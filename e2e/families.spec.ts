@@ -1444,9 +1444,43 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         await maya?.page.context().close();
     });
 
+    let clocked = false;
     async function show(summary: unknown, path = '/app/family') {
         answer = summary;
+        // A faked clock moved on by an earlier step comes back to now: the summaries are dated
+        // from now, as the server dates them.
+        if (clocked) await maya.page.clock.setSystemTime(new Date());
         await maya.page.goto(path);
+    }
+
+    /* The page's clock, faked from the next load on; it runs as usual until moved. */
+    async function fakeClock() {
+        if (clocked) return;
+        await maya.page.clock.install();
+        clocked = true;
+    }
+
+    /* Coming back to the tab after `by`: the summary, stale after 15 s, is read again. */
+    async function refocus(by: number | string = 20_000) {
+        await maya.page.clock.fastForward(by);
+        await maya.page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+    }
+
+    /* Raises (`units`) or moves (`plan`) answered as held by the bank; reads then answer `held`. */
+    async function heldByBank(path: 'units' | 'plan', held: unknown) {
+        const match = (url: URL) => url.pathname === `/api/billing/groups/${groupId}/${path}`;
+        await maya.page.route(match, (route: Route) => {
+            answer = held;
+            return route.fulfill({
+                json: {
+                    billing: held,
+                    url: 'https://bank.example/confirm/held',
+                    confirmPayment: true,
+                    when: 'now',
+                },
+            });
+        });
+        return () => maya.page.unroute(match);
     }
 
     /* The folder row's menu still offers Delete family folder; nothing is deleted here. */
@@ -1662,11 +1696,9 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         await dialog.getByRole('button', { name: 'Cancel' }).click();
         await expect(dialog).toHaveCount(0);
         // The held charge is still findable: the page's notice sends the payer to the portal.
-        await expect(
-            maya.page
-                .getByRole('alert')
-                .filter({ hasText: 'Your bank hasn’t confirmed the charge for 1 place yet' }),
-        ).toContainText('confirm it in Manage payment and invoices');
+        await expect(maya.page.locator('[data-plan-notice="places-waiting"]')).toContainText(
+            'Your bank hasn’t confirmed the charge for 1 place yet',
+        );
 
         await billing.getByRole('button', { name: 'Add places' }).click();
         await expect(dialog.getByRole('button', { name: 'Add 1 place' })).toBeEnabled();
@@ -1741,6 +1773,151 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         expect(changes).toBe(2);
         await maya.page.unroute(plan);
         await maya.page.unroute(`${bank}*`);
+    });
+
+    test('a confirm step settled or dropped elsewhere goes: with the success line when paid, quietly when gone', async () => {
+        await fakeClock();
+        const billing = maya.page.locator('[data-family-plan="billing"]');
+        const add = maya.page.getByRole('dialog', { name: 'Add places' });
+        const change = maya.page.getByRole('dialog', { name: 'Change plan' });
+        const bankStep = 'Your bank wants you to confirm';
+
+        // A raise of one (8 to 9), held; then paid in another tab, the summary read on refocus.
+        const raise = await heldByBank('units', { ...live({ units: 9, paidUnits: 8 }) });
+        async function holdRaise() {
+            await show(live());
+            await billing.getByRole('button', { name: 'Add places' }).click({ timeout: 60_000 });
+            await add.getByRole('button', { name: 'Add 1 place' }).click();
+            await expect(add).toContainText(bankStep);
+        }
+        await holdRaise();
+        answer = live({ units: 9, paidUnits: 9 });
+        await refocus();
+        await expect(add).toHaveCount(0);
+        await expect(maya.page.getByText(`Added 1 place to ${family}`)).toBeVisible();
+        // Cut back to eight before the bank answered: the raise is gone, and so is its step.
+        await holdRaise();
+        answer = live();
+        await refocus();
+        await expect(add).toHaveCount(0);
+        // Still held when read again: the step stays.
+        await holdRaise();
+        answer = live({ units: 9, paidUnits: 8 }, 301);
+        await refocus();
+        await expect(billing).toContainText('301 GB of 2 TB used');
+        await expect(add).toContainText(bankStep);
+        await raise();
+
+        // Pro to Max, held; then paid, so the plan is Max and nothing waits.
+        const held = live({
+            productId: 'max-month',
+            productName: 'Family Max (monthly)',
+            paidProductId: 'pro-month',
+            amount: 3600,
+        });
+        const move = await heldByBank('plan', held);
+        async function holdUpgrade() {
+            await show(live());
+            await billing.getByRole('button', { name: 'Change plan' }).click({ timeout: 60_000 });
+            await change.getByRole('button', { name: 'Change to Family Max' }).click();
+            await expect(change).toContainText(bankStep);
+        }
+        await holdUpgrade();
+        answer = live({
+            productId: 'max-month',
+            productName: 'Family Max (monthly)',
+            paidProductId: 'max-month',
+            amount: 3600,
+            quotaBytes: String(4 * 1024 ** 4),
+        });
+        await refocus();
+        await expect(change).toHaveCount(0);
+        await expect(maya.page.getByText(`${family} is on Family Max`)).toBeVisible();
+        // The upgrade dropped (still Pro, nothing waiting): its step goes.
+        await holdUpgrade();
+        answer = live();
+        await refocus();
+        await expect(change).toHaveCount(0);
+        await move();
+    });
+
+    test('a held quote keeps the price it was made at while the days pass', async () => {
+        await fakeClock();
+        const billing = maya.page.locator('[data-family-plan="billing"]');
+        // 18 to 20: twenty days left, $1.93; a day later the same raise would be $1.83.
+        const before = live({ units: 18, paidUnits: 18 });
+        before.seats = { used: 1, limit: 18 };
+        const held = live({ units: 20, paidUnits: 18 });
+        held.seats = { used: 1, limit: 20 };
+        const raise = await heldByBank('units', held);
+        await show(before);
+        const add = maya.page.getByRole('dialog', { name: 'Add places' });
+        await billing.getByRole('button', { name: 'Add places' }).click({ timeout: 60_000 });
+        await add.getByRole('button', { name: 'More' }).click();
+        await add.getByRole('button', { name: 'Add 2 places' }).click();
+        await expect(add).toContainText('Charged now$1.93');
+        // A day on, a fresh summary (a byte count changed) renders the dialog again.
+        answer = { ...held, storage: { ...held.storage, usedBytes: String(301 * 1024 ** 3) } };
+        await refocus('24:00:00');
+        await expect(billing).toContainText('301 GB of 2 TB used');
+        await expect(add).toContainText('Charged now$1.93');
+        await raise();
+
+        // Pro to Max: about $6.45 over twenty days, $6.13 over nineteen.
+        const upgrade = live({
+            productId: 'max-month',
+            productName: 'Family Max (monthly)',
+            paidProductId: 'pro-month',
+            amount: 3600,
+        });
+        const move = await heldByBank('plan', upgrade);
+        await show(live());
+        const change = maya.page.getByRole('dialog', { name: 'Change plan' });
+        await billing.getByRole('button', { name: 'Change plan' }).click({ timeout: 60_000 });
+        await change.getByRole('button', { name: 'Change to Family Max' }).click();
+        await expect(change).toContainText('Charged nowAbout $6.45');
+        answer = live(
+            {
+                productId: 'max-month',
+                productName: 'Family Max (monthly)',
+                paidProductId: 'pro-month',
+                amount: 3600,
+            },
+            301,
+        );
+        await refocus('24:00:00');
+        await expect(billing).toContainText('301 GB of 2 TB used');
+        await expect(change).toContainText('Charged nowAbout $6.45');
+        await move();
+    });
+
+    test('an open form closes once its control is withdrawn, while a held confirm step stays', async () => {
+        await fakeClock();
+        const billing = maya.page.locator('[data-family-plan="billing"]');
+        const ending = maya.page.locator('[data-plan-notice="ending"]');
+        // The plan is set to end in another tab: no Add places, no Change plan, so neither form.
+        for (const name of ['Add places', 'Change plan']) {
+            await show(live());
+            await billing.getByRole('button', { name }).click({ timeout: 60_000 });
+            const form = maya.page.getByRole('dialog', { name });
+            await expect(form).toBeVisible();
+            answer = live({ cancelAtPeriodEnd: true });
+            await refocus();
+            await expect(ending).toBeVisible();
+            await expect(form).toHaveCount(0);
+        }
+        // A raise the bank holds is still owed after that: its step stays.
+        const raise = await heldByBank('units', live({ units: 9, paidUnits: 8 }));
+        await show(live());
+        const add = maya.page.getByRole('dialog', { name: 'Add places' });
+        await billing.getByRole('button', { name: 'Add places' }).click({ timeout: 60_000 });
+        await add.getByRole('button', { name: 'Add 1 place' }).click();
+        await expect(add.getByRole('button', { name: 'Confirm with your bank' })).toBeVisible();
+        answer = live({ units: 9, paidUnits: 8, cancelAtPeriodEnd: true });
+        await refocus();
+        await expect(ending).toBeVisible();
+        await expect(add.getByRole('button', { name: 'Confirm with your bank' })).toBeVisible();
+        await raise();
     });
 
     test('a plan set to end, one that ended, and a member’s view each say only what is true', async () => {

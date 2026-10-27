@@ -486,7 +486,7 @@ function PlanTop(props: Inner) {
             );
         if (waiting > 0 && payerYou)
             return (
-                <div className="px-5 sm:px-8">
+                <div className="px-5 sm:px-8" data-plan-notice="places-waiting">
                     <Alert variant="warning">
                         <AlertDescription>
                             Your bank hasn’t confirmed the charge for {places(waiting)} yet. They
@@ -1070,6 +1070,7 @@ function PlanSection(props: Inner) {
             {(actions.addPlaces || adding) && (
                 <AddPlacesDialog
                     {...props}
+                    offered={actions.addPlaces}
                     open={adding}
                     onOpenChange={setAdding}
                     onDone={settle}
@@ -1079,6 +1080,7 @@ function PlanSection(props: Inner) {
             {(actions.changePlan || changing) && (
                 <ChangePlanDialog
                     {...props}
+                    offered={actions.changePlan}
                     open={changing}
                     onOpenChange={setChanging}
                     onDone={settle}
@@ -1187,6 +1189,75 @@ type DialogProps = Inner & {
     onDone: (next: FamilyBilling) => void;
 };
 
+type HeldDialogProps = DialogProps & {
+    /* Whether its button is still offered: a form closes once it isn't; a bank step stays. */
+    offered: boolean;
+};
+
+/*
+ * A change sent: the summary and the moment it was quoted at, what it asks for, its success
+ * line, and the bank's page once the bank holds it. The dialog quotes from this, not from the
+ * summaries that follow, which already hold the change and would price a later moment.
+ */
+type Sent<T> = {
+    summary: FamilyBillingFull;
+    at: Date;
+    target: T;
+    done: string;
+    url: string | null;
+};
+
+/* Where a change the bank held stands in a fresh summary: still held, paid, or dropped. */
+type Standing = 'held' | 'paid' | 'gone';
+
+function raiseStanding(summary: FamilyBillingFull, units: number): Standing {
+    const live = summary.subscription;
+    if (!live || live.units < units) return 'gone';
+    return live.paidUnits >= units && live.paidUnits >= live.units ? 'paid' : 'held';
+}
+
+function upgradeStanding(summary: FamilyBillingFull, productId: string): Standing {
+    const live = summary.subscription;
+    if (!live || live.productId !== productId) return 'gone';
+    return upgradeWaiting(live) ? 'held' : 'paid';
+}
+
+/*
+ * The summary the change was quoted from says nothing of it: the cache takes the server's
+ * answer a tick after the dialog does, so until it has, the change is simply held.
+ */
+function standingOf<T>(
+    sent: Sent<T>,
+    summary: FamilyBillingFull,
+    standing: (summary: FamilyBillingFull, target: T) => Standing,
+): Standing {
+    return summary === sent.summary ? 'held' : standing(summary, sent.target);
+}
+
+/*
+ * Paid or dropped elsewhere (the portal in another tab, a cut, the plan gone), a bank step
+ * leaves, with the success line when paid; a form whose button was withdrawn leaves too.
+ */
+function useSettled(
+    open: boolean,
+    busy: boolean,
+    offered: boolean,
+    standing: Standing | null,
+    done: string | undefined,
+    close: () => void,
+) {
+    useEffect(() => {
+        if (!open || busy) return;
+        if (standing === 'paid') {
+            cue('success');
+            toast.add({ type: 'success', title: done });
+            close();
+        } else if (standing === 'gone' || (standing === null && !offered)) close();
+        // close is new each render; what decides is the rest.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open, busy, offered, standing, done]);
+}
+
 /*
  * "Add places": charged now for the rest of the period, at the per-member
  * rate past the included members, quoted as Polar truncates it. A bank that
@@ -1194,54 +1265,66 @@ type DialogProps = Inner & {
  * From the press on, it reads the summary the raise was quoted from: the one
  * the server answers with already holds the places, and may have none left.
  */
-function AddPlacesDialog({ groupId, family, open, onOpenChange, onDone, ...props }: DialogProps) {
+function AddPlacesDialog({
+    groupId,
+    family,
+    open,
+    onOpenChange,
+    onDone,
+    offered,
+    ...props
+}: HeldDialogProps) {
     const [count, setCount] = useState(1);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
-    const [confirmUrl, setConfirmUrl] = useState<string | null>(null);
-    const [quoted, setQuoted] = useState<FamilyBillingFull | null>(null);
-    const summary = quoted ?? props.summary;
+    const [sent, setSent] = useState<Sent<number> | null>(null);
+    const confirmUrl = sent?.url ?? null;
+    const standing = sent?.url ? standingOf(sent, props.summary, raiseStanding) : null;
+    useSettled(open, busy, offered, standing, sent?.done, close);
+    const summary = sent?.summary ?? props.summary;
     const range = addRange(summary);
     const live = summary.subscription;
     const price = livePrice(summary);
-    if (!live || !range) return null;
-    const value = Math.min(count, range.max);
-    const now = quoteAdd(summary, value);
-    // A raise drops any scheduled cut, so the renewal is for every place the family then has.
-    const then = renewalAmount(summary, live.units + value);
-    const interval = intervalOf(live.recurringInterval);
-
-    async function add() {
-        setBusy(true);
-        setError('');
-        setQuoted(summary);
-        try {
-            const result = await groupBillingApi.setUnits(groupId, live!.units + value);
-            onDone(result.billing);
-            if (result.confirmPayment && result.url) {
-                setConfirmUrl(result.url);
-                return;
-            }
-            setQuoted(null);
-            cue('success');
-            toast.add({ type: 'success', title: `Added ${places(value)} to ${family}` });
-            onOpenChange(false);
-        } catch (cause) {
-            setQuoted(null);
-            cue('error');
-            setError(authError(cause));
-        } finally {
-            setBusy(false);
-        }
-    }
 
     // Closed any way, it opens afresh; a raise the bank holds stays in the page's notice.
     function close() {
         onOpenChange(false);
         setError('');
-        setConfirmUrl(null);
-        setQuoted(null);
+        setSent(null);
         setCount(1);
+    }
+
+    if (!live || !range) return null;
+    const value = Math.min(count, range.max);
+    const now = quoteAdd(summary, value, sent?.at);
+    // A raise drops any scheduled cut, so the renewal is for every place the family then has.
+    const then = renewalAmount(summary, live.units + value);
+    const interval = intervalOf(live.recurringInterval);
+
+    async function add() {
+        const done = `Added ${places(value)} to ${family}`;
+        setBusy(true);
+        setError('');
+        setSent({ summary, at: new Date(), target: live!.units + value, done, url: null });
+        try {
+            const result = await groupBillingApi.setUnits(groupId, live!.units + value);
+            onDone(result.billing);
+            const url = result.confirmPayment ? result.url : null;
+            if (url) {
+                setSent((held) => held && { ...held, url });
+                return;
+            }
+            setSent(null);
+            cue('success');
+            toast.add({ type: 'success', title: done });
+            onOpenChange(false);
+        } catch (cause) {
+            setSent(null);
+            cue('error');
+            setError(authError(cause));
+        } finally {
+            setBusy(false);
+        }
     }
 
     return (
@@ -1328,17 +1411,36 @@ function AddPlacesDialog({ groupId, family, open, onOpenChange, onDone, ...props
  * summary the move was quoted from, as Add places does: an upgrade the bank
  * holds answers with the new tier already named.
  */
-function ChangePlanDialog({ groupId, family, open, onOpenChange, onDone, ...props }: DialogProps) {
+function ChangePlanDialog({
+    groupId,
+    family,
+    open,
+    onOpenChange,
+    onDone,
+    offered,
+    ...props
+}: HeldDialogProps) {
     const id = useId();
     const [choice, setChoice] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
-    const [confirmUrl, setConfirmUrl] = useState<string | null>(null);
-    const [quoted, setQuoted] = useState<FamilyBillingFull | null>(null);
-    const summary = quoted ?? props.summary;
-    const moves = tierMoves(summary);
+    const [sent, setSent] = useState<Sent<string> | null>(null);
+    const confirmUrl = sent?.url ?? null;
+    const standing = sent?.url ? standingOf(sent, props.summary, upgradeStanding) : null;
+    useSettled(open, busy, offered, standing, sent?.done, close);
+    const summary = sent?.summary ?? props.summary;
+    const moves = tierMoves(summary, sent?.at);
     const live = summary.subscription;
     const current = currentPlan(summary);
+
+    // Closed any way, it opens afresh; an upgrade the bank holds stays in the page's notice.
+    function close() {
+        onOpenChange(false);
+        setError('');
+        setSent(null);
+        setChoice(null);
+    }
+
     if (!live || !current || !moves.length) return null;
     const ends = formatDay(live.currentPeriodEnd);
     const interval = intervalOf(live.recurringInterval);
@@ -1356,42 +1458,35 @@ function ChangePlanDialog({ groupId, family, open, onOpenChange, onDone, ...prop
         .sort((a, b) => Number(BigInt(a.plan.quotaBytes) - BigInt(b.plan.quotaBytes)));
 
     async function change() {
+        const done = `${family} is on ${tierName(chosen.plan)}`;
         setBusy(true);
         setError('');
-        setQuoted(summary);
+        setSent({ summary, at: new Date(), target: chosen.plan.id, done, url: null });
         try {
             const result = await groupBillingApi.changePlan(groupId, chosen.plan.id);
             onDone(result.billing);
-            if (result.confirmPayment && result.url) {
-                setConfirmUrl(result.url);
+            const url = result.confirmPayment ? result.url : null;
+            if (url) {
+                setSent((held) => held && { ...held, url });
                 return;
             }
-            setQuoted(null);
+            setSent(null);
             cue('success');
             toast.add({
                 type: 'success',
                 title:
                     result.when === 'renewal'
                         ? `${family} moves to ${tierName(chosen.plan)} on ${ends}`
-                        : `${family} is on ${tierName(chosen.plan)}`,
+                        : done,
             });
             onOpenChange(false);
         } catch (cause) {
-            setQuoted(null);
+            setSent(null);
             cue('error');
             setError(authError(cause));
         } finally {
             setBusy(false);
         }
-    }
-
-    // Closed any way, it opens afresh; an upgrade the bank holds stays in the page's notice.
-    function close() {
-        onOpenChange(false);
-        setError('');
-        setConfirmUrl(null);
-        setQuoted(null);
-        setChoice(null);
     }
 
     return (
