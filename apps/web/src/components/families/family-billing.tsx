@@ -314,8 +314,8 @@ function GlanceTop({
         const paused = lapsed.standing === 'paused';
         return (
             <div>
-                {/* Nothing here is theirs to fix: said plainly, without the payer's alarm. */}
-                <Alert data-plan-notice="unpaid">
+                {/* Nothing here is theirs to fix, but it is still a warning: plain words, the status colour. */}
+                <Alert variant={paused ? 'warning' : 'destructive'} data-plan-notice="unpaid">
                     <AlertTitle>
                         {paused ? `${name} is paused` : `${name}’s payment didn’t go through`}
                     </AlertTitle>
@@ -361,14 +361,13 @@ function GlanceSection({
     return (
         <SettingsGroup title="Plan">
             <div data-family-plan="glance" className="flex flex-col">
-                <Setting label="Plan">
-                    <span className="font-semibold">
-                        {planTierName({ name: summary.planName })}
-                        {summary.storage && summary.storage.quotaBytes !== '0'
-                            ? ` · ${formatQuota(summary.storage.quotaBytes)}`
-                            : ''}
-                    </span>
-                </Setting>
+                {/* The group is already called Plan: its first row says only which one. */}
+                <p className="border-b border-rule py-4 text-[15px] font-semibold last:border-0">
+                    {planTierName({ name: summary.planName })}
+                    {summary.storage && summary.storage.quotaBytes !== '0'
+                        ? ` · ${formatQuota(summary.storage.quotaBytes)}`
+                        : ''}
+                </p>
                 {seats && (
                     <Setting label="Places" data={{ 'data-glance-places': true }}>
                         <Figure>
