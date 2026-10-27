@@ -1,0 +1,39 @@
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_42c2939ce65b73 2139-2140
+  s_566b8e0c4467a4::t_c2e4e9e72ca217 2192
+  s_566b8e0c4467a4::t_ae7b3e76e62241 2216
+  s_566b8e0c4467a4::t_9982948eba38d3 2755
+packages/billing/src/protocol.ts
+  s_566b8e0c4467a4::t_7138b7b9a0e8b5 82-87
+  s_566b8e0c4467a4::t_dbd622bdbe189b 77-81
+  s_566b8e0c4467a4::t_75e85269a1d4e1 88
+docs/polar-group-billing-spike.md
+  s_566b8e0c4467a4::t_49cbe57382c036 738
+  s_566b8e0c4467a4::t_85d6345540f5a1 545-546
+apps/web/src/lib/family-billing.ts
+  s_566b8e0c4467a4::t_9fb7c24b686a65 216-217,222
+apps/web/src/components/families/family-billing.tsx
+  s_566b8e0c4467a4::t_4fc587035f7c58 1271-1273
+apps/web/src/lib/family-billing.test.ts
+  s_566b8e0c4467a4::t_9b75ef48813037 143-147,151-158
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_2f0cd77a3d0ad3 577
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_6fa8769c23f6a3 3013,3017,3037-3078
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "68726e76ce248d6c895a9ecc6e39877491b29aad",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
