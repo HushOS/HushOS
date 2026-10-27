@@ -1,0 +1,23 @@
+apps/web/src/lib/family-signup.test.ts
+  s_566b8e0c4467a4::t_5f4466c9ab3b2a 172,182-183,186,242-271
+apps/web/src/lib/family-signup.ts
+  s_566b8e0c4467a4::t_08bcf799bccfaa 131-133,145-146,170-179
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_566b8e0c4467a4::t_b9d90c16a3370c 121-122,148-149
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "05095aff4be8ee28f0506bfcfb2b3e9eb2132c19",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

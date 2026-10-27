@@ -1,0 +1,21 @@
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_1de8d044cad0aa 1959-1962
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_4586c99432c98a 2762-2767,3012-3041,3051,3075,3080,3085,3091,3093-3094,3115,3554,3558,3633,3661,3686,3692,3732,3763-3764,3770,3783,3787,8084
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a408b6612d9061463597ade403f9f3473a6b498a",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

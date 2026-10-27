@@ -1,0 +1,23 @@
+bun.lock
+  s_566b8e0c4467a4::t_fe3549a42b4c5b 144
+packages/billing/package.json
+  s_566b8e0c4467a4::t_03e915c41d2ea8 26
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_163956557baa8b 1,983-984,986-988,2203-2313
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c38ba09d32d23cb7b1db7fe7b252970df5031cd9",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
