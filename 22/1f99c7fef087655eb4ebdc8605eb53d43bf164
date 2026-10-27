@@ -1,0 +1,25 @@
+docs/groups-design.md
+  s_566b8e0c4467a4::t_da34c6618cd6fc 209
+docs/optional-verification.md
+  s_566b8e0c4467a4::t_0b59e2b77fefe3 121,491
+packages/crypto/src/session-groups.interleave.test.ts
+  s_566b8e0c4467a4::t_63273d142c33df 3,33,36-40,42,48,58-68,115,123,140-144,219-238
+packages/crypto/src/session-groups.ts
+  s_566b8e0c4467a4::t_aebb3af3611eea 2462-2465,2472,2489-2490,2508,2519,2533,2538,2541-2542,2545
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "221f99c7fef087655eb4ebdc8605eb53d43bf164",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
