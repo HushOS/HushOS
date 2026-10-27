@@ -11,13 +11,13 @@ import {
     lookupContact,
     notUpgradedWords,
     pinContact,
+    removeContact,
     TrustMovedError,
     type Lookup,
 } from '@/lib/contacts';
 import { driveClient, driveError, driveKeys, formatDay } from '@/lib/drive';
 import { vouchLine } from '@/lib/family-pin';
 import { afterTrustChanged } from '@/lib/integrity';
-import { stopSharingWithPerson } from '@/lib/rotation';
 import { cue } from '@/lib/sounds';
 
 /* Who is being checked: from a contact, a share row, a mark or the changed-account notice. */
@@ -28,10 +28,12 @@ export type Checking = { email: string; name: string };
  * twelve words over the keys HushOS serves for them now, read against the
  * ones on their own device. They match makes the pin verified (over new keys,
  * it is also a Continue, and what was shared with them is sealed again);
- * They don't match saves nothing, and offers Stop sharing with Maya, the
- * remedy for shares sealed to keys that were not theirs. A step of the
- * contact flow (contact-flow.tsx): "Stop sharing with Maya?" replaces it in
- * the same dialog, and Cancel there comes back to it.
+ * They don't match saves nothing, and offers Remove Maya from contacts, so
+ * nothing new is shared with those keys; what was already shared is stopped
+ * item by item from its share sheet (stopping everything with one person at
+ * once is docs/optional-verification.md 8, PR 3b). A step of the contact flow
+ * (contact-flow.tsx): "Remove Maya?" replaces it in the same dialog, and
+ * Cancel there comes back to it.
  */
 export function CheckContactStep({
     userId,
@@ -53,8 +55,8 @@ export function CheckContactStep({
         gcTime: 0,
         retry: false,
     });
-    /* The words, the words not matching, then (replacing it) Stop sharing with Maya? */
-    const [stage, setStage] = useState<'words' | 'mismatch' | 'stop'>('words');
+    /* The words, the words not matching, then (replacing it) Remove Maya? */
+    const [stage, setStage] = useState<'words' | 'mismatch' | 'remove'>('words');
     const mismatch = stage !== 'words';
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState('');
@@ -85,21 +87,19 @@ export function CheckContactStep({
         }
     }
 
-    async function stopSharing(contactId: string) {
+    async function remove(contactId: string) {
         setSaving(true);
+        setError('');
         try {
-            await stopSharingWithPerson(queryClient, contactId);
+            await removeContact(queryClient, userId, contactId);
+            // What they wrote no longer reads as theirs.
+            afterTrustChanged(queryClient);
             cue('droplet');
-            toast.add({ type: 'success', title: `Stopped sharing with ${name}` });
+            toast.add({ type: 'success', title: `${name} removed` });
             onDone();
         } catch (cause) {
             cue('error');
-            toast.add({
-                type: 'error',
-                title: 'Couldn’t stop sharing',
-                // What was owed is kept: Drive finishes it when it next opens (lib/rotation.ts).
-                description: `${driveError(cause)} HushOS finishes it the next time you open your files.`,
-            });
+            setError(cause instanceof Error ? cause.message : 'That wasn’t saved. Try again.');
         } finally {
             setSaving(false);
         }
@@ -109,28 +109,38 @@ export function CheckContactStep({
     const replacedAt = lookup?.pinned?.keysReplacedAt ?? null;
     const vouched = lookup?.pinned ? vouchLine(lookup.pinned) : null;
 
-    if (stage === 'stop')
+    if (stage === 'remove')
         return (
             <>
                 <DialogHeader>
-                    <DialogTitle>Stop sharing with {name}?</DialogTitle>
+                    <DialogTitle>Remove {name}?</DialogTitle>
                     <DialogDescription>
-                        {name} can’t open anything you’ve shared with them any more, including what
-                        you add to those folders later. You can share again once your words match.
+                        {name} keeps access to anything you’ve already shared.
                     </DialogDescription>
                 </DialogHeader>
+                {error && (
+                    <p role="alert" className="text-[13px] text-destructive">
+                        {error}
+                    </p>
+                )}
                 <DialogFooter>
-                    <Button variant="outline" onClick={() => setStage('mismatch')}>
+                    <Button
+                        variant="outline"
+                        onClick={() => {
+                            setError('');
+                            setStage('mismatch');
+                        }}
+                    >
                         Cancel
                     </Button>
                     <Button
                         variant="destructive"
                         disabled={saving}
                         onClick={() => {
-                            if (lookup) void stopSharing(lookup.contact.userId);
+                            if (lookup) void remove(lookup.contact.userId);
                         }}
                     >
-                        Stop sharing
+                        Remove
                     </Button>
                 </DialogFooter>
             </>
@@ -142,7 +152,7 @@ export function CheckContactStep({
                 <DialogTitle>Check it’s {name}</DialogTitle>
                 <DialogDescription>
                     {mismatch
-                        ? `These don’t match. Check ${name}’s email address with them. If it’s right and they still don’t match, you can stop sharing with ${name} for now and share again once they do.`
+                        ? `These don’t match. Check ${name}’s email address with them. If it’s right and they still don’t match, you can remove ${name} from your contacts for now and add them again once they do. To stop sharing something with ${name}, choose Share on it, then Stop sharing.`
                         : `Ask ${name} to open Contacts in HushOS and choose Your twelve words. If theirs match these, it’s really them. Do it in person or on a call.`}
                 </DialogDescription>
             </DialogHeader>
@@ -218,9 +228,9 @@ export function CheckContactStep({
                             <Button
                                 variant="outline"
                                 disabled={saving}
-                                onClick={() => setStage('stop')}
+                                onClick={() => setStage('remove')}
                             >
-                                Stop sharing with {name}
+                                Remove {name} from contacts
                             </Button>
                         )}
                         <Button onClick={onDone}>Done</Button>

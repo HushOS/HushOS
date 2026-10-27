@@ -63,7 +63,7 @@ import {
 } from '@/lib/drive';
 import { downloadNodes } from '@/lib/downloads';
 import { afterTrustChanged } from '@/lib/integrity';
-import { oweRotation, rotateAfterRevoke } from '@/lib/rotation';
+import { rotateAfterRevoke } from '@/lib/rotation';
 import { saveCopy } from '@/lib/save-copy';
 import { cue } from '@/lib/sounds';
 import { copySecret } from '@/lib/clipboard';
@@ -517,8 +517,6 @@ function ByMe() {
         const node = target.kind === 'share' ? target.share.node : target.link.node;
         setBusy(target.kind === 'share' ? target.share.id : target.link.id);
         try {
-            // Owed before it is stopped, so a closed tab still re-keys it (lib/rotation.ts).
-            await oweRotation(node.id);
             if (target.kind === 'share') await driveClient.revokeShare(node, target.share.id);
             else await driveClient.revokeLink(node, target.link.id);
             await queryClient.invalidateQueries({ queryKey: driveKeys.mine });

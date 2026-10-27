@@ -99,9 +99,7 @@ vi.mock('@/lib/drive', () => ({
 }));
 vi.mock('@/lib/rotation', () => ({
     currentNode: (...args: unknown[]) => currentNode(...(args as [])),
-    oweRotation: vi.fn(),
     rotateAfterRevoke: vi.fn(),
-    stopSharingWithPerson: vi.fn(),
 }));
 vi.mock('@/lib/session', () => ({
     sessionQueryOptions: queryOptions({

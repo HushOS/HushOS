@@ -40,7 +40,6 @@ import {
     type GuardSealer,
 } from '@/lib/contact-guard';
 import { onStaleIdentity } from '@/lib/drive-api';
-import type { StopRecord, StopWork } from '@/lib/stop-sharing';
 import { pinOf } from '@/lib/family-pin';
 import { openOwnIdentity, type OwnIdentity } from '@/lib/own-identity';
 import {
@@ -1771,30 +1770,5 @@ export function sharingLedger(userId: () => string | null): SharingLedger {
             save((ledger) => {
                 delete ledger.links[linkId];
             }),
-    };
-}
-
-/*
- * What Stop sharing and every re-key still owe, kept beside the ledger in the
- * settings document (lib/stop-sharing.ts): it outlives a closed tab, a
- * failure and a sign-out, and any of the person's devices carries it on.
- * Every client keeps fields of the ledger it does not know when it saves.
- */
-export function stopWork(userId: () => string | null): StopWork {
-    return {
-        async read() {
-            const id = userId();
-            if (!id) return { shares: {} };
-            const { settings } = await loadSettings(id);
-            return (settings.sharing ?? { shares: {}, links: {} }) as StopRecord;
-        },
-        async save(change) {
-            const id = userId();
-            if (!id) throw new Error('Unlock your account first.');
-            await saveSettings(boundQueryClient, id, (settings) => {
-                change(ledgerOf(settings) as StopRecord);
-                return settings;
-            });
-        },
     };
 }

@@ -6,25 +6,23 @@ import type { Lookup } from '@/lib/contacts';
 /*
  * Check it's Maya (docs/optional-verification.md 6.6): They match saves the
  * check over the very lookup whose words were shown; They don't match saves
- * nothing at all, and offers Stop sharing with Maya, which asks once before
- * it ends anything. Each step replaces the one before in the same dialog:
+ * nothing at all, and offers Remove Maya from contacts, which asks once
+ * before it removes anything. Each step replaces the one before in the same dialog:
  * one dialog on screen at a time.
  */
 const lookup = vi.fn<() => Promise<Lookup>>();
 const pinContact = vi.fn(async () => ({}));
 const continueWith = vi.fn(async () => ({}));
-const stopSharing = vi.fn(async () => 2);
+const removeContact = vi.fn(async () => ({}));
 const upgradeShares = vi.fn(async () => ({ resealed: 1, refused: 0 }));
 vi.mock('@/lib/contacts', () => ({
     lookupContact: () => lookup(),
     pinContact: (...args: unknown[]) => pinContact(...(args as [])),
     continueWith: (...args: unknown[]) => continueWith(...(args as [])),
+    removeContact: (...args: unknown[]) => removeContact(...(args as [])),
     addContact: vi.fn(),
     TrustMovedError: class extends Error {},
     notUpgradedWords: (name: string) => `${name} needs to sign in`,
-}));
-vi.mock('@/lib/rotation', () => ({
-    stopSharingWithPerson: (...args: unknown[]) => stopSharing(...(args as [])),
 }));
 vi.mock('@/lib/integrity', () => ({ afterTrustChanged: vi.fn() }));
 vi.mock('@/lib/drive', () => ({
@@ -82,27 +80,30 @@ describe('Check it’s Maya', () => {
         lookup.mockReset().mockResolvedValue(found);
         pinContact.mockClear();
         continueWith.mockClear();
-        stopSharing.mockClear();
+        removeContact.mockClear();
         upgradeShares.mockClear();
     });
 
-    test('They don’t match saves nothing, and Stop sharing asks before it ends anything', async () => {
+    test('They don’t match saves nothing, and Remove asks before it removes anything', async () => {
         open();
         fireEvent.click(await screen.findByRole('button', { name: 'They don’t match' }));
         expect(screen.getByText(/These don’t match\. Check Maya’s email address/)).toBeVisible();
+        expect(screen.getByText(/choose Share on it, then Stop sharing\./)).toBeVisible();
         expect(screen.queryByRole('button', { name: 'They match' })).toBeNull();
         expect(pinContact).not.toHaveBeenCalled();
-        fireEvent.click(screen.getByRole('button', { name: 'Stop sharing with Maya' }));
-        expect(stopSharing).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByRole('button', { name: 'Remove Maya from contacts' }));
+        expect(removeContact).not.toHaveBeenCalled();
         // The question replaces the check: one dialog, and Cancel comes back to it.
-        expect(await screen.findByText('Stop sharing with Maya?')).toBeVisible();
+        expect(await screen.findByText('Remove Maya?')).toBeVisible();
         expect(dialogs()).toHaveLength(1);
         expect(screen.queryByText(/These don’t match/)).toBeNull();
         fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
         expect(screen.getByText(/These don’t match/)).toBeVisible();
-        fireEvent.click(screen.getByRole('button', { name: 'Stop sharing with Maya' }));
-        fireEvent.click(await screen.findByRole('button', { name: 'Stop sharing' }));
-        await vi.waitFor(() => expect(stopSharing).toHaveBeenCalledWith(expect.anything(), MAYA));
+        fireEvent.click(screen.getByRole('button', { name: 'Remove Maya from contacts' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+        await vi.waitFor(() =>
+            expect(removeContact).toHaveBeenCalledWith(expect.anything(), 'me', MAYA),
+        );
         expect(pinContact).not.toHaveBeenCalled();
     });
 

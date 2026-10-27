@@ -90,18 +90,9 @@ export type Settings = {
      * The owner's own record of what they shared: per node, the people it was
      * shared with; per link, its node. Only what is here is ever sealed again on
      * rotation or upgrade (see SharingLedger in @hushos/drive/client). Every
-     * client keeps fields it does not know when it saves. `stopping` (per
-     * person, items whose shares to them are still to be revoked) and `rekey`
-     * (items owed a re-key, oldest first) are what a Stop sharing or a stopped
-     * share left unfinished (apps/web lib/stop-sharing.ts), recorded before
-     * anything reaches the server and crossed off as each lands.
+     * client keeps fields it does not know when it saves.
      */
-    sharing?: {
-        shares: Record<string, string[]>;
-        links: Record<string, string>;
-        stopping?: Record<string, string[]>;
-        rekey?: string[];
-    };
+    sharing?: { shares: Record<string, string[]>; links: Record<string, string> };
     /*
      * Per group, the checked version 1 key and the marks a server must not take
      * back (docs/groups-design.md 2.7); checkGroupPin in pins.ts refuses a

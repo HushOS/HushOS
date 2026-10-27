@@ -1422,35 +1422,6 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         if (all && !failed) await options.resealedAll?.();
         return { resealed, refused };
     }
-    /*
-     * By item id in this account's own workspace, for work recorded before it
-     * ran (Stop sharing with someone): an item in Trash is listed and revoked
-     * like any other, and one deleted for good has no shares left.
-     */
-    async function sharesOfNode(nodeId: string) {
-        if (!workspace) throw new Error('Open Drive first.');
-        try {
-            return (await api.nodeShares(workspace.workspaceId, nodeId)).shares;
-        } catch (error) {
-            if (error instanceof DriveApiError && error.status === 404) return [];
-            throw error;
-        }
-    }
-    /* Ends a share the caller already took out of the ledger; one already ended is not an error. */
-    async function endShare(shareId: string) {
-        if (!workspace) throw new Error('Open Drive first.');
-        try {
-            await api.revokeShare(workspace.workspaceId, shareId);
-        } catch (error) {
-            if (error instanceof DriveApiError && error.status === 404) return;
-            throw error;
-        }
-    }
-    /* Every share this account made, by item and grantee, unopened. */
-    async function sharedByMeIds() {
-        const mine = await api.sharedByMe();
-        return mine.shares.map((share) => ({ nodeId: share.node.id, granteeId: share.grantee.id }));
-    }
     async function revokeShare(node: DriveNode, shareId: string) {
         // Out of the ledger first, so the rotation that follows never seals to them again.
         const grantee = (await nodeShares(node)).find((share) => share.id === shareId)?.grantee.id;
@@ -1880,25 +1851,6 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         for (const change of page.changes) if (change.kind === 'node') remember([change.node]);
         return page;
     }
-    /*
-     * Re-keys an item of this account's own workspace by id, wherever it is
-     * (a folder in Trash included): the walk resolves where it sits, as a
-     * resumed rotation does. False when the item is gone for good.
-     */
-    async function rotateById(nodeId: string, onProgress?: (done: number) => void) {
-        if (!workspace) throw new Error('Open Drive first.');
-        let rotation;
-        try {
-            ({ rotation } = await api.startRotation(workspace.workspaceId, nodeId));
-        } catch (error) {
-            if (error instanceof DriveApiError && error.status === 404) return false;
-            throw error;
-        }
-        await walkRotation({ nodeId, targetEpoch: rotation.targetEpoch }, onProgress);
-        // The server's own record of it (from opening Drive) is this one, now finished.
-        if (workspace?.rotation?.nodeId === nodeId) workspace = { ...workspace, rotation: null };
-        return true;
-    }
     /* A rotation this account left unfinished, from any device; null when none. */
     function pendingRotation() {
         return workspace?.rotation ?? null;
@@ -2259,10 +2211,6 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         openReport,
         resealReport,
         rotate,
-        rotateById,
-        sharesOfNode,
-        endShare,
-        sharedByMeIds,
         resumeRotation,
         walkRotation,
         pendingRotation,

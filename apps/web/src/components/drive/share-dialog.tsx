@@ -77,7 +77,7 @@ import {
     formatDay,
     formatWhen,
 } from '@/lib/drive';
-import { currentNode, oweRotation, rotateAfterRevoke } from '@/lib/rotation';
+import { currentNode, rotateAfterRevoke } from '@/lib/rotation';
 import { sessionQueryOptions } from '@/lib/session';
 import { cue } from '@/lib/sounds';
 import { copySecret } from '@/lib/clipboard';
@@ -322,8 +322,6 @@ function ShareForm({
     async function stop(target: ShareView) {
         setPending(target.id);
         try {
-            // Owed before it is stopped, so a closed tab still re-keys it (lib/rotation.ts).
-            await oweRotation(node.id);
             await driveClient.revokeShare(node, target.id);
             await refresh();
             await queryClient.invalidateQueries({ queryKey: driveKeys.mine });
@@ -1021,7 +1019,6 @@ function LinkCard({
     async function turnOff() {
         setBusy(true);
         try {
-            await oweRotation(node.id);
             await driveClient.revokeLink(node, link.id);
             await onChanged();
             cue('droplet');
