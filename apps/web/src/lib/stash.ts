@@ -292,10 +292,14 @@ const writtenMarker = {
 
 export const uploadStash = createSealedStash({
     written: writtenMarker,
-    exclusive: (work) =>
-        typeof navigator !== 'undefined' && navigator.locks?.request
-            ? (navigator.locks.request('hushos-stash', work) as ReturnType<typeof work>)
-            : work(),
+    // Across tabs where the browser has Web Locks; without them, the factory's own queue, which
+    // still keeps this tab's commits and wipes apart (never nothing at all).
+    ...(typeof navigator !== 'undefined' && navigator.locks?.request
+        ? {
+              exclusive: <T>(work: () => Promise<T>) =>
+                  navigator.locks.request('hushos-stash', work) as Promise<T>,
+          }
+        : {}),
     root: () => navigator.storage.getDirectory(),
     account: () => authClient.store.getState().unlockedUserId,
     lockRevision: () => authClient.store.getState().lockRevision,
