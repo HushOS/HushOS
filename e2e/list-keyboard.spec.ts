@@ -35,14 +35,20 @@ async function reset(p: Page) {
     await expect(rows(p)).toHaveCount(NAMES.length, { timeout: 60_000 });
     for (const [i, file] of NAMES.entries()) await expect(rows(p).nth(i)).toContainText(file);
 }
-/* Tab until the keys reach `target`, as a person would; a handful of stops at most. */
-async function tabTo(p: Page, target: Locator) {
+/*
+ * Tab until the keys reach `target`, as a person would; a handful of stops at most. Safari
+ * tabs to buttons only with the system's keyboard navigation on, which differs from one
+ * machine to the next (off on CI's macOS runner), so WebKit puts the keys there directly.
+ */
+async function tabTo(p: Page, target: Locator, browserName: string) {
+    if (browserName === 'webkit') return target.focus();
     for (let i = 0; i < 8; i++) {
         if (await target.evaluate((element) => element === document.activeElement)) return;
         await p.keyboard.press('Tab');
     }
     await expect(target).toBeFocused();
 }
+
 test.beforeAll(async ({ browser }) => {
     // Registration runs OPAQUE and key setup in the browser; WebKit on a CI runner needs the room.
     test.setTimeout(300_000);
@@ -73,12 +79,15 @@ test('the arrows move on from the row whose name has the keys', async () => {
     await expect(selectedRows(page)).toHaveCount(1);
 });
 
-test('one row wears the focus outline when Tab takes the keys on from the arrows', async () => {
+test('one row wears the focus outline when Tab takes the keys on from the arrows', async ({
+    browserName,
+}) => {
     await reset(page);
     await nameOf(rows(page).nth(0)).focus();
     await page.keyboard.press('ArrowDown');
     await expect(rows(page).nth(1)).toHaveAttribute('aria-selected', 'true');
-    await tabTo(page, nameOf(rows(page).nth(2)));
+    await tabTo(page, nameOf(rows(page).nth(2)), browserName);
+    await expect(nameOf(rows(page).nth(2))).toBeFocused();
     await expect.poll(() => outlined(page)).toBe(1);
     await expect(rows(page).nth(2)).toHaveCSS('outline-style', 'solid');
 });
