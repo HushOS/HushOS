@@ -383,14 +383,21 @@ export async function getPendingIntent(userId: string) {
 }
 
 /*
- * Forgets the plan chosen at signup but not the rest of the intent: a code that came with it
- * still applies to the next checkout, which consumes it.
+ * Forgets the plan chosen at signup, `planProductId` as it was read, but not the rest of the
+ * intent: a code that came with it still applies to the next checkout, which consumes it. A
+ * plan chosen since the read is kept.
  */
-export async function dropIntendedPlan(userId: string) {
+export async function dropIntendedPlan(userId: string, planProductId: string) {
     await db
         .update(accountIntents)
         .set({ planProductId: null })
-        .where(and(eq(accountIntents.userId, userId), isNull(accountIntents.consumedAt)));
+        .where(
+            and(
+                eq(accountIntents.userId, userId),
+                isNull(accountIntents.consumedAt),
+                eq(accountIntents.planProductId, planProductId),
+            ),
+        );
 }
 
 export async function consumeIntent(userId: string) {

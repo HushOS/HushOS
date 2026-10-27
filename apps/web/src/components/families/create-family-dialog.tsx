@@ -104,6 +104,13 @@ export function CreateFamilyDialog({
         event.preventDefault();
         const trimmed = name.trim();
         if (!trimmed || refusal || checking) return;
+        // Checked before anything is made: a family made for a checkout that can't open.
+        if (plan && !Object.hasOwn(plan.plan.prices, plan.currency)) {
+            setError(
+                `${familyTierName(plan.plan)} isn’t sold in ${plan.currency.toUpperCase()}. Choose it again from Plans.`,
+            );
+            return;
+        }
         setPending(true);
         setError('');
         // Where the dialog is: the page and the tier chosen by address (Account → Family's

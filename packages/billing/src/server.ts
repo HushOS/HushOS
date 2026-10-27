@@ -186,12 +186,14 @@ function intendedFamilyOf(productId: string, families: FamilyCatalogueProduct[])
  */
 export async function forgetIntendedFamily(user: BillingUser) {
     if (!billingEnabled()) return;
-    const [intent, plans] = await Promise.all([
+    const [intent, families] = await Promise.all([
         billingRepository.getPendingIntent(user.id),
-        listCatalogue().then((catalogue) => catalogue.plans),
+        getFamilyCatalogue(),
     ]);
-    if (!intent?.planProductId || plans.some((plan) => plan.id === intent.planProductId)) return;
-    await billingRepository.dropIntendedPlan(user.id);
+    const plan = intent?.planProductId;
+    // Only a family plan: a personal one is left for its checkout.
+    if (!plan || !families.some((family) => family.id === plan)) return;
+    await billingRepository.dropIntendedPlan(user.id, plan);
 }
 
 /*

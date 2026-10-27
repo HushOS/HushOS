@@ -8,7 +8,7 @@ import { PageHeader } from '@/components/page-header';
 import { Setting, SettingsGroup } from '@/components/settings';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { myInvitationsQueryOptions } from '@/lib/families-shell';
-import { defaultFamilyName } from '@/lib/family-signup';
+import { defaultFamilyName, familyCheckoutCurrency } from '@/lib/family-signup';
 import { personalPlanEnding } from '@/lib/plans';
 import { billingQueryOptions, catalogueQueryOptions, useBillingEnabled } from '@/lib/queries';
 import type { GroupSummary } from '@/lib/groups/api';
@@ -54,8 +54,9 @@ export function NoFamily({
     const catalogue = useQuery({ ...catalogueQueryOptions, enabled: billing && Boolean(create) });
     const personal = useQuery({ ...billingQueryOptions, enabled: billing && Boolean(create) });
     const chosen = create ? catalogue.data?.families.find((at) => at.id === create.planId) : null;
+    // Charged in the address's currency only where the tier is priced in it.
     const plan = chosen
-        ? { plan: chosen, currency: create?.currency ?? Object.keys(chosen.prices)[0] ?? 'usd' }
+        ? { plan: chosen, currency: familyCheckoutCurrency(chosen, create?.currency) }
         : undefined;
     // Arrived with a tier: the dialog opens with it, until it is closed. Not for someone waiting
     // to join a family: they're about to be in one, and are shown how to finish joining instead.

@@ -502,9 +502,18 @@ describe('signup intents', () => {
             referralCode: 'FRIEND25',
             source: 'referral',
         });
-        await billing.dropIntendedPlan(userId);
+        await billing.dropIntendedPlan(userId, 'prod_family_pro');
         expect((await billing.getPendingIntent(userId))?.planProductId).toBeNull();
         expect(await pendingReferralCode(userId)).toBe('FRIEND25');
+    });
+
+    test('dropping only the plan that was read: a plan chosen since is kept', async () => {
+        const { userId } = await createTestAccount();
+        await db
+            .insert(accountIntents)
+            .values({ userId, planProductId: 'prod_pro', source: 'pricing' });
+        await billing.dropIntendedPlan(userId, 'prod_family_pro');
+        expect((await billing.getPendingIntent(userId))?.planProductId).toBe('prod_pro');
     });
 });
 

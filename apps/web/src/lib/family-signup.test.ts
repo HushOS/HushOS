@@ -1,7 +1,13 @@
 import type { FamilyPlan, Plan } from '@hushos/billing/api';
 import { checkGroupName } from '@hushos/groups/protocol';
 import { describe, expect, test } from 'vitest';
-import { defaultFamilyName, familyLanding, familyStanding, firstLanding } from './family-signup';
+import {
+    defaultFamilyName,
+    familyCheckoutCurrency,
+    familyLanding,
+    familyStanding,
+    firstLanding,
+} from './family-signup';
 
 const personal = (prices: Record<string, number>): Plan => ({
     id: 'plus-month',
@@ -294,5 +300,17 @@ describe('firstLanding', () => {
         expect(await firstLanding(all)).toEqual({ kind: 'go', to: { to: '/app/billing' } });
         expect(asked).toBe(false);
         expect(forgotten).toHaveLength(1);
+    });
+});
+
+describe('familyCheckoutCurrency', () => {
+    test('the currency in the address when the tier is priced in it, else the tier’s default', () => {
+        expect(familyCheckoutCurrency(everywhere, 'inr')).toBe('inr');
+        // Edited by hand, or a currency the tier isn't sold in: never sent to checkout.
+        expect(familyCheckoutCurrency(everywhere, 'gbp')).toBe('usd');
+        expect(familyCheckoutCurrency(everywhere, 'INR')).toBe('usd');
+        expect(familyCheckoutCurrency(everywhere, undefined)).toBe('usd');
+        const rupees = familyPro({ inr: { base: 79900, perMember: 5900 } });
+        expect(familyCheckoutCurrency(rupees, 'xyz')).toBe('inr');
     });
 });

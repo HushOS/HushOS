@@ -92,6 +92,16 @@ export function familyStanding<T extends Membership>(families: readonly T[]): Fa
     return accepted ? { kind: 'waiting', family: accepted } : { kind: 'none' };
 }
 
+/*
+ * The currency Create a family charges a tier in: the one its address names (Pricing, Plans or
+ * the landing after signup) when the tier is priced in it, else the tier's default. An address
+ * edited by hand never reaches checkout with a currency the tier isn't sold in.
+ */
+export function familyCheckoutCurrency(plan: FamilyPlan, requested: string | undefined) {
+    if (requested && Object.hasOwn(plan.prices, requested)) return requested;
+    return familyPrice(plan, DEFAULT_CURRENCY)?.currency ?? Object.keys(plan.prices)[0]!;
+}
+
 export type FamilyLanding =
     | { to: '/app/billing' }
     | { to: '/app/family'; search?: { create: string; currency: string } };
