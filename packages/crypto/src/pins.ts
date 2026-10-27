@@ -362,18 +362,100 @@ export const SETTINGS_MAX_BYTES = 64 * 1024;
 /* What adding someone says when the settings have no room for one more pin (docs/optional-verification.md 2.7). */
 export const CONTACTS_FULL = 'Your contacts are full. Remove someone you no longer share with.';
 
+const settingsBytes = (settings: Settings) =>
+    new TextEncoder().encode(JSON.stringify({ ...settings, version: 2 })).length;
+
+/*
+ * The removals a document records (`removedContacts`), oldest first: each a
+ * lowercased account id and when it was removed. Anything malformed is left
+ * out, so an odd value from another client never stops a save.
+ */
+function removalsOf(settings: Settings) {
+    const removed = settings.removedContacts;
+    if (typeof removed !== 'object' || removed === null || Array.isArray(removed)) return [];
+    return Object.entries(removed)
+        .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+        .sort(([, a], [, b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/* Whether this account removed `userId` from its contacts and has not added them back. */
+export function contactRemoved(settings: Settings, userId: string) {
+    return removalsOf(settings).some(([id]) => id === userId.toLowerCase());
+}
+
+/* The settings with `userId`'s removal forgotten (they were added back), as a new document. */
+export function withoutRemoval<S extends Settings>(settings: S, userId: string): S {
+    const id = userId.toLowerCase();
+    const kept = removalsOf(settings).filter(([each]) => each !== id);
+    const next = { ...settings };
+    if (kept.length) next.removedContacts = Object.fromEntries(kept);
+    else delete next.removedContacts;
+    return next;
+}
+
+/*
+ * Removals count against the room a document has (docs/optional-verification.md
+ * 2.7, 2.8): a document that would not seal with them all is kept by
+ * forgetting the oldest removals first, one at a time, until it does. A
+ * forgotten removal only means that person's next share is added on its own
+ * again on a device that never acted on them; a device whose guard holds
+ * them still waits for an Open. A document too large without any removal is
+ * returned as it is, for the caller to refuse.
+ */
+export function settingsThatFit<S extends Settings>(settings: S): S {
+    if (settingsBytes(settings) <= SETTINGS_MAX_BYTES) return settings;
+    const removals = removalsOf(settings);
+    let next = settings;
+    while (removals.length && settingsBytes(next) > SETTINGS_MAX_BYTES) {
+        removals.shift();
+        next = { ...next, removedContacts: Object.fromEntries(removals) };
+        if (!removals.length) delete next.removedContacts;
+    }
+    return next;
+}
+
 /*
  * The settings with `pin` written for its person, as a new document: the one
  * given is never changed, so a pin that does not fit leaves nothing behind.
+ * Writing a pin forgets that person's removal (they are a contact again).
  * Refused, with CONTACTS_FULL, when the document would no longer seal
- * (SETTINGS_MAX_BYTES, as sealSettings measures it). A first-seen pin is
- * about 500 bytes, so a document holds roughly a hundred people.
+ * (SETTINGS_MAX_BYTES, as sealSettings measures it) even with every removal
+ * forgotten. A first-seen pin is about 500 bytes, so a document holds roughly
+ * a hundred people.
  */
 export function settingsWithPin<S extends Settings>(settings: S, pin: S['contacts'][string]): S {
-    const next = { ...settings, contacts: { ...settings.contacts, [pin.userId]: pin } };
-    const json = new TextEncoder().encode(JSON.stringify({ ...next, version: 2 }));
-    if (json.length > SETTINGS_MAX_BYTES) throw new CryptoError(CONTACTS_FULL);
+    const next = settingsThatFit(
+        withoutRemoval(
+            { ...settings, contacts: { ...settings.contacts, [pin.userId]: pin } },
+            pin.userId,
+        ),
+    );
+    if (settingsBytes(next) > SETTINGS_MAX_BYTES) throw new CryptoError(CONTACTS_FULL);
     return next;
+}
+
+/*
+ * The settings with `userId`'s pin removed and the removal recorded, at
+ * `at`, so a share from them is never added again on its own (2.8): it waits
+ * until the person opens it. A pin is far larger than a removal, so this
+ * always fits.
+ */
+export function settingsWithoutContact<S extends Settings>(
+    settings: S,
+    userId: string,
+    at: string,
+): S {
+    const id = userId.toLowerCase();
+    const contacts = Object.fromEntries(
+        Object.entries(settings.contacts).filter(([key]) => key.toLowerCase() !== id),
+    ) as S['contacts'];
+    const removals = removalsOf(settings).filter(([each]) => each !== id);
+    removals.push([id, at]);
+    return settingsThatFit({
+        ...settings,
+        contacts,
+        removedContacts: Object.fromEntries(removals),
+    });
 }
 
 /*

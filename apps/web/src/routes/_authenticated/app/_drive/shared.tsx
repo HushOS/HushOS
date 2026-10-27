@@ -306,7 +306,7 @@ function WithMeRow({
         </>
     );
 
-    /* The person opening this share: someone new is added, a succession followed, then it opens. */
+    /* The person opening this share: someone removed is added back, a succession followed, then it opens. */
     async function openIt() {
         setOpening(true);
         try {

@@ -19,7 +19,15 @@ import { SETTINGS_MAX_BYTES, type GroupPin } from './pins';
  */
 
 // Pure, so the web's main thread uses them without libsodium; re-exported here as before.
-export { CONTACTS_FULL, SETTINGS_MAX_BYTES, settingsWithPin } from './pins';
+export {
+    CONTACTS_FULL,
+    contactRemoved,
+    SETTINGS_MAX_BYTES,
+    settingsThatFit,
+    settingsWithoutContact,
+    settingsWithPin,
+    withoutRemoval,
+} from './pins';
 export const SETTINGS_PAD_STEP = 1024;
 
 export { fingerprint } from './fingerprint';
@@ -109,6 +117,15 @@ export type Settings = {
         string,
         { rosterVersion: number; with: string; code: string[]; checkedAt: string }
     >;
+    /*
+     * People this account removed from its contacts and has not added back,
+     * by lowercased account id, with when (docs/optional-verification.md
+     * 2.8): a share from them is never added on its own, it waits until the
+     * person opens it. Writing their pin again forgets the entry; the oldest
+     * go first when the document runs out of room (settingsThatFit in
+     * pins.ts). Every shipped client keeps it when it saves.
+     */
+    removedContacts?: Record<string, string>;
 };
 
 export const EMPTY_SETTINGS: Settings = { version: 2, contacts: {} };

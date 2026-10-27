@@ -33,7 +33,7 @@ const row = (p: Page, name: string) =>
     p.locator('[data-node-id]').filter({ has: p.getByText(name, { exact: true }) });
 const dialog = (p: Page) => p.locator('[data-slot=dialog-content]');
 
-/* The share Maya made with Sam, by a digest of its envelope: it changes when it is sealed again. */
+/* The shares Maya made with Sam, by a digest of each envelope: it changes when it is sealed again. */
 async function sealedForSam() {
     const database = new SQL(e2eDatabase().url);
     try {
@@ -43,7 +43,8 @@ async function sealedForSam() {
             join users granter on granter.id = s.granter_user_id
             join users grantee on grantee.id = s.grantee_user_id
             where granter.normalized_email = ${mayaEmail.toLowerCase()}
-              and grantee.normalized_email = ${samEmail.toLowerCase()}`;
+              and grantee.normalized_email = ${samEmail.toLowerCase()}
+            order by s.id`;
         return rows.map((each: { digest: string }) => each.digest);
     } finally {
         await database.close();
@@ -93,14 +94,59 @@ test('Maya shares with Sam by typing his address, and he opens it, with no words
     );
     await expect(maya.locator(`[data-contact="${samEmail}"]`)).toContainText('Not verified');
 
-    // Sam has never added Maya: her share waits for him to open it, then she is a contact of his.
+    // Sam has never added Maya: her share opens as it is listed, and she is a contact of his.
     await sam.goto('/app/shared');
-    await openWaiting(sam, 'Open this to add Maya to your contacts.');
     const shared = sam.locator('[data-shared="notes.md"]');
     await expect(shared).toBeVisible({ timeout: 60_000 });
+    await expect(sam.locator('[data-waiting]')).toHaveCount(0);
     await shared.getByRole('button', { name: 'notes.md', exact: true }).click();
     await expect(dialog(sam).locator('.rt-markdown')).toContainText('Notes', { timeout: 60_000 });
     await sam.keyboard.press('Escape');
+    await sam.goto('/app/contacts');
+    await expect(sam.locator(`[data-contact="${mayaEmail}"]`)).toHaveAttribute(
+        'data-standing',
+        'seen',
+        { timeout: 60_000 },
+    );
+});
+
+test('someone Sam removed is not added back when they share again, until he opens it', async () => {
+    await sam.goto('/app/contacts');
+    await sam
+        .locator(`[data-contact="${mayaEmail}"]`)
+        .getByRole('button', { name: /^More for/ })
+        .click();
+    await sam.getByRole('menuitem', { name: 'Remove' }).click();
+    await sam.getByRole('alertdialog').getByRole('button', { name: 'Remove' }).click();
+    await expect(sam.locator(`[data-contact="${mayaEmail}"]`)).toHaveCount(0);
+
+    // Maya shares something else with him, picking him from her contacts.
+    await maya.goto('/app/drive');
+    await maya.locator('input[type=file]').first().setInputFiles([samples.files.code]);
+    await expect(row(maya, 'module.ts')).toBeVisible({ timeout: 60_000 });
+    await openShare(maya, 'module.ts');
+    const field = dialog(maya).getByRole('combobox', { name: 'Add people' });
+    await field.click();
+    await field.fill('Sam');
+    await maya.getByRole('option', { name: /Sam Okafor/ }).click();
+    await dialog(maya).getByRole('button', { name: 'Share', exact: true }).click();
+    await expect(dialog(maya).locator(`[data-share="${samEmail}"]`)).toBeVisible({
+        timeout: 60_000,
+    });
+    await maya.keyboard.press('Escape');
+
+    // Both of her shares wait on Sam's list, with their size left empty, until he opens one.
+    await sam.goto('/app/shared');
+    const waiting = sam.locator('[data-waiting="open"]');
+    await expect(waiting).toHaveCount(2, { timeout: 60_000 });
+    await expect(waiting.first()).toContainText(
+        'You removed Maya from your contacts. Open this to add them again.',
+    );
+    await openWaiting(sam, 'You removed Maya');
+    // Added back on purpose: the rest of what she shared opens too.
+    await expect(sam.locator('[data-shared="module.ts"]')).toBeVisible({ timeout: 60_000 });
+    await expect(sam.locator('[data-shared="notes.md"]')).toBeVisible();
+    await expect(waiting).toHaveCount(0);
     await sam.goto('/app/contacts');
     await expect(sam.locator(`[data-contact="${mayaEmail}"]`)).toHaveAttribute(
         'data-standing',
@@ -146,10 +192,12 @@ test('a key change with no chain is one calm notice; Continue seals the share ag
     await notice.getByRole('button', { name: 'Continue' }).click();
     await expect(maya.getByText('You’re sharing with Sam again')).toBeVisible({ timeout: 60_000 });
 
-    // What waited runs: the share is sealed again, to the keys the server serves now.
+    // What waited runs: both shares are sealed again, to the keys the server serves now.
     await expect
-        .poll(async () => (await sealedForSam())[0], { timeout: 60_000 })
-        .not.toBe(before[0]);
+        .poll(async () => (await sealedForSam()).filter((each: string) => before.includes(each)), {
+            timeout: 60_000,
+        })
+        .toEqual([]);
     await maya.goto('/app/contacts');
     const contact = maya.locator(`[data-contact="${samEmail}"]`);
     await expect(contact).toHaveAttribute('data-standing', 'seen', { timeout: 60_000 });

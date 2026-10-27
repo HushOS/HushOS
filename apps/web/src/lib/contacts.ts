@@ -7,10 +7,14 @@ import {
 } from '@hushos/auth/client';
 import {
     CONTACTS_FULL,
+    contactRemoved,
     keyCommitment,
     nextGuardEntry,
     pinTrust,
+    settingsThatFit,
+    settingsWithoutContact,
     settingsWithPin,
+    withoutRemoval,
     type GuardEntry,
 } from '@hushos/crypto/pins';
 import type { ServedIdentity } from '@hushos/drive/api';
@@ -392,8 +396,10 @@ export async function readSettingsForFamilies(userId: string) {
 export async function compareAndSetSettings(
     userId: string,
     version: number,
-    settings: LoadedSettings['settings'],
+    given: LoadedSettings['settings'],
 ) {
+    // Removals count against the room the document has: the oldest go first (2.7).
+    const settings = settingsThatFit(given);
     const { envelope } = await authClient.rpc('settingsSeal', {
         userId,
         settingsVersion: version + 1,
@@ -432,7 +438,8 @@ export async function saveSettings(
 ) {
     for (let attempt = 0; attempt < 2; attempt++) {
         const current = await readSettings(userId, true);
-        const next = await change(structuredClone(current.settings));
+        // Removals count against the room the document has: the oldest go first (2.7).
+        const next = settingsThatFit(await change(structuredClone(current.settings)));
         const { envelope } = await authClient.rpc('settingsSeal', {
             userId,
             settingsVersion: current.version + 1,
@@ -850,7 +857,8 @@ type SuccessionLink = Awaited<ReturnType<typeof authClient.contactSuccession>>['
  *   holds the served keys, or follows them along a chain from the guard's
  *   keys (`followed`);
  * - new: nobody pinned: first use, or a contact removed from the settings
- *   whose guard holds the served keys;
+ *   whose guard holds the served keys (`removed`: the settings record that
+ *   this account removed them, so nothing adds them back on its own);
  * - succession: a signed succession not looked up (a background pass);
  * - changed: anything else, a pin missing from the settings included;
  * - not-upgraded: a pin from before post-quantum identities whose person has
@@ -862,7 +870,7 @@ type SuccessionLink = Awaited<ReturnType<typeof authClient.contactSuccession>>['
  */
 type Standing =
     | { kind: 'ok'; pin: Pin; entry: GuardEntry | null; followed: boolean }
-    | { kind: 'new'; entry: GuardEntry | null }
+    | { kind: 'new'; entry: GuardEntry | null; removed: boolean }
     | { kind: 'succession'; pin: Pin }
     | { kind: 'changed'; pin: Pin | null; entry: GuardEntry | null; wasVerified: boolean }
     | { kind: 'not-upgraded'; pin: Pin };
@@ -887,10 +895,11 @@ async function stand(
             (trust === 'verified' && (await agreement(entry, pin)) !== 'changed'),
     });
     if (pin === null) {
-        if (entry === null) return { kind: 'new', entry };
+        const removed = contactRemoved(loaded.settings, contactId);
+        if (entry === null) return { kind: 'new', entry, removed };
         const keys = await servedCommitment(served);
         return keys !== null && keys === (await keyCommitment(entry))
-            ? { kind: 'new', entry }
+            ? { kind: 'new', entry, removed }
             : changed();
     }
     if (trust === 'legacy' || trust === 'invalid') {
@@ -1244,7 +1253,7 @@ async function withPinIf(
         (await sameKeys(current, target)) &&
         (!verify || (await pinTrust(current)) === 'verified')
     )
-        return settings;
+        return withoutRemoval(settings, target.userId);
     if (await sameKeys(current, expected)) return withPinOnce(settings, target);
     throw new TrustMovedError();
 }
@@ -1478,13 +1487,16 @@ export async function shareeStanding(userId: string, pin: Pin): Promise<'ok' | '
     return 'changed';
 }
 
-/* Removing forgets the pin in the settings only; this device's guard keeps what it saw (2.8). */
+/*
+ * Removing forgets the pin in the settings and records the removal there
+ * (2.8), so no device adds them back on its own when they share something:
+ * it waits until the person opens it, which adds them again on purpose.
+ * This device's guard keeps what it saw.
+ */
 export async function removeContact(queryClient: QueryClient, userId: string, contactId: string) {
-    const saved = await saveSettings(queryClient, userId, (settings) => {
-        const found = pinOf(settings.contacts, contactId);
-        if (found) delete settings.contacts[found.key];
-        return settings;
-    });
+    const saved = await saveSettings(queryClient, userId, (settings) =>
+        settingsWithoutContact(settings, contactId, new Date().toISOString()),
+    );
     clearChange(userId, contactId);
     return saved;
 }
@@ -1508,37 +1520,22 @@ export class GranterWaitingError extends Error {
     override name = 'GranterWaitingError';
 }
 
-/* The keys a guard entry holds, as a pin no settings carry: what this device already acted on. */
-function pinOfEntry(person: { userId: string; email: string; name: string }, entry: GuardEntry) {
-    return {
-        userId: person.userId,
-        email: person.email,
-        name: person.name,
-        pinnedAt: new Date(0).toISOString(),
-        keyVersion: entry.keyVersion,
-        encryptionPublicKey: entry.encryptionPublicKey,
-        signingPublicKey: entry.signingPublicKey,
-        mlDsaPublicKeyHash: entry.mlDsaPublicKeyHash,
-        kemPublicKeyHash: entry.kemPublicKeyHash,
-        fingerprint: '',
-        previousSigningKeys: entry.previousSigningKeys,
-    } satisfies Pin;
-}
-
 /*
  * Which keys to open a share with (6.4). From someone pinned, the pinned
  * keys, only when the server serves those same keys or a signed succession
- * from them leads to them, and the pin agrees with this device's guard.
- * Anything else waits for the person: "Maya's account changed", Review.
+ * from them leads to them, and the pin agrees with this device's guard (a
+ * pin that came with the settings, with no guard entry here yet, is
+ * remembered in the guard first, or nothing opens). Anything else waits for
+ * the person: "Maya's account changed", Review.
  *
- * Only an explicit open (the person opening this one share, `explicit`) may
- * pin anyone or follow a succession: from someone this device has never met,
- * the keys the share came with are then pinned first-seen and it opens; that
- * is first use, and the server could make a share look as if anyone sent it
- * (docs/optional-verification.md 4.1). Listing what was shared with this
- * person (background discovery) opens only what the keys this device already
- * holds open, a removed contact's guard keys included, and pins nothing, so a
- * removed contact stays removed and a succession waits for the person.
+ * Listing what was shared opens it: from someone this account has never had
+ * as a contact, the keys the share came with are pinned first-seen and it
+ * opens. That is first use, and the server could make a share look as if
+ * anyone sent it (docs/optional-verification.md 4.1). Two things wait for the
+ * person's own open (`explicit`): following a signed succession (2.3), and
+ * adding back someone this account removed (the settings record it) or this
+ * device has acted on before (its guard holds them, their pin gone), so a
+ * removal sticks.
  */
 export async function trustGranter(
     granter: { id: string; name: string; email: string } & Served,
@@ -1549,21 +1546,17 @@ export async function trustGranter(
     const first = firstNameOf(granter.name);
     return withGuardLock(userId, () =>
         decidedAgain(async () => {
+            // Every open remembers the pin it uses in the guard; only the person's own open follows.
             let standing = await stand(userId, granter.id, granter, {
-                act: explicit,
+                act: true,
                 follow: explicit,
             });
-            if (standing.kind === 'new' && !explicit) {
-                // Removed from the settings, but the keys this device acted on: opens, pins nothing.
-                if (standing.entry)
-                    standing = {
-                        kind: 'ok',
-                        pin: pinOfEntry({ ...granter, userId: granter.id }, standing.entry),
-                        entry: standing.entry,
-                        followed: false,
-                    };
-                else throw new GranterWaitingError(`Open this to add ${first} to your contacts.`);
-            }
+            if (standing.kind === 'new' && !explicit && (standing.removed || standing.entry))
+                throw new GranterWaitingError(
+                    standing.removed
+                        ? `You removed ${first} from your contacts. Open this to add them again.`
+                        : `Open this to add ${first} to your contacts.`,
+                );
             if (standing.kind === 'succession')
                 throw new GranterWaitingError(
                     `${first} updated their account. Open this to carry on.`,

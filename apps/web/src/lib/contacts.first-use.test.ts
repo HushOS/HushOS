@@ -541,31 +541,69 @@ describe('another device saving between the read and the save', () => {
 });
 
 describe('listing what was shared, and opening it', () => {
-    test('a share from someone new waits for the person to open it, and listing pins nobody', async () => {
+    test('a share from someone never met opens as it is listed, and pins them first-seen', async () => {
         const w = await world();
-        await expect(trustGranter(granter(w.maya))).rejects.toBeInstanceOf(GranterWaitingError);
-        expect(w.server.saves).toBe(0);
-        expect(await w.real.entry(ME, MAYA)).toBeNull();
-        // Opening it is the person's act: she is pinned, first-seen, and it opens.
-        expect((await trustGranter(granter(w.maya), { explicit: true })).signingPublicKey).toBe(
+        expect((await trustGranter(granter(w.maya))).signingPublicKey).toBe(
             w.maya.signingPublicKey,
         );
-        expect((await w.stored()).contacts[MAYA]!.firstSeen).toBe('shared-with-me');
+        const pin = (await w.stored()).contacts[MAYA]!;
+        expect(pin.firstSeen).toBe('shared-with-me');
+        expect(await pinTrust(pin)).toBe('seen');
+        // Remembered here too, so settings that later drop or swap her are a change.
+        expect(await keyCommitment((await w.real.entry(ME, MAYA))!)).toBe(await keyCommitment(pin));
+        // A second share under other keys pauses: the first keys stand.
+        const other = await startOver(w);
+        await expect(trustGranter(granter(other))).rejects.toBeInstanceOf(AccountChangedError);
+        expect((await w.stored()).contacts[MAYA]!.signingPublicKey).toBe(w.maya.signingPublicKey);
     });
 
-    test('a removed contact stays removed when their shares are listed, and keeps their verified state', async () => {
+    test('a removed contact is never added back by listing, on any device, until the person opens it', async () => {
         const w = await world();
         await addContact(query, ME, MAYA_EMAIL);
         await pinContact(query, ME, await lookupContact(query, ME, MAYA_EMAIL));
         await removeContact(query, ME, MAYA);
+        expect((await w.stored()).removedContacts).toEqual({ [MAYA]: expect.any(String) });
         const saves = w.server.saves;
-        // What she shared still opens, under the keys this device acted on, and nobody is added.
+        // Listing waits, here (the guard holds her) and on a device that never met her.
+        await expect(trustGranter(granter(w.maya))).rejects.toThrow(
+            'You removed Maya from your contacts. Open this to add them again.',
+        );
+        const fresh = createIndexedDbContactGuard(sealerOf(w.device), `fresh-${Math.random()}`);
+        setContactGuard({ store: fresh, persist: async () => true });
+        await expect(trustGranter(granter(w.maya))).rejects.toBeInstanceOf(GranterWaitingError);
+        expect(w.server.saves).toBe(saves);
+        expect((await w.stored()).contacts[MAYA]).toBeUndefined();
+        expect(await fresh.entry(ME, MAYA)).toBeNull();
+
+        // Opening it is the person's act: she is a contact again and the removal is forgotten.
+        setContactGuard({ store: w.store, persist: w.persist });
+        expect((await trustGranter(granter(w.maya), { explicit: true })).signingPublicKey).toBe(
+            w.maya.signingPublicKey,
+        );
+        expect((await w.stored()).contacts[MAYA]).toBeDefined();
+        expect((await w.stored()).removedContacts).toBeUndefined();
+        // The guard kept that this device saw these keys verified.
+        expect((await w.real.entry(ME, MAYA))!.verified).toBe(true);
+
+        // Adding her back from Contacts forgets a removal too.
+        await removeContact(query, ME, MAYA);
+        expect((await addContact(query, ME, MAYA_EMAIL)).outcome).toBe('added');
+        expect((await w.stored()).removedContacts).toBeUndefined();
         expect((await trustGranter(granter(w.maya))).signingPublicKey).toBe(
             w.maya.signingPublicKey,
         );
+    });
+
+    test('a pin gone from the settings with no removal recorded waits too where the guard holds them', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        // An older app removed her (it records no removal), or a copy of the settings dropped her.
+        await w.replace({ ...(await w.stored()), contacts: {} });
+        const saves = w.server.saves;
+        await expect(trustGranter(granter(w.maya))).rejects.toThrow(
+            'Open this to add Maya to your contacts.',
+        );
         expect(w.server.saves).toBe(saves);
-        expect((await w.stored()).contacts[MAYA]).toBeUndefined();
-        expect((await w.real.entry(ME, MAYA))!.verified).toBe(true);
     });
 });
 

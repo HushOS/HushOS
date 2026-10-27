@@ -20,6 +20,8 @@ import {
     sealSettings,
     SETTINGS_MAX_BYTES,
     SETTINGS_PAD_STEP,
+    contactRemoved,
+    settingsWithoutContact,
     settingsWithPin,
     type Settings,
     type SettingsEnvelope,
@@ -435,6 +437,62 @@ describe('room for first-seen pins', () => {
             settingsWithPin(settings, { ...firstSeen(0), name: 'P' }).contacts[firstSeen(0).userId]!
                 .name,
         ).toBe('P');
+    });
+
+    test('a removal is recorded, forgotten when they are pinned again, and the oldest go first when room runs out', async () => {
+        const one = firstSeen(1);
+        let settings: Settings = settingsWithPin({ version: 2, contacts: {} }, one);
+        settings = settingsWithoutContact(
+            settings,
+            one.userId.toUpperCase(),
+            '2026-10-01T00:00:00Z',
+        );
+        expect(settings.contacts).toEqual({});
+        expect(contactRemoved(settings, one.userId)).toBe(true);
+        expect(contactRemoved(settingsWithPin(settings, one), one.userId)).toBe(false);
+
+        // A document full of pins, with removals filling what room is left.
+        let full: Settings = { version: 2, contacts: {} };
+        let count = 0;
+        for (;;) {
+            try {
+                full = settingsWithPin(full, firstSeen(1000 + count));
+            } catch {
+                break;
+            }
+            count++;
+        }
+        // Drop the last pin and fill its room and more with removals, oldest first in time.
+        const last = firstSeen(1000 + count - 1);
+        full = settingsWithoutContact(full, last.userId, '2026-01-01T00:00:00Z');
+        const removedAt = (n: number) => `2026-02-${String(n + 1).padStart(2, '0')}T00:00:00Z`;
+        const removals: Record<string, string> = { ...full.removedContacts };
+        for (let n = 0; n < 20; n++) removals[`dead${n}`.padEnd(36, '0')] = removedAt(n);
+        full = { ...full, removedContacts: removals };
+        // Pinning again needs room the removals hold: the oldest are forgotten until it fits.
+        const back = settingsWithPin(full, last);
+        const kept = Object.keys(back.removedContacts ?? {});
+        expect(back.contacts[last.userId]).toBeDefined();
+        expect(contactRemoved(back, last.userId)).toBe(false);
+        expect(kept.length).toBeGreaterThan(0);
+        expect(kept.length).toBeLessThan(20);
+        // Only the oldest went: every one kept is newer than every one forgotten.
+        const forgotten = Object.keys(removals).filter(
+            (id) => !kept.includes(id) && id !== last.userId,
+        );
+        const newest = (ids: string[]) =>
+            ids
+                .map((id) => removals[id]!)
+                .sort()
+                .at(-1)!;
+        const oldest = (ids: string[]) => ids.map((id) => removals[id]!).sort()[0]!;
+        expect(newest(forgotten) < oldest(kept)).toBe(true);
+        const { key } = await createSettingsKey(crypto.getRandomValues(new Uint8Array(32)), USER);
+        await expect(sealSettings(key, USER, 1, back)).resolves.toBeDefined();
+        // With no removal left to forget, one more pin is still refused.
+        expect(() =>
+            settingsWithPin({ ...back, removedContacts: undefined }, firstSeen(5000)),
+        ).toThrow(CONTACTS_FULL);
     });
 });
 

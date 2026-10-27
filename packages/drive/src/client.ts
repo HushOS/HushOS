@@ -268,8 +268,8 @@ export type DriveClientOptions = {
      * only when the served keys match. Throws to refuse (no pin, an unchecked
      * one, or keys that changed). Without it, shares received cannot be opened.
      * `explicit` is the person opening that one share (openShare): only then
-     * may it pin someone new or follow a succession; listing what was shared
-     * (mountShares) never does.
+     * may it follow a succession or add back someone the person removed;
+     * listing what was shared (mountShares) opens only what needs neither.
      */
     trustGranter?: (granter: Granter, how: { explicit: boolean }) => Promise<TrustedGranter>;
     /*
@@ -335,8 +335,8 @@ export type SharingLedger = {
 
 /*
  * `unverified`: the share stays shut until its granter can be pinned.
- * `waiting`: it opens when the person opens it (openShare), which may pin its
- * granter or follow their succession; listing never does.
+ * `waiting`: it opens when the person opens it (openShare), which may add its
+ * granter back or follow their succession; listing never does.
  */
 export type ShareMount = SharedWithMeView & {
     node: DriveNode;
@@ -1929,7 +1929,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     /*
      * Everything shared with this person, keys opened; a share whose granter is
      * not trusted is reported, not opened. `explicit`, the one share the person
-     * is opening now (openShare): its granter may be pinned or followed.
+     * is opening now (openShare): its granter may be added back or followed.
      */
     function mountShares(refresh = false, explicit?: string) {
         // Before Drive is open there is no identity to open a share with; a failure
@@ -2002,7 +2002,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         return mounts;
     }
 
-    /* The person opening one share: its granter may be pinned or followed, and it opens. */
+    /* The person opening one share: its granter may be added back or followed, and it opens. */
     async function openShare(shareId: string) {
         const mounted = await mountShares(true, shareId);
         const share = mounted.find((each) => each.id === shareId);
