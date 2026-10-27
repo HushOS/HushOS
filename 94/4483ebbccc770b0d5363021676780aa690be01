@@ -1,0 +1,41 @@
+packages/auth/src/server.ts
+  s_566b8e0c4467a4::t_124cfe3c0e46d5 1941-1946
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_f49c6d6ae7c891 2110-2112,2139-2150,2156-2162,2168,2176
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_20a6f919f59ea6 2,980-988,5906-5963
+packages/db/src/auth.ts
+  s_566b8e0c4467a4::t_2492e0d76244c9 1094,1096-1097,1103-1105,1111
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_18238e21131e90 317-322,1518-1526,1904-1905,1932-1962,1988,2159-2161,2185-2186
+packages/groups/src/protocol.ts
+  s_566b8e0c4467a4::t_3c208d23ad64d3 17-18
+packages/groups/src/server.billing.test.ts
+  s_16035d598d7fa4::t_28a3187500ee41 1225-1264
+packages/groups/src/server.ts
+  s_566b8e0c4467a4::t_144d0a49113c41 779-790,895-896,2274-2275
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "944483ebbccc770b0d5363021676780aa690be01",
+  "prompts": {},
+  "sessions": {
+    "s_16035d598d7fa4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a17c21-4476-7e51-b797-b577fbff2b30",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
