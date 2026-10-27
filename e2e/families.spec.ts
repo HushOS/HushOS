@@ -2987,7 +2987,7 @@ test.describe
                 name: 'Empty the family folders’ Trash?',
             });
             await expect(confirm).toContainText(
-                '1 item in the family folders’ Trash is deleted for good, for everyone in the family. 1 item in folders you can’t change stays.',
+                '1 item in the family folders’ Trash is deleted for good, for everyone in the family. 1 item in folders this device can’t change stays. If a folder’s keys changed, use Check again on that folder.',
             );
             await confirm.getByRole('button', { name: 'Empty Trash' }).click();
             await expect(ben.page.getByText('Some items are still in the Trash')).toBeVisible({
@@ -2998,7 +2998,7 @@ test.describe
             await expect(row('beach.txt')).toBeVisible();
             // What stays is explained under the list, not only in the toast.
             await expect(ben.page.locator('[data-family-trash-stays]')).toHaveText(
-                'Items in folders you can’t change stay until someone who can deletes them.',
+                'Items in folders this device can’t change stay until they’re deleted from a device that can, or after 30 days. If a folder’s keys changed, use Check again on that folder.',
             );
         } finally {
             await ben.page.unrouteAll({ behavior: 'ignoreErrors' });

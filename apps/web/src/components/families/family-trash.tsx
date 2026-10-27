@@ -28,7 +28,7 @@ import {
     nodeSize,
 } from '@/lib/drive';
 import { useIsMobile } from '@/hooks/use-mobile';
-import { emptyConfirmText, emptyPlan, emptyResult } from '@/lib/family-trash';
+import { emptyConfirmText, emptyPlan, emptyResult, staysLine } from '@/lib/family-trash';
 import { openArea, useFamilySpace } from '@/lib/spaces';
 import { cue } from '@/lib/sounds';
 
@@ -155,14 +155,24 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
 
     // What Empty Trash deletes and what stays (lib/family-trash.ts): only items in folders
     // this device may write, an item inside a trashed folder going with that folder.
+    // Family folders this device couldn't open aren't listed (familyTrashQueryOptions skips
+    // them), so their Trash is never counted: the page says so and never claims it is empty.
+    const unopened = space.areas.some((state) => !state.opened || !state.view.root);
     const plan = emptyPlan(
-        (trash.data ?? []).map((row) => ({
-            row,
-            writable: writable(row),
-            parentTrashed: row.parentTrashed,
-            kind: row.node.kind,
-        })),
+        (trash.data ?? []).map((row) => {
+            const write = space.areas.find((area) => area.workspaceId === row.workspaceId)?.write;
+            return {
+                row,
+                writable: write === 'writable',
+                reason:
+                    write === 'keys-changed' ? ('keys-changed' as const) : ('read-only' as const),
+                parentTrashed: row.parentTrashed,
+                kind: row.node.kind,
+            };
+        }),
+        { unopened },
     );
+    const stays = staysLine(plan);
 
     async function emptyAll() {
         setConfirmEmpty(false);
@@ -181,8 +191,15 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
         }
         setEmptying(null);
         await invalidateFolders(queryClient);
-        const result = emptyResult({ asked: rows.length, failed, stays: plan.stays });
-        cue(result.type === 'success' ? 'droplet' : 'error');
+        const result = emptyResult({
+            asked: rows.length,
+            failed,
+            stays: plan.stays,
+            keysChanged: plan.keysChanged,
+            unopened: plan.unopened,
+        });
+        // Something was deleted unless every request failed: the deletion's sound, not an error's.
+        cue(result.type === 'error' ? 'error' : 'droplet');
         toast.add(result);
     }
 
@@ -217,7 +234,7 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
                     </Button>
                 </EmptyState>
             )}
-            {trash.data?.length === 0 && (
+            {trash.data?.length === 0 && !unopened && (
                 <EmptyState
                     title="Trash is empty"
                     body="What anyone in the family moves to the Trash from the family folders stays here for 30 days."
@@ -390,14 +407,14 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
                     </tbody>
                 </table>
             )}
-            {plan.stays > 0 && (
-                // Why some rows have no actions and Empty Trash leaves them: said where they are,
-                // not only in a toast that goes.
+            {stays && (
+                // Why some rows have no actions and Empty Trash leaves them, or why some folders'
+                // Trash is missing: said where they are, not only in a toast that goes.
                 <p
                     data-family-trash-stays
                     className="px-5 py-4 text-[13px] text-muted-foreground sm:px-8"
                 >
-                    Items in folders you can’t change stay until someone who can deletes them.
+                    {stays}
                 </p>
             )}
             <AlertDialog open={confirmEmpty} onOpenChange={setConfirmEmpty}>
