@@ -1,0 +1,23 @@
+apps/web/src/lib/device-data.test.ts
+  s_566b8e0c4467a4::t_335b7de170579a 322
+apps/web/src/lib/stash.test.ts
+  s_566b8e0c4467a4::t_5131166d8cf9f0 103,126,237-345
+apps/web/src/lib/stash.ts
+  s_566b8e0c4467a4::t_9e6433fa5111be 74-79,81-88,189-197,245,247-250,295-298
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e8395394b69337b794a306c971e285d815091027",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
