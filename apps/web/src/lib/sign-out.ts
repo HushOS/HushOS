@@ -10,9 +10,9 @@ import { loadPage } from '@/lib/load-page';
 /*
  * What Drive kept on this device between visits, which would otherwise outlive
  * the account here: unfinished uploads are stopped, their journal (file names
- * and chunk digests) emptied and their stashed bytes (sealed copies)
- * deleted; the mirrored tree (ciphertext, but its shape, sizes and times) is
- * dropped; families' sealed records and family folders' mirrors are deleted;
+ * and chunk digests) and their stashed bytes (sealed copies) deleted; the
+ * mirrored tree (ciphertext, but its shape, sizes and times) is deleted;
+ * families' sealed records and family folders' mirrors are deleted;
  * and a saved return to a link (its key in the fragment) goes. Drive
  * loads on demand, so a page that never opened it does not pull it in here.
  */
@@ -27,32 +27,52 @@ export async function forgetDevice() {
     }
 }
 
+/* How long each part of clearing the device may take before it is given up on. */
+export const CLEAR_PART_MS = 6_000;
+
+/* Clearing the device did not finish: what stayed is named in `cause`, and a later try may get it. */
+export class DeviceNotCleared extends Error {
+    override name = 'DeviceNotCleared';
+    constructor(cause: unknown) {
+        super('Some of what HushOS kept on this browser could not be deleted.', { cause });
+    }
+}
+
 /*
  * The same, failing when any part did not clear: a removed device acknowledges its removal
  * (and lets go of the cookie) only once this resolved, so a blocked store is tried again.
- * Drive's parts are stopped and cleared by their owners first; then everything this browser
- * keeps for an account is deleted by name. What that is lives in one list, lib/device-data.ts:
- * a new store that holds anything of an account is registered there.
+ * Drive's parts are stopped by their owners first, without opening anything to empty it (a
+ * store opened while its deletion waits on another tab waits too, with no end); then
+ * everything this browser keeps for an account is deleted by name. What that is lives in one
+ * list, lib/device-data.ts: a new store that holds anything of an account is registered
+ * there. Each part gives up after CLEAR_PART_MS, so this always settles, with
+ * DeviceNotCleared when anything stayed.
  */
 export async function clearDevice() {
     const results = await Promise.allSettled([clearDrive()]);
-    results.push(...(await Promise.allSettled([forgetBrowserData()])));
+    results.push(
+        ...(await Promise.allSettled([
+            within(forgetBrowserData(), CLEAR_PART_MS, 'Device storage did not clear in time.'),
+        ])),
+    );
     const failed = results.find((result) => result.status === 'rejected');
-    if (failed) throw failed.reason;
+    if (failed) throw new DeviceNotCleared(failed.reason);
 }
 
 async function clearDrive() {
     forgetReturn();
     // Every part is tried whatever another does; the first failure is reported once all settled.
-    const results = await Promise.allSettled([
-        import('@/lib/transfers').then(({ transfers }) => transfers.forgetAll()),
-        // The sealed stash and the key for it, whatever the uploads left.
-        import('@/lib/stash').then(({ forgetStash }) => forgetStash()),
-        import('@/lib/drive').then(({ driveClient }) => driveClient.forgetMirror()),
-        // Families: the sealed chain records, outbox and joins, and every family folder's
-        // mirror (the 1c plan, 1.3). Membership is the social graph; none of it stays.
-        import('@/lib/groups/store').then(({ deleteGroupDevice }) => deleteGroupDevice()),
-    ]);
+    const results = await Promise.allSettled(
+        [
+            // Uploads stop; their journal goes with the databases below, never opened to be emptied.
+            import('@/lib/transfers').then(({ transfers }) => transfers.invalidate()),
+            // The sealed stash and the key for it, whatever the uploads left.
+            import('@/lib/stash').then(({ forgetStash }) => forgetStash()),
+            // Families: the sealed chain records, outbox and joins, and every family folder's
+            // mirror (the 1c plan, 1.3). Membership is the social graph; none of it stays.
+            import('@/lib/groups/store').then(({ deleteGroupDevice }) => deleteGroupDevice()),
+        ].map((part) => within(part, CLEAR_PART_MS, 'Part of this device did not clear in time.')),
+    );
     const failed = results.find((result) => result.status === 'rejected');
     if (failed) throw failed.reason;
 }

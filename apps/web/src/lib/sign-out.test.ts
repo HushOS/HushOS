@@ -16,7 +16,8 @@ const stores = vi.hoisted(() => ({
     browser: vi.fn(),
     transfers: vi.fn(),
     stash: vi.fn(),
-    mirror: vi.fn(),
+    // Uploads stopped before the logout, while the session can still release them.
+    uploads: vi.fn(),
     groups: vi.fn(),
 }));
 /* What the open app holds in memory, and the auth client with a real store to lock. */
@@ -33,10 +34,12 @@ const auth = vi.hoisted(() => ({
     logout: vi.fn(),
 }));
 const forgetSession = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/transfers', () => ({ transfers: { forgetAll: stores.transfers } }));
+vi.mock('@/lib/transfers', () => ({
+    transfers: { forgetAll: stores.uploads, invalidate: stores.transfers },
+}));
 vi.mock('@/lib/stash', () => ({ forgetStash: stores.stash }));
 vi.mock('@/lib/drive', () => ({
-    driveClient: { forgetMirror: stores.mirror, close: memory.close },
+    driveClient: { close: memory.close },
     closeSpaces: memory.spaces,
     stopSpaces,
 }));
@@ -57,6 +60,8 @@ vi.mock('@/lib/device-data', async (importOriginal) => ({
 
 const {
     clearDevice,
+    CLEAR_PART_MS,
+    DeviceNotCleared,
     forgetDevice,
     leaveApp,
     signOut,
@@ -78,7 +83,7 @@ beforeEach(() => {
     stores.browser.mockResolvedValue(undefined);
     stores.transfers.mockResolvedValue(undefined);
     stores.stash.mockResolvedValue(undefined);
-    stores.mirror.mockResolvedValue(undefined);
+    stores.uploads.mockResolvedValue(undefined);
     stores.groups.mockResolvedValue(undefined);
     auth.store = createStore(() => ({ unlockedUserId: 'maya' as string | null }));
     // Logging out locks this device at once, as the auth client does, then asks the server.
@@ -92,21 +97,23 @@ describe('clearing a removed browser', () => {
         expect(stores.browser).toHaveBeenCalledOnce();
         expect(stores.transfers).toHaveBeenCalledOnce();
         expect(stores.stash).toHaveBeenCalledOnce();
-        expect(stores.mirror).toHaveBeenCalledOnce();
         expect(stores.groups).toHaveBeenCalledOnce();
+        // Nothing is opened to be emptied: an open waits behind a deletion another tab holds up.
+        expect(stores.uploads).not.toHaveBeenCalled();
     });
 
     test.each([
         ['what this browser keeps for the account', 'browser'],
         ['the uploads and their journal', 'transfers'],
         ['the sealed stash', 'stash'],
-        ['the mirror', 'mirror'],
         ['the families and their folders’ mirrors', 'groups'],
     ] as const)(
         'rejects when %s did not clear, so the removal is not acknowledged',
         async (_label, store) => {
             stores[store].mockRejectedValue(new Error('Device storage is busy in another tab.'));
-            await expect(clearDevice()).rejects.toThrow('busy');
+            const failure = await clearDevice().catch((error: unknown) => error);
+            expect(failure).toBeInstanceOf(DeviceNotCleared);
+            expect(String((failure as Error).cause)).toContain('busy');
             // Signing out does not care: it goes on and ends the session,
             // and says that something stayed rather than swallow it.
             const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -135,27 +142,42 @@ describe('clearing a removed browser', () => {
         expect(stoppedFirst).toBe(true);
     });
 
+    test('settles, failing, when a store never answers, rather than wait on it', async () => {
+        vi.useFakeTimers();
+        try {
+            const never = new Promise<undefined>(() => {});
+            stores.groups.mockReturnValue(never);
+            stores.browser.mockReturnValue(never);
+            const failure = clearDevice().catch((error: unknown) => error);
+            await vi.advanceTimersByTimeAsync(2 * CLEAR_PART_MS + 10);
+            expect(await failure).toBeInstanceOf(DeviceNotCleared);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     test('deletes the stores by name even when a Drive part failed', async () => {
         stores.groups.mockRejectedValue(new Error('Device storage is busy in another tab.'));
-        await expect(clearDevice()).rejects.toThrow('busy');
+        await expect(clearDevice()).rejects.toBeInstanceOf(DeviceNotCleared);
         expect(stores.browser).toHaveBeenCalledOnce();
     });
 
     test('clears every other store when one fails, then says it failed', async () => {
         stores.stash.mockRejectedValue(new Error('The stash could not be deleted.'));
-        let mirrorCleared = false;
-        stores.mirror.mockImplementation(
+        let familiesCleared = false;
+        stores.groups.mockImplementation(
             () =>
                 new Promise((resolve) =>
                     setTimeout(() => {
-                        mirrorCleared = true;
+                        familiesCleared = true;
                         resolve(undefined);
                     }, 20),
                 ),
         );
-        await expect(clearDevice()).rejects.toThrow('could not be deleted');
+        const failure = await clearDevice().catch((error: unknown) => error);
+        expect(String((failure as Error).cause)).toContain('could not be deleted');
         // Reported only after the slower stores finished, not as soon as the first one failed.
-        expect(mirrorCleared).toBe(true);
+        expect(familiesCleared).toBe(true);
         expect(stores.transfers).toHaveBeenCalledOnce();
         expect(stores.groups).toHaveBeenCalledOnce();
     });
@@ -170,11 +192,11 @@ describe('clearing a removed browser', () => {
  * stalls never leaves.
  */
 describe('signing out of the app', () => {
-    /* The tree on this device: written by a feed pull, emptied by forgetMirror. */
+    /* The tree on this device: written by a feed pull, deleted with the device's databases. */
     let mirrorRows = 0;
     beforeEach(() => {
         mirrorRows = 3;
-        stores.mirror.mockImplementation(async () => {
+        stores.browser.mockImplementation(async () => {
             mirrorRows = 0;
         });
     });
@@ -206,6 +228,34 @@ describe('signing out of the app', () => {
         };
     }
 
+    test('a database another tab never lets go of still lets leaving finish, and says what stayed', async () => {
+        vi.useFakeTimers();
+        try {
+            const never = new Promise<undefined>(() => {});
+            stores.browser.mockReturnValue(never);
+            stores.groups.mockReturnValue(never);
+            const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+            const { router, navigate } = leaving();
+            let left = false;
+            void leaveApp(router).then(() => (left = true));
+            // The sign-out's own wipe, then the one after the page has gone: each part bounded.
+            await vi.advanceTimersByTimeAsync(4 * CLEAR_PART_MS);
+            expect(left).toBe(true);
+            expect(navigate).toHaveBeenCalledOnce();
+            // And the wait a sign-in makes on it is over too.
+            let settled = false;
+            void signOutSettled().then(() => (settled = true));
+            await vi.advanceTimersByTimeAsync(10);
+            expect(settled).toBe(true);
+            const failures = logged.mock.calls
+                .flat()
+                .filter((value) => value instanceof DeviceNotCleared);
+            expect(failures.length).toBeGreaterThanOrEqual(2);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     test('holds the page until the sign-in page replaces it, then forgets what it drew from', async () => {
         const { router, navigate, clear, draw, seen } = leaving();
         expect(draw()).toBe('maya');
@@ -235,7 +285,7 @@ describe('signing out of the app', () => {
         await leaveApp(router);
         expect(mirrorRows).toBe(0);
         // Wiped again only once the workspace that pulls the feed was closed.
-        const lastWipe = stores.mirror.mock.invocationCallOrder.at(-1)!;
+        const lastWipe = stores.browser.mock.invocationCallOrder.at(-1)!;
         expect(lastWipe).toBeGreaterThan(memory.close.mock.invocationCallOrder[0]!);
     });
 
@@ -496,7 +546,7 @@ describe('signing out, before the device is cleared', () => {
             mock.mock.invocationCallOrder[0]!;
         expect(first(announced)).toBeLessThan(first(auth.logout));
         expect(first(auth.logout)).toBeLessThan(first(stores.browser));
-        expect(first(auth.logout)).toBeLessThan(first(stores.mirror));
+        expect(first(auth.logout)).toBeLessThan(first(stores.groups));
     });
 
     test('a database delete that never answers never keeps the server session from ending', async () => {
@@ -510,7 +560,7 @@ describe('signing out, before the device is cleared', () => {
     test('uploads that never stop hold the session up only so long', async () => {
         vi.useFakeTimers();
         try {
-            stores.transfers.mockReturnValue(new Promise(() => {}));
+            stores.uploads.mockReturnValue(new Promise(() => {}));
             const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
             void signOut();
             await vi.advanceTimersByTimeAsync(STOP_UPLOADS_MS - 10);
