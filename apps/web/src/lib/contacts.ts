@@ -762,17 +762,25 @@ async function rememberSynced(
     contacts: Record<string, Pin>,
     entries: Map<string, GuardEntry>,
 ) {
-    const missing: Pin[] = [];
+    const missing: string[] = [];
     for (const pin of Object.values(contacts)) {
         if (entries.has(pin.userId.toLowerCase())) continue;
         const trust = await pinTrust(pin);
-        if (trust === 'verified' || trust === 'seen') missing.push(pin);
+        if (trust === 'verified' || trust === 'seen') missing.push(pin.userId);
     }
     if (!missing.length) return entries;
     await withGuardLock(userId, async () => {
-        for (const pin of missing)
-            if ((await guardFor(userId, pin.userId, pin)) === null)
-                await rememberKeys(userId, pin.userId, null, pin);
+        // Read again under the lock: an act another tab left pending is settled only against the
+        // settings as they are now, never against a pin read before the lock was ours.
+        const { settings } = await loadSettings(userId);
+        for (const contactId of missing) {
+            const pin = pinOf(settings.contacts, contactId)?.pin ?? null;
+            const entry = await guardFor(userId, contactId, pin);
+            if (entry !== null || pin === null) continue;
+            const trust = await pinTrust(pin);
+            if (trust === 'verified' || trust === 'seen')
+                await rememberKeys(userId, contactId, null, pin);
+        }
     });
     try {
         return await contactGuard().store.entries(userId);

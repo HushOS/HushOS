@@ -15,6 +15,7 @@ import {
     GUARD_UNSAVED,
     type ContactGuardStore,
     type GuardSealer,
+    withGuardLock,
 } from './contact-guard';
 import { account } from './groups/worker-testkit';
 
@@ -446,6 +447,51 @@ describe('the guard (2.8)', () => {
         full.fail.commit = new DOMException('full', 'QuotaExceededError');
         await expect(trustedSigners(ME)).rejects.toThrow(GUARD_UNSAVED);
         await expect(trustGranter(granter(full.maya))).rejects.toThrow(GUARD_UNSAVED);
+    });
+
+    test('a verdict that waited for the lock settles another tab’s pending act against the settings as they are now', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        // A new device: the settings hold Maya at K0, the guard holds nothing.
+        await deleteContactGuard(w.guardName);
+        let release!: () => void;
+        const held = withGuardLock(ME, () => new Promise<void>((done) => (release = done)));
+        const read = vi.spyOn(w.store, 'entries');
+        // A verdict reads K0 and the guard's empty entries, then waits for the lock.
+        const judged = trustedSigners(ME);
+        await vi.waitFor(() => expect(read).toHaveBeenCalled());
+        await new Promise((done) => setTimeout(done, 50));
+        // Meanwhile another tab continues to K1: its pending record and the settings land, and it
+        // is interrupted before it writes the guard.
+        const after = await startOver(w);
+        const moved = {
+            ...(await w.stored()).contacts[MAYA]!,
+            ...(await pinOfServed(
+                {
+                    ...after,
+                    mlDsaPublicKey: after.mlDsaPublicKey!,
+                    kemPublicKey: after.kemPublicKey!,
+                },
+                'seen',
+            )),
+        };
+        await w.real.putPending(ME, MAYA, {
+            target: (await keyCommitment(moved))!,
+            revision: 0,
+            at: new Date().toISOString(),
+        });
+        await w.replace({ ...(await w.stored()), contacts: { [MAYA]: moved } });
+        release();
+        await held;
+        // The queued verdict finishes that act (K1), never keeps K0 over it.
+        expect((await judged)[MAYA]).toMatchObject({ current: after.signingPublicKey });
+        expect((await w.real.entry(ME, MAYA))!.signingPublicKey).toBe(after.signingPublicKey);
+        expect(await w.real.pending(ME, MAYA)).toBeNull();
+        // So sharing with her goes on with no notice.
+        expect(await trustGrantee(ME, MAYA, after)).toMatchObject({
+            encryptionPublicKey: after.encryptionPublicKey,
+        });
+        read.mockRestore();
     });
 
     test('a lost settings answer shares nothing on the act, and the next act finishes it silently', async () => {
