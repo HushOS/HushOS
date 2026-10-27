@@ -296,6 +296,29 @@ export type AffiliateInput = {
     notes: string | null;
 };
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+/* The database itself, or a transaction holding the affiliate lock. */
+type Executor = typeof db | Tx;
+
+/*
+ * One affiliate's terms change one change at a time: a transaction-scoped
+ * advisory lock keyed by the affiliate's id, held while `run` reads the row,
+ * asks the provider, and writes. Two changes that each read, sent the provider
+ * their merged terms and wrote would otherwise leave the provider with one set
+ * and the row with another. The lock is held across the provider's call, which
+ * is admin-only, rare and per affiliate: one operator's second save waits a
+ * moment, nothing else does. A hash collision only serialises two affiliates.
+ */
+const AFFILIATE_LOCK_SPACE = 0x61666c74;
+export async function withAffiliateLock<T>(id: string, run: (tx: Tx) => Promise<T>) {
+    return db.transaction(async (tx) => {
+        await tx.execute(
+            sql`select pg_advisory_xact_lock(${AFFILIATE_LOCK_SPACE}::int, hashtext(${id}))`,
+        );
+        return run(tx);
+    });
+}
+
 export async function createAffiliate(
     input: AffiliateInput & { providerDiscountId: string | null },
 ) {
@@ -316,8 +339,9 @@ export async function updateAffiliate(
         active?: boolean;
         providerDiscountId?: string | null;
     },
+    executor: Executor = db,
 ) {
-    const [row] = await db
+    const [row] = await executor
         .update(affiliates)
         .set({
             ...patch,
@@ -335,8 +359,8 @@ export async function updateAffiliate(
  * people who signed up through them (their accounts stay; an affiliate
  * attribution carries no reward) and the ledger of their earnings.
  */
-export async function deleteAffiliate(id: string) {
-    return db.transaction(async (tx) => {
+export async function deleteAffiliate(id: string, executor: Executor = db) {
+    return executor.transaction(async (tx) => {
         await tx.delete(referrals).where(eq(referrals.affiliateId, id));
         const rows = await tx
             .delete(affiliates)
@@ -346,8 +370,8 @@ export async function deleteAffiliate(id: string) {
     });
 }
 
-export async function getAffiliate(id: string) {
-    const [row] = await db.select().from(affiliates).where(eq(affiliates.id, id));
+export async function getAffiliate(id: string, executor: Executor = db) {
+    const [row] = await executor.select().from(affiliates).where(eq(affiliates.id, id));
     return row ?? null;
 }
 

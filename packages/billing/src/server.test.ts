@@ -2373,8 +2373,8 @@ describe('affiliates', () => {
         const read = growthRepository.getAffiliate;
         return vi
             .spyOn(growthRepository, 'getAffiliate')
-            .mockImplementationOnce(async (id: string) => {
-                const row = await read(id);
+            .mockImplementationOnce(async (...args: Parameters<typeof read>) => {
+                const row = await read(...args);
                 await between();
                 return row;
             });
@@ -2401,6 +2401,36 @@ describe('affiliates', () => {
             'discounts.update:disc_creator25',
         ]);
         expect(polar.discounts).toEqual([expect.objectContaining({ basis_points: 3000 })]);
+    });
+
+    test('two term changes at once leave Polar and the row on the same terms: the second waits for the first', async () => {
+        const affiliate = await creator();
+        polar.calls = [];
+        const finished: string[] = [];
+        let second: Promise<unknown> = Promise.resolve();
+        // B changes the duration right after A has read the row. Given 300 ms it either
+        // finishes (nothing serialises them) or is still waiting for A.
+        const spy = landsBetween(async () => {
+            second = growth
+                .updateAffiliate(affiliate.id, { duration: 'once' })
+                .then(() => finished.push('duration'));
+            await Promise.race([second, new Promise((resolve) => setTimeout(resolve, 300))]);
+        });
+        try {
+            await growth.updateAffiliate(affiliate.id, { percentOff: 30 });
+            finished.push('percent');
+            await second;
+        } finally {
+            spy.mockRestore();
+        }
+        expect(finished).toEqual(['percent', 'duration']);
+        expect((await growth.listAffiliates())[0]).toMatchObject({
+            percentOff: 30,
+            duration: 'once',
+        });
+        expect(polar.discounts).toEqual([
+            expect.objectContaining({ basis_points: 3000, duration: 'once' }),
+        ]);
     });
 
     test('pausing never undoes a save that landed while it ran, here or at Polar', async () => {

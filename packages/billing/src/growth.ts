@@ -347,13 +347,18 @@ export async function updateAffiliate(
     id: string,
     patch: Partial<AffiliateInput> & { active?: boolean },
 ) {
-    const row = await growthRepository.getAffiliate(id);
-    if (!row) throw new BillingError('That affiliate does not exist.', 404);
-    // Only what the patch names is written. A pause or an unlink names no terms, so it
-    // writes none and asks nothing of Polar: it cannot put back terms that a save
-    // changed after this read, here or at the provider.
-    const changes: Parameters<typeof growthRepository.updateAffiliate>[1] = {};
-    if (TERMS.some((key) => patch[key] !== undefined)) {
+    // Pause, unlink and notes name no term: they write their own columns only, outside
+    // the lock, and cannot put back terms a save changed while they ran.
+    if (!TERMS.some((key) => patch[key] !== undefined)) {
+        if (!(await growthRepository.getAffiliate(id)))
+            throw new BillingError('That affiliate does not exist.', 404);
+        return view(await growthRepository.updateAffiliate(id, await otherChanges(patch)));
+    }
+    // A change of terms holds the affiliate's lock from its read to its write, so the
+    // provider and the row end on the same terms whichever of two saves came first.
+    const row = await growthRepository.withAffiliateLock(id, async (tx) => {
+        const row = await growthRepository.getAffiliate(id, tx);
+        if (!row) throw new BillingError('That affiliate does not exist.', 404);
         const merged: AffiliateInput = {
             name: patch.name ?? row.name,
             slug: patch.slug ?? row.slug,
@@ -371,16 +376,6 @@ export async function updateAffiliate(
         const { name, slug, code, durationMonths } = validate(merged);
         if (slug !== row.slug) await assertHandleFree(slug, id, 'slug');
         if (code !== row.code) await assertHandleFree(code, id, 'code');
-        if (patch.name !== undefined) changes.name = name;
-        if (patch.slug !== undefined) changes.slug = slug;
-        if (patch.code !== undefined) changes.code = code;
-        if (patch.percentOff !== undefined) changes.percentOff = merged.percentOff;
-        // The months belong to the duration: written together, as the check constraint reads them.
-        if (patch.duration !== undefined || patch.durationMonths !== undefined) {
-            changes.duration = merged.duration;
-            changes.durationMonths = durationMonths;
-        }
-        if (patch.commissionBps !== undefined) changes.commissionBps = merged.commissionBps;
         const termsChanged =
             name !== row.name ||
             code !== row.code ||
@@ -395,12 +390,33 @@ export async function updateAffiliate(
                 duration: merged.duration,
                 durationMonths,
             });
-    }
+        // The whole term set, as the provider was just sent it.
+        return growthRepository.updateAffiliate(
+            id,
+            {
+                name,
+                slug,
+                code,
+                percentOff: merged.percentOff,
+                duration: merged.duration,
+                durationMonths,
+                commissionBps: merged.commissionBps,
+                ...(await otherChanges(patch)),
+            },
+            tx,
+        );
+    });
+    return view(row);
+}
+
+/* The columns a patch sets besides the terms: notes, the account, and whether it is live. */
+async function otherChanges(patch: Partial<AffiliateInput> & { active?: boolean }) {
+    const changes: Parameters<typeof growthRepository.updateAffiliate>[1] = {};
     if (patch.notes !== undefined) changes.notes = patch.notes?.trim() || null;
     if (patch.userEmail !== undefined)
         Object.assign(changes, await accountForEmail(patch.userEmail));
     if (patch.active !== undefined) changes.active = patch.active;
-    return view(await growthRepository.updateAffiliate(id, changes));
+    return changes;
 }
 
 /*
@@ -409,17 +425,20 @@ export async function updateAffiliate(
  * attributions and the ledger of what was paid. Commission still owed blocks it.
  */
 export async function deleteAffiliate(id: string) {
-    const row = await growthRepository.getAffiliate(id);
-    if (!row) throw new BillingError('That affiliate does not exist.', 404);
-    const stats = await growthRepository.affiliateStats(id);
-    if (Object.values(stats.earnings).some((total) => total.unpaid > 0))
-        throw new BillingError(
-            'This affiliate is still owed commission. Mark it paid first, or pause them instead.',
-            409,
-        );
-    if (row.providerDiscountId) await deleteProviderDiscount(row.providerDiscountId);
-    await growthRepository.deleteAffiliate(id);
-    return { deleted: true as const };
+    // Under the affiliate's lock: a removal never interleaves with a change of terms.
+    return growthRepository.withAffiliateLock(id, async (tx) => {
+        const row = await growthRepository.getAffiliate(id, tx);
+        if (!row) throw new BillingError('That affiliate does not exist.', 404);
+        const stats = await growthRepository.affiliateStats(id);
+        if (Object.values(stats.earnings).some((total) => total.unpaid > 0))
+            throw new BillingError(
+                'This affiliate is still owed commission. Mark it paid first, or pause them instead.',
+                409,
+            );
+        if (row.providerDiscountId) await deleteProviderDiscount(row.providerDiscountId);
+        await growthRepository.deleteAffiliate(id, tx);
+        return { deleted: true as const };
+    });
 }
 
 export async function markAffiliatePaid(id: string) {
