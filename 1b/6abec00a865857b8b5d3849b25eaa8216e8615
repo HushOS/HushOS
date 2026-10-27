@@ -1,0 +1,23 @@
+apps/web/src/components/drive/check-contact.tsx
+  s_566b8e0c4467a4::t_207abd0af96da2 5,53-57,74,127-141
+e2e/contacts.spec.ts
+  s_566b8e0c4467a4::t_d6917ffd8f1dba 84-90,93-96
+e2e/integrity.spec.ts
+  s_566b8e0c4467a4::t_75e42e7a4e1490 359-361,363-376,382-384,386-387
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1b6abec00a865857b8b5d3849b25eaa8216e8615",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
