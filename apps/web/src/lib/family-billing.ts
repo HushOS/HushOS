@@ -310,6 +310,31 @@ export function renewalAmount(summary: FamilyBillingFull, units: number, plan?: 
 /* An upgrade whose charge the bank hasn't confirmed: the family keeps the tier it paid for. */
 export const upgradeWaiting = (live: FamilySubscription) => live.paidProductId !== live.productId;
 
+/*
+ * A change the bank holds: the summary it was quoted from and what it asks for (the places
+ * after a raise, the tier's product id for an upgrade). Read against each fresh summary, it is
+ * still held, paid, or gone (cut back, dropped, or the plan ended). The summary it was quoted
+ * from says nothing of it: the cache takes the server's answer a tick after the dialog does.
+ */
+export type HeldChange<T> = { summary: FamilyBillingFull; target: T };
+export type Standing = 'held' | 'paid' | 'gone';
+
+/* Paid once the places are paid for and no other charge waits on top of them. */
+export function raiseStanding(summary: FamilyBillingFull, held: HeldChange<number>): Standing {
+    if (summary === held.summary) return 'held';
+    const live = summary.subscription;
+    if (!live || live.units < held.target) return 'gone';
+    return live.paidUnits >= held.target && live.paidUnits >= live.units ? 'paid' : 'held';
+}
+
+/* Paid once the plan is the tier asked for and its charge no longer waits. */
+export function upgradeStanding(summary: FamilyBillingFull, held: HeldChange<string>): Standing {
+    if (summary === held.summary) return 'held';
+    const live = summary.subscription;
+    if (!live || live.productId !== held.target) return 'gone';
+    return upgradeWaiting(live) ? 'held' : 'paid';
+}
+
 /* The smaller tier the family moves to at the period's end, if one is scheduled. */
 export function pendingTier(summary: FamilyBillingFull): FamilyPlan | undefined {
     const id = summary.subscription?.pendingProductId;

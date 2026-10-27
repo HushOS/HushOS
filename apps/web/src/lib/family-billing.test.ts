@@ -14,9 +14,11 @@ import {
     lapsedEndsWords,
     planState,
     quoteAdd,
+    raiseStanding,
     removeRange,
     seatNoteFor,
     tierTooSmall,
+    upgradeStanding,
     type FamilyBillingFull,
     type FamilyGlance,
 } from './family-billing';
@@ -688,5 +690,64 @@ describe('lapsedPlanEndsLine', () => {
         ).toBe(
             'F’s Family Pro and Family plans, which you pay for and which give nothing now, end at once when you leave. Nothing of them is refunded: no part of them is in use.',
         );
+    });
+});
+
+describe('a raise the bank holds, read against a fresh summary', () => {
+    // Six places, raised to eight; the bank holds the charge for the two.
+    const quoted = summary({ units: 6 });
+    const held = { summary: quoted, target: 8 };
+
+    test('the summary it was quoted from is no news: still held, though it has fewer places', () => {
+        expect(raiseStanding(quoted, held)).toBe('held');
+        // The rule is that summary, not one like it: a fresh read saying six means cut back.
+        expect(raiseStanding({ ...quoted }, held)).toBe('gone');
+    });
+
+    test('held while the bank holds the places', () => {
+        expect(raiseStanding(summary({ units: 8, paidUnits: 6 }), held)).toBe('held');
+        expect(raiseStanding(summary({ units: 8, paidUnits: 7 }), held)).toBe('held');
+    });
+
+    test('paid once the places are paid for, at the target or above it', () => {
+        expect(raiseStanding(summary({ units: 8, paidUnits: 8 }), held)).toBe('paid');
+        expect(raiseStanding(summary({ units: 10, paidUnits: 10 }), held)).toBe('paid');
+    });
+
+    test('still held while another charge waits on top of the paid places', () => {
+        expect(raiseStanding(summary({ units: 10, paidUnits: 8 }), held)).toBe('held');
+    });
+
+    test('gone when cut back below the target, or when the plan ended', () => {
+        expect(raiseStanding(summary({ units: 7, paidUnits: 6 }), held)).toBe('gone');
+        expect(raiseStanding(summary({ units: 6 }), held)).toBe('gone');
+        expect(raiseStanding(summary({ live: false }), held)).toBe('gone');
+    });
+});
+
+describe('an upgrade the bank holds, read against a fresh summary', () => {
+    // Pro to Max; the bank holds the charge for the difference.
+    const quoted = onTier('pro-month');
+    const held = { summary: quoted, target: 'max-month' };
+
+    test('the summary it was quoted from is no news: still held, though it names Pro', () => {
+        expect(upgradeStanding(quoted, held)).toBe('held');
+        expect(upgradeStanding({ ...quoted }, held)).toBe('gone');
+    });
+
+    test('held while the plan names Max but the charge for it still waits', () => {
+        expect(upgradeStanding(onTier('max-month', { paidProductId: 'pro-month' }), held)).toBe(
+            'held',
+        );
+    });
+
+    test('paid once Max is the plan and nothing waits', () => {
+        expect(upgradeStanding(onTier('max-month'), held)).toBe('paid');
+    });
+
+    test('gone when the plan is another tier, or when it ended', () => {
+        expect(upgradeStanding(onTier('pro-month'), held)).toBe('gone');
+        expect(upgradeStanding(onTier('plus-month'), held)).toBe('gone');
+        expect(upgradeStanding(onTier('max-month', { live: false }), held)).toBe('gone');
     });
 });

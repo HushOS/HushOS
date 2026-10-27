@@ -50,16 +50,20 @@ import {
     paymentNeedsYou,
     placesOf,
     quoteAdd,
+    raiseStanding,
     seatNoteFor,
     removeRange,
     renewalAmount,
     TAX_LINE,
     TAX_ON_CHARGES,
     tierMoves,
+    upgradeStanding,
     upgradeWaiting,
     type FamilyBilling,
     type FamilyBillingFull,
     type FamilyGlance,
+    type HeldChange,
+    type Standing,
     type TierMove,
 } from '@/lib/family-billing';
 import { formatMoney, formatQuota, formatSpace } from '@/lib/format';
@@ -1199,40 +1203,7 @@ type HeldDialogProps = DialogProps & {
  * line, and the bank's page once the bank holds it. The dialog quotes from this, not from the
  * summaries that follow, which already hold the change and would price a later moment.
  */
-type Sent<T> = {
-    summary: FamilyBillingFull;
-    at: Date;
-    target: T;
-    done: string;
-    url: string | null;
-};
-
-/* Where a change the bank held stands in a fresh summary: still held, paid, or dropped. */
-type Standing = 'held' | 'paid' | 'gone';
-
-function raiseStanding(summary: FamilyBillingFull, units: number): Standing {
-    const live = summary.subscription;
-    if (!live || live.units < units) return 'gone';
-    return live.paidUnits >= units && live.paidUnits >= live.units ? 'paid' : 'held';
-}
-
-function upgradeStanding(summary: FamilyBillingFull, productId: string): Standing {
-    const live = summary.subscription;
-    if (!live || live.productId !== productId) return 'gone';
-    return upgradeWaiting(live) ? 'held' : 'paid';
-}
-
-/*
- * The summary the change was quoted from says nothing of it: the cache takes the server's
- * answer a tick after the dialog does, so until it has, the change is simply held.
- */
-function standingOf<T>(
-    sent: Sent<T>,
-    summary: FamilyBillingFull,
-    standing: (summary: FamilyBillingFull, target: T) => Standing,
-): Standing {
-    return summary === sent.summary ? 'held' : standing(summary, sent.target);
-}
+type Sent<T> = HeldChange<T> & { at: Date; done: string; url: string | null };
 
 /*
  * Paid or dropped elsewhere (the portal in another tab, a cut, the plan gone), a bank step
@@ -1279,7 +1250,7 @@ function AddPlacesDialog({
     const [error, setError] = useState('');
     const [sent, setSent] = useState<Sent<number> | null>(null);
     const confirmUrl = sent?.url ?? null;
-    const standing = sent?.url ? standingOf(sent, props.summary, raiseStanding) : null;
+    const standing = sent?.url ? raiseStanding(props.summary, sent) : null;
     useSettled(open, busy, offered, standing, sent?.done, close);
     const summary = sent?.summary ?? props.summary;
     const range = addRange(summary);
@@ -1426,7 +1397,7 @@ function ChangePlanDialog({
     const [error, setError] = useState('');
     const [sent, setSent] = useState<Sent<string> | null>(null);
     const confirmUrl = sent?.url ?? null;
-    const standing = sent?.url ? standingOf(sent, props.summary, upgradeStanding) : null;
+    const standing = sent?.url ? upgradeStanding(props.summary, sent) : null;
     useSettled(open, busy, offered, standing, sent?.done, close);
     const summary = sent?.summary ?? props.summary;
     const moves = tierMoves(summary, sent?.at);
