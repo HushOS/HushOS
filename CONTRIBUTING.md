@@ -42,6 +42,14 @@ The browser reaches the API through the `AuthApi` and `BillingApi` adapters in `
 
 Auth mutations require `Origin` to match `APP_ORIGIN`, so signing in from a LAN address or a Tailscale hostname needs `APP_ORIGIN` set to that origin and HTTPS in front of it. The dev server answers LAN addresses and `*.ts.net` hostnames; add others to `allowedHosts` in `apps/web/vite.config.ts`. Production does not enable cross-origin API access.
 
+## Component playground
+
+`bun run dev`, then open `http://localhost:5173/dev/components` (and `/dev/layers`). It shows every component in `src/components/ui/` and the main app pieces in each variant, size and state, the app pieces on a frame drawn like the page sheet. The [DialKit](https://github.com/joshpuckett/dialkit) panel on the right (a floating button on a phone) starts with **Playground**: the scheme (light, dark and their high contrast versions, set with the same `light`, `dark` and `hc` classes the app uses, without saving them), **Measure**, which draws edges and px distances over each demo, and **States**, which forces hover and focus-visible through `data-force` attributes. The panels under it tune padding, radius, gap, icon size and offset, springs and the layers' shadows; a panel's copy button puts its values on the clipboard to paste back into code.
+
+The playground is development only. `src/router.tsx` adds its routes behind `import.meta.env.DEV`, which a build replaces with `false`, so the routes, the pages and DialKit never reach the output, and `src/styles.css` keeps `src/dev` out of Tailwind's scan (the playground makes its own utilities in `src/dev/playground.css`). `bun run build` ends with `scripts/check-dev-only.ts`, which fails if any of it does reach the output. Its files live in `src/dev/`, outside `src/routes/`, so `routeTree.gen.ts` never changes.
+
+To add a component, write a function in `src/dev/demos/` that returns a `<Demo id title note>` with its samples (`Row`, `Sample`, `States` for the forced states, `SheetFrame` for a piece that sits on the page sheet), add it to `DEMOS` in `src/dev/components-page.tsx`, and give it a `useDialKit(name, config, { id })` panel for the values worth tuning. A rule worth showing gets a `Breakdown`: the demo large in a frame with Measure drawn over it and a switch between two versions. A layer is one entry in `LAYERS` in `src/dev/layers.ts`.
+
 ## Database
 
 Import the shared `db` instance from `@hushos/db` in API/server code. `packages/db/src/client.ts` initializes it once per process from `DATABASE_URL`; Drizzle creates the underlying PostgreSQL pool. The Nitro database plugin closes that client during shutdown with `db.$client.end()`.

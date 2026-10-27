@@ -25,6 +25,12 @@ export async function getRouter() {
         defaultOptions: { queries: { staleTime: 30_000, retry: 1 } },
     });
     const nonce = await cspNonce();
+    /*
+     * The component playground (/dev/components), in development only. Vite replaces
+     * import.meta.env.DEV with false in a build, so this branch and the import go with
+     * it: no route, page or DialKit in production. `bun run build` checks the output.
+     */
+    if (import.meta.env.DEV) (await import('@/dev/routes')).addPlayground(routeTree);
     const router = createRouter({
         routeTree,
         context: { queryClient },

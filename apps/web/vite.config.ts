@@ -123,6 +123,27 @@ function oneRequestPerConnectionInCI(): Plugin {
     };
 }
 
+/*
+ * A build leaves the development playground (src/dev) out of Tailwind's scan, so the
+ * utilities only it uses never reach production CSS. In development the scan includes it,
+ * and the playground's pages are styled like any other. scripts/check-dev-only.ts fails the
+ * build if a playground utility gets through anyway.
+ */
+function playgroundOutOfBuildCss(): Plugin {
+    return {
+        name: 'hushos:playground-out-of-build-css',
+        apply: 'build',
+        enforce: 'pre',
+        transform(code, id) {
+            if (!/\/src\/styles\.css(\?|$)/.test(id)) return null;
+            return code.replace(
+                "@import 'tailwindcss';",
+                "@import 'tailwindcss';\n@source not './dev';",
+            );
+        },
+    };
+}
+
 export default defineConfig({
     server: {
         host: '0.0.0.0',
@@ -152,6 +173,7 @@ export default defineConfig({
     },
     plugins: [
         oneRequestPerConnectionInCI(),
+        playgroundOutOfBuildCss(),
         pdfjsAssets(),
         mdxMeta(),
         {
