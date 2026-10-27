@@ -1,0 +1,31 @@
+apps/web/src/components/families/create-family-dialog.tsx
+  s_566b8e0c4467a4::t_66ef3ed7f8da32 107-113
+apps/web/src/components/families/no-family.tsx
+  s_566b8e0c4467a4::t_fa8ca985bbcb89 11,57,59
+apps/web/src/lib/family-signup.test.ts
+  s_566b8e0c4467a4::t_b3077f55c5decb 4-10,305-316
+apps/web/src/lib/family-signup.ts
+  s_566b8e0c4467a4::t_476f345690d213 95-104
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_f5d93ccd5df827 189,191,193-196
+packages/db/src/billing.test.ts
+  s_566b8e0c4467a4::t_2776d881083283 505,509-517
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_e274ba9510016b 386-388,390,394-400
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c50a4d93811ccddcc0fce0d4b7e66b1874909e41",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
