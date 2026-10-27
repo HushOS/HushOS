@@ -1,0 +1,33 @@
+apps/web/src/components/drive/check-contact.test.tsx
+  s_566b8e0c4467a4::t_6bc3b6ed3ec284 14,119-128
+apps/web/src/components/drive/check-contact.tsx
+  s_566b8e0c4467a4::t_febb1d3a6a850a 69,73-76
+apps/web/src/lib/contact-guard.ts
+  s_566b8e0c4467a4::t_0b11d2a4b95764 19-28,145,149,154-158,168-169,171-175,191,240-241,243,245,248-249,278-285,287-292,294-295,297,301,303-335,380,399-400,404-411,415,420,423,426-427
+apps/web/src/lib/contacts.first-use.test.ts
+  s_566b8e0c4467a4::t_76c705b5623e07 292-294,296,378-450,618-688,780-792,797,835-837,846-847,884-926
+apps/web/src/lib/contacts.ts
+  s_566b8e0c4467a4::t_8ba76e4225a2a3 546-555,566-567,571,751-783,961-962,969,1005-1006,1013-1034,1502-1503,1685-1688,1703-1704
+apps/web/src/lib/drive.ts
+  s_566b8e0c4467a4::t_0ecf6fcb1c6f8b 23,57-58
+docs/optional-verification.md
+  s_566b8e0c4467a4::t_398098d930eef6 118,123
+packages/crypto/src/contact-guard.ts
+  s_566b8e0c4467a4::t_e4cda6494f6eef 27-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "753366234a31f93090d496cdfd1fd343373495af",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
