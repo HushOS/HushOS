@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type * as HushosDb from '@hushos/db';
 import type * as PolarSdk from '@polar-sh/sdk/2026-10';
 import type { EndPersonalPlanJob } from './endings';
 import { PolarClientError } from '@polar-sh/sdk';
@@ -976,17 +977,31 @@ vi.mock('@polar-sh/sdk/2026-10', async (importOriginal) => {
     return { ...real, createPolar: () => fakeClient };
 });
 
+/*
+ * The repositories as they are, but as plain objects, so a test can make one call do something
+ * first (a payer leaving at the moment a change takes the plan's claim). Nothing else differs.
+ */
+vi.mock('@hushos/db', async (importOriginal) => {
+    const real = await importOriginal<typeof HushosDb>();
+    return { ...real, billingRepository: { ...real.billingRepository } };
+});
+
 /* The plan-ending mail a dissolved family's payer was sent, in order (its words are the template's). */
-const planEndingMail: { to: string; endsOn: string }[] = [];
+const planEndingMail: { to: string; endsOn: string; reason?: string }[] = [];
 /* How many plan-ending mails fail (the provider down, no email settings) before one is sent. */
 const mailer = { failures: 0 };
 vi.mock('@hushos/emails/server', () => ({
-    sendFamilyPlanEnding: async (to: string, input: { endsOn: string }) => {
+    sendFamilyPlanEnding: async (to: string, input: { endsOn: string; reason?: string }) => {
         if (mailer.failures > 0) {
             mailer.failures -= 1;
             throw new Error('Email is not configured.');
         }
-        planEndingMail.push({ to, endsOn: input.endsOn });
+        planEndingMail.push({
+            to,
+            endsOn: input.endsOn,
+            // Said only when it isn't the dissolved family's mail, so those tests read as before.
+            ...(input.reason && input.reason !== 'dissolved' ? { reason: input.reason } : {}),
+        });
     },
 }));
 
@@ -4020,7 +4035,7 @@ describe('a family plan whose payment failed, or that is paused', () => {
             await expect(billing.revokeForDeletion(payer.id)).rejects.toMatchObject({
                 status: 409,
                 message:
-                    'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support. Your account was not deleted.',
+                    'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page at hushos.com first, or contact support. Your account was not deleted.',
             });
         } finally {
             spy.mockRestore();
@@ -4037,7 +4052,7 @@ describe('a family plan whose payment failed, or that is paused', () => {
         await expect(billing.revokeForDeletion(payer.id)).rejects.toMatchObject({
             status: 409,
             message:
-                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support. Your account was not deleted.',
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page at hushos.com first, or contact support. Your account was not deleted.',
         });
         expect(callsTo('subscriptions.revoke')).toEqual([]);
         expect(subscription.ended_at).toBeNull();
@@ -4350,7 +4365,7 @@ describe('a family plan whose payment failed, or that is paused', () => {
             await expect(checkout(payer, groupId)).rejects.toMatchObject({
                 status: 409,
                 message:
-                    'Polar shows a payment for the family’s Family Pro plan in this period, though the plan is marked unpaid, so it can’t be ended. Whoever pays for it can update the card in the billing portal; or contact support.',
+                    'Polar shows a payment for the family’s Family Pro plan in this period, though the plan is marked unpaid, so it can’t be ended. Whoever pays for it can update the card in Card and invoices; or contact support.',
             });
             expect(warn).toHaveBeenCalledWith(
                 expect.objectContaining({
@@ -5732,6 +5747,349 @@ describe('cancelling and payers', () => {
         await expect(billing.getGroupBilling(payer, groupId)).rejects.toMatchObject({
             status: 404,
         });
+    });
+});
+
+describe('cancelling and resuming a family plan in HushOS', () => {
+    const endings = () => polar.calls.filter((call) => call.includes('"cancel_at_period_end"'));
+    const ending = async (groupId: string) =>
+        (await billingRepository.getLiveGroupSubscription(groupId))?.cancelAtPeriodEnd;
+
+    test('the payer sets the plan to end with their reason, then takes it back; each is read back from Polar', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 7 });
+        const cancelled = await billing.cancelGroupPlan(payer, groupId, {
+            reason: 'too_expensive',
+            comment: '  We share one account now.  ',
+        });
+        expect(endings()).toEqual([
+            `subscriptions.update:${subscription.id}:${JSON.stringify({
+                cancel_at_period_end: true,
+                customer_cancellation_reason: 'too_expensive',
+                customer_cancellation_comment: 'We share one account now.',
+            })}`,
+        ]);
+        expect(subscription.cancel_at_period_end).toBe(true);
+        expect(await ending(groupId)).toBe(true);
+        expect(cancelled.billing).toMatchObject({ subscription: { cancelAtPeriodEnd: true } });
+        // The family keeps what it paid for until the period ends.
+        expect(await seatLimit(groupId)).toBe(7);
+
+        polar.calls = [];
+        const resumed = await billing.resumeGroupPlan(payer, groupId);
+        expect(endings()).toEqual([
+            `subscriptions.update:${subscription.id}:${JSON.stringify({ cancel_at_period_end: false })}`,
+        ]);
+        expect(await ending(groupId)).toBe(false);
+        expect(resumed.billing).toMatchObject({ subscription: { cancelAtPeriodEnd: false } });
+    });
+
+    test('nobody but the payer can cancel or resume, a second billing holder included', async () => {
+        const { groupId, others } = await familyOnPlan({ members: 1 });
+        const member = others[0]!;
+        await expect(billing.cancelGroupPlan(userOf(member), groupId)).rejects.toMatchObject({
+            status: 403,
+        });
+        await setTestMember({
+            groupId,
+            userId: member.userId,
+            state: 'active',
+            roles: ['billing', 'members'],
+        });
+        await expect(billing.cancelGroupPlan(userOf(member), groupId)).rejects.toMatchObject({
+            status: 403,
+        });
+        await expect(billing.resumeGroupPlan(userOf(member), groupId)).rejects.toMatchObject({
+            status: 403,
+        });
+        expect(endings()).toEqual([]);
+        expect(await ending(groupId)).toBe(false);
+    });
+
+    test('a plan already ending is not cancelled again, and only one that is ending resumes', async () => {
+        const { payer, groupId } = await familyOnPlan();
+        await expect(billing.resumeGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 409,
+        });
+        expect(endings()).toEqual([]);
+        await billing.cancelGroupPlan(payer, groupId);
+        polar.calls = [];
+        await expect(billing.cancelGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 409,
+        });
+        expect(endings()).toEqual([]);
+        expect(await ending(groupId)).toBe(true);
+    });
+
+    test('a payer who left can still cancel, but not resume a plan for a family they are not in', async () => {
+        const { payer, groupId } = await familyOnPlan({ members: 1 });
+        await setTestMember({ groupId, userId: payer.id, state: 'left' });
+        await billing.cancelGroupPlan(payer, groupId);
+        expect(await ending(groupId)).toBe(true);
+        polar.calls = [];
+        await expect(billing.resumeGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 404,
+        });
+        expect(endings()).toEqual([]);
+        expect(await ending(groupId)).toBe(true);
+    });
+
+    test('Polar down changes nothing; Polar refusing is said as a refusal; a lost answer is read back', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan();
+        polar.cancelFailures = 1;
+        await expect(billing.cancelGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 503,
+        });
+        expect(await ending(groupId)).toBe(false);
+
+        polar.cancelRefusal = { status: 403, error: 'AlreadyCanceledSubscription' };
+        await expect(billing.cancelGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 409,
+        });
+        expect(await ending(groupId)).toBe(false);
+        polar.cancelRefusal = null;
+
+        // Polar kept the change but the answer never came: the page is told it failed, and
+        // the reconcile after it has written what Polar holds, so the next look is right.
+        polar.cancelAnswerLost = true;
+        await expect(billing.cancelGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 503,
+        });
+        expect(subscription.cancel_at_period_end).toBe(true);
+        expect(await ending(groupId)).toBe(true);
+    });
+
+    const BUSY = 'Another change to this plan is in progress. Try again in a moment.';
+
+    test('a cancel or resume while another change holds the plan is told to try again, and Polar isn’t asked', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 7 });
+        // A raise (or the dissolve job) holds the family's one plan-change claim.
+        const claim = await billingRepository.claimPlanChange(subscription.id, 60_000);
+        expect(claim).not.toBeNull();
+        await expect(billing.cancelGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 409,
+            message: BUSY,
+        });
+        expect(endings()).toEqual([]);
+        expect(await ending(groupId)).toBe(false);
+        await billingRepository.releasePlanChange(subscription.id, claim!);
+        await billing.cancelGroupPlan(payer, groupId);
+        polar.calls = [];
+        const again = await billingRepository.claimPlanChange(subscription.id, 60_000);
+        await expect(billing.resumeGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 409,
+            message: BUSY,
+        });
+        expect(endings()).toEqual([]);
+        expect(await ending(groupId)).toBe(true);
+        await billingRepository.releasePlanChange(subscription.id, again!);
+    });
+
+    test('Polar’s SubscriptionLocked, while the bank holds a charge, is the same try-again answer', async () => {
+        const { payer, groupId } = await familyOnPlan();
+        polar.cancelRefusal = { status: 409, error: 'SubscriptionLocked' };
+        await expect(billing.cancelGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 409,
+            message: BUSY,
+        });
+        expect(await ending(groupId)).toBe(false);
+    });
+
+    test('a dissolved family’s plan is never resumed from here, even by its payer', async () => {
+        const { payer, groupId } = await familyOnPlan();
+        await billing.cancelGroupPlan(payer, groupId);
+        expect(await groupsRepository.leaveGroup(groupId, payer.id)).toEqual({
+            status: 'dissolved',
+        });
+        polar.calls = [];
+        await expect(billing.resumeGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 404,
+        });
+        expect(endings()).toEqual([]);
+        expect(await ending(groupId)).toBe(true);
+    });
+
+    /* The payer holds only `billing`, so another `billing` and `members` holder lets them leave. */
+    async function payerWhoCanLeave() {
+        const family = await familyOnPlan({ members: 1 });
+        await setTestMember({
+            groupId: family.groupId,
+            userId: family.payer.id,
+            state: 'active',
+            roles: ['billing'],
+        });
+        await setTestMember({
+            groupId: family.groupId,
+            userId: family.others[0]!.userId,
+            state: 'active',
+            roles: ['billing', 'members'],
+        });
+        await billing.cancelGroupPlan(family.payer, family.groupId);
+        polar.calls = [];
+        return family;
+    }
+
+    test('a payer who leaves just before a resume takes the claim is never billed again', async () => {
+        const { payer, groupId, subscription } = await payerWhoCanLeave();
+        const claim = billingRepository.claimPlanChange;
+        // Past the resume's first checks: the payer leaves, then the claim is taken.
+        const spy = vi
+            .spyOn(billingRepository, 'claimPlanChange')
+            .mockImplementationOnce(async (...args) => {
+                expect(await groupsRepository.leaveGroup(groupId, payer.id)).toEqual({
+                    status: 'left',
+                });
+                return claim(...args);
+            });
+        try {
+            await expect(billing.resumeGroupPlan(payer, groupId)).rejects.toMatchObject({
+                status: 404,
+            });
+        } finally {
+            spy.mockRestore();
+        }
+        expect(endings()).toEqual([]);
+        expect(subscription.cancel_at_period_end).toBe(true);
+        expect(await ending(groupId)).toBe(true);
+    });
+
+    test('a payer who tries to leave while a resume is at Polar is told to wait, and stays', async () => {
+        const { payer, groupId, subscription } = await payerWhoCanLeave();
+        let leave: unknown = null;
+        polar.beforeCancel = async () => {
+            leave = await groupsRepository.leaveGroup(groupId, payer.id);
+        };
+        await billing.resumeGroupPlan(payer, groupId);
+        expect(leave).toEqual({ status: 'busy' });
+        expect(subscription.cancel_at_period_end).toBe(false);
+        expect(await ending(groupId)).toBe(false);
+        const members = await groupsRepository.listMembers(groupId);
+        expect(members.find((member) => member.userId === payer.id)?.state).toBe('active');
+    });
+
+    test('a family with no live plan has nothing to cancel', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan();
+        subscription.status = 'canceled';
+        subscription.ended_at = new Date().toISOString();
+        await billing.reconcileGroup(groupId);
+        polar.calls = [];
+        await expect(billing.cancelGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 404,
+        });
+        expect(endings()).toEqual([]);
+    });
+});
+
+describe('a renewing family plan whose payer is no longer in the family', () => {
+    const setToEnd = () =>
+        polar.calls.filter((call) => call.includes('"cancel_at_period_end":true'));
+    /* The worker: every queued job, in order. */
+    async function runCancelJobs() {
+        const outcomes = [];
+        for (const groupId of cancelJobs.splice(0))
+            outcomes.push(await billing.cancelDissolvedPlan(groupId));
+        return outcomes;
+    }
+    /* The payer holds only `billing`, so another `billing` and `members` holder lets them leave. */
+    async function payerWhoCanLeave() {
+        const family = await familyOnPlan({ members: 1 });
+        await setTestMember({
+            groupId: family.groupId,
+            userId: family.payer.id,
+            state: 'active',
+            roles: ['billing'],
+        });
+        await setTestMember({
+            groupId: family.groupId,
+            userId: family.others[0]!.userId,
+            state: 'active',
+            roles: ['billing', 'members'],
+        });
+        return family;
+    }
+
+    test('a resume Polar kept but whose reconcile failed, then the payer leaving: the plan is set to end again', async () => {
+        const { payer, groupId, subscription } = await payerWhoCanLeave();
+        await billing.cancelGroupPlan(payer, groupId);
+        // Polar resumes it; the reconcile after it fails, so the mirror still says it ends.
+        polar.beforeCancel = async () => {
+            polar.unauthorized = true;
+        };
+        await expect(billing.resumeGroupPlan(payer, groupId)).rejects.toBeTruthy();
+        polar.unauthorized = false;
+        expect(subscription.cancel_at_period_end).toBe(false);
+        // The payer leaves on that stale reading.
+        expect(await groupsRepository.leaveGroup(groupId, payer.id)).toEqual({ status: 'left' });
+        polar.calls = [];
+        cancelJobs.length = 0;
+        await billing.reconcileGroup(groupId);
+        expect(cancelJobs).toEqual([groupId]);
+        await runCancelJobs();
+        expect(setToEnd()).toEqual([
+            `subscriptions.update:${subscription.id}:{"cancel_at_period_end":true}`,
+        ]);
+        expect(subscription).toMatchObject({ cancel_at_period_end: true, status: 'active' });
+        // Nothing revoked, nothing refunded: they keep what they paid for.
+        expect(polar.calls.filter((call) => /revoke|refunds\./.test(call))).toEqual([]);
+        expect(planEndingMail).toEqual([
+            expect.objectContaining({ to: payer.email, reason: 'payer-left' }),
+        ]);
+    });
+
+    test('a payer who left and resumes in the portal has the plan set to end again, mailed once a period', async () => {
+        const { payer, groupId, subscription } = await payerWhoCanLeave();
+        await billing.cancelGroupPlan(payer, groupId);
+        expect(await groupsRepository.leaveGroup(groupId, payer.id)).toEqual({ status: 'left' });
+        // Resumed at Polar, outside HushOS.
+        subscription.cancel_at_period_end = false;
+        polar.calls = [];
+        cancelJobs.length = 0;
+        await billing.reconcileGroup(groupId);
+        await runCancelJobs();
+        expect(setToEnd()).toHaveLength(1);
+        expect(subscription.cancel_at_period_end).toBe(true);
+        // Resumed again the same period: set to end again, but not mailed twice.
+        subscription.cancel_at_period_end = false;
+        await billing.reconcileGroup(groupId);
+        await runCancelJobs();
+        expect(setToEnd()).toHaveLength(2);
+        expect(planEndingMail).toHaveLength(1);
+    });
+
+    test('a setting to end that keeps failing close to the renewal reaches the operators’ list', async () => {
+        const { payer, groupId, subscription } = await payerWhoCanLeave();
+        await billing.cancelGroupPlan(payer, groupId);
+        expect(await groupsRepository.leaveGroup(groupId, payer.id)).toEqual({ status: 'left' });
+        // Resumed in the portal, renewing in 30 hours; then Polar refuses every call.
+        subscription.cancel_at_period_end = false;
+        subscription.current_period_end = new Date(Date.now() + 30 * HOUR).toISOString();
+        await billing.reconcileGroup(groupId);
+        polar.unauthorized = true;
+        await expect(billing.cancelDissolvedPlan(groupId)).rejects.toBeInstanceOf(
+            billing.BillingError,
+        );
+        expect(
+            (await billingRepository.listGivenUpReissues()).map((row) => [
+                row.subscriptionId,
+                row.reason,
+            ]),
+        ).toEqual([[subscription.id, 'dissolved-failing']]);
+        polar.unauthorized = false;
+    });
+
+    test('a payer still in the family keeps a renewing plan as it is', async () => {
+        const { groupId, subscription } = await payerWhoCanLeave();
+        polar.calls = [];
+        cancelJobs.length = 0;
+        await billing.reconcileGroup(groupId);
+        expect(cancelJobs).toEqual([]);
+        expect(await billing.cancelDissolvedPlan(groupId)).toEqual({
+            cancelled: 0,
+            refused: 0,
+            revoked: 0,
+        });
+        expect(setToEnd()).toEqual([]);
+        expect(subscription.cancel_at_period_end).toBe(false);
+        expect(planEndingMail).toEqual([]);
     });
 });
 
@@ -8197,7 +8555,7 @@ describe('a personal plan while pooled', () => {
             status: 409,
             code: 'in-family',
             message:
-                'Your storage comes from The Family’s plan. Leave the family to choose a plan of your own.',
+                'Your storage comes from the plan for The Family. Leave the family to choose a plan of your own.',
         };
         // Before the job ends it (a plan still live) and after.
         await expect(billing.startCheckout(user, MAX)).rejects.toMatchObject(refusal);

@@ -481,6 +481,8 @@ test('trash: restore brings a file back, delete forever and empty trash remove t
 
     await page.goto('/app/trash');
     await expect(page.getByRole('heading', { name: 'Trash' })).toBeVisible();
+    // In no family there is one Trash: no tabs.
+    await expect(page.getByRole('tablist', { name: 'Whose Trash' })).toHaveCount(0);
     await expect(page.getByText('module.ts')).toBeVisible();
     await page.getByRole('button', { name: /delete “module.ts” forever/i }).click();
     await page.getByRole('alertdialog').getByRole('button', { name: 'Delete forever' }).click();
@@ -537,4 +539,98 @@ test('the transfers panel closes from its header once everything has finished, a
     await page.getByRole('alertdialog').getByRole('button', { name: 'Cancel it' }).click();
     await expect(transfers(page)).toHaveCount(0);
     await expect(row(page, 'still-going.bin')).toHaveCount(0);
+});
+
+test('on a phone a Markdown document stays inside the screen: wide tables and code scroll in their own box', async ({
+    browserName,
+}) => {
+    // Shaped like a real working note: a heading that wraps, a table of long cells, a fenced
+    // command on one long line (highlighted, so it keeps its line), nested lists, a bare URL.
+    const dir = mkdtempSync(join(tmpdir(), 'hushos-phone-md-'));
+    const path = join(dir, 'automation-ideas.md');
+    writeFileSync(
+        path,
+        [
+            '# Automation ideas for FY27 Endpoint Operations: candidates, owners and targets for phase 1',
+            '',
+            'Collected from the *FY27 Endpoint Operations* planning sessions and the *Service Desk Retrospective*.',
+            '',
+            '---',
+            '',
+            '| Measure | Baseline across every region and device class | Target | Notes for the owners |',
+            '| --- | --- | --- | --- |',
+            '| Patch compliance within fourteen days of release | 61% of managed endpoints | ≥ 75% | From the weekly export, retired devices left out |',
+            '| Password reset and lockout tickets | 4,210 a quarter | ≥ 30% reduction YoY | Self-service reset is the main lever |',
+            '',
+            '1. Self-service password reset',
+            '   - Enrol every account at first sign-in',
+            '     - Ask again after 30 days',
+            '',
+            '```sh',
+            `curl --silent --header 'Accept: text/csv' 'https://reports.example.com/endpoint-operations/fy27/patch-compliance/weekly/export?region=all&class=all&retired=excluded' --output patch-compliance-weekly.csv`,
+            '```',
+            '',
+            'Reference: https://learn.example.com/en-us/endpoint-operations/automation/patch-compliance/reporting/weekly-export-with-filters?view=fy27-planning',
+            '',
+        ].join('\n'),
+    );
+    // A neighbour, so Right has a next file to step to when the table doesn't keep the key.
+    const neighbour = join(dir, 'automation-notes.txt');
+    writeFileSync(neighbour, 'the next file\n');
+    const desk = page.viewportSize()!;
+    await page.setViewportSize({ width: 390, height: 844 });
+    try {
+        await page.locator('input[type=file]').first().setInputFiles([path, neighbour]);
+        await expect(row(page, 'automation-ideas.md')).toBeVisible({ timeout: 60_000 });
+        await expect(row(page, 'automation-notes.txt')).toBeVisible({ timeout: 60_000 });
+        await openPreview(page, 'automation-ideas.md');
+        const body = dialog(page).locator('[data-viewer-body]');
+        const rendered = body.locator('.rt-markdown');
+        // Measured once the fence is highlighted: its <pre> keeps the long line whole.
+        await expect(rendered.locator('pre.shiki')).toBeVisible({ timeout: 60_000 });
+        const sideways = () => body.evaluate((el) => el.scrollWidth - el.clientWidth);
+        expect(await sideways(), 'the viewer scrolls sideways').toBeLessThanOrEqual(0);
+        // The heading starts and ends on the screen, not past its left edge.
+        const heading = (await rendered.locator('h1').boundingBox())!;
+        expect(heading.x, 'the heading starts off the screen').toBeGreaterThanOrEqual(0);
+        expect(heading.x + heading.width).toBeLessThanOrEqual(390);
+        // The table and the code are as wide as the screen allows and scroll inside themselves.
+        for (const wide of [rendered.locator('.rt-table'), rendered.locator('pre.shiki')]) {
+            const box = (await wide.boundingBox())!;
+            expect(box.x).toBeGreaterThanOrEqual(0);
+            expect(box.x + box.width).toBeLessThanOrEqual(390);
+            expect(await wide.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+        }
+        await expect(rendered.getByRole('table')).toBeVisible();
+        // From the keyboard, a focused box scrolls with the arrows; they don't step to the next file.
+        await expect(dialog(page).getByRole('button', { name: 'Next file' })).toBeEnabled();
+        for (const wide of [rendered.locator('.rt-table'), rendered.locator('pre.shiki')]) {
+            await wide.focus();
+            // The event is kept to read once dispatch is over: nothing on the way may cancel it.
+            await wide.evaluate((el) =>
+                el.addEventListener('keydown', (event) => Object.assign(el, { pressed: event }), {
+                    once: true,
+                }),
+            );
+            await page.keyboard.press('ArrowRight');
+            await expect(dialog(page).getByRole('heading', { level: 2 })).toHaveText(
+                'automation-ideas.md',
+                { timeout: 3_000 },
+            );
+            const cancelled = await wide.evaluate(
+                (el) => (el as HTMLElement & { pressed?: KeyboardEvent }).pressed?.defaultPrevented,
+            );
+            expect(cancelled, 'the arrow key was taken from the box').toBe(false);
+            // Playwright's WebKit doesn't scroll a focused box from a pressed arrow at all.
+            if (browserName === 'chromium')
+                await expect.poll(() => wide.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+        }
+        // The source wraps on a phone: nothing sideways there either.
+        await dialog(page).getByRole('button', { name: 'Source', exact: true }).click();
+        await expect(body.locator('.rt-code')).toBeVisible();
+        expect(await sideways(), 'the source scrolls sideways').toBeLessThanOrEqual(0);
+        await closePreview(page);
+    } finally {
+        await page.setViewportSize(desk);
+    }
 });

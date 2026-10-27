@@ -41,7 +41,7 @@ export function KeyChangeNotice({
         <>
             {running.length > 0 && (
                 <Alert variant="info" data-key-change="walking">
-                    <AlertTitle>Replacing keys in {family}’s folders</AlertTitle>
+                    <AlertTitle>Replacing keys in the family folders</AlertTitle>
                     <AlertDescription>
                         {running.length === 1
                             ? `${nameOf(running[0]!.workspaceId)} is getting new keys.`

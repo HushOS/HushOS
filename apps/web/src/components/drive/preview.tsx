@@ -83,9 +83,34 @@ const JsonView = lazy(() =>
     import('@/components/drive/json-view').then((m) => ({ default: m.JsonView })),
 );
 
-/* A control inside the viewer that moves with the arrow keys itself (the JSON tree) keeps them. */
+/*
+ * A control inside the viewer that uses the arrow keys itself keeps them: the JSON tree, and a
+ * focused box that scrolls sideways (a document's table or code block), which they scroll.
+ */
 const ownsArrows = (target: EventTarget | null) =>
-    target instanceof Element && target.closest('[role="tree"]') !== null;
+    target instanceof Element &&
+    target.closest('[role="tree"], .rt-table, .rt-markdown pre') !== null;
+
+/*
+ * Left and Right step through the folder's files. The key's own action is cancelled only here,
+ * never where the focused control keeps the key, or a table could not be scrolled from the keyboard.
+ */
+function useStepKey(
+    key: 'ArrowLeft' | 'ArrowRight',
+    to: DriveNode | undefined,
+    open: boolean,
+    onChange: (node: DriveNode) => void,
+) {
+    useHotkey(
+        key,
+        (event) => {
+            if (ownsArrows(event.target)) return;
+            event.preventDefault();
+            if (to) onChange(to);
+        },
+        { enabled: open, preventDefault: false },
+    );
+}
 
 /* An earlier version open in the viewer: when it was replaced, how long it stays, and Restore. */
 export type ViewerVersion = {
@@ -120,12 +145,8 @@ export function Preview({
     const previous = !version && index > 0 ? files[index - 1] : undefined;
     const next = !version && index >= 0 && index < files.length - 1 ? files[index + 1] : undefined;
     const open = current !== null;
-    useHotkey('ArrowLeft', (event) => !ownsArrows(event.target) && previous && onChange(previous), {
-        enabled: open,
-    });
-    useHotkey('ArrowRight', (event) => !ownsArrows(event.target) && next && onChange(next), {
-        enabled: open,
-    });
+    useStepKey('ArrowLeft', previous, open, onChange);
+    useStepKey('ArrowRight', next, open, onChange);
     // Formatted | Source, offered by the renderer and kept per file.
     const [offered, setOffered] = useState(false);
     const [sourceFor, setSourceFor] = useState<string | null>(null);

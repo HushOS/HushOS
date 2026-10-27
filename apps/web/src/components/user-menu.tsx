@@ -17,6 +17,7 @@ import type { NavItem } from '@/components/app-sidebar';
 import { lockDevice, openDeviceDialog } from '@/components/device-control';
 import { TextSwap } from '@/components/motion';
 import { OwnWordsDialog } from '@/components/own-words-dialog';
+import { PersonAvatar } from '@/components/person-avatar';
 import { ThemeRadioItems } from '@/components/theme-toggle';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
@@ -70,28 +71,6 @@ export const account: NavItem[] = [
     },
 ];
 
-export function initials(name: string) {
-    return (
-        name
-            .trim()
-            .split(/\s+/)
-            .slice(0, 2)
-            .map((part) => part[0]?.toUpperCase() ?? '')
-            .join('') || '?'
-    );
-}
-
-export function Avatar({ name, className = '' }: { name: string; className?: string }) {
-    return (
-        <span
-            aria-hidden="true"
-            className={`grid size-7 shrink-0 place-items-center rounded-full bg-avatar1 text-xs font-bold text-on-avatar1 ${className}`}
-        >
-            {initials(name)}
-        </span>
-    );
-}
-
 /*
  * The account menu, opened from the avatar at the top right: identity, the
  * account's pages, Help, appearance, sounds, lock and sign out. It is the one
@@ -113,7 +92,7 @@ export function UserMenu({ user }: { user: { id: string; name: string; email: st
                     title={user.name}
                     className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full transition-colors outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring aria-expanded:bg-muted"
                 >
-                    <Avatar name={user.name} className="size-8" />
+                    <PersonAvatar name={user.name} seed={user.id} size={32} />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent side="bottom" align="end" sideOffset={6} className="w-66">
                     <DropdownMenuGroup>

@@ -24,4 +24,6 @@ export const groupBillingApi: GroupBillingApi = {
     changePlan: (groupId, productId) => unwrap(group(groupId).plan.post({ productId })),
     portal: (groupId) => unwrap(group(groupId).portal.post({})),
     sync: (groupId) => unwrap(group(groupId).sync.post({})),
+    cancel: (groupId, input) => unwrap(group(groupId).cancel.post(input)),
+    resume: (groupId) => unwrap(group(groupId).resume.post({})),
 };

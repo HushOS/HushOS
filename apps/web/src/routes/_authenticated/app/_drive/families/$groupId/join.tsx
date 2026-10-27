@@ -231,7 +231,7 @@ function JoinFamily() {
               : step.kind === 'mismatch'
                 ? `Don’t use ${family} yet.`
                 : step.kind === 'fork'
-                  ? `${family}’s member list was shown differently to you.`
+                  ? `The member list of ${family} was shown differently to you.`
                   : '';
 
     if (families.isPending) return <SkeletonRows rows={3} />;
@@ -310,7 +310,7 @@ function JoinFamily() {
                         {step.changed && (
                             <Alert variant="warning">
                                 <AlertDescription>
-                                    {family}’s member list changed since the code you compared.
+                                    The member list of {family} changed since the code you compared.
                                     Compare this one with {them}.
                                 </AlertDescription>
                             </Alert>

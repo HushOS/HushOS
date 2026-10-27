@@ -1290,6 +1290,18 @@ export const apiApp = new Elysia({ prefix: '/api' })
             ),
     )
     .post(
+        '/billing/groups/:id/cancel',
+        { params: t.Object({ id: uuidSchema }), body: cancellationSchema },
+        async ({ request, sessionToken, params, body }) =>
+            billing.cancelGroupPlan(await billingMutation(request, sessionToken), params.id, body),
+    )
+    .post(
+        '/billing/groups/:id/resume',
+        { params: t.Object({ id: uuidSchema }), body: t.Object({}) },
+        async ({ request, sessionToken, params }) =>
+            billing.resumeGroupPlan(await billingMutation(request, sessionToken), params.id),
+    )
+    .post(
         '/billing/groups/:id/sync',
         { params: t.Object({ id: uuidSchema }), body: t.Object({}) },
         async ({ request, sessionToken, params }) =>

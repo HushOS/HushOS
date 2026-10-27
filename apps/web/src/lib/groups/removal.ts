@@ -65,7 +65,7 @@ function failure(staged: StageOutcome, family: string): RemovalOutcome | null {
                   status: 'failed',
                   message:
                       staged.sync.status === 'fork'
-                          ? `${family}’s member list was shown differently to you.`
+                          ? `The member list of ${family} was shown differently to you.`
                           : `Couldn’t check ${family}. Try again.`,
               };
     if (staged.status !== 'sent') return { status: 'failed', message: 'Nothing was changed.' };

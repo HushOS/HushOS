@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { ListChecksIcon, RotateCcwIcon, Trash2Icon } from 'lucide-react';
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { useDrive } from '@/components/drive/drive-shell';
 import {
     EmptyState,
@@ -158,13 +158,13 @@ function PartialBanner({
 }
 
 export function TrashView({
-    section,
-    followed = false,
+    tabs,
 }: {
-    /* A heading for My files' items, when another section follows (the family folders'). */
-    section?: string;
-    /* Another section follows the list (the family folders' Trash): the list doesn't fill the page. */
-    followed?: boolean;
+    /*
+     * For someone in a family, the tabs of My files' and the family folders' Trash, under the
+     * title: this view is then My files' tab, and Empty Trash says it empties only that.
+     */
+    tabs?: ReactNode;
 } = {}) {
     const { rootId, userId } = useDrive();
     const queryClient = useQueryClient();
@@ -474,9 +474,9 @@ export function TrashView({
                     action: 'Delete forever',
                 }
               : {
-                    title: section ? `Empty ${section}’ Trash?` : 'Empty the Trash?',
-                    text: `All ${rows.length} ${rows.length === 1 ? 'item is' : 'items are'} deleted for good. This can’t be undone.${section ? ' The family folders’ Trash isn’t touched.' : ''}`,
-                    action: section ? `Empty ${section}’ Trash` : 'Empty Trash',
+                    title: tabs ? 'Empty My files’ Trash?' : 'Empty the Trash?',
+                    text: `All ${rows.length} ${rows.length === 1 ? 'item' : 'items'}${tabs ? ' in My files’ Trash' : ''} ${rows.length === 1 ? 'is' : 'are'} deleted for good. This can’t be undone.`,
+                    action: 'Empty Trash',
                 };
 
     return (
@@ -486,8 +486,7 @@ export function TrashView({
             // the name column keeps at least 320px; Was in goes first (its words move under the
             // name), then Size, then the action labels, then Trashed.
             className={cn(
-                '@container/list relative flex flex-col',
-                !followed && 'flex-1',
+                '@container/list relative flex flex-1 flex-col',
                 marquee && 'select-none',
             )}
         >
@@ -505,13 +504,11 @@ export function TrashView({
                         {emptying ? <Spinner /> : <Trash2Icon />}
                         {emptying
                             ? `Emptying… ${emptying.gone} of ${emptying.total}`
-                            : // Above both sections, it says which Trash it empties.
-                              section
-                              ? `Empty ${section}’ Trash`
-                              : 'Empty Trash'}
+                            : 'Empty Trash'}
                     </Button>
                 )}
             </PageHeader>
+            {tabs}
             {(emptying || (batch && batch.requests > 1)) && (
                 <Progress
                     label={
@@ -532,11 +529,6 @@ export function TrashView({
                     onRetry={() => void restoreMany(partial.failed.map((entry) => entry.item))}
                     onDismiss={() => setPartial(null)}
                 />
-            )}
-            {section && (
-                <h2 className="px-5 pb-2 text-lg font-bold tracking-[-0.01em] sm:px-8">
-                    {section}
-                </h2>
             )}
             {trash.isPending && <SkeletonRows />}
             {trash.isError && (
@@ -887,7 +879,7 @@ export function TrashView({
  * `whereSpan`), then Size, then the action labels (the actions widen to 256px, which "Restore to
  * My files" and Delete forever need on touch), then Trashed.
  */
-const TRASH_COLUMN = {
+export const TRASH_COLUMN = {
     where: 'hidden @min-[66rem]/list:table-cell',
     whereLine: '@min-[66rem]/list:hidden',
     whereSpan: '@min-[66rem]/list:row-span-1',

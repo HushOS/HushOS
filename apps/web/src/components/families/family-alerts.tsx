@@ -19,7 +19,7 @@ const FROM: Record<string, string> = {
 export function CheckingLine({ family }: { family: string }) {
     return (
         <output className="block text-[13px] text-muted-foreground" data-family-checking>
-            Checking {family}’s member list
+            Checking the member list of {family}
         </output>
     );
 }
@@ -33,7 +33,7 @@ export function CheckingLine({ family }: { family: string }) {
 export function ForkAlert({ family, fork }: { family: string; fork: RosterFork }) {
     return (
         <Alert variant="destructive" data-fork={fork.version}>
-            <AlertTitle>{family}’s member list was shown differently to you</AlertTitle>
+            <AlertTitle>The member list of {family} was shown differently to you</AlertTitle>
             <AlertDescription>
                 <p>
                     This device won’t change anything in {family} until it’s sorted. Tell the other

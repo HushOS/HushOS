@@ -356,14 +356,35 @@ test('after Sam replaces his sharing keys, Maya follows only when she checks, an
         .click({ timeout: 60_000 });
     await expect(row(sam, 'module.ts')).toBeVisible({ timeout: 60_000 });
 
-    // Comparing words again clears the notice.
+    // Comparing words again clears the notice. The dialog opens on his words: while his keys
+    // are looked up it says so, and the email form (a field a password manager lights up on)
+    // never shows, not even for the frame before the lookup starts.
     await maya.goto('/app/contacts');
+    const lookup = '**/api/auth/contacts/lookup';
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    await maya.route(lookup, async (route) => {
+        await held;
+        await route.continue();
+    });
+    await maya.evaluate(() => {
+        const seen = () =>
+            document.querySelector('[data-slot=dialog-content] input[type=email]') !== null;
+        new MutationObserver(() => {
+            if (seen()) document.documentElement.dataset.emailFieldSeen = '';
+        }).observe(document.body, { childList: true, subtree: true });
+    });
     await maya
         .locator(`[data-succession="${samEmail}"]`)
         .getByRole('button', { name: 'Compare words again' })
         .click();
     const again = dialog(maya).filter({ hasText: 'Check Sam again' });
+    await expect(again.getByRole('status')).toHaveText('Getting their words');
+    await expect(again.getByRole('textbox')).toHaveCount(0);
+    release();
     await expect(again.locator('[data-fingerprint-words]')).toBeVisible({ timeout: 60_000 });
+    await maya.unroute(lookup);
+    await expect(maya.locator('html')).not.toHaveAttribute('data-email-field-seen');
     await expect(again).toContainText('Sam replaced their sharing keys');
     await again.getByRole('button', { name: 'They match' }).click();
     await expect(maya.locator(`[data-succession="${samEmail}"]`)).toHaveCount(0);
