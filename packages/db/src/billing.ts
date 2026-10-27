@@ -376,7 +376,7 @@ export async function getBillingSummary(userId: string) {
 /* The plan someone signed up for and has not checked out yet. */
 export async function getPendingIntent(userId: string) {
     const [row] = await db
-        .select({ planProductId: accountIntents.planProductId })
+        .select({ planProductId: accountIntents.planProductId, currency: accountIntents.currency })
         .from(accountIntents)
         .where(and(eq(accountIntents.userId, userId), isNull(accountIntents.consumedAt)));
     return row ?? null;

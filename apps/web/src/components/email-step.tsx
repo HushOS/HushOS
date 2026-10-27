@@ -150,7 +150,7 @@ export function EmailStep({
                 )
             }
         >
-            {register && intent?.plan && <ChosenPlan id={intent.plan} />}
+            {register && intent?.plan && <ChosenPlan id={intent.plan} currency={intent.currency} />}
             <form
                 onSubmit={(event) => {
                     event.preventDefault();
@@ -308,12 +308,13 @@ export function CheckEmailStep({ purpose }: { purpose: 'register' | 'recover' })
  * is, what it costs, and that paying comes after the account exists. A family
  * tier says it's a family plan and that the family is made first.
  */
-function ChosenPlan({ id }: { id: string }) {
+function ChosenPlan({ id, currency: shown }: { id: string; currency?: string }) {
     const { data: catalogue } = useQuery(catalogueQueryOptions);
     const { data: hint } = useQuery(localeHintQueryOptions);
     if (!catalogue) return null;
     const family = catalogue.families.find((candidate) => candidate.id === id);
-    if (family) return <ChosenFamily catalogue={catalogue} plan={family} hint={hint} />;
+    if (family)
+        return <ChosenFamily catalogue={catalogue} plan={family} hint={hint} shown={shown} />;
     const plan = catalogue.plans.find((candidate) => candidate.id === id);
     if (!plan) return null;
     const currencies = currenciesOf(catalogue.plans);
@@ -340,12 +341,14 @@ function ChosenFamily({
     catalogue,
     plan,
     hint,
+    shown,
 }: {
     catalogue: Catalogue;
     plan: FamilyPlan;
     hint: LocaleHint | undefined;
+    shown?: string;
 }) {
-    const currency = familySignupCurrency(catalogue, plan, hint);
+    const currency = familySignupCurrency(catalogue, plan, hint, shown);
     const price = currency ? familyPrice(plan, currency) : null;
     if (!price) return null;
     return (

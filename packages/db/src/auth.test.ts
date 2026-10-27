@@ -10,6 +10,7 @@ import {
 } from '../test/helpers';
 import { keysStatement, successionStatement } from './signatures';
 import * as auth from './auth';
+import * as billingRepository from './billing';
 import { db } from './client';
 import {
     accountEnrollments,
@@ -82,7 +83,7 @@ function registration(workspaceId = randomUUID()) {
 async function verifiedEnrollment(
     email: string,
     options: {
-        intent?: { plan?: string; referral?: string; source?: string };
+        intent?: { plan?: string; referral?: string; source?: string; currency?: string };
         expired?: boolean;
     } = {},
 ) {
@@ -248,6 +249,26 @@ describe('nested input never names the account', () => {
 });
 
 describe('registerAccount', () => {
+    test('keeps the currency a family tier was shown in, with the plan, for the first visit', async () => {
+        const token = await verifiedEnrollment('rupees@hushos.test', {
+            intent: { plan: 'prod_family_pro', source: 'pricing', currency: 'inr' },
+        });
+        const result = await auth.registerAccount({
+            enrollmentTokenHash: token,
+            ...registration(),
+        });
+        if (result.status !== 'created') throw new Error(result.status);
+        const [intent] = await db
+            .select()
+            .from(accountIntents)
+            .where(eq(accountIntents.userId, result.user.id));
+        expect(intent).toMatchObject({ planProductId: 'prod_family_pro', currency: 'inr' });
+        expect(await billingRepository.getPendingIntent(result.user.id)).toMatchObject({
+            planProductId: 'prod_family_pro',
+            currency: 'inr',
+        });
+    });
+
     test('creates the account, workspace, allowance and keys, and consumes the enrollment', async () => {
         const email = 'first@hushos.test';
         const token = await verifiedEnrollment(email, {

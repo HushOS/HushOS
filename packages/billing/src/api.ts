@@ -203,7 +203,11 @@ export type BillingSummary = {
      * lands on Create a family with it once, then forgets it (forgetIntendedFamily). Named
      * whether or not this server serves families, so the app can send them to Plans instead.
      */
-    intendedFamily: string | null;
+    intendedFamily: {
+        plan: string;
+        /* The currency it was shown in on Pricing, while the plan is priced in it. */
+        currency: string | null;
+    } | null;
     /*
      * The family whose plan this person's storage comes from, while their own
      * files draw from its pool; no personal plan can be bought meanwhile.

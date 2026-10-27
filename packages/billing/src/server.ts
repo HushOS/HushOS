@@ -148,8 +148,18 @@ export async function getSummary(user: BillingUser): Promise<BillingSummary> {
             : null;
     // A family tier picked on the pricing page: the app opens Create a family with it, or, where
     // families aren't served (any more), Plans. Whether they're in a family is the app's to check.
-    const intendedFamily = intent?.planProductId
+    const familyPlan = intent?.planProductId
         ? intendedFamilyOf(intent.planProductId, families)
+        : null;
+    const priced = families.find((plan) => plan.id === familyPlan)?.prices;
+    const intendedFamily = familyPlan
+        ? {
+              plan: familyPlan,
+              currency:
+                  intent?.currency && priced && Object.hasOwn(priced, intent.currency)
+                      ? intent.currency
+                      : null,
+          }
         : null;
     const family = pooled
         ? {

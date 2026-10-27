@@ -229,6 +229,9 @@ function normalizeIntent(intent: SignupIntent | undefined) {
         const value = intent[key];
         if (typeof value === 'string' && INTENT_VALUE.test(value)) clean[key] = value;
     }
+    // Only with a plan to price: a currency on its own means nothing.
+    if (clean.plan && typeof intent.currency === 'string' && /^[a-z]{3}$/.test(intent.currency))
+        clean.currency = intent.currency;
     return Object.keys(clean).length ? clean : undefined;
 }
 

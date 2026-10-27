@@ -712,7 +712,11 @@ function FamilyTierAction({ offer, signedOut }: { offer: FamilyOffer; signedOut:
         className: 'mt-auto w-full',
     });
     return signedOut ? (
-        <Link to="/register" search={{ plan: offer.plan.id }} className={className}>
+        <Link
+            to="/register"
+            search={{ plan: offer.plan.id, currency: offer.currency }}
+            className={className}
+        >
             Start with {offer.name}
         </Link>
     ) : (

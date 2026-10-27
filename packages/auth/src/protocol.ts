@@ -5,7 +5,11 @@ export type AuthUser = { id: string; name: string; email: string };
 export type SessionUser = AuthUser & { credentialVersion: number; role: 'member' | 'admin' };
 
 /* Carried from a pricing or referral link into the account being created. */
-export type SignupIntent = { plan?: string; referral?: string; source?: string };
+/*
+ * What a signup carries from the page it began on: the plan chosen, a code, where it came from,
+ * and the currency a family tier was shown in (three lowercase letters).
+ */
+export type SignupIntent = { plan?: string; referral?: string; source?: string; currency?: string };
 
 export type DeviceKind = 'web' | 'ios' | 'android';
 export type DeviceApproval =

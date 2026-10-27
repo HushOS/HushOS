@@ -1785,6 +1785,9 @@ test.describe.serial('signing up for a family plan from the pricing page', () =>
         expect(href.pathname).toBe('/register');
         const tier = plans.find((plan) => plan.id === href.searchParams.get('plan'));
         expect(tier?.tier).toBe('pro');
+        // The currency the tier is shown in rides along, so sign-up and checkout use it.
+        const shownIn = href.searchParams.get('currency');
+        expect(Object.keys(tier!.prices)).toContain(shownIn);
         await hydrated(start);
         await start.click();
         await expect(page).toHaveURL(/\/register\?plan=/);
@@ -1803,7 +1806,7 @@ test.describe.serial('signing up for a family plan from the pricing page', () =>
         });
         const landed = new URL(page.url());
         expect(landed.searchParams.get('create')).toBe(tier!.id);
-        expect(Object.keys(tier!.prices)).toContain(landed.searchParams.get('currency'));
+        expect(landed.searchParams.get('currency')).toBe(shownIn);
         const dialog = page.getByRole('dialog', { name: 'Create a family' });
         await expect(dialog).toContainText(`Then you pay for ${planTierName(tier!)}`, {
             timeout: 60_000,

@@ -50,8 +50,9 @@ export function defaultFamilyName(accountName: string | null | undefined) {
 }
 
 /*
- * The currency a family tier is shown and charged in after signup: the one the visitor's
- * country or language suggests, out of those every personal plan is priced in (as sign-up
+ * The currency a family tier is shown and charged in after signup: the one Pricing showed it
+ * in (`shown`, carried in the signup's intent), else the one the visitor's country or language
+ * suggests, out of those every personal plan is priced in (as sign-up
  * shows a personal plan), and the tier's default where it has no price in it. Sign-up and
  * Create a family both use it, so the price said at sign-up is the one checkout asks for.
  */
@@ -59,7 +60,11 @@ export function familySignupCurrency(
     catalogue: Pick<Catalogue, 'plans'>,
     plan: FamilyPlan,
     hint: LocaleHint | null | undefined,
+    // The currency Pricing showed the tier in, carried through signup: it wins where the tier is
+    // priced in it, so the price said on Pricing and at signup is the one checkout asks for.
+    shown?: string | null,
 ) {
+    if (shown && Object.hasOwn(plan.prices, shown)) return shown;
     const currencies = currenciesOf(catalogue.plans);
     const currency = pickCurrency({
         hint,
@@ -117,6 +122,8 @@ export type FamilyLanding =
  */
 export function familyLanding(input: {
     tier: string;
+    /* The currency Pricing showed the tier in, if signup carried one. */
+    currency?: string | null;
     groupsEnabled: boolean;
     families: readonly Membership[];
     catalogue: Pick<Catalogue, 'plans' | 'families'>;
@@ -125,7 +132,8 @@ export function familyLanding(input: {
     if (!input.groupsEnabled) return { to: '/app/billing' };
     if (familyStanding(input.families).kind !== 'none') return { to: '/app/family' };
     const plan = input.catalogue.families.find((candidate) => candidate.id === input.tier);
-    const currency = plan && familySignupCurrency(input.catalogue, plan, input.hint);
+    const currency =
+        plan && familySignupCurrency(input.catalogue, plan, input.hint, input.currency);
     if (!plan || !currency) return { to: '/app/billing' };
     return { to: '/app/family', search: { create: plan.id, currency } };
 }
@@ -171,7 +179,8 @@ export async function firstLanding(deps: FirstLandingDeps): Promise<FirstLanding
             const groupsEnabled = capabilities.groups === true;
             const families = groupsEnabled ? await deps.families() : [];
             const to = familyLanding({
-                tier: summary.intendedFamily,
+                tier: summary.intendedFamily.plan,
+                currency: summary.intendedFamily.currency,
                 groupsEnabled,
                 families,
                 catalogue,

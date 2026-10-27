@@ -177,7 +177,10 @@ describe('firstLanding', () => {
         const forgotten: unknown[] = [];
         const logged: unknown[] = [];
         const all: Deps = {
-            summary: async () => ({ intendedPlan: null, intendedFamily: everywhere.id }),
+            summary: async () => ({
+                intendedPlan: null,
+                intendedFamily: { plan: everywhere.id, currency: null },
+            }),
             capabilities: async () => ({ groups: true }),
             catalogue: async () => catalogue,
             hint: async () => india,
@@ -275,9 +278,38 @@ describe('firstLanding', () => {
         expect(forgotten).toHaveLength(1);
     });
 
+    test('the currency the tier was shown in on Pricing wins over the visitor’s location', async () => {
+        const { all } = deps({
+            summary: async () => ({
+                intendedPlan: null,
+                intendedFamily: { plan: everywhere.id, currency: 'usd' },
+            }),
+        });
+        // Shown in dollars from India: charged in dollars, as Pricing said.
+        expect(await firstLanding(all)).toEqual({
+            kind: 'go',
+            to: { to: '/app/family', search: { create: everywhere.id, currency: 'usd' } },
+        });
+    });
+
+    test('a currency the tier isn’t sold in is passed over for the one sign-up would pick', async () => {
+        const { all } = deps({
+            summary: async () => ({
+                intendedPlan: null,
+                intendedFamily: { plan: everywhere.id, currency: 'gbp' },
+            }),
+        });
+        expect(await firstLanding(all)).toMatchObject({
+            to: { search: { currency: 'inr' } },
+        });
+    });
+
     test('a tier no longer sold goes to Plans, and is forgotten', async () => {
         const { all, forgotten } = deps({
-            summary: async () => ({ intendedPlan: null, intendedFamily: 'family-retired' }),
+            summary: async () => ({
+                intendedPlan: null,
+                intendedFamily: { plan: 'family-retired', currency: null },
+            }),
         });
         expect(await firstLanding(all)).toEqual({ kind: 'go', to: { to: '/app/billing' } });
         expect(forgotten).toHaveLength(1);

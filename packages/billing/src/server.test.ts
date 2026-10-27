@@ -2075,16 +2075,24 @@ describe('a personal plan whose payment failed, or that is paused', () => {
 
 describe('a family tier chosen at sign-up', () => {
     const userOfId = (userId: string) => ({ id: userId, name: 'Test', email: 'x@hushos.test' });
-    const intend = (userId: string, plan: string, referral: string | null = null) =>
+    const intend = (
+        userId: string,
+        plan: string,
+        referral: string | null = null,
+        currency: string | null = null,
+    ) =>
         rawSql(
-            `insert into account_intents (user_id, plan_product_id, referral_code, source) values ('${userId}', '${plan}', ${referral ? `'${referral}'` : 'null'}, 'pricing')`,
+            `insert into account_intents (user_id, plan_product_id, referral_code, source, currency) values ('${userId}', '${plan}', ${referral ? `'${referral}'` : 'null'}, 'pricing', ${currency ? `'${currency}'` : 'null'})`,
         );
 
     test('is named until the app has opened it, and forgetting it keeps the code that came with it', async () => {
         const { userId } = await createTestAccount();
         await intend(userId, PRO_FAMILY, 'FRIEND25');
         const before = await billing.getSummary(userOfId(userId));
-        expect(before).toMatchObject({ intendedFamily: PRO_FAMILY, intendedPlan: null });
+        expect(before).toMatchObject({
+            intendedFamily: { plan: PRO_FAMILY, currency: null },
+            intendedPlan: null,
+        });
         await billing.forgetIntendedFamily(userOfId(userId));
         expect((await billing.getSummary(userOfId(userId))).intendedFamily).toBeNull();
         expect(await growthRepository.pendingReferralCode(userId)).toBe('FRIEND25');
@@ -2133,7 +2141,9 @@ describe('a family tier chosen at sign-up', () => {
                 return () => polar.products.splice(polar.products.length - 1, 1);
             },
             async () => {
-                expect((await billing.getSummary(userOfId(userId))).intendedFamily).toBe(NEW_PRO);
+                expect((await billing.getSummary(userOfId(userId))).intendedFamily?.plan).toBe(
+                    NEW_PRO,
+                );
             },
         );
     });
@@ -2150,7 +2160,7 @@ describe('a family tier chosen at sign-up', () => {
                 };
             },
             async () => {
-                expect((await billing.getSummary(userOfId(userId))).intendedFamily).toBe(
+                expect((await billing.getSummary(userOfId(userId))).intendedFamily?.plan).toBe(
                     PRO_FAMILY,
                 );
             },
@@ -2158,7 +2168,23 @@ describe('a family tier chosen at sign-up', () => {
         // The single Family plan from before the tiers, never offered beside them.
         const old = await createTestAccount();
         await intend(old.userId, FAMILY);
-        expect((await billing.getSummary(userOfId(old.userId))).intendedFamily).toBe(FAMILY);
+        expect((await billing.getSummary(userOfId(old.userId))).intendedFamily?.plan).toBe(FAMILY);
+    });
+
+    test('carries the currency the tier was shown in, only where the tier is priced in it', async () => {
+        const rupees = await createTestAccount();
+        await intend(rupees.userId, PRO_FAMILY, null, 'inr');
+        expect((await billing.getSummary(userOfId(rupees.userId))).intendedFamily).toEqual({
+            plan: PRO_FAMILY,
+            currency: 'inr',
+        });
+        // Not sold in yen: the app picks one as it would without.
+        const yen = await createTestAccount();
+        await intend(yen.userId, PRO_FAMILY, null, 'jpy');
+        expect((await billing.getSummary(userOfId(yen.userId))).intendedFamily).toEqual({
+            plan: PRO_FAMILY,
+            currency: null,
+        });
     });
 
     test('forgetting it leaves a personal plan for its checkout', async () => {

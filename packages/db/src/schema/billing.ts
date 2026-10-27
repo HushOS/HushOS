@@ -88,6 +88,8 @@ export const accountIntents = pgTable('account_intents', {
         .primaryKey()
         .references(() => users.id, { onDelete: 'cascade' }),
     planProductId: text('plan_product_id'),
+    /* The currency a family tier was shown in on Pricing (`^[a-z]{3}$`), for its checkout. */
+    currency: text(),
     referralCode: text('referral_code'),
     source: text(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
