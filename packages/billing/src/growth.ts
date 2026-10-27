@@ -321,9 +321,14 @@ export async function createAffiliate(input: AffiliateInput) {
  * whose own handles are free to it. The admin form asks this as the operator
  * types; saving asks again, and that answer is the one that counts.
  */
-export async function isHandleFree(
+export async function isHandleFree(handle: string, except?: string) {
+    return handleFree(handle, except);
+}
+
+/* The same rule, inside the affiliate's lock: through its transaction. */
+async function handleFree(
     handle: string,
-    except?: string,
+    except: string | undefined,
     executor?: growthRepository.Executor,
 ) {
     return !(await growthRepository.findAffiliateByHandle(handle, except, executor));
@@ -335,7 +340,7 @@ async function assertHandleFree(
     what: 'slug' | 'code',
     executor?: growthRepository.Executor,
 ) {
-    if (!(await isHandleFree(handle, except, executor)))
+    if (!(await handleFree(handle, except, executor)))
         throw new BillingError(`That ${what} belongs to another affiliate.`);
 }
 
@@ -423,7 +428,7 @@ export async function updateAffiliate(
 
 /*
  * The affiliate's lock, for a change of terms or a removal. Every read inside
- * goes through `tx`. A wait past the lock's timeout is a plain refusal to retry.
+ * goes through `tx`. A lock already held is a plain refusal, at once, to retry.
  */
 async function underAffiliateLock<T>(
     id: string,
@@ -461,7 +466,10 @@ async function otherChanges(
 export async function deleteAffiliate(id: string) {
     // Under the affiliate's lock: a removal never interleaves with a change of terms.
     return underAffiliateLock(id, async (tx) => {
-        const row = await growthRepository.getAffiliate(id, tx);
+        // Locked before anything owed is counted: an earning recorded while Polar deletes the
+        // discount waits for this removal, then fails where the webhook sees it, rather than
+        // being deleted with the affiliate after the count found nothing owed.
+        const row = await growthRepository.getAffiliate(id, tx, { forUpdate: true });
         if (!row) throw new BillingError('That affiliate does not exist.', 404);
         const stats = await growthRepository.affiliateStats(id, tx);
         if (Object.values(stats.earnings).some((total) => total.unpaid > 0))

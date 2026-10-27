@@ -179,6 +179,8 @@ const polar = {
     beforeRaise: null as (() => Promise<void>) | null,
     /* Runs once as Polar takes the next new discount: a sign-up landing mid-enrolment. */
     beforeDiscountCreate: null as (() => Promise<void>) | null,
+    /* Runs once as Polar takes the next discount deletion: an order landing mid-removal. */
+    beforeDiscountDelete: null as (() => Promise<void>) | null,
     /* Runs once just after the next subscription read: a change landing behind it. */
     afterGet: null as (() => void | Promise<void>) | null,
     /*
@@ -578,6 +580,9 @@ const fakeClient = {
         },
         async delete(id: string) {
             polar.calls.push(`discounts.delete:${id}`);
+            const hook = polar.beforeDiscountDelete;
+            polar.beforeDiscountDelete = null;
+            await hook?.();
             const index = polar.discounts.findIndex((d) => d.id === id);
             if (index < 0) throw new PolarClientError(404, { error: 'ResourceNotFound' });
             polar.discounts.splice(index, 1);
@@ -1089,6 +1094,7 @@ beforeEach(async () => {
     polar.cutFailures = 0;
     polar.beforeCut = null;
     polar.beforeDiscountCreate = null;
+    polar.beforeDiscountDelete = null;
     polar.ordersFail = false;
     polar.beforeProductChange = null;
     polar.ignoresMoves = false;
@@ -2404,81 +2410,157 @@ describe('affiliates', () => {
         expect(polar.discounts).toEqual([expect.objectContaining({ basis_points: 3000 })]);
     });
 
-    /* Waits until `count` changes wait on the affiliate lock; past the deadline, fails. */
-    async function untilWaiting(
-        observer: ReturnType<typeof lockObserver>,
-        count: number,
-        deadlineMs = 5_000,
-    ) {
-        const until = Date.now() + deadlineMs;
-        while ((await observer.waiting(growthRepository.AFFILIATE_LOCK_SPACE)) < count) {
-            if (Date.now() > until)
-                throw new Error(`Never saw ${count} waiting on the affiliate lock.`);
-            await new Promise((resolve) => setTimeout(resolve, 20));
-        }
+    /* How long a test waits for something it expects to happen; longer on a loaded CI runner. */
+    const DEADLINE = process.env.CI ? 20_000 : 5_000;
+    const BUSY = 'This affiliate is being changed. Try again in a moment.';
+
+    /* Takes every connection the app's pool has left, so any further query waits; returns the release. */
+    async function fillPool(holding: number) {
+        const max = db.$client.options.max ?? 10;
+        const clients = await Promise.all(
+            Array.from({ length: max - holding }, () => db.$client.connect()),
+        );
+        return () => clients.forEach((client) => client.release());
     }
 
-    test('two term changes at once leave Polar and the row on the same terms: the second waits on the lock', async () => {
+    /* `work` finished before the deadline, or 'stalled'. */
+    const within = (work: Promise<unknown>) =>
+        Promise.race([
+            work.then(() => 'done'),
+            new Promise((resolve) => setTimeout(() => resolve('stalled'), DEADLINE)),
+        ]);
+
+    test('a second change of terms while the first holds the lock is refused at once, and the first one’s terms stand', async () => {
         const affiliate = await creator();
-        const observer = lockObserver();
-        let second: Promise<unknown> = Promise.resolve();
-        // A holds the lock, having read 25%/forever; B is let go only once seen waiting on it.
+        let second: unknown = null;
+        // A has read 25%/forever under the lock; B asks while A still holds it.
         const spy = landsBetween(async () => {
-            second = growth.updateAffiliate(affiliate.id, { duration: 'once' });
-            second.catch(() => {});
-            await untilWaiting(observer, 1);
+            second = await growth.updateAffiliate(affiliate.id, { duration: 'once' }).then(
+                () => 'saved',
+                (error: unknown) => error,
+            );
         });
         try {
             await growth.updateAffiliate(affiliate.id, { percentOff: 30 });
-            await second;
         } finally {
             spy.mockRestore();
-            await observer.end();
         }
+        expect(second).toBeInstanceOf(billing.BillingError);
+        expect(second).toMatchObject({ message: BUSY, status: 409 });
         expect((await growth.listAffiliates())[0]).toMatchObject({
             percentOff: 30,
-            duration: 'once',
+            duration: 'forever',
         });
         expect(polar.discounts).toEqual([
-            expect.objectContaining({ basis_points: 3000, duration: 'once' }),
+            expect.objectContaining({ basis_points: 3000, duration: 'forever' }),
         ]);
-    }, 30_000);
+    });
 
-    test('a locked change that looks up a handle and an email finishes while every other connection waits on its lock', async () => {
+    test('a change or a removal while another process holds the lock is refused with nothing asked of Polar', async () => {
+        const affiliate = await creator();
+        const observer = lockObserver();
+        const release = await observer.hold(growthRepository.AFFILIATE_LOCK_SPACE, affiliate.id);
+        polar.calls = [];
+        try {
+            await expect(
+                growth.updateAffiliate(affiliate.id, { percentOff: 30 }),
+            ).rejects.toMatchObject({ message: BUSY, status: 409 });
+            await expect(growth.deleteAffiliate(affiliate.id)).rejects.toMatchObject({
+                message: BUSY,
+                status: 409,
+            });
+        } finally {
+            await release();
+            await observer.end();
+        }
+        expect(polar.calls).toEqual([]);
+        expect((await growth.listAffiliates())[0]).toMatchObject({ percentOff: 25 });
+    });
+
+    test('a locked change that looks up a handle and an email finishes with the rest of the pool taken', async () => {
         const owner = await createTestAccount({ email: 'owner@hushos.test' });
         const affiliate = await creator();
-        // The app's pool, less the connection the change holds: all of them queue on the lock.
-        const others = (db.$client.options.max ?? 10) - 1;
-        const observer = lockObserver();
-        const waiting: Promise<unknown>[] = [];
+        let release = () => {};
+        // Under the lock, every other connection is taken: the change has its own, and only that.
         const spy = landsBetween(async () => {
-            for (let i = 0; i < others; i++) {
-                const change = growth.updateAffiliate(affiliate.id, { commissionBps: 1000 + i });
-                change.catch(() => {});
-                waiting.push(change);
-            }
-            await untilWaiting(observer, others);
+            release = await fillPool(1);
         });
         try {
-            // Then it checks the new code and the email: through its own connection, or never.
             const change = growth.updateAffiliate(affiliate.id, {
                 code: 'creator30',
                 userEmail: 'owner@hushos.test',
             });
-            const outcome = await Promise.race([
-                change.then(() => 'done'),
-                new Promise((resolve) => setTimeout(() => resolve('stalled'), 10_000)),
-            ]);
-            expect(outcome).toBe('done');
-            await Promise.all(waiting);
+            change.catch(() => {});
+            expect(await within(change)).toBe('done');
         } finally {
+            release();
             spy.mockRestore();
-            await observer.end();
         }
         expect((await growth.listAffiliates())[0]).toMatchObject({
             code: 'CREATOR30',
             userId: owner.userId,
         });
+    }, 60_000);
+
+    test('a locked removal that checks what is owed finishes with the rest of the pool taken', async () => {
+        const affiliate = await creator();
+        let release = () => {};
+        const spy = landsBetween(async () => {
+            release = await fillPool(1);
+        });
+        try {
+            const removal = growth.deleteAffiliate(affiliate.id);
+            removal.catch(() => {});
+            expect(await within(removal)).toBe('done');
+        } finally {
+            release();
+            spy.mockRestore();
+        }
+        expect(await growth.listAffiliates()).toEqual([]);
+    }, 60_000);
+
+    test('an earning recorded while a removal waits on Polar is never deleted with it', async () => {
+        const affiliate = await creator();
+        const fan = await createTestAccount();
+        const observer = lockObserver();
+        let earning: Promise<unknown> = Promise.resolve();
+        // The removal has found nothing owed; an order.paid lands while Polar deletes the discount.
+        polar.beforeDiscountDelete = async () => {
+            earning = growthRepository
+                .recordEarning({
+                    affiliateId: affiliate.id,
+                    orderId: 'order_late',
+                    userId: fan.userId,
+                    currency: 'usd',
+                    netAmount: 1000,
+                    commissionBps: 2000,
+                })
+                .then(
+                    () => 'recorded',
+                    (error: unknown) => error,
+                );
+            // The earning must wait for the removal: seen blocked on the affiliate's row.
+            const until = Date.now() + DEADLINE;
+            while (!(await observer.waitingOn('affiliate_earnings'))) {
+                if (Date.now() > until)
+                    throw new Error('The earning was never held back by the removal.');
+                await new Promise((resolve) => setTimeout(resolve, 20));
+            }
+        };
+        try {
+            await growth.deleteAffiliate(affiliate.id);
+        } finally {
+            await observer.end();
+        }
+        // Gone with the affiliate, it fails where it is seen: the webhook answers 503 and is retried.
+        const outcome = await earning;
+        expect(outcome).toBeInstanceOf(Error);
+        let cause: unknown = outcome;
+        for (let depth = 0; depth < 5 && cause instanceof Error; depth++) {
+            if ((cause as { code?: string }).code) break;
+            cause = cause.cause;
+        }
+        expect((cause as { code?: string }).code).toBe('23503');
     }, 60_000);
 
     test('pausing never undoes a save that landed while it ran, here or at Polar', async () => {

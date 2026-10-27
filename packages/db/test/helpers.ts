@@ -69,22 +69,29 @@ export async function closeDatabase() {
 }
 
 /*
- * A connection of its own, outside the app's pool: for watching locks while
- * that pool is full. Close it with `end()`.
+ * A connection of its own, outside the app's pool: for holding a lock as
+ * another process would, and for seeing what waits on a lock. Close it with `end()`.
  */
 export function lockObserver() {
+    // One connection, so a lock taken here is released on the same session.
     const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
     return {
-        /* Ungranted advisory locks in this database, in the two-key space `space`. */
-        async waiting(space: number) {
+        /* Holds the two-key advisory lock (space, hashtext(key)) until the returned release. */
+        async hold(space: number, key: string) {
+            await pool.query('select pg_advisory_lock($1::int, hashtext($2))', [space, key]);
+            return async () => {
+                await pool.query('select pg_advisory_unlock($1::int, hashtext($2))', [space, key]);
+            };
+        },
+        /* Whether another session's statement naming `table` waits on a lock in this database. */
+        async waitingOn(table: string) {
             const result = await pool.query<{ waiting: number }>(
-                `select count(*)::int as waiting from pg_locks
-                 where locktype = 'advisory' and not granted and objsubid = 2
-                   and classid = $1::oid
-                   and database = (select oid from pg_database where datname = current_database())`,
-                [space],
+                `select count(*)::int as waiting from pg_stat_activity
+                 where datname = current_database() and pid <> pg_backend_pid()
+                   and wait_event_type = 'Lock' and query like '%' || $1 || '%'`,
+                [table],
             );
-            return result.rows[0]!.waiting;
+            return result.rows[0]!.waiting > 0;
         },
         end: () => pool.end(),
     };

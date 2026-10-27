@@ -306,18 +306,13 @@ export type Executor = typeof db | Tx;
  * asks the provider, and writes. Two changes that each read, sent the provider
  * their merged terms and wrote would otherwise leave the provider with one set
  * and the row with another. The lock is held across the provider's call, which
- * is admin-only, rare and per affiliate: one operator's second save waits a
- * moment, nothing else does. A hash collision only serialises two affiliates.
+ * is admin-only, rare and per affiliate. A change that finds it held is refused
+ * at once rather than queued: a waiter would hold a pooled connection for as
+ * long as the provider takes. A hash collision only refuses a second affiliate.
  */
 export const AFFILIATE_LOCK_SPACE = 0x61666c74;
-/*
- * How long a change waits for the lock, or any lock, before giving up. A waiter
- * holds a pooled connection, so it must not wait for ever: a provider that
- * hangs with the lock held would otherwise end with the pool full of waiters.
- */
-const AFFILIATE_LOCK_TIMEOUT = '30s';
 
-/* Another change of this affiliate held the lock past the timeout. */
+/* Another change of this affiliate holds the lock. */
 export class AffiliateBusyError extends Error {
     constructor() {
         super('This affiliate is being changed.');
@@ -326,30 +321,18 @@ export class AffiliateBusyError extends Error {
 }
 
 /*
- * Everything `run` reads or writes goes through `tx`, never the global `db`: a
- * second connection, asked for while the lock is held, can wait behind every
- * other connection in the pool queued on this same lock.
+ * Everything `run` reads or writes goes through `tx`, never the global `db`:
+ * the lock is held for the whole transaction, and a second connection asked
+ * for inside it could wait on a pool that is full.
  */
 export async function withAffiliateLock<T>(id: string, run: (tx: Tx) => Promise<T>) {
-    try {
-        return await db.transaction(async (tx) => {
-            await tx.execute(sql.raw(`set local lock_timeout = '${AFFILIATE_LOCK_TIMEOUT}'`));
-            await tx.execute(
-                sql`select pg_advisory_xact_lock(${AFFILIATE_LOCK_SPACE}::int, hashtext(${id}))`,
-            );
-            return run(tx);
-        });
-    } catch (error) {
-        if (lockTimedOut(error)) throw new AffiliateBusyError();
-        throw error;
-    }
-}
-
-/* Postgres's code for a lock timeout, anywhere in a driver error's causes. */
-function lockTimedOut(error: unknown) {
-    for (let at = error; at && typeof at === 'object'; at = (at as { cause?: unknown }).cause)
-        if ((at as { code?: unknown }).code === '55P03') return true;
-    return false;
+    return db.transaction(async (tx) => {
+        const taken = await tx.execute<{ locked: boolean }>(
+            sql`select pg_try_advisory_xact_lock(${AFFILIATE_LOCK_SPACE}::int, hashtext(${id})) as locked`,
+        );
+        if (!taken.rows[0]?.locked) throw new AffiliateBusyError();
+        return run(tx);
+    });
 }
 
 export async function createAffiliate(
@@ -403,8 +386,18 @@ export async function deleteAffiliate(id: string, executor: Executor = db) {
     });
 }
 
-export async function getAffiliate(id: string, executor: Executor = db) {
-    const [row] = await executor.select().from(affiliates).where(eq(affiliates.id, id));
+/*
+ * `forUpdate` locks the row to the transaction's end: an earning recorded for
+ * it meanwhile waits on its foreign key, and after a removal fails, instead of
+ * being deleted with the affiliate unseen.
+ */
+export async function getAffiliate(
+    id: string,
+    executor: Executor = db,
+    options: { forUpdate?: boolean } = {},
+) {
+    const query = executor.select().from(affiliates).where(eq(affiliates.id, id));
+    const [row] = await (options.forUpdate ? query.for('update') : query);
     return row ?? null;
 }
 
