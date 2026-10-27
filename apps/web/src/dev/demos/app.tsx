@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useDialKit } from 'dialkit';
 import { cn } from 'cn';
 import { MoreHorizontalIcon, UploadIcon } from 'lucide-react';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import { AccessCell, type Access } from '@/components/access-cell';
 import { AccessMarker } from '@/components/drive/access';
@@ -14,13 +14,14 @@ import {
     SelectableMark,
     SkeletonRows,
 } from '@/components/drive/file-list';
-import { FamilyPlan } from '@/components/families/family-billing';
+import { FamilyPlan, FamilyStorage } from '@/components/families/family-billing';
 import { PageHeader } from '@/components/page-header';
 import { PersonAvatar } from '@/components/person-avatar';
+import { PortalLink } from '@/components/portal-link';
 import { Done, Segmented, Setting, SettingsGroup } from '@/components/settings';
 import { StorageMeter } from '@/components/storage-card';
-import { Button, buttonVariants } from '@/components/ui/button';
-import { Demo, Row, Sample, SheetFrame } from '@/dev/demo';
+import { Button } from '@/components/ui/button';
+import { Demo, Row, Sample, SheetFrame, States } from '@/dev/demo';
 import { familyBillingQueryOptions, type FamilyGlance } from '@/lib/family-billing';
 
 const GB = 1024 ** 3;
@@ -297,8 +298,8 @@ export function SettingsDemo() {
     return (
         <Demo
             id="settings"
-            title="Settings rows and storage"
-            note="A group with its title and rule; rows with the label left and the action right."
+            title="Settings rows, storage and Card and invoices"
+            note="A group with its title and rule; rows with the label left and the action right. Card and invoices (PortalLink) opens Polar's portal, so it is a link: muted words beside the blue icon."
         >
             <SheetFrame className="px-5 py-6 sm:px-8">
                 <div className="max-w-2xl">
@@ -331,15 +332,8 @@ export function SettingsDemo() {
                             Two months free yearly
                         </Setting>
                         <Setting
-                            label="Card and invoices"
-                            action={
-                                <a
-                                    href="#settings"
-                                    className={buttonVariants({ variant: 'outline' })}
-                                >
-                                    Open
-                                </a>
-                            }
+                            label="Payment"
+                            action={<PortalLink busy={false} onOpen={() => {}} />}
                             below={<Done>Saved</Done>}
                         >
                             Visa ending 4242
@@ -347,19 +341,26 @@ export function SettingsDemo() {
                     </SettingsGroup>
                 </div>
             </SheetFrame>
+            <States states={['rest', 'hover', 'focus', 'disabled', 'busy']}>
+                {({ state, disabled }) => (
+                    <PortalLink busy={state === 'busy'} disabled={disabled} onOpen={() => {}} />
+                )}
+            </States>
         </Demo>
     );
 }
 
 /*
- * The family plan as a member without billing sees it: the real FamilyPlan, reading a stub
- * summary from a query client of its own whose queries never run (`enabled: false`), so
- * nothing is fetched. Without the family's own record there is no "places taken" line.
+ * The family page's plan and storage as a member without billing sees them: the real
+ * FamilyPlan and FamilyStorage, reading stub summaries from a query client of their own
+ * whose queries never run (`enabled: false`), so nothing is fetched. Laid out as the family
+ * page lays them (family-page.tsx): on the sheet, in its gutters and its 36px rhythm.
  */
 const USER = 'playground-user';
 const GROUP = 'playground-family';
+const FAMILY = 'The Lindqvists';
 
-function StubFamily({ summary, place }: { summary: FamilyGlance; place: 'top' | 'bottom' }) {
+function StubFamily({ summary, children }: { summary: FamilyGlance; children: ReactNode }) {
     const [client] = useState(() => {
         const stub = new QueryClient({
             defaultOptions: { queries: { enabled: false, retry: false } },
@@ -367,37 +368,60 @@ function StubFamily({ summary, place }: { summary: FamilyGlance; place: 'top' | 
         stub.setQueryData(familyBillingQueryOptions(USER, GROUP).queryKey, summary);
         return stub;
     });
+    return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
+
+/* The family page's body: the sheet, its gutters and rhythm (family-page.tsx). */
+function FamilyBody({ children }: { children: ReactNode }) {
     return (
-        <QueryClientProvider client={client}>
-            <FamilyPlan
-                place={place}
-                userId={USER}
-                groupId={GROUP}
-                family="The Lindqvists"
-                roles={[]}
-                onCheckoutSeen={() => {}}
-            />
-        </QueryClientProvider>
+        <SheetFrame className="py-6" data-measure="">
+            <div className="flex max-w-3xl flex-col gap-9 px-5 sm:px-8">{children}</div>
+        </SheetFrame>
     );
 }
 
+const plan = { productName: 'Family Plus', youPay: false } as const;
+
 export function FamilyGlanceDemo() {
     const none = { usedBytes: '0', quotaBytes: '0' };
+    const props = {
+        userId: USER,
+        groupId: GROUP,
+        family: FAMILY,
+        roles: [],
+        onCheckoutSeen: () => {},
+    };
     return (
         <Demo
             id="family-glance"
             title="Family plan glance"
-            note={
-                <>
-                    What a member without billing is shown: the plan and the pool, or why there is
-                    none. This is main’s version; the Plan heading becomes a settings group when
-                    #202 merges.
-                </>
-            }
+            note="What a member without billing is shown: the plan beside the storage it gives, or why there is none."
         >
-            <SheetFrame className="pb-6" data-measure="">
+            <Row label="With a shared pool: the plan is a row of Storage">
                 <StubFamily
-                    place="bottom"
+                    summary={{
+                        enabled: true,
+                        view: 'member',
+                        hasPlan: true,
+                        planName: 'Family Plus',
+                        storage: { usedBytes: String(120 * GB), quotaBytes: String(1024 * GB) },
+                        usage: {
+                            ownBytes: String(18 * GB),
+                            foldersBytes: String(41 * GB),
+                            members: null,
+                        },
+                    }}
+                >
+                    <div className="w-full">
+                        <FamilyBody>
+                            <FamilyPlan place="bottom" {...props} />
+                            <FamilyStorage userId={USER} groupId={GROUP} family={FAMILY} />
+                        </FamilyBody>
+                    </div>
+                </StubFamily>
+            </Row>
+            <Row label="A plan with no pool to show: Plan on its own">
+                <StubFamily
                     summary={{
                         enabled: true,
                         view: 'member',
@@ -405,50 +429,55 @@ export function FamilyGlanceDemo() {
                         planName: 'Family Plus',
                         storage: { usedBytes: String(120 * GB), quotaBytes: String(1024 * GB) },
                     }}
-                />
-            </SheetFrame>
-            <SheetFrame className="flex flex-col gap-3 py-6">
-                <StubFamily
-                    place="top"
-                    summary={{
-                        enabled: true,
-                        view: 'member',
-                        hasPlan: false,
-                        planName: null,
-                        storage: null,
-                    }}
-                />
-                <StubFamily
-                    place="top"
-                    summary={{
-                        enabled: true,
-                        view: 'member',
-                        hasPlan: false,
-                        planName: null,
-                        storage: none,
-                        lapsedPlan: {
-                            productName: 'Family Plus',
-                            standing: 'paused',
-                            youPay: false,
-                        },
-                    }}
-                />
-                <StubFamily
-                    place="top"
-                    summary={{
-                        enabled: true,
-                        view: 'member',
-                        hasPlan: false,
-                        planName: null,
-                        storage: none,
-                        lapsedPlan: {
-                            productName: 'Family Plus',
-                            standing: 'payment-failed',
-                            youPay: false,
-                        },
-                    }}
-                />
-            </SheetFrame>
+                >
+                    <div className="w-full">
+                        <FamilyBody>
+                            <FamilyPlan place="bottom" {...props} />
+                        </FamilyBody>
+                    </div>
+                </StubFamily>
+            </Row>
+            <Row label="No plan, paused, payment failed">
+                <div className="w-full">
+                    <FamilyBody>
+                        <StubFamily
+                            summary={{
+                                enabled: true,
+                                view: 'member',
+                                hasPlan: false,
+                                planName: null,
+                                storage: null,
+                            }}
+                        >
+                            <FamilyPlan place="top" {...props} />
+                        </StubFamily>
+                        <StubFamily
+                            summary={{
+                                enabled: true,
+                                view: 'member',
+                                hasPlan: false,
+                                planName: null,
+                                storage: none,
+                                lapsedPlan: { ...plan, standing: 'paused' },
+                            }}
+                        >
+                            <FamilyPlan place="top" {...props} />
+                        </StubFamily>
+                        <StubFamily
+                            summary={{
+                                enabled: true,
+                                view: 'member',
+                                hasPlan: false,
+                                planName: null,
+                                storage: none,
+                                lapsedPlan: { ...plan, standing: 'payment-failed' },
+                            }}
+                        >
+                            <FamilyPlan place="top" {...props} />
+                        </StubFamily>
+                    </FamilyBody>
+                </div>
+            </Row>
         </Demo>
     );
 }
