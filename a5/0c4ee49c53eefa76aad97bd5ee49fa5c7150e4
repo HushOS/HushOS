@@ -1,0 +1,115 @@
+apps/web/src/components/drive/file-list.tsx
+  s_566b8e0c4467a4::t_89e3449678567e 112-116
+  s_566b8e0c4467a4::t_f2cc56250690c6 60-61,67,90,111,117-127,294,298-311,355,364-365,459,618,831
+apps/web/src/components/ui/button.tsx
+  s_566b8e0c4467a4::t_c89bf20eefc1f1 5-9
+  s_566b8e0c4467a4::t_a15afc052d73c9 11,20-22,27
+apps/web/src/components/drive/access.tsx
+  s_566b8e0c4467a4::t_da5b16f4981cd7 107
+apps/web/src/components/drive/folder-view.tsx
+  s_566b8e0c4467a4::t_85b457febc1bbc 19-20,25-26,256,998,1210,1216,1338,1342,1349-1350,1745
+apps/web/src/components/drive/home-view.tsx
+  s_566b8e0c4467a4::t_56f59f1406a345 17-18,152,545,549,826,850
+apps/web/src/components/drive/json-view.tsx
+  s_566b8e0c4467a4::t_c9e60238cda021 194,579
+apps/web/src/components/drive/link-row.tsx
+  s_566b8e0c4467a4::t_56d4d145df6168 205
+apps/web/src/components/drive/office-viewer.tsx
+  s_566b8e0c4467a4::t_2a49e72c9e281a 174,212,240,321,349,363
+apps/web/src/components/drive/preview.tsx
+  s_566b8e0c4467a4::t_4598c4493bd729 210,691,815
+apps/web/src/components/drive/share-dialog.tsx
+  s_566b8e0c4467a4::t_dad5904183370e 507
+apps/web/src/components/drive/storage-full-dialog.tsx
+  s_566b8e0c4467a4::t_2a04caae5598f9 289
+apps/web/src/components/drive/tag-colour.tsx
+  s_566b8e0c4467a4::t_d1de5aea8e93b0 45,256,280,322,349
+apps/web/src/components/drive/tag-stamp.tsx
+  s_566b8e0c4467a4::t_33d71748b1843d 46,100
+apps/web/src/components/drive/trash-view.tsx
+  s_566b8e0c4467a4::t_a698f6a8d727ec 12,206,635
+apps/web/src/components/drive/unverified-mark.tsx
+  s_566b8e0c4467a4::t_025cc5c610c43f 214-215
+apps/web/src/components/drive/viewer-parts.tsx
+  s_566b8e0c4467a4::t_20415c67e1c29d 175,211
+apps/web/src/components/families/let-in-dialog.tsx
+  s_566b8e0c4467a4::t_d6cb6749167d69 662
+apps/web/src/components/operator.tsx
+  s_566b8e0c4467a4::t_141faff261e649 119
+apps/web/src/components/recovery-phrase.tsx
+  s_566b8e0c4467a4::t_cd769d9c8be715 458
+apps/web/src/components/security-page.tsx
+  s_566b8e0c4467a4::t_50bd2095ef64f7 101,114,279
+apps/web/src/components/settings.tsx
+  s_566b8e0c4467a4::t_aaaae07cf2de12 100
+apps/web/src/components/site.tsx
+  s_566b8e0c4467a4::t_e97c54cbe86ccf 245
+apps/web/src/components/theme-toggle.tsx
+  s_566b8e0c4467a4::t_ab685f00b63ae0 50
+apps/web/src/components/ui/accordion.tsx
+  s_566b8e0c4467a4::t_9e272ef3342d94 31
+apps/web/src/components/ui/alert-dialog.tsx
+  s_566b8e0c4467a4::t_374c9bd81fdd32 39
+apps/web/src/components/ui/breadcrumb.tsx
+  s_566b8e0c4467a4::t_47500f034d17cc 43
+apps/web/src/components/ui/checkbox.tsx
+  s_566b8e0c4467a4::t_997452854b23e7 10
+apps/web/src/components/ui/command.tsx
+  s_566b8e0c4467a4::t_17235bc07cd1ce 86,100,155
+apps/web/src/components/ui/context-menu.tsx
+  s_566b8e0c4467a4::t_d917a42b2c61c3 36,45,97,122,151,184
+apps/web/src/components/ui/dialog.tsx
+  s_566b8e0c4467a4::t_af8079a1bd29f1 49
+apps/web/src/components/ui/dropdown-menu.tsx
+  s_566b8e0c4467a4::t_eeb9a5db792eb4 30,39,91,116,165,207
+apps/web/src/components/ui/input.tsx
+  s_566b8e0c4467a4::t_52851380e0ed45 11
+apps/web/src/components/ui/popover.tsx
+  s_566b8e0c4467a4::t_c73995f8f4bc62 37
+apps/web/src/components/ui/radio-group.tsx
+  s_566b8e0c4467a4::t_af517983e6e756 22,43
+apps/web/src/components/ui/scroll-area.tsx
+  s_566b8e0c4467a4::t_af48c3144cc6a5 13
+apps/web/src/components/ui/select.tsx
+  s_566b8e0c4467a4::t_e8db6e88793930 34,71,77,106
+apps/web/src/components/ui/sidebar.tsx
+  s_566b8e0c4467a4::t_93985a3d910836 285,394,418,466,555,659
+apps/web/src/components/ui/switch.tsx
+  s_566b8e0c4467a4::t_aea123f7c07f8d 16
+apps/web/src/components/ui/textarea.tsx
+  s_566b8e0c4467a4::t_0847ac926ecee9 9
+apps/web/src/components/ui/toast.tsx
+  s_566b8e0c4467a4::t_0bc101a3ab5504 30,43,104,131
+apps/web/src/components/user-menu.tsx
+  s_566b8e0c4467a4::t_231445183b8bdf 114
+apps/web/src/routes/_authenticated/app/_drive/families/$groupId/join.tsx
+  s_566b8e0c4467a4::t_2adaf9b2571825 306,364,414,490
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/index.tsx
+  s_566b8e0c4467a4::t_0d1f199fdf936c 113
+apps/web/src/routes/_authenticated/app/_drive/shared.tsx
+  s_566b8e0c4467a4::t_30c93d4a255d6e 93
+apps/web/src/routes/_authenticated/app/account.tsx
+  s_566b8e0c4467a4::t_b2c584856dfaf2 122
+apps/web/src/routes/_authenticated/app/admin/accounts/$accountId.tsx
+  s_566b8e0c4467a4::t_18e64d50087bfd 306
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_566b8e0c4467a4::t_86b4359b141bc3 185
+apps/web/src/routes/s/$token.tsx
+  s_566b8e0c4467a4::t_5a76631a7e9235 563,618
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a50c4ee49c53eefa76aad97bd5ee49fa5c7150e4",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
