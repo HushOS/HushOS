@@ -3122,6 +3122,35 @@ describe('family places', () => {
         expect(await seatLimit(groupId)).toBe(6);
     });
 
+    test('a raise counted from a total that has changed since is refused and charges nothing', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 6 });
+        const moved = {
+            status: 409,
+            message:
+                'Your family’s places changed a moment ago. Check the new total and try again.',
+        };
+        // Another tab raised to seven; this one, still showing six, asks for eight.
+        subscription.units = 7;
+        await expect(billing.setGroupUnits(payer, groupId, 8, 6)).rejects.toMatchObject(moved);
+        // Even when the absolute count would already be there: nothing was bought by this ask.
+        await expect(billing.setGroupUnits(payer, groupId, 7, 6)).rejects.toMatchObject(moved);
+        expect(raises()).toEqual([]);
+        // The summary it then reads shows Polar's seven, so the next ask counts from there.
+        expect(await billing.getGroupBilling(payer, groupId)).toMatchObject({
+            subscription: { units: 7 },
+        });
+        // A raise that lands between the first read and the one under the claim, too.
+        polar.afterGet = () => {
+            subscription.units = 8;
+        };
+        await expect(billing.setGroupUnits(payer, groupId, 9, 7)).rejects.toMatchObject(moved);
+        expect(raises()).toEqual([]);
+        // Counted from the total Polar has, it goes through.
+        await billing.setGroupUnits(payer, groupId, 10, 8);
+        expect(subscription.units).toBe(10);
+        expect(raises()).toHaveLength(1);
+    });
+
     test('an admission gets a place only from the payer, and only on a 200', async () => {
         const { payer, groupId, subscription, others } = await familyOnPlan({
             units: 6,
@@ -6299,13 +6328,19 @@ describe('family tiers', () => {
             state: 'accepted',
         });
         polar.calls = [];
+        // An admission sends the admitter to the portal to confirm the upgrade first.
         expect(await billing.ensureGroupSeat(groupId, payer.id)).toMatchObject({
             status: 'confirm',
         });
-        await expect(billing.setGroupUnits(payer, groupId, 6)).resolves.toMatchObject({
-            confirmPayment: true,
+        // The payer's own raise is refused outright: nothing went to Polar, so there is
+        // nothing of it to confirm, and the portal would only show the upgrade's charge.
+        polar.sessions = [];
+        await expect(billing.setGroupUnits(payer, groupId, 6)).rejects.toMatchObject({
+            status: 409,
+            message: 'Confirm the plan change with your bank first, then add places.',
         });
         expect(raises()).toEqual([]);
+        expect(polar.sessions).toEqual([]);
         expect(subscription.units).toBe(4);
     });
 

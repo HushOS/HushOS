@@ -2153,6 +2153,13 @@ export type SeatResult =
     | { status: 'changed' }
     | { status: 'unavailable' };
 
+/*
+ * What the payer's own raise can meet besides: an upgrade the bank still holds (nothing
+ * stacks on it, and nothing would go to Polar to confirm), or a total that changed since the
+ * payer read it. An admission counts from no total, and meets the first as a confirmation.
+ */
+type RaiseResult = SeatResult | { status: 'upgrade-waiting' } | { status: 'moved' };
+
 /* A refused raise, by what Polar said. */
 function refusedRaise(error: unknown): SeatResult {
     if (statusOf(error) === 402) {
@@ -2179,7 +2186,9 @@ async function changePlaces(
     groupId: string,
     live: { id: string; paidUnits: number },
     target: number,
-): Promise<SeatResult> {
+    /* The count the payer's ask was made from: another one means it no longer says how many it adds. */
+    from?: number,
+): Promise<RaiseResult> {
     let subscription: models.Subscription;
     try {
         subscription = await polar().subscriptions.get(live.id);
@@ -2190,6 +2199,7 @@ async function changePlaces(
     const plan = await planOf(subscription.product_id);
     if (!plan) return { status: 'no-plan' };
     const current = subscription.units ?? plan.includedMembers;
+    if (from !== undefined && from !== current) return { status: 'moved' };
     const cap = { status: 'cap' as const, max: plan.maxMembers, step: MAX_MEMBERS_PER_RAISE };
     if (target > plan.maxMembers) return cap;
     if (subscription.cancel_at_period_end) return { status: 'canceling' };
@@ -2199,7 +2209,7 @@ async function changePlaces(
     // raise works from a read taken under the claim, never from the one above.
     return withPlanChange(
         live.id,
-        (): SeatResult => ({ status: 'busy' }),
+        (): RaiseResult => ({ status: 'busy' }),
         async () => {
             let held: models.Subscription;
             try {
@@ -2215,6 +2225,8 @@ async function changePlaces(
             const heldPlan = await planOf(held.product_id);
             if (!heldPlan) return { status: 'no-plan' };
             const now = held.units ?? heldPlan.includedMembers;
+            // A raise that landed between the two reads moved the count the ask was made from.
+            if (from !== undefined && from !== now) return { status: 'moved' };
             if (held.cancel_at_period_end) return { status: 'canceling' };
             if (target > heldPlan.maxMembers) return cap;
             // A raise that landed meanwhile may already hold the place.
@@ -2306,7 +2318,7 @@ async function raisePlaces(
     readAt: billingRepository.ReadingStamp,
     target: number,
     cut: number | null,
-): Promise<SeatResult> {
+): Promise<RaiseResult> {
     // No raise on top of an upgrade the bank hasn't confirmed: the two orders never interleave.
     // Polar's product, just read, against the tier paid for: a row a failed write left behind
     // can't open a place.
@@ -2315,7 +2327,7 @@ async function raisePlaces(
     if (!(await applyChanged(groupId, subscription, false, readAt))) return { status: 'no-plan' };
     const row = await billingRepository.getLiveGroupSubscription(groupId);
     if (row && subscription.product_id !== paidTier(row).productId)
-        return { status: 'confirm', url: null };
+        return { status: 'upgrade-waiting' };
     const startedAt = Date.now();
     let raised: models.Subscription;
     try {
@@ -2371,7 +2383,15 @@ export async function ensureGroupSeat(groupId: string, admitterId: string): Prom
     if (target <= billingRepository.seatLimitOf(live)) return { status: 'ok' };
     const customer = await billingRepository.getGroupCustomer(groupId);
     if (!customer || customer.payerUserId !== admitterId) return { status: 'payer' };
-    const result = await changePlaces(groupId, live, target);
+    const raised = await changePlaces(groupId, live, target);
+    // An upgrade the bank holds comes first: the admitter confirms it in the portal. No total
+    // is sent from here, so a moved one never comes back.
+    const result: SeatResult =
+        raised.status === 'upgrade-waiting'
+            ? { status: 'confirm', url: null }
+            : raised.status === 'moved'
+              ? { status: 'busy' }
+              : raised;
     if (result.status !== 'confirm') return result;
     return {
         status: 'confirm',
@@ -2387,7 +2407,13 @@ export async function ensureGroupSeat(groupId: string, admitterId: string): Prom
  * refused whole on a 402), fewer is scheduled for the period's end and never
  * below the members admitted or the plan's included count.
  */
-export async function setGroupUnits(user: BillingUser, groupId: string, units: number) {
+export async function setGroupUnits(
+    user: BillingUser,
+    groupId: string,
+    units: number,
+    /* The count the payer saw: a raise from another one is refused (`moved`), never re-aimed. */
+    from?: number,
+) {
     requireFamilyBilling();
     // The payer may always pay for less, even after leaving the family; adding needs a member.
     await requirePayer(groupId, user.id);
@@ -2412,7 +2438,7 @@ export async function setGroupUnits(user: BillingUser, groupId: string, units: n
         return { billing: await getGroupBilling(user, groupId), url: null };
     }
     await familyOf(groupId, user.id, 'billing');
-    const result = await changePlaces(groupId, live, units);
+    const result = await changePlaces(groupId, live, units, from);
     switch (result.status) {
         case 'ok':
             return { billing: await getGroupBilling(user, groupId), url: null };
@@ -2422,10 +2448,28 @@ export async function setGroupUnits(user: BillingUser, groupId: string, units: n
                 url: (await portalFor(groupId, user.id)).url,
                 confirmPayment: true as const,
             };
+        case 'upgrade-waiting':
+            throw new BillingError(UPGRADE_FIRST, 409);
+        case 'moved':
+            // Polar's count, written now, so the summary the page reads next shows it.
+            await reconcileGroup(groupId).catch((error: unknown) =>
+                log.warn({
+                    message: 'A family could not be read again after its places moved',
+                    billing: { status: statusOf(error) },
+                }),
+            );
+            throw new BillingError(PLACES_MOVED, 409);
         default:
             throw seatError(result);
     }
 }
+
+/* Said when the payer adds places while an upgrade waits for the bank: nothing went to Polar. */
+const UPGRADE_FIRST = 'Confirm the plan change with your bank first, then add places.';
+
+/* Said when the count a raise was made from is no longer the family's: nothing was charged. */
+const PLACES_MOVED =
+    'Your family’s places changed a moment ago. Check the new total and try again.';
 
 /* Said when Polar has charged for a place on a plan that changed meanwhile: never "try again". */
 const CHARGED_BUT_CHANGED =

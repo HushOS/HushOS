@@ -331,6 +331,8 @@ export interface GroupBillingApi {
     setUnits(
         groupId: string,
         units: number,
+        /* The count the payer saw: a raise from another one is refused (409), never re-aimed. */
+        from?: number,
     ): Promise<{ billing: GroupBillingSummary; url: string | null; confirmPayment?: true }>;
     /*
      * Moves the family to another tier of the same billing period: a bigger
