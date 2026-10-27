@@ -164,7 +164,7 @@ Folder and file keys hang off the workspace key, not off your account key. That 
         ],
         [
             'Rollback marks',
-            'The highest settings and identity versions this browser has seen, so an older copy from the server is refused. Sealed with XChaCha20-Poly1305 under a key derived from the account key, so a locked browser holds ciphertext; a mark that does not open stops the check rather than count as none',
+            'The highest settings and identity versions this browser has seen, so an older copy from the server is refused. Sealed with XChaCha20-Poly1305 under a key derived from your settings key, which a new account key keeps, so a locked browser holds ciphertext; a mark that does not open stops the check rather than count as none',
         ],
         [
             'Signing out',

@@ -18,11 +18,13 @@ import {
 /*
  * A server keeps the settings and the identity, and would like to hand back
  * an older copy of either. What a device has seen must only ever go up, per
- * account, whatever identity the account has now; at rest it must say
- * nothing, and a record that does not open must never read as "nothing seen".
+ * account, whatever identity or account key the account has now; at rest it
+ * must say nothing, and a record that does not open must never read as
+ * "nothing seen".
  *
- * The sealing is the worker's own (@hushos/crypto/rollback-marks), under a
- * root per account; "locked" is the account the worker would refuse.
+ * The sealing is the worker's own (@hushos/crypto/rollback-marks), under the
+ * account's settings key as the server serves it; "locked" is the account the
+ * worker would refuse.
  */
 const MAYA = '0f6d6c1e-2a49-4d8b-9b1a-4b3f4b8c1d01';
 const SAM = '0f6d6c1e-2a49-4d8b-9b1a-4b3f4b8c1d02';
@@ -42,18 +44,54 @@ const local = (() => {
     };
 })();
 
-function browser() {
-    const roots = new Map<string, Uint8Array<ArrayBuffer>>();
-    const rootOf = (userId: string) => {
-        if (!roots.has(userId))
-            roots.set(
-                userId,
-                crypto.getRandomValues(new Uint8Array(32)) as Uint8Array<ArrayBuffer>,
-            );
-        return roots.get(userId)!.slice();
+const key32 = () => crypto.getRandomValues(new Uint8Array(32)) as Uint8Array<ArrayBuffer>;
+
+/*
+ * The server's side: each account's settings key and its envelope (wrapped under the account
+ * key, bound to the account), the same whatever root unwraps it, since a master-key rotation
+ * re-wraps it. `withhold` serves none, `down` answers nothing; `created` counts keys made.
+ */
+type Envelope = { nonce: string; ciphertext: string };
+function server() {
+    const keys = new Map<string, { key: Uint8Array<ArrayBuffer>; envelope: Envelope }>();
+    /* What an envelope unwraps to, and for whom: another account's does not open. */
+    const wraps = new Map<string, { userId: string; key: Uint8Array<ArrayBuffer> }>();
+    const withheld = new Set<string>();
+    let down = false;
+    let created = 0;
+    return {
+        served(userId: string) {
+            if (down) throw new Error('Something went wrong.');
+            return withheld.has(userId) ? null : (keys.get(userId)?.envelope ?? null);
+        },
+        unwrap: (userId: string, envelope: Envelope) => {
+            const found = wraps.get(envelope.ciphertext);
+            return found?.userId === userId ? found.key : null;
+        },
+        store(userId: string) {
+            created++;
+            const key = key32();
+            const envelope = {
+                nonce: `n${created}`,
+                ciphertext: crypto.randomUUID().replaceAll('-', ''),
+            };
+            keys.set(userId, { key, envelope });
+            wraps.set(envelope.ciphertext, { userId, key });
+            return envelope;
+        },
+        withhold: (userId: string) => withheld.add(userId),
+        down: (value: boolean) => (down = value),
+        created: () => created,
     };
+}
+
+/* One tab of the browser: its own worker state, the shared localStorage, and a lock. */
+function browser(keys = server(), exclusive?: <T>(work: () => Promise<T>) => Promise<T>) {
     let unlocked: string | null = null;
     let writes: 'ok' | 'full' = 'ok';
+    /* What the worker has open after `ready`. */
+    const open = new Map<string, Uint8Array<ArrayBuffer>>();
+    let onSeal: (() => void) | undefined;
     const storage = {
         getItem: (key: string) => local.getItem(key),
         setItem: (key: string, value: string) => {
@@ -66,32 +104,78 @@ function browser() {
             return local.length;
         },
     };
+    const keyOf = (userId: string) => {
+        const key = open.get(userId);
+        if (!key) throw new Error('Open your settings key first.');
+        return key;
+    };
+    /* As contacts.ts marksKeyReady does it, against the server above. */
+    async function ready(userId: string, create: boolean, kept: Envelope | null) {
+        const fromKept = () => {
+            const key = kept && keys.unwrap(userId, kept);
+            if (key) open.set(userId, key);
+            return Boolean(key);
+        };
+        let served: Envelope | null;
+        try {
+            served = keys.served(userId);
+        } catch (error) {
+            if (fromKept()) return kept;
+            throw error;
+        }
+        if (served) {
+            open.set(userId, keys.unwrap(userId, served)!);
+            return served;
+        }
+        if (fromKept()) return kept;
+        if (!create) return null;
+        const made = keys.store(userId);
+        open.set(userId, keys.unwrap(userId, made)!);
+        return made;
+    }
     const marks = createRollbackMarks({
         sealer: {
-            slot: (userId) => rollbackMarksSlot(rootOf(userId), userId),
-            seal: (userId, value) => sealRollbackMarks(rootOf(userId), userId, value),
-            open: (userId, envelope) =>
-                openRollbackMarks(rootOf(userId), userId, envelope).catch((error: unknown) => {
-                    if (error instanceof RollbackMarksError) return null;
-                    throw error;
-                }),
+            ready,
+            async seal(userId, value) {
+                onSeal?.();
+                return sealRollbackMarks(keyOf(userId), userId, value);
+            },
+            async open(userId, envelope) {
+                return openRollbackMarks(keyOf(userId), userId, envelope).catch(
+                    (error: unknown) => {
+                        if (error instanceof RollbackMarksError) return null;
+                        throw error;
+                    },
+                );
+            },
         },
         storage: () => storage,
         account: () => unlocked,
+        ...(exclusive ? { exclusive } : {}),
     });
     return {
         ...marks,
-        unlock: (userId: string | null) => (unlocked = userId),
-        slot: (userId: string) => rollbackMarksSlot(rootOf(userId), userId),
+        keys,
+        unlock(userId: string | null) {
+            unlocked = userId;
+            open.clear();
+        },
         fill: () => (writes = 'full'),
-        /* A master-key rotation: the account's root is replaced. */
-        rotate: (userId: string) =>
-            roots.set(
-                userId,
-                crypto.getRandomValues(new Uint8Array(32)) as Uint8Array<ArrayBuffer>,
-            ),
+        /* Something another tab does while this one seals. */
+        whileSealing: (work: () => void) => (onSeal = work),
     };
 }
+
+/* A lock across tabs, as navigator.locks gives one. */
+function sharedLock() {
+    let chain: Promise<unknown> = Promise.resolve();
+    return <T>(work: () => Promise<T>) => {
+        const next = chain.then(work, work);
+        chain = next.catch(() => {});
+        return next;
+    };
+}
+const slotKey = async (userId: string) => MARKS_PREFIX + (await rollbackMarksSlot(userId));
 
 const stored = () => {
     const out: Record<string, string> = {};
@@ -164,7 +248,7 @@ describe('rollback marks', () => {
         b.unlock(MAYA);
         await b.raise(MAYA, { settings: 4217, identity: 3, settingsDocument: true });
         const all = stored();
-        expect(Object.keys(all)).toEqual([MARKS_PREFIX + (await b.slot(MAYA))]);
+        expect(Object.keys(all)).toEqual([await slotKey(MAYA)]);
         const text = JSON.stringify(all);
         for (const needle of [MAYA, '4217', 'settings', 'identity', 'true'])
             expect(text).not.toContain(needle);
@@ -186,9 +270,11 @@ describe('rollback marks', () => {
         const b = browser();
         b.unlock(MAYA);
         await b.raise(MAYA, { settings: 12 });
-        const key = MARKS_PREFIX + (await b.slot(MAYA));
-        const envelope = local.getItem(key)!;
-        const damaged = `${envelope.slice(0, -2)}${envelope.endsWith('AA') ? 'BA' : 'AA'}`;
+        const key = await slotKey(MAYA);
+        const record = JSON.parse(local.getItem(key)!) as { marks: string };
+        const envelope = record.marks;
+        record.marks = `${envelope.slice(0, -2)}${envelope.endsWith('AA') ? 'BA' : 'AA'}`;
+        const damaged = JSON.stringify(record);
         local.setItem(key, damaged);
         await expect(b.read(MAYA)).rejects.toBeInstanceOf(MarksUnreadableError);
         await expect(b.raise(MAYA, { settings: 1 })).rejects.toBeInstanceOf(MarksUnreadableError);
@@ -199,10 +285,10 @@ describe('rollback marks', () => {
         const b = browser();
         b.unlock(SAM);
         await b.raise(SAM, { settings: 1 });
-        const sams = local.getItem(MARKS_PREFIX + (await b.slot(SAM)))!;
+        const sams = local.getItem(await slotKey(SAM))!;
         b.unlock(MAYA);
         await b.raise(MAYA, { settings: 30 });
-        local.setItem(MARKS_PREFIX + (await b.slot(MAYA)), sams);
+        local.setItem(await slotKey(MAYA), sams);
         await expect(b.read(MAYA)).rejects.toBeInstanceOf(MarksUnreadableError);
     });
 
@@ -228,7 +314,7 @@ describe('rollback marks', () => {
         };
         expect(await b.read(MAYA)).toEqual(migrated);
         expect(Object.keys(stored()).sort()).toEqual(
-            [MARKS_PREFIX + (await b.slot(MAYA)), `hushos.settings-seen:${SAM}`].sort(),
+            [await slotKey(MAYA), `hushos.settings-seen:${SAM}`].sort(),
         );
         // What was moved is the sealed record's now, on every later read.
         expect(await b.read(MAYA)).toEqual(migrated);
@@ -237,25 +323,134 @@ describe('rollback marks', () => {
         expect(stored()[`hushos.settings-seen:${SAM}`]).toBeUndefined();
     });
 
-    test('a new account key on this browser carries the marks to its slot, and the old record goes', async () => {
-        const b = browser();
-        b.unlock(MAYA);
-        await b.raise(MAYA, { settings: 11, identity: 2, identityVersion: 2 });
-        const before = MARKS_PREFIX + (await b.slot(MAYA));
-        await b.carry(MAYA, async () => {
-            // A master-key rotation: locked, a new root, unlocked again.
-            b.unlock(null);
-            b.rotate(MAYA);
-            b.unlock(MAYA);
-        });
-        expect(await b.read(MAYA)).toEqual({
-            settings: 11,
+    test('two tabs raising at once both stay', async () => {
+        // Each tab has its own module and worker; they share localStorage and the Web Lock.
+        const keys = server();
+        const lock = sharedLock();
+        const one = browser(keys, lock);
+        const two = browser(keys, lock);
+        one.unlock(MAYA);
+        two.unlock(MAYA);
+        await one.raise(MAYA, { settings: 1 });
+        await Promise.all([
+            one.raise(MAYA, { settings: 9 }),
+            two.raise(MAYA, { identity: 4, identityVersion: 2 }),
+            one.raise(MAYA, { settingsDocument: true }),
+            two.raise(MAYA, { settings: 8 }),
+        ]);
+        const read = { settings: 9, settingsDocument: true, identity: 4, identityVersion: 2 };
+        expect(await one.read(MAYA)).toEqual(read);
+        expect(await two.read(MAYA)).toEqual(read);
+    });
+
+    test('a new account key changes nothing: the marks open under the settings key it re-wraps', async () => {
+        // A master-key rotation (here, or on another device), or the server replaying the root
+        // from before one: the settings key is the same, so are the marks, with nothing carried.
+        const keys = server();
+        const before = browser(keys);
+        before.unlock(MAYA);
+        await before.raise(MAYA, { settings: 21, identity: 5, identityVersion: 2 });
+        const after = browser(keys);
+        after.unlock(MAYA);
+        expect(await after.read(MAYA)).toEqual({
+            settings: 21,
             settingsDocument: false,
-            identity: 2,
+            identity: 5,
             identityVersion: 2,
         });
-        expect(Object.keys(stored())).toEqual([MARKS_PREFIX + (await b.slot(MAYA))]);
-        expect(stored()[before]).toBeUndefined();
+    });
+
+    test('the marks open while the server cannot serve the settings, or withholds the key', async () => {
+        const keys = server();
+        const b = browser(keys);
+        b.unlock(MAYA);
+        await b.raise(MAYA, { settings: 14, identity: 2 });
+        for (const trouble of [
+            () => keys.down(true),
+            () => (keys.down(false), keys.withhold(MAYA)),
+        ]) {
+            trouble();
+            // A fresh unlock: nothing open in the worker yet.
+            const tab = browser(keys);
+            tab.unlock(MAYA);
+            expect((await tab.read(MAYA)).settings).toBe(14);
+        }
+    });
+
+    test('with nothing kept that opens, a withheld key leaves the record refused and makes none', async () => {
+        const keys = server();
+        const b = browser(keys);
+        b.unlock(MAYA);
+        await b.raise(MAYA, { settings: 14 });
+        // A record whose kept envelope is not this account's (or was never kept).
+        const slot = await slotKey(MAYA);
+        local.setItem(
+            slot,
+            JSON.stringify({
+                ...JSON.parse(local.getItem(slot)!),
+                key: { nonce: 'x', ciphertext: 'not-hers' },
+            }),
+        );
+        keys.withhold(MAYA);
+        const fresh = browser(keys);
+        fresh.unlock(MAYA);
+        await expect(fresh.read(MAYA)).rejects.toBeInstanceOf(MarksUnreadableError);
+        await expect(fresh.raise(MAYA, { settings: 1 })).rejects.toBeInstanceOf(
+            MarksUnreadableError,
+        );
+        expect(keys.created()).toBe(1);
+    });
+
+    test('a server that does not answer, with nothing kept, is an error to try again, not unreadable marks', async () => {
+        const keys = server();
+        const b = browser(keys);
+        b.unlock(MAYA);
+        await b.raise(MAYA, { settings: 3 });
+        const slot = await slotKey(MAYA);
+        local.setItem(slot, JSON.stringify({ ...JSON.parse(local.getItem(slot)!), key: null }));
+        keys.down(true);
+        const fresh = browser(keys);
+        fresh.unlock(MAYA);
+        const failure = await fresh.read(MAYA).catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).not.toBeInstanceOf(MarksUnreadableError);
+    });
+
+    test('an account with no settings key gets one at its first mark, never just for reading', async () => {
+        const keys = server();
+        const b = browser(keys);
+        b.unlock(MAYA);
+        expect((await b.read(MAYA)).settings).toBe(0);
+        expect(keys.created()).toBe(0);
+        await b.raise(MAYA, { identity: 1, identityVersion: 2 });
+        expect(keys.created()).toBe(1);
+    });
+
+    test('a higher plaintext mark an older tab writes during the migration is sealed, not lost', async () => {
+        local.setItem(`hushos.settings-seen:${MAYA}`, '5');
+        const b = browser();
+        b.unlock(MAYA);
+        let once = true;
+        b.whileSealing(() => {
+            // A tab still on the earlier version saves settings meanwhile.
+            if (once) local.setItem(`hushos.settings-seen:${MAYA}`, '12');
+            once = false;
+        });
+        expect((await b.read(MAYA)).settings).toBe(12);
+        expect(local.getItem(`hushos.settings-seen:${MAYA}`)).toBeNull();
+        expect((await b.read(MAYA)).settings).toBe(12);
+    });
+
+    test('plaintext an older tab keeps rewriting stays until it settles, and still counts', async () => {
+        local.setItem(`hushos.identity-seen:${MAYA}`, '1');
+        const b = browser();
+        b.unlock(MAYA);
+        let next = 1;
+        b.whileSealing(() => local.setItem(`hushos.identity-seen:${MAYA}`, String(++next)));
+        const read = await b.read(MAYA);
+        // Never deleted while it moves, and what was last written counts.
+        expect(local.getItem(`hushos.identity-seen:${MAYA}`)).not.toBeNull();
+        expect(read.identity).toBe(Number(local.getItem(`hushos.identity-seen:${MAYA}`)));
     });
 
     test('plaintext marks that could not be sealed stay, and still count', async () => {

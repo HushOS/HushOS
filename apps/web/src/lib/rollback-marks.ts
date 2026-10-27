@@ -1,4 +1,5 @@
-import { NO_MARKS, type RollbackMarks } from '@hushos/crypto/rollback-marks';
+import type { SettingsKeyEnvelope } from '@hushos/auth/api';
+import { NO_MARKS, rollbackMarksSlot, type RollbackMarks } from '@hushos/crypto/rollback-marks';
 
 /*
  * Rollback marks, kept in this browser's storage, sealed. The rules a
@@ -12,28 +13,38 @@ import { NO_MARKS, type RollbackMarks } from '@hushos/crypto/rollback-marks';
  * older identity to bring back keys this account replaced. A device that has
  * seen settings version n refuses anything older, and one that has opened its
  * own identity at key version k refuses one served as current below it. Both
- * survive a succession; a new device starts with none, which is inherent, and
- * so does this browser after signing out, which deletes them (lib/device-data.ts).
+ * survive a succession and a master-key rotation; a new device starts with
+ * none, which is inherent, and so does this browser after signing out, which
+ * deletes them (lib/device-data.ts).
  *
- * At rest the marks are one record per account, sealed by the crypto worker
- * under a key from the account root (@hushos/crypto/rollback-marks), in
- * localStorage under `hushos.marks:<slot>`, a slot only the root can name. A
- * locked browser holds ciphertext that says neither whose marks they are nor
- * what they count. They are read only while unlocked, which is when every
- * check runs (contacts.ts reads them after requireUnlocked).
+ * At rest the marks are one record per account in localStorage under
+ * `hushos.marks:<slot>`, sealed by the crypto worker under a key from the
+ * settings key (@hushos/crypto/rollback-marks). A locked browser holds
+ * ciphertext that says neither whose marks they are nor what they count; the
+ * slot is a digest of the user id, found without a key. The settings key only
+ * ever moves to a new root by being re-wrapped, so the marks open under every
+ * root the account has had, one a server replays from before a rotation
+ * included, and a rotation needs nothing done to them. They are read only
+ * while unlocked, which is when every check runs (contacts.ts reads them after
+ * requireUnlocked).
  *
- * Fail closed: a record that is there and does not open is an error
- * (MARKS_UNREADABLE), and so is a read while locked; neither is ever "nothing
- * seen", so a damaged
- * or swapped record cannot reset this device's marks. Signing out and in again
- * starts the browser afresh. A browser that refuses site storage altogether
- * has never kept a mark, and reads none, as before.
+ * Fail closed: a record that is there and does not open (damaged, swapped, or
+ * under a settings key other than the one the server serves, or none served)
+ * is an error (MARKS_UNREADABLE), and so is a read while locked; neither is
+ * ever "nothing seen". Signing out and in again starts the browser afresh. A
+ * browser that refuses site storage altogether has never kept a mark, and
+ * reads none, as before. An account with no settings key yet gets one the
+ * first time a mark is kept (contacts.ts marksKeyReady). Beside the marks sits
+ * the settings key's envelope as the server keeps it (ciphertext under the
+ * account key), so the marks open when the settings can't be fetched, and
+ * opening files never waits on them.
  *
  * Earlier versions kept the marks in the clear (`hushos.settings-seen:<id>`,
  * `hushos.settings-document-seen:<id>`, `hushos.identity-seen:<id>` and
  * `…:version`, and per identity key `hushos.settings-seen:<id>:<key>`). The
- * first read after an unlock folds the highest of each into the sealed record
- * and deletes them once it is written.
+ * first read after an unlock folds the highest of each into the sealed record,
+ * then deletes them only if no tab still on an earlier version wrote a higher
+ * one meanwhile; one that did is folded in first.
  */
 
 export type { RollbackMarks };
@@ -50,7 +61,7 @@ export const PLAINTEXT_MARK_PREFIXES = [
 export const MARKS_UNREADABLE =
     'HushOS couldn’t read what this browser last saw of your account, so nothing was opened. Sign out and sign in again to start this browser afresh.';
 
-/* The marks are there and do not open, or the account is locked: never "nothing seen". */
+/* The marks are there and do not open: never "nothing seen". */
 export class MarksUnreadableError extends Error {
     override name = 'MarksUnreadableError';
     constructor(cause?: unknown) {
@@ -58,9 +69,20 @@ export class MarksUnreadableError extends Error {
     }
 }
 
-/* The worker's sealing (rollbackMarksSlot, rollbackMarksSeal, rollbackMarksOpen). */
+/* The worker's sealing (rollbackMarksSeal, rollbackMarksOpen), under the settings key. */
 export type MarksSealer = {
-    slot(userId: string): Promise<string>;
+    /*
+     * Opens the account's settings key in the worker and answers the envelope it opened: the
+     * server's, or `kept` (the one beside the marks) when the server does not answer or serves
+     * none. With `create`, makes and stores one when the account has none yet; without, the
+     * worker may stay without one. Rejects only when it could not ask (the server did not
+     * answer and nothing kept opens).
+     */
+    ready(
+        userId: string,
+        create: boolean,
+        kept: SettingsKeyEnvelope | null,
+    ): Promise<SettingsKeyEnvelope | null>;
     seal(userId: string, marks: RollbackMarks): Promise<{ slot: string; envelope: string }>;
     /* Null for a record that does not open. */
     open(userId: string, envelope: string): Promise<RollbackMarks | null>;
@@ -82,13 +104,12 @@ const same = (a: RollbackMarks, b: RollbackMarks) =>
     a.identity === b.identity &&
     a.identityVersion === b.identityVersion;
 
-/* What earlier versions kept in the clear for `userId`, and under which keys. */
+/* What earlier versions kept in the clear for `userId`: each key with its value as read. */
 function plaintextMarks(storage: Store, userId: string) {
-    const read = (key: string) => Number(storage.getItem(key) ?? 0) || 0;
     const settings = `${PLAINTEXT_MARK_PREFIXES[0]}${userId}`;
     const document = `${PLAINTEXT_MARK_PREFIXES[1]}${userId}`;
     const identity = `${PLAINTEXT_MARK_PREFIXES[2]}${userId}`;
-    const keys: string[] = [];
+    const found = new Map<string, string>();
     for (let index = 0; index < storage.length; index++) {
         const name = storage.key(index);
         if (
@@ -98,19 +119,43 @@ function plaintextMarks(storage: Store, userId: string) {
             name === identity ||
             name === `${identity}:version`
         )
-            keys.push(name);
+            found.set(name, storage.getItem(name) ?? '');
     }
     let marks = NO_MARKS;
-    for (const key of keys) {
-        const value = read(key);
+    for (const [key, raw] of found) {
+        const value = Number(raw) || 0;
         if (key === settings || key.startsWith(`${settings}:`))
             marks = highest(marks, { settings: value });
         else if (key === document) marks = highest(marks, { settingsDocument: value >= 2 });
         else if (key === identity) marks = highest(marks, { identity: value });
         else marks = highest(marks, { identityVersion: value });
     }
-    return { keys, marks };
+    return { found, marks };
 }
+/*
+ * What a slot holds: the marks, sealed, and the settings key's envelope as the server keeps it
+ * (wrapped under the account key), so the marks still open when the settings can't be fetched.
+ */
+type MarksRecord = { marks: string; key: SettingsKeyEnvelope | null };
+function parse(raw: string): MarksRecord | null {
+    try {
+        const value = JSON.parse(raw) as Partial<MarksRecord>;
+        const key = value.key;
+        const keyOk =
+            key === null ||
+            (typeof key === 'object' &&
+                typeof key.nonce === 'string' &&
+                typeof key.ciphertext === 'string');
+        return typeof value.marks === 'string' && keyOk
+            ? { marks: value.marks, key: key ?? null }
+            : null;
+    } catch {
+        return null;
+    }
+}
+
+const unchanged = (a: Map<string, string>, b: Map<string, string>) =>
+    a.size === b.size && [...a].every(([key, value]) => b.get(key) === value);
 
 export function createRollbackMarks(options: {
     sealer: MarksSealer;
@@ -139,14 +184,27 @@ export function createRollbackMarks(options: {
     async function requireUnlocked(userId: string) {
         if ((await options.account()) !== userId) throw new Error('Unlock your account first.');
     }
-    /* The sealed record as stored: none, or its marks; throws when it does not open. */
+    /*
+     * The sealed record as stored: none, or its marks and the settings key envelope kept beside
+     * them. Throws MarksUnreadableError when it is there and does not open; a server that did
+     * not answer (with nothing kept that opens) is its own error, to try again.
+     */
     async function sealed(storage: Store, userId: string) {
-        const slot = await options.sealer.slot(userId);
+        const slot = await rollbackMarksSlot(userId);
         const raw = storage.getItem(MARKS_PREFIX + slot);
-        if (raw === null) return { slot, marks: NO_MARKS, stored: false };
-        const marks = await options.sealer.open(userId, raw);
+        if (raw === null) return { marks: NO_MARKS, stored: false, key: null };
+        const record = parse(raw);
+        if (!record) throw new MarksUnreadableError();
+        // Never makes a settings key: one the server withholds leaves the record unopened.
+        const key = (await options.sealer.ready(userId, false, record.key)) ?? record.key;
+        let marks: RollbackMarks | null;
+        try {
+            marks = await options.sealer.open(userId, record.marks);
+        } catch (error) {
+            throw new MarksUnreadableError(error);
+        }
         if (!marks) throw new MarksUnreadableError();
-        return { slot, marks, stored: true };
+        return { marks, stored: true, key };
     }
     /* Raises the stored marks to at least `to`, never lowering any; returns what is stored. */
     async function raise(userId: string, to: Partial<RollbackMarks>) {
@@ -154,12 +212,16 @@ export function createRollbackMarks(options: {
         if (!storage) return highest(NO_MARKS, to);
         await requireUnlocked(userId);
         return exclusive(async () => {
-            // A record that does not open is never written over: that would reset it.
+            // Read again under the lock: another tab may have raised it. A record that does not
+            // open is never written over: that would reset it.
             const current = await sealed(storage, userId);
             const next = highest(current.marks, to);
             if (current.stored && same(next, current.marks)) return next;
+            const key =
+                (await options.sealer.ready(userId, !current.stored, current.key)) ?? current.key;
             const { slot, envelope } = await options.sealer.seal(userId, next);
-            storage.setItem(MARKS_PREFIX + slot, envelope);
+            const record: MarksRecord = { marks: envelope, key };
+            storage.setItem(MARKS_PREFIX + slot, JSON.stringify(record));
             return next;
         });
     }
@@ -172,62 +234,47 @@ export function createRollbackMarks(options: {
         if (!storage) return NO_MARKS;
         await requireUnlocked(userId);
         const stored = (await sealed(storage, userId)).marks;
-        const plaintext = plaintextMarks(storage, userId);
-        if (!plaintext.keys.length) return stored;
-        // Sealed first, then the plaintext goes: a write that failed keeps it for the next read.
-        let marks: RollbackMarks;
-        try {
-            marks = await raise(userId, plaintext.marks);
-        } catch (error) {
-            if (error instanceof MarksUnreadableError) throw error;
-            return highest(stored, plaintext.marks);
+        let plaintext = plaintextMarks(storage, userId);
+        if (!plaintext.found.size) return stored;
+        let marks = highest(stored, plaintext.marks);
+        // A tab still on an earlier version can write a plaintext mark at any time. Only what
+        // was sealed is deleted, and only if it is still what was read; anything newer is
+        // sealed first. A write that fails keeps the plaintext for the next read.
+        for (let attempt = 0; attempt < 3; attempt++) {
+            try {
+                marks = await raise(userId, plaintext.marks);
+            } catch (error) {
+                if (error instanceof MarksUnreadableError) throw error;
+                return marks;
+            }
+            const now = plaintextMarks(storage, userId);
+            if (unchanged(plaintext.found, now.found)) {
+                for (const key of now.found.keys()) storage.removeItem(key);
+                return marks;
+            }
+            plaintext = now;
+            marks = highest(marks, now.marks);
         }
-        for (const key of plaintext.keys) storage.removeItem(key);
         return marks;
     }
-    /*
-     * Around a change that may give the account a new root: the marks read before it are
-     * sealed again under the root it ends with, and the record under the old slot goes.
-     */
-    async function carry<T>(userId: string, work: () => Promise<T>) {
-        const storage = storageOrNone();
-        let before: { slot: string; marks: RollbackMarks } | null = null;
-        try {
-            before = { slot: await options.sealer.slot(userId), marks: await read(userId) };
-        } catch {
-            /* Nothing readable to carry: the change goes ahead as it would have. */
-        }
-        const result = await work();
-        if (!storage || !before) return result;
-        try {
-            await raise(userId, before.marks);
-            if ((await options.sealer.slot(userId)) !== before.slot)
-                storage.removeItem(MARKS_PREFIX + before.slot);
-        } catch (error) {
-            console.warn(
-                'The rollback marks could not be carried over to the new account key.',
-                error,
-            );
-        }
-        return result;
-    }
-    return { read, raise, carry };
+    return { read, raise };
 }
 
-/* The worker, reached through the auth client, loaded when first used. */
-async function rpc() {
+/* The worker and the settings key, reached through the app's modules, loaded when first used. */
+async function auth() {
     return (await import('@/lib/auth-client')).authClient;
 }
 const marks = createRollbackMarks({
     sealer: {
-        slot: async (userId) => (await (await rpc()).rpc('rollbackMarksSlot', { userId })).slot,
+        ready: async (userId, create, kept) =>
+            (await import('@/lib/contacts')).marksKeyReady(userId, create, kept),
         seal: async (userId, value) =>
-            (await rpc()).rpc('rollbackMarksSeal', { userId, marks: value }),
+            (await auth()).rpc('rollbackMarksSeal', { userId, marks: value }),
         open: async (userId, envelope) =>
-            (await (await rpc()).rpc('rollbackMarksOpen', { userId, envelope })).marks,
+            (await (await auth()).rpc('rollbackMarksOpen', { userId, envelope })).marks,
     },
     storage: () => window.localStorage,
-    account: async () => (await rpc()).store.getState().unlockedUserId,
+    account: async () => (await auth()).store.getState().unlockedUserId,
     exclusive: (work) =>
         typeof navigator !== 'undefined' && navigator.locks?.request
             ? (navigator.locks.request('hushos-rollback-marks', work) as ReturnType<typeof work>)
@@ -248,16 +295,6 @@ export function migrateMarks(userId: string) {
         () => {},
         () => {},
     );
-}
-
-/*
- * Around a security change that may give the account a new root (a master-key
- * rotation): the marks read before it are sealed again under the root it ends
- * with, so rotating on this browser keeps them. A browser where the rotation
- * was made elsewhere starts again from none, as a new device would.
- */
-export function carryMarks<T>(userId: string, work: () => Promise<T>) {
-    return marks.carry(userId, work);
 }
 
 export async function settingsSeen(userId: string) {

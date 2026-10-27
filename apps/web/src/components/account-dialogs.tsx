@@ -18,7 +18,6 @@ import { authClient } from '@/lib/auth-client';
 import { succeedIdentity } from '@/lib/contacts';
 import { driveClient, driveError, driveOpenQueryOptions } from '@/lib/drive';
 import { authError } from '@/lib/form';
-import { carryMarks } from '@/lib/rollback-marks';
 import { cue } from '@/lib/sounds';
 import { forgetDevice } from '@/lib/sign-out';
 
@@ -337,10 +336,7 @@ export function NewKeyDialog({
         setPending(true);
         setError('');
         try {
-            // A new account key (master-key) moves the rollback marks to its own slot here.
-            const result = await carryMarks(user.id, () =>
-                authClient.changeSecurity(user, action, password, ''),
-            );
+            const result = await authClient.changeSecurity(user, action, password, '');
             cue('success');
             router.options.context.queryClient.clear();
             if (!result.signedIn) {

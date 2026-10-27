@@ -229,15 +229,18 @@ function settingsKeyReady(userId: string, served: SettingsKeyEnvelope | null, cr
     const promise = (async () => {
         if (served) {
             await authClient.rpc('settingsKeyOpen', { userId, settingsKey: served });
+            keyEnvelope = { userId, envelope: served };
             return;
         }
         const { settingsKey } = await authClient.rpc('settingsKeyCreate', { userId });
         try {
             await authClient.saveSettingsKey(settingsKey);
+            keyEnvelope = { userId, envelope: settingsKey };
         } catch (error) {
             const stored = (await authClient.settings()).settingsKey;
             if (!stored) throw error;
             await authClient.rpc('settingsKeyOpen', { userId, settingsKey: stored });
+            keyEnvelope = { userId, envelope: stored };
         }
     })().catch((error: unknown) => {
         settingsKeyOpened = undefined;
@@ -245,6 +248,44 @@ function settingsKeyReady(userId: string, served: SettingsKeyEnvelope | null, cr
     });
     settingsKeyOpened = { userId, promise };
     return promise;
+}
+
+/* The settings key envelope the worker opened this unlock, which the rollback marks keep. */
+let keyEnvelope: { userId: string; envelope: SettingsKeyEnvelope } | undefined;
+
+/*
+ * The settings key in the worker for the rollback marks (lib/rollback-marks.ts), which are
+ * sealed under it; answers the envelope it was opened from, for the marks to keep beside them.
+ * The server's envelope first. When the server does not answer, or serves none, the one `kept`
+ * beside the marks opens the same key, so marks read while the settings cannot be fetched (a
+ * server error, or one withheld) and a replayed account key still finds its key on the server.
+ * `create` only when no marks are kept here yet: an account with no settings key at all gets
+ * one then. Otherwise none is made, and marks that are there stay unopened, and refused.
+ */
+export async function marksKeyReady(
+    userId: string,
+    create: boolean,
+    kept: SettingsKeyEnvelope | null,
+): Promise<SettingsKeyEnvelope | null> {
+    requireUnlocked(userId);
+    if (settingsKeyOpened?.userId === userId) {
+        await settingsKeyOpened.promise;
+        return keyEnvelope?.userId === userId ? keyEnvelope.envelope : null;
+    }
+    const fromKept = async () =>
+        kept !== null &&
+        (await authClient.rpc('rollbackMarksKey', { userId, settingsKey: kept })).opened;
+    let served: SettingsKeyEnvelope | null;
+    try {
+        served = (await authClient.settings()).settingsKey;
+    } catch (error) {
+        if (await fromKept()) return kept;
+        throw error;
+    }
+    requireUnlocked(userId);
+    if (!served && (await fromKept())) return kept;
+    await settingsKeyReady(userId, served, create);
+    return keyEnvelope?.userId === userId ? keyEnvelope.envelope : null;
 }
 
 /* Background reads stop at a lock rather than ask a locked worker, which would lock it again. */
