@@ -99,24 +99,21 @@ export type FamilyLanding =
 /*
  * Where the first visit after signing up for a family tier goes:
  * - families not served here (any more): Plans, where the personal plans are;
- * - in a family, or waiting to join one (`families`; undefined while unknown): the family
- *   page, which shows that family or how to finish joining, never a second family;
+ * - in a family, or waiting to join one: the family page, which shows that family or how to
+ *   finish joining, never a second family;
  * - the tier still offered: Create a family with it, priced as sign-up priced it
  *   (familySignupCurrency);
  * - otherwise (no longer offered, or priced in nothing): Plans.
- * With the families unread, the family page decides which is true: it shows the family if
- * there is one, and Create a family only to someone in none.
  */
 export function familyLanding(input: {
     tier: string;
     groupsEnabled: boolean;
-    families: readonly Membership[] | undefined;
+    families: readonly Membership[];
     catalogue: Pick<Catalogue, 'plans' | 'families'>;
     hint: LocaleHint | null | undefined;
 }): FamilyLanding {
     if (!input.groupsEnabled) return { to: '/app/billing' };
-    if (input.families && familyStanding(input.families).kind !== 'none')
-        return { to: '/app/family' };
+    if (familyStanding(input.families).kind !== 'none') return { to: '/app/family' };
     const plan = input.catalogue.families.find((candidate) => candidate.id === input.tier);
     const currency = plan && familySignupCurrency(input.catalogue, plan, input.hint);
     if (!plan || !currency) return { to: '/app/billing' };
@@ -147,23 +144,30 @@ export type FirstLanding =
 export async function firstLanding(deps: FirstLandingDeps): Promise<FirstLanding> {
     const summary = await deps.summary().catch(() => null);
     if (summary?.intendedFamily) {
-        const settle = <T>(reading: Promise<T>) => reading.catch(() => undefined);
-        const [capabilities, catalogue, hint] = await Promise.all([
-            settle(deps.capabilities()),
-            settle(deps.catalogue()),
-            settle(deps.hint()),
-        ]);
-        const groupsEnabled = capabilities?.groups === true;
-        const families = groupsEnabled ? await settle(deps.families()) : undefined;
-        const to = familyLanding({
-            tier: summary.intendedFamily,
-            groupsEnabled,
-            families,
-            catalogue: catalogue ?? { plans: [], families: [] },
-            hint,
-        });
-        await deps.forget().catch(() => {});
-        return { kind: 'go', to };
+        // Each of these decides where the tier goes. One that can't be read (offline, a server
+        // hiccup) would send the person somewhere wrong and lose the tier for good, so nothing
+        // moves and nothing is forgotten: the next visit tries again. The locale hint only
+        // picks a currency, so without it the plans' default does.
+        try {
+            const [capabilities, catalogue, hint] = await Promise.all([
+                deps.capabilities(),
+                deps.catalogue(),
+                deps.hint().catch(() => null),
+            ]);
+            const groupsEnabled = capabilities.groups === true;
+            const families = groupsEnabled ? await deps.families() : [];
+            const to = familyLanding({
+                tier: summary.intendedFamily,
+                groupsEnabled,
+                families,
+                catalogue,
+                hint,
+            });
+            await deps.forget().catch(() => {});
+            return { kind: 'go', to };
+        } catch {
+            return { kind: 'stay' };
+        }
     }
     return summary?.intendedPlan
         ? { kind: 'checkout', plan: summary.intendedPlan }

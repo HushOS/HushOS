@@ -145,10 +145,6 @@ describe('familyLanding', () => {
         });
     });
 
-    test('with the families unread, the family page decides, so the tier still rides along', () => {
-        expect(land({ families: undefined })).toMatchObject({ search: { create: everywhere.id } });
-    });
-
     test('goes to Plans where families aren’t served, or the tier is no longer offered', () => {
         expect(land({ groupsEnabled: false })).toEqual({ to: '/app/billing' });
         expect(land({ tier: 'family-old' })).toEqual({ to: '/app/billing' });
@@ -212,6 +208,32 @@ describe('firstLanding', () => {
         });
         expect(await firstLanding(all)).toEqual({ kind: 'stay' });
         expect(forgotten).toHaveLength(0);
+    });
+
+    test.each(['capabilities', 'catalogue', 'families'] as const)(
+        'when the %s can’t be read, it neither moves nor forgets: the next visit tries again',
+        async (reading) => {
+            const { all, forgotten } = deps({
+                [reading]: async () => {
+                    throw new Error('offline');
+                },
+            });
+            expect(await firstLanding(all)).toEqual({ kind: 'stay' });
+            expect(forgotten).toHaveLength(0);
+        },
+    );
+
+    test('without a locale hint it still lands, priced in the plans’ default currency', async () => {
+        const { all, forgotten } = deps({
+            hint: async () => {
+                throw new Error('offline');
+            },
+        });
+        expect(await firstLanding(all)).toEqual({
+            kind: 'go',
+            to: { to: '/app/family', search: { create: everywhere.id, currency: 'usd' } },
+        });
+        expect(forgotten).toHaveLength(1);
     });
 
     test('someone waiting to join a family lands on Family, without the tier', async () => {
