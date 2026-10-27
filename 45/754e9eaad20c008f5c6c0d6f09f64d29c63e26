@@ -1,0 +1,51 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_8ca94148cceb0c 481,490
+apps/web/src/components/families/family-billing.tsx
+  s_566b8e0c4467a4::t_86ca0a711631e6 14,472,502-503,514,533-534,537,540-541,563,645,1038-1044,1047-1053,1881-1885,1888
+apps/web/src/components/portal-link.tsx
+  s_008a72435325da::t_20c81c201cffd9 1-43
+apps/web/src/lib/family-billing.ts
+  s_566b8e0c4467a4::t_b0789fa45b6c40 410
+apps/web/src/lib/pricing-faq.ts
+  s_566b8e0c4467a4::t_addaa0421606bd 91
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_566b8e0c4467a4::t_51bf99c4ffe6ea 4,478-479,481-482,560,562,565,570-572,574-575,593-594
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_ec3168f3ef725a 1531,1602,1654
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_fefc5824e08894 1864,1911,1928-1929,2566,2571,2649,2776,2786,2799,2818
+packages/billing/src/provider.ts
+  s_566b8e0c4467a4::t_3d5c004d15d110 70
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_da0ebba434c2e2 4023,4040,4353
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_5f597417e00eb5 741
+packages/groups/src/server.billing.test.ts
+  s_566b8e0c4467a4::t_6ec96e5d1cf673 885,912,952,986
+packages/groups/src/server.ts
+  s_566b8e0c4467a4::t_935a89b760f577 1984,2257
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "45754e9eaad20c008f5c6c0d6f09f64d29c63e26",
+  "prompts": {},
+  "sessions": {
+    "s_008a72435325da": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a17856-bb28-7322-a974-4bca08432aab",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
