@@ -1528,7 +1528,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         await expect(maya.page.locator('[data-choose-plan]')).toHaveCount(0);
         await expect(maya.page.getByRole('button', { name: 'Invite someone' })).toBeVisible();
         for (const name of [
-            'Manage payment and invoices',
+            'Card and invoices',
             'Change plan',
             'Remove places at renewal',
             'Cancel plan',
@@ -1599,9 +1599,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
             'After that, nobody can upload to the family folders, and everyone’s own files count against their own storage again. Nothing is deleted.',
         );
         const billing = maya.page.locator('[data-family-plan="billing"]');
-        await expect(
-            billing.getByRole('button', { name: 'Manage payment and invoices' }),
-        ).toBeVisible();
+        await expect(billing.getByRole('button', { name: 'Card and invoices' })).toBeVisible();
         for (const name of ['Add places', 'Change plan', 'Remove places at renewal', 'Cancel plan'])
             await expect(billing.getByRole('button', { name })).toHaveCount(0);
         // Set to end: the payer takes it back here.
@@ -1653,9 +1651,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         await expect(maya.page.locator('[data-usage-total]')).toHaveText('Used300 GB of 2 TB');
         await expect(maya.page.getByText('Next charge')).toHaveCount(0);
         await expect(maya.page.getByRole('button', { name: 'Add places' })).toHaveCount(0);
-        await expect(
-            maya.page.getByRole('button', { name: 'Manage payment and invoices' }),
-        ).toHaveCount(0);
+        await expect(maya.page.getByRole('button', { name: 'Card and invoices' })).toHaveCount(0);
     });
 
     test('who stores what: a manager sees each person’s own files rounded up, a member only their own', async () => {

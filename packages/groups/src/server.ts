@@ -1981,7 +1981,7 @@ function seatRefusal(result: Exclude<SeatResult, { status: 'ok' }>) {
         declined:
             'Your bank declined the charge for another place. Nothing was charged and nobody was let in.',
         confirm:
-            'Your bank wants you to confirm the charge for another place. Confirm it in the billing portal, then let them in again.',
+            'Your bank wants you to confirm the charge for another place. Confirm it in Card and invoices, under Billing, then let them in again.',
         payment: 'The payment for another place did not go through. Nobody was let in.',
         busy: 'Another change to this plan is in progress. Try again in a moment.',
         changed:
@@ -2254,7 +2254,7 @@ async function leaveAnswer(result: groupsRepository.LeaveResult, groupId?: strin
         case 'not-last':
             throw new GroupError(
                 'payer',
-                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support.',
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page first, or contact support.',
                 409,
             );
         case 'unavailable':

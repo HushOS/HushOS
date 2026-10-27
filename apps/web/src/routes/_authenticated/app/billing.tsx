@@ -1,6 +1,7 @@
 import { CreateFamilyDialog } from '@/components/families/create-family-dialog';
 import { Spinner } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
+import { PortalLink } from '@/components/portal-link';
 import { Segmented, SettingsGroup } from '@/components/settings';
 import { StorageCard } from '@/components/storage-card';
 import { Badge } from '@/components/ui/badge';
@@ -474,14 +475,11 @@ function BillingPage() {
                             <div className="flex shrink-0 flex-wrap gap-2">
                                 {/* A plan ended when they joined keeps its invoices and refund there. */}
                                 {summary.data?.hasCustomer && (
-                                    <Button
-                                        variant="outline"
+                                    <PortalLink
+                                        busy={busy === 'portal'}
                                         disabled={busy !== null}
-                                        onClick={() => void portal()}
-                                    >
-                                        {busy === 'portal' ? 'Opening…' : 'Card and invoices'}
-                                        <ArrowUpRightIcon />
-                                    </Button>
+                                        onOpen={() => void portal()}
+                                    />
                                 )}
                                 <Link
                                     to="/app/family"
@@ -559,26 +557,22 @@ function BillingPage() {
                                             onClick={() => void portal()}
                                         >
                                             {busy === 'portal'
-                                                ? 'Opening portal'
+                                                ? 'Opening'
                                                 : paused
-                                                  ? 'Resume in portal'
+                                                  ? 'Resume in Card and invoices'
                                                   : overdue
                                                     ? 'Update card'
-                                                    : 'Billing portal'}
+                                                    : 'Card and invoices'}
                                             <ArrowUpRightIcon />
                                         </Button>
                                     ) : (
                                         summary.data?.hasCustomer && (
-                                            <Button
-                                                variant="outline"
+                                            // Nothing to fix: a link to the card and invoices.
+                                            <PortalLink
+                                                busy={busy === 'portal'}
                                                 disabled={busy !== null}
-                                                onClick={() => void portal()}
-                                            >
-                                                {busy === 'portal'
-                                                    ? 'Opening…'
-                                                    : 'Card and invoices'}
-                                                <ArrowUpRightIcon />
-                                            </Button>
+                                                onOpen={() => void portal()}
+                                            />
                                         )
                                     )}
                                 </div>
@@ -596,8 +590,8 @@ function BillingPage() {
                                         : `Your payment for ${lapsedName} didn’t go through, so you have Free’s ${freeSize ?? 'storage'} for now.`}{' '}
                                     Nothing is deleted, and uploads pause while you’re over it.{' '}
                                     {paused
-                                        ? `Resume it in the billing portal, or choose a plan below, which ends ${lapsedName} first.`
-                                        : `Choose a plan below to get more room; that ends ${lapsedName} first. If the billing portal offers to retry the payment, that restores ${lapsedName}.`}
+                                        ? `Resume it in Card and invoices, or choose a plan below, which ends ${lapsedName} first.`
+                                        : `Choose a plan below to get more room; that ends ${lapsedName} first. If Card and invoices offers to retry the payment, that restores ${lapsedName}.`}
                                 </Notice>
                             )}
                             {live && !live.cancelAtPeriodEnd && !overdue && (

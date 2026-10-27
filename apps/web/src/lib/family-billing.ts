@@ -407,7 +407,7 @@ export type FamilyActions = {
     removePlaces: boolean;
     /* Withdraw a scheduled cut: free, and the places stay. */
     keepPlaces: boolean;
-    /* "Manage payment and invoices": the payer's billing portal. */
+    /* "Card and invoices": the payer's billing portal at Polar. */
     portal: boolean;
     /* Set the plan to end at its period's end, here (the reason goes to Polar); while it renews. */
     cancel: boolean;

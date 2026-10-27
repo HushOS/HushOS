@@ -4020,7 +4020,7 @@ describe('a family plan whose payment failed, or that is paused', () => {
             await expect(billing.revokeForDeletion(payer.id)).rejects.toMatchObject({
                 status: 409,
                 message:
-                    'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support. Your account was not deleted.',
+                    'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page first, or contact support. Your account was not deleted.',
             });
         } finally {
             spy.mockRestore();
@@ -4037,7 +4037,7 @@ describe('a family plan whose payment failed, or that is paused', () => {
         await expect(billing.revokeForDeletion(payer.id)).rejects.toMatchObject({
             status: 409,
             message:
-                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support. Your account was not deleted.',
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page first, or contact support. Your account was not deleted.',
         });
         expect(callsTo('subscriptions.revoke')).toEqual([]);
         expect(subscription.ended_at).toBeNull();
@@ -4350,7 +4350,7 @@ describe('a family plan whose payment failed, or that is paused', () => {
             await expect(checkout(payer, groupId)).rejects.toMatchObject({
                 status: 409,
                 message:
-                    'Polar shows a payment for the family’s Family Pro plan in this period, though the plan is marked unpaid, so it can’t be ended. Whoever pays for it can update the card in the billing portal; or contact support.',
+                    'Polar shows a payment for the family’s Family Pro plan in this period, though the plan is marked unpaid, so it can’t be ended. Whoever pays for it can update the card in Card and invoices; or contact support.',
             });
             expect(warn).toHaveBeenCalledWith(
                 expect.objectContaining({

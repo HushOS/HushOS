@@ -1861,7 +1861,7 @@ function checkoutRefusal(error: LapsedFamilyPlanError) {
             );
         case 'paid':
             return new BillingError(
-                `Polar shows a payment for the family’s ${name} plan in this period, though the plan is marked unpaid, so it can’t be ended. Whoever pays for it can update the card in the billing portal; or contact support.`,
+                `Polar shows a payment for the family’s ${name} plan in this period, though the plan is marked unpaid, so it can’t be ended. Whoever pays for it can update the card in Card and invoices; or contact support.`,
                 409,
                 { cause: error },
             );
@@ -1908,7 +1908,7 @@ export function lapsedPlanStaysRefusal(error: LapsedFamilyPlanError, who: 'payer
                 : `A checkout for the family’s ${name} plan, which they pay for, is still waiting for the bank. Try again tomorrow.`;
         case 'paid':
             return self
-                ? `Polar shows a payment for the family’s ${name} plan in this period, so it can’t be ended yet. Update the card in the billing portal, or contact support.`
+                ? `Polar shows a payment for the family’s ${name} plan in this period, so it can’t be ended yet. Update the card in Card and invoices, or contact support.`
                 : `Polar shows a payment for the family’s ${name} plan, which they pay for, in this period, so it can’t be ended yet and they can’t be removed. Try again later, or contact support.`;
         case 'locked':
             return `Polar is still working on a change to the family’s ${name} plan, so it can’t be ended yet. Try again later, or contact support.`;
@@ -1925,8 +1925,8 @@ export function lapsedPlanStaysRefusal(error: LapsedFamilyPlanError, who: 'payer
         // Said where the family's page may not open (a deletion, a phone): the portal, or support.
         case 'live':
             return self
-                ? 'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support.'
-                : 'They pay for the family’s plan, which was just paid for again. They can cancel it in the billing portal; then you can remove them.';
+                ? 'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page first, or contact support.'
+                : 'They pay for the family’s plan, which was just paid for again. They can cancel it under Billing; then you can remove them.';
     }
 }
 
@@ -2563,12 +2563,12 @@ export async function changeGroupPlan(
     if (!current) throw unresolvedPlan();
     if (subscription.cancel_at_period_end)
         throw new BillingError(
-            'This family plan is set to end. Resume it in the billing portal first.',
+            'This family plan is set to end. Resume it under Billing first.',
             409,
         );
     if (subscription.status === 'past_due')
         throw new BillingError(
-            'The last payment for this family’s plan didn’t go through. Update the card in the billing portal first.',
+            'The last payment for this family’s plan didn’t go through. Update the card in Card and invoices, under Billing, first.',
             409,
         );
     const done = async (when: PlanChange['when']): Promise<PlanChange> => ({
@@ -2646,7 +2646,7 @@ export async function changeGroupPlan(
                     held.product_id !== paidTier(fresh).productId
                 )
                     throw new BillingError(
-                        'Your bank hasn’t confirmed the last charge yet. Confirm it in Manage payment and invoices, then change the plan.',
+                        'Your bank hasn’t confirmed the last charge yet. Confirm it in Card and invoices, then change the plan.',
                         409,
                     );
                 let changed: models.Subscription;
@@ -2773,7 +2773,7 @@ function planChangeError(result: SeatResult) {
     switch (result.status) {
         case 'declined':
             return new BillingError(
-                'Your bank declined this charge. Nothing was charged and the plan didn’t change. Try another card in the billing portal, or ask your bank.',
+                'Your bank declined this charge. Nothing was charged and the plan didn’t change. Try another card in Card and invoices, or ask your bank.',
                 402,
             );
         case 'payment':
@@ -2783,7 +2783,7 @@ function planChangeError(result: SeatResult) {
             );
         case 'canceling':
             return new BillingError(
-                'This family plan is set to end. Resume it in the billing portal first.',
+                'This family plan is set to end. Resume it under Billing first.',
                 409,
             );
         default:
@@ -2796,7 +2796,7 @@ export function seatError(result: Exclude<SeatResult, { status: 'ok' | 'confirm'
     switch (result.status) {
         case 'declined':
             return new BillingError(
-                'Your bank declined this charge. Nothing was charged and no places were added. Try another card in the billing portal, or ask your bank.',
+                'Your bank declined this charge. Nothing was charged and no places were added. Try another card in Card and invoices, or ask your bank.',
                 402,
             );
         case 'payment':
@@ -2815,7 +2815,7 @@ export function seatError(result: Exclude<SeatResult, { status: 'ok' | 'confirm'
             );
         case 'canceling':
             return new BillingError(
-                'This family plan is set to end. Resume it in the billing portal first.',
+                'This family plan is set to end. Resume it under Billing first.',
                 409,
             );
         case 'no-plan':

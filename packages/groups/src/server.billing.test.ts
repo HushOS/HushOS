@@ -882,7 +882,7 @@ describe('admission with billing on', () => {
         ).rejects.toMatchObject({
             code: 'payer',
             message:
-                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support.',
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page first, or contact support.',
         });
         expect(polar.revokes).toEqual([]);
         expect(await state(fam.groupId, plain.userId)).toBe('active');
@@ -909,7 +909,7 @@ describe('admission with billing on', () => {
         ).rejects.toMatchObject({
             code: 'payer',
             message:
-                'They pay for the family’s plan, which was just paid for again. They can cancel it in the billing portal; then you can remove them.',
+                'They pay for the family’s plan, which was just paid for again. They can cancel it under Billing; then you can remove them.',
         });
         expect(polar.revokes).toEqual([]);
     });
@@ -949,7 +949,7 @@ describe('admission with billing on', () => {
         ).rejects.toMatchObject({
             code: 'payer',
             message:
-                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support.',
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page first, or contact support.',
         });
         expect(polar.revokes).toEqual([]);
         expect(await state(fam.groupId, plain.userId)).toBe('active');
@@ -983,7 +983,7 @@ describe('admission with billing on', () => {
             code: 'payer',
             status: 409,
             message:
-                'The family’s plan was just paid for again, so it runs, on your card. Cancel it in the billing portal at hushos.com first, or contact support.',
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page first, or contact support.',
         });
         expect(await state(fam.groupId, fam.organizer.userId)).toBe('active');
         expect((await groupsRepository.getGroupRow(fam.groupId))?.dissolvedAt).toBeNull();

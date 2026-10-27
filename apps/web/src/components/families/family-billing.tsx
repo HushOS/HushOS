@@ -11,6 +11,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
 import { ArrowUpRightIcon, MinusIcon, PlusIcon } from 'lucide-react';
 import { useEffect, useId, useState, type ReactNode } from 'react';
+import { PortalLink } from '@/components/portal-link';
 import { Segmented, Setting, SettingsGroup } from '@/components/settings';
 import { StorageMeter } from '@/components/storage-card';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -468,7 +469,7 @@ function PlanTop(props: Inner) {
                         </AlertTitle>
                         <AlertDescription>
                             {payerYou
-                                ? 'Update the card in Manage payment and invoices, under Billing, to keep it.'
+                                ? 'Update the card in Card and invoices, under Billing, to keep it.'
                                 : `${payerName ?? 'The person who pays for it'} needs to update the card to keep it.`}
                         </AlertDescription>
                     </Alert>
@@ -498,8 +499,8 @@ function PlanTop(props: Inner) {
                         <AlertDescription>
                             Your bank hasn’t confirmed the charge for{' '}
                             {tierName({ name: live.productName })} yet. It starts once it does:
-                            confirm it in Manage payment and invoices. Until then the family keeps
-                            the storage it has.
+                            confirm it in Card and invoices, under Billing. Until then the family
+                            keeps the storage it has.
                         </AlertDescription>
                     </Alert>
                 </div>
@@ -510,7 +511,7 @@ function PlanTop(props: Inner) {
                     <Alert variant="warning">
                         <AlertDescription>
                             Your bank hasn’t confirmed the charge for {places(waiting)} yet. They
-                            open once it does: confirm it in Manage payment and invoices.
+                            open once it does: confirm it in Card and invoices, under Billing.
                         </AlertDescription>
                     </Alert>
                 </div>
@@ -529,15 +530,15 @@ function PlanTop(props: Inner) {
         const next = actions.choosePlan
             ? payerYou
                 ? paused
-                    ? `Resume it in the billing portal, or choose a plan below, which ends ${name} first.`
-                    : `Choose a plan below; that ends ${name} first. If the billing portal offers to retry the payment, that restores ${name}.`
+                    ? `Resume it in Card and invoices, or choose a plan below, which ends ${name} first.`
+                    : `Choose a plan below; that ends ${name} first. If Card and invoices offers to retry the payment, that restores ${name}.`
                 : paused
                   ? `Choose a plan below; that ends ${name} first, and you pay for the family from then on. ${payer} can resume it instead.`
-                  : `Choose a plan below; that ends ${name} first, and you pay for the family from then on. ${payer} can instead retry the payment in the billing portal, if it offers to.`
+                  : `Choose a plan below; that ends ${name} first, and you pay for the family from then on. ${payer} can instead retry the payment in Card and invoices, if it offers to.`
             : payerYou
               ? paused
-                  ? 'Resume it in the billing portal.'
-                  : 'Retry the payment in the billing portal, if it offers to.'
+                  ? 'Resume it in Card and invoices.'
+                  : 'Retry the payment in Card and invoices, if it offers to.'
               : ask
                 ? `${ask} can sort it out.`
                 : `${payer} can sort it out.`;
@@ -559,7 +560,7 @@ function PlanTop(props: Inner) {
                         <AlertAction>
                             <PortalButton
                                 groupId={props.groupId}
-                                label={paused ? 'Resume in portal' : 'Billing portal'}
+                                label={paused ? 'Resume in Card and invoices' : 'Card and invoices'}
                             />
                         </AlertAction>
                     )}
@@ -641,7 +642,7 @@ function PortalButton({ groupId, label }: { groupId: string; label: string }) {
                 onClick={() => void open()}
                 data-family-portal
             >
-                {busy ? 'Opening portal' : label}
+                {busy ? 'Opening' : label}
                 <ArrowUpRightIcon />
             </Button>
             {error && (
@@ -1034,21 +1035,22 @@ function PlanSection(props: Inner) {
                     <Setting
                         label="Paid by"
                         action={
-                            actions.portal && (
-                                // The payer's card and invoices are in Polar's portal. Blue only
-                                // while a renewal failed and you pay; otherwise Invite someone
-                                // keeps the page's one blue button.
-                                <Button
-                                    variant={paymentNeedsYou(summary) ? 'default' : 'outline'}
-                                    disabled={busy !== null}
-                                    onClick={() => void portal()}
-                                >
-                                    {busy === 'portal'
-                                        ? 'Opening portal'
-                                        : 'Manage payment and invoices'}
+                            actions.portal &&
+                            // A failed renewal the payer must fix: the portal is the step, so a
+                            // blue button. Otherwise a link: it opens Polar's page and changes
+                            // nothing on the plan, beside Change plan and Add places.
+                            (paymentNeedsYou(summary) ? (
+                                <Button disabled={busy !== null} onClick={() => void portal()}>
+                                    {busy === 'portal' ? 'Opening' : 'Card and invoices'}
                                     <ArrowUpRightIcon />
                                 </Button>
-                            )
+                            ) : (
+                                <PortalLink
+                                    busy={busy === 'portal'}
+                                    disabled={busy !== null}
+                                    onOpen={() => void portal()}
+                                />
+                            ))
                         }
                     >
                         {payerName}
@@ -1876,10 +1878,14 @@ export function SeatHelp({
                 <ArrowUpRightIcon />
             </Button>
         );
-    else if ((reason === 'declined' || reason === 'canceling' || reason === 'confirm') && payerYou)
+    // Set to end: the payer resumes it here first.
+    else if (reason === 'canceling' && payerYou)
+        body = <p>Resume the plan under Billing first; then they can join.</p>;
+    // A declined or unconfirmed charge is fixed with the card: the portal is the step, a button.
+    else if ((reason === 'declined' || reason === 'confirm') && payerYou)
         body = (
             <Button variant="outline" disabled={busy} onClick={() => void portal()}>
-                {busy ? 'Opening…' : 'Manage payment and invoices'}
+                {busy ? 'Opening' : 'Card and invoices'}
                 <ArrowUpRightIcon />
             </Button>
         );
