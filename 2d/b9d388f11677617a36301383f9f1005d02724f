@@ -1,0 +1,23 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_1c9d8a9403d1d8 343-344
+apps/web/src/content/security.mdx
+  s_566b8e0c4467a4::t_1db1ba8e748a92 328,362
+docs/optional-verification.md
+  s_566b8e0c4467a4::t_d979ef09368ade 24,28,79,85,92,118,140,155,261,289,352,360-361,386,392
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2db9d388f11677617a36301383f9f1005d02724f",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
