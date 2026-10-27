@@ -1,0 +1,19 @@
+apps/web/src/dev/demos/app.tsx
+  s_566b8e0c4467a4::t_7860485d084668 5,17,20,23-24,301-302,335-336,344-348,354-357,361,363,371-375,377-379,383-384,387-393,398,400,408-411,414-423,428-430,432-480
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "64f1c113dadef03e7deaee639b83c61c7266c27d",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
