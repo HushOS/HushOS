@@ -1,0 +1,41 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_ac44fb7cf89950 470
+apps/web/src/components/drive/trust-as-family.tsx
+  s_566b8e0c4467a4::t_c561366ee1dfc6 9,46,74
+apps/web/src/components/families/family-trash.tsx
+  s_566b8e0c4467a4::t_a20ab3e4c69ee2 45-48,51-52,55
+apps/web/src/components/families/let-in-dialog.tsx
+  s_566b8e0c4467a4::t_09c196acbbbd46 245
+apps/web/src/lib/groups/copy.test.ts
+  s_566b8e0c4467a4::t_8e488cf88e27c6 2,33-41
+apps/web/src/lib/groups/copy.ts
+  s_566b8e0c4467a4::t_5a790c8ae3d0d3 92,102,104-107,288
+packages/auth/src/server.ts
+  s_566b8e0c4467a4::t_b022e3a65eb1ae 1942-1947
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_936ecd437574d1 2157-2163,2187-2190
+packages/db/src/auth.ts
+  s_566b8e0c4467a4::t_e9a1098273b582 1094,1096,1098,1106,1114
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_2db8649f47ee40 320,322-324,1522-1525,1904-1908,1936-1943,1945-1946,1951,1955,1965-1967,1995-1996,2168-2169,2195-2196
+packages/groups/src/server.billing.test.ts
+  s_566b8e0c4467a4::t_cd3db1ecc93a43 1,210-218,995-996,998,1267-1355
+packages/groups/src/server.ts
+  s_566b8e0c4467a4::t_631697ad7fb95e 897-899,2279-2281
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b9770cbd77ed232fe69b30a936dc646f7b70ec62",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
