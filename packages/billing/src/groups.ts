@@ -1956,7 +1956,10 @@ export async function startGroupCheckout(
     requireFamilyBilling();
     await familyOf(groupId, user.id, 'billing');
     const tiers = await getFamilyCatalogue();
-    const plan = tiers.find((candidate) => candidate.id === input.productId && !candidate.archived);
+    // A first plan (or one bought again) is one on sale: never a tier an operator has replaced
+    // since, nor the single plan from before the tiers while they're on sale. Pages offer only
+    // these; an old link or a crafted request must not buy what is no longer sold.
+    const plan = offeredFamilies(tiers).find((candidate) => candidate.id === input.productId);
     if (!plan) throw new BillingError('That plan is not available.', 404);
     if (input.currency !== undefined && !(input.currency in plan.prices))
         throw new BillingError('That plan is not priced in that currency.', 400);
