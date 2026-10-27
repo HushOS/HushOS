@@ -1,0 +1,19 @@
+apps/web/src/components/email-step.tsx
+  s_008a72435325da::t_1d33b09651058c 193,197-223
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "023c03eca5dd9b23c17c585aabc5c032b5604d4f",
+  "prompts": {},
+  "sessions": {
+    "s_008a72435325da": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a17856-bb28-7322-a974-4bca08432aab",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
