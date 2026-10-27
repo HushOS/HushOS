@@ -1,0 +1,21 @@
+apps/web/src/dev/layers-page.tsx
+  s_566b8e0c4467a4::t_9dc596ebc64f7e 215-218,224-229
+apps/web/src/dev/measure-overlay.tsx
+  s_566b8e0c4467a4::t_083cef121c6c2d 6-7,12-13,23,112-117,200-201,203-207,216-217,325,342
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "01aa053f37e53e41ec29ab1d01f23e5e4ad2d5bf",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
