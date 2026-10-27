@@ -2459,13 +2459,17 @@ export function createGroupSession(host: GroupHost) {
     async function accept(
         input: GroupRequests['groupAccept'],
     ): Promise<GroupResults['groupAccept']> {
+        // The session and the family as this call found them, before any await (a record's
+        // decryption, a join's admission): a lock or a wipe before it ends keeps nothing, however
+        // early it lands (the core's accept_served and accept_matched take theirs as early).
+        const began = { generation, epoch: forgets.get(uuid(input.groupId, 'group id')) ?? 0 };
         if (input.joining && input.creating)
             throw new CryptoError('A family is either joined or created, not both.');
         // Joining always carries the join code the person compared: there is no joining without
         // it, so nothing accepts, views or keeps a chain over first keys nobody checked.
         if (input.joining && typeof input.joining.joinsRecord !== 'string')
             throw new CryptoError('Compare the join code first.');
-        if (!input.joining) return acceptRun(input, null, input.checkedAt, null);
+        if (!input.joining) return acceptRun(input, began, null, input.checkedAt, null);
         // A join: the code compared, from the joins record only a match sealed, or a first use,
         // from the record only groupJoinFirstUse sealed (the core's accept_joining). After the
         // record is opened and digested, checked and taken with no await between the two, so of
@@ -2482,8 +2486,8 @@ export function createGroupSession(host: GroupHost) {
         try {
             result =
                 opened.kind === 'code'
-                    ? await joinRun(input, joinGroup, opened)
-                    : await firstUseRun(input, opened);
+                    ? await joinRun(input, began, joinGroup, opened)
+                    : await firstUseRun(input, began, opened);
         } catch (error) {
             usedJoins.get(joinGroup)?.delete(used);
             throw error;
@@ -2501,6 +2505,7 @@ export function createGroupSession(host: GroupHost) {
      */
     async function joinRun(
         input: GroupRequests['groupAccept'],
+        began: Began,
         joinGroup: string,
         opened: { mark: JoinMark; checkedAt: string },
     ): Promise<GroupResults['groupAccept']> {
@@ -2511,7 +2516,7 @@ export function createGroupSession(host: GroupHost) {
             (await codeAt(now.chain, opened.mark.rosterVersion)).join(' ') ===
                 opened.mark.code.join(' ');
         if (later) return showing(joinGroup, now.mark, 'changed');
-        return acceptRun(input, opened.mark, opened.checkedAt, null);
+        return acceptRun(input, began, opened.mark, opened.checkedAt, null);
     }
 
     /*
@@ -2525,26 +2530,26 @@ export function createGroupSession(host: GroupHost) {
      */
     async function firstUseRun(
         input: GroupRequests['groupAccept'],
+        began: Began,
         opened: { pin: GroupPin; checkedAt: string },
     ): Promise<GroupResults['groupAccept']> {
         const now = await admission(input);
         if (now.status !== 'code') return now;
-        return acceptRun(input, null, opened.checkedAt, opened.pin);
+        return acceptRun(input, began, null, opened.checkedAt, opened.pin);
     }
 
+    /* The session (generation) and the family (epoch) an acceptance call began with. */
+    type Began = { generation: number; epoch: number };
     async function acceptRun(
         input: GroupRequests['groupAccept'],
+        { generation: began, epoch }: Began,
         joinMark: JoinMark | null,
         checkedAt: string,
         firstUse: GroupPin | null,
     ): Promise<GroupResults['groupAccept']> {
-        // The session this run begins in: a lock or another account before it ends keeps nothing.
-        const began = generation;
         const marked = await marksOf(input);
         if (!marked) return { status: 'record-unreadable' };
         const { groupId, userId, pins, pairMarks, cache, marks } = marked;
-        // The family as this run found it, before its floor is read: a wipe before it ends keeps nothing.
-        const epoch = forgets.get(groupId) ?? 0;
         let anchor: GroupAnchor | null = null;
         // Creation vouches for the first keys only where nothing marks the family (F1).
         if (input.creating && marks)

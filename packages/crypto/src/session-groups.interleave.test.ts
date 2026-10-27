@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, test, vi } from 'vitest';
 import { ROOT, sessionOf } from './device-record-testkit';
+import type * as Aead from './aead';
 import type * as Trust from './group-trust';
 import { GROUP, mlDsaKeysOf, pinOf } from './group-testkit';
 import { family } from './join-testkit';
@@ -29,24 +30,39 @@ vi.mock('./pq', async (original) =>
     (await import('./pq-memo-testkit')).verifyOnce(await original<typeof Pq>()),
 );
 
-/* A pause armed for the next call of acceptRosters ('verify') or pinAfter ('pin'): it waits after the real call returns. */
+/* A pause armed for the next call of acceptRosters ('verify'), pinAfter ('pin') or decryptKey ('decrypt', a device record opening): it waits after the real call returns. */
 const { hold, pause } = vi.hoisted(() => {
     type Armed = { reach: () => void; wait: Promise<void> };
-    const armed: Record<'verify' | 'pin', Armed[]> = { verify: [], pin: [] };
+    const armed: Record<'verify' | 'pin' | 'decrypt', Armed[]> = {
+        verify: [],
+        pin: [],
+        decrypt: [],
+    };
     return {
-        hold: async (kind: 'verify' | 'pin') => {
+        hold: async (kind: 'verify' | 'pin' | 'decrypt') => {
             const next = armed[kind].shift();
             if (!next) return;
             next.reach();
             await next.wait;
         },
-        pause: (kind: 'verify' | 'pin') => {
+        pause: (kind: 'verify' | 'pin' | 'decrypt') => {
             let reach!: () => void;
             let release!: () => void;
             const reached = new Promise<void>((resolve) => (reach = resolve));
             const wait = new Promise<void>((resolve) => (release = resolve));
             armed[kind].push({ reach, wait });
             return { reached, release };
+        },
+    };
+});
+vi.mock('./aead', async (original) => {
+    const real = await original<typeof Aead>();
+    return {
+        ...real,
+        decryptKey: async (...args: Parameters<typeof real.decryptKey>) => {
+            const out = await real.decryptKey(...args);
+            await hold('decrypt');
+            return out;
         },
     };
 });
@@ -96,7 +112,7 @@ async function setup() {
         const session = sessionOf(f.p1, ROOT);
         session.useSettings(f.p1.userId, { groups: { [GROUP]: pin } });
         let id = 0;
-        const sync = (chain: ServedChain, guard: GroupPin | null) =>
+        const sync = (chain: ServedChain, guard: GroupPin | null, record: string | null = null) =>
             session.handle({
                 id: ++id,
                 operation: 'groupAccept',
@@ -104,7 +120,7 @@ async function setup() {
                     userId: f.p1.userId,
                     groupId: GROUP,
                     served: chain,
-                    record: null,
+                    record,
                     checkedAt: NOW,
                     guard,
                 },
@@ -121,7 +137,11 @@ async function setup() {
         if (result.status !== 'accepted' || !result.guard) throw new Error('no guard handed back');
         return result.guard;
     };
-    return { f, served, open, guardOf };
+    const recordOf = (result: GroupResults['groupAccept']) => {
+        if (result.status !== 'accepted' || !result.record) throw new Error('no record');
+        return result.record;
+    };
+    return { f, served, open, guardOf, recordOf };
 }
 
 describe('acceptances and wipes interleaved', () => {
@@ -195,5 +215,25 @@ describe('acceptances and wipes interleaved', () => {
             status: 'accepted',
             view: { rosterVersion: 3 },
         });
+    });
+
+    test('an acceptance a wipe overtakes while its record is still being opened commits nothing, so an older floor does not come back', async () => {
+        const { served, open, guardOf, recordOf } = await setup();
+        const device = open();
+        const first = await device.sync(served('succ', 2), null);
+        const [two, record] = [guardOf(first), recordOf(first)];
+        const three = guardOf(await device.sync(served('succ', 3), two));
+        // A late run from the record and guard at roster 2 pauses while its record is opened,
+        // before it has read anything of the family; the wipe, with the guard matching the floor
+        // at 3, lands then.
+        const paused = pause('decrypt');
+        const late = device.sync(served('succ', 2), two, record);
+        await paused.reached;
+        await expect(device.forget(three)).resolves.toMatchObject({ forgotten: true, guard: null });
+        paused.release();
+        // It would verify against no floor at all and commit roster 2: the family back, lower.
+        await expect(late).rejects.toThrow(FAMILY_FORGOTTEN);
+        expect(device.ledger.floor(GROUP)).toBeUndefined();
+        expect(device.ledger.committedChain(GROUP)).toBeUndefined();
     });
 });
