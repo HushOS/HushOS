@@ -244,10 +244,13 @@ export async function listAffiliates() {
  * account has it, else kept as pending and linked when that account signs up.
  * The caller has checked the address's form (the API uses the auth rule).
  */
-async function accountForEmail(email: string | null | undefined) {
+async function accountForEmail(
+    email: string | null | undefined,
+    executor?: growthRepository.Executor,
+) {
     const normalized = email?.trim().toLowerCase();
     if (!normalized) return { userId: null, pendingEmail: null };
-    const userId = await growthRepository.findUserIdByEmail(normalized);
+    const userId = await growthRepository.findUserIdByEmail(normalized, executor);
     return userId ? { userId, pendingEmail: null } : { userId: null, pendingEmail: normalized };
 }
 
@@ -318,12 +321,21 @@ export async function createAffiliate(input: AffiliateInput) {
  * whose own handles are free to it. The admin form asks this as the operator
  * types; saving asks again, and that answer is the one that counts.
  */
-export async function isHandleFree(handle: string, except?: string) {
-    return !(await growthRepository.findAffiliateByHandle(handle, except));
+export async function isHandleFree(
+    handle: string,
+    except?: string,
+    executor?: growthRepository.Executor,
+) {
+    return !(await growthRepository.findAffiliateByHandle(handle, except, executor));
 }
 
-async function assertHandleFree(handle: string, except: string | undefined, what: 'slug' | 'code') {
-    if (!(await isHandleFree(handle, except)))
+async function assertHandleFree(
+    handle: string,
+    except: string | undefined,
+    what: 'slug' | 'code',
+    executor?: growthRepository.Executor,
+) {
+    if (!(await isHandleFree(handle, except, executor)))
         throw new BillingError(`That ${what} belongs to another affiliate.`);
 }
 
@@ -356,7 +368,7 @@ export async function updateAffiliate(
     }
     // A change of terms holds the affiliate's lock from its read to its write, so the
     // provider and the row end on the same terms whichever of two saves came first.
-    const row = await growthRepository.withAffiliateLock(id, async (tx) => {
+    const row = await underAffiliateLock(id, async (tx) => {
         const row = await growthRepository.getAffiliate(id, tx);
         if (!row) throw new BillingError('That affiliate does not exist.', 404);
         const merged: AffiliateInput = {
@@ -374,8 +386,8 @@ export async function updateAffiliate(
             commissionBps: patch.commissionBps ?? row.commissionBps,
         };
         const { name, slug, code, durationMonths } = validate(merged);
-        if (slug !== row.slug) await assertHandleFree(slug, id, 'slug');
-        if (code !== row.code) await assertHandleFree(code, id, 'code');
+        if (slug !== row.slug) await assertHandleFree(slug, id, 'slug', tx);
+        if (code !== row.code) await assertHandleFree(code, id, 'code', tx);
         const termsChanged =
             name !== row.name ||
             code !== row.code ||
@@ -401,7 +413,7 @@ export async function updateAffiliate(
                 duration: merged.duration,
                 durationMonths,
                 commissionBps: merged.commissionBps,
-                ...(await otherChanges(patch)),
+                ...(await otherChanges(patch, tx)),
             },
             tx,
         );
@@ -409,12 +421,34 @@ export async function updateAffiliate(
     return view(row);
 }
 
+/*
+ * The affiliate's lock, for a change of terms or a removal. Every read inside
+ * goes through `tx`. A wait past the lock's timeout is a plain refusal to retry.
+ */
+async function underAffiliateLock<T>(
+    id: string,
+    run: Parameters<typeof growthRepository.withAffiliateLock<T>>[1],
+) {
+    try {
+        return await growthRepository.withAffiliateLock(id, run);
+    } catch (error) {
+        if (error instanceof growthRepository.AffiliateBusyError)
+            throw new BillingError('This affiliate is being changed. Try again in a moment.', 409, {
+                cause: error,
+            });
+        throw error;
+    }
+}
+
 /* The columns a patch sets besides the terms: notes, the account, and whether it is live. */
-async function otherChanges(patch: Partial<AffiliateInput> & { active?: boolean }) {
+async function otherChanges(
+    patch: Partial<AffiliateInput> & { active?: boolean },
+    executor?: growthRepository.Executor,
+) {
     const changes: Parameters<typeof growthRepository.updateAffiliate>[1] = {};
     if (patch.notes !== undefined) changes.notes = patch.notes?.trim() || null;
     if (patch.userEmail !== undefined)
-        Object.assign(changes, await accountForEmail(patch.userEmail));
+        Object.assign(changes, await accountForEmail(patch.userEmail, executor));
     if (patch.active !== undefined) changes.active = patch.active;
     return changes;
 }
@@ -426,10 +460,10 @@ async function otherChanges(patch: Partial<AffiliateInput> & { active?: boolean 
  */
 export async function deleteAffiliate(id: string) {
     // Under the affiliate's lock: a removal never interleaves with a change of terms.
-    return growthRepository.withAffiliateLock(id, async (tx) => {
+    return underAffiliateLock(id, async (tx) => {
         const row = await growthRepository.getAffiliate(id, tx);
         if (!row) throw new BillingError('That affiliate does not exist.', 404);
-        const stats = await growthRepository.affiliateStats(id);
+        const stats = await growthRepository.affiliateStats(id, tx);
         if (Object.values(stats.earnings).some((total) => total.unpaid > 0))
             throw new BillingError(
                 'This affiliate is still owed commission. Mark it paid first, or pause them instead.',

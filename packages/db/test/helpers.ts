@@ -8,6 +8,7 @@ import {
     sign,
 } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
+import { Pool } from 'pg';
 import { db } from '../src/client';
 import type { CreateLink, CreateShare } from '../src/drive';
 import {
@@ -65,6 +66,28 @@ export async function createTestAccount(input: { email?: string; quotaBytes?: bi
 
 export async function closeDatabase() {
     await db.$client.end();
+}
+
+/*
+ * A connection of its own, outside the app's pool: for watching locks while
+ * that pool is full. Close it with `end()`.
+ */
+export function lockObserver() {
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
+    return {
+        /* Ungranted advisory locks in this database, in the two-key space `space`. */
+        async waiting(space: number) {
+            const result = await pool.query<{ waiting: number }>(
+                `select count(*)::int as waiting from pg_locks
+                 where locktype = 'advisory' and not granted and objsubid = 2
+                   and classid = $1::oid
+                   and database = (select oid from pg_database where datname = current_database())`,
+                [space],
+            );
+            return result.rows[0]!.waiting;
+        },
+        end: () => pool.end(),
+    };
 }
 
 /* An Ed25519 key pair from a 32-byte seed, as libsodium's crypto_sign_seed_keypair makes it. */

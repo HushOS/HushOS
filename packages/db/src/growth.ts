@@ -298,7 +298,7 @@ export type AffiliateInput = {
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 /* The database itself, or a transaction holding the affiliate lock. */
-type Executor = typeof db | Tx;
+export type Executor = typeof db | Tx;
 
 /*
  * One affiliate's terms change one change at a time: a transaction-scoped
@@ -309,14 +309,47 @@ type Executor = typeof db | Tx;
  * is admin-only, rare and per affiliate: one operator's second save waits a
  * moment, nothing else does. A hash collision only serialises two affiliates.
  */
-const AFFILIATE_LOCK_SPACE = 0x61666c74;
+export const AFFILIATE_LOCK_SPACE = 0x61666c74;
+/*
+ * How long a change waits for the lock, or any lock, before giving up. A waiter
+ * holds a pooled connection, so it must not wait for ever: a provider that
+ * hangs with the lock held would otherwise end with the pool full of waiters.
+ */
+const AFFILIATE_LOCK_TIMEOUT = '30s';
+
+/* Another change of this affiliate held the lock past the timeout. */
+export class AffiliateBusyError extends Error {
+    constructor() {
+        super('This affiliate is being changed.');
+        this.name = 'AffiliateBusyError';
+    }
+}
+
+/*
+ * Everything `run` reads or writes goes through `tx`, never the global `db`: a
+ * second connection, asked for while the lock is held, can wait behind every
+ * other connection in the pool queued on this same lock.
+ */
 export async function withAffiliateLock<T>(id: string, run: (tx: Tx) => Promise<T>) {
-    return db.transaction(async (tx) => {
-        await tx.execute(
-            sql`select pg_advisory_xact_lock(${AFFILIATE_LOCK_SPACE}::int, hashtext(${id}))`,
-        );
-        return run(tx);
-    });
+    try {
+        return await db.transaction(async (tx) => {
+            await tx.execute(sql.raw(`set local lock_timeout = '${AFFILIATE_LOCK_TIMEOUT}'`));
+            await tx.execute(
+                sql`select pg_advisory_xact_lock(${AFFILIATE_LOCK_SPACE}::int, hashtext(${id}))`,
+            );
+            return run(tx);
+        });
+    } catch (error) {
+        if (lockTimedOut(error)) throw new AffiliateBusyError();
+        throw error;
+    }
+}
+
+/* Postgres's code for a lock timeout, anywhere in a driver error's causes. */
+function lockTimedOut(error: unknown) {
+    for (let at = error; at && typeof at === 'object'; at = (at as { cause?: unknown }).cause)
+        if ((at as { code?: unknown }).code === '55P03') return true;
+    return false;
 }
 
 export async function createAffiliate(
@@ -391,8 +424,12 @@ export async function getAffiliateBySlug(slug: string) {
  * `except` leaves one affiliate out, in the query itself: a handle can be one
  * affiliate's slug and another's code, and the row left out must not hide the other.
  */
-export async function findAffiliateByHandle(handle: string, except?: string) {
-    const [row] = await db
+export async function findAffiliateByHandle(
+    handle: string,
+    except?: string,
+    executor: Executor = db,
+) {
+    const [row] = await executor
         .select()
         .from(affiliates)
         .where(
@@ -472,8 +509,8 @@ export async function findAffiliateForCustomer(userId: string) {
 
 export type EarningTotals = Record<string, { unpaid: number; paid: number }>;
 
-async function earningTotals(affiliateId: string): Promise<EarningTotals> {
-    const rows = await db
+async function earningTotals(affiliateId: string, executor: Executor = db): Promise<EarningTotals> {
+    const rows = await executor
         .select({
             currency: affiliateEarnings.currency,
             paid: sql<boolean>`${affiliateEarnings.paidAt} is not null`,
@@ -490,19 +527,19 @@ async function earningTotals(affiliateId: string): Promise<EarningTotals> {
     return totals;
 }
 
-export async function affiliateStats(affiliateId: string) {
-    const [signups] = await db
+export async function affiliateStats(affiliateId: string, executor: Executor = db) {
+    const [signups] = await executor
         .select({ value: count() })
         .from(referrals)
         .where(eq(referrals.affiliateId, affiliateId));
-    const [orders] = await db
+    const [orders] = await executor
         .select({ value: count() })
         .from(affiliateEarnings)
         .where(eq(affiliateEarnings.affiliateId, affiliateId));
     return {
         signups: signups?.value ?? 0,
         orders: orders?.value ?? 0,
-        earnings: await earningTotals(affiliateId),
+        earnings: await earningTotals(affiliateId, executor),
     };
 }
 
@@ -562,8 +599,8 @@ export async function markEarningsPaid(affiliateId: string) {
 }
 
 /* The account behind an email, for linking a creator to their affiliate record. */
-export async function findUserIdByEmail(normalizedEmail: string) {
-    const [row] = await db
+export async function findUserIdByEmail(normalizedEmail: string, executor: Executor = db) {
+    const [row] = await executor
         .select({ id: users.id })
         .from(users)
         .where(eq(users.normalizedEmail, normalizedEmail));

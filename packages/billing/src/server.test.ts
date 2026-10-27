@@ -1000,6 +1000,7 @@ const {
     createTestAccount,
     createTestFamily,
     deleteTestAccount,
+    lockObserver,
     resetDatabase,
     setTestMember,
     setTestUsedBytes,
@@ -2403,27 +2404,37 @@ describe('affiliates', () => {
         expect(polar.discounts).toEqual([expect.objectContaining({ basis_points: 3000 })]);
     });
 
-    test('two term changes at once leave Polar and the row on the same terms: the second waits for the first', async () => {
+    /* Waits until `count` changes wait on the affiliate lock; past the deadline, fails. */
+    async function untilWaiting(
+        observer: ReturnType<typeof lockObserver>,
+        count: number,
+        deadlineMs = 5_000,
+    ) {
+        const until = Date.now() + deadlineMs;
+        while ((await observer.waiting(growthRepository.AFFILIATE_LOCK_SPACE)) < count) {
+            if (Date.now() > until)
+                throw new Error(`Never saw ${count} waiting on the affiliate lock.`);
+            await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+    }
+
+    test('two term changes at once leave Polar and the row on the same terms: the second waits on the lock', async () => {
         const affiliate = await creator();
-        polar.calls = [];
-        const finished: string[] = [];
+        const observer = lockObserver();
         let second: Promise<unknown> = Promise.resolve();
-        // B changes the duration right after A has read the row. Given 300 ms it either
-        // finishes (nothing serialises them) or is still waiting for A.
+        // A holds the lock, having read 25%/forever; B is let go only once seen waiting on it.
         const spy = landsBetween(async () => {
-            second = growth
-                .updateAffiliate(affiliate.id, { duration: 'once' })
-                .then(() => finished.push('duration'));
-            await Promise.race([second, new Promise((resolve) => setTimeout(resolve, 300))]);
+            second = growth.updateAffiliate(affiliate.id, { duration: 'once' });
+            second.catch(() => {});
+            await untilWaiting(observer, 1);
         });
         try {
             await growth.updateAffiliate(affiliate.id, { percentOff: 30 });
-            finished.push('percent');
             await second;
         } finally {
             spy.mockRestore();
+            await observer.end();
         }
-        expect(finished).toEqual(['percent', 'duration']);
         expect((await growth.listAffiliates())[0]).toMatchObject({
             percentOff: 30,
             duration: 'once',
@@ -2431,7 +2442,44 @@ describe('affiliates', () => {
         expect(polar.discounts).toEqual([
             expect.objectContaining({ basis_points: 3000, duration: 'once' }),
         ]);
-    });
+    }, 30_000);
+
+    test('a locked change that looks up a handle and an email finishes while every other connection waits on its lock', async () => {
+        const owner = await createTestAccount({ email: 'owner@hushos.test' });
+        const affiliate = await creator();
+        // The app's pool, less the connection the change holds: all of them queue on the lock.
+        const others = (db.$client.options.max ?? 10) - 1;
+        const observer = lockObserver();
+        const waiting: Promise<unknown>[] = [];
+        const spy = landsBetween(async () => {
+            for (let i = 0; i < others; i++) {
+                const change = growth.updateAffiliate(affiliate.id, { commissionBps: 1000 + i });
+                change.catch(() => {});
+                waiting.push(change);
+            }
+            await untilWaiting(observer, others);
+        });
+        try {
+            // Then it checks the new code and the email: through its own connection, or never.
+            const change = growth.updateAffiliate(affiliate.id, {
+                code: 'creator30',
+                userEmail: 'owner@hushos.test',
+            });
+            const outcome = await Promise.race([
+                change.then(() => 'done'),
+                new Promise((resolve) => setTimeout(() => resolve('stalled'), 10_000)),
+            ]);
+            expect(outcome).toBe('done');
+            await Promise.all(waiting);
+        } finally {
+            spy.mockRestore();
+            await observer.end();
+        }
+        expect((await growth.listAffiliates())[0]).toMatchObject({
+            code: 'CREATOR30',
+            userId: owner.userId,
+        });
+    }, 60_000);
 
     test('pausing never undoes a save that landed while it ran, here or at Polar', async () => {
         const affiliate = await creator();
