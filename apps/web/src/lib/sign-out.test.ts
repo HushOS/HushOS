@@ -82,6 +82,7 @@ const {
 } = await import('./sign-in-gate');
 
 beforeEach(() => {
+    session.signedOut.mockReset();
     stores.browser.mockResolvedValue(undefined);
     stores.transfers.mockResolvedValue(undefined);
     stores.stash.mockResolvedValue(undefined);
@@ -156,6 +157,17 @@ describe('clearing a removed browser', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    test('shutting the upload queue failing is a clear that did not finish, and the rest is still done', async () => {
+        session.signedOut.mockImplementation(() => {
+            throw new Error('The queue could not be shut.');
+        });
+        const failure = await clearDevice().catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(DeviceNotCleared);
+        expect(String((failure as Error).cause)).toContain('could not be shut');
+        expect(stores.transfers).toHaveBeenCalledOnce();
+        expect(stores.browser).toHaveBeenCalledOnce();
     });
 
     test('deletes the stores by name even when a Drive part failed', async () => {

@@ -2,6 +2,7 @@ import type { useRouter } from '@tanstack/react-router';
 import { authClient } from '@/lib/auth-client';
 import { holdAuthView } from '@/lib/auth-view';
 import { announceSignOut, forgetBrowserData, within } from '@/lib/device-data';
+import { deviceSession } from '@/lib/device-session';
 import { forgetReturn } from '@/lib/return-to';
 import { forgetSession } from '@/lib/session';
 import { holdSignIn, markSignedOut } from '@/lib/sign-in-gate';
@@ -49,11 +50,15 @@ export class DeviceNotCleared extends Error {
  * DeviceNotCleared when anything stayed.
  */
 export async function clearDevice() {
+    const results: PromiseSettledResult<unknown>[] = [];
     // Nothing is queued to upload from here until a sign-in (a removed browser's own path here).
-    await import('@/lib/device-session')
-        .then(({ deviceSession }) => deviceSession.signedOut())
-        .catch((error: unknown) => console.error('Uploads could not be shut here.', error));
-    const results = await Promise.allSettled([clearDrive()]);
+    // If that fails, the rest is still done, and the clear says it did not finish.
+    try {
+        deviceSession.signedOut();
+    } catch (error) {
+        results.push({ status: 'rejected', reason: error });
+    }
+    results.push(...(await Promise.allSettled([clearDrive()])));
     results.push(
         ...(await Promise.allSettled([
             within(forgetBrowserData(), CLEAR_PART_MS, 'Device storage did not clear in time.'),
@@ -95,10 +100,13 @@ export const STOP_UPLOADS_MS = 5_000;
 export async function signOut() {
     // Other tabs stop, and release their uploads, while this one stops its own.
     const told = announceSignOut();
-    // From here nothing new is queued to upload, nor anything begun before now.
-    await import('@/lib/device-session')
-        .then(({ deviceSession }) => deviceSession.signedOut())
-        .catch((error: unknown) => console.error('Uploads could not be shut here.', error));
+    // From here nothing new is queued to upload, nor anything begun before now. A failure here is
+    // said again by the clear below, which tries it once more.
+    try {
+        deviceSession.signedOut();
+    } catch (error) {
+        console.error('Uploads could not be shut here.', error);
+    }
     // While this tab is still unlocked: no family key-change retry may sync now, since a sync
     // opens the families' store (hushos-groups) that forgetDevice is deleting, and could hold
     // up its deletion or make it again.
