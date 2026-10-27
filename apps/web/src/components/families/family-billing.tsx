@@ -314,8 +314,8 @@ function GlanceTop({
         const paused = lapsed.standing === 'paused';
         return (
             <div>
-                {/* Nothing here is theirs to fix: said plainly, without the payer's alarm. */}
-                <Alert data-plan-notice="unpaid">
+                {/* Nothing here is theirs to fix, but it is still a warning: plain words, the status colour. */}
+                <Alert variant={paused ? 'warning' : 'destructive'} data-plan-notice="unpaid">
                     <AlertTitle>
                         {paused ? `${name} is paused` : `${name}’s payment didn’t go through`}
                     </AlertTitle>
