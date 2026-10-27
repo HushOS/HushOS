@@ -1,0 +1,57 @@
+bun.lock
+  s_566b8e0c4467a4::t_891d9295963c61 284
+compose.yaml
+  s_566b8e0c4467a4::t_fb692cccea92ce 163-165
+docs/groups-design.md
+  s_566b8e0c4467a4::t_62938b3566ae68 70,118,120-121,137,207,317,323-326,334-335,484
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_22a640548e03c5 77,87,215,728
+packages/db/drizzle/20261026140033_group_dissolve_notices/migration.sql
+  s_566b8e0c4467a4::t_5df78e2fd88b8f 1-26
+packages/db/drizzle/20261026140033_group_dissolve_notices/snapshot.json
+  s_566b8e0c4467a4::t_dfff8cd37393f5 1-13873
+packages/db/src/dissolve-notices.ts
+  s_566b8e0c4467a4::t_c5dedfca0fb027 1-188
+packages/db/src/groups.dissolve-notices-off.test.ts
+  s_566b8e0c4467a4::t_8488fbccaf39eb 1-54
+packages/db/src/groups.dissolve-notices.test.ts
+  s_566b8e0c4467a4::t_b30a650aa7748d 1-584
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_885d9c371f4c3b 15,1955-1956,3431-3432
+packages/db/src/schema/groups.ts
+  s_566b8e0c4467a4::t_0dba7081f0ea0c 413-456
+packages/emails/scripts/render.tsx
+  s_566b8e0c4467a4::t_c4f06954657a95 2,215-258
+packages/emails/src/rendered/family-dissolved.ts
+  s_566b8e0c4467a4::t_ca982a62479a43 1-15
+packages/emails/src/service.ts
+  s_566b8e0c4467a4::t_0697964ab88da9 6,285-315
+packages/emails/src/templates/family-dissolved.tsx
+  s_566b8e0c4467a4::t_9e2c35ec22a7a7 1-293
+packages/jobs/Dockerfile
+  s_566b8e0c4467a4::t_2fcf8b702d239b 30
+packages/jobs/package.json
+  s_566b8e0c4467a4::t_b3bcf4c4eccb51 21
+packages/jobs/src/client.ts
+  s_566b8e0c4467a4::t_8fc0511fa058a0 29,59,157-169
+packages/jobs/src/jobs/groups.ts
+  s_566b8e0c4467a4::t_29d1b805c29f0f 2-3,48-115
+packages/jobs/src/worker.ts
+  s_566b8e0c4467a4::t_c1164b67d9ccfe 11,14,105-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4ebbbc1a4b8d5617ce414f20f18d2da05feb4269",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
