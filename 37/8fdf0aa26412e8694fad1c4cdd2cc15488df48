@@ -1,0 +1,20 @@
+apps/web/src/components/families/family-billing.tsx
+  h_f7ba60a6997566 60,67,72-73,514,1142-1143,1146,1152-1153,1156,1381-1416,1421-1422,1424-1432,1436-1441,1444-1452,1455,1461,1464,1468-1470,1473,1475,1478,1491-1492,1524-1527,1543,1566-1568,1570-1578,1583-1599,1617,1620,1624-1626,1629,1636,1640,1653-1654,1763
+apps/web/src/lib/family-billing.test.ts
+  h_f7ba60a6997566 17,21,711-769
+apps/web/src/lib/family-billing.ts
+  h_f7ba60a6997566 312-336
+e2e/families.spec.ts
+  h_f7ba60a6997566 1459,1462-1464,1468-1497,1629-1943
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "378fdf0aa26412e8694fad1c4cdd2cc15488df48",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
