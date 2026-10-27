@@ -1,0 +1,23 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_53d39f20d626b5 347
+apps/web/src/components/drive/transfers-panel.tsx
+  s_566b8e0c4467a4::t_7996d474f4995b 470
+apps/web/src/components/ui/toast.tsx
+  s_566b8e0c4467a4::t_6ad5d05d163504 10-12,32,50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2808a5dd32fc5619b5541240d527528b868e489e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
