@@ -1,0 +1,35 @@
+apps/web/src/components/account-dialogs.tsx
+  s_566b8e0c4467a4::t_271cacffd5a5d0 339
+apps/web/src/content/security.mdx
+  s_566b8e0c4467a4::t_d48d6d55536488 167
+apps/web/src/lib/contacts.ts
+  s_566b8e0c4467a4::t_392a94ebf16519 232,238,243,253-290
+apps/web/src/lib/rollback-marks.test.ts
+  s_566b8e0c4467a4::t_284e191ea6c398 21-23,25-27,47-84,86-89,92-94,107-135,138-150,154,158-162,164-175,178,251,273-277,288,291,317,326-356,358,361-453
+apps/web/src/lib/rollback-marks.ts
+  s_566b8e0c4467a4::t_d201a5ae3b7188 1-2,16-18,20-29,31-40,45-47,64,72,74-85,107,112,122,125-126,133,135-158,187-191,193,195-205,207,215-216,220-221,223-224,237-256,260,263-264,269-270,272,274,277
+docs/integrity-design.md
+  s_566b8e0c4467a4::t_99d9975926e2e0 223
+packages/crypto/src/rollback-marks.test.ts
+  s_566b8e0c4467a4::t_3ca3bd3deb6df8 2,16-18,23,32-33,45-47,53,60-65,73,84,92,95,100-101,103,109,112,114-115,117-118,121-137,141-146,151-184,188
+packages/crypto/src/rollback-marks.ts
+  s_566b8e0c4467a4::t_734e40a8563a4a 10-11,13,15-28,31,54,63-67,82-88,119,123,125,141,153-154
+packages/crypto/src/session.ts
+  s_566b8e0c4467a4::t_ee3a3dcd8a5eb2 246-249,253-258,800,1903,1907,1910-1915,1920-1936
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ec6a895278288fe765a0b13524cb7214df92fe9e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
