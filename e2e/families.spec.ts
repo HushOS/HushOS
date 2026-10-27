@@ -1808,7 +1808,7 @@ test.describe.serial('signing up for a family plan from the pricing page', () =>
         await expect(dialog).toContainText(`Then you pay for ${planTierName(tier!)}`, {
             timeout: 60_000,
         });
-        await expect(dialog.getByLabel('Name')).toHaveValue('Rosa’s family');
+        await expect(dialog.getByLabel('Name')).toHaveValue('Rosa Ekström’s family');
         await expect(dialog.getByRole('button', { name: 'Create and pay' })).toBeEnabled();
         // Opened once: the server no longer offers it, so the next visit goes where they choose.
         const summary = (await (await page.request.get('/api/billing')).json()) as {

@@ -64,6 +64,8 @@ import type {
     SignedStatementWire,
 } from './api';
 import {
+    checkGroupName,
+    GROUP_NAME_MAX,
     IDENTITY_PAGE,
     INVITATION_DAYS,
     MAX_GRANTS_PER_CALL,
@@ -1216,12 +1218,10 @@ function groupView(group: GroupRow) {
 }
 
 function groupName(name: string) {
-    const trimmed = name.trim().normalize('NFC');
-    const length = Array.from(trimmed).length;
-    // Printable text only: the name goes into invitation emails.
-    if (length < 1 || length > 100 || /\p{C}/u.test(trimmed))
-        throw new GroupError('invalid', 'Use a name between 1 and 100 characters.');
-    return trimmed;
+    const checked = checkGroupName(name);
+    if (checked === null)
+        throw new GroupError('invalid', `Use a name between 1 and ${GROUP_NAME_MAX} characters.`);
+    return checked;
 }
 
 /* JSON with every object's keys sorted: the same call always gives the same text. */

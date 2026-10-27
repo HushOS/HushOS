@@ -1,4 +1,5 @@
 import type { FamilyPlan, Plan } from '@hushos/billing/api';
+import { checkGroupName } from '@hushos/groups/protocol';
 import { describe, expect, test } from 'vitest';
 import { defaultFamilyName, familyLanding, familyStanding } from './family-signup';
 
@@ -73,17 +74,52 @@ describe('familyStanding', () => {
 });
 
 describe('defaultFamilyName', () => {
-    test('is the account’s first name as a family, else My family', () => {
-        expect(defaultFamilyName('Sam Ortega')).toBe('Sam’s family');
-        expect(defaultFamilyName('  Maya\tLindqvist ')).toBe('Maya’s family');
+    // Every suggestion must be one the server stores as it is (its groupName is checkGroupName).
+    const accepted = (name: string) => expect(checkGroupName(name)).toBe(name);
+
+    test('is the account’s full name as a family, else My family', () => {
+        expect(defaultFamilyName('Sam Ortega')).toBe('Sam Ortega’s family');
+        expect(defaultFamilyName('  Maya   Lindqvist ')).toBe('Maya Lindqvist’s family');
         expect(defaultFamilyName('')).toBe('My family');
         expect(defaultFamilyName('   ')).toBe('My family');
         expect(defaultFamilyName(undefined)).toBe('My family');
+        accepted(defaultFamilyName('Sam Ortega'));
+        accepted(defaultFamilyName(''));
     });
 
-    test('never suggests a name longer than the field takes', () => {
-        expect(defaultFamilyName('a'.repeat(91))).toBe(`${'a'.repeat(91)}’s family`);
-        expect(defaultFamilyName('a'.repeat(92))).toBe('My family');
+    test('a tab between names is a space, never a character the server refuses', () => {
+        const name = defaultFamilyName('Sam\tOrtega');
+        expect(name).toBe('Sam Ortega’s family');
+        accepted(name);
+    });
+
+    test('invisible marks the server refuses are left out: ZWNJ, bidi marks, an emoji’s joiners', () => {
+        // Persian names often carry a zero-width non-joiner.
+        const persian = defaultFamilyName('مهر\u200cانگیز');
+        expect(persian).toBe('مهرانگیز’s family');
+        accepted(persian);
+        const bidi = defaultFamilyName('\u202bسارا\u202c \u200fRahimi');
+        expect(bidi).toBe('سارا Rahimi’s family');
+        accepted(bidi);
+        const emoji = defaultFamilyName('👨\u200d👩\u200d👧 Lee');
+        expect(emoji).toBe('👨👩👧 Lee’s family');
+        accepted(emoji);
+        // Nothing but marks: nothing left to name it after.
+        expect(defaultFamilyName('\u200c\u200f')).toBe('My family');
+    });
+
+    test('a long name is cut, never the ’s family, and never inside a character', () => {
+        const long = defaultFamilyName('a'.repeat(200));
+        expect(long).toBe(`${'a'.repeat(91)}’s family`);
+        accepted(long);
+        // A thumb with its skin tone is one character of two code points: kept whole or dropped.
+        const thumb = defaultFamilyName(`${'a'.repeat(90)}👍🏽 Ortega`);
+        expect(thumb).toBe(`${'a'.repeat(90)}’s family`);
+        accepted(thumb);
+        // Combining accents stay on their letter, composed as the server stores it.
+        const accent = defaultFamilyName(`${'e'.repeat(89)}Jose\u0301`);
+        accepted(accent);
+        expect(Array.from(accent).length).toBeLessThanOrEqual(100);
     });
 });
 

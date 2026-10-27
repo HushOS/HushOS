@@ -1,5 +1,6 @@
 import type { Catalogue, FamilyPlan } from '@hushos/billing/api';
 import { DEFAULT_CURRENCY } from '@hushos/billing/protocol';
+import { checkGroupName, GROUP_NAME_MAX } from '@hushos/groups/protocol';
 import { pickCurrency, type LocaleHint } from '@/lib/currency';
 import { currenciesOf, familyPrice } from '@/lib/plans';
 
@@ -9,18 +10,43 @@ import { currenciesOf, familyPrice } from '@/lib/plans';
  * Create a family with that tier, its name already filled in, one click from checkout.
  */
 
-/* Create a family's name field caps a name at this. */
-const NAME_LIMIT = 100;
+const SUFFIX = '’s family';
+
+/* `text` cut to at most `max` code points, at a character (grapheme) boundary. */
+function cutTo(text: string, max: number) {
+    let kept = '';
+    let count = 0;
+    for (const { segment } of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(
+        text,
+    )) {
+        const size = Array.from(segment).length;
+        if (count + size > max) break;
+        kept += segment;
+        count += size;
+    }
+    return kept;
+}
 
 /*
- * The name Create a family suggests: the account's first name, "Sam’s family", else "My
- * family". Only a suggestion: it stays editable in the dialog, and the family can be
- * renamed later.
+ * The name Create a family suggests: the account's name, "Sam Ortega’s family", else "My
+ * family". Only a suggestion: it stays editable in the dialog, and the family can be renamed
+ * later. An account's name may hold anything, so it is made into one the server accepts as it
+ * is (checkGroupName, the server's own rule): any run of whitespace is one space, characters
+ * the server refuses (controls, and invisible marks such as a zero-width non-joiner, bidi
+ * marks or an emoji's joiners) are left out, and a long name is cut, at a character, so that
+ * "’s family" still fits.
  */
 export function defaultFamilyName(accountName: string | null | undefined) {
-    const first = accountName?.trim().split(/\s+/)[0] ?? '';
-    const name = `${first}’s family`;
-    return first && name.length <= NAME_LIMIT ? name : 'My family';
+    const clean = (accountName ?? '')
+        .normalize('NFC')
+        .replace(/\s+/gu, ' ')
+        .replace(/\p{C}/gu, '')
+        .replace(/ {2,}/g, ' ')
+        .trim()
+        .normalize('NFC');
+    const name = cutTo(clean, GROUP_NAME_MAX - Array.from(SUFFIX).length).trim();
+    const suggested = `${name}${SUFFIX}`;
+    return name && checkGroupName(suggested) === suggested ? suggested : 'My family';
 }
 
 /*
