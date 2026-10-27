@@ -369,6 +369,8 @@ function AffiliateDialog({
     const [left, setLeft] = useState<ReadonlySet<DraftField>>(new Set());
     const [tried, setTried] = useState(false);
     const [pending, setPending] = useState(false);
+    // Pending covers Unlink and Cancel too, so Save waits for them; its label is its own.
+    const [saving, setSaving] = useState(false);
     const [error, setError] = useState('');
     // Every opening starts from the creator as saved, or from empty. The page opens the
     // dialog through `open`, which never calls onOpenChange, so the reset is keyed to it.
@@ -392,6 +394,7 @@ function AffiliateDialog({
         if (!reading.ok) return;
         const input = reading.input;
         setPending(true);
+        setSaving(true);
         setError('');
         try {
             if (affiliate) {
@@ -411,6 +414,7 @@ function AffiliateDialog({
             setError(message(cause));
         } finally {
             setPending(false);
+            setSaving(false);
         }
     }
     return (
@@ -447,6 +451,8 @@ function AffiliateDialog({
                         fieldError={fieldError}
                         onLeave={leave}
                         onSaved={onSaved}
+                        pending={pending}
+                        onPending={setPending}
                     />
                     {error && (
                         <p role="alert" className="text-[13px] text-destructive">
@@ -463,7 +469,7 @@ function AffiliateDialog({
                             Cancel
                         </Button>
                         <Button type="submit" disabled={pending}>
-                            {pending
+                            {saving
                                 ? affiliate
                                     ? 'Saving…'
                                     : 'Adding…'
@@ -645,12 +651,16 @@ function AccountField({
 function AccountUnlink({
     affiliate,
     onSaved,
+    pending: busy,
+    onPending: setBusy,
 }: {
     affiliate: AffiliateView;
     onSaved: () => Promise<unknown>;
+    /* The dialog's one pending state: Save and this never run at once. */
+    pending: boolean;
+    onPending: (pending: boolean) => void;
 }) {
     const [asking, setAsking] = useState(false);
-    const [busy, setBusy] = useState(false);
     const linked = Boolean(affiliate.userId);
     async function unlink() {
         setBusy(true);
@@ -716,6 +726,8 @@ function AffiliateFields({
     fieldError,
     onLeave,
     onSaved,
+    pending,
+    onPending,
 }: {
     id: string;
     form: AffiliateDraft;
@@ -724,6 +736,8 @@ function AffiliateFields({
     fieldError: (field: DraftField) => string | undefined;
     onLeave: (field: DraftField) => void;
     onSaved: () => Promise<unknown>;
+    pending: boolean;
+    onPending: (pending: boolean) => void;
 }) {
     const set = <K extends keyof AffiliateDraft>(key: K, value: AffiliateDraft[K]) =>
         onChange((current) => ({ ...current, [key]: value }));
@@ -854,7 +868,12 @@ function AffiliateFields({
                 }
                 action={
                     affiliate && (affiliate.userId || affiliate.pendingEmail) ? (
-                        <AccountUnlink affiliate={affiliate} onSaved={onSaved} />
+                        <AccountUnlink
+                            affiliate={affiliate}
+                            onSaved={onSaved}
+                            pending={pending}
+                            onPending={onPending}
+                        />
                     ) : undefined
                 }
             />

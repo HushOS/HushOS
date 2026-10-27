@@ -327,6 +327,17 @@ async function assertHandleFree(handle: string, except: string | undefined, what
         throw new BillingError(`That ${what} belongs to another affiliate.`);
 }
 
+/* What the enrolment form sets about the offer; a patch naming none of them leaves them alone. */
+const TERMS = [
+    'name',
+    'slug',
+    'code',
+    'percentOff',
+    'duration',
+    'durationMonths',
+    'commissionBps',
+] as const satisfies readonly (keyof AffiliateInput)[];
+
 /*
  * Edits an affiliate. Everything the enrolment form set can change; the code
  * and the discount's terms change at the provider first, so the row never
@@ -338,50 +349,57 @@ export async function updateAffiliate(
 ) {
     const row = await growthRepository.getAffiliate(id);
     if (!row) throw new BillingError('That affiliate does not exist.', 404);
-    const merged: AffiliateInput = {
-        name: patch.name ?? row.name,
-        slug: patch.slug ?? row.slug,
-        code: patch.code ?? row.code,
-        percentOff: patch.percentOff ?? row.percentOff,
-        duration: patch.duration ?? row.duration,
-        durationMonths:
-            patch.durationMonths !== undefined
-                ? patch.durationMonths
-                : (patch.duration ?? row.duration) === 'repeating'
-                  ? row.durationMonths
-                  : null,
-        commissionBps: patch.commissionBps ?? row.commissionBps,
-    };
-    const { name, slug, code, durationMonths } = validate(merged);
-    if (slug !== row.slug) await assertHandleFree(slug, id, 'slug');
-    if (code !== row.code) await assertHandleFree(code, id, 'code');
-    const changes: Parameters<typeof growthRepository.updateAffiliate>[1] = {
-        name,
-        slug,
-        code,
-        percentOff: merged.percentOff,
-        duration: merged.duration,
-        durationMonths,
-        commissionBps: merged.commissionBps,
-    };
+    // Only what the patch names is written. A pause or an unlink names no terms, so it
+    // writes none and asks nothing of Polar: it cannot put back terms that a save
+    // changed after this read, here or at the provider.
+    const changes: Parameters<typeof growthRepository.updateAffiliate>[1] = {};
+    if (TERMS.some((key) => patch[key] !== undefined)) {
+        const merged: AffiliateInput = {
+            name: patch.name ?? row.name,
+            slug: patch.slug ?? row.slug,
+            code: patch.code ?? row.code,
+            percentOff: patch.percentOff ?? row.percentOff,
+            duration: patch.duration ?? row.duration,
+            durationMonths:
+                patch.durationMonths !== undefined
+                    ? patch.durationMonths
+                    : (patch.duration ?? row.duration) === 'repeating'
+                      ? row.durationMonths
+                      : null,
+            commissionBps: patch.commissionBps ?? row.commissionBps,
+        };
+        const { name, slug, code, durationMonths } = validate(merged);
+        if (slug !== row.slug) await assertHandleFree(slug, id, 'slug');
+        if (code !== row.code) await assertHandleFree(code, id, 'code');
+        if (patch.name !== undefined) changes.name = name;
+        if (patch.slug !== undefined) changes.slug = slug;
+        if (patch.code !== undefined) changes.code = code;
+        if (patch.percentOff !== undefined) changes.percentOff = merged.percentOff;
+        // The months belong to the duration: written together, as the check constraint reads them.
+        if (patch.duration !== undefined || patch.durationMonths !== undefined) {
+            changes.duration = merged.duration;
+            changes.durationMonths = durationMonths;
+        }
+        if (patch.commissionBps !== undefined) changes.commissionBps = merged.commissionBps;
+        const termsChanged =
+            name !== row.name ||
+            code !== row.code ||
+            merged.percentOff !== row.percentOff ||
+            merged.duration !== row.duration ||
+            durationMonths !== row.durationMonths;
+        if (termsChanged && row.providerDiscountId)
+            await updateProviderDiscount(row.providerDiscountId, {
+                name: `${name} (${code})`,
+                code,
+                percentOff: merged.percentOff,
+                duration: merged.duration,
+                durationMonths,
+            });
+    }
     if (patch.notes !== undefined) changes.notes = patch.notes?.trim() || null;
     if (patch.userEmail !== undefined)
         Object.assign(changes, await accountForEmail(patch.userEmail));
     if (patch.active !== undefined) changes.active = patch.active;
-    const termsChanged =
-        name !== row.name ||
-        code !== row.code ||
-        merged.percentOff !== row.percentOff ||
-        merged.duration !== row.duration ||
-        durationMonths !== row.durationMonths;
-    if (termsChanged && row.providerDiscountId)
-        await updateProviderDiscount(row.providerDiscountId, {
-            name: `${name} (${code})`,
-            code,
-            percentOff: merged.percentOff,
-            duration: merged.duration,
-            durationMonths,
-        });
     return view(await growthRepository.updateAffiliate(id, changes));
 }
 

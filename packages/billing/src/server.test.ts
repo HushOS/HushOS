@@ -2368,6 +2368,60 @@ describe('affiliates', () => {
         expect((await growth.getReferralSummary(buyer.userId)).affiliates).toEqual([]);
     });
 
+    /* Runs `between` once, right after the next read of an affiliate: a save landing mid-way. */
+    function landsBetween(between: () => Promise<unknown>) {
+        const read = growthRepository.getAffiliate;
+        return vi
+            .spyOn(growthRepository, 'getAffiliate')
+            .mockImplementationOnce(async (id: string) => {
+                const row = await read(id);
+                await between();
+                return row;
+            });
+    }
+
+    test('unlinking never undoes a save that landed while it ran, here or at Polar', async () => {
+        await createTestAccount({ email: 'owner@hushos.test' });
+        const affiliate = await creator();
+        await growth.updateAffiliate(affiliate.id, { userEmail: 'owner@hushos.test' });
+        polar.calls = [];
+        const spy = landsBetween(() => growth.updateAffiliate(affiliate.id, { percentOff: 30 }));
+        try {
+            await growth.updateAffiliate(affiliate.id, { userEmail: null });
+        } finally {
+            spy.mockRestore();
+        }
+        expect((await growth.listAffiliates())[0]).toMatchObject({
+            percentOff: 30,
+            userId: null,
+            pendingEmail: null,
+        });
+        // One change at Polar, the save's; the row says what Polar applies.
+        expect(polar.calls.filter((call) => call.startsWith('discounts.'))).toEqual([
+            'discounts.update:disc_creator25',
+        ]);
+        expect(polar.discounts).toEqual([expect.objectContaining({ basis_points: 3000 })]);
+    });
+
+    test('pausing never undoes a save that landed while it ran, here or at Polar', async () => {
+        const affiliate = await creator();
+        polar.calls = [];
+        const spy = landsBetween(() => growth.updateAffiliate(affiliate.id, { percentOff: 30 }));
+        try {
+            await growth.updateAffiliate(affiliate.id, { active: false });
+        } finally {
+            spy.mockRestore();
+        }
+        expect((await growth.listAffiliates())[0]).toMatchObject({
+            percentOff: 30,
+            active: false,
+        });
+        expect(polar.calls.filter((call) => call.startsWith('discounts.'))).toEqual([
+            'discounts.update:disc_creator25',
+        ]);
+        expect(polar.discounts).toEqual([expect.objectContaining({ basis_points: 3000 })]);
+    });
+
     test('unlinking clears the linked account and a pending email alike', async () => {
         const owner = await createTestAccount({ email: 'owner@hushos.test' });
         const affiliate = await creator();
