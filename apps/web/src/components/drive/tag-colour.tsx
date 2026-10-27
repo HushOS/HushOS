@@ -42,7 +42,7 @@ export function TagColourPicker({
     const [open, setOpen] = useState(custom);
     const ring = (on: boolean) =>
         cn(
-            'relative flex size-9 cursor-pointer items-center justify-center rounded-full border-2 outline-none has-focus-visible:outline-2 has-focus-visible:outline-offset-1 has-focus-visible:outline-ring has-disabled:cursor-not-allowed has-disabled:opacity-50',
+            'relative flex size-9 cursor-pointer items-center justify-center rounded-full border-2 outline-none has-focus-visible:outline-2 has-focus-visible:outline-solid has-focus-visible:outline-offset-1 has-focus-visible:outline-ring has-disabled:cursor-not-allowed has-disabled:opacity-50',
             on ? 'border-foreground' : 'border-transparent hover:border-rule',
         );
     return (
@@ -253,7 +253,7 @@ function CustomColour({
                 aria-valuetext={`${Math.round(hsv.s * 100)}% saturation, ${Math.round(hsv.v * 100)}% brightness`}
                 onKeyDown={(event) => keys(event, 'area')}
                 {...surface((x, y) => ({ ...hsv, s: x, v: 1 - y }))}
-                className="relative h-32 w-full cursor-crosshair touch-none rounded-md outline-none select-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                className="relative h-32 w-full cursor-crosshair touch-none rounded-md outline-none select-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring"
                 style={{
                     backgroundImage: `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, ${pure})`,
                 }}
@@ -277,7 +277,7 @@ function CustomColour({
                 aria-valuenow={Math.round(hsv.h)}
                 onKeyDown={(event) => keys(event, 'hue')}
                 {...surface((x) => ({ ...hsv, h: x * 359.999 }))}
-                className="relative h-3 w-full cursor-pointer touch-none rounded-full outline-none select-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                className="relative h-3 w-full cursor-pointer touch-none rounded-full outline-none select-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring"
                 style={{
                     backgroundImage:
                         'linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)',
@@ -319,7 +319,7 @@ function CustomColour({
                                 commit(hexToHsv(typed.toLowerCase()));
                         }
                     }}
-                    className="h-9 w-28 min-w-0 rounded-md border border-input bg-card px-2.5 font-mono text-base outline-none sm:text-sm focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-ring"
+                    className="h-9 w-28 min-w-0 rounded-md border border-input bg-card px-2.5 font-mono text-base outline-none sm:text-sm focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-1 focus-visible:outline-ring"
                 />
             </label>
         </div>
@@ -346,7 +346,7 @@ export function TagColourButton({
                 aria-label="Colour for the new tag"
                 title="Colour"
                 disabled={disabled}
-                className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-card px-2.5 outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-default disabled:opacity-60 pointer-coarse:h-11"
+                className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-card px-2.5 outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring disabled:cursor-default disabled:opacity-60 pointer-coarse:h-11"
             >
                 <Swatch colour={value} className="size-[18px] rounded-full" />
                 <ChevronDownIcon className="size-4 text-muted-foreground" aria-hidden="true" />

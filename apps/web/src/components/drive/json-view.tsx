@@ -197,7 +197,7 @@ function ValidJson({ text, name, layout }: { text: string; name: string; layout:
                                 aria-pressed={showing === value}
                                 onClick={() => show(value, true)}
                                 className={cn(
-                                    'h-8 cursor-pointer rounded-sm px-3 text-[13px] font-semibold outline-none focus-visible:outline-2 focus-visible:outline-ring pointer-coarse:h-10',
+                                    'h-8 cursor-pointer rounded-sm px-3 text-[13px] font-semibold outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring pointer-coarse:h-10',
                                     showing === value
                                         ? segmentOn
                                         : 'text-muted-foreground hover:text-foreground',

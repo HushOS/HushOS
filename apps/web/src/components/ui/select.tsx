@@ -31,7 +31,7 @@ function SelectTrigger({ className, children, ...props }: SelectPrimitive.Trigge
         <SelectPrimitive.Trigger
             data-slot="select-trigger"
             className={cn(
-                'min-w-0 flex h-11 w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-input bg-card px-3.5 font-sans text-sm whitespace-nowrap transition-[border-color,background-color] duration-150 ease-out-soft outline-none select-none hover:bg-muted/40 focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive data-placeholder:text-muted-foreground/70 aria-expanded:bg-muted [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*="size-"])]:size-4',
+                'min-w-0 flex h-11 w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-input bg-card px-3.5 font-sans text-sm whitespace-nowrap transition-[border-color,background-color] duration-150 ease-out-soft outline-none select-none hover:bg-muted/40 focus-visible:border-ring focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive data-placeholder:text-muted-foreground/70 aria-expanded:bg-muted [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*="size-"])]:size-4',
                 className,
             )}
             {...props}
@@ -103,7 +103,7 @@ function SelectItem({ className, children, ...props }: SelectPrimitive.Item.Prop
         <SelectPrimitive.Item
             data-slot="select-item"
             className={cn(
-                'relative flex w-full cursor-pointer items-center gap-2 rounded-md py-2 pr-8 pl-3 font-sans text-sm outline-hidden select-none data-highlighted:bg-muted data-selected:bg-accent data-selected:font-semibold data-selected:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*="size-"])]:size-3.5',
+                'relative flex w-full cursor-pointer items-center gap-2 rounded-md py-2 pr-8 pl-3 font-sans text-sm outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring select-none data-highlighted:bg-muted data-selected:bg-accent data-selected:font-semibold data-selected:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*="size-"])]:size-3.5',
                 className,
             )}
             {...props}

@@ -90,7 +90,7 @@ export function UserMenu({ user }: { user: { id: string; name: string; email: st
                 <DropdownMenuTrigger
                     aria-label="Account menu"
                     title={user.name}
-                    className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full transition-colors outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring aria-expanded:bg-muted"
+                    className="grid size-10 shrink-0 cursor-pointer place-items-center rounded-full transition-colors outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring aria-expanded:bg-muted"
                 >
                     <PersonAvatar name={user.name} seed={user.id} size={32} />
                 </DropdownMenuTrigger>

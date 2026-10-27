@@ -323,7 +323,7 @@ Everything is sentence case. Nothing in product UI is uppercase. Sizes and dates
 
 ## Elevation & Depth
 
-Four shadows, tinted with ink in light and near-black with a faint top highlight in dark: `sm` for resting controls and the page panel, `md` for raised cards, glass bars and floating buttons, `lg` for menus, popovers, selection bars and toasts, `xl` for dialogs and sheets (values in `packages/tokens`). On the web, `shadow-sheet` is `sm` and `shadow-overlay` is `lg`. Rows, inline cards and fields have no shadow. In high contrast every shadow is `none` and the `edge` role becomes a solid border, so depth never depends on a shadow. Focus is a 2px primary outline, inset 2px on the web.
+Four shadows, tinted with ink in light and near-black with a faint top highlight in dark: `sm` for resting controls and the page panel, `md` for raised cards, glass bars and floating buttons, `lg` for menus, popovers, selection bars and toasts, `xl` for dialogs and sheets (values in `packages/tokens`). On the web, `shadow-sheet` is `sm` and `shadow-overlay` is `lg`. Rows, inline cards and fields have no shadow. In high contrast every shadow is `none` and the `edge` role becomes a solid border, so depth never depends on a shadow. Focus is a 2px primary outline, inset 2px on the web. A filled button (default, secondary, destructive) draws it in its text colour instead, as primary would vanish into its own fill.
 
 ## Shapes
 

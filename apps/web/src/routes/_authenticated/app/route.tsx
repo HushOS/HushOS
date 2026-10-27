@@ -182,7 +182,7 @@ function AppLayout() {
                         onClick={() => setPaletteOpen(true)}
                         aria-label="Search"
                         aria-keyshortcuts="/ Meta+K Control+K"
-                        className="flex h-10 min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-md bg-muted px-3.5 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring md:max-w-110"
+                        className="flex h-10 min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-md bg-muted px-3.5 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring md:max-w-110"
                     >
                         <SearchIcon aria-hidden="true" className="size-4 shrink-0" />
                         <span className="flex-1 truncate">

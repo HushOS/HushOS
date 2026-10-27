@@ -247,7 +247,7 @@ export function SiteSwitch<T extends string>({
                     onClick={() => onChange(option.value)}
                     className={cn(
                         // 40px drawn, 44px to a finger: the tap area reaches into the track's padding.
-                        "relative flex h-10 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-sm px-4 text-[15px] whitespace-nowrap outline-none after:absolute after:inset-x-0 after:-inset-y-0.5 after:content-[''] focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-default disabled:opacity-60",
+                        "relative flex h-10 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-sm px-4 text-[15px] whitespace-nowrap outline-none after:absolute after:inset-x-0 after:-inset-y-0.5 after:content-[''] focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring disabled:cursor-default disabled:opacity-60",
                         value === option.value
                             ? cn(segmentOn, 'font-bold')
                             : 'font-medium text-muted-foreground hover:text-foreground',

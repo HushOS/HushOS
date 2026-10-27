@@ -234,7 +234,7 @@ export function Preview({
                                                     )
                                                 }
                                                 className={cn(
-                                                    'h-8 cursor-pointer rounded-sm px-2.5 text-[13px] sm:px-3 font-semibold outline-none focus-visible:outline-2 focus-visible:outline-ring',
+                                                    'h-8 cursor-pointer rounded-sm px-2.5 text-[13px] sm:px-3 font-semibold outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring',
                                                     on
                                                         ? segmentOn
                                                         : 'text-muted-foreground hover:text-foreground',

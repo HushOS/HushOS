@@ -487,7 +487,7 @@ function HiddenCode({
                                     next[slot] = event.target.value;
                                     onType(next);
                                 }}
-                                className="w-full min-w-0 rounded-sm border border-input bg-background px-1.5 text-[15px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring aria-invalid:border-destructive aria-invalid:ring-1 aria-invalid:ring-destructive"
+                                className="w-full min-w-0 rounded-sm border border-input bg-background px-1.5 text-[15px] font-medium focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring aria-invalid:border-destructive aria-invalid:ring-1 aria-invalid:ring-destructive"
                             />
                         )}
                     </li>

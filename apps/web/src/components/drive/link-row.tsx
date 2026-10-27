@@ -202,7 +202,7 @@ function LinkOptionsForm({
                             aria-pressed={ends === option.value}
                             onClick={() => setEnds(option.value)}
                             className={cn(
-                                'flex h-9 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-sm px-2 text-sm whitespace-nowrap outline-none focus-visible:outline-2 focus-visible:outline-ring',
+                                'flex h-9 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-sm px-2 text-sm whitespace-nowrap outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring',
                                 ends === option.value
                                     ? 'bg-accent font-semibold text-accent-foreground'
                                     : 'text-muted-foreground hover:text-foreground',

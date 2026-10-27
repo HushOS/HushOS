@@ -57,11 +57,14 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [anchor, setAnchor] = useState<string | null>(null);
     const [focused, setFocused] = useState<string | null>(null);
+    /* Whether the arrows put the focus where it is, rather than a click. */
+    const [keyed, setKeyed] = useState(false);
     const [marquee, setMarquee] = useState<Marquee | null>(null);
 
     function select(id: string, event?: Modifiers) {
         const toggle = coarse || Boolean(event?.metaKey || event?.ctrlKey);
         setFocused(id);
+        setKeyed(false);
         if (event?.shiftKey && anchor !== null) {
             const from = ids.indexOf(anchor);
             const to = ids.indexOf(id);
@@ -84,6 +87,7 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
     /* The corner badge's toggle: always adds or removes, whatever the pointer or modifier. */
     function toggle(id: string) {
         setFocused(id);
+        setKeyed(false);
         setAnchor(id);
         setSelected((current) => {
             const next = new Set(current);
@@ -104,10 +108,45 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
         const index = focused ? ids.indexOf(focused) : -1;
         const next = ids[Math.min(ids.length - 1, Math.max(0, index + delta))]!;
         select(next, extend ? { shiftKey: true } : undefined);
-        root.current
-            ?.querySelector<HTMLElement>(`[data-node-id="${next}"]`)
-            ?.scrollIntoView({ block: 'nearest' });
+        setKeyed(true);
+        const item = root.current?.querySelector<HTMLElement>(`[data-node-id="${next}"]`);
+        item?.scrollIntoView({ block: 'nearest' });
+        // The keys are on a row's name (Tab) or its thumbnail (a click, in Chromium): they move
+        // along with the arrows to the next row's name, so one row has focus and Enter acts there.
+        if (
+            document.activeElement?.closest('[data-row-name], [data-row-thumb]') &&
+            root.current?.contains(document.activeElement)
+        )
+            item?.querySelector<HTMLElement>('[data-row-name]')?.focus({ preventScroll: true });
     }
+    /*
+     * Whether an item wears the focus outline: always once the arrows moved there, as the
+     * tint alone says selected, not here; after a click only on an item the click left
+     * unselected, so a plain click shows the tint and nothing more.
+     */
+    function focusShown(id: string) {
+        return focused === id && (keyed || !selected.has(id));
+    }
+
+    /*
+     * The list's focus follows the keys' real focus: Tab onto a row's name makes that row the
+     * one the arrows move from, and the outline is then the name's own, not the arrows'.
+     * WebKit focuses no button on a click, so there `keyed` alone marks the row.
+     */
+    useEffect(() => {
+        const follow = (event: FocusEvent) => {
+            const name =
+                event.target instanceof Element ? event.target.closest('[data-row-name]') : null;
+            const id =
+                name && root.current?.contains(name)
+                    ? name.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId
+                    : undefined;
+            if (id) setFocused(id);
+            setKeyed(false);
+        };
+        document.addEventListener('focusin', follow);
+        return () => document.removeEventListener('focusin', follow);
+    }, [root]);
 
     const latest = useRef({ ids, selected, select });
     useEffect(() => {
@@ -273,8 +312,23 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
         clear,
         selectAll,
         moveFocus,
+        focusShown,
     };
 }
+
+/*
+ * Focus on a row or a grid tile: a 2px outline in the focus colour that sits beside the
+ * selection's tint and ring instead of giving way to them. A row's is inset; a tile's
+ * goes outside it, clear of the selection ring a selected tile already wears. The
+ * `_WITHIN` forms draw it while the keys have the item's own name button (Tab into
+ * the list), marked `data-row-name`; the plain forms go with `focusShown`.
+ */
+export const ROW_FOCUS = 'outline-2 outline-solid -outline-offset-2 outline-ring';
+export const ROW_FOCUS_WITHIN =
+    'has-[[data-row-name]:focus-visible]:outline-2 has-[[data-row-name]:focus-visible]:outline-solid has-[[data-row-name]:focus-visible]:-outline-offset-2 has-[[data-row-name]:focus-visible]:outline-ring';
+export const TILE_FOCUS = 'outline-2 outline-solid outline-offset-2 outline-ring';
+export const TILE_FOCUS_WITHIN =
+    'has-[[data-row-name]:focus-visible]:outline-2 has-[[data-row-name]:focus-visible]:outline-solid has-[[data-row-name]:focus-visible]:outline-offset-2 has-[[data-row-name]:focus-visible]:outline-ring';
 
 /* The box a drag on empty space draws. */
 export function MarqueeBox({ marquee }: { marquee: Marquee | null }) {
@@ -319,6 +373,7 @@ export function RowName({
             <button
                 type="button"
                 tabIndex={-1}
+                data-row-thumb
                 className="inline-flex shrink-0 cursor-default items-center py-2 pr-3 pl-5 outline-none sm:pl-8 md:pr-4"
                 onClick={onSelect}
             >
@@ -328,6 +383,7 @@ export function RowName({
                 <span className="flex min-w-0 items-center gap-0.5">
                     <button
                         type="button"
+                        data-row-name
                         className="block min-w-0 cursor-default truncate text-left text-[14px] font-medium outline-none md:text-[15px]"
                         onClick={onSelect}
                     >
@@ -581,7 +637,7 @@ export function SelectionAction({
                 aria-busy={pending || undefined}
                 data-pending={pending ? '' : undefined}
                 className={cn(
-                    'flex h-10 shrink-0 cursor-pointer items-center gap-2 rounded-md px-2.5 text-sm font-semibold transition-colors outline-none hover:bg-secondary-foreground/10 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-secondary-foreground aria-disabled:cursor-default aria-disabled:hover:bg-transparent aria-expanded:bg-secondary-foreground/10 group-data-[labels=all]/selection:px-3',
+                    'flex h-10 shrink-0 cursor-pointer items-center gap-2 rounded-md px-2.5 text-sm font-semibold transition-colors outline-none hover:bg-secondary-foreground/10 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-2px] focus-visible:outline-secondary-foreground aria-disabled:cursor-default aria-disabled:hover:bg-transparent aria-expanded:bg-secondary-foreground/10 group-data-[labels=all]/selection:px-3',
                     // Working is not unavailable: it stays at full strength, the spinner says why it waits.
                     disabled && !pending && 'opacity-40',
                     className,
@@ -794,7 +850,7 @@ export function HiddenSortToggle({
             type="button"
             onClick={onClick}
             aria-label={`By ${label}, ${order}. Reverse the order`}
-            className="-my-2 inline-flex h-9 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-xs font-semibold text-foreground transition-colors outline-none hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring pointer-coarse:h-11"
+            className="-my-2 inline-flex h-9 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-xs font-semibold text-foreground transition-colors outline-none hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring pointer-coarse:h-11"
         >
             By {label}
             <Arrow className="size-3.5" aria-hidden="true" />

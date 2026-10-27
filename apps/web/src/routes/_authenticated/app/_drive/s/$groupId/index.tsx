@@ -110,7 +110,7 @@ function FamilySpacePage() {
                                     <Link
                                         to="/app/s/$groupId/f/$folderId"
                                         params={{ groupId: space.groupId, folderId: root.id }}
-                                        className="flex min-h-14 min-w-0 flex-1 items-center gap-3 py-2 pr-5 pl-5 outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring sm:pr-8 sm:pl-8"
+                                        className="flex min-h-14 min-w-0 flex-1 items-center gap-3 py-2 pr-5 pl-5 outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring sm:pr-8 sm:pl-8"
                                     >
                                         {body}
                                         <ChevronRightIcon

@@ -286,7 +286,7 @@ function Way({
             disabled={disabled}
             onClick={onClick}
             className={cn(
-                'flex h-14 w-full cursor-pointer items-center gap-3 rounded-md border px-4 text-left outline-none focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-default disabled:opacity-60',
+                'flex h-14 w-full cursor-pointer items-center gap-3 rounded-md border px-4 text-left outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring disabled:cursor-default disabled:opacity-60',
                 primary
                     ? 'border-primary bg-accent text-accent-foreground'
                     : 'border-rule enabled:hover:bg-muted',

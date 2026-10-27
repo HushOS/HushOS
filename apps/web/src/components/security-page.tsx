@@ -98,7 +98,7 @@ export function Contents({ items }: { items: Items }) {
                 aria-current={current === id ? 'location' : undefined}
                 className={cn(
                     spacing,
-                    'rounded-xs leading-snug outline-none focus-visible:outline-2 focus-visible:outline-ring',
+                    'rounded-xs leading-snug outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring',
                     current === id
                         ? 'font-bold text-foreground'
                         : 'text-muted-foreground hover:text-foreground',
@@ -111,7 +111,7 @@ export function Contents({ items }: { items: Items }) {
     return (
         <>
             <details className="group mb-10 border-y border-rule lg:hidden">
-                <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-4 text-[15px] font-bold outline-none focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
+                <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-4 text-[15px] font-bold outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
                     On this page
                     <ChevronDownIcon
                         className="size-5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180"
@@ -276,7 +276,7 @@ export function Section({
 export function Exact({ open = false, children }: { open?: boolean; children: ReactNode }) {
     return (
         <details open={open} className="group mt-5">
-            <summary className="flex min-h-9 w-fit cursor-pointer list-none items-center gap-1.5 rounded-xs text-[15px] font-semibold text-primary outline-none focus-visible:outline-2 focus-visible:outline-ring pointer-coarse:min-h-11 [&::-webkit-details-marker]:hidden">
+            <summary className="flex min-h-9 w-fit cursor-pointer list-none items-center gap-1.5 rounded-xs text-[15px] font-semibold text-primary outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring pointer-coarse:min-h-11 [&::-webkit-details-marker]:hidden">
                 <span className="group-open:hidden">The exact terms</span>
                 <span className="hidden group-open:inline">Hide the exact terms</span>
                 <ChevronDownIcon

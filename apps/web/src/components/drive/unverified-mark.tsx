@@ -211,8 +211,8 @@ export function UnverifiedMark({
                     onDoubleClick={(event) => event.stopPropagation()}
                     className={cn(
                         variant === 'icon'
-                            ? 'relative inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-warning outline-none transition-colors after:absolute after:-inset-2.5 hover:bg-warning-soft focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring data-popup-open:bg-warning-soft'
-                            : 'eyebrow inline-flex h-5 shrink-0 cursor-pointer items-center rounded-xs border border-transparent bg-warning-soft px-1.5 whitespace-nowrap text-warning outline-none transition-colors hover:border-warning/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring data-popup-open:border-warning/40',
+                            ? 'relative inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-warning outline-none transition-colors after:absolute after:-inset-2.5 hover:bg-warning-soft focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring data-popup-open:bg-warning-soft'
+                            : 'eyebrow inline-flex h-5 shrink-0 cursor-pointer items-center rounded-xs border border-transparent bg-warning-soft px-1.5 whitespace-nowrap text-warning outline-none transition-colors hover:border-warning/40 focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring data-popup-open:border-warning/40',
                         // A key conflict is worse than Unverified: the danger colour, as its words say.
                         worst === 'key-conflict' &&
                             (variant === 'icon'
