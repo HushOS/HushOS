@@ -1,0 +1,25 @@
+e2e/drive.spec.ts
+  s_566b8e0c4467a4::t_95d247eeff245c 603-611
+  s_566b8e0c4467a4::t_14f33f4c28fe54 542-544,575-577,581,583,612-625
+apps/web/src/components/drive/preview.tsx
+  s_566b8e0c4467a4::t_27b1f58492862b 85-88,90-93,96-100,102-112
+  s_566b8e0c4467a4::t_84d13362ad7c12 147-148
+  s_566b8e0c4467a4::t_030183a60d57ad 94-95
+  s_566b8e0c4467a4::t_81209d4d83dead 101
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "235e9275d3d3254243d6f0c886410e2e61c26701",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
