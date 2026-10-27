@@ -19,6 +19,8 @@ const buttonVariants = cva(
                     'border-destructive bg-destructive text-destructive-foreground hover:bg-[color-mix(in_oklch,var(--destructive),var(--ink)_10%)] focus-visible:outline-destructive',
                 'destructive-outline':
                     'border-destructive/35 bg-transparent text-destructive hover:bg-destructive-soft focus-visible:outline-destructive',
+                'destructive-ghost':
+                    'border-transparent bg-transparent text-destructive hover:bg-destructive-soft focus-visible:outline-destructive',
                 link: 'h-auto rounded-none border-transparent px-0 font-normal text-primary underline decoration-1 underline-offset-4 hover:text-primary-hover',
             },
             size: {

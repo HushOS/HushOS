@@ -31,8 +31,8 @@ import { areaClient, FamilySpaceProvider, pruneAreas, type FamilySpace } from '@
  * walk has not reached wait in the queue and go once it has.
  *
  * The family's pages (/app/s/<family>) sit inside it, and so does the family
- * folders' section of Trash (/app/trash), which lists their Trash beside My
- * files' (docs/families-shared-pool.md 7.1).
+ * folders' tab of Trash (/app/trash?view=family), beside My files' tab
+ * (docs/families-shared-pool.md 7.1).
  */
 const KEY_CHANGE_POLL_MS = 15_000;
 const ROUTE_2_POLL_MS = 30_000;
