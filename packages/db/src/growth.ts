@@ -1,4 +1,4 @@
-import { and, count, desc, eq, isNull, or, sql, sum } from 'drizzle-orm';
+import { and, count, desc, eq, isNull, ne, or, sql, sum } from 'drizzle-orm';
 import { db } from './client';
 import {
     accountIntents,
@@ -292,6 +292,7 @@ export type AffiliateInput = {
     durationMonths: number | null;
     commissionBps: number;
     userId: string | null;
+    pendingEmail?: string | null;
     notes: string | null;
 };
 
@@ -363,18 +364,45 @@ export async function getAffiliateBySlug(slug: string) {
  * Any affiliate, paused or not, whose slug or code this is. The offer page
  * asks before falling back to the provider's discount codes, so pausing a
  * creator takes their page down instead of leaving it up under their code.
+ * `except` leaves one affiliate out, in the query itself: a handle can be one
+ * affiliate's slug and another's code, and the row left out must not hide the other.
  */
-export async function findAffiliateByHandle(handle: string) {
+export async function findAffiliateByHandle(handle: string, except?: string) {
     const [row] = await db
         .select()
         .from(affiliates)
         .where(
-            or(
-                eq(affiliates.slug, normalizeSlug(handle)),
-                eq(affiliates.code, normalizeAffiliateCode(handle)),
+            and(
+                or(
+                    eq(affiliates.slug, normalizeSlug(handle)),
+                    eq(affiliates.code, normalizeAffiliateCode(handle)),
+                ),
+                except ? ne(affiliates.id, except) : undefined,
             ),
-        );
+        )
+        .limit(1);
     return row ?? null;
+}
+
+/*
+ * A new account whose email an operator gave a creator before it existed:
+ * link every such creator to it. The email is the one the account verified
+ * before it was created, so only the address's owner can take the link.
+ */
+export async function linkPendingAffiliates(userId: string) {
+    const rows = await db
+        .update(affiliates)
+        .set({ userId, pendingEmail: null, updatedAt: new Date() })
+        .from(users)
+        .where(
+            and(
+                eq(users.id, userId),
+                eq(affiliates.pendingEmail, users.normalizedEmail),
+                isNull(affiliates.userId),
+            ),
+        )
+        .returning({ id: affiliates.id });
+    return rows.length;
 }
 
 export async function getAffiliateForUser(userId: string) {

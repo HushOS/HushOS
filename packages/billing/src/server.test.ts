@@ -2169,6 +2169,136 @@ describe('affiliates', () => {
         expect(polar.calls.filter((call) => call.startsWith('discounts.update'))).toEqual([]);
     });
 
+    test('the form’s live check answers by the rule saving applies: slug and code are one handle', async () => {
+        const first = await creator();
+        await growth.createAffiliate({
+            name: 'Other',
+            slug: 'other',
+            code: 'OTHER10',
+            percentOff: 10,
+            duration: 'once',
+            commissionBps: 0,
+        });
+        // Taken as a slug or a code, in any case, whichever field it is typed into.
+        expect(await growth.isHandleFree('creator')).toBe(false);
+        expect(await growth.isHandleFree('CREATOR')).toBe(false);
+        expect(await growth.isHandleFree('creator25')).toBe(false);
+        expect(await growth.isHandleFree(' Creator25 ')).toBe(false);
+        expect(await growth.isHandleFree('other10')).toBe(false);
+        expect(await growth.isHandleFree('nobody')).toBe(true);
+        // Editing: the affiliate's own slug and code are free to it, nobody else's are.
+        expect(await growth.isHandleFree('creator', first.id)).toBe(true);
+        expect(await growth.isHandleFree('CREATOR25', first.id)).toBe(true);
+        expect(await growth.isHandleFree('other', first.id)).toBe(false);
+        expect(await growth.isHandleFree('OTHER10', first.id)).toBe(false);
+    });
+
+    test('a handle that is the edited affiliate’s own slug and another’s code is taken', async () => {
+        // Enrolment refuses this pair now; rows made before it checked can still hold it.
+        const ada = await growthRepository.createAffiliate({
+            name: 'Ada',
+            slug: 'ada',
+            code: 'ADA20',
+            percentOff: 20,
+            duration: 'forever',
+            durationMonths: null,
+            commissionBps: 0,
+            userId: null,
+            pendingEmail: null,
+            notes: null,
+            providerDiscountId: null,
+        });
+        await growthRepository.createAffiliate({
+            name: 'Not Ada',
+            slug: 'notada',
+            code: 'ADA',
+            percentOff: 20,
+            duration: 'forever',
+            durationMonths: null,
+            commissionBps: 0,
+            userId: null,
+            pendingEmail: null,
+            notes: null,
+            providerDiscountId: null,
+        });
+        // Ada's own row matches too; it must not hide the code that is someone else's.
+        expect(await growth.isHandleFree('ada', ada.id)).toBe(false);
+        await expect(growth.updateAffiliate(ada.id, { code: 'ada' })).rejects.toThrow(
+            'That code belongs to another affiliate.',
+        );
+    });
+
+    test('enrolling refuses a slug or code another affiliate holds, before Polar is asked', async () => {
+        await creator();
+        polar.calls = [];
+        await expect(
+            growth.createAffiliate({
+                name: 'Copycat',
+                slug: 'creator25',
+                code: 'COPY10',
+                percentOff: 10,
+                duration: 'once',
+                commissionBps: 0,
+            }),
+        ).rejects.toThrow('That slug belongs to another affiliate.');
+        await expect(
+            growth.createAffiliate({
+                name: 'Copycat',
+                slug: 'copycat',
+                code: 'creator',
+                percentOff: 10,
+                duration: 'once',
+                commissionBps: 0,
+            }),
+        ).rejects.toThrow('That code belongs to another affiliate.');
+        // No discount left behind at Polar for a creator who was never enrolled.
+        expect(polar.calls.filter((call) => call.startsWith('discounts.create'))).toEqual([]);
+        expect(polar.discounts).toHaveLength(1);
+        expect(await growth.listAffiliates()).toHaveLength(1);
+    });
+
+    test('an email with no account yet is kept, and linked when an account with it signs up', async () => {
+        const affiliate = await growth.createAffiliate({
+            name: 'Later',
+            slug: 'later',
+            code: 'LATER10',
+            percentOff: 10,
+            duration: 'forever',
+            commissionBps: 1000,
+            userEmail: ' Later@HushOS.test ',
+        });
+        expect(affiliate).toMatchObject({ userId: null, pendingEmail: 'later@hushos.test' });
+        // Someone else signing up takes nothing.
+        const stranger = await createTestAccount();
+        expect(await growth.linkNewAccount(stranger.userId)).toBe(0);
+        expect((await growth.getReferralSummary(stranger.userId)).affiliate).toBeNull();
+        const later = await createTestAccount({ email: 'later@hushos.test' });
+        expect(await growth.linkNewAccount(later.userId)).toBe(1);
+        expect((await growth.listAffiliates())[0]).toMatchObject({
+            userId: later.userId,
+            pendingEmail: null,
+        });
+        expect((await growth.getReferralSummary(later.userId)).affiliate?.id).toBe(affiliate.id);
+        // Linked once: signing up is not a second claim, and the link is not moved.
+        expect(await growth.linkNewAccount(later.userId)).toBe(0);
+    });
+
+    test('editing the account: an existing email links at once, an unknown one replaces the link with a pending one, none keeps it', async () => {
+        const owner = await createTestAccount({ email: 'owner@hushos.test' });
+        const affiliate = await creator();
+        expect(
+            await growth.updateAffiliate(affiliate.id, { userEmail: 'OWNER@hushos.test' }),
+        ).toMatchObject({ userId: owner.userId, pendingEmail: null });
+        // A patch without the email (the form left empty) keeps the linked account.
+        expect(await growth.updateAffiliate(affiliate.id, { notes: 'Paid monthly' })).toMatchObject(
+            { userId: owner.userId, pendingEmail: null },
+        );
+        const moved = await growth.updateAffiliate(affiliate.id, { userEmail: 'new@hushos.test' });
+        expect(moved).toMatchObject({ userId: null, pendingEmail: 'new@hushos.test' });
+        // The old account no longer sees the creator's earnings.
+        expect((await growth.getReferralSummary(owner.userId)).affiliate).toBeNull();
+    });
+
     test('removing an affiliate deletes the discount at Polar, and waits while commission is owed', async () => {
         const affiliate = await creator();
         const fan = await createTestAccount();

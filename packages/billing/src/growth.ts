@@ -84,6 +84,7 @@ async function view(row: Awaited<ReturnType<typeof growthRepository.getAffiliate
         commissionBps: row.commissionBps,
         active: row.active,
         userId: row.userId,
+        pendingEmail: row.pendingEmail,
         notes: row.notes,
         providerDiscountId: row.providerDiscountId,
         createdAt: row.createdAt.toISOString(),
@@ -226,6 +227,7 @@ export async function listAffiliates() {
         commissionBps: row.commissionBps,
         active: row.active,
         userId: row.userId,
+        pendingEmail: row.pendingEmail,
         notes: row.notes,
         providerDiscountId: row.providerDiscountId,
         createdAt: row.createdAt.toISOString(),
@@ -233,11 +235,21 @@ export async function listAffiliates() {
     })) satisfies AffiliateView[];
 }
 
-async function userIdForEmail(email: string | null | undefined) {
-    if (!email) return null;
-    const userId = await growthRepository.findUserIdByEmail(email.trim().toLowerCase());
-    if (!userId) throw new BillingError('No account has that email address.', 404);
-    return userId;
+/*
+ * The creator's account, from the email an operator gave: linked now when an
+ * account has it, else kept as pending and linked when that account signs up.
+ * The caller has checked the address's form (the API uses the auth rule).
+ */
+async function accountForEmail(email: string | null | undefined) {
+    const normalized = email?.trim().toLowerCase();
+    if (!normalized) return { userId: null, pendingEmail: null };
+    const userId = await growthRepository.findUserIdByEmail(normalized);
+    return userId ? { userId, pendingEmail: null } : { userId: null, pendingEmail: normalized };
+}
+
+/* A new account: any creator an operator gave its email before it existed is now theirs. */
+export async function linkNewAccount(userId: string) {
+    return growthRepository.linkPendingAffiliates(userId);
 }
 
 function validate(input: AffiliateInput) {
@@ -275,7 +287,10 @@ function validate(input: AffiliateInput) {
  */
 export async function createAffiliate(input: AffiliateInput) {
     const { name, slug, code, durationMonths } = validate(input);
-    const userId = await userIdForEmail(input.userEmail);
+    // Before the provider: a refused handle must not leave a discount behind at Polar.
+    await assertHandleFree(slug, undefined, 'slug');
+    await assertHandleFree(code, undefined, 'code');
+    const account = await accountForEmail(input.userEmail);
     const providerDiscountId = await createProviderDiscount({
         name: `${name} (${code})`,
         code,
@@ -291,17 +306,25 @@ export async function createAffiliate(input: AffiliateInput) {
         duration: input.duration,
         durationMonths,
         commissionBps: input.commissionBps,
-        userId,
+        ...account,
         notes: input.notes?.trim() || null,
         providerDiscountId,
     });
     return view(row);
 }
 
-/* A slug or code is one handle: the offer page resolves either, so neither may be another affiliate's. */
-async function assertHandleFree(handle: string, id: string, what: 'slug' | 'code') {
-    const taken = await growthRepository.findAffiliateByHandle(handle);
-    if (taken && taken.id !== id)
+/*
+ * A slug or code is one handle: the offer page resolves either, so neither may
+ * be another affiliate's slug or code. `except` is the affiliate being edited,
+ * whose own handles are free to it. The admin form asks this as the operator
+ * types; saving asks again, and that answer is the one that counts.
+ */
+export async function isHandleFree(handle: string, except?: string) {
+    return !(await growthRepository.findAffiliateByHandle(handle, except));
+}
+
+async function assertHandleFree(handle: string, except: string | undefined, what: 'slug' | 'code') {
+    if (!(await isHandleFree(handle, except)))
         throw new BillingError(`That ${what} belongs to another affiliate.`);
 }
 
@@ -343,7 +366,8 @@ export async function updateAffiliate(
         commissionBps: merged.commissionBps,
     };
     if (patch.notes !== undefined) changes.notes = patch.notes?.trim() || null;
-    if (patch.userEmail !== undefined) changes.userId = await userIdForEmail(patch.userEmail);
+    if (patch.userEmail !== undefined)
+        Object.assign(changes, await accountForEmail(patch.userEmail));
     if (patch.active !== undefined) changes.active = patch.active;
     const termsChanged =
         name !== row.name ||
