@@ -1,0 +1,163 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_115e4ae412db2c 298,338,433,450,462,472-473,479-480,482-484,493-495,501-502,519
+apps/web/src/components/app-sidebar.tsx
+  s_566b8e0c4467a4::t_9dcb3bf0d178ea 184
+apps/web/src/components/drive/area-notice.tsx
+  s_566b8e0c4467a4::t_db5c8385cbab6f 49-51
+apps/web/src/components/drive/check-contact.test.tsx
+  s_566b8e0c4467a4::t_dfcdb59259860c 81-83
+apps/web/src/components/drive/check-contact.tsx
+  s_566b8e0c4467a4::t_999b8f0146452a 5,53-57,74,127-141
+apps/web/src/components/drive/move-dialog.tsx
+  s_566b8e0c4467a4::t_57b9e98759ff74 345
+apps/web/src/components/drive/preview.tsx
+  s_566b8e0c4467a4::t_4287455f5ba5df 86-89,91-113,148-149
+apps/web/src/components/drive/rich-text.css
+  s_566b8e0c4467a4::t_3e095482c37670 100-105,107,109,247,249,258-259,261-269,273-276,279,284,295-299,302,312,316-318
+apps/web/src/components/drive/rich-text.tsx
+  s_566b8e0c4467a4::t_d58e7f74848c64 12,69-84,143,148
+apps/web/src/components/drive/trash-view.tsx
+  s_566b8e0c4467a4::t_c8a6f67dc1dfda 7,161,163-167,477-479,489,507,511,882
+apps/web/src/components/drive/trust-as-family.tsx
+  s_566b8e0c4467a4::t_a683015c0cdc19 9,46-47,74
+apps/web/src/components/families/delete-folder-dialog.tsx
+  s_566b8e0c4467a4::t_e7833044738b88 58
+apps/web/src/components/families/family-alerts.tsx
+  s_566b8e0c4467a4::t_1ce0cd7d47451d 22,36
+apps/web/src/components/families/family-billing.tsx
+  s_566b8e0c4467a4::t_e821d42269ddce 2-9,14-15,17,29-36,110,120-130,137-144,161,163-172,186-201,203-218,220-247,316-317,324-325,335,337,340-341,358-360,362-365,370,372-376,379,447,464,467,471,479,481,486,494,499-500,507,511,530-531,534,537-538,543,550-551,556-563,571,573,593,595,598-599,632,640,736,744,750,870,904,922-941,960-966,968-979,998-1001,1004-1008,1010-1055,1103-1123,1127,1156-1295,1492,1532-1533,1690,1712-1715,1741-1742,1878-1882,1885
+apps/web/src/components/families/family-page.tsx
+  s_566b8e0c4467a4::t_16326c0b684d64 10,16,132-133,186-192,218-290,304-358,362-363,365,367-422,429-437,439-451,453-461,463-465,467-475
+apps/web/src/components/families/family-space.tsx
+  s_566b8e0c4467a4::t_2aad92689066f6 34-35
+apps/web/src/components/families/family-trash.tsx
+  s_566b8e0c4467a4::t_98285a81a9b26e 4-6,8-10,22-37,44-48,50-55,58,60-63,72-76,80-89,91-117,131-134,157-161,175-232,234-254,264-268,270-271,273,275-280,282-348,350-365,367-435,437-460,471
+apps/web/src/components/families/key-changes.tsx
+  s_566b8e0c4467a4::t_58e07a3afed289 44
+apps/web/src/components/families/let-in-dialog.tsx
+  s_566b8e0c4467a4::t_6d355272b3e759 234,245,276,492-496
+apps/web/src/components/families/members.tsx
+  s_566b8e0c4467a4::t_98a4d7b48b2d5b 8,65,68-70,81,90,92-93,107,112-115,338-339,484,516,650-652
+apps/web/src/components/families/new-folder-dialog.tsx
+  s_566b8e0c4467a4::t_2282d2080a71d6 56
+apps/web/src/components/families/rename-dialog.tsx
+  s_566b8e0c4467a4::t_5730e79764a7e1 1-119
+apps/web/src/components/page-header.tsx
+  s_566b8e0c4467a4::t_7d4c80be229b1a 7,12,18,26-31
+apps/web/src/components/person-avatar.tsx
+  s_566b8e0c4467a4::t_9d15f8cd9de22a 2,18-23
+apps/web/src/components/portal-link.tsx
+  s_566b8e0c4467a4::t_4fe61c74cd4efb 1-43
+apps/web/src/components/settings.tsx
+  s_566b8e0c4467a4::t_faecaa67ea6392 49,55-56,59
+apps/web/src/components/storage-card.tsx
+  s_566b8e0c4467a4::t_54f2fff67cdf43 147
+apps/web/src/components/ui/button.tsx
+  s_566b8e0c4467a4::t_f2baa501800f79 27-28
+apps/web/src/components/user-menu.tsx
+  s_566b8e0c4467a4::t_04ca73590d352c 20,95
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_d5186bbf7f7608 1292-1303
+apps/web/src/lib/billing-api.ts
+  s_566b8e0c4467a4::t_c22e2fcfa4c371 27-28
+apps/web/src/lib/family-billing.test.ts
+  s_566b8e0c4467a4::t_83f89af1dfa27a 185,193-196,204,214,643,652,665,682,695
+apps/web/src/lib/family-billing.ts
+  s_566b8e0c4467a4::t_497926a97cb45c 130-131,410,412,414-415,427,433,473
+apps/web/src/lib/family-pin.test.ts
+  s_566b8e0c4467a4::t_2d7d18e22454a5 76,78
+apps/web/src/lib/family-pin.ts
+  s_566b8e0c4467a4::t_ff90b7b17841d9 18,21,27-29
+apps/web/src/lib/family-trash.test.ts
+  s_566b8e0c4467a4::t_e9f7ca772e3383 1-129
+apps/web/src/lib/family-trash.ts
+  s_566b8e0c4467a4::t_2b27eb962c517a 1-154
+apps/web/src/lib/groups/copy.test.ts
+  s_566b8e0c4467a4::t_18dded8c0a77e0 2,33-41
+apps/web/src/lib/groups/copy.ts
+  s_566b8e0c4467a4::t_c2357ec7ee0397 92,98,102,104-107,114,116,118,133-134,139,159-160,288,311,314,316-317
+apps/web/src/lib/groups/removal.ts
+  s_566b8e0c4467a4::t_c1c9bbb34e4b4c 68
+apps/web/src/lib/initials.test.ts
+  s_566b8e0c4467a4::t_8b5665d37768b0 1-43
+apps/web/src/lib/initials.ts
+  s_566b8e0c4467a4::t_0733049b031f3b 1-31
+apps/web/src/lib/integrity-lines.test.ts
+  s_566b8e0c4467a4::t_b8a94e08c7d0c0 186,238
+apps/web/src/lib/pricing-faq.ts
+  s_566b8e0c4467a4::t_77d95d54b1de68 91
+apps/web/src/routes/_authenticated/app/_drive/families/$groupId/join.tsx
+  s_566b8e0c4467a4::t_a60ff2a5467d90 234,313
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/f.$folderId.tsx
+  s_566b8e0c4467a4::t_36861b3e8c179f 87
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/index.tsx
+  s_566b8e0c4467a4::t_4e1666617ff843 63
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/trash.tsx
+  s_566b8e0c4467a4::t_36854bd82e4935 4-5,8
+apps/web/src/routes/_authenticated/app/_drive/trash.tsx
+  s_566b8e0c4467a4::t_8a48ee9717202a 1-4,6,9-10,14-15,21-25,29-30,34-70,72-89
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_566b8e0c4467a4::t_086c804924fb00 4,472,478-479,481-482,560,562,565,570-572,574-575,593-594
+apps/web/src/routes/join/route.tsx
+  s_566b8e0c4467a4::t_a91431d43880b4 272-273
+docs/groups-design.md
+  s_566b8e0c4467a4::t_153ea04dae25fe 354
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_6ce3d55220bfb7 66-82,86
+e2e/contacts.spec.ts
+  s_566b8e0c4467a4::t_6a19f63ec81d92 84-90,93-96
+e2e/drive.spec.ts
+  s_566b8e0c4467a4::t_8c06269e6d3cf0 484-485,543-636
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_83caf183b90539 92-100,459,464,469,893,1050,1199,1220,1427-1428,1482,1524-1526,1531,1538-1544,1597,1602,1605-1606,1617,1646,1648,1650-1651,1654,1690-1694,1698,1713-1715,1717-1721,2053,2269,2275,2296,2354,2362,2364-2370,2852-2858,2861-2868,2870-2911,2913-2935,2938-3005
+e2e/integrity.spec.ts
+  s_566b8e0c4467a4::t_344321f0f5292b 359-361,363-376,382-384,386-387
+packages/auth/src/server.ts
+  s_566b8e0c4467a4::t_41d014a8339aca 1882,1941-1952
+packages/billing/src/api.ts
+  s_566b8e0c4467a4::t_0ace5590cf60b2 352-357
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_5127c9577a6b3c 39,474-476,479,809-827,850-852,901,927,946-955,1082,1087,1100-1105,1116,1902,1949,1963-1964,1967-1968,2143-2232,2643,2648,2726,2853,2863,2876,2895
+packages/billing/src/provider.ts
+  s_566b8e0c4467a4::t_738e94df4a876b 70
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_ff003ae96b699c 2,980-988,990,994,999-1004,4038,4055,4368,5753-6095,8558
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_2b48251c51c903 61,82,167,741
+packages/db/src/auth.ts
+  s_566b8e0c4467a4::t_78f9138555282f 1094,1096-1098,1104-1107,1113-1114
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_09a8fac55916e6 859-912,958-963,976-979
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_f18074d2f9f989 317-324,1520-1526,1904-1908,1935-1969,1995-1996,2167-2170,2194-2196
+packages/emails/scripts/render.tsx
+  s_566b8e0c4467a4::t_89d978b161ba27 188,194-208,212,215
+packages/emails/src/rendered/family-plan-ending.ts
+  s_566b8e0c4467a4::t_a55db15ded7bd1 3-10
+packages/emails/src/service.ts
+  s_566b8e0c4467a4::t_02754040552812 269-271,275-280,286-289
+packages/emails/src/templates/family-plan-ending.tsx
+  s_566b8e0c4467a4::t_f286e9ee52d677 16-18,39,44-45,53-54,57,178-180,248-250
+packages/groups/src/protocol.ts
+  s_566b8e0c4467a4::t_930e7ad6e2f8ee 17-18
+packages/groups/src/server.billing.test.ts
+  s_566b8e0c4467a4::t_de556da4d611e7 1,210-218,895,922,962,995-996,998,1237-1365
+packages/groups/src/server.ts
+  s_566b8e0c4467a4::t_a332dfa94dd69a 779-790,895-899,1933,2001,2274,2277-2281
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "803facf29b1c4bcbe2cf8b720626066e7ee0bd72",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
