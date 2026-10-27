@@ -3175,6 +3175,32 @@ describe('family places', () => {
         expect(subscription).toMatchObject({ units: 10, pending_update: { units: 8 } });
     });
 
+    test('a stale raise below the members another tab has since let in is told the total moved', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 6 });
+        // Tab A quoted six to eight; tab B raised to ten and let in nine members in all.
+        subscription.units = 10;
+        await billing.reconcileGroup(groupId);
+        for (let count = 1; count < 9; count++)
+            await setTestMember({
+                groupId,
+                userId: (await createTestAccount()).userId,
+                state: 'active',
+            });
+        polar.calls = [];
+        // Eight is below the nine members, but what A needs to hear is that the total moved.
+        await expect(billing.setGroupUnits(payer, groupId, 8, 6)).rejects.toMatchObject({
+            status: 409,
+            message:
+                'Your family’s places changed a moment ago. Check the new total and try again.',
+        });
+        expect(polar.calls.filter((call) => call.startsWith('subscriptions.update'))).toEqual([]);
+        expect(subscription.pending_update ?? null).toBeNull();
+        // A cut below the members, asked as a cut, is still refused for that.
+        await expect(billing.setGroupUnits(payer, groupId, 8)).rejects.toMatchObject({
+            status: 400,
+        });
+    });
+
     test('an admission gets a place only from the payer, and only on a 200', async () => {
         const { payer, groupId, subscription, others } = await familyOnPlan({
             units: 6,

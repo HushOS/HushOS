@@ -2418,6 +2418,10 @@ export async function setGroupUnits(
     await requirePayer(groupId, user.id);
     const live = await billingRepository.getLiveGroupSubscription(groupId);
     if (!live) throw new BillingError('This family has no plan.', 404);
+    // A raise counted from a total the family no longer has is refused before anything else:
+    // never re-aimed, never read as a cut because another tab has since passed it, and never
+    // told it is below members that tab has since let in.
+    if (from !== undefined && units > from && live.units !== from) throw await placesMoved(groupId);
     const used = await groupsRepository.seatsUsed(groupId);
     const floor = Math.max(live.includedMembers, used);
     if (units < floor)
@@ -2425,9 +2429,6 @@ export async function setGroupUnits(
             'A family cannot have fewer places than its members, or than its plan includes.',
             400,
         );
-    // A raise counted from a total the family no longer has is refused before anything else:
-    // never re-aimed, and never read as a cut because another tab has since passed it.
-    if (from !== undefined && units > from && live.units !== from) throw await placesMoved(groupId);
     if (units < live.units) {
         // A plan HushOS cannot read is never changed blind.
         if (!(await planOf(live.productId))) throw unresolvedPlan();
