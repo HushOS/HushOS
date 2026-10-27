@@ -2154,12 +2154,13 @@ export async function resumeGroupPlan(user: BillingUser, groupId: string) {
 /*
  * Under the family's one plan-change claim, as raises, upgrades and the dissolve job are, so a
  * cancel never crosses a raise nor a resume the dissolve job's cancel. `recheck` runs first
- * under the claim, for what may have changed since the caller looked. A payer's departure
- * takes the plan's rows FOR UPDATE and refuses while the claim is held (payerChangeInFlight),
- * so the claim and a departure are ordered one way or the other: a departure first is seen by
- * `recheck`; one during the Polar call is refused. The group's lock is never taken across the
- * call: its error path reconciles, which takes that lock. Polar's 409 `SubscriptionLocked`
- * (the bank still holds a charge) is the same "in progress" answer.
+ * under the claim, for what may have changed since the caller looked, and the mirror is written
+ * (reconcile) before the claim goes. A payer's departure takes the plan's rows FOR UPDATE and
+ * refuses while the claim is held or while the plan renews (payerHold), so the two are ordered
+ * one way or the other: a departure first is seen by `recheck`; one during the change is
+ * refused as busy; one after it sees the plan renewing. The group's lock is never taken across
+ * the call: reconcile takes that lock. Polar's 409 `SubscriptionLocked` (the bank still holds a
+ * charge) is the same "in progress" answer.
  */
 async function setGroupPlanEnding(
     groupId: string,
@@ -2183,9 +2184,12 @@ async function setGroupPlanEnding(
                     throw new BillingError(BUSY, 409, { cause: error });
                 throw unavailable(error);
             }
+            // Written while the claim is still held: a payer's departure, refused while it is,
+            // then sees the plan as Polar now holds it (renewing after a resume), never a mirror
+            // that hasn't caught up.
+            await reconcileGroup(groupId);
         },
     );
-    await reconcileGroup(groupId);
 }
 
 /*

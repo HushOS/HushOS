@@ -6,7 +6,7 @@ import { toast } from '@/components/ui/toast';
 import { capabilitiesQueryOptions } from '@/lib/families-shell';
 
 /*
- * "Trust as Lindqvist family does", in the Unverified popover of an item
+ * "Trust through the member list of Lindqvist family", in the Unverified popover of an item
  * outside a family's folders (design 2.8, F12): a writer nobody checked who
  * is active in one of this person's families gets a pin written from the
  * family's member list, marked as the family's word (`trustedVia`). Only on
@@ -43,7 +43,7 @@ export function TrustAsFamily({
             await trustAsFamily(queryClient, userId, found);
             toast.add({
                 type: 'success',
-                title: `${found.name} (${found.email}) is trusted as ${found.family} does`,
+                title: `${found.name} (${found.email}) is trusted through the member list of ${found.family}`,
                 description: `The member list of ${found.family} vouches for these keys. Compare words with them in Contacts to check it yourself.`,
             });
         } catch (cause) {
@@ -71,7 +71,7 @@ export function TrustAsFamily({
                     void trust();
                 }}
             >
-                {busy ? 'Trusting…' : `Trust as ${found.family} does`}
+                {busy ? 'Trusting…' : `Trust through the member list of ${found.family}`}
             </Button>
         </div>
     );

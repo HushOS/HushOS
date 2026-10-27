@@ -242,7 +242,7 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
                         cue('success');
                         await showCode(
                             attempt > 0
-                                ? `${family} changed while you were letting ${first} in, so HushOS signed it again.`
+                                ? `The member list of ${family} changed while you were letting ${first} in, so HushOS signed it again.`
                                 : '',
                         );
                         return;

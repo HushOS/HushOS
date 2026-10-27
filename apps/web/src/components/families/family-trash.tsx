@@ -42,16 +42,17 @@ type Row = TrashItem & { workspaceId: string; folder: string };
 
 /*
  * The family folders' Trash, every folder's together, newest first, and whether a folder this
- * device couldn't open was left out: shared by the tab and its prefetch. The folders opened
- * here are part of the key, so the list is read again when one opens.
+ * device couldn't open was left out: shared by the tab and its prefetch. Every folder and
+ * whether it opened here are part of the key, so the list is read again when one opens, or
+ * when a folder this device can't open is added (else a stale "nothing left out" would call
+ * the Trash empty).
  */
 function familyTrashQueryOptions(space: ReturnType<typeof useFamilySpace>) {
-    const opened = space.areas
-        .filter((state) => state.opened && state.view.root)
-        .map((state) => state.workspaceId)
+    const areas = space.areas
+        .map((state) => `${state.workspaceId}:${state.opened && state.view.root ? 1 : 0}`)
         .sort();
     return {
-        queryKey: [...driveKeys.trash, 'family', space.groupId, ...opened],
+        queryKey: [...driveKeys.trash, 'family', space.groupId, ...areas],
         queryFn: async () => {
             const rows: Row[] = [];
             let unopened = false;

@@ -1939,6 +1939,12 @@ export async function finishAccountDeletion(
     if (deleted === 'unavailable')
         throw new AuthError(`${stopped} account could not be deleted just now. Try again.`, 503);
     // A change to the family plan they pay for was under way: the departure waits for it.
+    // They became the payer of a renewing family plan after billing was checked (a resume landed).
+    if (deleted === 'pays')
+        throw new AuthError(
+            `${stopped} account was not deleted: you pay for a family plan. Hand its billing to another member, or cancel the family plan under Billing on the family’s page at hushos.com, then delete your account.`,
+            409,
+        );
     if (deleted === 'busy')
         throw new AuthError(
             `${stopped} account was not deleted: another change to your family’s plan is in progress. Try again in a moment.`,

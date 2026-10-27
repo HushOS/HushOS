@@ -894,6 +894,9 @@ function chainAnswer(result: groupsRepository.ChainResult): Head & { replayed: b
             throw notMember();
         case 'busy':
             throw planBusy();
+        // Removing the payer of a plan that renews (asked again under the plan's lock).
+        case 'pays':
+            throw paysForPlan();
         case 'unavailable':
             throw unavailable();
         case 'invalid':
@@ -2273,6 +2276,9 @@ async function leaveAnswer(result: groupsRepository.LeaveResult, groupId?: strin
             );
         case 'busy':
             throw planBusy();
+        // The leaver pays for a plan that renews (the route's precheck, asked again under the lock).
+        case 'pays':
+            throw youPay();
         case 'unavailable':
             throw unavailable();
     }

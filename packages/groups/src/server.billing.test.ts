@@ -1,3 +1,4 @@
+import type * as HushosDb from '@hushos/db';
 import type * as PolarSdk from '@polar-sh/sdk/2026-10';
 import type { Member } from '../test/kit';
 import { createHash, randomBytes } from 'node:crypto';
@@ -204,6 +205,15 @@ const fakeClient = {
 vi.mock('@polar-sh/sdk/2026-10', async (importOriginal) => {
     const real = await importOriginal<typeof PolarSdk>();
     return { ...real, createPolar: () => fakeClient };
+});
+
+/*
+ * The repositories as they are, but as plain objects, so a test can make one call do something
+ * first (a resume landing just before a departure's write). Nothing else differs.
+ */
+vi.mock('@hushos/db', async (importOriginal) => {
+    const real = await importOriginal<typeof HushosDb>();
+    return { ...real, groupsRepository: { ...real.groupsRepository } };
 });
 
 const { groupsRepository, billingRepository, driveRepository, scopedId } =
@@ -982,8 +992,10 @@ describe('admission with billing on', () => {
         ).rejects.toMatchObject({
             code: 'payer',
             status: 409,
+            // The write asks again under the plan's lock: the plan runs, on their card, so they
+            // pay for it and may not leave.
             message:
-                'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page at hushos.com first, or contact support.',
+                'You pay for this family’s plan. Cancel it in Billing on the family’s page before you leave; the family keeps it until the end of the period.',
         });
         expect(await state(fam.groupId, fam.organizer.userId)).toBe('active');
         expect((await groupsRepository.getGroupRow(fam.groupId))?.dissolvedAt).toBeNull();
@@ -1250,6 +1262,95 @@ describe('admission with billing on', () => {
         await billingRepository.releasePlanChange(subscription.id, claim!);
         await groups.removeMember(fam.organizer.userId, fam.groupId, plain.userId, call);
         expect(await state(fam.groupId, plain.userId)).toBe('removed');
+    });
+
+    /*
+     * The payer of a plan set to end passes the leave's and removal's first checks; a resume then
+     * finishes, its reconcile included, before the departure's write. The write checks again
+     * under the plan's lock, so the payer of a renewing plan never goes.
+     */
+    async function endingPayerWithHolder() {
+        const fam = await kit.family();
+        const subscription = await onPlan(fam, 2);
+        const plain = await kit.member();
+        await kit.admitted(fam, plain);
+        // Another holder of both roles, with a seal of the current key: the organizer may go.
+        await setTestMember({
+            groupId: fam.groupId,
+            userId: plain.userId,
+            state: 'active',
+            roles: ['billing', 'members'],
+        });
+        const [seal] = await db
+            .select()
+            .from(groupKeySeals)
+            .where(eq(groupKeySeals.holderUserId, fam.organizer.userId));
+        await db.insert(groupKeySeals).values({ ...seal!, holderUserId: plain.userId });
+        subscription.cancel_at_period_end = true;
+        await billing.reconcileGroup(fam.groupId);
+        const payer = { id: fam.organizer.userId, name: 'Maya', email: fam.organizer.email };
+        return { fam, subscription, plain, payer };
+    }
+
+    test('a payer whose plan is resumed after their leave’s first checks doesn’t leave', async () => {
+        const { fam, subscription, payer } = await endingPayerWithHolder();
+        // Every check before the write passed; the resume lands, reconcile and all, then the write.
+        const write = groupsRepository.leaveGroup;
+        const spy = vi
+            .spyOn(groupsRepository, 'leaveGroup')
+            .mockImplementationOnce(async (...args) => {
+                await billing.resumeGroupPlan(payer, fam.groupId);
+                return write(...args);
+            });
+        try {
+            expect(await refusal(groups.leave(payer.id, fam.groupId))).toMatchObject({
+                code: 'payer',
+                status: 409,
+            });
+        } finally {
+            spy.mockRestore();
+        }
+        expect(subscription.cancel_at_period_end).toBe(false);
+        expect(await state(fam.groupId, payer.id)).toBe('active');
+    });
+
+    test('a payer whose plan is resumed after their removal’s first checks isn’t removed', async () => {
+        const fam = await kit.family();
+        const subscription = await onPlan(fam, 2);
+        const plain = await kit.member();
+        await kit.admitted(fam, plain);
+        // They pay (billing passed to them), and hold `billing`, so they may resume.
+        expect(
+            await billingRepository.setGroupPayer(fam.groupId, fam.organizer.userId, plain.userId),
+        ).toBe(true);
+        await setTestMember({
+            groupId: fam.groupId,
+            userId: plain.userId,
+            state: 'active',
+            roles: ['billing'],
+        });
+        subscription.cancel_at_period_end = true;
+        await billing.reconcileGroup(fam.groupId);
+        const payer = { id: plain.userId, name: 'Sam', email: plain.email };
+        const call = await removal(fam, [plain], []);
+        // Every check before the write passed (its rolled-back preview too); the resume lands,
+        // reconcile and all, then the write.
+        const append = groupsRepository.appendChain;
+        const spy = vi.spyOn(groupsRepository, 'appendChain').mockImplementation(async (input) => {
+            if (!input.preview) await billing.resumeGroupPlan(payer, fam.groupId);
+            return append(input);
+        });
+        try {
+            expect(
+                await refusal(
+                    groups.removeMember(fam.organizer.userId, fam.groupId, plain.userId, call),
+                ),
+            ).toMatchObject({ code: 'payer', status: 409 });
+        } finally {
+            spy.mockRestore();
+        }
+        expect(subscription.cancel_at_period_end).toBe(false);
+        expect(await state(fam.groupId, plain.userId)).toBe('active');
     });
 
     test('someone who doesn’t pay leaves while a change to the plan holds its claim', async () => {

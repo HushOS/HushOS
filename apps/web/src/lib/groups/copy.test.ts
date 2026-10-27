@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { GroupApiError } from './api';
 import { errorCopy, wrongWordsCopy } from './copy';
 
 describe('the hidden words typed wrong', () => {
@@ -26,6 +27,15 @@ describe('a request the client gave up on', () => {
         // Anything else the worker or the server said is still said as it was.
         expect(errorCopy(new Error('Open the family’s folders first, then try again.'))).toBe(
             'Open the family’s folders first, then try again.',
+        );
+    });
+});
+
+describe('a payer’s leave or removal while a change to the plan is under way', () => {
+    test('says to try again in a moment, not to reload', () => {
+        const busy = new GroupApiError('Another change…', 409, 'busy', undefined);
+        expect(errorCopy(busy, { family: 'The Lindqvists' })).toBe(
+            'Another change to this plan is in progress. Try again in a moment.',
         );
     });
 });

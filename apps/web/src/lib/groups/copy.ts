@@ -89,7 +89,7 @@ export function refusalCopy(
     data: unknown,
     ctx: CopyContext = {},
 ): string {
-    const family = ctx.family ?? 'This family';
+    const family = ctx.family ?? 'this family';
     const person = ctx.person ?? 'They';
     switch (code) {
         case 'invalid':
@@ -99,9 +99,12 @@ export function refusalCopy(
         case 'left-due':
             return leftDueCopy(data, ctx);
         case 'members-changed':
-            return `${family} changed while you were working on it. Try again.`;
+            return `The member list of ${family} changed while you were working on it. Try again.`;
         case 'stale':
-            return `${family} changed while you were working on it. Try again.`;
+            return `The member list of ${family} changed while you were working on it. Try again.`;
+        // The family's payer leaving or removed while a change to its plan holds the plan's claim.
+        case 'busy':
+            return 'Another change to this plan is in progress. Try again in a moment.';
         case 'seats': {
             // With billing on, the server says why no place could be had (docs/groups-design.md 3.5).
             switch (stringField(data, 'reason')) {
@@ -282,7 +285,7 @@ export function noticeCopy(
             const what =
                 notice.owner === null
                     ? 'your own files, in My files'
-                    : `${notice.count === 1 ? 'one' : notice.count} of ${familyOf(notice.owner) ?? 'another family'}’s folders`;
+                    : `${notice.count === 1 ? 'one' : notice.count} of the folders belonging to ${familyOf(notice.owner) ?? 'another family'}`;
             return [
                 `It names ${what}.`,
                 `HushOS ignored that, so nothing in ${them} was shared or changed.`,
