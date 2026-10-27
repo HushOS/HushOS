@@ -71,7 +71,21 @@ export function createSealedStash(options: {
      * can't reach the private file system is a failure only when it is set.
      */
     written: { set(): void; clear(): void; get(): boolean };
+    /*
+     * Runs `work` alone across this browser's tabs (a Web Lock): every wipe, and every write of
+     * the revision file all stashes share, so a commit never lands between a wipe and the next
+     * session's first stash.
+     */
+    exclusive?: <T>(work: () => Promise<T>) => Promise<T>;
 }): SealedStash {
+    let chain: Promise<unknown> = Promise.resolve();
+    const exclusive =
+        options.exclusive ??
+        (<T>(work: () => Promise<T>) => {
+            const next = chain.then(work, work);
+            chain = next.catch(() => {});
+            return next;
+        });
     // Moves on every wipe, so a write that began before one never lands after it.
     let generation = 0;
     // Set once start-up asked for the unsealed stash's folder to go, until a removal got through.
@@ -172,7 +186,15 @@ export function createSealedStash(options: {
                 }
                 await writable.close();
                 if (!current()) throw stale();
-                await remember(options.lockRevision());
+                // The revision file is every stash's, the next session's too: it is written only
+                // under the lock a wipe takes, and only while this is still the session and no
+                // wipe came since. Otherwise a stale write could set it back under another
+                // account's stashes, and their next settle would delete them.
+                await exclusive(async () => {
+                    if (!current() || generation !== started) throw stale();
+                    await remember(options.lockRevision());
+                });
+                // Ended while it committed: the wipe that follows under the lock takes the files.
                 if (!current()) throw stale();
                 return name;
             } catch {
@@ -220,10 +242,12 @@ export function createSealedStash(options: {
             for await (const name of dir.keys()) if (!keep.has(name)) names.push(name);
             for (const name of names) await dir.removeEntry(name).catch(() => {});
         },
-        forget: wipe,
+        forget: () => exclusive(wipe),
         async settle() {
-            const written = await writtenUnder();
-            if (written !== null && options.lockRevision() > written) await wipe();
+            await exclusive(async () => {
+                const written = await writtenUnder();
+                if (written !== null && options.lockRevision() > written) await wipe();
+            });
         },
         async dropPlaintext() {
             plaintextLeft = true;
@@ -268,6 +292,10 @@ const writtenMarker = {
 
 export const uploadStash = createSealedStash({
     written: writtenMarker,
+    exclusive: (work) =>
+        typeof navigator !== 'undefined' && navigator.locks?.request
+            ? (navigator.locks.request('hushos-stash', work) as ReturnType<typeof work>)
+            : work(),
     root: () => navigator.storage.getDirectory(),
     account: () => authClient.store.getState().unlockedUserId,
     lockRevision: () => authClient.store.getState().lockRevision,

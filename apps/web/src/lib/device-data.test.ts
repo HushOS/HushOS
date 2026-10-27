@@ -319,6 +319,7 @@ const NOT_STORAGE = new Set([
     'hushos-device',
     'hushos-sign-out',
     'hushos-rollback-marks',
+    'hushos-stash',
     'hushos-area-walk:',
     'hushos-group-write:',
     'hushos-recovery-kit.txt',

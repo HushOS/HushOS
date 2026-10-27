@@ -100,6 +100,7 @@ async function worker() {
 function setup(
     fs: ReturnType<typeof privateFileSystem>,
     sealer: Awaited<ReturnType<typeof worker>>,
+    exclusive?: <T>(work: () => Promise<T>) => Promise<T>,
 ) {
     const state = {
         account: 'user-1' as string | null,
@@ -122,6 +123,7 @@ function setup(
             clear: () => void (state.written = false),
             get: () => state.written,
         },
+        ...(exclusive ? { exclusive } : {}),
     });
     return { stash, state };
 }
@@ -230,6 +232,115 @@ describe('the sealed upload stash', () => {
         });
         expect(await stash.put(canary)).toBeNull();
         expect(fs.stashes()).toHaveLength(0);
+    });
+
+    it('a stash of a session that ended never sets the revision back under the next one’s stashes', async () => {
+        const fs = privateFileSystem();
+        const { stash, state } = setup(fs, await worker());
+        // Maya's copy reaches its revision commit, and the private file system is slow to answer.
+        let sessionA = true;
+        let resume!: () => void;
+        const slow = new Promise<void>((resolve) => {
+            resume = resolve;
+        });
+        let paused = false;
+        const getFileHandle = fs.root.getFileHandle.bind(fs.root);
+        fs.root.getFileHandle = (async (name: string, options?: { create?: boolean }) => {
+            if (name === 'upload-stash-revision' && options?.create && !paused) {
+                paused = true;
+                await slow;
+            }
+            return getFileHandle(name, options);
+        }) as typeof fs.root.getFileHandle;
+        const mayas = stash.put(canary, { account: 'user-1', current: () => sessionA });
+        await vi.waitFor(() => expect(paused).toBe(true));
+        // Maya signs out: the lock revision moves and this browser's stash is wiped.
+        sessionA = false;
+        state.account = null;
+        state.revision = 200;
+        const wiping = stash.forget();
+        // Sam signs in and saves a copy of his own.
+        state.account = 'user-2';
+        const sams = stash.put(canary, { account: 'user-2', current: () => true });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        // Only now does Maya's commit get its answer.
+        resume();
+        expect(await mayas).toBeNull();
+        await wiping;
+        const name = await sams;
+        expect(name).not.toBeNull();
+        // Sam's stash is still his: reading it settles against the revision, and keeps it.
+        expect(textOf(await stash.open(name!, described))).toBe(plain);
+        expect(fs.stashes()).toHaveLength(1);
+    });
+
+    it('a wipe waits for a revision commit under way, so nothing of the session outlives it', async () => {
+        const fs = privateFileSystem();
+        const { stash, state } = setup(fs, await worker());
+        let session = true;
+        let resume!: () => void;
+        const slow = new Promise<void>((resolve) => {
+            resume = resolve;
+        });
+        let paused = false;
+        const getFileHandle = fs.root.getFileHandle.bind(fs.root);
+        fs.root.getFileHandle = (async (name: string, options?: { create?: boolean }) => {
+            if (name === 'upload-stash-revision' && options?.create && !paused) {
+                paused = true;
+                await slow;
+            }
+            return getFileHandle(name, options);
+        }) as typeof fs.root.getFileHandle;
+        const put = stash.put(canary, { account: 'user-1', current: () => session });
+        await vi.waitFor(() => expect(paused).toBe(true));
+        // Signed out while the commit, begun in the session, waits on the file system.
+        session = false;
+        state.account = null;
+        state.revision = 200;
+        const wiping = stash.forget();
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        resume();
+        expect(await put).toBeNull();
+        await wiping;
+        // Neither the stash nor the revision it was committing is left after the sign-out.
+        expect(fs.disk()).toHaveLength(0);
+    });
+
+    it('a commit that gets the lock only after another tab wiped and the next session stashed writes nothing', async () => {
+        // The lock across tabs: another tab can take it between this one's last look and its ask.
+        let chain: Promise<unknown> = Promise.resolve();
+        const lock = <T>(work: () => Promise<T>) => {
+            const next = chain.then(work, work);
+            chain = next.catch(() => {});
+            return next;
+        };
+        let calls = 0;
+        let late!: () => void;
+        const lateAsk = new Promise<void>((resolve) => {
+            late = resolve;
+        });
+        const exclusive = <T>(work: () => Promise<T>) =>
+            // Maya's put asks twice: to settle, then to commit; the commit's ask comes in late.
+            ++calls === 2 ? lateAsk.then(() => lock(work)) : lock(work);
+        const fs = privateFileSystem();
+        const sealer = await worker();
+        // Maya's tab, which still sees the lock revision it had, and the tab that signs her out.
+        const maya = setup(fs, sealer, exclusive);
+        const other = setup(fs, sealer, lock);
+        let sessionA = true;
+        const mayas = maya.stash.put(canary, { account: 'user-1', current: () => sessionA });
+        await vi.waitFor(() => expect(calls).toBe(2));
+        // The other tab signs Maya out and wipes, and Sam signs in there and stashes, all before
+        // Maya's tab asks for the lock to commit.
+        sessionA = false;
+        maya.state.account = null;
+        other.state.revision = 200;
+        await other.stash.forget();
+        other.state.account = 'user-2';
+        const name = await other.stash.put(canary, { account: 'user-2', current: () => true });
+        late();
+        expect(await mayas).toBeNull();
+        expect(textOf(await other.stash.open(name!, described))).toBe(plain);
     });
 
     it('leaves no folder behind once wiped: tidying and reading after a sign-out make none', async () => {
