@@ -111,9 +111,10 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
         setKeyed(true);
         const item = root.current?.querySelector<HTMLElement>(`[data-node-id="${next}"]`);
         item?.scrollIntoView({ block: 'nearest' });
-        // Tab put the keys on a row's name: they move along with the arrows, so one row has focus.
+        // The keys are on a row's name (Tab) or its thumbnail (a click, in Chromium): they move
+        // along with the arrows to the next row's name, so one row has focus and Enter acts there.
         if (
-            document.activeElement?.closest('[data-row-name]') &&
+            document.activeElement?.closest('[data-row-name], [data-row-thumb]') &&
             root.current?.contains(document.activeElement)
         )
             item?.querySelector<HTMLElement>('[data-row-name]')?.focus({ preventScroll: true });
@@ -126,6 +127,26 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
     function focusShown(id: string) {
         return focused === id && (keyed || !selected.has(id));
     }
+
+    /*
+     * The list's focus follows the keys' real focus: Tab onto a row's name makes that row the
+     * one the arrows move from, and the outline is then the name's own, not the arrows'.
+     * WebKit focuses no button on a click, so there `keyed` alone marks the row.
+     */
+    useEffect(() => {
+        const follow = (event: FocusEvent) => {
+            const name =
+                event.target instanceof Element ? event.target.closest('[data-row-name]') : null;
+            const id =
+                name && root.current?.contains(name)
+                    ? name.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId
+                    : undefined;
+            if (id) setFocused(id);
+            setKeyed(false);
+        };
+        document.addEventListener('focusin', follow);
+        return () => document.removeEventListener('focusin', follow);
+    }, [root]);
 
     const latest = useRef({ ids, selected, select });
     useEffect(() => {
@@ -352,6 +373,7 @@ export function RowName({
             <button
                 type="button"
                 tabIndex={-1}
+                data-row-thumb
                 className="inline-flex shrink-0 cursor-default items-center py-2 pr-3 pl-4 outline-none md:pr-4 md:pl-8"
                 onClick={onSelect}
             >

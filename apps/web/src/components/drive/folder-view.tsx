@@ -516,11 +516,23 @@ export function FolderView({ folderId }: { folderId: string }) {
     useHotkey('T', () => ownSelection && setTagging(selection), { enabled: idle });
     useHotkey('Backspace', () => writable && void trash(selection), { enabled });
     useHotkey('Delete', () => writable && void trash(selection), { enabled });
-    // Enter on a focused link or button in the view is that control's, not the selection's.
+    // Enter on a focused link or button in the view is that control's, not the selection's,
+    // except a selected row's own name or thumbnail: Enter there opens the row when it is
+    // the whole selection, and otherwise keeps the selection the button's click would collapse.
     useHotkey(
         'Enter',
         (event) => {
-            if (event.target instanceof Element && event.target.closest('a, button')) return;
+            if (!(event.target instanceof Element)) return;
+            const control = event.target.closest('a, button');
+            const id = control?.matches('[data-row-name], [data-row-thumb]')
+                ? control.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId
+                : undefined;
+            if (id && selected.has(id)) {
+                event.preventDefault();
+                if (selection.length === 1) open(selection[0]!);
+                return;
+            }
+            if (control) return;
             if (selection.length === 1) open(selection[0]!);
         },
         { enabled, preventDefault: false },
