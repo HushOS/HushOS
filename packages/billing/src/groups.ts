@@ -1922,10 +1922,11 @@ export function lapsedPlanStaysRefusal(error: LapsedFamilyPlanError, who: 'payer
             return self
                 ? `The family’s ${name} plan couldn’t be ended just now, and it is still on your card. Try again in a few minutes.`
                 : `The family’s ${name} plan couldn’t be ended just now, and it is still on their card. Try again in a few minutes.`;
-        // Said where the family's page may not open (a deletion, a phone): the portal, or support.
+        // Said where the family's page may not be at hand (a deletion, a phone, which has no
+        // family page): where to cancel on the web, or support.
         case 'live':
             return self
-                ? 'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page first, or contact support.'
+                ? 'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page at hushos.com first, or contact support.'
                 : 'They pay for the family’s plan, which was just paid for again. They can cancel it under Billing; then you can remove them.';
     }
 }
@@ -2138,18 +2139,33 @@ export async function resumeGroupPlan(user: BillingUser, groupId: string) {
     return { billing: await getGroupBilling(user, groupId) };
 }
 
+/*
+ * Under the family's one plan-change claim, as raises, upgrades and the dissolve job are, so a
+ * cancel never crosses a raise nor a resume the dissolve job's cancel. Polar's 409
+ * `SubscriptionLocked` (the bank still holds a charge) is the same "in progress" answer.
+ */
 async function setGroupPlanEnding(
     groupId: string,
     subscriptionId: string,
     body: models.SubscriptionUpdate,
 ) {
-    try {
-        await polar().subscriptions.update(subscriptionId, body);
-    } catch (error) {
-        // Refused or lost: whatever Polar holds now is written, then the refusal is said.
-        await reconcileGroup(groupId).catch(() => undefined);
-        throw unavailable(error);
-    }
+    await withPlanChange(
+        subscriptionId,
+        () => {
+            throw new BillingError(BUSY, 409);
+        },
+        async () => {
+            try {
+                await polar().subscriptions.update(subscriptionId, body);
+            } catch (error) {
+                // Refused or lost: whatever Polar holds now is written, then the refusal is said.
+                await reconcileGroup(groupId).catch(() => undefined);
+                if (statusOf(error) === 409 && polarErrorName(error) === 'SubscriptionLocked')
+                    throw new BillingError(BUSY, 409, { cause: error });
+                throw unavailable(error);
+            }
+        },
+    );
     await reconcileGroup(groupId);
 }
 

@@ -2254,7 +2254,7 @@ async function leaveAnswer(result: groupsRepository.LeaveResult, groupId?: strin
         case 'not-last':
             throw new GroupError(
                 'payer',
-                'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page first, or contact support.',
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page at hushos.com first, or contact support.',
                 409,
             );
         case 'unavailable':

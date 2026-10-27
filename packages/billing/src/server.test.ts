@@ -4020,7 +4020,7 @@ describe('a family plan whose payment failed, or that is paused', () => {
             await expect(billing.revokeForDeletion(payer.id)).rejects.toMatchObject({
                 status: 409,
                 message:
-                    'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page first, or contact support. Your account was not deleted.',
+                    'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page at hushos.com first, or contact support. Your account was not deleted.',
             });
         } finally {
             spy.mockRestore();
@@ -4037,7 +4037,7 @@ describe('a family plan whose payment failed, or that is paused', () => {
         await expect(billing.revokeForDeletion(payer.id)).rejects.toMatchObject({
             status: 409,
             message:
-                'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page first, or contact support. Your account was not deleted.',
+                'The family’s plan was just paid for again, so it runs, on your card. Cancel it under Billing on the family’s page at hushos.com first, or contact support. Your account was not deleted.',
         });
         expect(callsTo('subscriptions.revoke')).toEqual([]);
         expect(subscription.ended_at).toBeNull();
@@ -5840,6 +5840,56 @@ describe('cancelling and resuming a family plan in HushOS', () => {
             status: 503,
         });
         expect(subscription.cancel_at_period_end).toBe(true);
+        expect(await ending(groupId)).toBe(true);
+    });
+
+    const BUSY = 'Another change to this plan is in progress. Try again in a moment.';
+
+    test('a cancel or resume while another change holds the plan is told to try again, and Polar isn’t asked', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 7 });
+        // A raise (or the dissolve job) holds the family's one plan-change claim.
+        const claim = await billingRepository.claimPlanChange(subscription.id, 60_000);
+        expect(claim).not.toBeNull();
+        await expect(billing.cancelGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 409,
+            message: BUSY,
+        });
+        expect(endings()).toEqual([]);
+        expect(await ending(groupId)).toBe(false);
+        await billingRepository.releasePlanChange(subscription.id, claim!);
+        await billing.cancelGroupPlan(payer, groupId);
+        polar.calls = [];
+        const again = await billingRepository.claimPlanChange(subscription.id, 60_000);
+        await expect(billing.resumeGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 409,
+            message: BUSY,
+        });
+        expect(endings()).toEqual([]);
+        expect(await ending(groupId)).toBe(true);
+        await billingRepository.releasePlanChange(subscription.id, again!);
+    });
+
+    test('Polar’s SubscriptionLocked, while the bank holds a charge, is the same try-again answer', async () => {
+        const { payer, groupId } = await familyOnPlan();
+        polar.cancelRefusal = { status: 409, error: 'SubscriptionLocked' };
+        await expect(billing.cancelGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 409,
+            message: BUSY,
+        });
+        expect(await ending(groupId)).toBe(false);
+    });
+
+    test('a dissolved family’s plan is never resumed from here, even by its payer', async () => {
+        const { payer, groupId } = await familyOnPlan();
+        await billing.cancelGroupPlan(payer, groupId);
+        expect(await groupsRepository.leaveGroup(groupId, payer.id)).toEqual({
+            status: 'dissolved',
+        });
+        polar.calls = [];
+        await expect(billing.resumeGroupPlan(payer, groupId)).rejects.toMatchObject({
+            status: 404,
+        });
+        expect(endings()).toEqual([]);
         expect(await ending(groupId)).toBe(true);
     });
 

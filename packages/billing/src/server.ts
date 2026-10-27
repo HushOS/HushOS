@@ -738,7 +738,7 @@ export async function revokeForDeletion(userId: string) {
     if (!billingEnabled()) return;
     if ((await billingRepository.listGroupsPaidBy(userId)).length)
         throw new BillingError(
-            'You pay for a family plan. Hand its billing to another member, or cancel the family plan under Billing on the family’s page, then delete your account.',
+            'You pay for a family plan. Hand its billing to another member, or cancel the family plan under Billing on the family’s page at hushos.com, then delete your account.',
             409,
         );
     // A family plan they pay for that gives nothing (unpaid, incomplete, paused) is still on their

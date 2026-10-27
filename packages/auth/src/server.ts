@@ -1879,7 +1879,7 @@ async function refuseWhileHoldingGroups(userId: string) {
     // The last member of a family with a plan still paid for: deleting would dissolve it.
     if (blockers.some((blocker) => blocker.reason === 'billed'))
         throw new AuthError(
-            'Your family has a plan that is still being paid for. Cancel it in Billing on the family’s page before deleting your account; the family keeps it until the end of the period.',
+            'Your family has a plan that is still being paid for. Cancel it under Billing on the family’s page at hushos.com before deleting your account; the family keeps it until the end of the period.',
             409,
         );
     // In DESIGN.md's words: an organizer can't leave, and nor can a family's last manager.
