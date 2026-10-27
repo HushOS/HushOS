@@ -57,9 +57,10 @@ export function NoFamily({
     const plan = chosen
         ? { plan: chosen, currency: create?.currency ?? Object.keys(chosen.prices)[0] ?? 'usd' }
         : undefined;
-    // Arrived from Plans with a tier: the dialog opens with it, until it is closed.
+    // Arrived with a tier: the dialog opens with it, until it is closed. Not for someone waiting
+    // to join a family: they're about to be in one, and are shown how to finish joining instead.
     const [dismissed, setDismissed] = useState(false);
-    const open = creating || (Boolean(chosen) && !dismissed);
+    const open = creating || (Boolean(chosen) && !dismissed && waiting.length === 0);
     return (
         <div className="flex flex-1 flex-col" data-no-family>
             <PageHeader

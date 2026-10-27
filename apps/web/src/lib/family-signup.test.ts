@@ -1,6 +1,6 @@
 import type { FamilyPlan, Plan } from '@hushos/billing/api';
 import { describe, expect, test } from 'vitest';
-import { defaultFamilyName, familyLanding } from './family-signup';
+import { defaultFamilyName, familyLanding, familyStanding } from './family-signup';
 
 const personal = (prices: Record<string, number>): Plan => ({
     id: 'plus-month',
@@ -38,11 +38,39 @@ const land = (input: Partial<Parameters<typeof familyLanding>[0]> = {}) =>
     familyLanding({
         tier: everywhere.id,
         groupsEnabled: true,
-        inFamily: false,
+        families: [],
         catalogue,
         hint: india,
         ...input,
     });
+
+const member = (state: string, name = 'Ortega family') => ({
+    id: `group-${state}`,
+    kind: 'family',
+    name,
+    state,
+});
+
+describe('familyStanding', () => {
+    test('in a family, waiting to join one, or in none', () => {
+        expect(familyStanding([member('left'), member('active', 'Berg family')])).toEqual({
+            kind: 'in',
+            family: member('active', 'Berg family'),
+        });
+        expect(familyStanding([member('accepted')])).toEqual({
+            kind: 'waiting',
+            family: member('accepted'),
+        });
+        expect(familyStanding([member('left'), member('removed')])).toEqual({ kind: 'none' });
+        expect(familyStanding([])).toEqual({ kind: 'none' });
+    });
+
+    test('being in a family outranks waiting to join another', () => {
+        expect(familyStanding([member('accepted', 'Berg family'), member('active')])).toMatchObject(
+            { kind: 'in', family: { name: 'Ortega family' } },
+        );
+    });
+});
 
 describe('defaultFamilyName', () => {
     test('is the account’s first name as a family, else My family', () => {
@@ -68,11 +96,21 @@ describe('familyLanding', () => {
     });
 
     test('someone already in a family lands on it, never on a second one', () => {
-        expect(land({ inFamily: true })).toEqual({ to: '/app/family' });
+        expect(land({ families: [member('active')] })).toEqual({ to: '/app/family' });
+    });
+
+    test('someone waiting to join a family lands on it too, never on paying for another', () => {
+        expect(land({ families: [member('accepted')] })).toEqual({ to: '/app/family' });
+    });
+
+    test('a family they left or were removed from is no family', () => {
+        expect(land({ families: [member('left'), member('removed')] })).toMatchObject({
+            search: { create: everywhere.id },
+        });
     });
 
     test('with the families unread, the family page decides, so the tier still rides along', () => {
-        expect(land({ inFamily: undefined })).toMatchObject({ search: { create: everywhere.id } });
+        expect(land({ families: undefined })).toMatchObject({ search: { create: everywhere.id } });
     });
 
     test('goes to Plans where families aren’t served, or the tier is no longer offered', () => {

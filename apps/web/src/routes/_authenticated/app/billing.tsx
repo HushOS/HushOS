@@ -1,5 +1,5 @@
 import { CreateFamilyDialog } from '@/components/families/create-family-dialog';
-import { defaultFamilyName } from '@/lib/family-signup';
+import { defaultFamilyName, familyStanding } from '@/lib/family-signup';
 import { Spinner } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
 import { Segmented, SettingsGroup } from '@/components/settings';
@@ -28,7 +28,7 @@ import { moneyFontLinks } from '@/lib/fonts';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
 import { useUnlocked } from '@/lib/families';
-import { activeFamily, familiesQueryOptions, useGroupsEnabled } from '@/lib/families-shell';
+import { familiesQueryOptions, useGroupsEnabled } from '@/lib/families-shell';
 import { familyCurrencies, tierTooSmall } from '@/lib/family-billing';
 import { useBackFromCheckout, useCheckoutOpening } from '@/lib/family-checkout';
 import {
@@ -398,7 +398,8 @@ function BillingPage() {
         groups &&
         familyPlans.length > 0 &&
         families.isSuccess &&
-        (opening || !activeFamily(families.data));
+        // Nor to someone waiting to join a family: they're about to be in one.
+        (opening || familyStanding(families.data).kind === 'none');
     const familySaving = twoMonthsFree(familyPairs(familyPlans, familyCurrency));
     const familyShown = familyPlans
         .filter((plan) => plan.interval === period)

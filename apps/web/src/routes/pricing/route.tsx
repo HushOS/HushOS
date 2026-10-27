@@ -24,7 +24,8 @@ import { currencyLabel, pickCurrency } from '@/lib/currency';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
 import { faqFor } from '@/lib/pricing-faq';
-import { activeFamily, familiesQueryOptions } from '@/lib/families-shell';
+import { familiesQueryOptions } from '@/lib/families-shell';
+import { familyStanding } from '@/lib/family-signup';
 import { sessionQueryOptions } from '@/lib/session';
 import {
     billingQueryOptions,
@@ -673,25 +674,29 @@ function Business() {
 
 /*
  * Where the visitor stands with families, for the family section's buttons: signed out (a
- * session cookie with no account behind it counts), in no family, in one, or unknown (the
- * families can't be read). Null until that is known, so nothing shows that the server would
- * refuse (an account is in one family at most).
+ * session cookie with no account behind it counts), in no family, in one, waiting to join one
+ * (familyStanding), or unknown (the families can't be read). Null until that is known, so
+ * nothing shows that the server would refuse or that would make a second family.
  */
-type FamilyStanding =
+type PricingStanding =
     | { kind: 'signed-out' }
     | { kind: 'none' }
     | { kind: 'in'; name: string }
+    | { kind: 'waiting'; name: string; groupId: string }
     | { kind: 'unknown' };
 
-function useFamilyStanding(hasSession: boolean): FamilyStanding | null {
+function usePricingStanding(hasSession: boolean): PricingStanding | null {
     const session = useQuery({ ...sessionQueryOptions, enabled: hasSession });
     const userId = session.data?.id;
     const families = useQuery({ ...familiesQueryOptions(userId ?? ''), enabled: Boolean(userId) });
     if (!hasSession || (session.isSuccess && !session.data)) return { kind: 'signed-out' };
     if (session.isError || families.isError) return { kind: 'unknown' };
     if (!userId || families.isPending) return null;
-    const yours = activeFamily(families.data);
-    return yours ? { kind: 'in', name: yours.name } : { kind: 'none' };
+    const standing = familyStanding(families.data);
+    if (standing.kind === 'in') return { kind: 'in', name: standing.family.name };
+    if (standing.kind === 'waiting')
+        return { kind: 'waiting', name: standing.family.name, groupId: standing.family.id };
+    return { kind: 'none' };
 }
 
 /*
@@ -724,16 +729,23 @@ function FamilyTierAction({ offer, signedOut }: { offer: FamilyOffer; signedOut:
 function FamilySection({ offers, hasSession }: { offers: FamilyOffer[]; hasSession: boolean }) {
     // The same on every tier (a tier change keeps the family's places), as the questions say too.
     const { includedMembers, maxMembers } = offers[0]!.plan;
-    const standing = useFamilyStanding(hasSession);
-    // Each tier has its own button for someone who can make a family. Someone in one is offered
-    // theirs instead, once, and where the families can't be read the family page says which.
+    const standing = usePricingStanding(hasSession);
+    // Each tier has its own button for someone who can make a family. Someone in one, or waiting
+    // to join one, is offered that family instead, once; where the families can't be read, the
+    // family page says which.
     const buying = standing?.kind === 'signed-out' || standing?.kind === 'none';
+    const sectionClass = buttonVariants({ size: 'lg', className: 'w-full shrink-0 lg:w-fit' });
     const sectionAction =
-        standing?.kind === 'in' || standing?.kind === 'unknown' ? (
+        standing?.kind === 'waiting' ? (
             <Link
-                to="/app/family"
-                className={buttonVariants({ size: 'lg', className: 'w-full shrink-0 lg:w-fit' })}
+                to="/app/families/$groupId/join"
+                params={{ groupId: standing.groupId }}
+                className={sectionClass}
             >
+                Continue joining {standing.name}
+            </Link>
+        ) : standing?.kind === 'in' || standing?.kind === 'unknown' ? (
+            <Link to="/app/family" className={sectionClass}>
                 {standing.kind === 'in' ? `Open ${standing.name}` : 'Family'}
             </Link>
         ) : null;

@@ -1840,6 +1840,52 @@ test.describe.serial('signing up for a family plan from the pricing page', () =>
     });
 });
 
+test.describe.serial('Pricing for someone waiting to join a family', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+
+    test('offers to finish joining, never a tier that would make a second family', async ({
+        browser,
+        request,
+    }) => {
+        test.skip(
+            !(await familyCatalogue(request)).length,
+            'Billing is off or sells no family plan, so the pricing page has no family section.',
+        );
+        test.setTimeout(300_000);
+        const ines = await person(browser, 'Inês Ortega');
+        // Accepted an invitation and not let in yet, as route 2 lists it: the invitation flow
+        // needs a family with a plan, which can't be paid for here, so the list is answered.
+        const groupId = randomUUID();
+        await ines.page.route(
+            (url) => url.pathname === '/api/groups',
+            (route: Route) =>
+                route.request().method() === 'GET'
+                    ? route.fulfill({
+                          json: {
+                              groups: [
+                                  {
+                                      id: groupId,
+                                      kind: 'family',
+                                      name: 'Ortega family',
+                                      state: 'accepted',
+                                  },
+                              ],
+                          },
+                      })
+                    : route.continue(),
+        );
+        await ines.page.goto('/pricing', { waitUntil: 'networkidle' });
+        const section = ines.page.locator('[data-family-plan]');
+        await expect(
+            section.getByRole('link', { name: 'Continue joining Ortega family', exact: true }),
+        ).toHaveAttribute('href', `/app/families/${groupId}/join`, { timeout: 60_000 });
+        await expect(
+            section.getByRole('link', { name: /^(Choose|Start with) Family / }),
+        ).toHaveCount(0);
+        await ines.page.context().close();
+    });
+});
+
 test.describe.serial('deleting a family folder', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
     let ida: Person;

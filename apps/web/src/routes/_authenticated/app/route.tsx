@@ -27,7 +27,7 @@ import {
     localeHintQueryOptions,
     storageQueryOptions,
 } from '@/lib/queries';
-import { activeFamily, capabilitiesQueryOptions, familiesQueryOptions } from '@/lib/families-shell';
+import { capabilitiesQueryOptions, familiesQueryOptions } from '@/lib/families-shell';
 import { familyLanding } from '@/lib/family-signup';
 import { sessionQueryOptions } from '@/lib/session';
 import { useIsTablet } from '@/hooks/use-mobile';
@@ -69,7 +69,7 @@ async function familyLandingFor(queryClient: QueryClient, tier: string, userId: 
     return familyLanding({
         tier,
         groupsEnabled,
-        inFamily: families && Boolean(activeFamily(families)),
+        families,
         catalogue: catalogue ?? { plans: [], families: [] },
         hint,
     });

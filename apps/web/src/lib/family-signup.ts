@@ -43,6 +43,29 @@ export function familySignupCurrency(
     return familyPrice(plan, currency)?.currency ?? null;
 }
 
+/* A family as the account's list of families gives it (route 2's GroupSummary). */
+type Membership = { id: string; name: string; kind: string; state: string };
+
+/*
+ * Where an account stands with families: in one (`active`), waiting to join one (`accepted`:
+ * they accepted an invitation and aren't let in yet), or in none (a family left or removed
+ * from is none). Waiting to join counts as having a family for everything that would offer a
+ * new one: they are about to be in one, and a second would be refused once they're let in.
+ */
+export type FamilyStanding<T extends Membership = Membership> =
+    | { kind: 'in'; family: T }
+    | { kind: 'waiting'; family: T }
+    | { kind: 'none' };
+
+export function familyStanding<T extends Membership>(families: readonly T[]): FamilyStanding<T> {
+    const of = (state: string) =>
+        families.find((family) => family.kind === 'family' && family.state === state);
+    const active = of('active');
+    if (active) return { kind: 'in', family: active };
+    const accepted = of('accepted');
+    return accepted ? { kind: 'waiting', family: accepted } : { kind: 'none' };
+}
+
 export type FamilyLanding =
     | { to: '/app/billing' }
     | { to: '/app/family'; search?: { create: string; currency: string } };
@@ -50,8 +73,8 @@ export type FamilyLanding =
 /*
  * Where the first visit after signing up for a family tier goes:
  * - families not served here (any more): Plans, where the personal plans are;
- * - already in a family (`inFamily`; undefined while unknown): that family's page, never a
- *   second family;
+ * - in a family, or waiting to join one (`families`; undefined while unknown): the family
+ *   page, which shows that family or how to finish joining, never a second family;
  * - the tier still offered: Create a family with it, priced as sign-up priced it
  *   (familySignupCurrency);
  * - otherwise (no longer offered, or priced in nothing): Plans.
@@ -61,12 +84,13 @@ export type FamilyLanding =
 export function familyLanding(input: {
     tier: string;
     groupsEnabled: boolean;
-    inFamily: boolean | undefined;
+    families: readonly Membership[] | undefined;
     catalogue: Pick<Catalogue, 'plans' | 'families'>;
     hint: LocaleHint | null | undefined;
 }): FamilyLanding {
     if (!input.groupsEnabled) return { to: '/app/billing' };
-    if (input.inFamily) return { to: '/app/family' };
+    if (input.families && familyStanding(input.families).kind !== 'none')
+        return { to: '/app/family' };
     const plan = input.catalogue.families.find((candidate) => candidate.id === input.tier);
     const currency = plan && familySignupCurrency(input.catalogue, plan, input.hint);
     if (!plan || !currency) return { to: '/app/billing' };
