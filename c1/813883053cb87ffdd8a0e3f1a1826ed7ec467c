@@ -1,0 +1,35 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_c249a277036c39 343
+apps/web/src/components/drive/link-row.tsx
+  s_566b8e0c4467a4::t_e80bc98d867d05 8,17-18,54
+apps/web/src/components/drive/share-dialog.test.tsx
+  s_566b8e0c4467a4::t_1b3c332fba8b91 43-53,101-102,114,152-191
+apps/web/src/components/drive/share-dialog.tsx
+  s_566b8e0c4467a4::t_5aaf5f0c1528f9 17,21,133-136,138-142,345-418,581-586,711,716,724-727,778-780,782,786,901-906,917-929,1009-1011,1026-1028,1036-1038,1040-1041,1057,1078,1086,1097,1166,1175
+apps/web/src/routes/_authenticated/app/_drive/shared.tsx
+  s_566b8e0c4467a4::t_c600e65692d114 3,282-284,286,298-302
+docs/optional-verification.md
+  s_566b8e0c4467a4::t_6cfeea8ae53f1d 352,356,362
+e2e/first-use.spec.ts
+  s_566b8e0c4467a4::t_aa982e337938e4 145-146
+e2e/links.spec.ts
+  s_566b8e0c4467a4::t_ec2475366e690b 293,322,339
+e2e/screenshots.spec.ts
+  s_566b8e0c4467a4::t_e79fb3ee13ccf0 453
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c1813883053cb87ffdd8a0e3f1a1826ed7ec467c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
