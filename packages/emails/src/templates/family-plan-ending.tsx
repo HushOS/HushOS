@@ -13,8 +13,9 @@ import {
 } from 'react-email';
 
 /*
- * A family's plan was set to end because the family was dissolved: sent to the
- * person who pays for it, the only one Polar charges. Fixed words and one date
+ * A family's plan was set to end by HushOS: because the family was dissolved, or
+ * because the person who pays for it is no longer in it (`payer-left`). Sent to
+ * that person, the only one Polar charges. Fixed words and one date
  * (the end of the period paid for, in UTC); no family name, no device, nothing
  * anyone typed. Same sheet as the invitation.
  *
@@ -35,10 +36,13 @@ const label = {
 };
 
 export default function FamilyPlanEnding({
+    reason = 'dissolved',
     endsOn = '19 November 2026',
     logoUrl = '/static/hushos-logo-square.png',
     marker = 'preview',
 }: {
+    /** Why HushOS set it to end: the family was dissolved, or its payer is no longer in it. */
+    reason?: 'dissolved' | 'payer-left';
     /** The last day of the period paid for, written out in UTC. */
     endsOn?: string;
     /** The logo: the brand square as one image, the same in both colour schemes. */
@@ -169,9 +173,9 @@ export default function FamilyPlanEnding({
                                 color: '#5a6380',
                             }}
                         >
-                            The family you pay for was dissolved: it has no members left. Its plan
-                            is set to end with the period you paid for, so you won’t be charged
-                            again. Nothing is refunded for the rest of that period.
+                            {reason === 'payer-left'
+                                ? 'You’re no longer in the family you pay for. Its plan is set to end with the period you paid for, so you won’t be charged again. Nothing is refunded for the rest of that period.'
+                                : 'The family you pay for was dissolved: it has no members left. Its plan is set to end with the period you paid for, so you won’t be charged again. Nothing is refunded for the rest of that period.'}
                         </Text>
                     </Section>
                     <Section className="email-pad" style={{ padding: '0 28px 28px' }}>
@@ -239,10 +243,9 @@ export default function FamilyPlanEnding({
                                 color: '#5a6380',
                             }}
                         >
-                            If you resume the plan in Polar’s billing portal, HushOS cancels it
-                            again, because there is no family for it to pay for. The family’s
-                            folders and records are deleted 30 days after it was dissolved, and its
-                            records wait for the plan to end.
+                            {reason === 'payer-left'
+                                ? 'If you resume the plan in Polar’s billing portal, HushOS cancels it again, because you’re no longer in the family. Someone in the family can choose a new plan for it.'
+                                : 'If you resume the plan in Polar’s billing portal, HushOS cancels it again, because there is no family for it to pay for. The family’s folders and records are deleted 30 days after it was dissolved, and its records wait for the plan to end.'}
                         </Text>
                     </Section>
                 </Container>

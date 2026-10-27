@@ -266,18 +266,26 @@ export async function sendGroupInvitation(to: string, input: InvitationInput) {
 }
 
 /*
- * To a dissolved family's payer: its plan was set to end at the period's end, on
- * `endsOn` (written by the caller, in UTC). Fixed words, so nothing anyone typed
+ * To the payer of a family plan HushOS set to end at the period's end, on `endsOn`
+ * (written by the caller, in UTC): the family was dissolved, or its payer is no longer
+ * in it (`reason`, which picks the words). Fixed words, so nothing anyone typed
  * (the family's name included) reaches the message; the date is in the subject so
  * a second notice, after the plan was resumed and cancelled again, is its own thread.
  */
-export function composeFamilyPlanEnding(to: string, input: { endsOn: string; appUrl: string }) {
-    return compose(to, `Your family plan ends on ${input.endsOn} · HushOS`, familyPlanEnding, {
+export function composeFamilyPlanEnding(
+    to: string,
+    input: { endsOn: string; appUrl: string; reason?: 'dissolved' | 'payer-left' },
+) {
+    const template = familyPlanEnding[input.reason ?? 'dissolved'];
+    return compose(to, `Your family plan ends on ${input.endsOn} · HushOS`, template, {
         endsOn: input.endsOn,
         logoUrl: logoUrl(input.appUrl),
     });
 }
 
-export async function sendFamilyPlanEnding(to: string, input: { endsOn: string; appUrl: string }) {
+export async function sendFamilyPlanEnding(
+    to: string,
+    input: { endsOn: string; appUrl: string; reason?: 'dissolved' | 'payer-left' },
+) {
     await deliver(composeFamilyPlanEnding(to, input));
 }

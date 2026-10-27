@@ -471,11 +471,12 @@ async function reconcileGroupOnce(
     for (const userId of await billingRepository.listPooledWithPersonalPlan(groupId))
         await queuePlanEnding(userId);
     // A dissolved family's plan that can still charge and isn't set to end (its payer took the
-    // ending back in the portal, or it was never set): the worker sets it to end. Also one
-    // HushOS set to end whose payer is still owed the mail (it failed, or the answer was lost).
+    // ending back in the portal, or it was never set), or a renewing plan whose payer is no
+    // longer in the family (plansToEnd): the worker sets it to end. Also one HushOS set to end
+    // whose payer is still owed the mail (it failed, or the answer was lost).
     if (
         !options.fromDissolveCancel &&
-        (await billingRepository.listDissolvedChargeable(groupId)).some(
+        (await plansToEnd(groupId)).some(
             (row) => (!row.ending && row.refusedState !== row.state) || row.mailOwed,
         )
     )
@@ -805,6 +806,25 @@ export async function queueDissolvedCancel(groupId: string) {
     }
 }
 
+/*
+ * The plans HushOS sets to end at their period's end, by the same job (cancelDissolvedPlan):
+ * a dissolved family's that can still charge, and a renewing plan whose payer is no longer an
+ * active member of the family (listAbandonedChargeable). The second is the backstop for every
+ * way a departed payer's plan can come to renew: a resume whose reconcile failed before they
+ * left, or one they made in Polar's portal afterwards. Either way the payer keeps what they
+ * paid for: set to end, never revoked, nothing refunded.
+ */
+async function plansToEnd(groupId: string) {
+    const [dissolved, abandoned] = await Promise.all([
+        billingRepository.listDissolvedChargeable(groupId),
+        billingRepository.listAbandonedChargeable(groupId),
+    ]);
+    return [
+        ...dissolved.map((row) => ({ ...row, reason: 'dissolved' as const })),
+        ...abandoned.map((row) => ({ ...row, reason: 'payer-left' as const })),
+    ];
+}
+
 /* Another run holds the plan (its claim): pg-boss retries this one, which then finds it set. */
 export class DissolveCancelBusyError extends Error {
     constructor() {
@@ -827,7 +847,9 @@ const endingOrEnded = (subscription: models.Subscription) =>
     ENDED.has(subscription.status);
 
 /*
- * The job for a dissolved family (docs/groups-design.md 3.3): every plan of it that
+ * The job for a dissolved family (docs/groups-design.md 3.3), and for a renewing plan whose
+ * payer is no longer in the family (plansToEnd, the same rules, the payer's own mail; such a
+ * plan is only set to end, never revoked, since it is live): every plan of a dissolved family that
  * can still charge (not ended, `canceled` or `incomplete_expired`) is ended. A live one is
  * set to end at the period's end (`cancel_at_period_end`), never revoked: the payer keeps
  * what they paid for, and nothing is refunded, as when a payer cancels (groups-design 3.5);
@@ -876,7 +898,7 @@ export async function cancelDissolvedPlan(groupId: string) {
     // customer for asks Polar nothing.
     try {
         if (await billingRepository.getGroupCustomer(groupId)) await findLapsedFamilyPlans(groupId);
-        if ((await billingRepository.listDissolvedChargeable(groupId)).length === 0) return outcome;
+        if ((await plansToEnd(groupId)).length === 0) return outcome;
         return await setDissolvedToEnd(groupId, outcome);
     } catch (error) {
         // Retried by pg-boss, but recorded: a failure Polar keeps repeating (a token without
@@ -902,7 +924,7 @@ async function setDissolvedToEnd(
     // others from being set to end, nor the payer's owed mail: the first is thrown last, for
     // pg-boss to retry the job.
     let failed: unknown = null;
-    for (const row of await billingRepository.listDissolvedChargeable(groupId)) {
+    for (const row of await plansToEnd(groupId)) {
         if (row.ending || row.refusedState === row.state) continue;
         let result: 'busy' | 'cancelled' | 'refused' | 'revoked' | 'already' | 'waiting' | 'gone';
         try {
@@ -921,6 +943,16 @@ async function setDissolvedToEnd(
                     const current = await read();
                     if (!current) return 'gone' as const;
                     if (endingOrEnded(current)) return 'already' as const;
+                    // A departed payer's plan is only ever set to end while it renews and they
+                    // are still away (asked again under the claim: they may have come back).
+                    if (
+                        row.reason === 'payer-left' &&
+                        (!LIVE.has(current.status) ||
+                            !(await billingRepository.listAbandonedChargeable(groupId)).some(
+                                (away) => away.id === row.id,
+                            ))
+                    )
+                        return 'already' as const;
                     const state = billingRepository.dissolveStateOf({
                         status: current.status,
                         currentPeriodEnd: current.current_period_end,
@@ -1047,12 +1079,12 @@ async function setDissolvedToEnd(
         asked = true;
     }
     if (asked) await reconcileGroup(groupId, { fromDissolveCancel: true });
-    for (const row of await billingRepository.listDissolvedChargeable(groupId))
+    for (const row of await plansToEnd(groupId))
         if (
             row.mailOwed &&
             (await billingRepository.claimDissolveMail(row.id, row.currentPeriodEnd))
         )
-            await tellPayer(groupId, row.id, row.currentPeriodEnd);
+            await tellPayer(groupId, row.id, row.currentPeriodEnd, row.reason);
     if (failed) throw failed;
     return outcome;
 }
@@ -1065,7 +1097,12 @@ async function setDissolvedToEnd(
  * The mail module is loaded here, not with this file: it reads the email settings when it
  * loads, and a process without them (a worker an operator gave none) must still start.
  */
-async function tellPayer(groupId: string, subscriptionId: string, endsAt: Date) {
+async function tellPayer(
+    groupId: string,
+    subscriptionId: string,
+    endsAt: Date,
+    reason: 'dissolved' | 'payer-left',
+) {
     try {
         const customer = await billingRepository.getGroupCustomer(groupId);
         const payer = customer?.payerUserId
@@ -1076,6 +1113,7 @@ async function tellPayer(groupId: string, subscriptionId: string, endsAt: Date) 
         await sendFamilyPlanEnding(payer.email, {
             endsOn: endsOnFormat.format(endsAt),
             appUrl: appEnv.APP_ORIGIN,
+            reason,
         });
     } catch (error) {
         await billingRepository.releaseDissolveMail(subscriptionId, endsAt);

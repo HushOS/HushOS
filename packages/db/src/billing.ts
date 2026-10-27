@@ -857,6 +857,60 @@ export async function listDissolvedChargeable(groupId: string) {
 }
 
 /*
+ * A family's renewing plans whose payer is no longer an active member (left, removed): the
+ * backstop beside the dissolved family's (docs/groups-design.md 3.3). HushOS sets them to end
+ * at the period's end, as it does a dissolved family's, so nobody goes on paying for a family
+ * they have left, however the plan came to renew (a resume whose reconcile failed before they
+ * left, or one they made in the portal after). Only live plans (a lapsed one is ended when its
+ * payer departs) of a family not dissolved (that one's job covers it), with a payer on record:
+ * a family with none goes through revokeWithoutPayer. Rows as listDissolvedChargeable has them.
+ */
+export async function listAbandonedChargeable(groupId: string) {
+    const rows = await db
+        .select({
+            id: groupBillingSubscriptions.id,
+            status: groupBillingSubscriptions.status,
+            currentPeriodEnd: groupBillingSubscriptions.currentPeriodEnd,
+            currentPeriodStart: groupBillingSubscriptions.currentPeriodStart,
+            ending: groupBillingSubscriptions.cancelAtPeriodEnd,
+            cancels: groupBillingSubscriptions.dissolveCancels,
+            askedAt: groupBillingSubscriptions.dissolveCancelledAt,
+            mailedPeriodEnd: groupBillingSubscriptions.dissolveMailedPeriodEnd,
+            refusedState: groupBillingSubscriptions.dissolveRefusedState,
+        })
+        .from(groupBillingSubscriptions)
+        .innerJoin(groups, eq(groups.id, groupBillingSubscriptions.groupId))
+        .innerJoin(
+            groupBillingCustomers,
+            eq(groupBillingCustomers.groupId, groupBillingSubscriptions.groupId),
+        )
+        .where(
+            and(
+                eq(groupBillingSubscriptions.groupId, groupId),
+                isNull(groups.dissolvedAt),
+                isNotNull(groupBillingCustomers.payerUserId),
+                isNull(groupBillingSubscriptions.endedAt),
+                inArray(groupBillingSubscriptions.status, [...LIVE_STATUSES]),
+                sql`not exists (select 1 from ${groupMemberships} m where m.group_id = ${groupBillingSubscriptions.groupId} and m.user_id = ${groupBillingCustomers.payerUserId} and m.state = 'active')`,
+            ),
+        )
+        .orderBy(groupBillingSubscriptions.id);
+    return rows.map((row) => ({
+        ...row,
+        mailOwed:
+            row.ending &&
+            row.askedAt !== null &&
+            row.askedAt.getTime() >= row.currentPeriodStart.getTime() &&
+            row.mailedPeriodEnd?.getTime() !== row.currentPeriodEnd.getTime(),
+        state: dissolveStateOf({
+            status: row.status,
+            currentPeriodEnd: row.currentPeriodEnd,
+            cancelAtPeriodEnd: row.ending,
+        }),
+    }));
+}
+
+/*
  * HushOS is about to ask Polar to set a dissolved family's plan to end: written before the
  * call, so a set whose answer was lost still owes its payer the mail once Polar shows it.
  */
