@@ -140,8 +140,9 @@ export const transfers = createTransferManager({
     },
 });
 
-// Another tab signed out: uploads here stop, and nothing writes the journal it deletes back.
-onSignedOutElsewhere(() => transfers.invalidate());
+// Another tab is signing out: uploads here stop, writing nothing to the journal it deletes, and
+// release what they reserved on the server before that tab ends the session.
+onSignedOutElsewhere(() => transfers.releaseAll());
 
 /*
  * A move's copy is in place (lib/move-across.ts): the server deleted the source

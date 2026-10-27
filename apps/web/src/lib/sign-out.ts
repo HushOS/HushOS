@@ -85,14 +85,16 @@ async function clearDrive() {
 export const STOP_UPLOADS_MS = 5_000;
 
 /*
- * Signing out of this browser. Other tabs hear of it first, then uploads stop while the
- * session still answers (the server releases what they reserved), never longer than
- * STOP_UPLOADS_MS. The session is revoked before anything local is deleted: deleting can wait
- * on a database another tab holds, and nothing on this device may keep the server session
- * alive. Then, whatever the logout did, everything this browser kept for the account goes.
+ * Signing out of this browser. Other tabs hear of it first, then uploads here and there stop
+ * while the session still answers (the server releases what they reserved), never longer than
+ * STOP_UPLOADS_MS here and RELEASED_WITHIN_MS for the others. The session is revoked before
+ * anything local is deleted: deleting can wait on a database another tab holds, and nothing
+ * on this device may keep the server session alive. Then, whatever the logout did,
+ * everything this browser kept for the account goes.
  */
 export async function signOut() {
-    announceSignOut();
+    // Other tabs stop, and release their uploads, while this one stops its own.
+    const told = announceSignOut();
     // From here nothing new is queued to upload, nor anything begun before now.
     await import('@/lib/device-session')
         .then(({ deviceSession }) => deviceSession.signedOut())
@@ -108,6 +110,7 @@ export async function signOut() {
         STOP_UPLOADS_MS,
         'Uploads took too long to stop.',
     ).catch((error: unknown) => console.error('Uploads were not all stopped here.', error));
+    await told;
     try {
         await authClient.logout();
     } finally {

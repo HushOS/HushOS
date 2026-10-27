@@ -16,6 +16,7 @@ import {
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import {
     ACCOUNT_DATA,
+    announceSignOut,
     deleteDatabase,
     forgetBrowserData,
     KEPT,
@@ -160,27 +161,87 @@ describe('signing out of this browser', () => {
         // Saving the device key failed at sign-in: there is no entry whose removal other tabs see.
         expect(localStorage.getItem('hushos-device-unlock')).toBeNull();
         const otherTab = new BroadcastChannel('hushos-signed-out');
-        const heard = new Promise(
+        const heard = new Promise<{ kind: string }>(
             (resolve) => (otherTab.onmessage = (event) => resolve(event.data)),
         );
         await forgetBrowserData({ files: async () => fileRoot([]).root });
-        expect(await heard).toBe('signed-out');
+        expect((await heard).kind).toBe('signing-out');
         otherTab.close();
     });
+});
 
-    test('a tab that hears another sign out drops its session entries and its uploads', async () => {
-        const stop = watchSignOutElsewhere();
-        const uploadsDropped = vi.fn();
-        const stopListening = onSignedOutElsewhere(uploadsDropped);
+/* Two tabs of one browser: each its own copy of the module, sharing the BroadcastChannel. */
+async function anotherTab() {
+    vi.resetModules();
+    return import('./device-data');
+}
+
+describe('telling other tabs', () => {
+    test('a tab that hears another sign out drops its session entries and releases its uploads', async () => {
+        const other = await anotherTab();
+        const stop = other.watchSignOutElsewhere();
+        let release!: () => void;
+        const releasing = vi.fn(
+            () =>
+                new Promise<void>((resolve) => {
+                    release = resolve;
+                }),
+        );
+        const stopListening = other.onSignedOutElsewhere(releasing);
         try {
             sessionStorage.setItem('hushos-link-sent', '{"email":"maya@example.com"}');
             sessionStorage.setItem('hushos.invite', 'token');
             sessionStorage.setItem('hushos-device-removed', '1');
-            // The other tab's sign-out, as it says it: no hand-made event.
-            const { announceSignOut } = await import('./device-data');
-            announceSignOut();
-            await vi.waitFor(() => expect(uploadsDropped).toHaveBeenCalledOnce());
+            let finished = false;
+            const told = announceSignOut({ heardWithin: 50, releasedWithin: 3_000 }).then(
+                (result) => {
+                    finished = true;
+                    return result;
+                },
+            );
+            await vi.waitFor(() => expect(releasing).toHaveBeenCalledOnce());
             expect(keys(sessionStorage)).toEqual(['hushos-device-removed']);
+            // The signing-out tab waits for the release, not merely for the message to land.
+            await new Promise((resolve) => setTimeout(resolve, 150));
+            expect(finished).toBe(false);
+            release();
+            expect(await told).toEqual({ heard: 1, released: 1 });
+        } finally {
+            stopListening();
+            stop();
+        }
+    });
+
+    test('waits for a tab that never releases only so long', async () => {
+        const other = await anotherTab();
+        const stop = other.watchSignOutElsewhere();
+        const stopListening = other.onSignedOutElsewhere(() => new Promise(() => {}));
+        try {
+            const started = Date.now();
+            expect(await announceSignOut({ heardWithin: 50, releasedWithin: 400 })).toEqual({
+                heard: 1,
+                released: 0,
+            });
+            expect(Date.now() - started).toBeLessThan(1_000);
+        } finally {
+            stopListening();
+            stop();
+        }
+    });
+
+    test('a tab never acts on its own sign-out, which its own listener also hears', async () => {
+        const stop = watchSignOutElsewhere();
+        const releasing = vi.fn();
+        const stopListening = onSignedOutElsewhere(releasing);
+        try {
+            sessionStorage.setItem('hushos.invite', 'token');
+            expect(await announceSignOut({ heardWithin: 50, releasedWithin: 200 })).toEqual({
+                heard: 0,
+                released: 0,
+            });
+            // Its uploads are stopped by its own sign-out, after it has looked at them.
+            expect(releasing).not.toHaveBeenCalled();
+            expect(sessionStorage.getItem('hushos.invite')).toBe('token');
         } finally {
             stopListening();
             stop();

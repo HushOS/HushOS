@@ -2244,10 +2244,34 @@ export function createTransferManager(options: TransferManagerOptions) {
         emit();
     }
 
+    /*
+     * Another tab is signing out and waits on this one: every upload here stops at once, as
+     * invalidate does, and then what each had reserved is released while the session still
+     * answers (the worker's state for it, and the server's reservation, which would otherwise
+     * hold quota until it expires). Never longer than FORGET_TIMEOUT_MS, and nothing is written
+     * to the journal, which that tab deletes.
+     */
+    async function releaseAll() {
+        const held = [...uploads.values()];
+        invalidate();
+        await Promise.race([
+            Promise.allSettled(
+                held.map(async (u) => {
+                    await rpc('driveUploadCancel', { objectId: u.objectId }).catch(() => {});
+                    await rpc('driveUploadForget', { objectId: u.objectId }).catch(() => {});
+                    if (u.uploadId)
+                        await api.abortUpload(workspaceOf(u), u.uploadId).catch(() => {});
+                }),
+            ),
+            new Promise((resolve) => setTimeout(resolve, FORGET_TIMEOUT_MS)),
+        ]);
+    }
+
     return {
         enqueue,
         forgetAll,
         invalidate,
+        releaseAll,
         pause,
         resume,
         retry,

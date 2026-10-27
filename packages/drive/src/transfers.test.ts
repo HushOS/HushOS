@@ -1935,6 +1935,27 @@ describe('queued rows and stashed copies', () => {
         expect(h.journal.entries.size).toBe(0);
     });
 
+    test('when another tab signs out, uploads here release their reservations and write nothing', async () => {
+        const h = harness({
+            // Parts never land: the uploads are begun and stay so.
+            send: () => new Promise(() => {}),
+        });
+        const [sending, paused] = h.manager.enqueue([
+            { file: fakeFile(2 * CHUNK, 'payroll.xlsx'), parent: node('root', null) },
+            { file: fakeFile(2 * CHUNK, 'contract.pdf'), parent: node('root', null) },
+        ]);
+        await settle(200);
+        await h.manager.pause(paused!);
+        expect(h.item(sending!).status).toBe('uploading');
+        expect(h.item(paused!).status).toBe('paused');
+        const writes = journalWrites(h.journal);
+        await h.manager.releaseAll();
+        // Both reservations go back to the server now, not when they expire a day later.
+        expect([...h.server.aborted].sort()).toEqual(['up-1', 'up-2']);
+        expect(writes).toEqual([]);
+        expect(h.manager.getState().uploads).toHaveLength(0);
+    });
+
     test('a copy without bytes on this device is reported lost, its reservation released, no file picker offered', async () => {
         const stash = fakeStash();
         stash.files.set('copy-1', fakeFile(2 * CHUNK, 'stashed.bin'));

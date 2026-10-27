@@ -276,7 +276,8 @@ export async function forgetBrowserData(options: { files?: () => Promise<FileRoo
                 return Promise.reject(new Error('No private file system here.'));
             return navigator.storage.getDirectory();
         });
-    announceSignOut();
+    // Told again, without waiting: a removed browser comes here without signing out.
+    void announceSignOut({ heardWithin: 0, releasedWithin: 0 });
     const results = await Promise.allSettled([
         (async () =>
             forgetKeys(
@@ -293,48 +294,116 @@ export async function forgetBrowserData(options: { files?: () => Promise<FileRoo
 }
 
 /*
- * Signing out tells every other tab of this browser, before anything is
- * deleted: it is the only way their sessionStorage goes (no other tab can
- * reach it), and their uploads must stop writing to the journal this tab is
- * about to delete. Said on a BroadcastChannel of its own, so it does not rest
- * on a storage event for the saved unlock, which a browser that never saved
- * one never fires.
+ * Signing out tells every other tab of this browser, before the session ends
+ * and before anything is deleted: it is the only way their sessionStorage goes
+ * (no other tab can reach it), they must stop writing what this tab is about to
+ * delete, and they release the uploads they began while the session can still
+ * release them (the server's reservations would otherwise hold quota for a
+ * day). Said on a BroadcastChannel of its own, so it does not rest on a storage
+ * event for the saved unlock, which a browser that never saved one never fires.
+ *
+ * Every message names the tab that sent it. A tab ignores its own, which its
+ * own listening channel would otherwise hear, so a tab never drops its own
+ * uploads before its sign-out has stopped them itself.
  */
 const SIGNED_OUT = 'hushos-signed-out';
-export function announceSignOut() {
+const TAB = typeof crypto === 'undefined' ? String(Math.random()) : crypto.randomUUID();
+type Said = { kind: 'signing-out' | 'heard' | 'released'; id: string; from: string };
+
+/* How long a signing-out tab listens for other tabs to say they heard it. */
+export const HEARD_WITHIN_MS = 300;
+/* How long it waits, in all, for those tabs to release their uploads. */
+export const RELEASED_WITHIN_MS = 4_000;
+
+function channel() {
     try {
-        const channel = new BroadcastChannel(SIGNED_OUT);
-        channel.postMessage('signed-out');
-        channel.close();
+        return new BroadcastChannel(SIGNED_OUT);
     } catch {
-        /* No BroadcastChannel: other tabs still lock on the saved unlock's storage event. */
+        return null;
     }
 }
 
-const elsewhere = new Set<() => void>();
-/* Work a tab drops when another signs out (its uploads, lib/transfers.ts). */
-export function onSignedOutElsewhere(listener: () => void) {
+/*
+ * Tells every other tab, and waits until each that answered within HEARD_WITHIN_MS has
+ * released its uploads, or RELEASED_WITHIN_MS has passed. Resolves with how many heard and
+ * how many released; never rejects.
+ */
+export async function announceSignOut({
+    heardWithin = HEARD_WITHIN_MS,
+    releasedWithin = RELEASED_WITHIN_MS,
+} = {}) {
+    const sender = channel();
+    if (!sender) return { heard: 0, released: 0 };
+    const id = typeof crypto === 'undefined' ? String(Math.random()) : crypto.randomUUID();
+    const heard = new Set<string>();
+    const released = new Set<string>();
+    let listening = true;
+    let done!: () => void;
+    const allReleased = new Promise<void>((resolve) => {
+        done = resolve;
+    });
+    const check = () => {
+        if (!listening && [...heard].every((tab) => released.has(tab))) done();
+    };
+    sender.onmessage = (event: MessageEvent<Said>) => {
+        const said = event.data;
+        if (!said || said.id !== id || said.from === TAB) return;
+        if (said.kind === 'heard') heard.add(said.from);
+        if (said.kind === 'released') {
+            heard.add(said.from);
+            released.add(said.from);
+        }
+        check();
+    };
+    try {
+        sender.postMessage({ kind: 'signing-out', id, from: TAB } satisfies Said);
+        await new Promise((resolve) => setTimeout(resolve, heardWithin));
+        listening = false;
+        check();
+        await within(allReleased, Math.max(0, releasedWithin - heardWithin), 'Late').catch(
+            () => {},
+        );
+    } finally {
+        sender.close();
+    }
+    return { heard: heard.size, released: released.size };
+}
+
+/* What a tab does when another signs out (its uploads, lib/transfers.ts; lib/device-session.ts). */
+const elsewhere = new Set<() => unknown>();
+export function onSignedOutElsewhere(listener: () => unknown) {
     elsewhere.add(listener);
     return () => void elsewhere.delete(listener);
 }
 
 /* Installed once in every tab (lib/auth-client.ts). */
 export function watchSignOutElsewhere() {
-    let channel: BroadcastChannel;
-    try {
-        channel = new BroadcastChannel(SIGNED_OUT);
-    } catch {
-        return () => {};
-    }
-    channel.onmessage = () => {
-        forgetSessionData();
-        for (const listener of elsewhere) {
+    const listener = channel();
+    if (!listener) return () => {};
+    listener.onmessage = (event: MessageEvent<Said>) => {
+        const said = event.data;
+        if (!said || said.kind !== 'signing-out' || said.from === TAB) return;
+        const answer = (kind: Said['kind']) => {
             try {
-                listener();
-            } catch (error) {
-                console.error('Part of another tab’s sign-out could not be followed here.', error);
+                listener.postMessage({ kind, id: said.id, from: TAB } satisfies Said);
+            } catch {
+                /* The signing-out tab stops waiting on its own. */
             }
-        }
+        };
+        answer('heard');
+        forgetSessionData();
+        const work = [...elsewhere].map(async (follow) => follow());
+        void within(Promise.allSettled(work), RELEASED_WITHIN_MS, 'Late')
+            .then((results) => {
+                for (const result of results)
+                    if (result.status === 'rejected')
+                        console.error(
+                            'Part of another tab’s sign-out could not be followed here.',
+                            result.reason,
+                        );
+            })
+            .catch(() => {})
+            .finally(() => answer('released'));
     };
-    return () => channel.close();
+    return () => listener.close();
 }

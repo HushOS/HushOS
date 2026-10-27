@@ -553,6 +553,21 @@ describe('signing out, before the device is cleared', () => {
         expect(first(auth.logout)).toBeLessThan(first(stores.groups));
     });
 
+    test('the session ends only after other tabs released their uploads, or stopped being waited on', async () => {
+        let released!: () => void;
+        announced.mockReturnValue(
+            new Promise((resolve) => {
+                released = () => resolve({ heard: 1, released: 1 });
+            }),
+        );
+        const signingOut = signOut();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(auth.logout).not.toHaveBeenCalled();
+        released();
+        await signingOut;
+        expect(auth.logout).toHaveBeenCalledOnce();
+    });
+
     test('a database delete that never answers never keeps the server session from ending', async () => {
         const never = new Promise<undefined>(() => {});
         stores.browser.mockReturnValue(never);
