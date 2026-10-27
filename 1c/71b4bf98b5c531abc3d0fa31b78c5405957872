@@ -1,0 +1,37 @@
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_5237159fb27fc9 1846-1884
+packages/groups/src/server.billing.test.ts
+  s_566b8e0c4467a4::t_5fee597403a7c5 335,340-342
+apps/web/src/components/families/no-family.tsx
+  s_566b8e0c4467a4::t_8fc6e1cc93c495 75-78
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_14ed6cfdc5fade 576-601,1231-1232,1329-1331
+apps/web/src/lib/groups/copy.ts
+  s_566b8e0c4467a4::t_a4b8446dda3b3f 59-62,146-147
+packages/groups/src/server.test.ts
+  s_566b8e0c4467a4::t_da13ece9a4904a 822-875,903,912-913,948-952,968,1000-1040
+apps/web/src/lib/groups/copy.test.ts
+  s_566b8e0c4467a4::t_cff9ea1fce3969 2,33-48
+packages/groups/src/server.ts
+  s_566b8e0c4467a4::t_517c2c4d4a6523 129-136,1282-1284,1411-1412
+DESIGN.md
+  s_566b8e0c4467a4::t_03e2cd42567ac5 429
+packages/db/src/groups.one-family.test.ts
+  s_566b8e0c4467a4::t_0e7021d538a2c3 12,361-364
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1c71b4bf98b5c531abc3d0fa31b78c5405957872",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
