@@ -1,0 +1,37 @@
+apps/web/src/lib/device-session.test.ts
+  s_566b8e0c4467a4::t_7e7c4d5c895f3a 1-106
+apps/web/src/lib/device-session.ts
+  s_566b8e0c4467a4::t_32c35e86effea9 1-40
+apps/web/src/lib/move-across.ts
+  s_566b8e0c4467a4::t_65381409ec5c47 5,95-96,128-144,147-149
+apps/web/src/lib/save-copy.test.ts
+  s_566b8e0c4467a4::t_32a924e59cc7e5 1-62
+apps/web/src/lib/save-copy.ts
+  s_566b8e0c4467a4::t_06bc4f5b6a47b0 4,38-39,70-82
+apps/web/src/lib/sign-out.test.ts
+  s_566b8e0c4467a4::t_1603c34fd693a8 52-53,550-551
+apps/web/src/lib/sign-out.ts
+  s_566b8e0c4467a4::t_8aadeebafccdcd 52-55,96-99
+apps/web/src/lib/transfers.ts
+  s_566b8e0c4467a4::t_8125901f1042f5 12,118-119
+apps/web/src/lib/uploads.ts
+  s_566b8e0c4467a4::t_fb57572ed53dc4 12,32-33,124,143,149
+packages/drive/src/transfers.ts
+  s_566b8e0c4467a4::t_a0cd67e45cdb64 166-180,185-186,1587-1598
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fef91fd7bcc25409fb5f55cb9ef47ea82931ba9b",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
