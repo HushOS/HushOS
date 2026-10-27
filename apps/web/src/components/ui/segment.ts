@@ -3,10 +3,13 @@
  * Formatted and Source, the tree view's Tree and Text, Pricing's planner): one track and one chosen
  * segment, so every copy stays the same.
  *
- * The track is a groove in the ground, below the panel in both schemes, so the chosen segment, the
- * panel's surface, reads as raised. The segment's edge is a hairline drawn inside it, never a drop
- * shadow: in a track 2px or 4px deep a shadow fills the inset under the segment (in the dark nearly
- * all of it), and the segment looks as if it sinks. High contrast makes the hairline solid.
+ * The track is a soft groove, the ink at 7% over whatever it sits on, so it shows on a panel and on
+ * the public pages' ground alike. The chosen segment is raised out of it: the card with the
+ * smallest shadow and a hairline in light, a lighter fill in the dark, where a shadow can't be
+ * seen. Owner's pick of three (2026-10-27): a border round the track read as a form field, and
+ * the selection tint was too close to the track in light. High contrast drops the shadow and makes
+ * the hairline solid.
  */
-export const segmentTrack = 'bg-ground';
-export const segmentOn = 'bg-card text-foreground inset-ring inset-ring-edge';
+export const segmentTrack = 'bg-foreground/7';
+export const segmentOn =
+    'bg-card text-foreground shadow-sheet inset-ring inset-ring-edge dark:bg-foreground/16 dark:shadow-none';
