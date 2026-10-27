@@ -1,7 +1,8 @@
 /*
  * Run after every `vite build` (the web app's `build` script): fails if the development
  * playground (src/dev, mounted by router.tsx behind import.meta.env.DEV) or DialKit
- * reached the output, client or server. The playground must never ship, to hushos.com or
+ * reached the output, client or server. The build itself refuses to load either
+ * (playgroundOutOfBuild in vite.config.ts), which also covers a module with no marker below. The playground must never ship, to hushos.com or
  * to anyone who builds their own image.
  */
 import { readdirSync, readFileSync } from 'node:fs';
@@ -14,6 +15,8 @@ const output = join(import.meta.dir, '..', '.output');
  */
 const MARKERS = [
     'hushos-dev-playground',
+    // A source path, should a build ever carry module ids or sourcemaps.
+    'src/dev/',
     'dialkit',
     '/dev/components',
     '/dev/layers',

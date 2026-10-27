@@ -124,16 +124,32 @@ function oneRequestPerConnectionInCI(): Plugin {
 }
 
 /*
- * A build leaves the development playground (src/dev) out of Tailwind's scan, so the
- * utilities only it uses never reach production CSS. In development the scan includes it,
- * and the playground's pages are styled like any other. scripts/check-dev-only.ts fails the
- * build if a playground utility gets through anyway.
+ * The development playground (src/dev) never reaches a build. A build refuses to load any
+ * module under src/dev or from DialKit, whatever imports it, and refuses to run at all
+ * outside production mode, where import.meta.env.DEV would be true and the playground's
+ * routes would be mounted (router.tsx). It also leaves src/dev out of Tailwind's scan, so
+ * the utilities only the playground uses never reach production CSS; in development the
+ * scan includes it. scripts/check-dev-only.ts then greps the output for what got through.
  */
-function playgroundOutOfBuildCss(): Plugin {
+function playgroundOutOfBuild(): Plugin {
+    const playground = /[\\/]src[\\/]dev[\\/]|[\\/]dialkit[\\/]/;
     return {
-        name: 'hushos:playground-out-of-build-css',
+        name: 'hushos:playground-out-of-build',
         apply: 'build',
         enforce: 'pre',
+        configResolved(config) {
+            if (!config.isProduction)
+                throw new Error(
+                    `A build must run in production mode (NODE_ENV=${process.env.NODE_ENV}); in development it would mount the playground.`,
+                );
+        },
+        load(id) {
+            if (playground.test(id))
+                this.error(
+                    `${id} is development-only (the playground or DialKit) and must not be built.`,
+                );
+            return null;
+        },
         transform(code, id) {
             if (!/\/src\/styles\.css(\?|$)/.test(id)) return null;
             return code.replace(
@@ -173,7 +189,7 @@ export default defineConfig({
     },
     plugins: [
         oneRequestPerConnectionInCI(),
-        playgroundOutOfBuildCss(),
+        playgroundOutOfBuild(),
         pdfjsAssets(),
         mdxMeta(),
         {
