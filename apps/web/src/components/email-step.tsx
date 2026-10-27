@@ -1,9 +1,10 @@
 import type { SignupIntent } from '@hushos/auth/protocol';
+import type { Catalogue, FamilyPlan } from '@hushos/billing/api';
 import { planTierName } from '@hushos/billing/protocol';
 import { revalidateLogic, useForm } from '@tanstack/react-form';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useRouter } from '@tanstack/react-router';
-import { useState, useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore, type ReactNode } from 'react';
 import { z } from 'zod';
 import { AuthInput } from '@/components/auth-input';
 import { AuthActions, AuthFields, AuthLayout, AuthNote, authLink } from '@/components/auth-layout';
@@ -18,8 +19,16 @@ import { Button } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
 import { agreeValue, authError, emailValue } from '@/lib/form';
 import { getOfferLandingServerFn, getReferralLandingServerFn } from '@/lib/growth';
-import { pickCurrency } from '@/lib/currency';
-import { currenciesOf, priceOf, yearlyPrice, yearsByMonth } from '@/lib/plans';
+import { pickCurrency, type LocaleHint } from '@/lib/currency';
+import { familySignupCurrency } from '@/lib/family-signup';
+import {
+    currenciesOf,
+    familyPrice,
+    familyTierName,
+    priceOf,
+    yearlyPrice,
+    yearsByMonth,
+} from '@/lib/plans';
 import {
     catalogueQueryOptions,
     formatMoney,
@@ -154,7 +163,7 @@ export function EmailStep({
                 )
             }
         >
-            {register && intent?.plan && <ChosenPlan id={intent.plan} />}
+            {register && intent?.plan && <ChosenPlan id={intent.plan} currency={intent.currency} />}
             <form
                 onSubmit={(event) => {
                     event.preventDefault();
@@ -323,13 +332,18 @@ export function CheckEmailStep({ purpose }: { purpose: 'register' | 'recover' })
 
 /*
  * The plan picked on the pricing page, said once at the top of sign-up: what it
- * is, what it costs, and that paying comes after the account exists.
+ * is, what it costs, and that paying comes after the account exists. A family
+ * tier says it's a family plan and that the family is made first.
  */
-function ChosenPlan({ id }: { id: string }) {
+function ChosenPlan({ id, currency: shown }: { id: string; currency?: string }) {
     const { data: catalogue } = useQuery(catalogueQueryOptions);
     const { data: hint } = useQuery(localeHintQueryOptions);
-    const plan = catalogue?.plans.find((candidate) => candidate.id === id);
-    if (!catalogue || !plan) return null;
+    if (!catalogue) return null;
+    const family = catalogue.families.find((candidate) => candidate.id === id);
+    if (family)
+        return <ChosenFamily catalogue={catalogue} plan={family} hint={hint} shown={shown} />;
+    const plan = catalogue.plans.find((candidate) => candidate.id === id);
+    if (!plan) return null;
     const currencies = currenciesOf(catalogue.plans);
     const currency = pickCurrency({
         hint,
@@ -339,22 +353,60 @@ function ChosenPlan({ id }: { id: string }) {
     const price = priceOf(plan, currency);
     const name = planTierName({ name: plan.name });
     return (
-        <div className="flex items-start justify-between gap-4 rounded-md bg-accent px-4 py-3 text-accent-foreground">
+        <ChosenCard title={`${name} · ${formatQuota(plan.quotaBytes)}`}>
+            {plan.interval === 'year'
+                ? // Written as the pricing page wrote it, by the month or by the year.
+                  yearlyPrice(price.amount, price.currency, yearsByMonth(catalogue, currency)).line
+                : `${formatMoney(price.amount, price.currency)} a month.`}{' '}
+            You pay after your account is set up.
+        </ChosenCard>
+    );
+}
+
+/* A family tier, priced as Create a family will charge it after sign-up (familySignupCurrency). */
+function ChosenFamily({
+    catalogue,
+    plan,
+    hint,
+    shown,
+}: {
+    catalogue: Catalogue;
+    plan: FamilyPlan;
+    hint: LocaleHint | undefined;
+    shown?: string;
+}) {
+    const currency = familySignupCurrency(catalogue, plan, hint, shown);
+    const price = currency ? familyPrice(plan, currency) : null;
+    if (!price) return null;
+    return (
+        <ChosenCard title={`${familyTierName(plan)} · ${formatQuota(plan.quotaBytes)}`} family>
+            A family plan with {plan.includedMembers} members included.{' '}
+            {plan.interval === 'year'
+                ? yearlyPrice(price.base, price.currency, yearsByMonth(catalogue, price.currency))
+                      .line
+                : `${formatMoney(price.base, price.currency)} a month.`}{' '}
+            You name your family and pay after your account is set up.
+        </ChosenCard>
+    );
+}
+
+function ChosenCard({
+    title,
+    family = false,
+    children,
+}: {
+    title: string;
+    family?: boolean;
+    children: ReactNode;
+}) {
+    return (
+        <div
+            data-chosen-plan={family ? 'family' : 'personal'}
+            className="flex items-start justify-between gap-4 rounded-md bg-accent px-4 py-3 text-accent-foreground"
+        >
             <span className="flex flex-col gap-0.5">
-                <span className="text-[15px] font-bold">
-                    {name} · {formatQuota(plan.quotaBytes)}
-                </span>
-                <span className="text-sm">
-                    {plan.interval === 'year'
-                        ? // Written as the pricing page wrote it, by the month or by the year.
-                          yearlyPrice(
-                              price.amount,
-                              price.currency,
-                              yearsByMonth(catalogue, currency),
-                          ).line
-                        : `${formatMoney(price.amount, price.currency)} a month.`}{' '}
-                    You pay after your account is set up.
-                </span>
+                <span className="text-[15px] font-bold">{title}</span>
+                <span className="text-sm">{children}</span>
             </span>
             <Link
                 to="/pricing"

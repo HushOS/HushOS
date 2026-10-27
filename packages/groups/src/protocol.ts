@@ -119,3 +119,19 @@ export function rosterBodyLimit(
         resealed * ROTATION_DOCUMENTS_BODY_BYTES
     );
 }
+
+/* The longest family name, in characters (code points, as `Array.from` counts them). */
+export const GROUP_NAME_MAX = 100;
+
+/*
+ * A family's name as the server stores it, or null when the server refuses it: trimmed, NFC,
+ * 1 to GROUP_NAME_MAX characters, and printable text only (no `\p{C}`: no controls, no
+ * invisible format marks), since the name goes into invitation emails. The one rule, used by
+ * the server's create and rename and by the name the web suggests.
+ */
+export function checkGroupName(name: string): string | null {
+    const trimmed = name.trim().normalize('NFC');
+    const length = Array.from(trimmed).length;
+    if (length < 1 || length > GROUP_NAME_MAX || /\p{C}/u.test(trimmed)) return null;
+    return trimmed;
+}

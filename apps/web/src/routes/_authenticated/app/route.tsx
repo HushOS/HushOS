@@ -21,7 +21,14 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/s
 import { billingApi } from '@/lib/billing-api';
 import { usePageRestored } from '@/lib/page-restore';
 import { setPaletteOpen } from '@/lib/palette';
-import { billingQueryOptions, storageQueryOptions } from '@/lib/queries';
+import {
+    billingQueryOptions,
+    catalogueQueryOptions,
+    localeHintQueryOptions,
+    storageQueryOptions,
+} from '@/lib/queries';
+import { capabilitiesQueryOptions, familiesQueryOptions } from '@/lib/families-shell';
+import { firstLanding } from '@/lib/family-signup';
 import { sessionQueryOptions } from '@/lib/session';
 import { useIsTablet } from '@/hooks/use-mobile';
 import { passesThrough } from '@/lib/own-keys';
@@ -106,10 +113,13 @@ function AppLayout() {
         void authClient.restore(latestUser.current, { validated }).catch(() => {});
     }, [user.id, user.credentialVersion, lockRevision]);
     // First landing: finish account setup, send a new account to save its recovery
-    // phrase, and a signup from the pricing page straight on to checkout.
+    // phrase, and a signup from the pricing page straight on to checkout, or, for a family
+    // tier, to Create a family with it.
     useEffect(() => {
         let active = true;
         const current = latestUser.current;
+        // Where the person was as this began: a landing never moves them from a place they went to.
+        const from = router.state.location.href;
         // A session from before devices, or one whose registration failed, describes its device
         // now (docs/devices-design.md); never in the way of the page.
         void authClient.ensureDevice(current).catch(() => {});
@@ -121,11 +131,32 @@ function AppLayout() {
                 if (needsBackup)
                     await router.navigate({ to: '/setup/recovery-key', replace: true });
                 await queryClient.invalidateQueries(storageQueryOptions);
-                const billing = await queryClient.fetchQuery(billingQueryOptions).catch(() => null);
-                if (!active || !billing?.intendedPlan) return;
+                const landing = await firstLanding({
+                    summary: () => queryClient.fetchQuery(billingQueryOptions),
+                    capabilities: () => queryClient.fetchQuery(capabilitiesQueryOptions),
+                    catalogue: () => queryClient.fetchQuery(catalogueQueryOptions),
+                    hint: () => queryClient.fetchQuery(localeHintQueryOptions),
+                    families: () => queryClient.fetchQuery(familiesQueryOptions(current.id)),
+                    // By the server, and in the summary kept here, which the next landing reads.
+                    forget: async () => {
+                        await billingApi.forgetIntendedFamily();
+                        queryClient.setQueryData(
+                            billingQueryOptions.queryKey,
+                            (summary) => summary && { ...summary, intendedFamily: null },
+                        );
+                    },
+                    stillHere: () => active && router.state.location.href === from,
+                    log: (message, error) => console.error(message, error),
+                });
+                if (!active) return;
+                if (landing.kind === 'go') {
+                    await router.navigate({ ...landing.to, replace: true });
+                    return;
+                }
+                if (landing.kind !== 'checkout') return;
                 setCheckingOut(true);
                 try {
-                    const { url } = await billingApi.checkout(billing.intendedPlan);
+                    const { url } = await billingApi.checkout(landing.plan);
                     if (url) {
                         window.location.assign(url);
                         return;
@@ -136,7 +167,7 @@ function AppLayout() {
                 if (active)
                     await router.navigate({
                         to: '/app/billing',
-                        search: { plan: billing.intendedPlan },
+                        search: { plan: landing.plan },
                         replace: true,
                     });
             })

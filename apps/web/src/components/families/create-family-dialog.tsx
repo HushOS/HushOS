@@ -37,10 +37,11 @@ import { cue } from '@/lib/sounds';
  * Someone already in a family is told to leave it first, before any keys are
  * made (one family per account); the server refuses it too.
  *
- * From Plans, with a tier chosen (`plan`), the family is made the same way and
- * then goes straight to Polar's checkout for that tier
- * (docs/families-shared-pool.md 7.4). A checkout that can't start leaves the
- * family made, on its page, where Choose a plan offers the tiers again.
+ * From Plans, the pricing page or sign-up, with a tier chosen (`plan`, its name filled
+ * in from `defaultName` so one click goes on), the family is made the same way and then
+ * goes straight to Polar's checkout for that tier (docs/families-shared-pool.md 7.4). A
+ * checkout that can't start leaves the family made, on its page, where Choose a plan
+ * offers the tiers again.
  * `personalPlan` says what happens to a personal plan of theirs (personalPlanEnding): it
  * ends when the family's plan starts, and that is said before they go on (3.3).
  */
@@ -49,12 +50,15 @@ export function CreateFamilyDialog({
     open,
     onOpenChange,
     plan,
+    defaultName,
     personalPlan,
 }: {
     userId: string;
     open: boolean;
     onOpenChange: (open: boolean) => void;
     plan?: { plan: FamilyPlan; currency: string };
+    /* The name filled in until they type their own (defaultFamilyName). */
+    defaultName?: string;
     personalPlan?: string | null;
 }) {
     const id = useId();
@@ -62,7 +66,9 @@ export function CreateFamilyDialog({
     const navigate = useNavigate();
     // Where plans are sold, a family chooses one before anyone can join (docs/groups-design.md 3.5).
     const billing = useBillingEnabled();
-    const [name, setName] = useState('');
+    // Null until they type: until then the field shows `defaultName`, which may arrive later.
+    const [typed, setName] = useState<string | null>(null);
+    const name = typed ?? defaultName ?? '';
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
     const yours = useQuery(familiesQueryOptions(userId)).data?.find(
@@ -98,6 +104,13 @@ export function CreateFamilyDialog({
         event.preventDefault();
         const trimmed = name.trim();
         if (!trimmed || refusal || checking) return;
+        // Checked before anything is made: a family made for a checkout that can't open.
+        if (plan && !Object.hasOwn(plan.plan.prices, plan.currency)) {
+            setError(
+                `${familyTierName(plan.plan)} isn’t sold in ${plan.currency.toUpperCase()}. Choose it again from Plans.`,
+            );
+            return;
+        }
         setPending(true);
         setError('');
         // Where the dialog is: the page and the tier chosen by address (Account → Family's
@@ -157,7 +170,7 @@ export function CreateFamilyDialog({
                             return;
                         }
                         onOpenChange(false);
-                        setName('');
+                        setName(null);
                         setPending(false);
                         checkoutNotOpening();
                         await afterFamilyChange(queryClient, userId);
@@ -168,7 +181,7 @@ export function CreateFamilyDialog({
                 cue('success');
                 toast.add({ type: 'success', title: `${trimmed} created` });
                 onOpenChange(false);
-                setName('');
+                setName(null);
                 setPending(false);
                 await navigate({ to: '/app/family' });
                 return;

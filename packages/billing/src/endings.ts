@@ -1622,13 +1622,12 @@ async function grantKeptRewards(userId: string) {
     if (!kept.length) return;
     const { grantFamilyOrderRewards, grantOrderRewards } = await import('./server');
     for (const subscriptionId of new Set(kept.map((row) => row.subscriptionId))) {
-        // A family's plan earns what its delivery would have given it: an affiliate's commission
-        // by the order's discount, and no referral reward (nobody was invited to pay for it).
+        // A family's plan earns what its delivery would have given it, with its payer as owner.
         const family = await billingRepository.familyPlanOf(subscriptionId);
         const page = await polar().orders.list({ subscription_id: subscriptionId, limit: 100 });
         for (const row of kept.filter((candidate) => candidate.subscriptionId === subscriptionId)) {
             const order = page.items.find((candidate) => candidate.id === row.orderId);
-            if (order && family) await grantFamilyOrderRewards(order);
+            if (order && family) await grantFamilyOrderRewards(family.groupId, order);
             else if (order) await grantOrderRewards(userId, order);
             // Granted, or an order Polar no longer lists (nothing to grant on): done.
             await billingRepository.settleKeptPayment(row.orderId);

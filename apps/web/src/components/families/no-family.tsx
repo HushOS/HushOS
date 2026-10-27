@@ -2,12 +2,14 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { CreateFamilyDialog } from '@/components/families/create-family-dialog';
+import { DeclineInvitation } from '@/components/families/decline-invitation';
 import { NoticeList } from '@/components/families/family-alerts';
 import { ServerKnowsLine } from '@/components/families/server-knows';
 import { PageHeader } from '@/components/page-header';
 import { Setting, SettingsGroup } from '@/components/settings';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { myInvitationsQueryOptions } from '@/lib/families-shell';
+import { defaultFamilyName, familyCheckoutCurrency } from '@/lib/family-signup';
 import { personalPlanEnding } from '@/lib/plans';
 import { billingQueryOptions, catalogueQueryOptions, useBillingEnabled } from '@/lib/queries';
 import type { GroupSummary } from '@/lib/groups/api';
@@ -31,13 +33,19 @@ export function NoFamily({
     notices,
     nameOf,
     create,
+    accountName,
 }: {
     userId: string;
     families: readonly GroupSummary[];
     notices: readonly GroupNotice[];
     nameOf: (groupId: string) => string | undefined;
-    /* A family tier chosen on Plans: Create a family opens with it, and goes on to its checkout. */
+    /*
+     * A family tier chosen on Plans or the pricing page, or at signup: Create a family opens
+     * with it, and goes on to its checkout.
+     */
     create?: { planId: string; currency?: string };
+    /* The account's name, for the name a family made with a chosen tier starts with. */
+    accountName?: string;
 }) {
     const waiting = families.filter((at) => at.kind === 'family' && at.state === 'accepted');
     const invitations = useQuery(myInvitationsQueryOptions(userId));
@@ -47,12 +55,14 @@ export function NoFamily({
     const catalogue = useQuery({ ...catalogueQueryOptions, enabled: billing && Boolean(create) });
     const personal = useQuery({ ...billingQueryOptions, enabled: billing && Boolean(create) });
     const chosen = create ? catalogue.data?.families.find((at) => at.id === create.planId) : null;
+    // Charged in the address's currency only where the tier is priced in it.
     const plan = chosen
-        ? { plan: chosen, currency: create?.currency ?? Object.keys(chosen.prices)[0] ?? 'usd' }
+        ? { plan: chosen, currency: familyCheckoutCurrency(chosen, create?.currency) }
         : undefined;
-    // Arrived from Plans with a tier: the dialog opens with it, until it is closed.
+    // Arrived with a tier: the dialog opens with it, until it is closed. Not for someone waiting
+    // to join a family: they're about to be in one, and are shown how to finish joining instead.
     const [dismissed, setDismissed] = useState(false);
-    const open = creating || (Boolean(chosen) && !dismissed);
+    const open = creating || (Boolean(chosen) && !dismissed && waiting.length === 0);
     return (
         <div className="flex flex-1 flex-col" data-no-family>
             <PageHeader
@@ -63,7 +73,10 @@ export function NoFamily({
                         : 'A family shares folders, and everyone in it is checked before they join. You can be in one family.'
                 }
             >
-                <Button onClick={() => setCreating(true)}>Create a family</Button>
+                {/* Not while waiting to join one: once let in it is theirs, and a second is refused. */}
+                {waiting.length === 0 && (
+                    <Button onClick={() => setCreating(true)}>Create a family</Button>
+                )}
             </PageHeader>
             <div className="flex max-w-3xl flex-col gap-9 px-5 pb-10 sm:px-8">
                 {notices.length > 0 && <NoticeList notices={notices} nameOf={nameOf} />}
@@ -84,8 +97,17 @@ export function NoFamily({
                                     </Link>
                                 }
                             >
-                                <span className="text-muted-foreground">
-                                    You accepted. Check each other’s words to finish.
+                                <span className="flex flex-col items-start gap-1">
+                                    <span className="text-muted-foreground">
+                                        You accepted. Check each other’s words to finish.
+                                    </span>
+                                    {/* Quiet, under the words: Continue is the row's way on. */}
+                                    <DeclineInvitation
+                                        userId={userId}
+                                        groupId={family.id}
+                                        family={family.name}
+                                        className="-ml-3.5"
+                                    />
                                 </span>
                             </Setting>
                         ))}
@@ -133,6 +155,8 @@ export function NoFamily({
                     if (!next) setDismissed(true);
                 }}
                 plan={plan}
+                // With a tier chosen the name is filled in, so one click goes on to checkout.
+                defaultName={plan ? defaultFamilyName(accountName) : undefined}
                 personalPlan={personalPlanEnding(
                     personal.data?.subscription,
                     'the family’s plan starts',

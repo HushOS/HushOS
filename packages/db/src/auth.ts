@@ -152,6 +152,7 @@ export async function registerAccount(input: {
             await tx.insert(accountIntents).values({
                 userId: user.id,
                 planProductId: enrollment.intent.plan ?? null,
+                currency: enrollment.intent.currency ?? null,
                 referralCode: enrollment.intent.referral ?? null,
                 source: enrollment.intent.source ?? null,
             });

@@ -64,6 +64,8 @@ import type {
     SignedStatementWire,
 } from './api';
 import {
+    checkGroupName,
+    GROUP_NAME_MAX,
     IDENTITY_PAGE,
     INVITATION_DAYS,
     MAX_GRANTS_PER_CALL,
@@ -123,6 +125,14 @@ const inYourFamily = (family: { groupId: string; name: string }, invitedTo?: str
             : `You’re in ${family.name}. Leave it before you create another.`,
         409,
         { reason: 'self', family },
+    );
+/* Someone waiting to join a family (accepted, not let in) who tries to make one. */
+const waitingToJoin = (family: { groupId: string; name: string | null }) =>
+    new GroupError(
+        'in-family',
+        `You’re joining ${family.name || 'a family'} already. Decline that invitation first, then you can create your own.`,
+        409,
+        { reason: 'waiting', family },
     );
 const newcomerInFamily = () =>
     new GroupError(
@@ -1216,12 +1226,10 @@ function groupView(group: GroupRow) {
 }
 
 function groupName(name: string) {
-    const trimmed = name.trim().normalize('NFC');
-    const length = Array.from(trimmed).length;
-    // Printable text only: the name goes into invitation emails.
-    if (length < 1 || length > 100 || /\p{C}/u.test(trimmed))
-        throw new GroupError('invalid', 'Use a name between 1 and 100 characters.');
-    return trimmed;
+    const checked = checkGroupName(name);
+    if (checked === null)
+        throw new GroupError('invalid', `Use a name between 1 and ${GROUP_NAME_MAX} characters.`);
+    return checked;
 }
 
 /* JSON with every object's keys sorted: the same call always gives the same text. */
@@ -1271,6 +1279,9 @@ export async function createGroup(userId: string, body: CreateGroupBody) {
     // This very family, landed since storedCreation looked, is the repository's replay to answer.
     const family = await groupsRepository.familyOf(userId);
     if (family && family.groupId !== body.id) throw inYourFamily(family);
+    // Nor while waiting to join one: once let in it would be theirs, and this one refused then.
+    const waiting = await groupsRepository.waitingFamilyOf(userId);
+    if (waiting) throw waitingToJoin(waiting);
     await limit(`groups:create:user:${userId}`, 5, DAY);
     await limit('groups:create:global', 1000, 60 * 60 * 1000);
     const name = groupName(body.name);
@@ -1397,6 +1408,8 @@ export async function createGroup(userId: string, body: CreateGroupBody) {
             );
         case 'area-limit':
             throw new GroupError('area-limit', 'This group has no room for another folder.', 409);
+        case 'waiting-to-join':
+            throw waitingToJoin(result.family);
         case 'in-family': {
             // Admitted elsewhere between the check above and the write. The index's answer
             // names no family: read it, and if they've already left it too, let them retry.

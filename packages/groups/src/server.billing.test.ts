@@ -332,13 +332,14 @@ describe('admission with billing on', () => {
         expect(polar.updates).toEqual([]);
     });
 
-    test('someone who made a family since accepting is refused before Polar is asked for a place', async () => {
+    test('someone in another family since accepting is refused before Polar is asked for a place', async () => {
         const fam = await kit.family();
         await onPlan(fam, 1);
         const newcomer = await kit.member();
         const call = await admission(fam, newcomer);
-        // One family per account: theirs, made after they accepted.
-        await kit.family(newcomer);
+        // One family per account: another one they're in since they accepted (let in there; the
+        // rows are written directly, as making one while waiting is refused).
+        await createTestFamily({ organizerId: newcomer.userId });
         const before = await kit.head(fam.groupId);
         polar.updates = [];
         expect(

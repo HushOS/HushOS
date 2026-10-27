@@ -376,10 +376,28 @@ export async function getBillingSummary(userId: string) {
 /* The plan someone signed up for and has not checked out yet. */
 export async function getPendingIntent(userId: string) {
     const [row] = await db
-        .select({ planProductId: accountIntents.planProductId })
+        .select({ planProductId: accountIntents.planProductId, currency: accountIntents.currency })
         .from(accountIntents)
         .where(and(eq(accountIntents.userId, userId), isNull(accountIntents.consumedAt)));
     return row ?? null;
+}
+
+/*
+ * Forgets the plan chosen at signup, `planProductId` as it was read, but not the rest of the
+ * intent: a code that came with it still applies to the next checkout, which consumes it. A
+ * plan chosen since the read is kept.
+ */
+export async function dropIntendedPlan(userId: string, planProductId: string) {
+    await db
+        .update(accountIntents)
+        .set({ planProductId: null })
+        .where(
+            and(
+                eq(accountIntents.userId, userId),
+                isNull(accountIntents.consumedAt),
+                eq(accountIntents.planProductId, planProductId),
+            ),
+        );
 }
 
 export async function consumeIntent(userId: string) {

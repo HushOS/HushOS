@@ -1698,48 +1698,285 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
 });
 
 /*
- * The pricing page's Create a family, pressed signed out: it signs up first and lands on
- * Plans, where the family tiers sit beside the personal ones (docs/families-shared-pool.md 7.4),
- * through the return it keeps in this browser (rememberReturn, for an hour). The
- * section shows only where the server sells plans and lists a family plan, so this skips
- * with billing off, as every CI job runs; it runs against a server with a Polar catalogue
- * (verify-hushos `launch --billing polar`).
+ * Family in the sidebar, wherever families are served: someone in no family (or only waiting to
+ * join one) has a Family place leading to Account → Family, where they can create one; once in
+ * a family, its name heads the sidebar instead and leads to the same page.
  */
-test.describe.serial('creating a family from the pricing page', () => {
+test.describe.serial('Family in the sidebar', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
 
-    test('someone without an account signs up from Create a family and lands on Plans, at the family tiers', async ({
+    test('someone in no family finds Family there; in one, the family’s name leads to it instead', async ({
+        browser,
+    }) => {
+        test.setTimeout(300_000);
+        const nia = await person(browser, 'Nia Okafor');
+        const family = 'Okafor family';
+        // Asked once the families are known, so what the sidebar shows means something.
+        const listed = nia.page.waitForResponse(
+            (response) => new URL(response.url()).pathname === '/api/groups' && response.ok(),
+        );
+        await nia.page.goto('/app/drive');
+        await listed;
+        const place = nia.page
+            .locator('[data-family-place]')
+            .getByRole('link', { name: 'Family', exact: true });
+        await expect(place).toBeVisible({ timeout: 60_000 });
+        await expect(nia.page.locator('[data-family-header]')).toHaveCount(0);
+        await place.click();
+        await expect(nia.page).toHaveURL(/\/app\/family$/);
+        await expect(
+            nia.page.locator('[data-no-family]').getByRole('button', { name: 'Create a family' }),
+        ).toBeVisible({ timeout: 60_000 });
+
+        await createFamily(nia, family);
+        await nia.page.goto('/app/drive');
+        const header = nia.page
+            .locator('[data-family-header]')
+            .getByRole('link', { name: family, exact: true });
+        await expect(header).toBeVisible({ timeout: 60_000 });
+        // One way to the family, never a second Family beside its name.
+        await expect(nia.page.locator('[data-family-place]')).toHaveCount(0);
+        await header.click();
+        await expect(nia.page).toHaveURL(/\/app\/family$/);
+        await expect(nia.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+            timeout: 60_000,
+        });
+        await nia.page.context().close();
+    });
+});
+
+/*
+ * A family plan from the pricing page, like a personal one: each family tier has its own
+ * button. Signed out, it signs up with the tier as the plan; sign-up says it's a family plan,
+ * and the first visit after it (recovery kit saved, device unlocked) opens Create a family with
+ * that tier and a name already filled in, so one click goes to checkout. The server then
+ * forgets the tier, so the next visit goes where the person chooses. Signed in and in no
+ * family, each tier opens Create a family with it; in a family, the section offers only theirs.
+ * The section shows only where the server sells plans and lists a family plan, so this skips
+ * with billing off, as every CI job runs; it runs against a server with a Polar catalogue
+ * (verify-hushos `launch --groups --billing polar`). Nothing is paid: Create and pay is never
+ * pressed, and the family made at the end is made without a plan.
+ */
+test.describe.serial('signing up for a family plan from the pricing page', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+
+    test('a tier signs up with it, and the first visit opens Create a family with it and a name', async ({
         browser,
         request,
     }) => {
-        const catalogue = (await (await request.get('/api/billing/catalogue')).json()) as {
-            enabled?: boolean;
-            families?: unknown[];
-        };
+        const plans = await familyCatalogue(request);
         test.skip(
-            !catalogue.enabled || !catalogue.families?.length,
+            !plans.length,
             'Billing is off or sells no family plan, so the pricing page has no family section.',
         );
         test.setTimeout(300_000);
         const page = await (await newContext(browser)).newPage();
         await page.goto('/pricing', { waitUntil: 'networkidle' });
-        const create = page
-            .locator('[data-family-plan]')
-            .getByRole('link', { name: 'Create a family', exact: true });
-        // A press before hydration follows the link without keeping the return.
-        await hydrated(create);
-        await create.click();
-        await expect(page).toHaveURL(/\/register$/);
+        const section = page.locator('[data-family-plan]');
+        // One button per tier, none for the section as a whole.
+        await expect(section.getByRole('link', { name: 'Create a family' })).toHaveCount(0);
+        const tiers = section.locator('[data-family-tier]');
+        await expect(tiers.getByRole('link', { name: /^Start with Family / })).toHaveCount(
+            await tiers.count(),
+        );
+        const pro = section.locator('[data-family-tier="pro"]');
+        const start = pro.getByRole('link', { name: 'Start with Family Pro', exact: true });
+        const href = new URL((await start.getAttribute('href'))!, 'http://hushos.invalid');
+        expect(href.pathname).toBe('/register');
+        const tier = plans.find((plan) => plan.id === href.searchParams.get('plan'));
+        expect(tier?.tier).toBe('pro');
+        // The currency the tier is shown in rides along, so sign-up and checkout use it.
+        const shownIn = href.searchParams.get('currency');
+        expect(Object.keys(tier!.prices)).toContain(shownIn);
+        await hydrated(start);
+        await start.click();
+        await expect(page).toHaveURL(/\/register\?plan=/);
+        const chosen = page.locator('[data-chosen-plan="family"]');
+        await expect(chosen).toContainText(`${planTierName(tier!)} · `, { timeout: 60_000 });
+        await expect(chosen).toContainText(
+            `A family plan with ${tier!.includedMembers} members included.`,
+        );
+        await expect(chosen).toContainText(
+            'You name your family and pay after your account is set up.',
+        );
+
         await registerAccount(page, 'Rosa Ekström', undefined, {
             viaCurrentPage: true,
-            landsOn: /\/app\/billing$/,
+            landsOn: /\/app\/family\?create=/,
         });
+        const landed = new URL(page.url());
+        expect(landed.searchParams.get('create')).toBe(tier!.id);
+        expect(landed.searchParams.get('currency')).toBe(shownIn);
+        const dialog = page.getByRole('dialog', { name: 'Create a family' });
+        await expect(dialog).toContainText(`Then you pay for ${planTierName(tier!)}`, {
+            timeout: 60_000,
+        });
+        await expect(dialog.getByLabel('Name')).toHaveValue('Rosa Ekström’s family');
+        await expect(dialog.getByRole('button', { name: 'Create and pay' })).toBeEnabled();
+        // Opened once: the server no longer offers it, so the next visit goes where they choose.
+        const summary = (await (await page.request.get('/api/billing')).json()) as {
+            intendedFamily?: string | null;
+        };
+        expect(summary.intendedFamily).toBeNull();
+        await dialog.getByRole('button', { name: 'Cancel' }).click();
+
+        // Signed in and in no family: each tier opens Create a family with it, priced as shown.
+        await page.goto('/pricing', { waitUntil: 'networkidle' });
+        const choose = section
+            .locator('[data-family-tier="pro"]')
+            .getByRole('link', { name: 'Choose Family Pro', exact: true });
+        await expect(choose).toBeVisible({ timeout: 60_000 });
+        const target = new URL((await choose.getAttribute('href'))!, 'http://hushos.invalid');
+        expect(target.pathname).toBe('/app/family');
+        expect(target.searchParams.get('create')).toBe(tier!.id);
+        expect(Object.keys(tier!.prices)).toContain(target.searchParams.get('currency'));
+        await expect(section.getByRole('link', { name: /^Start with / })).toHaveCount(0);
+
+        // In a family: only theirs, never a second one.
+        await createFamily({ page, email: '', name: 'Rosa Ekström' }, 'Ekström family');
+        await page.goto('/pricing', { waitUntil: 'networkidle' });
         await expect(
-            page
-                .locator('[data-family-plans]')
-                .getByRole('button', { name: /^Create a family with Family / })
-                .first(),
-        ).toBeVisible({ timeout: 60_000 });
+            section.getByRole('link', { name: 'Open Ekström family', exact: true }),
+        ).toHaveAttribute('href', '/app/family', { timeout: 60_000 });
+        await expect(section.getByRole('link', { name: /^Choose Family / })).toHaveCount(0);
+        await page.context().close();
+    });
+});
+
+/*
+ * Backing out of a pending join (accepted, not let in): Decline invitation, on the join screen
+ * and on Family's Waiting to join row, asked once. The server's leave withdraws it; Family
+ * then offers Create a family again. Real accounts and a real invitation, so it runs where
+ * plans aren't sold (as CI runs): where they are, inviting needs a family with a paid plan.
+ */
+test.describe.serial('declining a pending join', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+
+    test('someone waiting to join declines from Family: the wait is gone, and Create a family is back', async ({
+        browser,
+        request,
+    }) => {
+        test.skip(
+            await sellsPlans(request),
+            'Where plans are sold, inviting needs a family with a plan, which can’t be paid for here.',
+        );
+        test.setTimeout(300_000);
+        const maya = await person(browser, 'Maya Berg');
+        const sam = await person(browser, 'Sam Okafor');
+        await createFamily(maya, 'Berg family');
+        await invite(maya, sam.email);
+        await accept(sam, 'Berg family');
+        // The join screen offers it too, quietly.
+        await expect(sam.page.getByRole('button', { name: 'Decline invitation' })).toBeVisible();
+        await sam.page.goto('/app/family');
+        const page = sam.page.locator('[data-no-family]');
+        await expect(page.getByRole('link', { name: 'Continue joining Berg family' })).toBeVisible({
+            timeout: 60_000,
+        });
+        await expect(page.getByRole('button', { name: 'Create a family' })).toHaveCount(0);
+        await page.getByRole('button', { name: 'Decline invitation to Berg family' }).click();
+        const ask = sam.page.getByRole('alertdialog');
+        await expect(ask).toContainText('Decline the invitation to Berg family?');
+        await expect(ask).toContainText('You can be invited again.');
+        await ask.getByRole('button', { name: 'Decline invitation' }).click();
+        await expect(ask).toHaveCount(0, { timeout: 60_000 });
+        await expect(page.getByRole('link', { name: 'Continue joining Berg family' })).toHaveCount(
+            0,
+        );
+        await expect(page.getByRole('button', { name: 'Create a family' })).toBeVisible();
+        // The server says so too: the membership is gone from the account's families.
+        const listed = (await (
+            await sam.page.request.get('/api/groups', { headers: { 'HushOS-Client': 'web/1' } })
+        ).json()) as {
+            groups: { id: string; state: string }[];
+        };
+        expect(listed.groups.filter((group) => group.state === 'accepted')).toEqual([]);
+        for (const who of [maya, sam]) await who.page.context().close();
+    });
+});
+
+test.describe.serial('Family for someone waiting to join one', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+
+    test('offers to finish joining, never Create a family, which would be refused once let in', async ({
+        browser,
+    }) => {
+        test.setTimeout(300_000);
+        const ines = await person(browser, 'Inês Ortega');
+        // Accepted and not let in, as route 2 lists it (an invitation needs a family with a plan
+        // where plans are sold, so the list is answered here).
+        const groupId = randomUUID();
+        await ines.page.route(
+            (url) => url.pathname === '/api/groups',
+            (route: Route) =>
+                route.request().method() === 'GET'
+                    ? route.fulfill({
+                          json: {
+                              groups: [
+                                  {
+                                      id: groupId,
+                                      kind: 'family',
+                                      name: 'Ortega family',
+                                      state: 'accepted',
+                                  },
+                              ],
+                          },
+                      })
+                    : route.continue(),
+        );
+        await ines.page.goto('/app/family');
+        const page = ines.page.locator('[data-no-family]');
+        await expect(
+            page.getByRole('link', { name: 'Continue joining Ortega family' }),
+        ).toHaveAttribute('href', `/app/families/${groupId}/join`, { timeout: 60_000 });
+        await expect(page.getByRole('button', { name: 'Create a family' })).toHaveCount(0);
+        await ines.page.context().close();
+    });
+});
+
+test.describe.serial('Pricing for someone waiting to join a family', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+
+    test('offers to finish joining, never a tier that would make a second family', async ({
+        browser,
+        request,
+    }) => {
+        test.skip(
+            !(await familyCatalogue(request)).length,
+            'Billing is off or sells no family plan, so the pricing page has no family section.',
+        );
+        test.setTimeout(300_000);
+        const ines = await person(browser, 'Inês Ortega');
+        // Accepted an invitation and not let in yet, as route 2 lists it: the invitation flow
+        // needs a family with a plan, which can't be paid for here, so the list is answered.
+        const groupId = randomUUID();
+        await ines.page.route(
+            (url) => url.pathname === '/api/groups',
+            (route: Route) =>
+                route.request().method() === 'GET'
+                    ? route.fulfill({
+                          json: {
+                              groups: [
+                                  {
+                                      id: groupId,
+                                      kind: 'family',
+                                      name: 'Ortega family',
+                                      state: 'accepted',
+                                  },
+                              ],
+                          },
+                      })
+                    : route.continue(),
+        );
+        await ines.page.goto('/pricing', { waitUntil: 'networkidle' });
+        const section = ines.page.locator('[data-family-plan]');
+        await expect(
+            section.getByRole('link', { name: 'Continue joining Ortega family', exact: true }),
+        ).toHaveAttribute('href', `/app/families/${groupId}/join`, { timeout: 60_000 });
+        await expect(
+            section.getByRole('link', { name: /^(Choose|Start with) Family / }),
+        ).toHaveCount(0);
+        await ines.page.context().close();
     });
 });
 
@@ -2052,6 +2289,7 @@ type CatalogueFamily = {
     tier: string | null;
     quotaBytes: string;
     includedMembers: number;
+    prices: Record<string, unknown>;
 };
 
 /* Whether this server sells family plans, and which: only then is anyone's storage pooled. */
@@ -2161,7 +2399,7 @@ test.describe.serial('one view for a family member, with one pool', () => {
 
     const sellsFamilies = () => plans.some((plan) => plan.interval === 'month');
 
-    test('a personal account sees no family in the sidebar, and its storage is its own', async () => {
+    test('a personal account has no family of its own in the sidebar, and its storage is its own', async () => {
         // Asked once the families are known, so the absence means something.
         const listed = rosa.page.waitForResponse(
             (response) => new URL(response.url()).pathname === '/api/groups' && response.ok(),
@@ -2870,6 +3108,7 @@ test.describe.serial('families off', () => {
         await expect(page.locator('[data-your-family]')).toHaveCount(0);
         await expect(page.getByRole('heading', { level: 2, name: 'Family' })).toHaveCount(0);
         await expect(page.locator('[data-family-header]')).toHaveCount(0);
+        await expect(page.locator('[data-family-place]')).toHaveCount(0);
         await page.goto('/app/families');
         await expect(page.getByText('Families aren’t available here')).toBeVisible({
             timeout: 60_000,

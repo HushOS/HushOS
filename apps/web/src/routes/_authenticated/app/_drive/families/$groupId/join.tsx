@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
+import { DeclineInvitation } from '@/components/families/decline-invitation';
 import { RotateCcwIcon } from 'lucide-react';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
@@ -392,6 +393,17 @@ function JoinFamily() {
                         </h2>
                         <ForkAlert family={family} fork={step.fork} />
                     </>
+                )}
+                {/* A way back out while they wait: quiet, beneath the steps (DeclineInvitation). */}
+                {summary.state === 'accepted' && (
+                    <div className="border-t border-rule pt-4">
+                        <DeclineInvitation
+                            userId={userId}
+                            groupId={groupId}
+                            family={family}
+                            onDeclined={() => navigate({ to: '/app/family' })}
+                        />
+                    </div>
                 )}
             </div>
         </div>

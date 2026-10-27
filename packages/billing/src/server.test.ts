@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type * as PolarSdk from '@polar-sh/sdk/2026-10';
 import type { EndPersonalPlanJob } from './endings';
 import { PolarClientError } from '@polar-sh/sdk';
@@ -980,7 +980,12 @@ vi.mock('@polar-sh/sdk/2026-10', async (importOriginal) => {
 const planEndingMail: { to: string; endsOn: string }[] = [];
 /* How many plan-ending mails fail (the provider down, no email settings) before one is sent. */
 const mailer = { failures: 0 };
+/* Verification links sign-up sends, as the email would carry them. */
+const verificationMail: { to: string; url: string }[] = [];
 vi.mock('@hushos/emails/server', () => ({
+    sendVerificationEmail: async (to: string, url: string) => {
+        verificationMail.push({ to, url });
+    },
     sendFamilyPlanEnding: async (to: string, input: { endsOn: string }) => {
         if (mailer.failures > 0) {
             mailer.failures -= 1;
@@ -2073,6 +2078,239 @@ describe('a personal plan whose payment failed, or that is paused', () => {
     });
 });
 
+describe('a family tier chosen at sign-up', () => {
+    const userOfId = (userId: string) => ({ id: userId, name: 'Test', email: 'x@hushos.test' });
+    const intend = (
+        userId: string,
+        plan: string,
+        referral: string | null = null,
+        currency: string | null = null,
+    ) =>
+        rawSql(
+            `insert into account_intents (user_id, plan_product_id, referral_code, source, currency) values ('${userId}', '${plan}', ${referral ? `'${referral}'` : 'null'}, 'pricing', ${currency ? `'${currency}'` : 'null'})`,
+        );
+
+    test('is named until the app has opened it, and forgetting it keeps the code that came with it', async () => {
+        const { userId } = await createTestAccount();
+        await intend(userId, PRO_FAMILY, 'FRIEND25');
+        const before = await billing.getSummary(userOfId(userId));
+        expect(before).toMatchObject({
+            intendedFamily: { plan: PRO_FAMILY, currency: null },
+            intendedPlan: null,
+        });
+        await billing.forgetIntendedFamily(userOfId(userId));
+        expect((await billing.getSummary(userOfId(userId))).intendedFamily).toBeNull();
+        expect(await growthRepository.pendingReferralCode(userId)).toBe('FRIEND25');
+    });
+
+    test('a personal plan, or a product that isn’t a family plan, is never named as one', async () => {
+        const personal = await createTestAccount();
+        await intend(personal.userId, MAX);
+        expect(await billing.getSummary(userOfId(personal.userId))).toMatchObject({
+            intendedPlan: MAX,
+            intendedFamily: null,
+        });
+        const stranger = await createTestAccount();
+        await intend(stranger.userId, 'not-a-product');
+        expect((await billing.getSummary(userOfId(stranger.userId))).intendedFamily).toBeNull();
+    });
+
+    /* The catalogue as `change` leaves it, past its cache; put back afterwards for later tests. */
+    async function withCatalogue(change: () => () => void, run: () => Promise<void>) {
+        const clock = vi.spyOn(Date, 'now');
+        catalogueClock += 10 * 60_000;
+        const undo = change();
+        try {
+            clock.mockReturnValue(new Date().getTime() + catalogueClock);
+            await run();
+        } finally {
+            undo();
+            clock.mockReturnValue(new Date().getTime() + catalogueClock + 5 * 60_000);
+            await billing.listCatalogue();
+            clock.mockRestore();
+        }
+    }
+
+    test('a tier replaced since sign-up is named as the one on sale now, same tier and period', async () => {
+        const { userId } = await createTestAccount();
+        await intend(userId, PRO_FAMILY);
+        const NEW_PRO = 'b6666666-aaaa-4aaa-8aaa-b66666666666';
+        await withCatalogue(
+            () => {
+                polar.products.push({
+                    ...tierProduct(NEW_PRO, 'Family Pro (monthly)', 'pro', FAMILY_POOL, {
+                        usd: 2200,
+                    }),
+                    created_at: '2026-10-20T00:00:00Z',
+                } as never);
+                return () => polar.products.splice(polar.products.length - 1, 1);
+            },
+            async () => {
+                expect((await billing.getSummary(userOfId(userId))).intendedFamily?.plan).toBe(
+                    NEW_PRO,
+                );
+            },
+        );
+    });
+
+    test('a tier no longer sold at all is still named, so the app sends them to Plans', async () => {
+        const { userId } = await createTestAccount();
+        await intend(userId, PRO_FAMILY);
+        const pro = polar.products.find((candidate) => candidate.id === PRO_FAMILY)!;
+        await withCatalogue(
+            () => {
+                pro.is_archived = true;
+                return () => {
+                    pro.is_archived = false;
+                };
+            },
+            async () => {
+                expect((await billing.getSummary(userOfId(userId))).intendedFamily?.plan).toBe(
+                    PRO_FAMILY,
+                );
+            },
+        );
+        // The single Family plan from before the tiers, never offered beside them.
+        const old = await createTestAccount();
+        await intend(old.userId, FAMILY);
+        expect((await billing.getSummary(userOfId(old.userId))).intendedFamily?.plan).toBe(FAMILY);
+    });
+
+    test('carries the currency the tier was shown in, only where the tier is priced in it', async () => {
+        const rupees = await createTestAccount();
+        await intend(rupees.userId, PRO_FAMILY, null, 'inr');
+        expect((await billing.getSummary(userOfId(rupees.userId))).intendedFamily).toEqual({
+            plan: PRO_FAMILY,
+            currency: 'inr',
+        });
+        // Not sold in yen: the app picks one as it would without.
+        const yen = await createTestAccount();
+        await intend(yen.userId, PRO_FAMILY, null, 'jpy');
+        expect((await billing.getSummary(userOfId(yen.userId))).intendedFamily).toEqual({
+            plan: PRO_FAMILY,
+            currency: null,
+        });
+    });
+
+    test('forgetting it leaves a personal plan for its checkout', async () => {
+        const { userId } = await createTestAccount();
+        await intend(userId, MAX);
+        await billing.forgetIntendedFamily(userOfId(userId));
+        expect((await billing.getSummary(userOfId(userId))).intendedPlan).toBe(MAX);
+    });
+});
+
+/*
+ * Signing up for a family tier, driven through the real path as far as the fake Polar: the
+ * registration email asked for with the tier, a code and the currency Pricing showed, the
+ * link opened, the account registered (the repository's step; OPAQUE has no part in it),
+ * the summary read as the first visit reads it, the tier forgotten (twice: a second landing
+ * finds nothing), then the family's checkout in the currency signup carried.
+ */
+describe('signing up for a family tier, through to its checkout', () => {
+    const sha = (value: string) => createHash('sha256').update(value).digest();
+    const bytes = (length: number) => randomBytes(length);
+    const registration = () => ({
+        initialQuotaBytes: 1_073_741_824n,
+        name: 'Sam Ortega',
+        registrationRecord: 'record',
+        profileVersion: 1,
+        serverSetupId: 'primary',
+        envelope: {
+            envelopeVersion: 1,
+            wrappingSalt: bytes(32),
+            wrappingNonce: bytes(24),
+            encryptedKey: bytes(48),
+        },
+        recovery: {
+            wrappingSalt: bytes(32),
+            wrappingNonce: bytes(24),
+            encryptedKey: bytes(48),
+            backupNonce: bytes(24),
+            encryptedRecoveryKey: bytes(48),
+            publicKey: bytes(32),
+        },
+        identity: {
+            wrappingSalt: bytes(32),
+            encryptionPublicKey: bytes(32),
+            encryptionPrivateKeyNonce: bytes(24),
+            encryptedEncryptionPrivateKey: bytes(48),
+            signingPublicKey: bytes(32),
+            signingSeedNonce: bytes(24),
+            encryptedSigningSeed: bytes(48),
+        },
+        workspace: {
+            id: randomUUID(),
+            grant: {
+                keyVersion: 1,
+                wrappingSalt: bytes(32),
+                wrappingNonce: bytes(24),
+                encryptedKey: bytes(48),
+            },
+        },
+    });
+
+    /* Signs up as a person would, from the email with `intent`; the account as billing sees it. */
+    async function signUp(intent: Record<string, string>) {
+        const auth = await import('@hushos/auth/server');
+        const email = `family-${randomUUID()}@hushos.test`;
+        await auth.requestRegistrationEmail(email, 'register', '203.0.113.7', intent);
+        const link = new URL(verificationMail.filter((mail) => mail.to === email).at(-1)!.url);
+        const { enrollmentToken } = await auth.verifyEmail(link.hash.slice('#verify='.length));
+        const result = await authRepository.registerAccount({
+            enrollmentTokenHash: sha(enrollmentToken),
+            ...registration(),
+        });
+        if (result.status !== 'created') throw new Error(result.status);
+        return { id: result.user.id, name: 'Sam Ortega', email };
+    }
+
+    test('the tier, the code and the currency reach the family’s checkout', async () => {
+        const user = await signUp({
+            plan: PRO_FAMILY,
+            referral: 'FRIEND25',
+            source: 'referral',
+            currency: 'inr',
+        });
+        const summary = await billing.getSummary(user);
+        expect(summary).toMatchObject({
+            intendedPlan: null,
+            intendedFamily: { plan: PRO_FAMILY, currency: 'inr' },
+        });
+        await billing.forgetIntendedFamily(user);
+        await billing.forgetIntendedFamily(user);
+        expect((await billing.getSummary(user)).intendedFamily).toBeNull();
+        // Kept for the checkout that comes next.
+        expect(await growthRepository.pendingReferralCode(user.id)).toBe('FRIEND25');
+        const { groupId } = await createTestFamily({ organizerId: user.id, pooled: true });
+        await billing.startGroupCheckout(user, groupId, {
+            productId: summary.intendedFamily!.plan,
+            currency: summary.intendedFamily!.currency!,
+        });
+        expect(polar.checkouts.at(-1)).toMatchObject({
+            products: [PRO_FAMILY],
+            currency: 'inr',
+            units: 4,
+            min_units: 4,
+            max_units: 20,
+            metadata: { hushos_group_id: groupId },
+        });
+    });
+
+    test('a currency that isn’t three lowercase letters, or comes without a plan, is dropped', async () => {
+        const shouted = await signUp({ plan: PRO_FAMILY, source: 'pricing', currency: 'INR' });
+        expect((await billing.getSummary(shouted)).intendedFamily).toEqual({
+            plan: PRO_FAMILY,
+            currency: null,
+        });
+        const alone = await signUp({ referral: 'FRIEND25', source: 'referral', currency: 'inr' });
+        expect(
+            (await rawSql(`select currency from account_intents where user_id = '${alone.id}'`))
+                .rows[0],
+        ).toEqual({ currency: null });
+    });
+});
+
 describe('affiliates', () => {
     const creator = () =>
         growth.createAffiliate({
@@ -2097,6 +2335,47 @@ describe('affiliates', () => {
         // The creator's code reaches the same page as their slug.
         expect((await growth.getOfferLanding('creator25'))?.kind).toBe('affiliate');
         expect(await growth.getOfferLanding('nobody')).toBeNull();
+    });
+
+    /* Someone who signed up through `code` with Family Pro chosen, and made a family. */
+    async function familySignup(code: string) {
+        const fan = await createTestAccount();
+        await growth.attributeNewAccount(fan.userId, code);
+        await rawSql(
+            `insert into account_intents (user_id, plan_product_id, referral_code, source) values ('${fan.userId}', '${PRO_FAMILY}', '${code}', 'referral')`,
+        );
+        const { groupId } = await createTestFamily({ organizerId: fan.userId, pooled: true });
+        return { fan, groupId, user: userOf(fan, 'Fan') };
+    }
+    /* A paid order of the family's plan, as Polar delivers it: under the family's customer. */
+    const familyOrder = (groupId: string, id: string, discountId: string | null) =>
+        signedWebhook({
+            type: 'order.paid',
+            data: {
+                id,
+                discount_id: discountId,
+                net_amount: 2000,
+                currency: 'usd',
+                billing_reason: discountId ? 'subscription_create' : 'subscription_cycle',
+                customer: { id: `cus_${groupId}`, external_id: `group:${groupId}` },
+            },
+        });
+
+    test('a creator’s sign-up with a family tier: the family checkout carries the discount, and the family’s orders pay the creator', async () => {
+        await creator();
+        const { fan, groupId, user } = await familySignup('creator25');
+        await billing.startGroupCheckout(user, groupId, { productId: PRO_FAMILY });
+        expect(polar.checkouts.at(-1)).toMatchObject({ discount_id: 'disc_creator25' });
+        // Taken to checkout: the intent is used, as a personal checkout uses it.
+        expect(await billingRepository.getPendingIntent(fan.userId)).toBeNull();
+        await billing.handleWebhook(await familyOrder(groupId, 'order_fam_1', 'disc_creator25'));
+        // A renewal carries no discount: the creator is still found, through the payer.
+        await billing.handleWebhook(await familyOrder(groupId, 'order_fam_2', null));
+        const [row] = await growth.listAffiliates();
+        expect(row!.stats).toMatchObject({
+            orders: 2,
+            earnings: { usd: { unpaid: 800, paid: 0 } },
+        });
     });
 
     test('pausing a creator takes down their page under both the slug and the code', async () => {
@@ -2428,6 +2707,26 @@ describe('affiliates', () => {
 });
 
 describe('offers made at Polar', () => {
+    test('an offer limited to personal plans isn’t carried to a family checkout, which Polar would refuse', async () => {
+        polar.discounts.push({
+            code: 'SOLO10',
+            basis_points: 1000,
+            duration: 'once',
+            name: 'Solo',
+            products: [{ id: PRO }],
+        });
+        const fan = await createTestAccount();
+        await growthRepository.rememberCoupon(fan.userId, 'SOLO10');
+        const { groupId } = await createTestFamily({ organizerId: fan.userId, pooled: true });
+        await billing.startGroupCheckout(userOf(fan, 'Fan'), groupId, { productId: PRO_FAMILY });
+        expect(polar.checkouts.at(-1)).toMatchObject({ discount_id: null });
+        // The same code still rides to a personal checkout of the plan it covers.
+        const solo = await createTestAccount();
+        await growthRepository.rememberCoupon(solo.userId, 'SOLO10');
+        await billing.startCheckout({ id: solo.userId, name: 'Solo', email: solo.email }, PRO);
+        expect(polar.checkouts.at(-1)).toMatchObject({ discount_id: 'disc_solo10' });
+    });
+
     test('a code the operator made at Polar has a page and rides to checkout without an affiliate', async () => {
         polar.discounts.push({
             code: 'LAUNCH20',
@@ -2519,6 +2818,42 @@ describe('offers made at Polar', () => {
 });
 
 describe('referrals', () => {
+    test('a friend’s invite with a family tier: the family’s first paid order earns the inviter the paid bonus', async () => {
+        const inviter = await createTestAccount();
+        const { code } = await growth.getReferralSummary(inviter.userId);
+        const joiner = await createTestAccount();
+        await growth.attributeNewAccount(joiner.userId, code);
+        await rawSql(
+            `insert into account_intents (user_id, plan_product_id, referral_code, source) values ('${joiner.userId}', '${PRO_FAMILY}', '${code}', 'referral')`,
+        );
+        const { groupId } = await createTestFamily({ organizerId: joiner.userId, pooled: true });
+        await billing.startGroupCheckout(userOf(joiner, 'Joiner'), groupId, {
+            productId: PRO_FAMILY,
+        });
+        // A friend's code is storage, not money: no discount at Polar, and the intent is used.
+        expect(polar.checkouts.at(-1)).toMatchObject({ discount_id: null });
+        expect(await billingRepository.getPendingIntent(joiner.userId)).toBeNull();
+        const before = BigInt(
+            (await authRepository.getStorageAllowance(inviter.userId))!.quotaBytes,
+        );
+        await billing.handleWebhook(
+            await signedWebhook({
+                type: 'order.paid',
+                data: {
+                    id: 'order_fam_ref',
+                    net_amount: 2000,
+                    currency: 'usd',
+                    billing_reason: 'subscription_create',
+                    customer: { id: `cus_${groupId}`, external_id: `group:${groupId}` },
+                },
+            }),
+        );
+        expect(BigInt((await authRepository.getStorageAllowance(inviter.userId))!.quotaBytes)).toBe(
+            before + 5n * GIB,
+        );
+        expect((await growth.getReferralSummary(inviter.userId)).paid).toMatchObject({ count: 1 });
+    });
+
     test('an invite gives both people storage, and a code that resolves to nobody gives nothing', async () => {
         const inviter = await createTestAccount();
         const summary = await growth.getReferralSummary(inviter.userId);
@@ -2663,7 +2998,12 @@ async function familyOnPlan(
     });
     const payer = userOf(organizer, 'Payer');
     const product = options.product ?? FAMILY;
-    await billing.startGroupCheckout(payer, groupId, { productId: product });
+    // A family on the single plan bought it before the tiers were on sale, and it can't be
+    // bought beside them now: the team customer is made by a checkout on a tier, and the
+    // subscription below is on `product`, as such a family has it.
+    await billing.startGroupCheckout(payer, groupId, {
+        productId: product === FAMILY ? PRO_FAMILY : product,
+    });
     const units = options.units ?? (product === FAMILY ? 6 : 4);
     const currency = options.currency ?? 'usd';
     const subscription = familySubscription(groupId, {
@@ -2908,6 +3248,36 @@ describe('family checkout on a tier', () => {
         await billing.startGroupCheckout(userOf(bigger), five.groupId, { productId: PLUS });
         expect(polar.checkouts.at(-1)).toMatchObject({ units: 5, min_units: 5 });
     });
+    test('a first plan is only one on sale: never a tier replaced since, nor the single plan beside the tiers', async () => {
+        const organizer = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: organizer.userId, pooled: true });
+        const NEW_PRO = 'b7777777-aaaa-4aaa-8aaa-b77777777777';
+        const before = polar.checkouts.length;
+        // The single Family plan from before the tiers isn't offered beside them.
+        await expect(
+            billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY }),
+        ).rejects.toMatchObject({ status: 404 });
+        const clock = vi.spyOn(Date, 'now');
+        catalogueClock += 10 * 60_000;
+        polar.products.push({
+            ...tierProduct(NEW_PRO, 'Family Pro (monthly)', 'pro', FAMILY_POOL, { usd: 2200 }),
+            created_at: '2026-10-20T00:00:00Z',
+        } as never);
+        try {
+            clock.mockReturnValue(new Date().getTime() + catalogueClock);
+            await expect(
+                billing.startGroupCheckout(userOf(organizer), groupId, { productId: PRO_FAMILY }),
+            ).rejects.toMatchObject({ status: 404 });
+            expect(polar.checkouts.length).toBe(before);
+            await billing.startGroupCheckout(userOf(organizer), groupId, { productId: NEW_PRO });
+            expect(polar.checkouts.at(-1)).toMatchObject({ products: [NEW_PRO] });
+        } finally {
+            polar.products.splice(polar.products.length - 1, 1);
+            clock.mockReturnValue(new Date().getTime() + catalogueClock + 5 * 60_000);
+            await billing.listCatalogue();
+            clock.mockRestore();
+        }
+    });
 });
 
 describe('where Polar sends a family’s payer back', () => {
@@ -2917,7 +3287,7 @@ describe('where Polar sends a family’s payer back', () => {
     test('checkout returns to /app/family with the checkout id, and the portal to /app/family', async () => {
         const organizer = await createTestAccount();
         const { groupId } = await createTestFamily({ organizerId: organizer.userId, pooled: true });
-        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: PRO_FAMILY });
         expect(polar.checkouts.at(-1)).toMatchObject({
             success_url: 'http://localhost:5173/app/family?checkout_id={CHECKOUT_ID}',
             return_url: 'http://localhost:5173/app/family',
@@ -2941,26 +3311,26 @@ describe('family checkout and webhooks', () => {
         });
         // A manager without `billing` cannot buy for the family.
         await expect(
-            billing.startGroupCheckout(userOf(member), groupId, { productId: FAMILY }),
+            billing.startGroupCheckout(userOf(member), groupId, { productId: PRO_FAMILY }),
         ).rejects.toMatchObject({ status: 403 });
         // Past the family maximum: refused before anything is made at Polar.
         await expect(
             billing.startGroupCheckout(userOf(organizer), groupId, {
-                productId: FAMILY,
+                productId: PRO_FAMILY,
                 units: 21,
             }),
         ).rejects.toMatchObject({ status: 400 });
         expect(polar.calls.filter((call) => call.startsWith('customers.create'))).toEqual([]);
-        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: PRO_FAMILY });
         const customer = polar.customers.get(`group:${groupId}`);
         expect(customer).toMatchObject({ type: 'team', members: [organizer.userId] });
         // Polar learns nothing of the family but that it is one: not its name.
         expect(customer?.name).toBe('HushOS family');
         expect(polar.checkouts.at(-1)).toMatchObject({
-            products: [FAMILY],
+            products: [PRO_FAMILY],
             customer_id: customer?.id,
-            units: 6,
-            min_units: 6,
+            units: 4,
+            min_units: 4,
             max_units: 20,
             metadata: { hushos_group_id: groupId },
         });
@@ -2981,7 +3351,7 @@ describe('family checkout and webhooks', () => {
         expect((await driveRepository.getStorage(areaIds[0]!))?.allowance).toBe(FAMILY_POOL);
         // The family already has a plan: no second checkout.
         await expect(
-            billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY }),
+            billing.startGroupCheckout(userOf(organizer), groupId, { productId: PRO_FAMILY }),
         ).rejects.toMatchObject({ status: 409 });
     });
 
@@ -3420,11 +3790,11 @@ describe('review fixes', () => {
     test('a checkout is refused while Polar holds a plan HushOS has not seen yet', async () => {
         const organizer = await createTestAccount();
         const { groupId } = await createTestFamily({ organizerId: organizer.userId, pooled: true });
-        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: PRO_FAMILY });
         familySubscription(groupId, { units: 7 });
         polar.checkouts = [];
         await expect(
-            billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY }),
+            billing.startGroupCheckout(userOf(organizer), groupId, { productId: PRO_FAMILY }),
         ).rejects.toMatchObject({ status: 409 });
         expect(polar.checkouts).toEqual([]);
         // The plan it found reached the family.
@@ -3499,7 +3869,7 @@ describe('family summary', () => {
         const before = await priced(billing.getGroupBilling(userOf(organizer), groupId));
         // Never paid: nothing ended, so it is a family still choosing, not a lapsed one.
         expect(before).toMatchObject({ subscription: null, lastPlan: null });
-        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: PRO_FAMILY });
         const subscription = familySubscription(groupId, { units: 6 });
         await billing.reconcileGroup(groupId);
         await setTestUsedBytes(areaIds[0]!, 5n * GIB);
@@ -3527,7 +3897,7 @@ describe('family summary', () => {
             (await priced(billing.getGroupBilling(userOf(organizer), groupId))).storage,
         ).toBeNull();
         expect((await driveRepository.getStorage(areaIds[0]!))?.allowance).toBe(10n * GIB);
-        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: PRO_FAMILY });
         const subscription = familySubscription(groupId, { units: 6 });
         await billing.reconcileGroup(groupId);
         expect((await driveRepository.getStorage(areaIds[0]!))?.allowance).toBe(FAMILY_POOL);
@@ -3552,13 +3922,13 @@ describe('a new payer', () => {
         await setTestMember({ groupId, userId: heir.userId, state: 'active', roles: ['billing'] });
         // While the plan runs, the payer stays the payer.
         await expect(
-            billing.startGroupCheckout(userOf(heir), groupId, { productId: FAMILY }),
+            billing.startGroupCheckout(userOf(heir), groupId, { productId: PRO_FAMILY }),
         ).rejects.toMatchObject({ status: 409 });
         subscription.status = 'canceled';
         subscription.ended_at = new Date().toISOString();
         await billing.reconcileGroup(groupId);
         polar.calls = [];
-        await billing.startGroupCheckout(userOf(heir), groupId, { productId: FAMILY });
+        await billing.startGroupCheckout(userOf(heir), groupId, { productId: PRO_FAMILY });
         const customer = polar.customers.get(`group:${groupId}`)!;
         // The heir is the owner, and the former payer is off the customer.
         expect(customer.members).toEqual([heir.userId]);
@@ -3598,7 +3968,7 @@ describe('a new payer', () => {
             });
             polar.calls = [];
             await billing.startGroupCheckout(userOf(heir), groupId, {
-                productId: FAMILY,
+                productId: PRO_FAMILY,
                 endLapsed: [subscription.id],
             });
             expect((await billingRepository.getGroupCustomer(groupId))?.payerUserId).toBe(
@@ -3629,14 +3999,14 @@ describe('a new payer', () => {
             members: [{ userId: heir.userId, roles: ['billing'] }],
             pooled: true,
         });
-        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
-        await billing.startGroupCheckout(userOf(heir), groupId, { productId: FAMILY });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: PRO_FAMILY });
+        await billing.startGroupCheckout(userOf(heir), groupId, { productId: PRO_FAMILY });
         expect((await billingRepository.getGroupCustomer(groupId))?.payerUserId).toBe(heir.userId);
         // Someone without `billing` never takes it over.
         const plain = await createTestAccount();
         await setTestMember({ groupId, userId: plain.userId, state: 'active', roles: ['members'] });
         await expect(
-            billing.startGroupCheckout(userOf(plain), groupId, { productId: FAMILY }),
+            billing.startGroupCheckout(userOf(plain), groupId, { productId: PRO_FAMILY }),
         ).rejects.toMatchObject({ status: 403 });
         expect((await billingRepository.getGroupCustomer(groupId))?.payerUserId).toBe(heir.userId);
     });
@@ -3649,11 +4019,11 @@ describe('a new payer', () => {
             members: [{ userId: heir.userId, roles: ['billing'] }],
             pooled: true,
         });
-        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: PRO_FAMILY });
         // Paid at Polar; the delivery hasn't arrived.
         familySubscription(groupId, { units: 6 });
         await expect(
-            billing.startGroupCheckout(userOf(heir), groupId, { productId: FAMILY }),
+            billing.startGroupCheckout(userOf(heir), groupId, { productId: PRO_FAMILY }),
         ).rejects.toMatchObject({ status: 409 });
         expect(polar.customers.get(`group:${groupId}`)!.members).toEqual([organizer.userId]);
         expect((await billingRepository.getGroupCustomer(groupId))?.payerUserId).toBe(
@@ -7950,7 +8320,7 @@ describe('a personal plan ends when its owner’s files join a family', () => {
         await billing.reconcileCustomer(organizer.userId);
         // No plan yet: they keep their own.
         expect(endingJobs).toEqual([]);
-        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: FAMILY });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: PRO_FAMILY });
         familySubscription(groupId, { units: 6 });
         await billing.reconcileGroup(groupId);
         expect(endingJobs.map((queued) => [queued.userId, queued.groupId])).toEqual([

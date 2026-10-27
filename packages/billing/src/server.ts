@@ -34,6 +34,7 @@ import {
     unavailable,
     type BillingUser,
     type CatalogueProduct,
+    type FamilyCatalogueProduct,
 } from './provider';
 import { GROUP_CUSTOMER_PREFIX, lapsedPlan, livePlan, type CancellationReason } from './protocol';
 
@@ -122,12 +123,15 @@ export async function getSummary(user: BillingUser): Promise<BillingSummary> {
             hasCustomer: false,
             subscription: null,
             intendedPlan: null,
+            intendedFamily: null,
             family: null,
         };
-    const [summary, intent, plans, pooled] = await Promise.all([
+    const [summary, intent, plans, families, pooled] = await Promise.all([
         billingRepository.getBillingSummary(user.id),
         billingRepository.getPendingIntent(user.id),
         listCatalogue().then((catalogue) => catalogue.plans),
+        // Read from the one cached product list even where families aren't served (below).
+        getFamilyCatalogue(),
         billingRepository.getPooledFamily(user.id),
     ]);
     const live = livePlan(summary.subscription);
@@ -142,6 +146,21 @@ export async function getSummary(user: BillingUser): Promise<BillingSummary> {
         plans.some((plan) => plan.id === intent.planProductId)
             ? intent.planProductId
             : null;
+    // A family tier picked on the pricing page: the app opens Create a family with it, or, where
+    // families aren't served (any more), Plans. Whether they're in a family is the app's to check.
+    const familyPlan = intent?.planProductId
+        ? intendedFamilyOf(intent.planProductId, families)
+        : null;
+    const priced = families.find((plan) => plan.id === familyPlan)?.prices;
+    const intendedFamily = familyPlan
+        ? {
+              plan: familyPlan,
+              currency:
+                  intent?.currency && priced && Object.hasOwn(priced, intent.currency)
+                      ? intent.currency
+                      : null,
+          }
+        : null;
     const family = pooled
         ? {
               name: pooled.name,
@@ -150,7 +169,41 @@ export async function getSummary(user: BillingUser): Promise<BillingSummary> {
                   null,
           }
         : null;
-    return { enabled: true, ...summary, intendedPlan, family };
+    return { enabled: true, ...summary, intendedPlan, intendedFamily, family };
+}
+
+/*
+ * The family plan a signup's intent names, as the app should open it: the tier itself while it
+ * is on sale; the one on sale now of the same tier and billing period when an operator has
+ * replaced it since; otherwise (archived, the single plan from before the tiers) the id as it
+ * is, which the app finds in no offer and sends to Plans. Null for anything but a family plan.
+ */
+function intendedFamilyOf(productId: string, families: FamilyCatalogueProduct[]) {
+    const offered = offeredFamilies(families);
+    if (offered.some((plan) => plan.id === productId)) return productId;
+    const chosen = families.find((plan) => plan.id === productId);
+    if (!chosen) return null;
+    const successor = chosen.tier
+        ? offered.find((plan) => plan.tier === chosen.tier && plan.interval === chosen.interval)
+        : undefined;
+    return successor?.id ?? productId;
+}
+
+/*
+ * The family tier chosen at signup has been opened (the app's first landing after signup), so
+ * it isn't offered again on the next visit. A personal plan is left for its checkout, which
+ * consumes it; a code that came with either stays for the next checkout.
+ */
+export async function forgetIntendedFamily(user: BillingUser) {
+    if (!billingEnabled()) return;
+    const [intent, families] = await Promise.all([
+        billingRepository.getPendingIntent(user.id),
+        getFamilyCatalogue(),
+    ]);
+    const plan = intent?.planProductId;
+    // Only a family plan: a personal one is left for its checkout.
+    if (!plan || !families.some((family) => family.id === plan)) return;
+    await billingRepository.dropIntendedPlan(user.id, plan);
 }
 
 /*
@@ -311,11 +364,12 @@ export async function startCheckout(
 }
 
 /*
- * The provider discount a checkout carries: the affiliate this person arrived
- * through while it is live, else the code they were given, whether a creator's
- * or one the operator made at Polar and shared as a page.
+ * The provider discount a checkout carries, a personal plan's or a family's (the payer's):
+ * the affiliate this person arrived through while it is live, else the code they were given,
+ * whether a creator's or one the operator made at Polar and shared as a page (only where it
+ * covers `productId`). Creators' discounts cover every product, family plans included.
  */
-async function discountFor(userId: string) {
+export async function discountFor(userId: string, productId?: string) {
     const affiliate = await growthRepository.findAffiliateForCustomer(userId);
     if (affiliate?.active && affiliate.providerDiscountId) return affiliate.providerDiscountId;
     const code = await growthRepository.pendingReferralCode(userId);
@@ -325,7 +379,12 @@ async function discountFor(userId: string) {
     if (resolved?.kind === 'user') return null;
     // A paused creator's code is not the provider's to honour either.
     if (await growthRepository.findAffiliateByHandle(code)) return null;
-    return (await findProviderDiscount(code))?.id ?? null;
+    const offer = await findProviderDiscount(code);
+    // An offer the operator limited to other products would be refused at checkout: none, then,
+    // and the person may still type a code there.
+    if (offer && productId && offer.productIds.length && !offer.productIds.includes(productId))
+        return null;
+    return offer?.id ?? null;
 }
 
 /* A discount as Polar holds it, reduced to what a page and a checkout need. */
@@ -515,12 +574,17 @@ export async function grantOrderRewards(
 }
 
 /*
- * What a paid order of a family's plan earns, as its `order.paid` delivery gives it: the
- * commission of the affiliate whose discount it used, never one found through a person (the
- * family's customer is not one), and no referral reward.
+ * What a paid order of a family's plan earns, as a personal order does, with the family's payer
+ * as its owner: the commission of the affiliate whose discount it used, else of the one the
+ * payer signed up through; and the paid bonus for whoever invited the payer, once.
  */
-export async function grantFamilyOrderRewards(order: Parameters<typeof recordAffiliateEarning>[0]) {
-    await recordAffiliateEarning({ ...order, customer: null });
+export async function grantFamilyOrderRewards(
+    groupId: string,
+    order: Parameters<typeof recordAffiliateEarning>[0],
+) {
+    const payer = (await billingRepository.getGroupCustomer(groupId))?.payerUserId ?? null;
+    await recordAffiliateEarning({ ...order, customer: payer ? { external_id: payer } : null });
+    if (payer) await rewardPaidReferral(payer);
 }
 
 /* The inviter's storage when someone they invited pays for a plan; once per invitee, under a cap. */
@@ -888,10 +952,12 @@ export async function handleWebhook(request: Request): Promise<Response> {
                 event.data as Parameters<typeof notePaidAfterRevoke>[0],
             );
             if (!refunded) {
-                await recordAffiliateEarning(
-                    event.data as Parameters<typeof recordAffiliateEarning>[0],
-                );
-                if (userId) await rewardPaidReferral(userId);
+                const order = event.data as Parameters<typeof recordAffiliateEarning>[0];
+                if (owner?.kind === 'group') await grantFamilyOrderRewards(owner.id, order);
+                else {
+                    await recordAffiliateEarning(order);
+                    if (userId) await rewardPaidReferral(userId);
+                }
             }
             // A personal order paid while its owner's files draw from a family's pool (a
             // renewal that slipped past the revoke, a checkout that raced the admission):

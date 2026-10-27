@@ -1221,6 +1221,15 @@ export const apiApp = new Elysia({ prefix: '/api' })
     .post('/billing/resume', { body: t.Object({}) }, async ({ request, sessionToken }) =>
         billing.resume(await billingMutation(request, sessionToken)),
     )
+    // The family tier chosen at signup, once the app has opened Create a family with it.
+    .post(
+        '/billing/intended-family/forget',
+        { body: t.Object({}) },
+        async ({ request, sessionToken }) => {
+            await billing.forgetIntendedFamily(await billingMutation(request, sessionToken));
+            return { success: true as const };
+        },
+    )
     // A family's plan (docs/groups-design.md 3.5): only with GROUPS_ENABLED and billing on,
     // which the billing functions check; managers see it, the payer changes it.
     .get(
