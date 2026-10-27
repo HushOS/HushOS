@@ -1610,6 +1610,11 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         await raiseToTwenty();
         await expect(dialog).toContainText('Charged now$1.93');
         await expect(dialog).toContainText('Then$44 a month');
+        // Only the raise the bank holds: no room left to offer, nor the limit it was made under.
+        await expect(dialog).not.toContainText('You can add up to');
+        await expect(dialog).toContainText(
+            'Before any discount. Plus tax where it applies; Polar adds it to each charge.',
+        );
         await expect(dialog.getByRole('button', { name: 'Confirm with your bank' })).toBeVisible();
         await expect(dialog.getByRole('button', { name: /^Add / })).toHaveCount(0);
         await maya.page.screenshot({ path: test.info().outputPath('raise-to-limit-confirm.png') });
@@ -1630,6 +1635,111 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         await expect(maya.page).toHaveURL(bank);
         expect(raises).toBe(2);
         await maya.page.unroute(units);
+        await maya.page.unroute(`${bank}*`);
+    });
+
+    test('Cancel on a raise the bank holds starts Add places afresh, and the page still points to the confirmation', async () => {
+        // 8 places, one more held by the bank: Add places stays, as the family isn't full.
+        const after = live({ units: 9, paidUnits: 8 });
+        after.seats = { used: 1, limit: 9 };
+        const units = (url: URL) => url.pathname === `/api/billing/groups/${groupId}/units`;
+        await maya.page.route(units, (route: Route) => {
+            answer = after;
+            return route.fulfill({
+                json: {
+                    billing: after,
+                    url: 'https://bank.example/confirm/one',
+                    confirmPayment: true,
+                },
+            });
+        });
+        await show(live());
+        const billing = maya.page.locator('[data-family-plan="billing"]');
+        const dialog = maya.page.getByRole('dialog', { name: 'Add places' });
+        await billing.getByRole('button', { name: 'Add places' }).click({ timeout: 60_000 });
+        await dialog.getByRole('button', { name: 'Add 1 place' }).click();
+        await expect(dialog.getByRole('button', { name: 'Confirm with your bank' })).toBeVisible();
+        await dialog.getByRole('button', { name: 'Cancel' }).click();
+        await expect(dialog).toHaveCount(0);
+        // The held charge is still findable: the page's notice sends the payer to the portal.
+        await expect(
+            maya.page
+                .getByRole('alert')
+                .filter({ hasText: 'Your bank hasn’t confirmed the charge for 1 place yet' }),
+        ).toContainText('confirm it in Manage payment and invoices');
+
+        await billing.getByRole('button', { name: 'Add places' }).click();
+        await expect(dialog.getByRole('button', { name: 'Add 1 place' })).toBeEnabled();
+        await expect(dialog).not.toContainText('Your bank wants you to confirm this payment.');
+        await expect(dialog.getByRole('button', { name: 'Confirm with your bank' })).toHaveCount(0);
+        await expect(dialog.getByRole('button', { name: 'More' })).toBeEnabled();
+        await dialog.getByRole('button', { name: 'Cancel' }).click();
+        await maya.page.unroute(units);
+    });
+
+    test('an upgrade that needs the bank keeps its confirm step, quoted as it was made, until it is pressed or closed', async () => {
+        // Pro to Max, held by the bank: the plan names Max, the paid tier is still Pro.
+        const after = live({
+            productId: 'max-month',
+            productName: 'Family Max (monthly)',
+            paidProductId: 'pro-month',
+            amount: 3600,
+        });
+        const bank = 'https://bank.example/confirm/upgrade';
+        let changes = 0;
+        const plan = (url: URL) => url.pathname === `/api/billing/groups/${groupId}/plan`;
+        await maya.page.route(plan, async (route: Route) => {
+            changes += 1;
+            expect(route.request().postDataJSON()).toEqual({ productId: 'max-month' });
+            answer = after;
+            await route.fulfill({
+                json: { billing: after, url: bank, confirmPayment: true, when: 'now' },
+            });
+        });
+        await maya.page.route(`${bank}*`, (route: Route) =>
+            route.fulfill({ contentType: 'text/html', body: '<h1>Confirm with your bank</h1>' }),
+        );
+        const billing = maya.page.locator('[data-family-plan="billing"]');
+        const change = maya.page.getByRole('dialog', { name: 'Change plan' });
+
+        async function upgradeToMax() {
+            await show(live());
+            await billing.getByRole('button', { name: 'Change plan' }).click({ timeout: 60_000 });
+            await change.getByRole('button', { name: 'Change to Family Max' }).click();
+            await expect(change).toContainText(
+                'Your bank wants you to confirm this payment. The plan changes once you do.',
+            );
+            // The page has caught up with the held upgrade, so this is after the summary changed.
+            await expect(maya.page.locator('[data-plan-notice="upgrade-waiting"]')).toBeVisible();
+        }
+
+        await upgradeToMax();
+        // The move the bank holds, priced from Pro as it was quoted, not from Max.
+        await expect(change.locator('[data-tier-option]')).toHaveText([
+            /Family Plus · 800 GB\$16 a month/,
+            /Family Pro · 2 TB\s*Your plan/,
+            /Family Max · 4 TB\$36 a month/,
+        ]);
+        await expect(change.getByRole('radio', { name: /Family Max/ })).toBeChecked();
+        await expect(change).toContainText('Charged nowAbout $6.45');
+        await expect(change).toContainText('Then$36 a month from');
+        await expect(change.getByRole('button', { name: 'Confirm with your bank' })).toBeVisible();
+        await maya.page.screenshot({ path: test.info().outputPath('upgrade-confirm.png') });
+        const size = maya.page.viewportSize();
+        await maya.page.setViewportSize({ width: 375, height: 812 });
+        await maya.page.screenshot({ path: test.info().outputPath('upgrade-confirm-375.png') });
+        if (size) await maya.page.setViewportSize(size);
+        // Closed, it goes; nothing stacks on the held upgrade, so no Change plan to reopen it.
+        await change.getByRole('button', { name: 'Cancel' }).click();
+        await expect(change).toHaveCount(0);
+        await expect(billing.getByRole('button', { name: 'Change plan' })).toHaveCount(0);
+
+        // Pressed, it opens the bank's page the upgrade answered with.
+        await upgradeToMax();
+        await change.getByRole('button', { name: 'Confirm with your bank' }).click();
+        await expect(maya.page).toHaveURL(bank);
+        expect(changes).toBe(2);
+        await maya.page.unroute(plan);
         await maya.page.unroute(`${bank}*`);
     });
 

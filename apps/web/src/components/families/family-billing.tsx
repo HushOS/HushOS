@@ -1075,7 +1075,8 @@ function PlanSection(props: Inner) {
                     onDone={settle}
                 />
             )}
-            {actions.changePlan && (
+            {/* Kept while open too: an upgrade the bank holds takes Change plan away. */}
+            {(actions.changePlan || changing) && (
                 <ChangePlanDialog
                     {...props}
                     open={changing}
@@ -1234,18 +1235,22 @@ function AddPlacesDialog({ groupId, family, open, onOpenChange, onDone, ...props
         }
     }
 
+    // Closed any way, it opens afresh; a raise the bank holds stays in the page's notice.
+    function close() {
+        onOpenChange(false);
+        setError('');
+        setConfirmUrl(null);
+        setQuoted(null);
+        setCount(1);
+    }
+
     return (
         <Dialog
             open={open}
             onOpenChange={(next) => {
                 if (busy) return;
-                onOpenChange(next);
-                if (!next) {
-                    setError('');
-                    setConfirmUrl(null);
-                    setQuoted(null);
-                    setCount(1);
-                }
+                if (next) onOpenChange(true);
+                else close();
             }}
         >
             <DialogContent className="sm:max-w-[440px]">
@@ -1277,8 +1282,10 @@ function AddPlacesDialog({ groupId, family, open, onOpenChange, onDone, ...props
                     )}
                 </dl>
                 <p className="text-[13px] text-muted-foreground">
-                    {TAX_ON_CHARGES} You can add up to {places(range.max)} now; a family has at most{' '}
-                    {currentPlan(summary)?.maxMembers ?? FAMILY_MAX_MEMBERS} members.
+                    {TAX_ON_CHARGES}
+                    {/* Once the bank holds the raise, the step says only what it holds. */}
+                    {!confirmUrl &&
+                        ` You can add up to ${places(range.max)} now; a family has at most ${currentPlan(summary)?.maxMembers ?? FAMILY_MAX_MEMBERS} members.`}
                 </p>
                 {confirmUrl && (
                     <Alert variant="warning">
@@ -1294,7 +1301,7 @@ function AddPlacesDialog({ groupId, family, open, onOpenChange, onDone, ...props
                     </p>
                 )}
                 <DialogFooter>
-                    <Button variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
+                    <Button variant="outline" disabled={busy} onClick={close}>
                         Cancel
                     </Button>
                     {confirmUrl ? (
@@ -1317,17 +1324,21 @@ function AddPlacesDialog({ groupId, family, open, onOpenChange, onDone, ...props
  * "Change plan": the other tiers billed the same way. A bigger one starts now
  * and the difference for the rest of the period is charged at once; a smaller
  * one starts at the renewal, only once the family folders fit in it, and
- * refunds nothing. Places stay as they are.
+ * refunds nothing. Places stay as they are. From the press on, it reads the
+ * summary the move was quoted from, as Add places does: an upgrade the bank
+ * holds answers with the new tier already named.
  */
-function ChangePlanDialog({ groupId, family, summary, open, onOpenChange, onDone }: DialogProps) {
+function ChangePlanDialog({ groupId, family, open, onOpenChange, onDone, ...props }: DialogProps) {
     const id = useId();
-    const moves = tierMoves(summary);
-    const live = summary.subscription;
-    const current = currentPlan(summary);
     const [choice, setChoice] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
     const [confirmUrl, setConfirmUrl] = useState<string | null>(null);
+    const [quoted, setQuoted] = useState<FamilyBillingFull | null>(null);
+    const summary = quoted ?? props.summary;
+    const moves = tierMoves(summary);
+    const live = summary.subscription;
+    const current = currentPlan(summary);
     if (!live || !current || !moves.length) return null;
     const ends = formatDay(live.currentPeriodEnd);
     const interval = intervalOf(live.recurringInterval);
@@ -1347,6 +1358,7 @@ function ChangePlanDialog({ groupId, family, summary, open, onOpenChange, onDone
     async function change() {
         setBusy(true);
         setError('');
+        setQuoted(summary);
         try {
             const result = await groupBillingApi.changePlan(groupId, chosen.plan.id);
             onDone(result.billing);
@@ -1354,6 +1366,7 @@ function ChangePlanDialog({ groupId, family, summary, open, onOpenChange, onDone
                 setConfirmUrl(result.url);
                 return;
             }
+            setQuoted(null);
             cue('success');
             toast.add({
                 type: 'success',
@@ -1364,6 +1377,7 @@ function ChangePlanDialog({ groupId, family, summary, open, onOpenChange, onDone
             });
             onOpenChange(false);
         } catch (cause) {
+            setQuoted(null);
             cue('error');
             setError(authError(cause));
         } finally {
@@ -1371,17 +1385,22 @@ function ChangePlanDialog({ groupId, family, summary, open, onOpenChange, onDone
         }
     }
 
+    // Closed any way, it opens afresh; an upgrade the bank holds stays in the page's notice.
+    function close() {
+        onOpenChange(false);
+        setError('');
+        setConfirmUrl(null);
+        setQuoted(null);
+        setChoice(null);
+    }
+
     return (
         <Dialog
             open={open}
             onOpenChange={(next) => {
                 if (busy) return;
-                onOpenChange(next);
-                if (!next) {
-                    setError('');
-                    setConfirmUrl(null);
-                    setChoice(null);
-                }
+                if (next) onOpenChange(true);
+                else close();
             }}
         >
             <DialogContent className="sm:max-w-[480px]">
@@ -1490,7 +1509,7 @@ function ChangePlanDialog({ groupId, family, summary, open, onOpenChange, onDone
                     </p>
                 )}
                 <DialogFooter>
-                    <Button variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
+                    <Button variant="outline" disabled={busy} onClick={close}>
                         Cancel
                     </Button>
                     {confirmUrl ? (
