@@ -36,6 +36,7 @@ import { backfillConsent } from '@/lib/consent-backfill';
 import {
     askPersistentStorage,
     createIndexedDbContactGuard,
+    createIndexedDbFamilyGuard,
     GuardRacedError,
     GuardUnreadableError,
     GuardUnsavedError,
@@ -576,14 +577,14 @@ export function setContactGuard(next: Guard | undefined) {
 }
 
 /*
- * The family guard on this browser (2.8, "per family"): kept in the contact
- * guard's sealed store, under the same settings-key check, and deleted with it
- * on sign-out. lib/groups/client.ts reads and merges it per family.
+ * The family guard on this browser (2.8, "per family"): sealed as the contact
+ * guard is, in a database of its own, and deleted on sign-out.
+ * lib/groups/client.ts reads and merges it per family.
  */
+let familyStore: FamilyGuardStore | undefined;
 export function familyGuardStore(): FamilyGuardStore {
-    contactGuard();
-    if (!appStore) throw new Error('This device’s family records can’t be opened here.');
-    return appStore;
+    familyStore ??= createIndexedDbFamilyGuard(guardSealer);
+    return familyStore;
 }
 
 /*

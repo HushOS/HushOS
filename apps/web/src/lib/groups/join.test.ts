@@ -4,7 +4,7 @@ import type { CryptoResults, GroupPin } from '@hushos/crypto';
 import { GUARD_NOT_KEPT } from '@hushos/crypto/protocol';
 import { digest } from '@hushos/crypto/signatures';
 import { describe, expect, test } from 'vitest';
-import { createIndexedDbContactGuard, GUARD_UNSAVED, type GuardSealer } from '@/lib/contact-guard';
+import { createIndexedDbFamilyGuard, GUARD_UNSAVED, type GuardSealer } from '@/lib/contact-guard';
 import { GroupApiError, type GroupsApi } from './api';
 import { familyGuardOf, type FamilyGuard, type GroupContext } from './context';
 import { joinStatus } from './join';
@@ -182,7 +182,7 @@ async function invitedFamily() {
             open: async (userId, kind, rows) =>
                 (await device.call('contactGuardOpen', { userId, kind, rows })).rows,
         };
-        const guardStore = createIndexedDbContactGuard(sealer, guardName);
+        const guardStore = createIndexedDbFamilyGuard(sealer, guardName);
         const inner = familyGuardOf(() => guardStore, BOB);
         let session = 0;
         const ctx: GroupContext = {

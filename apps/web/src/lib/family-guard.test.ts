@@ -2,12 +2,20 @@
 import 'fake-indexeddb/auto';
 import type { GroupPin } from '@hushos/crypto';
 import { describe, expect, test } from 'vitest';
-import { createIndexedDbContactGuard, GuardConflictError, type GuardSealer } from './contact-guard';
+import { openDB } from 'idb';
+import {
+    CONTACT_GUARD_DATABASE,
+    createIndexedDbContactGuard,
+    createIndexedDbFamilyGuard,
+    GuardConflictError,
+    type GuardSealer,
+} from './contact-guard';
 import { account } from './groups/worker-testkit';
 
 /*
  * The family guard as this browser keeps it (docs/optional-verification.md
- * 2.8, "per family"): in the contact guard's sealed store, one row per family
+ * 2.8, "per family"): sealed as the contact guard is, in a database of its
+ * own so the contact guard's version stays where open tabs expect it, one row per family
  * found by an id worked out under the settings key, sealed by the account's
  * worker. It only ever moves up, whoever writes last: every write is a merge
  * against what is stored, under the account's lock, so a late write of an
@@ -51,11 +59,45 @@ async function browser() {
         me,
         device,
         name,
-        tab: () => createIndexedDbContactGuard(sealer, name),
+        tab: () => createIndexedDbFamilyGuard(sealer, name),
+        /* The app's own stores, by their own database names. */
+        appFamilies: () => createIndexedDbFamilyGuard(sealer),
+        appContacts: () => createIndexedDbContactGuard(sealer),
     };
 }
 
 describe('the family guard in its store', () => {
+    test('leaves the contact guard at version 3: an open tab of the earlier release keeps its connection and can open it again', async () => {
+        const b = await browser();
+        // The earlier release's tab, with the contact guard open at version 3.
+        const versionChanges: number[] = [];
+        const older = await openDB(CONTACT_GUARD_DATABASE, 3, {
+            upgrade(db) {
+                db.createObjectStore('entries', { keyPath: 'key' });
+                db.createObjectStore('pending', { keyPath: 'key' });
+                db.createObjectStore('sealed-entries', { keyPath: 'key' });
+                db.createObjectStore('sealed-pending', { keyPath: 'key' });
+                db.createObjectStore('sealed-check', { keyPath: 'key' });
+            },
+            blocking(_current, next) {
+                versionChanges.push(next ?? 0);
+            },
+        });
+        // This release, in another tab: contacts and a family guard, both opened and written.
+        expect(await b.appContacts().entries(USER)).toEqual(new Map());
+        await b.appFamilies().keepFamily(USER, GROUP, pinAt(2));
+        expect(await b.appFamilies().family(USER, GROUP)).toEqual(pinAt(2));
+        expect(await b.appContacts().entries(USER)).toEqual(new Map());
+        // Nothing asked the older tab to close, and it still reads; reopened, it still opens.
+        expect(versionChanges).toEqual([]);
+        expect(older.version).toBe(3);
+        expect(await older.count('sealed-entries')).toBe(0);
+        older.close();
+        const again = await openDB(CONTACT_GUARD_DATABASE, 3);
+        expect(again.version).toBe(3);
+        again.close();
+    });
+
     test('only moves up: an older guard written after a newer one leaves the newer, and another history is refused', async () => {
         const b = await browser();
         const store = b.tab();
