@@ -1,0 +1,35 @@
+packages/crypto/src/contact-guard.ts
+  s_566b8e0c4467a4::t_07b43646a3ed46 30-32,34
+packages/crypto/src/contacts.ts
+  s_566b8e0c4467a4::t_368e5a81d6ce83 113-117,121-122,124-130
+packages/crypto/src/protocol.ts
+  s_566b8e0c4467a4::t_d7a471093f92d0 152-160
+packages/crypto/src/index.ts
+  s_566b8e0c4467a4::t_d5e925e290271d 41-42
+packages/crypto/src/session.groups.test.ts
+  s_566b8e0c4467a4::t_adb73b64905db7 23,4949,4959,4963,4965-4974
+packages/crypto/src/pins.ts
+  s_566b8e0c4467a4::t_46ac4df78f4982 3,77-105
+packages/crypto/src/session-groups.ts
+  s_566b8e0c4467a4::t_f17ec7b9981b14 3268-3281,3285-3287,3289-3290,3294-3309,3313-3314
+  s_566b8e0c4467a4::t_0bd4428d46cc71 3218-3221
+  s_566b8e0c4467a4::t_aa89bb77135cd4 3,123,397-398,3210-3211,3222-3223,3316,3339-3340
+  s_566b8e0c4467a4::t_02825ba7d3c60e 3330-3332,3334-3338
+  s_566b8e0c4467a4::t_902fe044217bf5 368-371,377-380,387-396
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d03bce9023e8acba31dd95ee7645bcc7d0b35fca",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
