@@ -17,8 +17,12 @@ import { createIdentity } from '../../packages/crypto/src/identity';
 const email = process.argv[2];
 const url = process.env.DATABASE_URL;
 if (!email || !url) throw new Error('Usage: DATABASE_URL=… bun e2e/fixtures/start-over.ts <email>');
-if (decodeURIComponent(new URL(url).pathname.slice(1)) === 'hushos')
-    throw new Error('Refusing to change keys in the hushos database.');
+// As the admin script: a test against a server of its own (E2E_BASE_URL) or the verify skill's
+// instance (VERIFY_RUN) passes that server's database, so reaching `hushos`, the developer's own,
+// from one means the root .env leaked in. CI's own database is also named `hushos`.
+const marker = ['E2E_BASE_URL', 'VERIFY_RUN'].find((name) => process.env[name]);
+if (marker && decodeURIComponent(new URL(url).pathname.slice(1)) === 'hushos')
+    throw new Error(`Refusing to change keys in the hushos database while ${marker} is set.`);
 
 const sql = new SQL(url);
 try {
