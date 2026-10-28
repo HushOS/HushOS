@@ -296,6 +296,7 @@ export function FamilyPage({
                             members={detail.data.members}
                             view={view}
                             needsCheck={work.needsCheck}
+                            names={names}
                         />
                     )}
                     {markLeft.length > 0 && (

@@ -8,9 +8,9 @@ import { describe, expect, test, vi } from 'vitest';
 import { GUARD_UNSAVED } from '@/lib/contact-guard';
 import type { GroupContext } from './context';
 import { createFamily, letIn, stageChange, type StageOutcome } from './outbox';
-import { resealFolded, runDue } from './removal';
+import { AnotherChangeWaitsError, continueFoldIn, resealFolded, runDue } from './removal';
 import { ALICE, BOB, CAROL, familyServer } from './server-testkit';
-import { fetchIdentities, syncGroup } from './sync';
+import { fetchIdentities } from './sync';
 import { account, bytes, pinOf } from './worker-testkit';
 
 /*
@@ -25,8 +25,6 @@ import { account, bytes, pinOf } from './worker-testkit';
  */
 
 vi.setConfig({ testTimeout: 30_000 });
-
-type Server = Awaited<ReturnType<typeof familyServer>>;
 
 /* This account's contact pin of `userId`, as Let them in (first seen) or a check (verified) writes it. */
 async function pin(ctx: GroupContext, userId: string, value: ContactPin | null) {
@@ -185,27 +183,9 @@ describe('the manager rule (3.6)', () => {
     });
 });
 
-/* Continue on a member's account change: their new keys and every family folder rotated. */
-async function continued(
-    f: { server: Server; ctx: GroupContext; groupId: string },
-    userId: string,
-) {
-    const synced = await syncGroup(f.ctx, f.groupId);
-    if (synced.status !== 'accepted') throw new Error(synced.status);
-    const served = (await fetchIdentities(f.ctx, f.groupId)).get(userId)!;
-    const areas = Object.keys(synced.view.areas).map((workspaceId) => ({ workspaceId, kinds: [] }));
-    return stageChange(
-        f.ctx,
-        f.groupId,
-        {
-            kind: 'foldIn',
-            members: [{ userId, served: served.identity!, links: served.links }],
-            continued: [userId],
-            rotations: await f.ctx.rotations!.read(f.groupId, areas),
-        },
-        { writers: await f.ctx.rotations!.writers(f.groupId) },
-    );
-}
+/* Continue on a member's account change, as the family page does it once their new keys are pinned. */
+const continued = (f: { ctx: GroupContext; groupId: string }, userId: string) =>
+    continueFoldIn(f.ctx, f.groupId, userId, { [BOB]: 'Bob', [CAROL]: 'Carol' });
 
 describe('a member’s account change with no signed chain', () => {
     test('is folded in only after Continue, never on its own, and that change rotates every family folder and seals the new keys to the new entry only', async () => {
@@ -251,6 +231,37 @@ describe('a member’s account change with no signed chain', () => {
                 .map((grant) => grant.workspaceId)
                 .sort(),
         ).toEqual(rotated);
+    });
+
+    test('while another member’s account change waits too, Continue is refused before anything is signed, naming them', async () => {
+        const f = await withBob();
+        const carol = await pinOf(f.server.people[CAROL]);
+        await pin(f.ctx, CAROL, firstSeen(carol));
+        expect(landed(await letThemIn(f, CAROL))).toBe(true);
+        // Both start over, with no signed chain from the keys their entries name.
+        const bob = await account(BOB);
+        const carolNow = await account(CAROL);
+        f.server.serveAs(BOB, bob.served);
+        f.server.serveAs(CAROL, carolNow.served);
+        await pin(f.ctx, BOB, firstSeen({ ...(await pinOf(bob)), userId: BOB }));
+        await pin(f.ctx, CAROL, firstSeen({ ...(await pinOf(carolNow)), userId: CAROL }));
+        const before = f.server.log.length;
+        const refused = continued(f, BOB);
+        await expect(refused).rejects.toThrow(AnotherChangeWaitsError);
+        await expect(continued(f, BOB)).rejects.toThrow(
+            'Carol’s account changed too. HushOS can’t give Bob the family folders again while Carol’s change is waiting.',
+        );
+        await expect(continued(f, CAROL)).rejects.toThrow(/^Bob’s account changed too/);
+        // Nothing signed, nothing sent, nothing kept to send later.
+        expect(
+            f.server.log
+                .slice(before)
+                .filter((entry) => ['rosters', 'member'].includes(entry.route)),
+        ).toEqual([]);
+        expect(await f.ctx.store.outbox(ALICE, f.groupId)).toEqual([]);
+        // Once Carol's change is gone (served her old keys again), Bob is let back in alone.
+        f.server.serveAs(CAROL, f.server.people[CAROL].served);
+        expect(landed(await continued(f, BOB))).toBe(true);
     });
 
     test('a manager let back in that way keeps the folders but not the role: the family’s key is sealed to their new keys only after a check', async () => {

@@ -1,4 +1,5 @@
 import type { GroupView } from '@hushos/crypto';
+import { entryCommitment, keyCommitment, pinKeysOfServed } from '@hushos/crypto/pins';
 import { GroupApiError, isNotMember, lapsedPlansIn, type LapsedPlanNamed } from './api';
 import type { GroupContext } from './context';
 import { refusalCopy } from './copy';
@@ -466,4 +467,84 @@ export async function runDue(
     }
     if ((await repairPreviousRoots(ctx, groupId, options.areas)) > 0) report.done.push('repair');
     return report;
+}
+
+/*
+ * Another member waiting on their own Continue: their account changed and
+ * their entry still names the keys they had. Every family folder's new key
+ * is owed to every active member, to the keys their entry names, and this
+ * device has only those keys' digests, never the keys: so while one is
+ * waiting, no other can be let back in alone (docs/optional-verification.md
+ * 3.3). Said up front, naming them, rather than refused by the worker.
+ */
+export class AnotherChangeWaitsError extends Error {
+    override name = 'AnotherChangeWaitsError';
+    constructor(
+        readonly other: string,
+        readonly who: string,
+    ) {
+        super(
+            `${other}’s account changed too. HushOS can’t give ${who} the family folders again while ${other}’s change is waiting.`,
+        );
+    }
+}
+
+/*
+ * Continue on a member's account change (6.9), once this account pins the
+ * keys HushOS serves for them now: one roster that writes those keys into
+ * their entry and gives every family folder new keys (3.3), sent on the
+ * member route when it also takes the role that holds the family's key (the
+ * worker's `memberRoute`). A manager among them keeps the role, and gets the
+ * family key sealed to their new keys, only over a verified pin. Refused,
+ * naming them, while another member's change no signed chain explains waits.
+ */
+export async function continueFoldIn(
+    ctx: GroupContext,
+    groupId: string,
+    userId: string,
+    names: Record<string, string> = {},
+) {
+    const rotations = ctx.rotations;
+    if (!rotations) throw new Error('Open the family’s folders, then try again.');
+    const synced = await syncGroup(ctx, groupId);
+    if (synced.status !== 'accepted') throw new Error('HushOS couldn’t check this right now.');
+    const identities = await fetchIdentities(ctx, groupId);
+    const served = identities.get(userId);
+    if (!served?.identity) throw new Error('HushOS couldn’t load their keys. Try again.');
+    for (const entry of synced.view.members) {
+        if (entry.status !== 'active' || entry.userId === userId || entry.userId === ctx.userId)
+            continue;
+        const theirs = identities.get(entry.userId)?.identity;
+        if (!theirs) continue;
+        const [named, now] = await Promise.all([
+            entryCommitment(entry),
+            pinKeysOfServed(theirs, 'seen').then(keyCommitment, () => null),
+        ]);
+        if (named !== null && now !== null && named !== now)
+            throw new AnotherChangeWaitsError(
+                names[entry.userId] ?? 'Someone else in the family',
+                names[userId] ?? 'them',
+            );
+    }
+    const areas = Object.keys(synced.view.areas).map((workspaceId) => ({ workspaceId, kinds: [] }));
+    const staged = await stageChange(
+        ctx,
+        groupId,
+        {
+            kind: 'foldIn',
+            members: [{ userId, served: served.identity, links: served.links }],
+            continued: [userId],
+            rotations: await rotations.read(groupId, areas),
+        },
+        { writers: await rotations.writers(groupId) },
+    );
+    if (staged.status === 'sent' && staged.outcome.status === 'landed')
+        await resealFolded(
+            ctx,
+            groupId,
+            staged.outcome.sync,
+            [{ userId }],
+            await fetchIdentities(ctx, groupId),
+        );
+    return staged;
 }

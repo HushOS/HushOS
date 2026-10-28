@@ -15,9 +15,9 @@ import {
 import { pinOf } from '@/lib/family-pin';
 import type { GroupContext } from '@/lib/groups/context';
 import { memberJoinCode } from '@/lib/groups/join';
-import { letIn, stageChange } from '@/lib/groups/outbox';
-import { resealFolded } from '@/lib/groups/removal';
-import { fetchIdentities, fetchServed, syncGroup } from '@/lib/groups/sync';
+import { letIn } from '@/lib/groups/outbox';
+import { continueFoldIn } from '@/lib/groups/removal';
+import { fetchServed, syncGroup } from '@/lib/groups/sync';
 
 /*
  * Who in a family this person checked, and the acts that change it, for the
@@ -223,6 +223,8 @@ export async function continueMember(
     ctx: GroupContext,
     groupId: string,
     member: { userId: string; email: string; name: string },
+    /* First names by user id, to name another member whose account changed too. */
+    names: Record<string, string> = {},
 ) {
     const found = await lookupContact(queryClient, userId, member.email);
     if (found.contact.userId.toLowerCase() !== member.userId.toLowerCase())
@@ -237,32 +239,5 @@ export async function continueMember(
         const added = await pinForFamily(queryClient, userId, member);
         if (added.outcome === 'changed') await continueWith(queryClient, userId, added.change);
     }
-    const rotations = ctx.rotations;
-    if (!rotations) throw new Error('Open the family’s folders, then try again.');
-    const synced = await syncGroup(ctx, groupId);
-    if (synced.status !== 'accepted') throw new Error('HushOS couldn’t check this right now.');
-    const served = (await fetchIdentities(ctx, groupId)).get(member.userId);
-    if (!served?.identity) throw new Error('HushOS couldn’t load their keys. Try again.');
-    const areas = Object.keys(synced.view.areas).map((workspaceId) => ({ workspaceId, kinds: [] }));
-    const staged = await stageChange(
-        ctx,
-        groupId,
-        {
-            kind: 'foldIn',
-            members: [{ userId: member.userId, served: served.identity, links: served.links }],
-            continued: [member.userId],
-            rotations: await rotations.read(groupId, areas),
-        },
-        { writers: await rotations.writers(groupId) },
-    );
-    // A manager checked over these keys keeps the role, and the family key is sealed to them.
-    if (staged.status === 'sent' && staged.outcome.status === 'landed')
-        await resealFolded(
-            ctx,
-            groupId,
-            staged.outcome.sync,
-            [member],
-            await fetchIdentities(ctx, groupId),
-        );
-    return staged;
+    return continueFoldIn(ctx, groupId, member.userId, names);
 }

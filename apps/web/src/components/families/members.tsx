@@ -982,6 +982,7 @@ export function ChangedMembers({
     members,
     view,
     needsCheck,
+    names,
 }: {
     userId: string;
     groupId: string;
@@ -989,6 +990,8 @@ export function ChangedMembers({
     members: FamilyMember[];
     view: GroupView | null;
     needsCheck: readonly string[];
+    /* First names by user id: another member whose account changed too is named. */
+    names: Record<string, string>;
 }) {
     const queryClient = useQueryClient();
     const [busy, setBusy] = useState<string | null>(null);
@@ -1016,6 +1019,7 @@ export function ChangedMembers({
                 familyContext(userId),
                 groupId,
                 refOf(member),
+                names,
             );
             const failed = stageFailure(staged, { family, person: who });
             if (failed) throw new Error(failed);
