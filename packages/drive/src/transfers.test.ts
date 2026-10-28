@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { CryptoRequests, CryptoResults, UploadPartResult } from '@hushos/crypto';
 import { KEY_CHANGE_PENDING } from '@hushos/crypto/protocol';
+import { generateKey, openMetadata, sealMetadata } from '@hushos/crypto/drive';
 import { DriveApiError, type DriveApi, type NodeView } from './api';
 import type { DriveNode, Rpc } from './client';
 import { scopedId } from '../../db/src/ids';
@@ -26,6 +27,9 @@ import {
  */
 
 const CHUNK = 8 * 1024 * 1024;
+/* Ids in the form the envelope contexts take, for the one test that seals a record for real. */
+const WS_ID = '11111111-1111-4111-8111-111111111111';
+const NODE_ID = '22222222-2222-4222-8222-222222222222';
 
 function node(id: string, parentId: string | null = 'root'): DriveNode {
     return {
@@ -1820,6 +1824,24 @@ describe('queued rows and stashed copies', () => {
         await settle(2_000);
         expect(second.server.attached).toHaveLength(1);
         expect(attributesOf(second)).toEqual([attributes]);
+    });
+
+    test('a file whose name holds a lone surrogate lands with U+FFFD in its place, and its record opens', async () => {
+        const h = harness();
+        const [id] = h.manager.enqueue([
+            { file: fakeFile(CHUNK, 'a\ud800b'), parent: node('root', null) },
+        ]);
+        await settle(2_000);
+        expect(h.item(id!).status).toBe('done');
+        expect(h.item(id!).name).toBe('a�b');
+        const sealed = h.createdMetadata[0]!;
+        expect(sealed.name).toBe('a�b');
+        // Sealed and opened as the worker does: a name that seals is one that opens.
+        const key = generateKey();
+        const ctx = { workspaceId: WS_ID, nodeId: NODE_ID, metadataVersion: 1 };
+        expect(await openMetadata(await sealMetadata(sealed, key, ctx), key, ctx)).toMatchObject({
+            name: 'a�b',
+        });
     });
 
     test('a replacement’s "keep both" copy takes the replaced file’s attributes; a new file has none', async () => {

@@ -7,7 +7,13 @@ import type {
     UploadPartProgress,
     UploadPartResult,
 } from '@hushos/crypto';
-import { CONTENT_SUITE, chunkCount, ciphertextSize, contentLength } from '@hushos/crypto/drive';
+import {
+    CONTENT_SUITE,
+    chunkCount,
+    ciphertextSize,
+    contentLength,
+    wellFormed,
+} from '@hushos/crypto/drive';
 import { KEY_CHANGE_PENDING } from '@hushos/crypto/protocol';
 import { newId as mintScopedId, type IdKind } from '@hushos/crypto/ids';
 import type { DriveApi, NodeView, PartUrl } from './api';
@@ -1634,7 +1640,9 @@ export function createTransferManager(options: TransferManagerOptions) {
             const u = makeInternal(
                 {
                     id,
-                    name: input.name ?? input.file.name,
+                    // A File's name is a DOMString, which may hold a lone surrogate (a Windows
+                    // file's): it lands with U+FFFD in its place rather than be refused.
+                    name: wellFormed(input.name ?? input.file.name),
                     size,
                     mime: input.file.type || null,
                     parentId: input.parent.id,

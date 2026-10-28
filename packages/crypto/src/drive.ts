@@ -172,6 +172,19 @@ function context(parts: unknown[]) {
 }
 
 /* Names are enforced by the client because the server cannot read them. */
+/* A lone surrogate: JSON.parse makes one from "\ud800", TextEncoder would not keep it, Rust refuses it. */
+const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
+
+/*
+ * `text` with each lone surrogate replaced by U+FFFD, as
+ * String.prototype.toWellFormed does (newer than the browsers the web app
+ * builds for). For names the platform hands over, a File's or a dropped
+ * folder's: a Windows file name may hold one, and checkName refuses it.
+ */
+export function wellFormed(text: string) {
+    return text.replace(/[\uD800-\uDFFF]/gu, '\uFFFD');
+}
+
 export function checkName(name: string) {
     if (typeof name !== 'string') throw new CryptoError('Enter a name.');
     const points = Array.from(name).length;
@@ -180,6 +193,11 @@ export function checkName(name: string) {
         throw new CryptoError(`Use a name of at most ${NAME_MAX_CODE_POINTS} characters.`);
     if (name === '.' || name === '..' || name.includes('/'))
         throw new CryptoError('Names cannot contain "/" or be "." or "..".');
+    // Sealed, it would be written as an escape no reader opens (ambiguousJson): refused here instead.
+    if (LONE_SURROGATE.test(name))
+        throw new CryptoError(
+            'This name has a character that can’t be saved. Type the name again.',
+        );
     for (const character of name) {
         const point = character.codePointAt(0) ?? 0;
         if (point < 0x20 || point === 0x7f)
@@ -326,9 +344,6 @@ function strictText(bytes: Uint8Array) {
     return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
 }
 
-/* A lone surrogate: JSON.parse makes one from "\ud800", TextEncoder would not keep it, Rust refuses it. */
-const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
-
 /*
  * Whether JSON text JSON.parse already accepted reads differently in the core:
  * an object names one key twice, escapes decoded ("colour" and "\u0063olour"
@@ -406,6 +421,10 @@ export async function sealMetadata(
     ctx: MetadataContext,
 ) {
     const attributes = checkAttributes(metadata.attributes);
+    // Every string sealed must open again: a lone surrogate would be written as an escape both readers refuse.
+    for (const text of [metadata.mime, metadata.modified])
+        if (typeof text === 'string' && LONE_SURROGATE.test(text))
+            throw new CryptoError('This item has details that can’t be saved.');
     const clean: NodeMetadata = {
         name: checkName(metadata.name),
         mime:
