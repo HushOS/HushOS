@@ -1881,8 +1881,15 @@ const invitationHash = (token: string) => {
 export async function openInvitation(userId: string, token: string, address: string) {
     await limit(`invitations:open:address:${address}`, 30, 15 * 60 * 1000);
     await limit(`invitations:open:user:${userId}`, 30, 15 * 60 * 1000);
-    const found = await groupsRepository.openInvitation(invitationHash(token));
+    const found = await groupsRepository.openInvitation(invitationHash(token), userId);
     if (!found) throw new GroupError('gone', 'This invitation is no longer open.', 410);
+    // Someone else's invitation, forwarded or seen over a shoulder: nothing about the family.
+    if (!found.forAccount)
+        throw new GroupError(
+            'email-mismatch',
+            'This invitation is for another email address. Sign in with that one.',
+            403,
+        );
     // The caller's own family, so the join page can say to leave it first; never this one.
     const family = found.group.kind === 'family' ? await groupsRepository.familyOf(userId) : null;
     return {
@@ -1919,7 +1926,14 @@ export async function listMyInvitations(userId: string) {
 export async function acceptInvitation(userId: string, token: string, address: string) {
     await limit(`invitations:accept:address:${address}`, 30, 15 * 60 * 1000);
     await limit(`invitations:accept:user:${userId}`, 10, 15 * 60 * 1000);
-    const opened = await groupsRepository.openInvitation(invitationHash(token));
+    const opened = await groupsRepository.openInvitation(invitationHash(token), userId);
+    // Someone else's invitation: refused before anything below names the family.
+    if (opened && !opened.forAccount)
+        throw new GroupError(
+            'email-mismatch',
+            'This invitation is for another email address. Sign in with that one.',
+            403,
+        );
     // One family per account, before the plan: leaving theirs is the first thing they must do.
     if (opened?.group.kind === 'family') {
         const family = await groupsRepository.familyOf(userId);
