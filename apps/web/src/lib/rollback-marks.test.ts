@@ -119,7 +119,11 @@ function server() {
 }
 
 /* One tab of the browser: its own worker state, the shared localStorage, and a lock. */
-function browser(keys = server(), exclusive?: <T>(work: () => Promise<T>) => Promise<T>) {
+function browser(
+    keys = server(),
+    exclusive?: <T>(work: () => Promise<T>) => Promise<T>,
+    quietOldTabs?: () => Promise<void>,
+) {
     let unlocked: string | null = null;
     let writes: 'ok' | 'full' = 'ok';
     /* What the worker has open after `ready`. */
@@ -182,6 +186,7 @@ function browser(keys = server(), exclusive?: <T>(work: () => Promise<T>) => Pro
         storage: () => storage,
         account: () => unlocked,
         ...(exclusive ? { exclusive } : {}),
+        ...(quietOldTabs ? { quietOldTabs } : {}),
     });
     return {
         ...marks,
@@ -547,6 +552,43 @@ describe('rollback marks', () => {
         expect(local.getItem(`hushos.identity-seen:${MAYA}`)).toBe('4');
         expect((await b.read(MAYA)).identity).toBe(4);
         expect(local.getItem(`hushos.identity-seen:${MAYA}`)).toBeNull();
+    });
+
+    test('a tab on the earlier version is locked before its plaintext mark goes, so a higher one is never lost', async () => {
+        const key = `hushos.settings-seen:${MAYA}`;
+        local.setItem(key, '5');
+        // The older tab: it hears 'lock' on 'hushos-auth' as every version's auth client does,
+        // and a raise it already had on its way lands as it locks. Unlocked, it raises the same
+        // key again at the worst moment: just before this tab deletes it.
+        let olderTabUnlocked = true;
+        const olderTab = new BroadcastChannel('hushos-auth');
+        olderTab.onmessage = (event: MessageEvent) => {
+            if (event.data !== 'lock') return;
+            local.setItem(key, '9');
+            olderTabUnlocked = false;
+        };
+        const removeItem = local.removeItem;
+        local.removeItem = (name: string) => {
+            if (name === key && olderTabUnlocked) local.setItem(key, '12');
+            removeItem(name);
+        };
+        // This tab says 'lock' on its own channel (the auth client's lockOtherTabs) and waits.
+        const b = browser(server(), undefined, async () => {
+            const own = new BroadcastChannel('hushos-auth');
+            own.postMessage('lock');
+            own.close();
+            await new Promise((resolve) => setTimeout(resolve, 100));
+        });
+        b.unlock(MAYA);
+        try {
+            expect((await b.read(MAYA)).settings).toBe(9);
+        } finally {
+            local.removeItem = removeItem;
+            olderTab.close();
+        }
+        // Sealed, and gone from the clear: nothing higher was ever written, so nothing was lost.
+        expect(local.getItem(key)).toBeNull();
+        expect((await b.read(MAYA)).settings).toBe(9);
     });
 
     test('plaintext marks that could not be sealed stay, and still count', async () => {

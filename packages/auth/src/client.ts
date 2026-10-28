@@ -787,6 +787,16 @@ export function createAuthClient(
                 }
             }),
         session: () => readSession(),
+        /*
+         * Locks every other tab of this browser, as a lock here would, but not this one: said
+         * on this client's own channel, which does not hear its own messages. Older tabs know
+         * it too ('lock' on 'hushos-auth'), so this is how they are stopped from writing what
+         * they keep in the clear (apps/web lib/rollback-marks.ts, before plaintext marks go).
+         */
+        lockOtherTabs() {
+            listen();
+            broadcastLock();
+        },
         /* Whether this tab cleared a removed device; said once, on the sign-in page. */
         takeRemovedNotice() {
             try {

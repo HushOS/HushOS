@@ -181,6 +181,12 @@ export function createRollbackMarks(options: {
     account: () => string | null | Promise<string | null>;
     /* Runs `work` alone across this browser's tabs (a Web Lock), so a raise never lowers another. */
     exclusive?: <T>(work: () => Promise<T>) => Promise<T>;
+    /*
+     * Before plaintext marks are deleted: stops tabs still on an earlier version from writing
+     * them (they lock, and raise nothing until unlocked again), and waits long enough for a
+     * write such a tab already had on its way to land.
+     */
+    quietOldTabs?: () => Promise<void>;
 }) {
     let chain: Promise<unknown> = Promise.resolve();
     const exclusive =
@@ -252,15 +258,22 @@ export function createRollbackMarks(options: {
     }
     /*
      * This device's marks for `userId`. Plaintext marks of earlier versions count at their
-     * highest on every read, and are sealed; each plaintext key goes only once the sealed
-     * record holds what it says, read again just before it is deleted, so a higher value an
-     * older tab wrote meanwhile stays (and counts) until a later read seals it. Throws
-     * MarksUnreadableError when the marks are there and cannot be read.
+     * highest on every read, and are sealed, once tabs still on that version are locked
+     * (quietOldTabs); each plaintext key goes only once the sealed record holds what it says,
+     * read again just before it is deleted, so a higher value written meanwhile stays (and
+     * counts) until a later read seals it. Throws MarksUnreadableError when the marks are
+     * there and cannot be read.
      */
     async function read(userId: string): Promise<RollbackMarks> {
         const storage = storageOrNone();
         if (!storage) return NO_MARKS;
         await requireUnlocked(userId);
+        if (!plaintextMarks(storage, userId).keys.length) return update(storage, userId, {}, false);
+        // A tab on an earlier version writes these keys itself, read, compare and write, with
+        // no lock: deleting one while such a tab can still write it could lose a higher value
+        // it wrote in between. So those tabs are locked first, and what they had on its way
+        // has landed before the keys are read for sealing.
+        await options.quietOldTabs?.();
         const plaintext = plaintextMarks(storage, userId);
         if (!plaintext.keys.length) return update(storage, userId, {}, false);
         let sealed: RollbackMarks;
@@ -282,6 +295,9 @@ export function createRollbackMarks(options: {
     }
     return { read, raise };
 }
+
+/* How long a locked older tab is given for a mark it was already writing to land. */
+export const OLD_TABS_SETTLE_MS = 400;
 
 /*
  * The worker and the settings key, reached through the app's modules, loaded once when first
@@ -313,6 +329,12 @@ const marks = createRollbackMarks({
     },
     storage: () => window.localStorage,
     account: async () => (await auth()).store.getState().unlockedUserId,
+    // Once per browser in practice (only while plaintext marks are left): every other tab
+    // locks, older ones included, and a write one of them had on its way gets time to land.
+    quietOldTabs: async () => {
+        (await auth()).lockOtherTabs();
+        await new Promise((resolve) => setTimeout(resolve, OLD_TABS_SETTLE_MS));
+    },
     // Across tabs where the browser has Web Locks; without them, the factory's own queue, which
     // still keeps this tab's updates apart (never nothing at all).
     ...(typeof navigator !== 'undefined' && navigator.locks?.request
