@@ -45,7 +45,13 @@ import {
     type PendingPerson,
 } from '@/lib/families';
 import { removeBlocker } from '@/lib/family-leave';
-import { clearPendingRoles, pendingRolesDone, pendingRolesOf } from '@/lib/family-pending';
+import {
+    clearInvitedRole,
+    clearPendingRoles,
+    pendingRolesOf,
+    savePendingRoles,
+    tidiedPendingRoles,
+} from '@/lib/family-pending';
 import {
     continueMembers,
     letInWithoutWords,
@@ -886,20 +892,24 @@ export function MemberList({
             );
     }
 
-    // What no longer waits (they left, were removed, or manage the family now) goes from this
-    // account's settings, on whichever of its devices sees it first; doing it twice is harmless.
-    const done = pendingRolesDone(
-        settings.data?.settings,
-        groupId,
-        members,
-        (id) => view?.members.find((entry) => entry.userId === id)?.roles,
-    ).join();
+    // This account's records of Invite someone, kept up to date with what it sees: tied to the
+    // member let in with the address typed, and gone once nothing waits (they left, were
+    // removed, manage the family now, or the invitation was cancelled or expired), on whichever
+    // of its devices sees it first; doing it twice is harmless.
+    const checkedRoles = (id: string) => view?.members.find((entry) => entry.userId === id)?.roles;
+    const held = settings.data?.settings;
+    const tidied = held
+        ? tidiedPendingRoles(held, groupId, members, checkedRoles, new Date())
+        : undefined;
+    const tidy = tidied && tidied !== held ? JSON.stringify(tidied.pendingRoles ?? null) : '';
     useEffect(() => {
-        if (done)
-            void clearPendingRoles(queryClient, userId, groupId, done.split(',')).catch(
-                () => false,
-            );
-    }, [done, groupId, queryClient, userId]);
+        if (!tidy) return;
+        void savePendingRoles(queryClient, userId, (settings) =>
+            tidiedPendingRoles(settings, groupId, members, checkedRoles, new Date()),
+        ).catch(() => false);
+        // Run again only when what it would save changes.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tidy]);
 
     /* A role change that needs a check: asked first, unless this person checked them already. */
     function ask(change: RoleChange) {
@@ -1398,6 +1408,8 @@ export function InvitationList({
         setBusy(invitation.id);
         try {
             await groupsApi.revokeInvitation(groupId, invitation.id);
+            // This account's record of it, if it asked them to manage the family, goes too.
+            await clearInvitedRole(queryClient, userId, groupId, invitation.id).catch(() => false);
             cue('droplet');
             toast.add({
                 type: 'success',

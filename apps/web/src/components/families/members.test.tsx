@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { GroupView } from '@hushos/crypto';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
@@ -128,7 +128,10 @@ vi.mock('@/lib/families', () => ({
     familiesQueryOptions: vi.fn(),
     pendingQueryOptions: vi.fn(),
     familyContext: () => ({}),
-    familyKeys: { family: (userId: string, groupId: string) => ['family', userId, groupId] },
+    familyKeys: {
+        family: (userId: string, groupId: string) => ['family', userId, groupId],
+        invitations: (userId: string, groupId: string) => ['invitations', userId, groupId],
+    },
     firstName: (name: string) => name.split(' ')[0],
     rolesLine: () => '',
     withRole: (roles: string[], role: string, on: boolean) =>
@@ -147,7 +150,11 @@ vi.mock('@/lib/family-trust', () => ({
         (next.includes('members') && !roles.includes('members')) ||
         (next.includes('billing') && !roles.includes('billing')),
 }));
-vi.mock('@/lib/groups/api', () => ({ GroupApiError: class extends Error {}, groupsApi: {} }));
+const revokeInvitation = vi.fn(async (..._args: unknown[]) => ({ revoked: true }));
+vi.mock('@/lib/groups/api', () => ({
+    GroupApiError: class extends Error {},
+    groupsApi: { revokeInvitation: (...args: unknown[]) => revokeInvitation(...args) },
+}));
 vi.mock('@/lib/groups/outbox', () => ({
     dropKeptAdmission: vi.fn(),
     stageChange: (...args: unknown[]) => stageChange(...args),
@@ -156,6 +163,30 @@ vi.mock('@/lib/family-pending', async (original) => ({
     ...(await original<typeof Pending>()),
     clearPendingRoles: (...args: Parameters<typeof clearPendingRoles>) =>
         clearPendingRoles(...args),
+    // A save of this account's settings, as compare-and-set makes it: the change over what's there.
+    clearInvitedRole: async (
+        _queryClient: unknown,
+        _userId: string,
+        groupId: string,
+        id: string,
+    ) => {
+        const held = { ...(settingsDoc.pendingRoles as Record<string, Record<string, unknown>>) };
+        const group = { ...held[groupId] };
+        delete group[id];
+        if (Object.keys(group).length) held[groupId] = group;
+        else delete held[groupId];
+        settingsDoc = { ...settingsDoc, pendingRoles: Object.keys(held).length ? held : undefined };
+        return true;
+    },
+    savePendingRoles: async (
+        queryClient: { invalidateQueries: () => Promise<void> } | undefined,
+        _userId: string,
+        change: (settings: never) => never,
+    ) => {
+        settingsDoc = change(settingsDoc as never);
+        await queryClient?.invalidateQueries();
+        return true;
+    },
 }));
 vi.mock('@/lib/groups/sync', () => ({
     syncGroup: async () => (syncedView ? { status: 'accepted', view: syncedView } : null),
@@ -165,7 +196,8 @@ vi.mock('@/lib/groups/copy', async (original) => ({
     errorCopy: (cause: Error) => cause.message,
     outcomeCopy: () => null,
 }));
-const { ChangedMembers, MemberList } = await import('./members');
+const { ChangedMembers, InvitationList, MemberList } = await import('./members');
+const { pendingRolesOf } = await import('@/lib/family-pending');
 
 const person = (userId: string, name: string, roles: string[] = []): FamilyMember =>
     ({
@@ -407,19 +439,29 @@ describe('the notice for accounts that changed', () => {
  * check. Never from anything the server says.
  */
 describe('a manager role held back at Let them in', () => {
-    const invited = () =>
+    /* Alice's record of Invite someone, tied to Sam (let in under the address she typed). */
+    const invited = (tied = true) =>
         (settingsDoc = {
             version: 2,
             contacts: {},
-            pendingRoles: { g: { [SAM]: { roles: ['members'], since: '2026-10-28T00:00:00Z' } } },
+            pendingRoles: {
+                g: {
+                    'invitation-1': {
+                        email: 'sam@example.com',
+                        roles: ['members'],
+                        since: '2026-10-28T00:00:00Z',
+                        ...(tied ? { userId: SAM } : {}),
+                    },
+                },
+            },
         });
     let client: QueryClient;
-    function page(options: { manager?: boolean; members?: FamilyMember[] } = {}) {
+    function page(options: { manager?: boolean; members?: FamilyMember[]; userId?: string } = {}) {
         client = new QueryClient();
         render(
             <QueryClientProvider client={client}>
                 <MemberList
-                    userId={ALICE}
+                    userId={options.userId ?? ALICE}
                     groupId="g"
                     family="Holm family"
                     members={
@@ -562,9 +604,85 @@ describe('a manager role held back at Let them in', () => {
                 person(ANA, 'Ana Holm'),
             ],
         });
+        await waitFor(() => expect(settingsDoc.pendingRoles).toBeUndefined());
+    });
+
+    test('Alice invited Sam to manage it and Ana let him in: only Alice’s device asks', async () => {
+        matched = true;
+        const everyone = [
+            person(ALICE, 'Alice Holm', ORGANIZER),
+            person(SAM, 'Sam Holm'),
+            person(ANA, 'Ana Holm', ['members']),
+        ];
+        // Ana's device: she pressed Let them in, and holds no record of anyone's intent.
+        page({ userId: ANA, members: everyone });
+        await waitFor(() => expect(samRow().textContent).toContain('Verified'));
+        expect(samRow().textContent).not.toContain('Will manage the family once checked');
+        expect(prompt()).toBeNull();
+        cleanup();
+        // Alice's device: her record of Invite someone asks.
+        invited();
+        page({ members: everyone });
+        expect(
+            await screen.findByRole('alertdialog', {
+                name: 'Sam was invited to manage the family',
+            }),
+        ).toBeTruthy();
+    });
+
+    test('is tied to Sam only once he is let in under the address Alice typed', async () => {
+        invited(false);
+        // Let in under another address: never him.
+        page({
+            members: [
+                person(ALICE, 'Alice Holm', ORGANIZER),
+                { ...person(SAM, 'Sam Holm'), email: 'sam.other@example.com' } as FamilyMember,
+                person(ANA, 'Ana Holm'),
+            ],
+        });
         await waitFor(() =>
-            expect(clearPendingRoles).toHaveBeenCalledWith(expect.anything(), ALICE, 'g', [SAM]),
+            expect(document.querySelector('[data-member="sam.other@example.com"]')).not.toBeNull(),
         );
+        expect(document.body.textContent).not.toContain('Will manage the family once checked');
+        expect(pendingRolesOf(settingsDoc as never, 'g', SAM)).toEqual([]);
+        cleanup();
+        // Let in under the address she typed: tied, and the line shows.
+        invited(false);
+        page();
+        await waitFor(() =>
+            expect(samRow().textContent).toContain('Will manage the family once checked'),
+        );
+        expect(pendingRolesOf(settingsDoc as never, 'g', SAM)).toEqual(['members']);
+    });
+
+    test('goes with its invitation, cancelled on this device', async () => {
+        const user = userEvent.setup();
+        invited(false);
+        render(
+            <QueryClientProvider client={new QueryClient()}>
+                <InvitationList
+                    userId={ALICE}
+                    groupId="g"
+                    invitations={[
+                        {
+                            id: 'invitation-1',
+                            email: 'sam@example.com',
+                            roles: ['members'],
+                            invitedBy: ALICE,
+                            expiresAt: '2026-11-04T00:00:00.000Z',
+                        } as never,
+                    ]}
+                    members={[person(ALICE, 'Alice Holm', ORGANIZER)]}
+                />
+            </QueryClientProvider>,
+        );
+        await user.click(screen.getByRole('button', { name: 'Cancel invitation' }));
+        await user.click(
+            within(await screen.findByRole('alertdialog')).getByRole('button', {
+                name: 'Cancel invitation',
+            }),
+        );
+        await waitFor(() => expect(revokeInvitation).toHaveBeenCalledWith('g', 'invitation-1'));
         await waitFor(() => expect(settingsDoc.pendingRoles).toBeUndefined());
     });
 });

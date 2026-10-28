@@ -60,7 +60,8 @@ vi.mock('@/lib/own-identity', () => ({
 
 const { compareAndSetSettings, readSettingsForFamilies, setContactGuard, contactGuardEntry } =
     await import('./contacts');
-const { pendingRolesOf } = await import('./family-pending');
+const { keepInvitedRole, pendingRolesOf, savePendingRoles, tidiedPendingRoles } =
+    await import('./family-pending');
 const {
     continueMembers,
     familyCheckCode,
@@ -314,52 +315,56 @@ describe('checking each other in a family', () => {
     });
 });
 
-describe('a manager role held back at Let them in (6.8)', () => {
-    test('is kept in this account’s settings, in the same save as the first-seen pin, and sent nowhere', async () => {
+describe('a manager role asked for at Invite someone (6.8)', () => {
+    const INVITATION = 'a0000000-0000-4000-8000-0000000000a1';
+    /* Alice sent Invite someone with "Let them manage the family" ticked, then let Bob in. */
+    async function invitedBob(f: Awaited<ReturnType<typeof aliceFamily>>) {
+        await keepInvitedRole(f.queryClient, ALICE, f.groupId, INVITATION, BOB_EMAIL);
+        await f.letBobIn();
+        // Her device sees him let in, under the address she typed.
+        await savePendingRoles(f.queryClient, ALICE, (settings) =>
+            tidiedPendingRoles(
+                settings,
+                f.groupId,
+                [{ userId: BOB, email: BOB_EMAIL, state: 'active', roles: [] }],
+                () => undefined,
+                new Date(),
+            ),
+        );
+        expect(pendingRolesOf(await f.settings(), f.groupId, BOB)).toEqual(['members']);
+    }
+
+    test('Let them in never records one from the server’s invitation roles, whoever presses it', async () => {
         const f = await aliceFamily();
-        // Every settings save, opened: what each one held.
-        const saves: Record<string, unknown>[] = [];
-        const save = auth.saveSettings.getMockImplementation()!;
-        auth.saveSettings.mockImplementation(async (input) => {
-            const out = await save(input);
-            const { settings } = (await f.ctx.rpc(
-                'settingsOpen' as never,
-                {
-                    userId: ALICE,
-                    envelope: f.stored.envelope,
-                } as never,
-            )) as { settings: Record<string, unknown> };
-            saves.push(settings);
-            return out;
-        });
+        // The server says Bob was asked to manage the family; nobody here asked.
         const result = await letInWithoutWords(f.queryClient, ALICE, f.ctx, f.groupId, {
             userId: BOB,
             email: BOB_EMAIL,
             roles: ['members'],
             identity: f.server.people[BOB].served,
         });
+        // Held back all the same (safe that way), and nothing says it is owed.
         expect(result).toMatchObject({ outcome: 'staged', heldBack: ['members'] });
-        // The save that wrote Bob's first-seen pin wrote the waiting role too.
-        const first = saves.find((at) => (at.contacts as Record<string, unknown>)[BOB]);
-        expect(first?.pendingRoles).toEqual({
-            [f.groupId]: { [BOB]: { roles: ['members'], since: expect.any(String) } },
-        });
-        expect(pendingRolesOf(await f.settings(), f.groupId, BOB)).toEqual(['members']);
-        // Nothing of it reaches the server: Bob is let in as a member, and no call names it.
-        expect(JSON.stringify(f.server.log)).not.toContain('pendingRoles');
-        const [admit] = f.server.sent('admit');
-        expect(JSON.stringify(admit)).not.toContain('pendingRoles');
         expect(f.server.members.get(BOB)?.roles).toEqual([]);
+        expect((await f.settings()).pendingRoles).toBeUndefined();
+        expect(pendingRolesOf(await f.settings(), f.groupId, BOB)).toEqual([]);
+    });
+
+    test('is the inviter’s own, kept by invitation and address, and nothing of it reaches the server', async () => {
+        const f = await aliceFamily();
+        await invitedBob(f);
+        expect((await f.settings()).pendingRoles?.[f.groupId]?.[INVITATION]).toEqual({
+            email: BOB_EMAIL.toLowerCase(),
+            roles: ['members'],
+            since: expect.any(String),
+            userId: BOB,
+        });
+        expect(JSON.stringify(f.server.log)).not.toContain('pendingRoles');
     });
 
     test('survives a save by a tab that doesn’t know it: a check of Bob’s words and a sync', async () => {
         const f = await aliceFamily();
-        await letInWithoutWords(f.queryClient, ALICE, f.ctx, f.groupId, {
-            userId: BOB,
-            email: BOB_EMAIL,
-            roles: ['members'],
-            identity: f.server.people[BOB].served,
-        });
+        await invitedBob(f);
         const before = f.stored.version;
         // An older release's acts, through the very save paths it runs (saveSettings,
         // compareAndSetSettings, the worker's settingsOpen and settingsSeal, all as on main):
@@ -377,12 +382,7 @@ describe('a manager role held back at Let them in (6.8)', () => {
 
     test('goes with a Continue on Bob’s account change', async () => {
         const f = await aliceFamily();
-        await letInWithoutWords(f.queryClient, ALICE, f.ctx, f.groupId, {
-            userId: BOB,
-            email: BOB_EMAIL,
-            roles: ['members'],
-            identity: f.server.people[BOB].served,
-        });
+        await invitedBob(f);
         const fresh = await account(BOB);
         f.serve(fresh.served);
         f.server.serveAs(BOB, fresh.served);

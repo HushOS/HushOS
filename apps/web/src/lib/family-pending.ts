@@ -1,37 +1,49 @@
+import { INVITATION_DAYS } from '@hushos/groups/protocol';
 import type { QueryClient } from '@tanstack/react-query';
 import { saveSettings, type LoadedSettings } from '@/lib/contacts';
 
 /*
- * The manager role asked for at invitation, held back at Let them in until
- * the person is checked (docs/optional-verification.md 3.6, 6.8), kept in
- * this account's own sealed settings (`pendingRoles`) and nowhere else: never
- * the server's invitation roles, which are only the server's word. Once the
- * person reads Verified on any of this account's devices, the family page
- * asks whether to give it. Only this account's devices know, so other
- * managers see an ordinary member.
+ * The manager role an inviter asked for (docs/optional-verification.md 3.6,
+ * 6.8), recorded when they send Invite someone with "Let them manage the
+ * family" ticked, in their own sealed settings (`pendingRoles`) and nowhere
+ * else: by the invitation's id and the address they typed, since the person
+ * has no account id yet. It is tied to the member once this device sees them
+ * let in, and only if the account let in has the address the inviter typed.
+ * Neither the server's invitation roles nor whoever presses Let them in can
+ * make one: the server's roles are only its word, and only the inviter meant
+ * it. Once that member reads Verified on one of the inviter's devices, the
+ * family page asks whether to give the role. Other managers see an ordinary
+ * member.
  */
 
 type Settings = LoadedSettings['settings'];
-type PendingRole = 'members';
+type Invited = NonNullable<Settings['pendingRoles']>[string][string];
 
-const lower = (id: string) => id.toLowerCase();
+const lower = (id: string) => id.trim().toLowerCase();
+const DAY = 24 * 60 * 60 * 1000;
 
-/* The roles waiting for `userId` in `groupId`: empty for none. */
-export function pendingRolesOf(settings: Settings | undefined, groupId: string, userId: string) {
-    return (settings?.pendingRoles?.[lower(groupId)]?.[lower(userId)]?.roles ?? []).filter(
-        (role): role is PendingRole => role === 'members',
-    );
-}
-
-/* The settings with `roles` waiting for `userId`, since `at`. */
-export function withPendingRoles(
-    settings: Settings,
+/* The roles waiting for member `userId` in `groupId` (tied to them): empty for none. */
+export function pendingRolesOf(
+    settings: Settings | undefined,
     groupId: string,
     userId: string,
-    roles: readonly PendingRole[],
+): readonly 'members'[] {
+    const held = settings?.pendingRoles?.[lower(groupId)] ?? {};
+    return Object.values(held).some(
+        (entry) => entry.userId === lower(userId) && entry.roles.includes('members'),
+    )
+        ? ['members']
+        : [];
+}
+
+/* The settings with Invite someone's "Let them manage the family" kept for `invitationId`. */
+export function withInvitedRole(
+    settings: Settings,
+    groupId: string,
+    invitationId: string,
+    email: string,
     at: string,
 ): Settings {
-    if (roles.length === 0) return settings;
     const group = lower(groupId);
     return {
         ...settings,
@@ -39,27 +51,23 @@ export function withPendingRoles(
             ...settings.pendingRoles,
             [group]: {
                 ...settings.pendingRoles?.[group],
-                [lower(userId)]: { roles: [...roles], since: at },
+                [lower(invitationId)]: { email: lower(email), roles: ['members'], since: at },
             },
         },
     };
 }
 
-/* The settings with nothing waiting for `userIds` in `groupId` (every one of them for 'all'). */
-export function withoutPendingRoles(
+/* The settings without the entries `drop` names; the same object when it names none. */
+function without(
     settings: Settings,
     groupId: string,
-    userIds: readonly string[] | 'all',
-): Settings {
+    drop: (id: string, entry: Invited) => boolean,
+) {
     const group = lower(groupId);
     const held = settings.pendingRoles?.[group];
     if (!held) return settings;
-    const kept =
-        userIds === 'all'
-            ? {}
-            : Object.fromEntries(
-                  Object.entries(held).filter(([id]) => !userIds.map(lower).includes(id)),
-              );
+    const kept = Object.fromEntries(Object.entries(held).filter(([id, entry]) => !drop(id, entry)));
+    if (Object.keys(kept).length === Object.keys(held).length) return settings;
     const next = { ...settings.pendingRoles };
     if (Object.keys(kept).length > 0) next[group] = kept;
     else delete next[group];
@@ -68,36 +76,97 @@ export function withoutPendingRoles(
     return out;
 }
 
-/*
- * What no longer waits, from what route 3 and the checked member list say:
- * someone who left or was removed (or never had a membership, an admission
- * that never landed and an invitation that went), and someone who manages the
- * family now. A person still waiting to be let in keeps theirs.
- */
-export function pendingRolesDone(
-    settings: Settings | undefined,
+/* The settings with nothing waiting for members `userIds` in `groupId` (every entry for 'all'). */
+export function withoutPendingRoles(
+    settings: Settings,
     groupId: string,
-    members: readonly { userId: string; state: string; roles: readonly string[] }[],
-    checkedRoles: (userId: string) => readonly string[] | undefined,
-): string[] {
-    const held = settings?.pendingRoles?.[lower(groupId)];
-    if (!held) return [];
-    return Object.keys(held).filter((userId) => {
-        const member = members.find((at) => lower(at.userId) === userId);
-        if (!member || (member.state !== 'active' && member.state !== 'accepted')) return true;
-        const roles = checkedRoles(member.userId) ?? member.roles;
-        return member.state === 'active' && roles.includes('members');
-    });
+    userIds: readonly string[] | 'all',
+): Settings {
+    if (userIds === 'all') return without(settings, groupId, () => true);
+    const ids = userIds.map(lower);
+    return without(settings, groupId, (_id, entry) =>
+        Boolean(entry.userId && ids.includes(entry.userId)),
+    );
 }
 
-/* The families this account no longer has listed (left, dissolved, wiped): their waiting roles go. */
+/*
+ * The family's entries brought up to date with what route 3 and the checked
+ * member list say:
+ * - one not tied to anyone yet is tied to the member let in (active) whose
+ *   address is the one the inviter typed;
+ * - one tied to a member goes once they left, were removed, or manage the
+ *   family now;
+ * - one not tied yet goes once its invitation has expired (INVITATION_DAYS
+ *   after it was sent, a day's grace beside it) with nobody of that address
+ *   waiting or in. Cancelling an invitation on this device clears its record
+ *   straight away (clearInvitedRole); one cancelled elsewhere goes at expiry.
+ *   Route 12's open list is not used for this: it drops an invitation the
+ *   moment it is accepted, before route 3 shows who accepted it.
+ * The same object when nothing changes.
+ */
+export function tidiedPendingRoles(
+    settings: Settings,
+    groupId: string,
+    members: readonly {
+        userId: string;
+        email?: string | null;
+        state: string;
+        roles: readonly string[];
+    }[],
+    checkedRoles: (userId: string) => readonly string[] | undefined,
+    now: Date,
+): Settings {
+    const group = lower(groupId);
+    const held = settings.pendingRoles?.[group];
+    if (!held) return settings;
+    const byEmail = (email: string, states: readonly string[]) =>
+        members.find(
+            (member) =>
+                member.email && lower(member.email) === email && states.includes(member.state),
+        );
+    let changed = false;
+    const next: Record<string, Invited> = {};
+    for (const [id, entry] of Object.entries(held)) {
+        if (!entry.userId) {
+            const admitted = byEmail(entry.email, ['active']);
+            if (admitted) {
+                next[id] = { ...entry, userId: lower(admitted.userId) };
+                changed = true;
+                continue;
+            }
+            const gone =
+                Date.parse(entry.since) + (INVITATION_DAYS + 1) * DAY < now.getTime() &&
+                !byEmail(entry.email, ['accepted']);
+            if (gone) changed = true;
+            else next[id] = entry;
+            continue;
+        }
+        const member = members.find((at) => lower(at.userId) === entry.userId);
+        const roles = member ? (checkedRoles(member.userId) ?? member.roles) : [];
+        const done =
+            !member ||
+            (member.state !== 'active' && member.state !== 'accepted') ||
+            (member.state === 'active' && roles.includes('members'));
+        if (done) changed = true;
+        else next[id] = entry;
+    }
+    if (!changed) return settings;
+    const all = { ...settings.pendingRoles };
+    if (Object.keys(next).length > 0) all[group] = next;
+    else delete all[group];
+    const out: Settings = { ...settings, pendingRoles: all };
+    if (Object.keys(all).length === 0) delete out.pendingRoles;
+    return out;
+}
+
+/* The families this account no longer has listed (left, dissolved, wiped): their entries go. */
 export function pendingFamiliesGone(settings: Settings | undefined, listed: readonly string[]) {
     const ids = listed.map(lower);
     return Object.keys(settings?.pendingRoles ?? {}).filter((groupId) => !ids.includes(groupId));
 }
 
-/* Saves `change` only when it changes anything: clearing what is already clear writes nothing. */
-async function savePending(
+/* Saves `change` only when it changes anything: doing what is already done writes nothing. */
+export async function savePendingRoles(
     queryClient: QueryClient | undefined,
     userId: string,
     change: (settings: Settings) => Settings,
@@ -115,29 +184,39 @@ async function savePending(
 }
 class NothingToSave extends Error {}
 
-/* Nothing waits for `userIds` in `groupId` any more. Another tab or device clearing it first is fine. */
+/* Nothing waits for members `userIds` in `groupId` any more. Another tab or device clearing it first is fine. */
 export function clearPendingRoles(
     queryClient: QueryClient | undefined,
     userId: string,
     groupId: string,
     userIds: readonly string[] | 'all',
 ) {
-    return savePending(queryClient, userId, (settings) =>
+    return savePendingRoles(queryClient, userId, (settings) =>
         withoutPendingRoles(settings, groupId, userIds),
     );
 }
 
-/* Roles held back for `personId` at Let them in, kept for this account, when not already kept. */
-export function keepPendingRoles(
+/* An invitation this device cancelled: its record goes with it. */
+export function clearInvitedRole(
     queryClient: QueryClient | undefined,
     userId: string,
     groupId: string,
-    personId: string,
-    roles: readonly PendingRole[],
+    invitationId: string,
 ) {
-    return savePending(queryClient, userId, (settings) =>
-        pendingRolesOf(settings, groupId, personId).length === roles.length
-            ? settings
-            : withPendingRoles(settings, groupId, personId, roles, new Date().toISOString()),
+    return savePendingRoles(queryClient, userId, (settings) =>
+        without(settings, groupId, (id) => id === lower(invitationId)),
+    );
+}
+
+/* Invite someone, sent with "Let them manage the family" ticked: the inviter's own record of it. */
+export function keepInvitedRole(
+    queryClient: QueryClient | undefined,
+    userId: string,
+    groupId: string,
+    invitationId: string,
+    email: string,
+) {
+    return savePendingRoles(queryClient, userId, (settings) =>
+        withInvitedRole(settings, groupId, invitationId, email, new Date().toISOString()),
     );
 }

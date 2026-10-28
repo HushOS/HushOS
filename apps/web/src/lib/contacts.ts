@@ -1298,15 +1298,13 @@ export async function addContact(
     writer?: string,
     /* Where they were first met (Technical details only; no rule reads it): `family` when let in. */
     firstSeen: 'added' | 'family' = 'added',
-    /* More for the same save as a new pin (Let them in's held-back role); not run without one. */
-    alsoSave?: (settings: LoadedSettings['settings']) => LoadedSettings['settings'],
 ): Promise<Added> {
     const { contact } = await authClient.lookupContact(email);
     if (writer !== undefined && contact.userId.toLowerCase() !== writer.toLowerCase())
         throw new Error('This isn’t the account that wrote it. Check the address, then try again.');
     if (!(await keysHold(contact.userId, contact))) throw new Error(notUpgradedWords(contact.name));
     return withGuardLock(userId, () =>
-        decidedAgain(() => addDecided(queryClient, userId, contact, firstSeen, alsoSave)),
+        decidedAgain(() => addDecided(queryClient, userId, contact, firstSeen)),
     );
 }
 
@@ -1329,7 +1327,6 @@ async function addDecided(
     userId: string,
     contact: ContactIdentity,
     firstSeen: 'added' | 'family' = 'added',
-    alsoSave?: (settings: LoadedSettings['settings']) => LoadedSettings['settings'],
 ): Promise<Added> {
     const standing = await stand(userId, contact.userId, contact, { act: true, follow: true });
     if (standing.kind === 'ok') return { outcome: 'already', pin: standing.pin };
@@ -1365,10 +1362,7 @@ async function addDecided(
         contact.userId,
         standing.entry,
         fresh,
-        async (settings) => {
-            const pinned = await withPinIf(settings, fresh, null);
-            return alsoSave ? alsoSave(pinned) : pinned;
-        },
+        (settings) => withPinIf(settings, fresh, null),
     );
     return { outcome: 'added', pin };
 }

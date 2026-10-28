@@ -1415,6 +1415,71 @@ test.describe.serial('a member’s account changes', () => {
     });
 });
 
+test.describe.serial('a manager role asked for at Invite someone', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+    let maya: Person;
+    let sam: Person;
+    const family = 'Berg family';
+
+    test.beforeAll(async ({ browser }) => {
+        test.setTimeout(300_000);
+        maya = await person(browser, 'Maya Berg');
+        sam = await person(browser, 'Sam Berg');
+    });
+    test.afterAll(async () => {
+        for (const who of [maya, sam]) await who?.page.context().close();
+    });
+
+    test('invited to manage it, let in by the inviter: a member until checked, then the inviter is asked', async () => {
+        test.setTimeout(420_000);
+        await createFamily(maya, family);
+        await maya.page.getByRole('button', { name: 'Invite someone' }).click();
+        const dialog = maya.page.getByRole('dialog', { name: 'Invite someone' });
+        await dialog.getByLabel('Email').fill(sam.email);
+        await dialog.getByRole('checkbox', { name: 'Let them manage the family' }).click();
+        await dialog.getByRole('button', { name: 'Send invitation' }).click();
+        await expect(maya.page.locator(`[data-invitation="${sam.email}"]`)).toBeVisible();
+        await accept(sam, family);
+        await letThemIn(maya, sam, family);
+        // A member, and on Maya's device the line saying what waits.
+        const row = maya.page.locator(`[data-member="${sam.email}"]`);
+        await expect(row).toContainText('Will manage the family once checked', { timeout: 90_000 });
+        await expect(row.locator('[data-roles]')).toHaveCount(0);
+        await expect(maya.page.locator('[data-invited-to-manage]')).toHaveCount(0);
+        // Sam's own page never says it: only the inviter's devices know.
+        await sam.page.goto('/app/family');
+        await expect(sam.page.locator(`[data-member="${maya.email}"]`)).toBeVisible({
+            timeout: 90_000,
+        });
+        await expect(sam.page.getByText('Will manage the family once checked')).toHaveCount(0);
+        // They check each other; Maya is asked, and the role goes ahead.
+        const mayaCheck = await openCheck(maya, sam);
+        const samCheck = await openCheck(sam, maya);
+        await samCheck.getByRole('button', { name: 'They match' }).click();
+        await mayaCheck.getByRole('button', { name: 'They match' }).click();
+        const asked = maya.page.locator('[data-invited-to-manage]');
+        await expect(asked).toBeVisible({ timeout: 90_000 });
+        await expect(asked).toContainText('Sam was invited to manage the family');
+        await expect(asked).toContainText('Let them manage it now?');
+        await asked.getByRole('button', { name: 'Let them manage it' }).click();
+        await expect(maya.page.getByText('Sam can manage the family')).toBeVisible({
+            timeout: 120_000,
+        });
+        await expect(row.locator('[data-roles] [data-slot=badge]')).toHaveText(
+            'Manages the family',
+            { timeout: 90_000 },
+        );
+        await expect(row).not.toContainText('Will manage the family once checked');
+        // Asked once: a reload asks nothing more.
+        await maya.page.reload();
+        await expect(row.locator('[data-roles] [data-slot=badge]')).toHaveText(
+            'Manages the family',
+            { timeout: 90_000 },
+        );
+        await expect(maya.page.locator('[data-invited-to-manage]')).toHaveCount(0);
+    });
+});
+
 test.describe.serial('three people', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
     let maya: Person;

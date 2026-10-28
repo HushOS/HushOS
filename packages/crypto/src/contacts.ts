@@ -129,16 +129,18 @@ export type Settings = {
      */
     familyChecksSince?: string;
     /*
-     * Per group, then per person by account id: a role asked for when this
-     * account invited them and held back at Let them in until they are
-     * checked (docs/optional-verification.md 3.6, 6.8), with when. Only this
-     * account's devices read it, never the server's invitation roles: once
-     * the person reads Verified here, this account is asked whether to give
-     * it. Cleared when given, declined, or the person or family is gone.
+     * Per group, then per invitation id: the manager role this account asked
+     * for when it sent Invite someone (docs/optional-verification.md 3.6,
+     * 6.8), with the address it typed and when, and the member's account id
+     * once one with that address was let in. Only this account's devices
+     * read it, never the server's invitation roles: once that member reads
+     * Verified here, this account is asked whether to give the role. Cleared
+     * when given, declined, or the invitation, the person or the family is
+     * gone.
      */
     pendingRoles?: Record<
         string,
-        Record<string, { roles: ('members' | 'billing')[]; since: string }>
+        Record<string, { email: string; roles: 'members'[]; since: string; userId?: string }>
     >;
     /*
      * People this account removed from its contacts and has not added back,

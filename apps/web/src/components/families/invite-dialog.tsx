@@ -13,6 +13,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import { familyKeys } from '@/lib/families';
+import { keepInvitedRole } from '@/lib/family-pending';
 import { GroupApiError, groupsApi } from '@/lib/groups/api';
 import { errorCopy } from '@/lib/groups/copy';
 import { cue } from '@/lib/sounds';
@@ -55,7 +56,13 @@ export function InviteDialog({
         setError('');
         setBadAddress(false);
         try {
-            await groupsApi.invite(groupId, address, manage ? ['members'] : []);
+            const sent = await groupsApi.invite(groupId, address, manage ? ['members'] : []);
+            // Asked to manage the family: this account's own record of it (6.8), which is what
+            // later asks it, once they're let in and checked. Not saved, nothing is ever asked.
+            if (manage)
+                await keepInvitedRole(queryClient, userId, groupId, sent.id, address).catch(
+                    () => false,
+                );
             cue('success');
             toast.add({ type: 'success', title: `Invitation sent to ${address}` });
             void queryClient.invalidateQueries({

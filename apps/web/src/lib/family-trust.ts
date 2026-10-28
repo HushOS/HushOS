@@ -16,7 +16,7 @@ import { pinOf } from '@/lib/family-pin';
 import type { GroupContext } from '@/lib/groups/context';
 import { memberJoinCode } from '@/lib/groups/join';
 import { letIn } from '@/lib/groups/outbox';
-import { clearPendingRoles, keepPendingRoles, withPendingRoles } from '@/lib/family-pending';
+import { clearPendingRoles } from '@/lib/family-pending';
 import { continueFoldIn } from '@/lib/groups/removal';
 import { fetchServed, syncGroup } from '@/lib/groups/sync';
 
@@ -169,18 +169,10 @@ export async function pinForFamily(
     queryClient: QueryClient,
     userId: string,
     person: { userId: string; email: string },
-    alsoSave?: Parameters<typeof addContact>[5],
 ) {
-    const added = await addContact(
-        queryClient,
-        userId,
-        person.email,
-        person.userId,
-        'family',
-        alsoSave,
-    );
+    const added = await addContact(queryClient, userId, person.email, person.userId, 'family');
     if (added.outcome === 'changed') return added;
-    return { outcome: 'pinned' as const, pin: added.pin, added: added.outcome === 'added' };
+    return { outcome: 'pinned' as const, pin: added.pin };
 }
 
 /*
@@ -202,31 +194,12 @@ export async function letInWithoutWords(
         identity: Parameters<typeof letIn>[2]['served'];
     },
 ) {
-    // A manager role asked for at invitation waits for a check, kept for this account (6.8): in
-    // the same save as the first-seen pin when there is one to write, else in its own.
-    const managing = person.roles.includes('members');
-    const pinned = await pinForFamily(
-        queryClient,
-        userId,
-        person,
-        managing
-            ? (settings) =>
-                  withPendingRoles(
-                      settings,
-                      groupId,
-                      person.userId,
-                      ['members'],
-                      new Date().toISOString(),
-                  )
-            : undefined,
-    );
+    // The server's roles can only hold a role back here, never record that one is owed: only the
+    // inviter's own record of Invite someone does that (lib/family-pending.ts).
+    const pinned = await pinForFamily(queryClient, userId, person);
     if (pinned.outcome === 'changed') return pinned;
     const verified = (await pinTrust(pinned.pin)) === 'verified' && !pinned.pin.trustedVia;
     const roles = verified ? person.roles : person.roles.filter((role) => role !== 'members');
-    if (managing && verified)
-        await clearPendingRoles(queryClient, userId, groupId, [person.userId]);
-    else if (managing && pinned.added === false)
-        await keepPendingRoles(queryClient, userId, groupId, person.userId, ['members']);
     const staged = await letIn(
         ctx,
         groupId,
