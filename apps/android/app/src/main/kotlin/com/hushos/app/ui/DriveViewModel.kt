@@ -1710,7 +1710,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) cursor.getString(0)?.let { name = it }
         }
-        return name
+        // As the platform gives it, it may hold a lone surrogate: made well formed, so it matches and uploads.
+        return name?.let { com.hushos.app.data.wellFormed(it) }
     }
 
     /* "report.pdf" becomes "report (2).pdf", then "(3)", until the name is free. */
@@ -1908,6 +1909,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) cursor.getString(0)?.let { name = it }
         }
+        name = com.hushos.app.data.wellFormed(name)
         val target = File(context.cacheDir, "staged/${System.nanoTime()}/$name").also { it.parentFile?.mkdirs() }
         resolver.openInputStream(uri)?.use { input -> target.outputStream().use { input.copyTo(it) } } ?: return null
         return Triple(target, name, resolver.getType(uri))

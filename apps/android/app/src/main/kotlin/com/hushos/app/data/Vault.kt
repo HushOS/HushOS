@@ -11,7 +11,6 @@ import com.hushos.core.NodeMetadata
 import com.hushos.core.VersionContext
 import com.hushos.core.base64urlDecode
 import com.hushos.core.base64urlEncode
-import com.hushos.core.checkName
 import com.hushos.core.chunkDecrypt
 import com.hushos.core.chunkEncrypt
 import com.hushos.core.chunkLength
@@ -1074,7 +1073,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val id = made.id
         val key = randomBytes(32u)
         val wrapped = nodeWrap(NodeKeyContext(ws, id, parent.id, parent.node.keyEpoch, epoch), parentKey, key)
-        val metadata = NodeMetadata(checkName(name), null, null, null, attributes)
+        val metadata = NodeMetadata(typedName(name), null, null, null, attributes)
         val sealed = metadataSeal(MetadataContext(ws, id, 1uL), key, metadata)
         val signature = if (copy != null) signCopiedMetadata(ws, id, NodeKind.FOLDER, sealed, copy) else signMetadata(ws, id, NodeKind.FOLDER, 1uL, sealed)
         val node = api.createFolder(ws, JSONObject().putId(made).put("parentId", parent.id).put("keyEpoch", epoch.toLong())
@@ -1086,7 +1085,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     fun rename(id: String, name: String): Opened {
         val item = resolve(id)
         val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
-        val metadata = item.metadata.copy(name = name)
+        val metadata = item.metadata.copy(name = typedName(name))
         val next = item.node.metadataVersion + 1uL
         // The type, size and date are carried over into the re-signed record: signed as it checked, never vouched for blind.
         val prior = replacedNamePrior(item)
@@ -1123,7 +1122,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val parent = resolve(parentId)
         val ws = parent.node.workspaceId
         val parentKey = nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
-        val newName = checkName(name ?: source.name)
+        val newName = typedName(name ?: source.name)
         val checked = trust ?: trustForWrite()
         val prior = Prior.of(source.node, checked)
         if (source.isFolder) {
@@ -1335,7 +1334,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             nodeId = madeNode.id
             nodeKey = randomBytes(32u)
             val wrapped = nodeWrap(NodeKeyContext(ws, nodeId, parent.id, parent.node.keyEpoch, epoch), parentKey, nodeKey)
-            metadata = NodeMetadata(checkName(name), mime, size, modified, attributes)
+            metadata = newFileMetadata(name, mime, size, modified, attributes)
             val sealed = metadataSeal(MetadataContext(ws, nodeId, 1uL), nodeKey, metadata)
             val signature = if (copy != null) signCopiedMetadata(ws, nodeId, NodeKind.FILE, sealed, copy) else signMetadata(ws, nodeId, NodeKind.FILE, 1uL, sealed)
             nodeInput = JSONObject().put("existing", false).putId(madeNode).put("parentId", parent.id).put("keyEpoch", epoch.toLong())
