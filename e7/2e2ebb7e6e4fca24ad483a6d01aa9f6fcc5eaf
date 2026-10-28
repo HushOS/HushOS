@@ -1,0 +1,21 @@
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/GranterTrustTests.swift
+  s_566b8e0c4467a4::t_bb36cb4d23d793 23,60,73,95-96,173
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/IntegrityTests.swift
+  s_566b8e0c4467a4::t_5ef24cb9f4e7a8 14-15,21,366
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e72e2ebb7e6e4fca24ad483a6d01aa9f6fcc5eaf",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
