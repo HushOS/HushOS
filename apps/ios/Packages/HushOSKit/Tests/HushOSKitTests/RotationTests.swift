@@ -201,8 +201,14 @@ final class FakeDrive: @unchecked Sendable {
     var completed: [String] = []
     private let lock = NSLock()
     private var target: UInt64 = 0
+    /* What A, F and G carry beside their names when made `attributed`: a colour, and keys no client knows yet. */
+    static let attributes: [String: [String: String]] = [
+        "A": ["colour": "blue", "zz-unknown": "from a newer client"],
+        "f.txt": ["zz-unknown": "kept"],
+        "g.txt": ["colour": "red", "later_feature": "{\"x\":1}"],
+    ]
 
-    init() throws {
+    init(attributed: Bool = false) throws {
         workspaceKey = try randomBytes(length: 32)
         let accountKey = try randomBytes(length: 32)
         identity = try identityOpen(userId: session.userId, accountKey: accountKey, envelope: try identityCreate(userId: session.userId, accountKey: accountKey, keyVersion: 1))
@@ -216,7 +222,8 @@ final class FakeDrive: @unchecked Sendable {
             let parentKey = parent.flatMap { keys[$0] } ?? workspaceKey
             let envelope = try nodeWrap(ctx: NodeKeyContext(workspaceId: workspace, nodeId: id, parentId: parent ?? workspace, parentKeyEpoch: 1, keyEpoch: 1), parentKey: parentKey, nodeKey: key)
             let metadata = try metadataSeal(ctx: MetadataContext(workspaceId: workspace, nodeId: id, metadataVersion: 1), nodeKey: key,
-                                            metadata: NodeMetadata(name: name, mime: nil, size: nil, modified: nil))
+                                            metadata: NodeMetadata(name: name, mime: nil, size: nil, modified: nil,
+                                                                   attributes: attributed ? Self.attributes[name] ?? [:] : [:]))
             // Files carry a version: F's unsigned, G's the owner's.
             var version: VersionView?
             if kind == "file" {
@@ -313,6 +320,24 @@ final class FakeDrive: @unchecked Sendable {
                 made.append(try json(store(wire, id: id, kind: "folder", version: nil)))
             }
             return (200, ["nodes": made])
+        case ("POST", ["uploads"]) where (sent["node"] as? [String: Any])?["existing"] as? Bool == true:
+            // A new version of a file there is: its version and object are new, the node and its record stay until it completes.
+            guard let wire = sent["node"] as? [String: Any], let nodeId = wire["id"] as? String, nodes[nodeId] != nil,
+                  made(.version, sent["versionId"], sent["versionIdSeed"]), made(.object, sent["objectId"], sent["objectIdSeed"]),
+                  let versionId = sent["versionId"] as? String, let objectId = sent["objectId"] as? String
+            else { return Self.notMade }
+            let suite = (sent["contentSuite"] as? NSNumber)?.uint32Value ?? 0
+            guard let versionKind = try statement(version: sent["contentKeyEnvelope"] as? String ?? "", signature: sent["versionSignature"] as? String,
+                                                  statement: VersionStatement(workspaceId: workspace, nodeId: nodeId, versionId: versionId, objectId: objectId, contentSuite: suite))
+            else { return (400, ["message": "This change was not signed by your keys"]) }
+            statements["version:" + versionId] = versionKind
+            begins.append(sent)
+            let uploadId = UUID().uuidString.lowercased()
+            uploads[uploadId] = sent
+            let count = (sent["chunkCount"] as? Int) ?? 1
+            let urls = (1 ... max(count, 1)).map { ["partNumber": $0, "length": 0, "url": "https://drive.test/store/\(uploadId)/\($0)"] as [String: Any] }
+            return (200, ["upload": ["id": uploadId, "nodeId": nodeId, "versionId": versionId, "status": "pending", "chunkCount": count],
+                          "parts": urls, "urlExpiresAt": "2099-01-01T00:00:00Z"])
         case ("POST", ["uploads"]):
             guard let wire = sent["node"] as? [String: Any], wire["existing"] as? Bool == false, let nodeId = wire["id"] as? String else { return (400, ["message": "Bad upload"]) }
             guard made(.node, nodeId, wire["idSeed"]), made(.version, sent["versionId"], sent["versionIdSeed"]),
@@ -344,6 +369,17 @@ final class FakeDrive: @unchecked Sendable {
                                       contentNonce: begun["contentNonce"] as? String ?? "", plaintextSize: nil, ciphertextSize: nil, readyAt: nil)
             version.signer = writer
             version.signature = begun["versionSignature"] as? String
+            if wire["existing"] as? Bool == true, let old = nodes[nodeId] {
+                // The version goes live under the record as it was; the client re-signs the record next.
+                var updated = NodeView(id: old.id, workspaceId: old.workspaceId, parentId: old.parentId, kind: old.kind, keyEpoch: old.keyEpoch,
+                                       parentKeyEpoch: old.parentKeyEpoch, keyEnvelope: old.keyEnvelope, metadataVersion: old.metadataVersion,
+                                       metadataEnvelope: old.metadataEnvelope, currentVersion: version, trashedAt: nil,
+                                       changeSeq: (old.changeSeq ?? 0) + 1, createdAt: nil, updatedAt: nil)
+                updated.metadataSigner = old.metadataSigner
+                updated.metadataSignature = old.metadataSignature
+                nodes[nodeId] = updated
+                return (200, ["status": "ready", "node": try json(updated)])
+            }
             return (200, ["status": "ready", "node": try json(store(wire, id: nodeId, kind: "file", version: version))])
         default:
             return nil

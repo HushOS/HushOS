@@ -1359,7 +1359,7 @@ final class DriveStore {
         let name = Self.freeName(item.name, among: taken)
         if item.isFolder {
             // A visitor sees no signatures: everything saved from a link says so (the saved statement), no more.
-            let made = try await vault.createFolder(in: parent, name: name, signing: .savedFromLink)
+            let made = try await vault.createFolder(in: parent, name: name, signing: .savedFromLink, attributes: item.metadata.attributes)
             for child in try await link.children(of: item.id) { try await copy(from: link, item: child, into: made.id, ticket: ticket) }
             return
         }
@@ -1370,7 +1370,7 @@ final class DriveStore {
         try await link.download(item, to: file) { fraction in Task { @MainActor in self.progress(ticket, fraction / 2) } }
         let thumbnail = try? await link.thumbnail(item)
         _ = try await vault.upload(fileURL: file, name: name, mime: item.metadata.mime, in: parent, replacing: nil, thumbnail: thumbnail,
-                                   signing: (.savedFromLink, .savedFromLink)) { fraction in
+                                   signing: (.savedFromLink, .savedFromLink), attributes: item.metadata.attributes) { fraction in
             Task { @MainActor in self.progress(ticket, 0.5 + fraction / 2) }
         }
     }

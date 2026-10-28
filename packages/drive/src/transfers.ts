@@ -1,12 +1,19 @@
 import type {
     CryptoResults,
+    NodeAttributes,
     NodeMetadata,
     UploadBytes,
     SignatureForm,
     UploadPartProgress,
     UploadPartResult,
 } from '@hushos/crypto';
-import { CONTENT_SUITE, chunkCount, ciphertextSize, contentLength } from '@hushos/crypto/drive';
+import {
+    CONTENT_SUITE,
+    chunkCount,
+    ciphertextSize,
+    contentLength,
+    wellFormed,
+} from '@hushos/crypto/drive';
 import { KEY_CHANGE_PENDING } from '@hushos/crypto/protocol';
 import { newId as mintScopedId, type IdKind } from '@hushos/crypto/ids';
 import type { DriveApi, NodeView, PartUrl } from './api';
@@ -140,6 +147,12 @@ export type EnqueueInput = {
     stash?: string;
     /* A move: the file this one is a re-encrypted copy of. */
     move?: UploadMove;
+    /*
+     * The attributes the new file's record carries (a copy's or a move's are
+     * its source's). Absent: a replacement's "keep both" copy takes the
+     * replaced file's, anything else has none.
+     */
+    attributes?: NodeAttributes;
 };
 
 /* Where the app keeps the bytes of uploads that have no file on disk, by name. */
@@ -268,6 +281,8 @@ type Internal = {
     /* The seeds the ids were derived from, sent with begin; null until minted. */
     seeds: IdSeeds | null;
     signAs: UploadSignatures;
+    /* What the new node's record carries beside the name (EnqueueInput.attributes); journaled. */
+    attributes: NodeAttributes | undefined;
     uploadId: string | null;
     keyEpoch: number;
     /* The journal row, once begin has succeeded; null before, and for finished uploads. */
@@ -312,6 +327,11 @@ function signaturesOf(origin: UploadOrigin, signAs: UploadSignatures | undefined
     if (signAs) return signAs;
     const form: SignatureForm = origin === 'copy' ? 'resealed' : 'ordinary';
     return { metadata: form, version: form };
+}
+
+/* Attributes to carry, or undefined for none: `{}` is none, as sealMetadata writes it. */
+function attributesOf(attributes: NodeAttributes | undefined) {
+    return attributes && Object.keys(attributes).length ? { ...attributes } : undefined;
 }
 
 /* Every upload lands in its folder's workspace: the owner's, for a folder shared with an editor. */
@@ -989,6 +1009,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             mime: u.item.mime,
             size: u.item.size,
             modified: file.lastModified ? new Date(file.lastModified).toISOString() : null,
+            ...(u.attributes ? { attributes: u.attributes } : {}),
         };
         // Sealed, then begun; sealed again from a fresh look each time the server says a key
         // change has not reached the folder yet (409 rotating), until it takes it or the wait
@@ -1198,6 +1219,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             handle: u.handle,
             origin: u.item.origin,
             signAs: u.signAs,
+            ...(u.attributes ? { attributes: u.attributes } : {}),
             stash: u.stash,
             move: u.item.move ?? null,
             parts: {},
@@ -1458,6 +1480,8 @@ export function createTransferManager(options: TransferManagerOptions) {
                         modified: u.file?.lastModified
                             ? new Date(u.file.lastModified).toISOString()
                             : null,
+                        // The copy kept beside the version it found stands for the same file.
+                        ...(u.attributes ? { attributes: u.attributes } : {}),
                     },
                     signAs: u.signAs.metadata,
                 },
@@ -1572,6 +1596,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             objectId: '',
             seeds: null,
             signAs: signaturesOf(item.origin, undefined),
+            attributes: undefined,
             uploadId: null,
             keyEpoch: 0,
             entry: null,
@@ -1615,7 +1640,9 @@ export function createTransferManager(options: TransferManagerOptions) {
             const u = makeInternal(
                 {
                     id,
-                    name: input.name ?? input.file.name,
+                    // A File's name is a DOMString, which may hold a lone surrogate (a Windows
+                    // file's): it lands with U+FFFD in its place rather than be refused.
+                    name: wellFormed(input.name ?? input.file.name),
                     size,
                     mime: input.file.type || null,
                     parentId: input.parent.id,
@@ -1643,6 +1670,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             u.handle = input.handle ?? null;
             u.stash = input.stash ?? null;
             u.signAs = signaturesOf(u.item.origin, input.signAs);
+            u.attributes = attributesOf(input.attributes ?? input.replaces?.metadata?.attributes);
             if (input.replaces) u.nodeId = input.replaces.id;
             // On disk before anything else happens, so a reload forgets no file that was waiting.
             u.queued = {
@@ -1661,6 +1689,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                 handle: u.handle,
                 origin: u.item.origin,
                 signAs: u.signAs,
+                ...(u.attributes ? { attributes: u.attributes } : {}),
                 stash: u.stash,
                 move: u.item.move ?? null,
                 createdAt: now(),
@@ -2126,6 +2155,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             u.handle = entry.handle;
             u.stash = stash;
             u.signAs = signaturesOf(u.item.origin, entry.signAs);
+            u.attributes = attributesOf(entry.attributes);
             u.nodeId = entry.nodeId;
             u.versionId = entry.versionId;
             u.objectId = entry.objectId;
@@ -2179,6 +2209,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             u.handle = queued.handle;
             u.stash = queued.stash;
             u.signAs = signaturesOf(u.item.origin, queued.signAs);
+            u.attributes = attributesOf(queued.attributes);
             u.queued = queued;
             if (queued.replacesId) u.nodeId = queued.replacesId;
             restoredItem(u);

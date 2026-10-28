@@ -298,7 +298,9 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         AssetFileDescriptor(read, 0, AssetFileDescriptor.UNKNOWN_LENGTH)
     }
 
-    override fun createDocument(parentDocumentId: String, mimeType: String, displayName: String): String = guarded {
+    override fun createDocument(parentDocumentId: String, mimeType: String, given: String): String = guarded {
+        // Another app's name for what it saves: made well formed, so a lone surrogate never reaches the core.
+        val displayName = com.hushos.app.data.wellFormed(given)
         val vault = requireVault()
         val parent = nodeId(parentDocumentId, vault)
         if (mimeType == Document.MIME_TYPE_DIR) return@guarded vault.createFolder(parent, displayName).id

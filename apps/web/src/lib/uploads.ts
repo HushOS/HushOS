@@ -13,6 +13,7 @@ import { deviceSession } from '@/lib/device-session';
 import type { Dropped } from '@/lib/dropped-files';
 import { transfers } from '@/lib/transfers';
 import type { EnqueueInput } from '@hushos/drive/transfers';
+import { wellFormed } from '@hushos/crypto/drive';
 
 /*
  * From dropped or picked files to queued uploads. A dropped folder merges into
@@ -28,13 +29,20 @@ export async function enqueueDropped(
     dropped: Dropped,
     knownChildren: DriveNode[],
 ) {
-    const { files } = dropped;
+    // Names as the platform gives them may hold a lone surrogate (a Windows file's): each one
+    // well formed first, so it lands with U+FFFD in its place, and matches what is already there.
+    const files = dropped.files.map((entry) => ({
+        ...entry,
+        name: wellFormed(entry.file.name),
+        path: entry.path.map(wellFormed),
+    }));
+    const droppedFolders = dropped.folders.map((path) => path.map(wellFormed));
     // A sign-out while folders are made or a collision is asked about queues none of this.
     const from = { generation: deviceSession.generation() };
     // A family folder that may not be written now takes nothing. One a key change has not reached
     // yet (docs/groups-server.md 8) takes files, which wait in the queue until it has; folders the
     // drop makes there wait here first, since a new folder is wrapped under its parent's key.
-    const needsFolders = dropped.folders.length > 0 || files.some((entry) => entry.path.length);
+    const needsFolders = droppedFolders.length > 0 || files.some((entry) => entry.path.length);
     if (needsFolders) folder = await untilWritable(queryClient, folder);
     else refuseUnlessWaiting(folder);
     // What each destination already holds: the top folder's is known, a folder made by this
@@ -54,7 +62,7 @@ export async function enqueueDropped(
     };
     // Every folder the drop needs, each prefix included, parents before children.
     const paths = new Set<string>();
-    for (const path of [...files.map((entry) => entry.path), ...dropped.folders])
+    for (const path of [...files.map((entry) => entry.path), ...droppedFolders])
         for (let depth = 1; depth <= path.length; depth++)
             paths.add(path.slice(0, depth).join('/'));
     const ordered = [...paths].sort((a, b) => a.split('/').length - b.split('/').length);
@@ -105,11 +113,11 @@ export async function enqueueDropped(
         return set;
     };
     const free: EnqueueInput[] = [];
-    const collisions: { input: EnqueueInput; replaces: DriveNode }[] = [];
+    const collisions: { input: EnqueueInput & { name: string }; replaces: DriveNode }[] = [];
     for (const entry of files) {
         const parent = parents.get(entry.path.join('/')) ?? folder;
-        const input = { file: entry.file, parent, handle: entry.handle };
-        const replaces = existing.get(parent.id)?.get(entry.file.name.toLowerCase());
+        const input = { file: entry.file, parent, handle: entry.handle, name: entry.name };
+        const replaces = existing.get(parent.id)?.get(entry.name.toLowerCase());
         if (replaces) {
             collisions.push({ input, replaces });
             continue;
@@ -117,9 +125,9 @@ export async function enqueueDropped(
         // Two same-named files with nothing in the folder to clash with (dragged from a search
         // window, say) land as "name" and "name (2)", as on the phones.
         const taken = takenIn(parent);
-        const name = nextName(entry.file.name, taken);
+        const name = nextName(entry.name, taken);
         taken.add(name);
-        free.push(name === entry.file.name ? input : { ...input, name });
+        free.push({ ...input, name });
     }
     const ids = transfers.enqueue(free, from);
     let standing: CollisionDecision | null = null;
@@ -128,9 +136,9 @@ export async function enqueueDropped(
         const decision: CollisionDecision =
             standing ??
             (await askCollision({
-                fileName: input.file.name,
+                fileName: input.name,
                 folderName: input.parent.name,
-                suggested: nextName(input.file.name, taken),
+                suggested: nextName(input.name, taken),
                 taken,
                 remaining: collisions.length - index - 1,
             }));
@@ -144,7 +152,7 @@ export async function enqueueDropped(
             continue;
         }
         // A standing "keep both" names each later file itself; a chosen name applies once.
-        const name = standing === decision ? nextName(input.file.name, taken) : decision.name;
+        const name = standing === decision ? nextName(input.name, taken) : decision.name;
         taken.add(name);
         ids.push(...transfers.enqueue([{ ...input, name }], from));
     }

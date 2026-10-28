@@ -47,6 +47,9 @@ import {
     rekeyEnvelope,
     wrapOriginKey,
     type OriginKeyContext,
+    ATTRIBUTES_MAX_KEYS,
+    METADATA_MAX_BYTES,
+    documentContext,
 } from './drive';
 import { encryptKey } from './aead';
 import sodium from 'libsodium-wrappers';
@@ -115,6 +118,289 @@ describe('metadata envelopes', () => {
             );
         expect(checkName('x'.repeat(255))).toHaveLength(255);
         expect(checkName('naïve résumé.txt')).toBe('naïve résumé.txt');
+    });
+});
+
+describe('node attributes', () => {
+    const ctx = { workspaceId: WS, nodeId: FOLDER, metadataVersion: 2 };
+    const meta = { name: 'Plans', mime: null, size: null, modified: '2026-10-28T09:00:00.000Z' };
+    const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes).trimEnd();
+    /* An envelope over exactly `plaintext`, as a writer other than sealMetadata could make it. */
+    async function sealedAs(plaintext: string, key: Uint8Array) {
+        await sodium.ready;
+        const nonce = crypto.getRandomValues(new Uint8Array(24));
+        const body = await encryptKey(
+            new TextEncoder().encode(plaintext),
+            key,
+            nonce,
+            metadataContext(ctx),
+        );
+        return new Uint8Array([...nonce, ...body]);
+    }
+
+    test('come back exactly, keys the client does not know included, written in sorted order', async () => {
+        const key = generateKey();
+        const attributes = { 'zz-future': 'kept', colour: 'blue', a_b: '' };
+        const envelope = await sealMetadata({ ...meta, attributes }, key, ctx);
+        expect(await openMetadata(envelope, key, ctx)).toEqual({ ...meta, attributes });
+        expect(text(await openEnvelopeBytes(envelope, key, metadataContext(ctx)))).toBe(
+            '{"name":"Plans","mime":null,"size":null,"modified":"2026-10-28T09:00:00.000Z",' +
+                '"attributes":{"a_b":"","colour":"blue","zz-future":"kept"}}',
+        );
+    });
+
+    test('none is no field: {} seals as a record from before attributes, which opens without one', async () => {
+        const key = generateKey();
+        const aad = metadataContext(ctx);
+        const empty = await sealMetadata({ ...meta, attributes: {} }, key, ctx);
+        const absent = await sealMetadata(meta, key, ctx);
+        expect(text(await openEnvelopeBytes(empty, key, aad))).toBe(
+            text(await openEnvelopeBytes(absent, key, aad)),
+        );
+        expect(text(await openEnvelopeBytes(empty, key, aad))).not.toContain('attributes');
+        // Written before attributes existed: opens, and has none.
+        const old = await sealedAs(
+            '{"name":"Plans","mime":null,"size":null,"modified":null}' + ' '.repeat(200),
+            key,
+        );
+        const opened = await openMetadata(old, key, ctx);
+        expect(opened).toEqual({ ...meta, modified: null });
+        expect(opened).not.toHaveProperty('attributes');
+        expect(
+            await openMetadata(await sealedAs('{"name":"P","attributes":{}}', key), key, ctx),
+        ).not.toHaveProperty('attributes');
+    });
+
+    test('an attribute named like a known field never stands in for it', async () => {
+        const key = generateKey();
+        // Sealed: the attribute rides along, the name and its rules are the top-level field's.
+        const attributes = { name: 'a/b', mime: 'text/html', size: '9', modified: 'x' };
+        const opened = await openMetadata(
+            await sealMetadata({ ...meta, attributes }, key, ctx),
+            key,
+            ctx,
+        );
+        expect(opened).toEqual({ ...meta, attributes });
+        await expect(
+            sealMetadata({ ...meta, name: 'a/b', attributes: { name: 'fine' } }, key, ctx),
+        ).rejects.toThrow(CryptoError);
+        // Opened: a record whose only good name is an attribute is still refused.
+        await expect(
+            openMetadata(await sealedAs('{"name":"..","attributes":{"name":"ok"}}', key), key, ctx),
+        ).rejects.toThrow(CryptoError);
+        await expect(
+            openMetadata(await sealedAs('{"attributes":{"name":"ok"}}', key), key, ctx),
+        ).rejects.toThrow(CryptoError);
+        const planted = await openMetadata(
+            await sealedAs('{"name":"real","size":5,"attributes":{"name":"fake","size":"7"}}', key),
+            key,
+            ctx,
+        );
+        expect(planted.name).toBe('real');
+        expect(planted.size).toBe(5);
+    });
+
+    test('a key, a count or a value out of bounds is refused, sealing and opening, never trimmed', async () => {
+        const key = generateKey();
+        const badKeys = [
+            '',
+            'Colour',
+            '1colour',
+            '-colour',
+            '_colour',
+            '__proto__',
+            'col our',
+            'colör',
+            'a'.repeat(33),
+            'colour\n',
+        ];
+        for (const bad of badKeys) {
+            await expect(
+                sealMetadata({ ...meta, attributes: { [bad]: 'x' } }, key, ctx),
+                bad,
+            ).rejects.toThrow('Invalid attribute name.');
+            await expect(
+                openMetadata(
+                    await sealedAs(JSON.stringify({ name: 'P', attributes: { [bad]: 'x' } }), key),
+                    key,
+                    ctx,
+                ),
+                bad,
+            ).rejects.toThrow('could not be opened');
+        }
+        // At the bounds: 32 characters, and 32 keys.
+        const most = Object.fromEntries(
+            Array.from({ length: ATTRIBUTES_MAX_KEYS }, (_, i) => [`k${i}`, 'v']),
+        );
+        const longest = { ['a'.repeat(32)]: 'x', z: 'y' };
+        for (const attributes of [most, longest])
+            await expect(
+                openMetadata(await sealMetadata({ ...meta, attributes }, key, ctx), key, ctx),
+            ).resolves.toEqual({ ...meta, attributes });
+        const tooMany = { ...most, k99: 'v' };
+        await expect(sealMetadata({ ...meta, attributes: tooMany }, key, ctx)).rejects.toThrow(
+            'at most 32',
+        );
+        await expect(
+            openMetadata(
+                await sealedAs(JSON.stringify({ name: 'P', attributes: tooMany }), key),
+                key,
+                ctx,
+            ),
+        ).rejects.toThrow('could not be opened');
+        // Values are strings, and only well-formed ones: Rust cannot hold a lone surrogate.
+        for (const value of [1, true, null, ['x'], { x: 'y' }, '\ud800'])
+            await expect(
+                sealMetadata(
+                    { ...meta, attributes: { colour: value } as unknown as Record<string, string> },
+                    key,
+                    ctx,
+                ),
+            ).rejects.toThrow('must be text');
+        for (const value of ['1', 'true', 'null', '["x"]', '{"x":"y"}', '"\\ud800"'])
+            await expect(
+                openMetadata(
+                    await sealedAs(`{"name":"P","attributes":{"colour":${value}}}`, key),
+                    key,
+                    ctx,
+                ),
+                value,
+            ).rejects.toThrow('could not be opened');
+        // The map itself is an object: null, an array or a string is damage, not "none".
+        for (const value of [null, ['x'], 'blue'])
+            await expect(
+                sealMetadata(
+                    { ...meta, attributes: value as unknown as Record<string, string> },
+                    key,
+                    ctx,
+                ),
+            ).rejects.toThrow('Invalid attributes.');
+        for (const value of ['null', '["x"]', '"blue"', '0'])
+            await expect(
+                openMetadata(await sealedAs(`{"name":"P","attributes":${value}}`, key), key, ctx),
+                value,
+            ).rejects.toThrow('could not be opened');
+    });
+
+    /* Refused alike by the core (drive.rs, `metadata_open_refuses_what_the_twins_would_read_differently`). */
+    const doubled = [
+        '{"name":"P","attributes":{"colour":1,"colour":"blue"}}',
+        '{"name":"P","attributes":{"colour":"red","colour":"blue"}}',
+        '{"name":"P","attributes":{"colour":"red","\\u0063olour":"blue"}}',
+        '{"name":"P","attributes":{"colour":"red"},"attributes":{"colour":"blue"}}',
+        '{"name":"a/b","name":"P"}',
+        '{"name":"P","x":1,"x":2}',
+        '{"name":"P","x":{"a":1,"a":2}}',
+        // A lone surrogate in any string, key or value, unknown fields included: the core cannot hold one.
+        '{"name":"P","x":{"\\ud800":1,"a":1,"a":2}}',
+        '{"name":"P","\\ud800":1}',
+        '{"name":"P","x":"\\ud800"}',
+        '{"name":"P","x":["\\udc00"]}',
+    ];
+    /* Equal keys in different objects, and quoted keys inside a value, are not doubles. */
+    const single = [
+        '{"name":"P","x":{"name":"y"},"attributes":{"name":"z"}}',
+        '{"name":"P","x":[{"a":1},{"a":2}]}',
+        '{"name":"P","attributes":{"a":"\\"b\\":1,\\"b\\"","b":"x"}}',
+        // A pair written as escapes is one character, in a name, a value or an unknown field.
+        '{"name":"P\\ud83d\\ude00","attributes":{"colour":"\\ud83d\\ude00"},"x":"\\ud83d\\ude00"}',
+    ];
+
+    test('a key named twice or a lone surrogate anywhere is refused; a pair written as escapes opens', async () => {
+        const key = generateKey();
+        for (const text of doubled)
+            await expect(openMetadata(await sealedAs(text, key), key, ctx), text).rejects.toThrow(
+                'could not be opened',
+            );
+        for (const text of single)
+            await expect(
+                openMetadata(await sealedAs(text, key), key, ctx),
+                text,
+            ).resolves.toMatchObject({ name: expect.stringMatching(/^P/) });
+        const paired = await openMetadata(await sealedAs(single.at(-1)!, key), key, ctx);
+        expect(paired).toEqual({
+            name: 'P\u{1F600}',
+            mime: null,
+            size: null,
+            modified: null,
+            attributes: { colour: '\u{1F600}' },
+        });
+    });
+
+    test('bytes that are not UTF-8, or start with a byte order mark, are refused as damage', async () => {
+        await sodium.ready;
+        const key = generateKey();
+        const encode = (text: string) => new TextEncoder().encode(text);
+        const join = (...parts: Uint8Array[]) => new Uint8Array(parts.flatMap((part) => [...part]));
+        const sealedBytes = async (plaintext: Uint8Array, aad: Uint8Array) => {
+            const nonce = crypto.getRandomValues(new Uint8Array(24));
+            return new Uint8Array([...nonce, ...(await encryptKey(plaintext, key, nonce, aad))]);
+        };
+        const aad = metadataContext(ctx);
+        const cases = [
+            join(
+                encode('{"name":"P","attributes":{"colour":"'),
+                Uint8Array.of(0xff),
+                encode('"}}'),
+            ),
+            join(encode('{"name":"P'), Uint8Array.of(0xc3), encode('"}')),
+            join(Uint8Array.of(0xef, 0xbb, 0xbf), encode('{"name":"P"}')),
+        ];
+        for (const plaintext of cases)
+            await expect(openMetadata(await sealedBytes(plaintext, aad), key, ctx)).rejects.toThrow(
+                'could not be opened',
+            );
+        // A workspace document is opened and sealed again the same way (a family's walk).
+        const docCtx = { workspaceId: WS, kind: 'tags', version: 1 };
+        const bad = join(encode('{"tags":["'), Uint8Array.of(0xff), encode('"]}'));
+        await expect(
+            openDocument(await sealedBytes(bad, documentContext(docCtx)), key, docCtx),
+        ).rejects.toThrow('could not be opened');
+        await expect(
+            openDocument(
+                await sealedBytes(encode('{"tags":["é"]}'), documentContext(docCtx)),
+                key,
+                docCtx,
+            ),
+        ).resolves.toEqual({ tags: ['é'] });
+    });
+
+    test('the whole plaintext stays within 4096 bytes: one byte over is refused, not cut', async () => {
+        const key = generateKey();
+        const base = JSON.stringify({ ...meta, attributes: { colour: '' } });
+        const fits = { colour: 'x'.repeat(METADATA_MAX_BYTES - base.length) };
+        const envelope = await sealMetadata({ ...meta, attributes: fits }, key, ctx);
+        expect(envelope.length).toBe(24 + METADATA_MAX_BYTES + 16);
+        expect(await openMetadata(envelope, key, ctx)).toEqual({ ...meta, attributes: fits });
+        await expect(
+            sealMetadata({ ...meta, attributes: { colour: `${fits.colour}x` } }, key, ctx),
+        ).rejects.toThrow('too long to save');
+        // Multi-byte: counted in UTF-8 bytes, not characters.
+        await expect(
+            sealMetadata({ ...meta, attributes: { colour: 'é'.repeat(2100) } }, key, ctx),
+        ).rejects.toThrow('too long to save');
+    });
+
+    test('a tampered or misplaced envelope with attributes still fails', async () => {
+        const key = generateKey();
+        const envelope = await sealMetadata({ ...meta, attributes: { colour: 'blue' } }, key, ctx);
+        for (const at of [0, 30, envelope.length - 1]) {
+            const flipped = envelope.slice();
+            flipped[at]! ^= 1;
+            await expect(openMetadata(flipped, key, ctx)).rejects.toThrow(CryptoError);
+        }
+        await expect(openMetadata(envelope, key, { ...ctx, metadataVersion: 3 })).rejects.toThrow(
+            CryptoError,
+        );
+        await expect(openMetadata(envelope, generateKey(), ctx)).rejects.toThrow(CryptoError);
+    });
+
+    test('a raw re-key keeps every attribute, unknown keys included', async () => {
+        const [old, fresh] = [generateKey(), generateKey()];
+        const attributes = { colour: 'red', 'later-feature': '{"x":1}' };
+        const origin = await sealMetadata({ ...meta, attributes }, old, ctx);
+        const rekeyed = await rekeyEnvelope(origin, old, fresh, metadataContext(ctx));
+        expect(await openMetadata(rekeyed, fresh, ctx)).toEqual({ ...meta, attributes });
     });
 });
 

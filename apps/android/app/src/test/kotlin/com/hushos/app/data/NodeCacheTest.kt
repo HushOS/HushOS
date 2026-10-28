@@ -23,7 +23,7 @@ class NodeCacheTest {
     private val serverKey = ByteArray(32) { 2 }
 
     private fun node(ws: String, id: String = nodeId) = NodeView(id, ws, "parent", "folder", 1uL, 1uL, "", 1uL, "", null, null, null, null)
-    private fun row(ws: String, id: String = nodeId) = Opened(node(ws, id), NodeMetadata("Folder", null, null, null))
+    private fun row(ws: String, id: String = nodeId) = Opened(node(ws, id), NodeMetadata("Folder", null, null, null, emptyMap()))
     private fun share(ws: String, nodeWs: String = ws) = ShareView("share-1", ws, "editor", "", 1uL, "", "granter", "", "", node(nodeWs), ServedIdentity(1uL, "", ""))
 
     private fun cacheWithOwnNode() = NodeCache { own }.also { it.put(row(own), ownKey) }

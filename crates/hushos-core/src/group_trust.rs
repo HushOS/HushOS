@@ -5612,7 +5612,13 @@ mod tests {
         let origin = crate::metadata_seal(
             ctx.clone(),
             old.clone(),
-            crate::NodeMetadata { name: "budget.ods".into(), mime: None, size: Some(9), modified: None },
+            crate::NodeMetadata {
+                name: "budget.ods".into(),
+                mime: None,
+                size: Some(9),
+                modified: None,
+                attributes: Default::default(),
+            },
         )
         .unwrap();
         // The holder wrote it before leaving; the organizer rotates the area after the removal.

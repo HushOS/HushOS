@@ -274,7 +274,7 @@ public actor Vault {
         let wrapped = try nodeWrap(ctx: ctx, parentKey: workspaceKey, nodeKey: key)
         let sealed = try metadataSeal(
             ctx: MetadataContext(workspaceId: view.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key,
-            metadata: NodeMetadata(name: Self.rootName, mime: nil, size: nil, modified: nil)
+            metadata: NodeMetadata(name: Self.rootName, mime: nil, size: nil, modified: nil, attributes: [:])
         )
         let signature = try await signMetadata(workspaceId: view.workspaceId, nodeId: id, kind: .folder, version: 1, envelope: sealed)
         let made = try await api.createRoot(workspaceId: view.workspaceId, root: [
