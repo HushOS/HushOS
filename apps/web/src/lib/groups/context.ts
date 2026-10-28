@@ -48,6 +48,8 @@ export type GroupOperation =
     /* The family check: the pair code with one member, and what "They match" writes. */
     | 'groupPairCode'
     | 'groupPairMatch'
+    /* The family guard an acceptance handed back is stored: writes into the family go on again. */
+    | 'groupGuardKept'
     | 'groupStoreSeal'
     | 'groupStoreOpen'
     | 'identityConsent'

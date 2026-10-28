@@ -1,6 +1,7 @@
 // @vitest-environment node
 import 'fake-indexeddb/auto';
 import type { CryptoResults, GroupPin } from '@hushos/crypto';
+import { GUARD_NOT_KEPT } from '@hushos/crypto/protocol';
 import { digest } from '@hushos/crypto/signatures';
 import { describe, expect, test } from 'vitest';
 import { createIndexedDbContactGuard, GUARD_UNSAVED, type GuardSealer } from '@/lib/contact-guard';
@@ -233,6 +234,7 @@ async function invitedFamily() {
         groupId,
         area,
         bob,
+        alice,
         bobDevice,
         rosters,
         /* Alice signs Bob's admission ("Let them in", before it reaches the server). */
@@ -529,6 +531,65 @@ describe('joining a family on first use', () => {
         expect(guard.kept[1]).toEqual(handed);
         expect(await failing.held()).toEqual(handed);
         expect((await store.chain(BOB, f.groupId))?.rosterVersion).toBe(3);
+    });
+
+    test('while an accepted chain’s guard isn’t stored, nothing is written under it: no seal, grant or roster, and the floor stays', async () => {
+        const f = await invitedFamily();
+        const store = createMemoryGroupStore();
+        await f.admit();
+        await f.land();
+        let guard!: ReturnType<typeof watched>;
+        const bob = await f.bobDevice(store, (inner) => {
+            guard = watched(inner);
+            return guard.guard;
+        });
+        expect(await joinStatus(bob.ctx, f.groupId)).toMatchObject({ status: 'joined' });
+        const workspaceId = f.area.workspaceId;
+        const seal = () =>
+            bob.device.call(
+                'driveSealDocument' as never,
+                {
+                    workspaceId,
+                    kind: 'tags',
+                    version: 1,
+                    document: { version: 2, tags: [], items: {} },
+                } as never,
+            );
+        // Writable while the guard is stored.
+        await expect(seal()).resolves.toBeDefined();
+        // The family moves on; this background sync commits roster 3, and its guard isn't stored.
+        await f.later();
+        guard.failMore(1);
+        await expect(syncGroup(bob.ctx, f.groupId)).rejects.toThrow(GUARD_UNSAVED);
+        expect(await bob.held()).toMatchObject({ rosterVersion: 2 });
+        // Nothing is written under the accepted chain meanwhile: a document sealed in a family
+        // folder, a grant, a roster.
+        await expect(seal()).rejects.toThrow(GUARD_NOT_KEPT);
+        await expect(
+            bob.ctx.rpc('groupGrants', {
+                groupId: f.groupId,
+                missing: [
+                    { workspaceId, userId: ALICE, kemPublicKey: f.alice.served.kemPublicKey },
+                ],
+            }),
+        ).rejects.toThrow(GUARD_NOT_KEPT);
+        await expect(
+            bob.ctx.rpc('groupStage', {
+                groupId: f.groupId,
+                expectedRevision: 3,
+                op: { kind: 'area', name: 'Taxes' },
+                kems: {},
+            }),
+        ).rejects.toThrow(GUARD_NOT_KEPT);
+        // The chain stays committed: it is still the floor, so a replay below it is refused.
+        f.serveUpTo(2);
+        await expect(syncGroup(bob.ctx, f.groupId)).rejects.toThrow(/older member list/);
+        await expect(seal()).rejects.toThrow(GUARD_NOT_KEPT);
+        // Stored on the next acceptance: writes go on.
+        f.serveUpTo(null);
+        expect((await syncGroup(bob.ctx, f.groupId)).status).toBe('accepted');
+        expect(await bob.held()).toMatchObject({ rosterVersion: 3 });
+        await expect(seal()).resolves.toBeDefined();
     });
 
     test('a not-member answer after a failed guard write waits to wipe until the guard is stored, and a replay below the head after the wipe is refused', async () => {

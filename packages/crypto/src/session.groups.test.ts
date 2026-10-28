@@ -4857,6 +4857,10 @@ describe('joining on first use (docs/optional-verification.md 3.2, 3.3, 2.8)', (
             });
         const first = await sync(null);
         if (first.status !== 'accepted' || !first.guard) throw new Error(first.status);
+        // That guard is stored, as the app does before anything is written under its chain.
+        await expect(
+            alice.call('groupGuardKept', { groupId, guard: first.guard }),
+        ).resolves.toEqual({ kept: true });
         // The rotation and the folder opened at its version 2 are accepted, and their guard never stored.
         const r = await rotated(f);
         await sync(first.guard);

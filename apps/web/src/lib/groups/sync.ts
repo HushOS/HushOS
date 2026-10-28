@@ -240,19 +240,25 @@ export async function keepGuard(
     groupId: string,
     guard: GroupPin | null,
     began = ctx.session?.(),
+    /* A wipe's guard: stored, with no writes to release (the family is being let go of). */
+    { release = true }: { release?: boolean } = {},
 ) {
-    if (guard) {
-        try {
-            await ctx.guard.keep(groupId, guard);
-        } catch (error) {
-            if (error instanceof GuardConflictError || error instanceof GuardRacedError)
-                throw error;
-            throw new GuardUnsavedError(error);
-        }
+    if (!guard) return;
+    let stored: GroupPin;
+    try {
+        stored = await ctx.guard.keep(groupId, guard);
+    } catch (error) {
+        if (error instanceof GuardConflictError || error instanceof GuardRacedError) throw error;
+        throw new GuardUnsavedError(error);
     }
     // A lock while it was stored: that session's chain is gone, so nothing more is written on it.
     if (began !== undefined && ctx.session?.() !== began)
         throw new Error('Unlock your account first.');
+    // The worker keeps every write into the family waiting from the commit until it hears the
+    // guard is stored, and only for a stored guard that covers the one it handed back.
+    if (!release) return;
+    const { kept } = await ctx.rpc('groupGuardKept', { groupId, guard: stored });
+    if (!kept) throw new GuardUnsavedError();
 }
 
 /*
@@ -514,7 +520,7 @@ export async function forgetInWorker(ctx: GroupContext, groupId: string): Promis
         });
         if (answer.guard === null) return true;
         if (answer.unreadable) throw new GuardUnreadableError();
-        await keepGuard(ctx, groupId, answer.guard);
+        await keepGuard(ctx, groupId, answer.guard, undefined, { release: false });
     }
     // An acceptance committed in between, every time: the wipe waits for the next answer.
     return false;

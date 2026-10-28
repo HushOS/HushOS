@@ -2,6 +2,7 @@ import { OLDER_CHAIN, type AreaLedger } from './area-ledger';
 import {
     CHECK_MANAGER_FIRST,
     FAMILY_FORGOTTEN,
+    GUARD_NOT_KEPT,
     GUARD_AHEAD,
     GUARD_CONFLICT,
     NOT_THIS_ACCOUNT,
@@ -501,7 +502,11 @@ export type GroupRequests = {
          * never taken on first use again, nor replayed below what this device
          * accepted; 'unreadable' when the guard's store could not be read,
          * which refuses the acceptance (GUARD_UNREADABLE: never first use, and
-         * nothing taken on it).
+         * nothing taken on it). A caller that passes it (null for none) keeps a
+         * guard: from the commit, every write into the family (Drive writes in
+         * its folders, staging, grants, seals, self-grants, repairs) is refused
+         * with GUARD_NOT_KEPT until groupGuardKept says the guard handed back
+         * is stored.
          */
         guard?: GroupPin | 'unreadable' | null;
         /*
@@ -734,6 +739,13 @@ export type GroupRequests = {
      * `foreignListings`); this only says so, for the family's page.
      */
     groupForeignListings: { groupId: string };
+    /*
+     * The app stored the family guard an acceptance handed back (2.8):
+     * `guard` is what its store holds now. Writes into the family go on again
+     * once that covers the guard owed, or is past it; anything else keeps them
+     * waiting.
+     */
+    groupGuardKept: { groupId: string; guard: GroupPin };
 };
 
 export type GroupStaged = {
@@ -936,6 +948,8 @@ export type GroupResults = {
         | { status: 'cannot' };
     /* `openedBy`: the family that opened the folder here, or null for the account's own workspace. */
     groupForeignListings: { listings: { workspaceId: string; openedBy: string | null }[] };
+    /* Whether writes into the family go on again. */
+    groupGuardKept: { kept: boolean };
 };
 
 /* Every group operation is listed in GROUP_OPERATIONS (protocol.ts), and nothing else is. */
@@ -1748,6 +1762,12 @@ export function createGroupSession(host: GroupHost) {
      * (area-ledger.ts), from what this session tells it.
      */
     const ledger = host.ledger;
+    /* The guard each family's last acceptance handed back, until the app says it is stored (ledger.owe). */
+    const guardsOwed = new Map<string, GroupPin>();
+    /* Refused while a guard is owed: nothing is written under that acceptance until it is stored (2.8). */
+    function requireGuardKept(groupId: string) {
+        if (ledger.owes(uuid(groupId, 'group id'))) throw new CryptoError(GUARD_NOT_KEPT);
+    }
     /* The settings this worker last opened (settings-marks.ts): the only settings marks taken, and the only contact pins read. */
     let settingsPins: SettingsMarks | null = null;
     /* The session's succession verification cache (groupWriterTrust's `verified`). */
@@ -1849,6 +1869,7 @@ export function createGroupSession(host: GroupHost) {
         return true;
     }
     function forgetGroup(groupId: string) {
+        guardsOwed.delete(groupId);
         // An acceptance begun before this commits nothing (stillTheFamily).
         forgets.set(groupId, (forgets.get(groupId) ?? 0) + 1);
         for (const [slot, seed] of seeds)
@@ -1866,6 +1887,7 @@ export function createGroupSession(host: GroupHost) {
         usedJoins.delete(groupId);
     }
     function forget() {
+        guardsOwed.clear();
         for (const groupId of new Set([...chains.keys(), ...opened.keys()])) forgetGroup(groupId);
         for (const seed of seeds.values()) seed.fill(0);
         seeds.clear();
@@ -2652,6 +2674,11 @@ export function createGroupSession(host: GroupHost) {
             )
                 dropped.push(outboxId);
         for (const outboxId of dropped) dropStaged(outboxId);
+        // A caller that keeps a family guard (it passes `guard`, null for none, as the apps do)
+        // owes it from the commit on, before any await: no write lands under this chain until the
+        // guard is stored, and one never worked out (a throw below) keeps writes waiting.
+        const keepsGuard = input.guard !== undefined;
+        if (keepsGuard) ledger.owe(groupId);
         commit(chain);
         const pin = await pinAfter(marking, chain, checkedAt);
         // The family guard moves on with every acceptance, never down (docs/optional-verification.md
@@ -2672,6 +2699,12 @@ export function createGroupSession(host: GroupHost) {
         // The guard was a mark, so a chain that disagrees with it was the fork above, and one
         // short of it refused; nothing is ever written over it or below it.
         const guard = next === 'conflict' || next === 'ahead' ? null : next;
+        // Nothing new to store (the held guard covers this chain): writes go on. Otherwise they
+        // wait for groupGuardKept.
+        if (guard === null) {
+            guardsOwed.delete(groupId);
+            ledger.kept(groupId);
+        } else if (keepsGuard) guardsOwed.set(groupId, guard);
         const unlocked = host.unlocked();
         try {
             return {
@@ -3044,9 +3077,10 @@ export function createGroupSession(host: GroupHost) {
                 fromGrant = true;
             }
             if (!key) throw new CryptoError(NOT_CHECKED_KEYS);
-            // The server takes a self-grant only at the area's current version.
+            // The server takes a self-grant only at the area's current version, and none is made
+            // while the family's guard is not stored (2.8): the key still opens for reading.
             const selfGrantToStore =
-                fromGrant && version === latest && served === latest
+                fromGrant && version === latest && served === latest && !ledger.owes(groupId)
                     ? await grantAreaKey(
                           key,
                           root,
@@ -3174,6 +3208,7 @@ export function createGroupSession(host: GroupHost) {
     }
 
     async function stage(input: GroupRequests['groupStage']): Promise<GroupResults['groupStage']> {
+        requireGuardKept(input.groupId);
         const chain = committed(input.groupId);
         const groupId = chain.groupId;
         const { op } = input;
@@ -3608,6 +3643,7 @@ export function createGroupSession(host: GroupHost) {
     async function restage(
         input: GroupRequests['groupRestage'],
     ): Promise<GroupResults['groupRestage']> {
+        requireGuardKept(input.groupId);
         const chain = committed(input.groupId);
         const groupId = chain.groupId;
         const { userId, root } = host.unlocked();
@@ -3692,6 +3728,7 @@ export function createGroupSession(host: GroupHost) {
     async function grantsOwed(
         input: GroupRequests['groupGrants'],
     ): Promise<GroupResults['groupGrants']> {
+        requireGuardKept(input.groupId);
         const chain = committed(input.groupId);
         // Folder and person ids lowercase (the core's grants_body), each owed grant once.
         const seen = new Set<string>();
@@ -3732,6 +3769,7 @@ export function createGroupSession(host: GroupHost) {
     async function reseal(
         input: GroupRequests['groupReseal'],
     ): Promise<GroupResults['groupReseal']> {
+        requireGuardKept(input.groupId);
         const chain = committed(input.groupId);
         const seed = seeds.get(seedSlot(chain.groupId, chain.groupKeyVersion));
         if (!seed) throw new CryptoError(NO_SEED);
@@ -3990,6 +4028,7 @@ export function createGroupSession(host: GroupHost) {
     async function previousRoot(
         input: GroupRequests['groupPreviousRoot'],
     ): Promise<GroupResults['groupPreviousRoot']> {
+        requireGuardKept(input.groupId);
         const chain = committed(input.groupId);
         const workspaceId = uuid(input.workspaceId, 'workspace id');
         const { root } = input;
@@ -4124,6 +4163,22 @@ export function createGroupSession(host: GroupHost) {
                 return storeOpen(message.input);
             case 'groupPreviousRoot':
                 return previousRoot(message.input);
+            case 'groupGuardKept': {
+                const groupId = uuid(message.input.groupId, 'group id');
+                const owed = guardsOwed.get(groupId);
+                // Owed with no guard worked out (an acceptance that threw after its commit): only the
+                // next acceptance says what to store.
+                if (!owed) return { kept: !ledger.owes(groupId) };
+                const after = guardAfter(
+                    groupId,
+                    checkGroupPin(groupId, message.input.guard),
+                    owed,
+                );
+                if (after !== null && after !== 'ahead') return { kept: false };
+                guardsOwed.delete(groupId);
+                ledger.kept(groupId);
+                return { kept: true };
+            }
             case 'groupForeignListings': {
                 const groupId = uuid(message.input.groupId, 'group id');
                 return {

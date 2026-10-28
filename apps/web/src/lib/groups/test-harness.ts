@@ -214,6 +214,7 @@ export function harness(
         groupStoreOpen: (input) => ({ value: JSON.parse(input.envelope.slice('sealed:'.length)) }),
         groupDrop: () => ({ dropped: true }),
         groupForget: () => ({ forgotten: true, guard: null }),
+        groupGuardKept: () => ({ kept: true }),
         groupOpenSeal: () => ({ groupKeyVersion: 1 }),
         groupAccept: () => ({
             status: 'accepted',

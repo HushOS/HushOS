@@ -60,6 +60,7 @@ export const GROUP_OPERATIONS = [
     'groupStoreOpen',
     'groupPreviousRoot',
     'groupForeignListings',
+    'groupGuardKept',
 ] as const;
 
 /*
@@ -158,3 +159,13 @@ export const GUARD_AHEAD =
  */
 export const CHECK_MANAGER_FIRST =
     'Check it’s them first. Managers are checked before they get the role.';
+
+/*
+ * A write into a family, or under its folders' keys, while the family guard
+ * an acceptance handed back is not stored on this device
+ * (docs/optional-verification.md 2.8): nothing is written under that
+ * acceptance until it is (groupGuardKept), reading goes on. The same words
+ * as a guard write that failed.
+ */
+export const GUARD_NOT_KEPT =
+    'HushOS couldn’t save this on this device. Free up some space, then try again.';
