@@ -1,0 +1,62 @@
+apps/android/app/src/test/kotlin/com/hushos/app/data/AccountStoreTest.kt
+  s_efd5e4c7e9b391::t_0e799c5069f419 32-33
+apps/android/app/src/test/kotlin/com/hushos/app/data/JobNamesTest.kt
+  s_efd5e4c7e9b391::t_0e799c5069f419 1-50
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_efd5e4c7e9b391::t_9f87385a7314a0 529-530,533-534,539-540,548-549,555-556,620-621
+apps/android/AGENTS.md
+  s_efd5e4c7e9b391::t_a64d8d925aa839 39
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_efd5e4c7e9b391::t_ab9ecc7c97ca61 310-313,319,324,343,357
+docs/integrity-design.md
+  s_efd5e4c7e9b391::t_a64d8d925aa839 224
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Families.swift
+  s_efd5e4c7e9b391::t_4ef052285177d8 186
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsTests.swift
+  s_efd5e4c7e9b391::t_ee6a00361abb2d 194-195,197-198,206-218,446
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_efd5e4c7e9b391::t_4ef052285177d8 352,359,362,409
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Account.swift
+  s_efd5e4c7e9b391::t_4ef052285177d8 443-444
+apps/ios/AGENTS.md
+  s_efd5e4c7e9b391::t_a64d8d925aa839 79
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Identity.swift
+  s_efd5e4c7e9b391::t_4ef052285177d8 6-7,16-17,23,26,34-35,89,113,200,209,257
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/RollbackMarks.swift
+  s_efd5e4c7e9b391::t_ee6a00361abb2d 375-381
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Contacts.swift
+  s_efd5e4c7e9b391::t_4ef052285177d8 128,130,233,253,310
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Settings.swift
+  s_efd5e4c7e9b391::t_ee6a00361abb2d 319-322,341-342,366
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_efd5e4c7e9b391::t_0e799c5069f419 124-132,147-155
+  s_efd5e4c7e9b391::t_ab9ecc7c97ca61 136-138,158-159,246-248,252,256,261,313,341-342
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Shares.swift
+  s_efd5e4c7e9b391::t_4ef052285177d8 110-111
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_efd5e4c7e9b391::t_9f87385a7314a0 145-146,151,458,465,502,529,563,568,615
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsUpgradeTests.swift
+  s_efd5e4c7e9b391::t_532dd7a9ca65e8 41-61
+apps/android/app/src/main/kotlin/com/hushos/app/data/JobNames.kt
+  s_efd5e4c7e9b391::t_f39feb54ba94bc 1-50
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_efd5e4c7e9b391::t_ab9ecc7c97ca61 59
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Succession.swift
+  s_efd5e4c7e9b391::t_4ef052285177d8 204
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7a682ad91077cbb6b6f6d41a1be034be72955440",
+  "prompts": {},
+  "sessions": {
+    "s_efd5e4c7e9b391": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da795f5c-6f7b-4e4b-b602-9bdf2054de0d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
