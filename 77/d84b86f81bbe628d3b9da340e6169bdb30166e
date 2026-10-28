@@ -1,0 +1,25 @@
+apps/web/src/lib/contacts.succession.test.ts
+  s_566b8e0c4467a4::t_090ae51d34a44e 41,43-56
+apps/web/src/lib/own-identity.test.ts
+  s_566b8e0c4467a4::t_47d6ac4fc75bb3 174-186
+apps/web/src/lib/rollback-marks.bound.test.ts
+  s_566b8e0c4467a4::t_8c03b99e07178f 1-81
+apps/web/src/lib/rollback-marks.ts
+  s_566b8e0c4467a4::t_1be1a4acb56a2a 79-88,242-246,322-327,330-332,348,363,392
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "77d84b86f81bbe628d3b9da340e6169bdb30166e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
