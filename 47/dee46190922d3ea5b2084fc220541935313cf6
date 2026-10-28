@@ -1,0 +1,91 @@
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_432f491a4434c5 704-708
+DESIGN.md
+  s_566b8e0c4467a4::t_4b5ae079b08471 393
+apps/web/package.json
+  s_566b8e0c4467a4::t_8aa633b26d5049 20-22,41-42,44-46,48-49,51,53-54,62-69,74,77-79,83-84,91,95-100,102,106-107
+apps/web/src/components/account-devices.tsx
+  s_566b8e0c4467a4::t_e2245756affd73 334
+apps/web/src/components/device-control.tsx
+  s_566b8e0c4467a4::t_8cafcabec85c4b 39
+apps/web/src/components/drive/check-contact.tsx
+  s_566b8e0c4467a4::t_6ff33121cfc9c2 102
+apps/web/src/components/drive/command-palette.tsx
+  s_566b8e0c4467a4::t_b83acf079737d6 158
+apps/web/src/components/drive/folder-view.tsx
+  s_566b8e0c4467a4::t_751d1d4e7c8e07 372,459,665,682,748
+apps/web/src/components/drive/home-view.tsx
+  s_566b8e0c4467a4::t_d87496bef13d75 296
+apps/web/src/components/drive/share-dialog.tsx
+  s_566b8e0c4467a4::t_11583cad3f83f2 327,355
+apps/web/src/components/drive/storage-full-dialog.tsx
+  s_566b8e0c4467a4::t_d7e4d867084cae 122,152
+apps/web/src/components/drive/tag-view.tsx
+  s_566b8e0c4467a4::t_12e4f6ab75df0b 119
+apps/web/src/components/drive/trash-view.tsx
+  s_566b8e0c4467a4::t_66a9b9b9179273 351,378,436
+apps/web/src/components/drive/versions-dialog.tsx
+  s_566b8e0c4467a4::t_d1d7d303998296 148
+apps/web/src/components/families/family-page.tsx
+  s_566b8e0c4467a4::t_4f6f186280f6b9 548
+apps/web/src/components/families/family-trash.tsx
+  s_566b8e0c4467a4::t_ea8ae7afe40a24 156,229
+apps/web/src/components/families/let-in-dialog.tsx
+  s_566b8e0c4467a4::t_8f343a9d6eb10c 317
+apps/web/src/components/families/members.tsx
+  s_566b8e0c4467a4::t_042f160dd168d2 611
+apps/web/src/components/site-header.tsx
+  s_566b8e0c4467a4::t_8665d651174dce 300-301
+apps/web/src/components/storage-card.tsx
+  s_566b8e0c4467a4::t_96a9c6c40f510a 110
+apps/web/src/routes/_authenticated/app/_drive/contacts.tsx
+  s_566b8e0c4467a4::t_56c6f93de193d1 115
+apps/web/src/routes/_authenticated/app/_drive/shared.tsx
+  s_566b8e0c4467a4::t_eaa164f911e72b 188,526
+bun.lock
+  s_566b8e0c4467a4::t_1ffc9731a67d9b 10,13-16,18,26-28,47-48,50-52,54-55,57,59-60,68-75,80,83-85,89-90,97,101-106,108,112-113,124,129,131,142,148,155,176,187-188,194,196,203-204,209,214,216,223,225-226,230,232-237,246,252,268,271,273,275,287,293,300,306,325,345,347,349,351,353,355,357,359,361,363,365,367,369,371,373,375,377,379,381,383,385,387,389,427,429,433,435,437,439,441,443,503,549,551,553,555,557,559,561,563,565,567,569,571,573,575,577,579,581,583,585,587,589,591,593,595,597,599,631,633,635,637,639,641,643,645,647,649,651,653,657,659,661,663,665,667,669,671,673,691-692,695,697,699,701,703,705,707,709,711,713,715,717,719,721,723,725,727,729,731,733,735,737,739,741,743,745,747,749,751,753,755,757,759,761,763,765,767,769,771,773,775,777,779,781,783,785,819,821,913,915,917,919,921,923,925,929,935,937,939,945,979,981,983,985,987,989,991,993,995,997,999,1007,1011,1015,1017,1019,1023,1025,1027,1029,1033,1035,1037,1039,1045,1049,1051,1053,1057,1067,1069,1071,1073,1075,1077,1079,1111,1115,1117,1165,1167,1169,1215,1235,1245,1255,1265,1291,1301,1303,1333,1351,1353,1403,1413,1435,1483,1497,1541,1547,1601,1603,1609,1613,1657,1749,1751,1753,1757,1761,1773,1781,1793,1795,1797,1811,1815,1817,1819,1821,1839,1841,1843,1845,1877,1879,1881,1893,1923,1937,1947-1948,1953,1959,1967,1969,1975-1976,1997,1999,2031,2037,2039-2041,2045,2055,2065,2071,2081,2119,2131,2135,2137,2147,2153,2183,2185,2211-2220,2237-2240,2243,2245-2247,2271-2272,2277,2279,2281,2283,2285,2287,2317,2319,2321,2323,2325,2327,2329,2331,2333,2335,2337,2339,2341,2343,2345,2347,2349,2351,2353,2355,2357,2359,2361
+package.json
+  s_566b8e0c4467a4::t_c625b5d0caf238 68,71-74,76
+packages/auth/package.json
+  s_566b8e0c4467a4::t_098d1ad2554994 26,31,33
+packages/billing/package.json
+  s_566b8e0c4467a4::t_8a57575e31fe13 23,29
+packages/config/package.json
+  s_566b8e0c4467a4::t_13a5f94fba17da 15
+packages/crypto/package.json
+  s_566b8e0c4467a4::t_37605915d9d28c 59
+packages/db/package.json
+  s_566b8e0c4467a4::t_f91e1d9e07cf54 34-35,41,43
+packages/db/src/auth.ts
+  s_566b8e0c4467a4::t_49063c73834c40 855
+packages/drive/package.json
+  s_566b8e0c4467a4::t_e299956acc5152 28-29,34,39,41
+packages/emails/package.json
+  s_566b8e0c4467a4::t_ed4cff7aad03eb 19,21-22,26,28-33
+packages/env/package.json
+  s_566b8e0c4467a4::t_3a509c4b9fb309 25,31
+packages/groups/package.json
+  s_566b8e0c4467a4::t_71bf6981df40e5 26,29,31,33
+packages/jobs/package.json
+  s_566b8e0c4467a4::t_9637a25e167328 23,29
+packages/logging/package.json
+  s_566b8e0c4467a4::t_c675aab2268acf 22,28
+packages/tokens/package.json
+  s_566b8e0c4467a4::t_4bb31d5670a5c2 23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "47dee46190922d3ea5b2084fc220541935313cf6",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
