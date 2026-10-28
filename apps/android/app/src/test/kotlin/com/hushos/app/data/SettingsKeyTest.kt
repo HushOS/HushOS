@@ -57,7 +57,7 @@ class SettingsKeyTest {
 
     @Test
     fun aVersionOneRowServedAsNoneIsReadAtItsStoredSequenceSoTheSaveOverItOpensAgain() {
-        val mark = SettingsMark(folder.root.resolve("marks.json"))
+        val mark = SettingsMark(folder.root.resolve("marks"), SettingsMarkTest.keys(7))
         // An earlier session saw the version 1 document at sequence 7; the server serves it as none, with sequence 7.
         mark.recordSettings(userId, 7uL, sealedV2 = false)
         val read = readServedSettings(userId, null, 7uL, mark) { rawKey }
@@ -77,7 +77,7 @@ class SettingsKeyTest {
 
     @Test
     fun noneBelowTheMarkOrAfterAVersionTwoDocumentIsARollback() {
-        val mark = SettingsMark(folder.root.resolve("marks.json"))
+        val mark = SettingsMark(folder.root.resolve("marks"), SettingsMarkTest.keys(7))
         mark.recordSettings(userId, 7uL, sealedV2 = false)
         assertThrows(SettingsRolledBack::class.java) { readServedSettings(userId, null, 5uL, mark) { rawKey } }
         mark.recordSettings(userId, 8uL, sealedV2 = true)

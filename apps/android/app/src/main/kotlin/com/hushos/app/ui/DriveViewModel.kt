@@ -308,16 +308,21 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                 lastInfos = infos
                 val inUse = infos.mapNotNull { info -> info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:")?.let { File(it).parent } }.toSet()
                 val records = com.hushos.app.data.FailedTransfers.of(context)
+                val jobNames = com.hushos.app.data.JobNames.of(context)
+                // A job's name is the app's (JobNames), or a tag of an older version's job.
+                val names = withContext(Dispatchers.IO) { jobNames.all() }
+                val nameOf = { info: androidx.work.WorkInfo -> names[info.id.toString()] ?: info.tags.firstOrNull { it.startsWith("name:") }?.removePrefix("name:") ?: "File" }
                 // Failures from before the app kept its own record go on it now, while WorkManager still has them.
                 withContext(Dispatchers.IO) {
                     infos.filter { it.state == androidx.work.WorkInfo.State.FAILED && it.id !in hidden && !records.has(it.id.toString()) }.forEach { info ->
                         val tag = { prefix: String -> info.tags.firstOrNull { it.startsWith(prefix) }?.removePrefix(prefix) }
                         val out = info.outputData
-                        records.record(com.hushos.app.data.FailedTransfer(info.id.toString(), tag("kind:") ?: "upload", tag("name:") ?: "File",
+                        records.record(com.hushos.app.data.FailedTransfer(info.id.toString(), tag("kind:") ?: "upload", nameOf(info),
                             out.getString("message") ?: "The transfer failed.", System.currentTimeMillis(), out.getString("file") ?: tag("file:"), out.getString("mime"),
                             out.getString("folder"), out.getString("replacing"), tag("node:"), "folder" in info.tags, out.getString("share")))
                     }
                     com.hushos.app.data.TransferQueue.sweep(context, inUse)
+                    jobNames.retain(infos.map { it.id.toString() }.toSet())
                 }
                 // Failed rows come from the app's own record, which outlives WorkManager's; its FAILED jobs are not shown twice.
                 val failedRows = withContext(Dispatchers.IO) { records.all() }.map { failed ->
@@ -336,7 +341,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                     val finished = info.state.isFinished
                     val failed = info.state == androidx.work.WorkInfo.State.FAILED
                     TransferItem(
-                        id = info.id.toString(), kind = tag("kind:") ?: "upload", name = tag("name:") ?: "File",
+                        id = info.id.toString(), kind = tag("kind:") ?: "upload", name = nameOf(info),
                         fraction = if (info.state == androidx.work.WorkInfo.State.SUCCEEDED) 1f else info.progress.getFloat("fraction", 0f),
                         done = finished, failed = failed,
                         waiting = info.state == androidx.work.WorkInfo.State.ENQUEUED || info.state == androidx.work.WorkInfo.State.BLOCKED,
@@ -350,7 +355,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update { it.copy(queued = items) }
                 val newlyLanded = infos.filter { it.state == androidx.work.WorkInfo.State.SUCCEEDED && landed.add(it.id) }
                 // A kept folder whose share stopped: its job removed the copies; the app says so.
-                newlyLanded.mapNotNull { it.outputData.getString("unshared") }.forEach { name ->
+                newlyLanded.filter { it.outputData.getBoolean("unshared", false) || it.outputData.getString("unshared") != null }.map(nameOf).forEach { name ->
                     notifyUntilRead("“$name” is no longer shared with you, so it was removed from this phone.")
                 }
                 // Its own coroutine: the next queue update must not cancel the refresh halfway.

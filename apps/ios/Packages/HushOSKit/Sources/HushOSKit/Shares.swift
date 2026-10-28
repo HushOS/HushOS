@@ -107,8 +107,8 @@ public enum ShareOpener {
 
 extension Auth {
     /* The identity envelope the server keeps for this account. */
-    public static func identity() async throws -> IdentityEnvelope {
-        let reply = try await call("/api/auth/identity")
+    public static func identity(as owner: SharedKeychain.Session? = nil) async throws -> IdentityEnvelope {
+        let reply = try await call("/api/auth/identity", as: owner)
         guard let json = reply["identity"] as? [String: Any] else { throw AuthError.message("HushOS returned no identity.") }
         return identityEnvelope(from: json)
     }

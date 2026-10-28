@@ -140,17 +140,19 @@ class Vault(internal val context: Context, val api: DriveApi) {
     /* The identity in use and the earlier ones, opened once and kept until forgotten (see OpenedIdentities). */
     private val ownIdentities = OpenedIdentities(
         open = {
-            openOwnIdentity(api.session.userId, unlockAccount(), SettingsMark.of(context),
-                served = { Auth.identity(context) },
-                store = { Auth.upgradeIdentity(context, it) },
+            openOwnIdentity(api.session.userId, unlockAccount(), marks(),
+                served = { Auth.identity(context, api.session) },
+                store = { Auth.upgradeIdentity(context, it, api.session) },
                 upgraded = { ShareSeals.of(context).lastPass = 0L },
             )
         },
         // Each opened under the account key, which proves it is this account's own, not one the server added.
-        history = { Auth.identityHistory(context).mapNotNull { runCatching { identityOpen(api.session.userId, unlockAccount(), it) }.getOrNull() }.reversed() },
+        history = { Auth.identityHistory(context, api.session).mapNotNull { runCatching { identityOpen(api.session.userId, unlockAccount(), it) }.getOrNull() }.reversed() },
     )
     /* The settings key, opened under the account key once the server served it (or this device made it). */
     private var settingsKey: ByteArray? = null
+    /* The envelope `settingsKey` came out of, as the server keeps it: kept beside the rollback marks. */
+    private var settingsKeyEnvelope: com.hushos.core.SettingsKeyEnvelope? = null
     private val indexFile = File(context.filesDir, "files-parents.json")
     internal val parents: ConcurrentHashMap<String, String> = ConcurrentHashMap<String, String>().also { map ->
         runCatching {
@@ -354,8 +356,28 @@ class Vault(internal val context: Context, val api: DriveApi) {
     private fun openSettingsKey(stored: Auth.StoredSettings): ByteArray? {
         settingsKey?.let { return it }
         val wrapped = stored.key ?: return null
-        return settingsKeyOpen(api.session.userId, unlockAccount(), wrapped).also { settingsKey = it }
+        return settingsKeyOpen(api.session.userId, unlockAccount(), wrapped).also { settingsKey = it; settingsKeyEnvelope = wrapped }
     }
+
+    /*
+     * The settings key the rollback marks are sealed under (SettingsMark): the envelope kept beside them when it opens
+     * under the account key (it does until a master-key rotation), else the one this vault opened, else the server's
+     * (`served` when the caller has just read it). With `create`, an account with none gets one; without, null.
+     */
+    private fun marksKey(kept: com.hushos.core.SettingsKeyEnvelope?, create: Boolean, served: Auth.StoredSettings?): MarksKey? {
+        if (kept != null) runCatching { settingsKeyOpen(api.session.userId, unlockAccount(), kept) }.getOrNull()?.let { return MarksKey(it, kept) }
+        val cached = settingsKey
+        val cachedEnvelope = settingsKeyEnvelope
+        if (cached != null && cachedEnvelope != null) return MarksKey(cached, cachedEnvelope)
+        val stored = served ?: Auth.settings(context, api.session)
+        stored.key?.let { wrapped -> return MarksKey(openSettingsKey(stored) ?: return null, settingsKeyEnvelope ?: wrapped) }
+        if (!create) return null
+        val key = settingsKeyForSave()
+        return settingsKeyEnvelope?.let { MarksKey(key, it) }
+    }
+
+    /* This account's rollback marks, opened under the settings key through this vault. */
+    private fun marks(served: Auth.StoredSettings? = null) = SettingsMark.of(context, api.session.token) { kept, create -> marksKey(kept, create, served) }
 
     /*
      * The settings key for the next save: the stored one, or a new one wrapped under the account key and stored first
@@ -363,16 +385,18 @@ class Vault(internal val context: Context, val api: DriveApi) {
      */
     private fun settingsKeyForSave(): ByteArray {
         settingsKey?.let { return it }
-        val stored = Auth.settings(context)
+        val stored = Auth.settings(context, api.session)
         openSettingsKey(stored)?.let { return it }
         val made = settingsKeyCreate(api.session.userId, unlockAccount())
         try {
-            Auth.putSettingsKey(context, made.envelope)
+            // Under this vault's own session: a key is stored once and for good, so never into another account.
+            Auth.putSettingsKey(context, made.envelope, api.session)
         } catch (error: AuthFailure) {
             if (error.status != 409) throw error
-            return openSettingsKey(Auth.settings(context)) ?: throw error
+            return openSettingsKey(Auth.settings(context, api.session)) ?: throw error
         }
         settingsKey = made.key
+        settingsKeyEnvelope = made.envelope
         return made.key
     }
 
@@ -382,11 +406,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * key opened) no longer opens: it reads as no settings at its stored sequence, and the next save goes over it.
      */
     fun loadSettings(): Settings {
-        val mark = SettingsMark.of(context)
         val userId = api.session.userId
+        val identity = identityKeys()
+        val stored = Auth.settings(context, api.session)
+        val mark = marks(stored)
         // A mark an earlier app kept per identity carries over first, so the per-account one never starts lower.
-        mark.settingsSeen(userId, identityKeys().encryptionPublicKey)
-        val stored = Auth.settings(context)
+        mark.adopt(userId, listOf(identity.encryptionPublicKey))
         return readServedSettings(userId, stored.envelope, stored.sequence, mark) {
             openSettingsKey(stored) ?: throw AuthFailure("Your settings key is missing. Sign in again.")
         }
@@ -407,9 +432,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
             try {
                 // Always version 2, under the settings key: a version 1 document is moved over by its first save here.
                 // Named over the stored sequence and sealed at one above it, the version the server stores it at.
-                Auth.putSettings(context, settings.version, settingsSeal(api.session.userId, key, next, settings.text()))
+                Auth.putSettings(context, settings.version, settingsSeal(api.session.userId, key, next, settings.text()), api.session)
                 // Always version 2: from here on, no document at all is a rollback.
-                SettingsMark.of(context).recordSettings(api.session.userId, next, sealedV2 = true)
+                marks().recordSettings(api.session.userId, next, sealedV2 = true)
                 return Settings(settings.json, next)
             } catch (error: AuthFailure) {
                 if (error.status != 409 || ++attempt >= 3) throw error
@@ -429,14 +454,14 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * the words are those of the identity the server serves at this moment, re-derived from its private halves. It
      * needs the server: offline it fails rather than show words it can't confirm are current, and a 401 ends the session.
      */
-    fun currentOwnFingerprint(): String = ownFingerprint(ownIdentities.current(Auth.identity(context)))
+    fun currentOwnFingerprint(): String = ownFingerprint(ownIdentities.current(Auth.identity(context, api.session)))
 
     /*
      * A person by email, with what the pin says about them. "Check it's them": the one place a pinned contact's served keys are followed through their succession chain
      * (docs/integrity-design.md, "Who sees whom"), because the person asked. Nothing else follows them on its own.
      */
     fun lookup(email: String): Lookup {
-        val contact = Auth.lookupContact(context, email)
+        val contact = Auth.lookupContact(context, email, api.session)
         val pinned = loadSettings().contacts[contact.userId] ?: return Lookup(contact, null, changed = false)
         val comparison = comparePin(pinned, contact.served)
         // New keys signed by the pinned ones: the pin follows them, and People says so rather than warning.
@@ -473,7 +498,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
      */
     private fun followPin(pin: ContactPin, served: ServedIdentity): ContactPin? {
         if (comparePin(pin, served) != PinComparison.SUCCESSION) return null
-        val links = runCatching { Auth.succession(context, pin.userId) }.getOrNull() ?: return null
+        val links = runCatching { Auth.succession(context, pin.userId, api.session) }.getOrNull() ?: return null
         val next = followSuccession(pin, served, links, Instant.now().toString()) ?: return null
         updateSettings { settings ->
             // Another device may have followed (or re-pinned) first: only a pin still at the old keys is moved.
@@ -500,7 +525,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val nodeKey = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         // The pin as the settings hold it now, not as the sheet last read it.
         val current = loadSettings().contacts[pin.userId] ?: throw SharingRefused("Add ${pin.displayName} in Contacts before you share with them.")
-        val contact = Auth.lookupContact(context, current.email)
+        val contact = Auth.lookupContact(context, current.email, api.session)
         if (contact.userId != current.userId) throw ContactChanged()
         // Other keys than the pinned ones are never followed here: replaced or changed, the person checks them again first.
         val kem = granteeKem(current, contact.served)
@@ -534,12 +559,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val opened = identityKeys()
         // Signed over the identity opened, never over whatever the server serves now.
         val succession = try {
-            succeedOwnIdentity(userId, unlockAccount(), opened, Auth.identity(context))
+            succeedOwnIdentity(userId, unlockAccount(), opened, Auth.identity(context, api.session))
         } catch (error: IdentityMoved) {
             forgetIdentity()
             throw error
         }
-        Auth.succeedIdentity(context, succession)
+        Auth.succeedIdentity(context, succession, api.session)
         // From here the shares wait to be sealed again: a pass cut short is finished on the next Drive open, never by minting again.
         ShareSeals.of(context).pending = succession.identity.keyVersion
         forgetIdentity()
@@ -586,7 +611,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
                     val pin = pins[share.granteeId] ?: return@mapNotNull null
                     if (!needsReseal(share.suite, seals.get(share.id), keys.keyVersion, pin.keyVersion)) return@mapNotNull null
                     // The post-quantum key to seal to is only in a lookup; keys other than the pin's are left out by the plan.
-                    val contact = served.getOrPut(share.granteeId) { runCatching { Auth.lookupContact(context, pin.email) }.getOrNull() }
+                    val contact = served.getOrPut(share.granteeId) { runCatching { Auth.lookupContact(context, pin.email, api.session) }.getOrNull() }
                     val grantee = contact?.takeIf { it.userId == share.granteeId } ?: return@mapNotNull null
                     JSONObject().put("id", share.id).put("granteeUserId", share.granteeId).put("grantee", grantee.served.toJson())
                 }

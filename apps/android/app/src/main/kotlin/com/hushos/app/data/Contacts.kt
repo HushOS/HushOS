@@ -374,12 +374,13 @@ class Settings(val json: JSONObject, val version: ULong) {
 fun readServedSettings(userId: String, envelope: SettingsEnvelope?, sequence: ULong, mark: SettingsMark, settingsKey: () -> ByteArray): Settings {
     if (envelope == null) {
         mark.checkSettings(userId, sequence, present = false)
-        if (sequence > 0uL) mark.recordSettings(userId, sequence, sealedV2 = false)
+        // Checked again against what the write found: a newer mark kept meanwhile counts.
+        if (sequence > 0uL) mark.checkSettings(mark.recordSettings(userId, sequence, sealedV2 = false), sequence, present = false)
         return Settings.empty(sequence)
     }
     mark.checkSettings(userId, envelope.settingsVersion, present = true)
     val settings = openSettingsText(userId, if (envelope.version == 2u) settingsKey() else null, envelope)
-    mark.recordSettings(userId, envelope.settingsVersion, sealedV2 = envelope.version == 2u)
+    mark.checkSettings(mark.recordSettings(userId, envelope.settingsVersion, sealedV2 = envelope.version == 2u), envelope.settingsVersion, present = true)
     return settings
 }
 
