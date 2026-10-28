@@ -1,0 +1,147 @@
+packages/db/drizzle/20260912224849_drive/snapshot.json
+  s_566b8e0c4467a4::t_349b4b02252e7f 2-3,7-73,76-83,86-93,96-102,104-117,119-132,134-148,150-164,166-179,181-185,187-200,202-215,217-230,232-245,247-260,262-275,277-291,293-310,312-329,331-348,350-369,371-388,390-407,409-426,428-445,447-464,466-483,485-547,550-2527
+packages/db/drizzle/20260914231158_server_secrets/snapshot.json
+  s_566b8e0c4467a4::t_42efc099c56eeb 2-3,7-19,22-91
+packages/db/drizzle/20261019181225_drive_moves/snapshot.json
+  s_566b8e0c4467a4::t_e7d67726c28994 2-3,7,9-16,19-26,29-36,39-46,49-56,59-66,69-81,84-101,104-235
+packages/db/drizzle/20261021073123_personal_plan_lapsed/snapshot.json
+  s_566b8e0c4467a4::t_fc23b824690988 2-3,7,9-16,19-27,30-54
+packages/db/drizzle/20261017062152_rekeyed_origins/snapshot.json
+  s_566b8e0c4467a4::t_15c2d32a15e0ab 2-3,7,9-19,22-29,32-39,42-49,52-59,62-69,72-79,82-89,92-99,102-109,112-119,122-129,132-139,142-149,152-159,162-325,328-940
+packages/db/drizzle/20261013001717_share_feed_ancestors/snapshot.json
+  s_566b8e0c4467a4::t_5d041de779fc04 2-3,7,9-14,16,19-36
+packages/db/drizzle/20261020192250_dissolve_cancels/snapshot.json
+  s_566b8e0c4467a4::t_5c5bd2bf4f155e 2-3,7,9-21,24-36,39-51,54-66,69-81,84-96,99-196
+packages/db/drizzle/20260913145137_drive_ops/snapshot.json
+  s_566b8e0c4467a4::t_d25d8b4729822d 2-3,7-60,63-203
+packages/db/drizzle/20261020214235_change_seq_unique/snapshot.json
+  s_566b8e0c4467a4::t_5b9c0f4b1857a7 2-3,7-24,27-35
+packages/db/drizzle/20260913164406_settings_roles/snapshot.json
+  s_566b8e0c4467a4::t_e2060c3639a291 2-3,7-59,62-231
+packages/db/drizzle/20261012174906_share_suite_3/snapshot.json
+  s_566b8e0c4467a4::t_7ff91330425f27 2-3,7-24,27-35
+packages/db/drizzle/20261014213244_pq_identity/snapshot.json
+  s_566b8e0c4467a4::t_ceb4bdc2ef802e 2-3,7,9-16,19-26,29-36,39-46,49-278,281-488
+packages/db/drizzle/20261017153848_origin_drop_evidence/snapshot.json
+  s_566b8e0c4467a4::t_71d6a0adb3feb4 2-3,7-79,82-173
+packages/db/drizzle/20261012175109_identity_history/snapshot.json
+  s_566b8e0c4467a4::t_5e01ae8c509947 2-3,7-38,41-444
+packages/db/drizzle/20261012132956_server_hash_key/snapshot.json
+  s_566b8e0c4467a4::t_2468ff5b41db81 2-4,7-8
+packages/db/drizzle/20261026095529_family_orphan_paid_after/snapshot.json
+  s_566b8e0c4467a4::t_623985c3078d7b 2-3,7,9-16,19-26,29-62
+packages/db/drizzle/20261016032529_succession_consent/snapshot.json
+  s_566b8e0c4467a4::t_79daa01f8d4ddd 2-3,7-37,40-67
+packages/db/drizzle/20260913210340_report_thumbnails_requests/snapshot.json
+  s_566b8e0c4467a4::t_8a10b132901d83 2-3,7,9-167,170-480
+packages/db/drizzle/20261016032459_workspace_owners/snapshot.json
+  s_566b8e0c4467a4::t_3a26d48a37cd9e 2-3,7,9-16,19-133,136-275
+packages/db/drizzle/20261019161551_personal_plan_endings/snapshot.json
+  s_566b8e0c4467a4::t_ad285bac879a9b 2-3,7-112,115-740
+packages/db/drizzle/20260911025137_billing/snapshot.json
+  s_566b8e0c4467a4::t_3d5c6de9ea7c0c 2-3,7-17,19-31,33-44,46-57,59,62-67,69,72-77,79-83,85-98,100-117,119-136,138-155,157-165,168-845
+packages/db/drizzle/20260912144703_billing_currency/snapshot.json
+  s_566b8e0c4467a4::t_5dc6d9bc7f761e 2-3,7,9-14,16,19-24,26,29-62
+packages/db/drizzle/20260913201923_reports/snapshot.json
+  s_566b8e0c4467a4::t_dbd7ac47319eb9 2-3,7-58,61-68,71-78,81-247,250-1550
+packages/db/drizzle/20260907182127_spooky_alex_power/snapshot.json
+  s_566b8e0c4467a4::t_a276cd4d2b9ac0 2-3,7-17,19,22-28,30-38,41-274
+packages/db/drizzle/20260909171407_old_cardiac/snapshot.json
+  s_566b8e0c4467a4::t_b086fa2b61a580 2-3,7-17,19,22-28,30-43,45-62,64-72,75-332
+packages/db/drizzle/20261026151404_reconcile_order/snapshot.json
+  s_566b8e0c4467a4::t_c27d3336a205d7 2-3,7,9-17,20-27,30-37,40-47,50-57,60-139
+packages/db/drizzle/20261012173635_content_suite_3/snapshot.json
+  s_566b8e0c4467a4::t_cbd199487c73ae 2-3,7-28,31-39
+packages/db/drizzle/20260907172825_slow_lifeguard/snapshot.json
+  s_566b8e0c4467a4::t_f0c85ca738bc67 2-3,7-19,21-32,34-45,47-58,60-71,73-85,87-101,104-192,195-203,206-279,282-1607
+packages/db/drizzle/20261020151204_group_billing_no_group_fk/snapshot.json
+  s_566b8e0c4467a4::t_d6f7ee69e8aa3c 2-3,7-39,41-42,45-46,48
+packages/db/drizzle/20261013010217_report_release/snapshot.json
+  s_566b8e0c4467a4::t_042bfe2b659b60 2-3,7-163,165-172,175-182,185-189,192-196,199-203,206-210,213-217,220-224,226
+packages/db/drizzle/20261018020252_group_plan_tiers/snapshot.json
+  s_566b8e0c4467a4::t_880069198affbb 2-3,7,9-21,24-36,39-51,54-66,69-81,84-96,99-106,109-121,124-136,139-151,154-166,169-181,184-196,199-211,214-439
+packages/db/drizzle/20260913180206_drive_links/snapshot.json
+  s_566b8e0c4467a4::t_630c85f5c97a26 2-3,7-18,20,23-29,31-93,96-442
+packages/db/drizzle/20261018235021_invitation_email_index/snapshot.json
+  s_566b8e0c4467a4::t_fe0559c9336aee 2-3,7-26,29-54
+packages/db/drizzle/20261016013230_devices/snapshot.json
+  s_566b8e0c4467a4::t_e4e55f99690f7e 2-3,7-205,208-725
+packages/db/drizzle/20261012133230_admin_storage/snapshot.json
+  s_566b8e0c4467a4::t_2a53702ceba460 2-3,7-62,65-121
+packages/db/drizzle/20261011152024_drop_report_content_hash/snapshot.json
+  s_566b8e0c4467a4::t_603cea1e1b3c2c 2-3,7-43,45-46,49-53,55
+packages/db/drizzle/20261012132409_report_release/snapshot.json
+  s_566b8e0c4467a4::t_a640ea069f432c 2-3,7-33,36-63
+packages/db/drizzle/20260905145809_worried_barracuda/snapshot.json
+  s_566b8e0c4467a4::t_a7c10b49e8c7e7 2-3,7-21,24,26-27,30-32,40,43-45,53,58-60,63
+packages/db/drizzle/20261020213416_change_seq_renumber/snapshot.json
+  s_566b8e0c4467a4::t_b8a16797e21d5d 2-3,7-8
+packages/db/drizzle/20261019171449_refund_disputed/snapshot.json
+  s_566b8e0c4467a4::t_590859b919905f 2-3,7-22,25-33
+packages/db/drizzle/20260915234814_hybrid_reports/snapshot.json
+  s_566b8e0c4467a4::t_06af2b4d9aaf6e 2-3,7-18,21-29
+packages/db/drizzle/20261020211129_dissolve_failing/snapshot.json
+  s_566b8e0c4467a4::t_2adf0650030e4c 2-3,7,9-14,16-21,24-41
+packages/db/drizzle/20261017121401_group_billing/snapshot.json
+  s_566b8e0c4467a4::t_35b2ba258df40a 2-3,7-162,165-882
+packages/db/drizzle/20260914182125_thumbnails_in_object/snapshot.json
+  s_566b8e0c4467a4::t_02e17aba1c34c8 2-3,7-22,24-36,39-51,54-241,243-244,247-248,251-252,255-256,259-260,263-264,267-268,271-272,275-276,279-280,283-284,287-291,294-298,301-305,308-312,314
+packages/db/drizzle/20261014231034_pq_identity_not_null/snapshot.json
+  s_566b8e0c4467a4::t_39bd75fb76fe00 2-3,7-61,63-67,70-74,76
+packages/db/drizzle/20261017170455_group_area_deletion/snapshot.json
+  s_566b8e0c4467a4::t_00b2ff49d321d6 2-3,7-60,63-192
+packages/db/drizzle/20261012175419_settings_key/snapshot.json
+  s_566b8e0c4467a4::t_5af9ed19bcb52b 2-3,7-56,59-193
+packages/db/drizzle/20261016081643_group_tables/snapshot.json
+  s_566b8e0c4467a4::t_41ec996593fd9b 2-3,7-17,19-30,32-43,45-57,59-70,72-84,86-97,99-112,114-125,127-138,140-149,151-159,161-165,167-180,182-186,188-200,202-206,208-220,222-226,228-241,243-255,257-261,263-275,277-281,283-295,297-301,303-316,318-331,333-347,349-366,368-385,387-404,406-423,425-442,444-461,463-480,482-499,501-518,520-537,539-556,558-579,581-598,600-621,623-640,642-659,661-678,680-697,699-716,718-735,737-754,756-775,777-789,792-3440
+packages/db/drizzle/20260914161739_growth/snapshot.json
+  s_566b8e0c4467a4::t_d9f5f2bdcfb91f 2-3,7-76,79-351,354-1455
+packages/db/drizzle/20260916055412_tags_registry_resync/snapshot.json
+  s_566b8e0c4467a4::t_f3929f4162f233 2-3,7-43,46-77
+packages/db/drizzle/20261012135331_envelope_versions/snapshot.json
+  s_566b8e0c4467a4::t_1cb48673e4afe1 2-3,7,9-16,19-26,29-36,39-88
+packages/db/drizzle/20260913170034_drive_shares/snapshot.json
+  s_566b8e0c4467a4::t_13725e520d09e6 2-3,7-17,19,22-28,30-44,46-59,61-75,77-94,96-113,115-132,134-142,145-554
+packages/db/drizzle/20261026094157_family_lapsed_revoke_refusal/snapshot.json
+  s_566b8e0c4467a4::t_793cfcaca68e39 2-3,7,9-21,24-36,39-51,54-66,69-134
+packages/db/drizzle/20260909223154_colossal_darkhawk/snapshot.json
+  s_566b8e0c4467a4::t_47b8627f9a07a7 2-3,7-15,17,20-24,26-29,31,34-39,41-45,47-51,54-94
+packages/db/drizzle/20261018222928_one_family/snapshot.json
+  s_566b8e0c4467a4::t_14bf5c657106d2 2-3,7-74,77-146
+packages/db/drizzle/20261016164352_group_creation_digest/snapshot.json
+  s_566b8e0c4467a4::t_89d40f498d8c7f 2-3,7,9-16,19-27,30-57
+packages/db/drizzle/20260913215934_rotations/snapshot.json
+  s_566b8e0c4467a4::t_baeac6652921fb 2-3,7-119,122-351
+packages/db/drizzle/20260915165300_hybrid_shares/snapshot.json
+  s_566b8e0c4467a4::t_ac29047eb310ae 2-3,7-82,85-167
+packages/db/drizzle/20260908005640_supreme_siren/snapshot.json
+  s_566b8e0c4467a4::t_c25de0e38737f4 2-3,7-20,22-34,36-48,50-53,55-59,62-66,69-73,75
+packages/db/drizzle/20260907183015_public_demogoblin/snapshot.json
+  s_566b8e0c4467a4::t_3af6fe1e75caa3 2-3,7-14,16,19-24,26,29-35,37-42,45-88
+packages/db/drizzle/20260916014134_workspace_documents/snapshot.json
+  s_566b8e0c4467a4::t_535e93f38d8bda 2-3,7-38,41-188
+packages/db/drizzle/20260907182012_slim_beyonder/snapshot.json
+  s_566b8e0c4467a4::t_30fab2c2b9f9b0 2-3,7-73,76-83,86-91,93-97,99-111,113-117,119-131,133-137,139-152,154-171,173-190,192-291,294-1223
+packages/db/drizzle/20260913193257_link_secret/snapshot.json
+  s_566b8e0c4467a4::t_2a192effc7e04c 2-3,7-37,40-64
+packages/db/drizzle/20260913220954_share_events/snapshot.json
+  s_566b8e0c4467a4::t_f0d024546f1e84 2-3,7-38,41-152
+packages/db/drizzle/20261012174046_writer_signatures/snapshot.json
+  s_566b8e0c4467a4::t_e1a3f8d2a71a95 2-3,7,9-16,19-26,29-36,39-46,49-56,58-204,207-446
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e4e017b792d36a2c9ebfe219f7cb48629bb6d68f",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
