@@ -132,6 +132,8 @@ function harness(
         /* Held until it resolves: the attach, and the encrypt of a chunk index, still on their way. */
         attachHold?: () => Promise<void>;
         encryptHold?: (index: number) => Promise<void> | undefined;
+        /* The worker's cancel of an upload, held until it resolves (a worker that hangs). */
+        cancelHold?: () => Promise<void>;
     } = {},
 ) {
     const journal = options.journal ?? createMemoryJournal();
@@ -269,6 +271,7 @@ function harness(
                 }
             }
             case 'driveUploadCancel': {
+                await options.cancelHold?.();
                 const set = flying.get((input as CryptoRequests['driveUploadCancel']).objectId);
                 const count = set?.size ?? 0;
                 for (const finish of Array.from(set ?? []))
@@ -1867,6 +1870,134 @@ describe('queued rows and stashed copies', () => {
         // The server is told, so the reservations do not linger until they expire.
         expect(h.server.aborted.length).toBeGreaterThan(0);
         expect(h.server.completed).toHaveLength(0);
+    });
+
+    /* Records every journal write from now on. */
+    function journalWrites(journal: Journal) {
+        const writes: string[] = [];
+        for (const method of ['put', 'update', 'remove', 'putQueued', 'removeQueued'] as const) {
+            const original = journal[method].bind(journal) as (...args: never[]) => Promise<void>;
+            (journal[method] as unknown) = async (...args: never[]) => {
+                writes.push(method);
+                return original(...args);
+            };
+        }
+        return writes;
+    }
+
+    test('after another tab signed out, a part that lands later writes nothing to the journal', async () => {
+        let land!: () => void;
+        const landing = new Promise<void>((resolve) => {
+            land = resolve;
+        });
+        const h = harness({
+            send: async (_objectId, index) => {
+                await landing;
+                return { ok: true, etag: `etag-${index}`, bytes: CHUNK + 16 };
+            },
+        });
+        h.manager.enqueue([
+            { file: fakeFile(2 * CHUNK, 'payroll.xlsx'), parent: node('root', null) },
+        ]);
+        await settle(200);
+        expect(h.journal.entries.size).toBe(1);
+        // That tab deletes the journal; this one hears of it and must not write it back.
+        const writes = journalWrites(h.journal);
+        h.manager.invalidate();
+        land();
+        await settle(1_000);
+        expect(writes).toEqual([]);
+        expect(h.manager.getState().uploads).toHaveLength(0);
+        // Signed in again, the journal is used as before.
+        h.manager.enqueue([{ file: fakeFile(CHUNK, 'later.txt'), parent: node('root', null) }]);
+        await settle(1_000);
+        expect(writes).toContain('put');
+    });
+
+    test('after another tab signed out, an upload whose begin answers later sends nothing and is released', async () => {
+        const h = harness();
+        const begin = h.api.beginUpload;
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        h.api.beginUpload = async (ws, input) => {
+            await held;
+            return begin(ws, input);
+        };
+        h.manager.enqueue([
+            { file: fakeFile(2 * CHUNK, 'contract.pdf'), parent: node('root', null) },
+        ]);
+        await settle(100);
+        const sendsBefore = h.calls.filter((c) => c === 'driveUploadSend').length;
+        h.manager.invalidate();
+        release();
+        await settle(1_000);
+        expect(h.calls.filter((c) => c === 'driveUploadSend').length).toBe(sendsBefore);
+        expect(h.server.aborted).toEqual(['up-1']);
+        expect(h.journal.entries.size).toBe(0);
+    });
+
+    test('when another tab signs out, uploads here release their reservations and write nothing', async () => {
+        const h = harness({
+            // Parts never land: the uploads are begun and stay so.
+            send: () => new Promise(() => {}),
+        });
+        const [sending, paused] = h.manager.enqueue([
+            { file: fakeFile(2 * CHUNK, 'payroll.xlsx'), parent: node('root', null) },
+            { file: fakeFile(2 * CHUNK, 'contract.pdf'), parent: node('root', null) },
+        ]);
+        await settle(200);
+        await h.manager.pause(paused!);
+        expect(h.item(sending!).status).toBe('uploading');
+        expect(h.item(paused!).status).toBe('paused');
+        const writes = journalWrites(h.journal);
+        await h.manager.releaseAll();
+        // Both reservations go back to the server now, not when they expire a day later.
+        expect([...h.server.aborted].sort()).toEqual(['up-1', 'up-2']);
+        expect(writes).toEqual([]);
+        expect(h.manager.getState().uploads).toHaveLength(0);
+    });
+
+    test('a release waits for a begin still on its way, and aborts what it reserved before it says released', async () => {
+        const h = harness();
+        const begin = h.api.beginUpload;
+        let answer!: () => void;
+        const held = new Promise<void>((resolve) => {
+            answer = resolve;
+        });
+        h.api.beginUpload = async (ws, input) => {
+            await held;
+            return begin(ws, input);
+        };
+        h.manager.enqueue([
+            { file: fakeFile(2 * CHUNK, 'contract.pdf'), parent: node('root', null) },
+        ]);
+        await settle(100);
+        let released = false;
+        const releasing = h.manager.releaseAll().then(() => (released = true));
+        await settle(50);
+        expect(released).toBe(false);
+        // The server answers the begin while the other tab still waits on this one.
+        answer();
+        await releasing;
+        // Aborted before the release was reported, so before that tab ends the session (the
+        // upload's own late begin aborts it once more, harmlessly).
+        expect(h.server.aborted).toContain('up-1');
+    });
+
+    test('a worker that hangs does not hold up releasing the server’s reservations', async () => {
+        const h = harness({
+            send: () => new Promise(() => {}),
+            cancelHold: () => new Promise(() => {}),
+        });
+        h.manager.enqueue([
+            { file: fakeFile(2 * CHUNK, 'payroll.xlsx'), parent: node('root', null) },
+        ]);
+        await settle(200);
+        void h.manager.releaseAll();
+        await settle(50);
+        expect(h.server.aborted).toEqual(['up-1']);
     });
 
     test('a copy without bytes on this device is reported lost, its reservation released, no file picker offered', async () => {

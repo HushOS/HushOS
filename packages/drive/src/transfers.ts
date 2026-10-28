@@ -163,10 +163,27 @@ export type UploadStash = {
     sweep?(keep: Set<string>): Promise<void>;
 };
 
+/*
+ * Which session of the account uploads are for (the app's device session): `open` is false
+ * from a sign-out until the next sign-in, and `generation` moves on at every sign-out, so work
+ * that began before one (a copy still reading its bytes) can be told apart from work after.
+ */
+export type UploadSession = { open(): boolean; generation(): number };
+
+/* An enqueue refused because the person signed out of this browser after it began. */
+export class SignedOutError extends Error {
+    constructor() {
+        super('You signed out of this browser, so this wasn’t added.');
+        this.name = 'SignedOutError';
+    }
+}
+
 export type TransferManagerOptions = {
     rpc: Rpc;
     api: DriveApi;
     journal?: UploadJournal;
+    /* Without one, every enqueue is taken (tests, and pages with no account). */
+    session?: UploadSession;
     stash?: UploadStash;
     /*
      * Opens the keys a restored upload needs, parents first, and returns the parent
@@ -458,6 +475,8 @@ export function createTransferManager(options: TransferManagerOptions) {
     } = options;
     const uploads = new Map<string, Internal>();
     const order: string[] = [];
+    /* Begins on their way to the server: the upload id each will answer, or null if it fails. */
+    const beginning = new Map<Internal, { workspaceId: string; answer: Promise<string | null> }>();
     const listeners = new Set<() => void>();
     /*
      * Key epochs come from the server in ranges, one range per workspace per
@@ -1100,8 +1119,10 @@ export function createTransferManager(options: TransferManagerOptions) {
             // Padded: the object has the chunks of its bucket, which may be more than the file needs.
             set(u, { total: prepared.ciphertextSize, chunkCount: prepared.chunkCount });
             let begun: Awaited<ReturnType<DriveApi['beginUpload']>>;
+            // Known while on its way, so a release can wait for the reservation it makes.
+            let answer: Promise<string | null> | undefined;
             try {
-                begun = await api.beginUpload(workspaceId, {
+                const request = api.beginUpload(workspaceId, {
                     node,
                     versionId: u.versionId,
                     versionIdSeed: seeds.version,
@@ -1117,6 +1138,12 @@ export function createTransferManager(options: TransferManagerOptions) {
                     // transaction (UploadMove).
                     ...(u.item.move && { moveOf: u.item.move.of }),
                 });
+                answer = request.then(
+                    (result) => result.upload.id,
+                    () => null,
+                );
+                beginning.set(u, { workspaceId, answer });
+                begun = await request;
             } catch (error) {
                 // Without a way to look the folder up again there is nothing to seal afresh from.
                 if (!options.openNodes || !u.queued) throw error;
@@ -1128,6 +1155,8 @@ export function createTransferManager(options: TransferManagerOptions) {
                 if (!(await keyChangeRefused(u, generation, error as DriveApiError, parent)))
                     return;
                 continue;
+            } finally {
+                if (answer && beginning.get(u)?.answer === answer) beginning.delete(u);
             }
             sealed = { nodeEnvelopes, prepared, begun };
         }
@@ -1567,7 +1596,18 @@ export function createTransferManager(options: TransferManagerOptions) {
         };
     }
 
-    function enqueue(inputs: EnqueueInput[]) {
+    /*
+     * Queues `inputs`. `from` is the session generation the caller took when its work began
+     * (a copy reading its bytes, a move): if the person signed out since, or is signed out
+     * now, nothing is queued, so nothing is journaled after sign-out deleted the journal.
+     */
+    function enqueue(inputs: EnqueueInput[], from?: { generation: number }) {
+        const session = options.session;
+        if (
+            session &&
+            (!session.open() || (from !== undefined && from.generation !== session.generation()))
+        )
+            throw new SignedOutError();
         const ids: string[] = [];
         for (const input of inputs) {
             const id = crypto.randomUUID();
@@ -2199,9 +2239,60 @@ export function createTransferManager(options: TransferManagerOptions) {
         }
     }
 
+    /*
+     * Another tab signed out: every upload here is dropped without touching the journal (that
+     * tab deletes it). Each upload's generation moves on, and every step that writes the
+     * journal checks its own first, so an answer that lands later (a begin, a part, a
+     * completion) writes nothing back: a begun upload is aborted instead.
+     */
+    function invalidate() {
+        for (const u of uploads.values()) {
+            u.generation++;
+            clearBackoff(u);
+            u.inFlight.clear();
+        }
+        uploads.clear();
+        order.length = 0;
+        emit();
+    }
+
+    /*
+     * Another tab is signing out and waits on this one: every upload here stops at once, as
+     * invalidate does, and then what each had reserved is released while the session still
+     * answers. The server's reservations (which would otherwise hold quota until they expire)
+     * are aborted at once, those of begins still on their way as soon as they answer, apart
+     * from the worker's state for each, which is dropped beside them: a worker that hangs
+     * never holds up the network. Never longer than FORGET_TIMEOUT_MS, and nothing is written
+     * to the journal, which that tab deletes.
+     */
+    async function releaseAll() {
+        const held = [...uploads.values()];
+        const begins = [...beginning.values()];
+        invalidate();
+        const abort = (workspaceId: string, uploadId: string) =>
+            api.abortUpload(workspaceId, uploadId).catch(() => {});
+        await Promise.race([
+            Promise.allSettled([
+                ...held.flatMap((u) => (u.uploadId ? [abort(workspaceOf(u), u.uploadId)] : [])),
+                ...begins.map(({ workspaceId, answer }) =>
+                    answer.then((uploadId) =>
+                        uploadId ? abort(workspaceId, uploadId) : undefined,
+                    ),
+                ),
+                ...held.map(async (u) => {
+                    await rpc('driveUploadCancel', { objectId: u.objectId }).catch(() => {});
+                    await rpc('driveUploadForget', { objectId: u.objectId }).catch(() => {});
+                }),
+            ]),
+            new Promise((resolve) => setTimeout(resolve, FORGET_TIMEOUT_MS)),
+        ]);
+    }
+
     return {
         enqueue,
         forgetAll,
+        invalidate,
+        releaseAll,
         pause,
         resume,
         retry,

@@ -8,6 +8,8 @@ import {
 import type { QueryClient } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
 import { authClient } from '@/lib/auth-client';
+import { onSignedOutElsewhere } from '@/lib/device-data';
+import { deviceSession } from '@/lib/device-session';
 import { renderThumbnail } from '@/lib/thumbnails';
 import {
     clientFor,
@@ -113,6 +115,8 @@ export const transfers = createTransferManager({
     rpc: authClient.rpc,
     api: driveApi,
     journal: typeof indexedDB === 'undefined' ? undefined : createIndexedDbJournal(),
+    // Nothing is queued from a sign-out until the next sign-in, nor by work begun before one.
+    session: deviceSession,
     stash: stashAvailable() ? uploadStash : undefined,
     openNodes,
     // A family folder that may not be written fails the upload at prepare; one a key change has
@@ -135,6 +139,10 @@ export const transfers = createTransferManager({
         for (const listener of listeners) listener(event);
     },
 });
+
+// Another tab is signing out: uploads here stop, writing nothing to the journal it deletes, and
+// release what they reserved on the server before that tab ends the session.
+onSignedOutElsewhere(() => transfers.releaseAll());
 
 /*
  * A move's copy is in place (lib/move-across.ts): the server deleted the source

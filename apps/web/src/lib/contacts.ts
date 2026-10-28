@@ -50,6 +50,7 @@ import { openOwnIdentity, type OwnIdentity } from '@/lib/own-identity';
 import {
     identitySeen,
     identityVersionSeen,
+    migrateMarks,
     rememberIdentitySeen,
     rememberSettingsDocumentSeen,
     rememberSettingsSeen,
@@ -135,9 +136,9 @@ export function openIdentity(userId: string, refresh = false) {
                         (await authClient.rpc('identityUpgrade', { userId, identity })).identity,
                     store: async (identity) =>
                         (await authClient.upgradeIdentity(identity)).identity,
-                    seen: () => ({
-                        keyVersion: identitySeen(userId),
-                        identityVersion: identityVersionSeen(userId),
+                    seen: async () => ({
+                        keyVersion: await identitySeen(userId),
+                        identityVersion: await identityVersionSeen(userId),
                     }),
                     remember: (keyVersion, identityVersion) =>
                         rememberIdentitySeen(userId, keyVersion, identityVersion),
@@ -157,6 +158,12 @@ export function openIdentity(userId: string, refresh = false) {
 onStaleIdentity(() => {
     const userId = authClient.store.getState().unlockedUserId;
     if (userId) void openIdentity(userId, true).catch(() => {});
+});
+
+// At each unlock: rollback marks an earlier version kept in the clear are sealed, and deleted.
+authClient.store.subscribe((state, previous) => {
+    if (state.unlockedUserId && state.unlockedUserId !== previous.unlockedUserId)
+        void migrateMarks(state.unlockedUserId);
 });
 
 /*
@@ -248,15 +255,18 @@ function settingsKeyReady(userId: string, served: SettingsKeyEnvelope | null, cr
     const promise = (async () => {
         if (served) {
             await authClient.rpc('settingsKeyOpen', { userId, settingsKey: served });
+            keyEnvelope = { userId, envelope: served };
             return;
         }
         const { settingsKey } = await authClient.rpc('settingsKeyCreate', { userId });
         try {
             await authClient.saveSettingsKey(settingsKey);
+            keyEnvelope = { userId, envelope: settingsKey };
         } catch (error) {
             const stored = (await authClient.settings()).settingsKey;
             if (!stored) throw error;
             await authClient.rpc('settingsKeyOpen', { userId, settingsKey: stored });
+            keyEnvelope = { userId, envelope: stored };
         }
     })().catch((error: unknown) => {
         settingsKeyOpened = undefined;
@@ -264,6 +274,52 @@ function settingsKeyReady(userId: string, served: SettingsKeyEnvelope | null, cr
     });
     settingsKeyOpened = { userId, promise };
     return promise;
+}
+
+/* The settings key envelope the worker opened this unlock, which the rollback marks keep. */
+let keyEnvelope: { userId: string; envelope: SettingsKeyEnvelope } | undefined;
+
+/*
+ * The settings key in the worker for the rollback marks (lib/rollback-marks.ts), which are
+ * sealed under it; answers the envelope it was opened from, for the marks to keep beside them.
+ * The server's envelope first. When the server does not answer, or serves none, the one `kept`
+ * beside the marks opens the same key, so marks read while the settings cannot be fetched (a
+ * server error, or one withheld) and a replayed account key still finds its key on the server.
+ * `create` only when no marks are kept here yet: an account with no settings key at all gets
+ * one then. Otherwise none is made, and marks that are there stay unopened, and refused.
+ */
+export async function marksKeyReady(
+    userId: string,
+    create: boolean,
+    kept: SettingsKeyEnvelope | null,
+): Promise<SettingsKeyEnvelope | null> {
+    requireUnlocked(userId);
+    if (settingsKeyOpened?.userId === userId) {
+        await settingsKeyOpened.promise;
+        return keyEnvelope?.userId === userId ? keyEnvelope.envelope : null;
+    }
+    // Opened from the kept envelope, the key stays the worker's for this unlock: a later
+    // answer from the server never swaps in another one under the marks without proof that
+    // the marks open under it (lib/rollback-marks.ts refuses rather than seal them over).
+    const fromKept = async () => {
+        if (kept === null) return false;
+        const { opened } = await authClient.rpc('rollbackMarksKey', { userId, settingsKey: kept });
+        if (!opened) return false;
+        keyEnvelope = { userId, envelope: kept };
+        settingsKeyOpened = { userId, promise: Promise.resolve() };
+        return true;
+    };
+    let served: SettingsKeyEnvelope | null;
+    try {
+        served = (await authClient.settings()).settingsKey;
+    } catch (error) {
+        if (await fromKept()) return kept;
+        throw error;
+    }
+    requireUnlocked(userId);
+    if (!served && (await fromKept())) return kept;
+    await settingsKeyReady(userId, served, create);
+    return keyEnvelope?.userId === userId ? keyEnvelope.envelope : null;
 }
 
 /* Background reads stop at a lock rather than ask a locked worker, which would lock it again. */
@@ -283,12 +339,12 @@ async function readSettings(userId: string, create: boolean): Promise<LoadedSett
     // The stored sequence, whatever is stored: a device that has seen a later one refuses it,
     // document or none. A document served at another sequence than the server says is stored
     // is refused too.
-    const seen = settingsSeen(userId);
+    const seen = await settingsSeen(userId);
     if (settingsRolledBack(settingsVersion, seen)) throw new Error(ROLLED_BACK);
     if (served && served.settingsVersion !== settingsVersion) throw new Error(ROLLED_BACK);
     // Once this device has opened a version 2 document, none (or version 1) is an older copy,
     // whatever sequence it comes at: it would drop the pins it held, family marks among them.
-    const documentSeen = settingsDocumentSeen(userId);
+    const documentSeen = await settingsDocumentSeen(userId);
     const servedVersion = served ? (served.version as number) : null;
     if (
         settingsDocumentRolledBack(
@@ -299,7 +355,7 @@ async function readSettings(userId: string, create: boolean): Promise<LoadedSett
         throw new Error(ROLLED_BACK);
     // A version 1 document opens nowhere: it reads as none, under the same rules.
     const envelope = servedVersion === 2 ? served : null;
-    rememberSettingsSeen(userId, settingsVersion);
+    await rememberSettingsSeen(userId, settingsVersion);
     // None stored (sequence 0), or a version 1 document the server serves as none at its
     // sequence: empty settings, and the next save names that sequence and is sealed at the
     // one after, which replaces a version 1 row.
@@ -315,7 +371,7 @@ async function readSettings(userId: string, create: boolean): Promise<LoadedSett
     }
     const { settings } = await authClient.rpc('settingsOpen', { userId, envelope });
     if (!settings) return { settings: EMPTY, version: settingsVersion, unopened: true };
-    rememberSettingsDocumentSeen(userId);
+    await rememberSettingsDocumentSeen(userId);
     return { settings: settings as LoadedSettings['settings'], version: settingsVersion };
 }
 
@@ -413,8 +469,8 @@ export async function compareAndSetSettings(
             nonce: envelope.nonce,
             ciphertext: envelope.ciphertext,
         });
-        rememberSettingsSeen(userId, saved.settingsVersion);
-        rememberSettingsDocumentSeen(userId);
+        await rememberSettingsSeen(userId, saved.settingsVersion);
+        await rememberSettingsDocumentSeen(userId);
         boundQueryClient?.setQueryData(contactKeys.settings(userId), {
             settings,
             version: saved.settingsVersion,
@@ -456,8 +512,8 @@ export async function saveSettings(
                 nonce: envelope.nonce,
                 ciphertext: envelope.ciphertext,
             });
-            rememberSettingsSeen(userId, saved.settingsVersion);
-            rememberSettingsDocumentSeen(userId);
+            await rememberSettingsSeen(userId, saved.settingsVersion);
+            await rememberSettingsDocumentSeen(userId);
             queryClient?.setQueryData(contactKeys.settings(userId), {
                 settings: next,
                 version: saved.settingsVersion,

@@ -512,13 +512,13 @@ export function deleteContactGuard(name = CONTACT_GUARD_DATABASE) {
  */
 const local = new Map<string, Promise<unknown>>();
 export function withGuardLock<T>(userId: string, work: () => Promise<T>): Promise<T> {
-    const name = `hushos-contact-guard:${userId}`;
+    const lock = `hushos-contact-guard:${userId}`;
     if (typeof navigator !== 'undefined' && navigator.locks)
-        return navigator.locks.request(name, { mode: 'exclusive' }, work) as Promise<T>;
-    const previous = local.get(name) ?? Promise.resolve();
+        return navigator.locks.request(lock, { mode: 'exclusive' }, work) as Promise<T>;
+    const previous = local.get(lock) ?? Promise.resolve();
     const next = previous.then(work, work);
     local.set(
-        name,
+        lock,
         next.catch(() => {}),
     );
     return next;

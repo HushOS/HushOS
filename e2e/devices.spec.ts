@@ -131,9 +131,8 @@ test('two browsers on one account list, rename and remove each other', async ({ 
             { timeout: 30_000 },
         )
         .toBe(0);
-    expect(await b.evaluate(() => localStorage.getItem('hushos-device-unlock'))).not.toMatch(
-        /"device":\{/,
-    );
+    // The saved unlock goes with the rest of what the browser kept for the account.
+    expect(await b.evaluate(() => localStorage.getItem('hushos-device-unlock'))).toBeNull();
 
     // B signs in again: a new device, the removed one stays gone, and the notice is sent again.
     await signIn(b, email);

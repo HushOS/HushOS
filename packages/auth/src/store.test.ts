@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from 'vitest';
+import type { RememberedAccount } from '@hushos/crypto';
 import { createAuthStore } from './store';
 
 /*
@@ -52,5 +53,23 @@ describe('the saved unlock', () => {
         expect(saved()).toEqual({ device, lockRevision: 4 });
         store.setState({ device: null });
         expect(saved()).toEqual({ device: null, lockRevision: 4 });
+    });
+
+    test('signing out removes it, and nothing writes it back until a sign-in saves a device', async () => {
+        const { store } = createAuthStore();
+        await store.persist.rehydrate();
+        // What logout does: lock, forget the device, move the revision, then remove the entry.
+        store.setState({ unlockedUserId: null, device: null });
+        store.setState({ lockRevision: 5 });
+        store.persist.clearStorage();
+        expect(items.has(KEY)).toBe(false);
+        // A later lock (the page hidden), a restore step or another tab's sign-out notice.
+        store.setState({ unlockedUserId: null });
+        store.setState({ restoring: true, restoreStep: 'rehydrate' });
+        store.setState({ lockRevision: 6, device: null });
+        expect(items.has(KEY)).toBe(false);
+        // The next sign-in saves its device again.
+        store.setState({ device: device as RememberedAccount });
+        expect(saved()).toEqual({ device, lockRevision: 6 });
     });
 });

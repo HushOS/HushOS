@@ -1,10 +1,12 @@
 import { contentSize, type DriveNode } from '@hushos/drive/client';
 import { copySignatureForms } from '@hushos/drive/trust';
 import type { QueryClient } from '@tanstack/react-query';
+import { authClient } from '@/lib/auth-client';
+import { deviceSession } from '@/lib/device-session';
 import { driveClient, folderQueryOptions, invalidateFolders, nextName } from '@/lib/drive';
 import { openReader, readAll } from '@/lib/previews';
-import type { MemoryFile } from '@hushos/drive/transfers';
-import { stashBytes } from '@/lib/stash';
+import { SignedOutError, type EnqueueInput, type MemoryFile } from '@hushos/drive/transfers';
+import { forgetStashed, stashBytes } from '@/lib/stash';
 import { thumbnailBytes } from '@/lib/thumbnails';
 import { transfers } from '@/lib/transfers';
 
@@ -27,6 +29,45 @@ import { transfers } from '@/lib/transfers';
 
 export const SAVE_COPY_MAX_BYTES = 256 * 1024 * 1024;
 
+/*
+ * What a copy or a move took when it began: the session's generation and the account that
+ * was unlocked. Its bytes are that account's; they are stashed only for it and queued only
+ * while it is still the same session. Someone signing out and another (or the same) person
+ * signing in while the bytes were read leaves nothing behind.
+ */
+export type CopyStart = { generation: number; account: string | null };
+export function copyStart(): CopyStart {
+    return {
+        generation: deviceSession.generation(),
+        account: authClient.store.getState().unlockedUserId,
+    };
+}
+const stillCurrent = (start: CopyStart) =>
+    deviceSession.open() &&
+    deviceSession.generation() === start.generation &&
+    authClient.store.getState().unlockedUserId === start.account;
+
+/*
+ * Stashes a copy's bytes, sealed for the account it began for, and queues it. Checked before
+ * the stash, during it (stash.ts), and after; a stash already written for a copy that is then
+ * refused is deleted. Throws SignedOutError when the session changed.
+ */
+export async function queueCopy(start: CopyStart, bytes: Uint8Array, input: EnqueueInput) {
+    if (!start.account || !stillCurrent(start)) throw new SignedOutError();
+    const account = start.account;
+    const stash = await stashBytes(bytes, { account, current: () => stillCurrent(start) });
+    if (!stillCurrent(start)) {
+        if (stash) await forgetStashed(stash).catch(() => {});
+        throw new SignedOutError();
+    }
+    try {
+        return transfers.enqueue([{ ...input, stash: stash ?? undefined }], start)[0]!;
+    } catch (error) {
+        if (stash) await forgetStashed(stash).catch(() => {});
+        throw error;
+    }
+}
+
 export async function saveCopy(
     queryClient: QueryClient,
     nodes: DriveNode[],
@@ -34,6 +75,8 @@ export async function saveCopy(
     source: 'link' | 'drive',
     onProgress?: (done: number) => void,
 ) {
+    // A sign-out while this reads and seals the bytes means none of it is kept afterwards.
+    const start = copyStart();
     const listing = await queryClient.fetchQuery(folderQueryOptions(destination.id));
     const taken = new Set(listing.children.map((child) => child.name));
     let done = 0;
@@ -63,17 +106,13 @@ export async function saveCopy(
             };
             // Sealed to the stash first: the upload moves the bytes to the worker, after which
             // this page no longer holds them.
-            const stash = await stashBytes(bytes);
-            transfers.enqueue([
-                {
-                    file,
-                    parent: into,
-                    name,
-                    origin: 'copy',
-                    signAs: copySignatureForms(node, source),
-                    stash: stash ?? undefined,
-                },
-            ]);
+            await queueCopy(start, bytes, {
+                file,
+                parent: into,
+                name,
+                origin: 'copy',
+                signAs: copySignatureForms(node, source),
+            });
         } finally {
             await reader.close();
         }

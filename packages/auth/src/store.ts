@@ -32,6 +32,15 @@ function isDevice(value: unknown): value is RememberedAccount {
         /^[A-Za-z0-9_-]{64}$/.test(v.encryptedKey)
     );
 }
+/* Whether a serialised state holds a saved unlock. */
+function savesDevice(value: string) {
+    try {
+        const parsed = JSON.parse(value) as { state?: { device?: unknown } };
+        return Boolean(parsed.state?.device);
+    } catch {
+        return true;
+    }
+}
 export function createAuthStore() {
     let available = true;
     function disablePersistence(name: string) {
@@ -64,6 +73,10 @@ export function createAuthStore() {
         setItem(name, value) {
             if (!available || !loaded) return;
             try {
+                // Signing out removes the entry; nothing writes it back until there is a device to
+                // save. A lock over a saved entry still writes it (no device, the new revision),
+                // which is how other tabs hear of the lock.
+                if (localStorage.getItem(name) === null && !savesDevice(value)) return;
                 localStorage.setItem(name, value);
             } catch {
                 disablePersistence(name);

@@ -9,6 +9,7 @@ import {
     refuseWrite,
     waitsForKeyChange,
 } from '@/lib/drive';
+import { deviceSession } from '@/lib/device-session';
 import type { Dropped } from '@/lib/dropped-files';
 import { transfers } from '@/lib/transfers';
 import type { EnqueueInput } from '@hushos/drive/transfers';
@@ -28,6 +29,8 @@ export async function enqueueDropped(
     knownChildren: DriveNode[],
 ) {
     const { files } = dropped;
+    // A sign-out while folders are made or a collision is asked about queues none of this.
+    const from = { generation: deviceSession.generation() };
     // A family folder that may not be written now takes nothing. One a key change has not reached
     // yet (docs/groups-server.md 8) takes files, which wait in the queue until it has; folders the
     // drop makes there wait here first, since a new folder is wrapped under its parent's key.
@@ -118,7 +121,7 @@ export async function enqueueDropped(
         taken.add(name);
         free.push(name === entry.file.name ? input : { ...input, name });
     }
-    const ids = transfers.enqueue(free);
+    const ids = transfers.enqueue(free, from);
     let standing: CollisionDecision | null = null;
     for (const [index, { input, replaces }] of collisions.entries()) {
         const taken = takenIn(input.parent);
@@ -137,13 +140,13 @@ export async function enqueueDropped(
             // A new version goes under the file's own key: one a key change has not reached
             // waits in the queue too.
             refuseUnlessWaiting(replaces);
-            ids.push(...transfers.enqueue([{ ...input, replaces }]));
+            ids.push(...transfers.enqueue([{ ...input, replaces }], from));
             continue;
         }
         // A standing "keep both" names each later file itself; a chosen name applies once.
         const name = standing === decision ? nextName(input.file.name, taken) : decision.name;
         taken.add(name);
-        ids.push(...transfers.enqueue([{ ...input, name }]));
+        ids.push(...transfers.enqueue([{ ...input, name }], from));
     }
     return ids;
 }

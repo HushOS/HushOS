@@ -18,6 +18,7 @@ import {
     withGuardLock,
 } from './contact-guard';
 import { account } from './groups/worker-testkit';
+import { MARKS_UNREADABLE } from './rollback-marks';
 
 /*
  * Sharing on first use (docs/optional-verification.md 2, 8 "PR 3"), against a
@@ -1151,11 +1152,13 @@ describe('the guard at rest', () => {
         // Looked up under the new key, her row would just be missing: that must not read as none.
         await expect(w.real.entry(ME, MAYA)).rejects.toThrow();
         await expect(w.real.pending(ME, MAYA)).rejects.toThrow();
-        await expect(trustGrantee(ME, MAYA, planted)).rejects.toThrow(GUARD_UNREADABLE);
-        await expect(trustGranter(granter(planted))).rejects.toThrow(GUARD_UNREADABLE);
+        // The rollback marks are sealed under the same settings key, so in the app they refuse
+        // the new key first; the guard's own refusal is what the reads above prove.
+        await expect(trustGrantee(ME, MAYA, planted)).rejects.toThrow(MARKS_UNREADABLE);
+        await expect(trustGranter(granter(planted))).rejects.toThrow(MARKS_UNREADABLE);
         // Someone the guard never held pauses too: nothing is first use over a guard it can't read.
         const sam = await person('a1a1a1a1-0000-4000-8000-000000000003', 'sam@example.com', 'Sam');
-        await expect(trustGranter(granter(sam))).rejects.toThrow(GUARD_UNREADABLE);
+        await expect(trustGranter(granter(sam))).rejects.toThrow(MARKS_UNREADABLE);
         // And nothing is written beside the old rows under the new key.
         await expect(w.real.commit(ME, MAYA, { ...held, revision: 1 }, 0)).rejects.toThrow();
         await expect(

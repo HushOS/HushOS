@@ -1,6 +1,8 @@
 import type { useRouter } from '@tanstack/react-router';
 import { authClient } from '@/lib/auth-client';
 import { holdAuthView } from '@/lib/auth-view';
+import { announceSignOut, forgetBrowserData, within } from '@/lib/device-data';
+import { deviceSession } from '@/lib/device-session';
 import { forgetReturn } from '@/lib/return-to';
 import { forgetSession } from '@/lib/session';
 import { holdSignIn, markSignedOut } from '@/lib/sign-in-gate';
@@ -9,11 +11,10 @@ import { loadPage } from '@/lib/load-page';
 /*
  * What Drive kept on this device between visits, which would otherwise outlive
  * the account here: unfinished uploads are stopped, their journal (file names
- * and chunk digests) emptied and their stashed bytes (sealed copies)
- * deleted; the mirrored tree (ciphertext, but its shape, sizes and times) is
- * dropped; families' sealed records and family folders' mirrors are deleted;
- * the contact guard (sealed, lib/contact-guard.ts) is deleted; and a saved
- * return to a link (its key in the fragment) goes. Drive
+ * and chunk digests) and their stashed bytes (sealed copies) deleted; the
+ * mirrored tree (ciphertext, but its shape, sizes and times) is deleted;
+ * families' sealed records and family folders' mirrors are deleted;
+ * and a saved return to a link (its key in the fragment) goes. Drive
  * loads on demand, so a page that never opened it does not pull it in here.
  */
 export async function forgetDevice() {
@@ -27,41 +28,101 @@ export async function forgetDevice() {
     }
 }
 
+/* How long each part of clearing the device may take before it is given up on. */
+export const CLEAR_PART_MS = 6_000;
+
+/* Clearing the device did not finish: what stayed is named in `cause`, and a later try may get it. */
+export class DeviceNotCleared extends Error {
+    override name = 'DeviceNotCleared';
+    constructor(cause: unknown) {
+        super('Some of what HushOS kept on this browser could not be deleted.', { cause });
+    }
+}
+
 /*
  * The same, failing when any part did not clear: a removed device acknowledges its removal
  * (and lets go of the cookie) only once this resolved, so a blocked store is tried again.
+ * Drive's parts are stopped by their owners first, without opening anything to empty it (a
+ * store opened while its deletion waits on another tab waits too, with no end); then
+ * everything this browser keeps for an account is deleted by name. What that is lives in one
+ * list, lib/device-data.ts: a new store that holds anything of an account is registered
+ * there. Each part gives up after CLEAR_PART_MS, so this always settles, with
+ * DeviceNotCleared when anything stayed.
  */
 export async function clearDevice() {
+    const results: PromiseSettledResult<unknown>[] = [];
+    // Nothing is queued to upload from here until a sign-in (a removed browser's own path here).
+    // If that fails, the rest is still done, and the clear says it did not finish.
+    try {
+        deviceSession.signedOut();
+    } catch (error) {
+        results.push({ status: 'rejected', reason: error });
+    }
+    results.push(...(await Promise.allSettled([clearDrive()])));
+    results.push(
+        ...(await Promise.allSettled([
+            within(forgetBrowserData(), CLEAR_PART_MS, 'Device storage did not clear in time.'),
+        ])),
+    );
+    const failed = results.find((result) => result.status === 'rejected');
+    if (failed) throw new DeviceNotCleared(failed.reason);
+}
+
+async function clearDrive() {
     forgetReturn();
     // Every part is tried whatever another does; the first failure is reported once all settled.
-    const results = await Promise.allSettled([
-        import('@/lib/transfers').then(({ transfers }) => transfers.forgetAll()),
-        // The sealed stash and the key for it, whatever the uploads left.
-        import('@/lib/stash').then(({ forgetStash }) => forgetStash()),
-        import('@/lib/drive').then(({ driveClient }) => driveClient.forgetMirror()),
-        // Families: the sealed chain records, outbox and joins, and every family folder's
-        // mirror (the 1c plan, 1.3). Membership is the social graph; none of it stays.
-        import('@/lib/groups/store').then(({ deleteGroupDevice }) => deleteGroupDevice()),
-        // The contact guard: whom this account shared with and the keys it acted on. After
-        // signing back in, this device trusts the server's copy of the contacts, as a new one does.
-        import('@/lib/contact-guard').then(({ deleteContactGuard }) => deleteContactGuard()),
-    ]);
+    const results = await Promise.allSettled(
+        [
+            // Uploads stop; their journal goes with the databases below, never opened to be emptied.
+            import('@/lib/transfers').then(({ transfers }) => transfers.invalidate()),
+            // The sealed stash and the key for it, whatever the uploads left.
+            import('@/lib/stash').then(({ forgetStash }) => forgetStash()),
+            // Families: the sealed chain records, outbox and joins, and every family folder's
+            // mirror (the 1c plan, 1.3). Membership is the social graph; none of it stays.
+            import('@/lib/groups/store').then(({ deleteGroupDevice }) => deleteGroupDevice()),
+        ].map((part) => within(part, CLEAR_PART_MS, 'Part of this device did not clear in time.')),
+    );
     const failed = results.find((result) => result.status === 'rejected');
     if (failed) throw failed.reason;
 }
 
-/* Signing out of this browser: whatever the device cleanup does, the session and device key go. */
+/* How long signing out lets uploads stop, while the session can still release them. */
+export const STOP_UPLOADS_MS = 5_000;
+
+/*
+ * Signing out of this browser. Other tabs hear of it first, then uploads here and there stop
+ * while the session still answers (the server releases what they reserved), never longer than
+ * STOP_UPLOADS_MS here and RELEASED_WITHIN_MS for the others. The session is revoked before
+ * anything local is deleted: deleting can wait on a database another tab holds, and nothing
+ * on this device may keep the server session alive. Then, whatever the logout did,
+ * everything this browser kept for the account goes.
+ */
 export async function signOut() {
-    // First, while this tab is still unlocked: no family key-change retry may sync now, since a
-    // sync opens the families' store (hushos-groups) that forgetDevice is deleting, and could
-    // hold up its deletion or make it again.
+    // Other tabs stop, and release their uploads, while this one stops its own.
+    const told = announceSignOut();
+    // From here nothing new is queued to upload, nor anything begun before now. A failure here is
+    // said again by the clear below, which tries it once more.
+    try {
+        deviceSession.signedOut();
+    } catch (error) {
+        console.error('Uploads could not be shut here.', error);
+    }
+    // While this tab is still unlocked: no family key-change retry may sync now, since a sync
+    // opens the families' store (hushos-groups) that forgetDevice is deleting, and could hold
+    // up its deletion or make it again.
     await import('@/lib/drive')
         .then(({ stopSpaces }) => stopSpaces())
         .catch((error: unknown) => console.error('Family work could not be stopped here.', error));
+    await within(
+        import('@/lib/transfers').then(({ transfers }) => transfers.forgetAll()),
+        STOP_UPLOADS_MS,
+        'Uploads took too long to stop.',
+    ).catch((error: unknown) => console.error('Uploads were not all stopped here.', error));
+    await told;
     try {
-        await forgetDevice();
-    } finally {
         await authClient.logout();
+    } finally {
+        await forgetDevice();
     }
 }
 

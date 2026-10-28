@@ -156,11 +156,19 @@ Folder and file keys hang off the workspace key, not off your account key. That 
         ],
         [
             'Device key',
-            'A non-exportable Ed25519 key in its own IndexedDB database, which signs this browser back in to its own entry in Your devices. Kept when you lock; cleared when you sign out or the browser is removed',
+            'A non-exportable Ed25519 key in its own IndexedDB database, which signs this browser back in to its own entry in Your devices. Kept when you lock, with your account ID beside it in the clear, since it is read before you unlock; deleted when you sign out or the browser is removed',
         ],
         [
             'Tree mirror',
-            'Your tree as the server holds it, ciphertext only, kept in IndexedDB so search and folder listings run on the device; cleared when you leave the workspace',
+            'Your tree as the server holds it, ciphertext only, kept in IndexedDB so search and folder listings run on the device; cleared when you leave the workspace. Its IDs, sizes and times are as readable as they are to the server',
+        ],
+        [
+            'Rollback marks',
+            'The highest settings and identity versions this browser has seen, so an older copy from the server is refused. Sealed with XChaCha20-Poly1305 under a key derived from your settings key, which a new account key keeps, so a locked browser holds ciphertext; a mark that does not open stops the check rather than count as none',
+        ],
+        [
+            'Signing out',
+            'Deletes everything this browser kept for the account, databases included rather than emptied: the remembered unlock, the device key, the rollback marks, the tree mirror, the upload journal and stash, family records, a saved return to a link, and the email address a sign-up link went to. Only display settings stay: theme, contrast, sounds, list or grid, and sort order',
         ],
     ]}
 />
@@ -262,7 +270,10 @@ An envelope moved to another folder, another version or another workspace fails 
             'Transfer',
             'Browser to object store directly, by signed URLs valid 15 minutes for shared content, an hour otherwise',
         ],
-        ['Resume', 'A journal on your device records each chunk’s digest before it is sent'],
+        [
+            'Resume',
+            'A journal on your device records each chunk’s digest before it is sent. Until the upload finishes it also holds the file’s name and size in the clear, even while locked; signing out deletes it',
+        ],
         [
             'Thumbnails',
             'Rendered on the uploader’s device and sealed into the file’s own encrypted object, under a key derived from the content key; the server cannot tell which files have one',
