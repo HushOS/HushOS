@@ -37,6 +37,7 @@ import {
 import { Preview } from '@/components/drive/preview';
 import { RenameDialog } from '@/components/drive/rename-dialog';
 import { ShareDialog } from '@/components/drive/share-dialog';
+import { isTyping } from '@/components/drive/shortcuts';
 import { Swatch } from '@/components/drive/tag-colour';
 import { TagDialog } from '@/components/drive/tag-dialog';
 import { TagStamps } from '@/components/drive/tag-stamp';
@@ -358,6 +359,7 @@ export function HomeView() {
         'Enter',
         (event) => {
             if (!(event.target instanceof Element)) return;
+            if (isTyping(event.target)) return;
             const control = event.target.closest('a, button');
             const id = control?.matches('[data-row-name], [data-row-thumb]')
                 ? control.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId
@@ -370,7 +372,7 @@ export function HomeView() {
             if (control) return;
             if (selection.length === 1) open(selection[0]!);
         },
-        { enabled, preventDefault: false },
+        { enabled, preventDefault: false, ignoreInputs: false },
     );
     useHotkey('ArrowDown', () => moveFocus(1), { enabled });
     useHotkey('ArrowUp', () => moveFocus(-1), { enabled });
