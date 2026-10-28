@@ -20,7 +20,7 @@ struct GranterTrustTests {
     }
 
     /* The granter as the server serves them on a received share. */
-    func granter(_ keys: ServedContactKeys) -> SharedWithMeView.Granter {
+    func granter(_ keys: HushOSKit.ServedContactKeys) -> SharedWithMeView.Granter {
         var granter = SharedWithMeView.Granter(id: ana, name: "Ana Lima", email: "ana@example.com", encryptionPublicKey: keys.encryptionPublicKey)
         granter.signingPublicKey = keys.signingPublicKey
         granter.keyVersion = keys.keyVersion
@@ -57,7 +57,7 @@ struct GranterTrustTests {
 
     @Test func anMlDsaKeyOtherThanThePinnedOneBesideTheSameClassicalKeysIsAChange() throws {
         let pin = try pinned(ana, identity.keys, name: "Ana Lima")
-        let swapped = ServedContactKeys(keyVersion: 1, encryptionPublicKey: identity.keys.encryptionPublicKey, signingPublicKey: identity.keys.signingPublicKey,
+        let swapped = HushOSKit.ServedContactKeys(keyVersion: 1, encryptionPublicKey: identity.keys.encryptionPublicKey, signingPublicKey: identity.keys.signingPublicKey,
                                         mlDsaPublicKey: other.keys.mlDsaPublicKey, kemPublicKey: identity.keys.kemPublicKey)
         #expect(throws: GranterTrust.changed(name: "Ana Lima")) { try ContactPin.granter(granter(swapped), pins: pins(pin)) }
         // No ML-DSA key at all (the version 1 form served again): a change, not a pass.
@@ -70,7 +70,7 @@ struct GranterTrustTests {
         let pin = try pinned(ana, identity.keys, name: "Ana Lima")
         // Someone else's keys under Ana's name, at a higher version: nothing is followed until the person checks again.
         var newer = servedOf(other.envelope)
-        newer = ServedContactKeys(keyVersion: 2, encryptionPublicKey: newer.encryptionPublicKey, signingPublicKey: newer.signingPublicKey,
+        newer = HushOSKit.ServedContactKeys(keyVersion: 2, encryptionPublicKey: newer.encryptionPublicKey, signingPublicKey: newer.signingPublicKey,
                                   mlDsaPublicKey: newer.mlDsaPublicKey, kemPublicKey: newer.kemPublicKey)
         #expect(throws: GranterTrust.changed(name: "Ana Lima")) { try ContactPin.granter(granter(newer), pins: pins(pin)) }
     }
@@ -92,8 +92,8 @@ struct PinTrustTests {
 
     func pin() throws -> ContactPin { try pinned(ana, identity.keys, name: "Ana") }
 
-    func keys(encryption: String? = nil, signing: String? = nil, mlDsa: String?? = nil, kem: String?? = nil, version: UInt64 = 1) -> ServedContactKeys {
-        ServedContactKeys(keyVersion: version, encryptionPublicKey: encryption ?? identity.keys.encryptionPublicKey,
+    func keys(encryption: String? = nil, signing: String? = nil, mlDsa: String?? = nil, kem: String?? = nil, version: UInt64 = 1) -> HushOSKit.ServedContactKeys {
+        HushOSKit.ServedContactKeys(keyVersion: version, encryptionPublicKey: encryption ?? identity.keys.encryptionPublicKey,
                           signingPublicKey: signing ?? identity.keys.signingPublicKey,
                           mlDsaPublicKey: mlDsa ?? identity.keys.mlDsaPublicKey, kemPublicKey: kem ?? identity.keys.kemPublicKey)
     }
@@ -170,7 +170,7 @@ struct PinTrustTests {
         #expect(!keysHold(userId: "someone-else", keys, identityVersion: 2, keysSignature: envelope.keysSignature))
         // Another identity's statement beside these keys, or another ML-KEM key beside this statement.
         #expect(!keysHold(userId: ana, keys, identityVersion: 2, keysSignature: other.envelope.keysSignature))
-        let swappedKem = ServedContactKeys(keyVersion: keys.keyVersion, encryptionPublicKey: keys.encryptionPublicKey, signingPublicKey: keys.signingPublicKey,
+        let swappedKem = HushOSKit.ServedContactKeys(keyVersion: keys.keyVersion, encryptionPublicKey: keys.encryptionPublicKey, signingPublicKey: keys.signingPublicKey,
                                            mlDsaPublicKey: keys.mlDsaPublicKey, kemPublicKey: other.keys.kemPublicKey)
         #expect(!keysHold(userId: ana, swappedKem, identityVersion: 2, keysSignature: envelope.keysSignature))
         // A version 1 identity is never upgraded in the server's word alone.
