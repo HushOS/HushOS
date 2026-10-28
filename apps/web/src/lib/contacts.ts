@@ -272,9 +272,17 @@ export async function marksKeyReady(
         await settingsKeyOpened.promise;
         return keyEnvelope?.userId === userId ? keyEnvelope.envelope : null;
     }
-    const fromKept = async () =>
-        kept !== null &&
-        (await authClient.rpc('rollbackMarksKey', { userId, settingsKey: kept })).opened;
+    // Opened from the kept envelope, the key stays the worker's for this unlock: a later
+    // answer from the server never swaps in another one under the marks without proof that
+    // the marks open under it (lib/rollback-marks.ts refuses rather than seal them over).
+    const fromKept = async () => {
+        if (kept === null) return false;
+        const { opened } = await authClient.rpc('rollbackMarksKey', { userId, settingsKey: kept });
+        if (!opened) return false;
+        keyEnvelope = { userId, envelope: kept };
+        settingsKeyOpened = { userId, promise: Promise.resolve() };
+        return true;
+    };
     let served: SettingsKeyEnvelope | null;
     try {
         served = (await authClient.settings()).settingsKey;

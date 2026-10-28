@@ -173,6 +173,36 @@ describe('rollbackMarksSeal and rollbackMarksOpen', () => {
         );
     });
 
+    test('one update opens and seals under the one key held: a record under another is refused, not sealed over', async () => {
+        const root = key32();
+        const mine = await session(root, (await createSettingsKey(root, MAYA)).envelope);
+        const envelope = await sealIn(mine.call);
+        // Nothing rises: the same record back, not sealed again.
+        expect(
+            await mine.call('rollbackMarksUpdate', {
+                userId: MAYA,
+                envelope,
+                marks: { settings: 3 },
+            }),
+        ).toEqual({ refused: false, marks, envelope, changed: false });
+        const raised = (await mine.call('rollbackMarksUpdate', {
+            userId: MAYA,
+            envelope,
+            marks: { settings: 50 },
+        })) as { envelope: string; marks: { settings: number }; changed: boolean };
+        expect(raised.changed).toBe(true);
+        expect(raised.marks.settings).toBe(50);
+        // A worker holding another settings key of the account's refuses, and returns nothing to store.
+        const other = await session(root, (await createSettingsKey(root, MAYA)).envelope);
+        expect(
+            await other.call('rollbackMarksUpdate', {
+                userId: MAYA,
+                envelope: raised.envelope,
+                marks: { settings: 60 },
+            }),
+        ).toEqual({ refused: true });
+    });
+
     test('is refused without the settings key open, for another account, and once locked', async () => {
         const root = key32();
         const wrapped = (await createSettingsKey(root, MAYA)).envelope;

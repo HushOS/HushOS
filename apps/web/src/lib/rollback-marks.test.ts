@@ -3,7 +3,7 @@ import {
     openRollbackMarks,
     RollbackMarksError,
     rollbackMarksSlot,
-    sealRollbackMarks,
+    updateRollbackMarks,
 } from '@hushos/crypto/rollback-marks';
 import { beforeEach, describe, expect, test } from 'vitest';
 import {
@@ -59,10 +59,43 @@ function server() {
     const withheld = new Set<string>();
     let down = false;
     let created = 0;
+    /* Answers given in turn before the usual one: an envelope, or 'down'. */
+    const script: (Envelope | 'down')[] = [];
     return {
         served(userId: string) {
-            if (down) throw new Error('Something went wrong.');
+            const next = script.shift();
+            if (next === 'down' || (next === undefined && down))
+                throw new Error('Something went wrong.');
+            if (next) return next;
             return withheld.has(userId) ? null : (keys.get(userId)?.envelope ?? null);
+        },
+        script,
+        /* The key an envelope wraps, as a worker would open it. */
+        keyOf: (envelope: Envelope) => wraps.get(envelope.ciphertext)?.key ?? null,
+        /*
+         * A master-key rotation: the same key, wrapped afresh under the new account key; the
+         * old envelope no longer opens under the account key in use.
+         */
+        rotate(userId: string) {
+            const held = keys.get(userId)!;
+            wraps.delete(held.envelope.ciphertext);
+            const envelope = {
+                nonce: `r${++created}`,
+                ciphertext: crypto.randomUUID().replaceAll('-', ''),
+            };
+            keys.set(userId, { key: held.key, envelope });
+            wraps.set(envelope.ciphertext, { userId, key: held.key });
+            return envelope;
+        },
+        /* Another settings key for the account, as two devices that raced to make one leave. */
+        another(userId: string) {
+            const key = key32();
+            const envelope = {
+                nonce: `a${++created}`,
+                ciphertext: crypto.randomUUID().replaceAll('-', ''),
+            };
+            wraps.set(envelope.ciphertext, { userId, key });
+            return envelope;
         },
         unwrap: (userId: string, envelope: Envelope) => {
             const found = wraps.get(envelope.ciphertext);
@@ -136,17 +169,14 @@ function browser(keys = server(), exclusive?: <T>(work: () => Promise<T>) => Pro
     const marks = createRollbackMarks({
         sealer: {
             ready,
-            async seal(userId, value) {
-                onSeal?.();
-                return sealRollbackMarks(keyOf(userId), userId, value);
-            },
-            async open(userId, envelope) {
-                return openRollbackMarks(keyOf(userId), userId, envelope).catch(
-                    (error: unknown) => {
-                        if (error instanceof RollbackMarksError) return null;
-                        throw error;
-                    },
-                );
+            // As the worker's rollbackMarksUpdate: one step under the one key it holds.
+            async update(userId, envelope, to) {
+                const key = keyOf(userId);
+                if (Object.keys(to).length) onSeal?.();
+                return updateRollbackMarks(key, userId, envelope, to).catch((error: unknown) => {
+                    if (error instanceof RollbackMarksError) return null;
+                    throw error;
+                });
             },
         },
         storage: () => storage,
@@ -451,6 +481,30 @@ describe('rollback marks', () => {
         // Never deleted while it moves, and what was last written counts.
         expect(local.getItem(`hushos.identity-seen:${MAYA}`)).not.toBeNull();
         expect(read.identity).toBe(Number(local.getItem(`hushos.identity-seen:${MAYA}`)));
+    });
+
+    test('a raise never seals the marks over under a settings key they did not open under', async () => {
+        const keys = server();
+        const b = browser(keys);
+        b.unlock(MAYA);
+        await b.raise(MAYA, { settings: 4 });
+        const slot = await slotKey(MAYA);
+        const kept = (JSON.parse(local.getItem(slot)!) as { key: Envelope }).key;
+        const k1 = keys.keyOf(kept)!;
+        // A fresh unlock: the server does not answer at first (the kept envelope opens the key
+        // the marks are under), then answers with another settings key of the account's.
+        const other = keys.another(MAYA);
+        keys.script.push('down', other, other, other);
+        const tab = browser(keys);
+        tab.unlock(MAYA);
+        await tab.raise(MAYA, { settings: 9 }).catch(() => {});
+        const record = JSON.parse(local.getItem(slot)!) as { marks: string; key: Envelope };
+        // Still under the key they opened under, and only there.
+        expect(record.key).toEqual(kept);
+        await expect(openRollbackMarks(k1, MAYA, record.marks)).resolves.toBeTruthy();
+        await expect(
+            openRollbackMarks(keys.keyOf(other)!, MAYA, record.marks),
+        ).rejects.toBeInstanceOf(RollbackMarksError);
     });
 
     test('plaintext marks that could not be sealed stay, and still count', async () => {

@@ -171,3 +171,39 @@ export async function openRollbackMarks(
         throw refused();
     }
 }
+
+/* `a` raised to at least `b`, field by field: no mark is ever lowered. */
+export function highestMarks(a: RollbackMarks, b: Partial<RollbackMarks>): RollbackMarks {
+    return {
+        settings: Math.max(a.settings, b.settings ?? 0),
+        settingsDocument: a.settingsDocument || b.settingsDocument === true,
+        identity: Math.max(a.identity, b.identity ?? 0),
+        identityVersion: Math.max(a.identityVersion, b.identityVersion ?? 0),
+    };
+}
+
+/*
+ * One update of the marks under one settings key: the record `envelope` holds (none for a
+ * first record) is opened, raised to at least `to`, and sealed again under the same key, or
+ * left as it is when nothing rises. A record that does not open under this key is refused
+ * (RollbackMarksError), never sealed over: the marks only ever move to a key they opened
+ * under.
+ */
+export async function updateRollbackMarks(
+    settingsKey: Uint8Array<ArrayBuffer>,
+    userId: string,
+    envelope: string | null,
+    to: Partial<RollbackMarks>,
+) {
+    const current =
+        envelope === null ? NO_MARKS : await openRollbackMarks(settingsKey, userId, envelope);
+    const next = highestMarks(current, to);
+    const unchanged =
+        next.settings === current.settings &&
+        next.settingsDocument === current.settingsDocument &&
+        next.identity === current.identity &&
+        next.identityVersion === current.identityVersion;
+    if (envelope !== null && unchanged) return { marks: current, envelope, changed: false };
+    const sealed = await sealRollbackMarks(settingsKey, userId, next);
+    return { marks: next, envelope: sealed.envelope, changed: true };
+}

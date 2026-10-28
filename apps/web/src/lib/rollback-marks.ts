@@ -1,5 +1,12 @@
 import type { SettingsKeyEnvelope } from '@hushos/auth/api';
-import { NO_MARKS, rollbackMarksSlot, type RollbackMarks } from '@hushos/crypto/rollback-marks';
+import type * as AuthClientModule from '@/lib/auth-client';
+import type * as ContactsModule from '@/lib/contacts';
+import {
+    highestMarks,
+    NO_MARKS,
+    rollbackMarksSlot,
+    type RollbackMarks,
+} from '@hushos/crypto/rollback-marks';
 
 /*
  * Rollback marks, kept in this browser's storage, sealed. The rules a
@@ -69,7 +76,7 @@ export class MarksUnreadableError extends Error {
     }
 }
 
-/* The worker's sealing (rollbackMarksSeal, rollbackMarksOpen), under the settings key. */
+/* The worker's side, under the settings key (rollbackMarksUpdate). */
 export type MarksSealer = {
     /*
      * Opens the account's settings key in the worker and answers the envelope it opened: the
@@ -83,54 +90,47 @@ export type MarksSealer = {
         create: boolean,
         kept: SettingsKeyEnvelope | null,
     ): Promise<SettingsKeyEnvelope | null>;
-    seal(userId: string, marks: RollbackMarks): Promise<{ slot: string; envelope: string }>;
-    /* Null for a record that does not open. */
-    open(userId: string, envelope: string): Promise<RollbackMarks | null>;
+    /*
+     * Opens the record `envelope` holds (none for a first one), raises it to at least `to` and
+     * seals it again, all under the one key the worker holds: null when the record does not
+     * open under it. `changed` is false, and the envelope the same, when nothing rose.
+     */
+    update(
+        userId: string,
+        envelope: string | null,
+        to: Partial<RollbackMarks>,
+    ): Promise<{ marks: RollbackMarks; envelope: string; changed: boolean } | null>;
 };
 
 type Store = Pick<Storage, 'getItem' | 'setItem' | 'removeItem' | 'key' | 'length'>;
 
-function highest(a: RollbackMarks, b: Partial<RollbackMarks>): RollbackMarks {
-    return {
-        settings: Math.max(a.settings, b.settings ?? 0),
-        settingsDocument: a.settingsDocument || b.settingsDocument === true,
-        identity: Math.max(a.identity, b.identity ?? 0),
-        identityVersion: Math.max(a.identityVersion, b.identityVersion ?? 0),
-    };
-}
-const same = (a: RollbackMarks, b: RollbackMarks) =>
-    a.settings === b.settings &&
-    a.settingsDocument === b.settingsDocument &&
-    a.identity === b.identity &&
-    a.identityVersion === b.identityVersion;
-
-/* What earlier versions kept in the clear for `userId`: each key with its value as read. */
-function plaintextMarks(storage: Store, userId: string) {
+const PLAINTEXT_FIELD = (userId: string) => {
     const settings = `${PLAINTEXT_MARK_PREFIXES[0]}${userId}`;
     const document = `${PLAINTEXT_MARK_PREFIXES[1]}${userId}`;
     const identity = `${PLAINTEXT_MARK_PREFIXES[2]}${userId}`;
-    const found = new Map<string, string>();
+    /* The mark a plaintext key holds, or null when the key is not one of this account's. */
+    return (key: string, raw: string | null): Partial<RollbackMarks> | null => {
+        const value = Number(raw ?? 0) || 0;
+        if (key === settings || key.startsWith(`${settings}:`)) return { settings: value };
+        if (key === document) return { settingsDocument: value >= 2 };
+        if (key === identity) return { identity: value };
+        if (key === `${identity}:version`) return { identityVersion: value };
+        return null;
+    };
+};
+/* What earlier versions kept in the clear for `userId`: the keys, and the highest of each mark. */
+function plaintextMarks(storage: Store, userId: string) {
+    const fieldOf = PLAINTEXT_FIELD(userId);
+    const keys: string[] = [];
+    let marks = NO_MARKS;
     for (let index = 0; index < storage.length; index++) {
         const name = storage.key(index);
-        if (
-            name === settings ||
-            name?.startsWith(`${settings}:`) ||
-            name === document ||
-            name === identity ||
-            name === `${identity}:version`
-        )
-            found.set(name, storage.getItem(name) ?? '');
+        const mark = name === null ? null : fieldOf(name, storage.getItem(name));
+        if (!name || !mark) continue;
+        keys.push(name);
+        marks = highestMarks(marks, mark);
     }
-    let marks = NO_MARKS;
-    for (const [key, raw] of found) {
-        const value = Number(raw) || 0;
-        if (key === settings || key.startsWith(`${settings}:`))
-            marks = highest(marks, { settings: value });
-        else if (key === document) marks = highest(marks, { settingsDocument: value >= 2 });
-        else if (key === identity) marks = highest(marks, { identity: value });
-        else marks = highest(marks, { identityVersion: value });
-    }
-    return { found, marks };
+    return { keys, marks, fieldOf };
 }
 /*
  * What a slot holds: the marks, sealed, and the settings key's envelope as the server keeps it
@@ -153,10 +153,13 @@ function parse(raw: string): MarksRecord | null {
         return null;
     }
 }
-
+/* The plaintext keys as read, and the highest of each mark. */
+function snapshot(storage: Store, userId: string) {
+    const { keys, marks } = plaintextMarks(storage, userId);
+    return { found: new Map(keys.map((key) => [key, storage.getItem(key) ?? ''])), marks };
+}
 const unchanged = (a: Map<string, string>, b: Map<string, string>) =>
     a.size === b.size && [...a].every(([key, value]) => b.get(key) === value);
-
 export function createRollbackMarks(options: {
     sealer: MarksSealer;
     /* localStorage; throws where the browser refuses site storage. */
@@ -185,45 +188,48 @@ export function createRollbackMarks(options: {
         if ((await options.account()) !== userId) throw new Error('Unlock your account first.');
     }
     /*
-     * The sealed record as stored: none, or its marks and the settings key envelope kept beside
-     * them. Throws MarksUnreadableError when it is there and does not open; a server that did
-     * not answer (with nothing kept that opens) is its own error, to try again.
+     * One update of the stored record, alone across tabs: the record is read, opened, raised
+     * to `to` and sealed again in one step under one settings key (MarksSealer.update), so it
+     * never moves to another key it did not open under. With nothing
+     * stored, a read asks for no key and finds none.
      */
-    async function sealed(storage: Store, userId: string) {
-        const slot = await rollbackMarksSlot(userId);
-        const raw = storage.getItem(MARKS_PREFIX + slot);
-        if (raw === null) return { marks: NO_MARKS, stored: false, key: null };
-        const record = parse(raw);
-        if (!record) throw new MarksUnreadableError();
-        // Never makes a settings key: one the server withholds leaves the record unopened.
-        const key = (await options.sealer.ready(userId, false, record.key)) ?? record.key;
-        let marks: RollbackMarks | null;
-        try {
-            marks = await options.sealer.open(userId, record.marks);
-        } catch (error) {
-            throw new MarksUnreadableError(error);
-        }
-        if (!marks) throw new MarksUnreadableError();
-        return { marks, stored: true, key };
+    async function update(
+        storage: Store,
+        userId: string,
+        to: Partial<RollbackMarks>,
+        create: boolean,
+    ) {
+        return exclusive(async () => {
+            const slot = await rollbackMarksSlot(userId);
+            const raw = storage.getItem(MARKS_PREFIX + slot);
+            const record = raw === null ? null : parse(raw);
+            if (raw !== null && !record) throw new MarksUnreadableError();
+            if (!record && !create) return NO_MARKS;
+            // Never makes a settings key while a record is kept: one the server withholds leaves
+            // the record unopened. A server that does not answer, with nothing kept that opens,
+            // is its own error, to try again.
+            const key = await options.sealer.ready(userId, !record, record?.key ?? null);
+            let result: Awaited<ReturnType<MarksSealer['update']>>;
+            try {
+                result = await options.sealer.update(userId, record?.marks ?? null, to);
+            } catch (error) {
+                throw new MarksUnreadableError(error);
+            }
+            if (!result) throw new MarksUnreadableError();
+            const kept = record?.key ?? key ?? null;
+            if (!record || result.changed) {
+                const next: MarksRecord = { marks: result.envelope, key: kept };
+                storage.setItem(MARKS_PREFIX + slot, JSON.stringify(next));
+            }
+            return result.marks;
+        });
     }
     /* Raises the stored marks to at least `to`, never lowering any; returns what is stored. */
     async function raise(userId: string, to: Partial<RollbackMarks>) {
         const storage = storageOrNone();
-        if (!storage) return highest(NO_MARKS, to);
+        if (!storage) return highestMarks(NO_MARKS, to);
         await requireUnlocked(userId);
-        return exclusive(async () => {
-            // Read again under the lock: another tab may have raised it. A record that does not
-            // open is never written over: that would reset it.
-            const current = await sealed(storage, userId);
-            const next = highest(current.marks, to);
-            if (current.stored && same(next, current.marks)) return next;
-            const key =
-                (await options.sealer.ready(userId, !current.stored, current.key)) ?? current.key;
-            const { slot, envelope } = await options.sealer.seal(userId, next);
-            const record: MarksRecord = { marks: envelope, key };
-            storage.setItem(MARKS_PREFIX + slot, JSON.stringify(record));
-            return next;
-        });
+        return update(storage, userId, to, true);
     }
     /*
      * This device's marks for `userId`, migrating plaintext ones first. Throws
@@ -233,45 +239,60 @@ export function createRollbackMarks(options: {
         const storage = storageOrNone();
         if (!storage) return NO_MARKS;
         await requireUnlocked(userId);
-        const stored = (await sealed(storage, userId)).marks;
-        let plaintext = plaintextMarks(storage, userId);
+        const stored = await update(storage, userId, {}, false);
+        let plaintext = snapshot(storage, userId);
         if (!plaintext.found.size) return stored;
-        let marks = highest(stored, plaintext.marks);
+        let marks = highestMarks(stored, plaintext.marks);
         // A tab still on an earlier version can write a plaintext mark at any time. Only what
         // was sealed is deleted, and only if it is still what was read; anything newer is
         // sealed first. A write that fails keeps the plaintext for the next read.
         for (let attempt = 0; attempt < 3; attempt++) {
             try {
-                marks = await raise(userId, plaintext.marks);
+                marks = await update(storage, userId, plaintext.marks, true);
             } catch (error) {
                 if (error instanceof MarksUnreadableError) throw error;
                 return marks;
             }
-            const now = plaintextMarks(storage, userId);
+            const now = snapshot(storage, userId);
             if (unchanged(plaintext.found, now.found)) {
                 for (const key of now.found.keys()) storage.removeItem(key);
                 return marks;
             }
             plaintext = now;
-            marks = highest(marks, now.marks);
+            marks = highestMarks(marks, now.marks);
         }
         return marks;
     }
     return { read, raise };
 }
 
-/* The worker and the settings key, reached through the app's modules, loaded when first used. */
+/*
+ * The worker and the settings key, reached through the app's modules, loaded once when first
+ * used and shared by every caller after.
+ */
+let authModule: Promise<typeof AuthClientModule> | undefined;
+let contactsModule: Promise<typeof ContactsModule> | undefined;
 async function auth() {
-    return (await import('@/lib/auth-client')).authClient;
+    return (await (authModule ??= import('@/lib/auth-client'))).authClient;
 }
 const marks = createRollbackMarks({
     sealer: {
         ready: async (userId, create, kept) =>
-            (await import('@/lib/contacts')).marksKeyReady(userId, create, kept),
-        seal: async (userId, value) =>
-            (await auth()).rpc('rollbackMarksSeal', { userId, marks: value }),
-        open: async (userId, envelope) =>
-            (await (await auth()).rpc('rollbackMarksOpen', { userId, envelope })).marks,
+            (await (contactsModule ??= import('@/lib/contacts'))).marksKeyReady(
+                userId,
+                create,
+                kept,
+            ),
+        update: async (userId, envelope, to) => {
+            const result = await (
+                await auth()
+            ).rpc('rollbackMarksUpdate', {
+                userId,
+                envelope,
+                marks: to,
+            });
+            return result.refused ? null : result;
+        },
     },
     storage: () => window.localStorage,
     account: async () => (await auth()).store.getState().unlockedUserId,

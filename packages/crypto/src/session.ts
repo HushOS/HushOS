@@ -125,6 +125,7 @@ import {
     openRollbackMarks,
     RollbackMarksError,
     sealRollbackMarks,
+    updateRollbackMarks,
     type RollbackMarks,
 } from './rollback-marks';
 import { encode, decode, wrappingKey, checkProfile } from './keys';
@@ -250,6 +251,16 @@ type BaseRequests = {
      */
     rollbackMarksSeal: { userId: string; marks: RollbackMarks };
     rollbackMarksOpen: { userId: string; envelope: string };
+    /*
+     * Opens the record `envelope` holds (none for a first one), raises it to at least `marks`
+     * and seals it again, in one step under the one settings key open now: a record that does
+     * not open under it is refused, never sealed over under another.
+     */
+    rollbackMarksUpdate: {
+        userId: string;
+        envelope: string | null;
+        marks: Partial<RollbackMarks>;
+    };
     /*
      * Opens the settings key from the envelope kept beside the marks, for when the server did
      * not answer or served none: false, the session untouched, when it does not open under
@@ -797,6 +808,9 @@ type BaseResults = {
     settingsSeal: { envelope: SettingsEnvelope };
     rollbackMarksSeal: { slot: string; envelope: string };
     rollbackMarksOpen: { marks: RollbackMarks | null };
+    rollbackMarksUpdate:
+        | { refused: true }
+        | { refused: false; marks: RollbackMarks; envelope: string; changed: boolean };
     rollbackMarksKey: { opened: boolean };
     driveSealShare: { shareEnvelope: string };
     driveOpenShare: { opened: true };
@@ -1915,6 +1929,22 @@ export function createCryptoSession() {
                     return { opened: false };
                 } finally {
                     root.fill(0);
+                }
+            }
+            case 'rollbackMarksUpdate': {
+                const { userId, envelope, marks } = message.input;
+                if (!accountKey || unlockedUserId !== userId)
+                    throw new CryptoError('Unlock your account first.');
+                if (!settingsKey || settingsKey.userId !== userId)
+                    throw new CryptoError('Open your settings key first.');
+                try {
+                    return {
+                        refused: false as const,
+                        ...(await updateRollbackMarks(settingsKey.key, userId, envelope, marks)),
+                    };
+                } catch (error) {
+                    if (error instanceof RollbackMarksError) return { refused: true as const };
+                    throw error;
                 }
             }
             case 'rollbackMarksSeal':
