@@ -573,8 +573,13 @@ export async function syncLocked(
             const row = await ctx.store.chain(ctx.userId, groupId);
             const { settings } = await ctx.settings.read();
             const pinned = settings.groups?.[groupId] ?? null;
-            const creating = row || pinned ? null : (options.creating ?? null);
-            if (!row && !pinned && !creating) return { status: 'unchecked', notices };
+            // A creation interrupted after its guard was stored and before its record (2.8): the
+            // guard marks the family now, so it is accepted against that, as after a join's crash
+            // at the same point, and the seed vouches for nothing more. (An unreadable guard
+            // counts as a mark too: the worker answers it, never the seed.)
+            const guarded = options.creating ? (await heldGuard(ctx, groupId)) !== null : false;
+            const creating = row || pinned || guarded ? null : (options.creating ?? null);
+            if (!row && !pinned && !creating && !guarded) return { status: 'unchecked', notices };
             const accepted = await acceptServed(ctx, groupId, { creating, owner: options.owner });
             if (accepted.status === 'record-unreadable') {
                 // Deleted: once more without it, against the settings pin (or unchecked).

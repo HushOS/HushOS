@@ -7,10 +7,11 @@ import { digest } from '@hushos/crypto/signatures';
 import { describe, expect, test, vi } from 'vitest';
 import { GUARD_UNSAVED } from '@/lib/contact-guard';
 import type { GroupContext } from './context';
-import { createFamily, letIn, stageChange, type StageOutcome } from './outbox';
+import { createFamily, letIn, resumeOutbox, stageChange, type StageOutcome } from './outbox';
 import { AnotherChangeWaitsError, continueFoldIn, resealFolded, runDue } from './removal';
 import { ALICE, BOB, CAROL, DAVE, familyServer } from './server-testkit';
-import { fetchIdentities } from './sync';
+import { createMemoryGroupStore } from './store';
+import { fetchIdentities, syncGroup } from './sync';
 import { account, bytes, pinOf } from './worker-testkit';
 
 /*
@@ -396,6 +397,32 @@ describe('a member’s account change with no signed chain', () => {
 });
 
 describe('the family guard before anything written under an acceptance (2.8)', () => {
+    test('a creation whose guard was stored but whose record never was opens after a reload, and its saved change goes', async () => {
+        const server = await familyServer();
+        const store = createMemoryGroupStore();
+        // The tab closes between the guard write and the record write.
+        const putChain = store.putChain.bind(store);
+        let crash = true;
+        store.putChain = async (row) => {
+            if (!crash) return putChain(row);
+            crash = false;
+            throw new Error('The tab closed.');
+        };
+        const { groupId, outcome } = await createFamily(await server.device(store), 'Lindqvist');
+        expect(outcome.status).toBe('pending');
+        expect(server.familyGuard.rows.size).toBe(1);
+        expect(await store.chain(ALICE, groupId)).toBeNull();
+        expect(await store.outbox(ALICE, groupId)).toHaveLength(1);
+        // A reload: the guard marks the family now, so it is accepted against that, not the seed.
+        const reopened = await server.device(store);
+        const resumed = await resumeOutbox(reopened);
+        expect([...resumed.outcomes.values()].map((at) => at.status)).toEqual(['landed']);
+        expect(await store.outbox(ALICE, groupId)).toEqual([]);
+        expect(await store.chain(ALICE, groupId)).not.toBeNull();
+        expect((await reopened.settings.read()).settings.groups?.[groupId]).toBeDefined();
+        expect((await syncGroup(reopened, groupId)).status).toBe('accepted');
+    });
+
     test('an admission waits for the guard: while it can’t be stored nothing is sent, and once it is, the admission goes', async () => {
         const f = await withBob();
         const carol = await pinOf(f.server.people[CAROL]);

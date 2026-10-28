@@ -13,7 +13,7 @@ import { GroupApiError, type GroupsApi } from './api';
 import { createMemoryFamilyGuard } from '@/lib/contact-guard';
 import { familyGuardOf, type GroupContext } from './context';
 import { createRotationSource } from './rotations';
-import { createMemoryGroupStore } from './store';
+import { createMemoryGroupStore, type GroupStore } from './store';
 import { account, bytes, pinOf } from './worker-testkit';
 
 /*
@@ -531,8 +531,11 @@ export async function familyServer() {
 
     /* Alice's family guard: one per browser, kept across her devices' worker sessions here. */
     const guard = createMemoryFamilyGuard();
-    /* Alice's device: one worker session, this server, the memory store, her settings. */
-    async function device(): Promise<GroupContext> {
+    /*
+     * Alice's device: one worker session, this server, the memory store (`store`, to open the
+     * same browser again after a reload), her settings.
+     */
+    async function device(store: GroupStore = createMemoryGroupStore()): Promise<GroupContext> {
         const opened = await alice.device();
         const pins: Record<string, ContactPin> = {
             [BOB]: { ...(await pinOf(people[BOB])), userId: BOB },
@@ -545,7 +548,7 @@ export async function familyServer() {
             userId: ALICE,
             api,
             rpc: opened.call as GroupContext['rpc'],
-            store: createMemoryGroupStore(),
+            store,
             settings: opened.settings,
             guard: familyGuardOf(() => guard, ALICE),
             lock: (_groupId, work) => work(),
