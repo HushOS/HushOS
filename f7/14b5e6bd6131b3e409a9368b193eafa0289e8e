@@ -1,0 +1,103 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_232b4a2c66457a 39,57
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_566b8e0c4467a4::t_61173ea114b17f 17,45-47,59,61
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_566b8e0c4467a4::t_b5aaa4ef018d01 392-394,498-500,529-530,533-534,539-540,548-549,555-556,620-621,633,641-642,646,648
+apps/android/app/src/main/kotlin/com/hushos/app/data/Contacts.kt
+  s_566b8e0c4467a4::t_eed0bd19f40c05 377-378,383
+apps/android/app/src/main/kotlin/com/hushos/app/data/JobNames.kt
+  s_566b8e0c4467a4::t_0d7107a21a2098 1-53
+apps/android/app/src/main/kotlin/com/hushos/app/data/SettingsMark.kt
+  s_566b8e0c4467a4::t_063dd644af9113 4-6,8-9,17-64,66-68,70-115,120-122,124-175,184,186-188,191-197,204-207,210,213-217,219-267,272-275,277-279,281-283,285-296,298-304,306-310
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_566b8e0c4467a4::t_1649e3f7b8397e 124-132,136-138,147-155,158-159,246-248,252,256,261,313,341-342
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_b03df8cd11a39b 143-145,150,154-155,359,362-381,388,392-393,396,399,410-412,414,435,437,457,464,501,528,562,567,614
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_5850ca1ecaae9a 310-313,319,324,343,357
+apps/android/app/src/test/kotlin/com/hushos/app/data/AccountStoreTest.kt
+  s_566b8e0c4467a4::t_358949ef77f90e 19,32-34,41-43,51,53,112-126
+apps/android/app/src/test/kotlin/com/hushos/app/data/FailedTransfersTest.kt
+  s_566b8e0c4467a4::t_2ab19ffefeb73b 73
+apps/android/app/src/test/kotlin/com/hushos/app/data/JobNamesTest.kt
+  s_566b8e0c4467a4::t_ad919c7a70c0be 1-50
+apps/android/app/src/test/kotlin/com/hushos/app/data/OwnIdentityTest.kt
+  s_566b8e0c4467a4::t_f909e77c8cd5ae 34
+apps/android/app/src/test/kotlin/com/hushos/app/data/RecoveryWordsTest.kt
+  s_566b8e0c4467a4::t_83641bf5e89741 56
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsKeyTest.kt
+  s_566b8e0c4467a4::t_93eff0798e091c 60,80
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsMarkTest.kt
+  s_566b8e0c4467a4::t_f06eab1a6b9cb0 3-6,10,14,17-21,26-36,40-43,48-99,102-105,107-113,116,118-132,135,137-144,147,149-155,159-166,171-200
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_72d3adaf5f2da0 70,79,109,122
+apps/ios/App/AppModel.swift
+  s_566b8e0c4467a4::t_e7dd72672a84dd 310
+apps/ios/Files/FileProviderExtension.swift
+  s_566b8e0c4467a4::t_e3f77f26465610 40-48
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Account.swift
+  s_566b8e0c4467a4::t_1a9a8fd2c13018 227-229,443-444
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AccountStore.swift
+  s_566b8e0c4467a4::t_fbc351ecf08510 23-24,28-34,38,41,74,98-102,104,106-108,116-118,128
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Auth.swift
+  s_566b8e0c4467a4::t_4c6461d7ad4264 142-146
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Contacts.swift
+  s_566b8e0c4467a4::t_1b486f2712047b 128,130,161-162,182,185,190-191,233,253,310
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyRecords.swift
+  s_566b8e0c4467a4::t_7cc9e5d9f77cc2 32,36
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FileLock.swift
+  s_566b8e0c4467a4::t_5378d32acbe6ca 1-97
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/RollbackMarks.swift
+  s_566b8e0c4467a4::t_d27966dd84ade5 5-31,33-36,38-42,44-61,64-66,68-84,86-87,91-93,95-110,113-117,119-121,125-126,128-148,150-151,155-157,159-190,195-199,202-227,229-250,253-272,274-275,277-282,284-306,308,311-320,325-328,332-339,341-347,349-350,352-353,358-363,367-370,372,376-378,380-381,386-390,392,395-397
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Settings.swift
+  s_566b8e0c4467a4::t_9e9a46a262dba9 262,266-290,299-300,302,305,317-322,339-342,364,366
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Shares.swift
+  s_566b8e0c4467a4::t_8e270417c7b086 110-111
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Succession.swift
+  s_566b8e0c4467a4::t_40735f31a973a4 204
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Families.swift
+  s_566b8e0c4467a4::t_de48bd06f28c70 186
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Identity.swift
+  s_566b8e0c4467a4::t_a5727ac4b0d9c5 6-7,16-17,23,26,34-35,89,93-95,113,121,200,209,257
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_566b8e0c4467a4::t_1de6a144250da4 104-105,350,352-354,359,362,369-381,409
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/AccountStoreTests.swift
+  s_566b8e0c4467a4::t_d2699c94e8a87c 43-48,104-112
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyJoinTests.swift
+  s_566b8e0c4467a4::t_b1bd919e609b3d 189-192,194,199-213,215-216,218-223
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/IdentityUpgradeTests.swift
+  s_566b8e0c4467a4::t_773694f4d90c00 93-111,136-139,207-208,249-257
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/IntegrityTests.swift
+  s_566b8e0c4467a4::t_655357ab487e12 6-8
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsTests.swift
+  s_566b8e0c4467a4::t_aebfada1854f47 121-135,138-141,144-161,164-217,219-224,226-238,241-243,248-249,255-258,260-261,263-269,271-272,275-299,302-424,427-446
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsUpgradeTests.swift
+  s_566b8e0c4467a4::t_d63d9be845ca97 41-61,72-73
+crates/hushos-core/src/lib.rs
+  s_566b8e0c4467a4::t_acb522d7d93188 39,68
+crates/hushos-core/src/rollback_marks.rs
+  s_566b8e0c4467a4::t_380bab88afe06c 1-266
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_4754f13509b3e1 168,170
+docs/integrity-design.md
+  s_566b8e0c4467a4::t_9e5575004cdc1a 224
+docs/optional-verification.md
+  s_566b8e0c4467a4::t_eadca1ba4406e7 134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f714b5e6bd6131b3e409a9368b193eafa0289e8e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
