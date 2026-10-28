@@ -29,7 +29,7 @@ public struct AccountStore: Sendable {
      * files earlier versions kept across sign-outs): a phone signed back in trusts the server as a new
      * device does, the cost the web accepted too (docs/integrity-design.md, "Rollback marks"). */
     static let accountFiles = [
-        "offline", "transfers", "share-staging", "state", "local/files-parents.json", "local/groups", "local/marks", "local/marks.lock",
+        "offline", "transfers", "share-staging", "state", "local/files-parents.json", "local/groups", "local/marks",
         "local/settings-marks.json", "local/settings-marks.json.lock", "local/identity-marks.json", "local/identity-marks.json.lock",
     ]
 
@@ -71,7 +71,7 @@ public struct AccountStore: Sendable {
     @discardableResult
     public func claim(_ owner: AccountOwner) -> Bool {
         let other = recorded() != .owner(owner)
-        if other { wipe(keepingJoinChecks: true) }
+        if other { wipe() }
         record(owner)
         return other
     }
@@ -94,40 +94,27 @@ public struct AccountStore: Sendable {
         }
     }
 
-    /* Sign-out and account deletion, the person's own: every account file, decrypted or not, and the owner. */
-    public func wipe() { wipe(keepingJoinChecks: false) }
-
     /*
-     * The server says this phone was removed from the account: the same, except the join checks.
-     * Each family's kept escalation (`local/groups/<user>_<group>.holds`, FamilyJoin) stays: a server
-     * that could clear it by answering "removed" could reset the alarm after every wrong pair
-     * (docs/groups-mobile-plan.md). They are sealed under the account's store key, and their names
-     * say which account and family; the next sign-in of the account reads them. The web's removal
-     * deletes its families' store whole, so this is the one thing a removed phone keeps that a
-     * removed browser doesn't.
+     * Sign-out, account deletion, a removal, and another account's sign-in: every account file,
+     * decrypted or not, and the owner. The families' join checks (`local/groups/<user>_<group>.holds`)
+     * go too, as the web's do (owner, 2026-10-28): kept, their names said which account and family
+     * used the phone. The cost, recorded and accepted: a server that falsely answers "removed" resets
+     * a join's escalation on this phone (docs/groups-mobile-plan.md).
      */
-    public func wipeAfterRemoval() { wipe(keepingJoinChecks: true) }
-
-    private func wipe(keepingJoinChecks: Bool) {
+    public func wipe() {
         let files = FileManager.default
         // Under the marks' lock, so a raise from before the sign-out can't write them back after.
         RollbackMarkStore(folder: root.appendingPathComponent("local/marks", isDirectory: true), floor: marksFloor).deleteAll()
-        for name in Self.accountFiles {
-            let url = root.appendingPathComponent(name)
-            if keepingJoinChecks && name == "local/groups" {
-                for item in (try? files.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? [] where item.pathExtension != FamilyRecords.Kept.holds.rawValue {
-                    try? files.removeItem(at: item)
-                }
-                continue
-            }
-            try? files.removeItem(at: url)
-        }
+        for name in Self.accountFiles { try? files.removeItem(at: root.appendingPathComponent(name)) }
         for item in (try? files.contentsOfDirectory(at: temporary, includingPropertiesForKeys: nil)) ?? [] {
             try? files.removeItem(at: item)
         }
         forgetStores()
         try? files.removeItem(at: ownerFile)
     }
+
+    /* The server says this phone was removed from the account: the same as a sign-out. */
+    public func wipeAfterRemoval() { wipe() }
 
     private func record(_ owner: AccountOwner) {
         try? FileManager.default.createDirectory(at: ownerFile.deletingLastPathComponent(), withIntermediateDirectories: true)

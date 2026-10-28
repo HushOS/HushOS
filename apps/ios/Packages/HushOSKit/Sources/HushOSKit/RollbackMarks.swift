@@ -121,7 +121,10 @@ struct RollbackMarkStore: Sendable {
         let key: Kept?
     }
 
-    /* Beside the folder, not in it: a lock file deleted with the folder would leave two processes holding different locks. */
+    /*
+     * Beside the folder, not in it, and never deleted (it is empty): a lock file deleted while a writer
+     * holds it would let the next writer lock a new one, and the two would no longer exclude each other.
+     */
     private var lockPath: String { folder.path + ".lock" }
 
     /* The plaintext files of earlier versions, beside the folder. */
@@ -215,9 +218,11 @@ struct RollbackMarkStore: Sendable {
         }
         guard let key else { throw AuthError.message(kept == nil ? MarksWords.unsaved : MarksWords.unreadable) }
         // Already held, under the same envelope, with nothing to migrate: no write, so no lock. Read again
-        // after the wait for the key, so a mark another process raised meanwhile is in what this returns.
+        // after the wait for the key, so a mark another process raised meanwhile is in what this returns,
+        // and held only if it also holds what this process raised meanwhile (a raise that couldn't be kept).
+        let wantedNow = wanted.highest(floor.value(scoped(user)))
         if let fresh = try record(url), earlier.keys.isEmpty, fresh.key == Record.Kept(nonce: key.envelope.nonce, ciphertext: key.envelope.ciphertext),
-           let held = try? rollbackMarksUpdate(settingsKey: key.key, userId: user, envelope: fresh.marks, to: .none).marks, held.holds(wanted) {
+           let held = try? rollbackMarksUpdate(settingsKey: key.key, userId: user, envelope: fresh.marks, to: .none).marks, held.holds(wantedNow) {
             guard signedIn(), floor.raise(scoped(user), held, since: generation) else { throw AuthError.message(MarksWords.unsaved) }
             return held.highest(floor.value(scoped(user)))
         }

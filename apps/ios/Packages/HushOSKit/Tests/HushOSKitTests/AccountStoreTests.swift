@@ -42,7 +42,8 @@ extension OfflineStore {
             root.appendingPathComponent("local/files-parents.json"),
             // The rollback marks, sealed, and the plaintext ones an earlier version kept across sign-outs.
             root.appendingPathComponent("local/marks/dm3BIs9g8rvG3OeM5lsOQA.json"),
-            root.appendingPathComponent("local/marks.lock"),
+            // A family's join check, named by account and family.
+            root.appendingPathComponent("local/groups/alice_family.holds"),
             root.appendingPathComponent("local/settings-marks.json"),
             root.appendingPathComponent("local/identity-marks.json.lock"),
             temporary.appendingPathComponent("opened/node-a/version-1/Tax return.pdf"),
