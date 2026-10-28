@@ -107,7 +107,7 @@ export function StorageCard({ userId }: { userId: string }) {
         setRemoving(true);
         try {
             const purged = await removeEarlierVersions(queryClient, userId);
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: purged === 1 ? 'Earlier version removed' : 'Earlier versions removed',

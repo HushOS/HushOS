@@ -153,7 +153,7 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
             const state = space.areas.find((area) => area.workspaceId === row.workspaceId)!;
             const { client } = await openArea(space.userId, space.groupId, state);
             await client.purge(row.node);
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: `Deleted “${row.node.name}” forever`,
@@ -226,7 +226,7 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
             unopened: plan.unopened,
         });
         // The error's sound when any deletion failed; otherwise the deletion's, a partial one too.
-        cue(result.type === 'error' ? 'error' : 'droplet');
+        cue(result.type === 'error' ? 'error' : 'close');
         toast.add(result);
     }
 

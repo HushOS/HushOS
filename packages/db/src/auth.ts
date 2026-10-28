@@ -852,7 +852,7 @@ export async function cleanupExpired(options: { batchSize?: number; signal?: Abo
     async function sweep(table: PgTable, key: PgColumn, expiresAt: PgColumn) {
         let total = 0;
         while (!options.signal?.aborted) {
-            const result = await db.execute(
+            const result = await db.execute<never>(
                 sql`delete from ${table} where ${key} in (select ${key} from ${table} where ${expiresAt} < ${now} limit ${batch})`,
             );
             const deleted = result.rowCount ?? 0;

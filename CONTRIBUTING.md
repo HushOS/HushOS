@@ -34,6 +34,10 @@ Both editors use four spaces. Per-package `tsconfig.json` files extend the root 
 - Export shared runtime code through the owning package's `package.json`. Avoid relative imports into another workspace.
 - Use `import type` for API contracts. Keep runtime server imports within server routes, server modules, or `createIsomorphicFn().server(...)` implementations so the browser build excludes them.
 
+## Vendored packages
+
+SheetJS publishes `xlsx` releases after 0.18.5 only on its own CDN, not on npm, and installs from the CDN sometimes stalled CI: the response headers arrived and the body never finished, so `bun install` waited until the job timed out. The tarball is therefore kept in `vendor/` (`xlsx-0.20.3.tgz`), and both `package.json` files point at it with `file:`. `bun.lock` records its sha512, so a changed file fails `--frozen-lockfile`, and the Dockerfiles copy `vendor/` before they install. To move to a new release, download its `.tgz` from `https://cdn.sheetjs.com/`, replace the file, update both specifiers and run `bun install`.
+
 ## Web and API requests
 
 Develop at `http://localhost:5173/app`; API endpoints live under `/api` on the same server (`/api/health`, `/api/ready`, `/api/auth/*`). Nitro hosts both TanStack Start and the mounted Elysia app. Local development needs no custom hostname or certificate.

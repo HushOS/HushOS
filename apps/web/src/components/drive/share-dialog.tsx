@@ -324,7 +324,7 @@ function ShareForm({
             await driveClient.revokeShare(node, target.id);
             await refresh();
             await queryClient.invalidateQueries({ queryKey: driveKeys.mine });
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: `${target.grantee.name} can’t open “${node.name}” any more`,
@@ -352,7 +352,7 @@ function ShareForm({
         try {
             await driveClient.revokeLink(node, link.id);
             await linksChanged();
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: 'Link turned off',

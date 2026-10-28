@@ -155,7 +155,7 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
         setBusy(true);
         try {
             await emptyTrashAll(queryClient, user.id);
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: 'Trash emptied',

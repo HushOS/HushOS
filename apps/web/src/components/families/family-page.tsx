@@ -545,7 +545,7 @@ function LeaveDialog({
                 .then(() => true)
                 .catch(() => false);
             familySynced(groupId, { status: 'wiped' });
-            cue('droplet');
+            cue('close');
             // The leave landed either way; a wipe that failed is said, not hidden behind it.
             if (wiped)
                 toast.add({

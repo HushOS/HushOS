@@ -314,7 +314,7 @@ function LetIn({ userId, groupId, family, person, names, blocked, onOpenChange }
         setError('');
         try {
             await groupsApi.decline(groupId, person.userId);
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: `${first} won’t join ${family}`,
