@@ -185,7 +185,7 @@ jobs:
             # hidden directory, which upload-artifact leaves out by default.
             - name: Pack the server output
               run: tar -cf web-output.tar -C apps/web .output
-            - uses: actions/upload-artifact@v4
+            - uses: actions/upload-artifact@v7
               with:
                   name: web-output
                   path: web-output.tar
@@ -209,7 +209,7 @@ jobs:
               run: bun run build
             - name: Pack the server output
               run: tar -cf web-output.tar -C apps/web .output
-            - uses: actions/upload-artifact@v4
+            - uses: actions/upload-artifact@v7
               with:
                   name: web-output-macos
                   path: web-output.tar
@@ -261,7 +261,7 @@ jobs:
               with:
                   bun-version: 1.4.2
             - run: bun install --frozen-lockfile
-            - uses: actions/download-artifact@v4
+            - uses: actions/download-artifact@v8
               with:
                   name: web-output
             - name: Unpack the server output
@@ -277,7 +277,7 @@ jobs:
               id: playwright
               run: echo "version=$(bunx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
             - name: Cache Chromium
-              uses: actions/cache@v4
+              uses: actions/cache@v6
               with:
                   path: ~/.cache/ms-playwright
                   key: playwright-${{ runner.os }}-chromium-${{ steps.playwright.outputs.version }}
@@ -311,7 +311,7 @@ jobs:
             # flake shows what went wrong instead of disappearing with the green run.
             - name: Keep traces of failures and the server log
               if: failure() || hashFiles('test-results/**/trace.zip') != ''
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@v7
               with:
                   name: playwright-traces-chromium-${{ matrix.shard }}-${{ github.run_attempt }}
                   path: |
@@ -337,7 +337,7 @@ jobs:
               with:
                   bun-version: 1.4.2
             - run: bun install --frozen-lockfile
-            - uses: actions/download-artifact@v4
+            - uses: actions/download-artifact@v8
               with:
                   name: web-output
             - name: Unpack the server output
@@ -353,7 +353,7 @@ jobs:
               id: playwright
               run: echo "version=$(bunx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
             - name: Cache Chromium
-              uses: actions/cache@v4
+              uses: actions/cache@v6
               with:
                   path: ~/.cache/ms-playwright
                   key: playwright-${{ runner.os }}-chromium-${{ steps.playwright.outputs.version }}
@@ -382,7 +382,7 @@ jobs:
               run: tail -n 60 scratchpad/e2e-server.log || true
             - name: Keep traces of failures and the server log
               if: failure() || hashFiles('test-results/**/trace.zip') != ''
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@v7
               with:
                   name: playwright-traces-families-${{ github.run_attempt }}
                   path: |
@@ -413,7 +413,7 @@ jobs:
               with:
                   bun-version: 1.4.2
             - run: bun install --frozen-lockfile
-            - uses: actions/download-artifact@v4
+            - uses: actions/download-artifact@v8
               with:
                   name: web-output-macos
             - name: Unpack the server output
@@ -434,7 +434,7 @@ jobs:
               id: playwright
               run: echo "version=$(bunx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
             - name: Cache WebKit
-              uses: actions/cache@v4
+              uses: actions/cache@v6
               with:
                   path: ~/Library/Caches/ms-playwright
                   key: playwright-${{ runner.os }}-webkit-${{ steps.playwright.outputs.version }}
@@ -465,7 +465,7 @@ jobs:
             # flake shows what went wrong instead of disappearing with the green run.
             - name: Keep traces of failures and the logs
               if: failure() || hashFiles('test-results/**/trace.zip') != ''
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@v7
               with:
                   name: playwright-traces-webkit-${{ matrix.shard }}-${{ github.run_attempt }}
                   path: |
