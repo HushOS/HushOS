@@ -78,4 +78,17 @@ describe('keeping marks', () => {
             marks.MarksUnsavedError,
         );
     });
+
+    test('raises at once in one tab without Web Locks all stay', async () => {
+        await marks.rememberSettingsSeen(MAYA, 1);
+        await Promise.all([
+            marks.rememberSettingsSeen(MAYA, 9),
+            marks.rememberIdentitySeen(MAYA, 4, 2),
+            marks.rememberSettingsDocumentSeen(MAYA),
+        ]);
+        expect(await marks.settingsSeen(MAYA)).toBe(9);
+        expect(await marks.identitySeen(MAYA)).toBe(4);
+        expect(await marks.identityVersionSeen(MAYA)).toBe(2);
+        expect(await marks.settingsDocumentSeen(MAYA)).toBe(true);
+    });
 });

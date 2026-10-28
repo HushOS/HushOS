@@ -313,10 +313,14 @@ const marks = createRollbackMarks({
     },
     storage: () => window.localStorage,
     account: async () => (await auth()).store.getState().unlockedUserId,
-    exclusive: (work) =>
-        typeof navigator !== 'undefined' && navigator.locks?.request
-            ? (navigator.locks.request('hushos-rollback-marks', work) as ReturnType<typeof work>)
-            : work(),
+    // Across tabs where the browser has Web Locks; without them, the factory's own queue, which
+    // still keeps this tab's updates apart (never nothing at all).
+    ...(typeof navigator !== 'undefined' && navigator.locks?.request
+        ? {
+              exclusive: <T>(work: () => Promise<T>) =>
+                  navigator.locks.request('hushos-rollback-marks', work) as Promise<T>,
+          }
+        : {}),
 });
 
 /*
