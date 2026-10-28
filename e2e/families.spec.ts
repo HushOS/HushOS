@@ -1382,7 +1382,10 @@ test.describe.serial('a member’s account changes', () => {
                 path: new URL(route.request().url()).pathname,
                 status: response.status(),
             });
-            await route.fulfill({ response });
+            await route.fulfill({ response }).catch((error: Error) => {
+                // A request the page dropped meanwhile (it moved on) needs no answer.
+                if (!/already handled/.test(error.message)) throw error;
+            });
         });
         // Opening the family and its folders still works: reads and Drive are served.
         await maya.page.getByRole('link', { name: 'Family folders', exact: true }).first().click();
