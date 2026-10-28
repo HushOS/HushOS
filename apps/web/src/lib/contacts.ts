@@ -1406,9 +1406,18 @@ async function sameKeys(a: Pin | null, b: Pin | null) {
  * the compare-and-set (another device may have saved since the act was
  * decided): a pin of the target's own keys already there is kept exactly as
  * it is, its verified state included, unless `verify` asks for a verified one
- * over first-seen keys; the target is written only over the pin the act was
+ * over first-seen keys, or for this person's own check over a family's word
+ * (`trustedVia` reads verified, but the manager rule and the Verified label
+ * want a check of one's own, docs/optional-verification.md 3.4, 3.6, 3.8);
+ * the target is written only over the pin the act was
  * decided from (`expected`, null for nobody); anything else stops the act.
  */
+/*
+ * A pin taken on a family's word (Trust as family, before 3.7) rather than this person's own
+ * check; `trustedViaFamily` is only that family's name beside it.
+ */
+const familysWord = (pin: Pin) => pin.trustedVia !== undefined && pin.trustedVia !== null;
+
 async function withPinIf(
     settings: LoadedSettings['settings'],
     target: Pin,
@@ -1419,7 +1428,7 @@ async function withPinIf(
     if (
         current !== null &&
         (await sameKeys(current, target)) &&
-        (!verify || (await pinTrust(current)) === 'verified')
+        (!verify || ((await pinTrust(current)) === 'verified' && !familysWord(current)))
     )
         return withoutRemoval(settings, target.userId);
     if (await sameKeys(current, expected)) return withPinOnce(settings, target);
@@ -1535,6 +1544,7 @@ export async function pinContact(queryClient: QueryClient, userId: string, looku
             // left behind; the pin is the reader's own now, not a family's word.
             const kept = { ...before } as Partial<Pin>;
             delete kept.trustedVia;
+            delete kept.trustedViaFamily;
             target = {
                 ...kept,
                 userId: contact.userId,

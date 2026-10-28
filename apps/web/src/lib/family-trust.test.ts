@@ -3,11 +3,12 @@ import 'fake-indexeddb/auto';
 import type { ContactIdentity } from '@hushos/auth/api';
 import type { SettingsEnvelope } from '@hushos/crypto';
 import { pinTrust } from '@hushos/crypto/pins';
+import { CHECK_MANAGER_FIRST } from '@hushos/crypto/protocol';
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, test, vi } from 'vitest';
 import { createIndexedDbContactGuard, type GuardSealer } from './contact-guard';
 import type { GroupContext } from './groups/context';
-import { createFamily } from './groups/outbox';
+import { createFamily, stageChange } from './groups/outbox';
 import { ALICE, BOB, familyServer } from './groups/server-testkit';
 import { fetchServed, syncGroup } from './groups/sync';
 import { account } from './groups/worker-testkit';
@@ -231,6 +232,54 @@ describe('checking each other in a family', () => {
         // This device's guard moved with it, and the member list says Verified.
         expect(await contactGuardEntry(ALICE, BOB)).toMatchObject({ verified: true });
         expect((await memberStandings(ALICE, await f.view())).get(BOB)).toBe('verified');
+    });
+
+    test('over a pin taken on the family’s word, They match makes it this person’s own check: Verified, and the manager role goes ahead', async () => {
+        const f = await aliceFamily();
+        await f.letBobIn();
+        await bobsWords(f);
+        const shown = (await familyCheckCode(f.ctx, f.groupId, BOB)) as {
+            rosterVersion: number;
+            code: string[];
+        };
+        // Bob's pin, as Trust as family left it before 3.7: his very keys, on the family's word.
+        expect(await familyCheckMatch(f.queryClient, ALICE, f.ctx, f.groupId, bob, shown)).toEqual({
+            checked: true,
+            verified: true,
+        });
+        const loaded = await readSettingsForFamilies(ALICE);
+        await compareAndSetSettings(ALICE, loaded.version, {
+            ...loaded.settings,
+            contacts: {
+                ...loaded.settings.contacts,
+                [BOB]: {
+                    ...loaded.settings.contacts[BOB]!,
+                    trustedVia: f.groupId,
+                    trustedViaFamily: 'Lindqvist',
+                } as never,
+            },
+        });
+        expect((await memberStandings(ALICE, await f.view())).get(BOB)).toBe('not-verified');
+        await expect(
+            stageChange(f.ctx, f.groupId, { kind: 'roles', userId: BOB, roles: ['members'] }),
+        ).rejects.toThrow(CHECK_MANAGER_FIRST);
+        // They match again: the family's word goes, and the check is this person's own.
+        expect(await familyCheckMatch(f.queryClient, ALICE, f.ctx, f.groupId, bob, shown)).toEqual({
+            checked: true,
+            verified: true,
+        });
+        const pin = (await f.settings()).contacts[BOB]! as {
+            trustedVia?: unknown;
+            trustedViaFamily?: unknown;
+        };
+        expect(pin.trustedVia ?? null).toBeNull();
+        expect(pin.trustedViaFamily).toBeUndefined();
+        expect(await pinTrust(pin as never)).toBe('verified');
+        expect((await memberStandings(ALICE, await f.view())).get(BOB)).toBe('verified');
+        // And making Bob a manager goes ahead without asking for another check.
+        expect(
+            await stageChange(f.ctx, f.groupId, { kind: 'roles', userId: BOB, roles: ['members'] }),
+        ).toMatchObject({ status: 'sent', outcome: { status: 'landed' } });
     });
 
     test('the older-app path reads the old join code to the phone and writes nothing on this device, over keys the server planted too', async () => {
