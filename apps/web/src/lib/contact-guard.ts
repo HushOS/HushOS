@@ -1,4 +1,5 @@
 import type { GuardEntry } from '@hushos/crypto/first-seen';
+import { checkGroupPin, mergePin, pinAhead, type GroupPin } from '@hushos/crypto/pins';
 import { deleteDB, openDB, type DBSchema, type IDBPDatabase } from 'idb';
 
 /*
@@ -70,6 +71,42 @@ export interface ContactGuardStore {
         keep?: PendingAct,
     ): Promise<void>;
     dropPending(userId: string, contactId: string): Promise<void>;
+}
+
+/*
+ * The family guard (docs/optional-verification.md 2.8, "per family"): the
+ * latest group pin this device accepted for a family, kept in the same sealed
+ * store as the contact guard and deleted with it on sign-out, never written to
+ * the settings and never cleared by a `not-member` answer. It only ever moves
+ * up: every write is mergePin against what is stored, under the account's
+ * lock, so a late write of an older pin changes nothing, and one from another
+ * history is refused (GuardConflictError) rather than written over it.
+ */
+export interface FamilyGuardStore {
+    /* The guard this device holds for a family: null for none; throws when it could not be read. */
+    family(userId: string, groupId: string): Promise<GroupPin | null>;
+    /* `pin` merged into what is stored (never lower), and what is stored after; throws when not written. */
+    keepFamily(userId: string, groupId: string, pin: GroupPin): Promise<GroupPin>;
+}
+
+/* A family guard of another history than the one stored: never written over it. */
+export class GuardConflictError extends Error {
+    override name = 'GuardConflictError';
+    constructor() {
+        super('This family looks different on this device. Nothing was saved.');
+    }
+}
+
+/*
+ * The guard merged: what to store over `held`, or null when `held` already
+ * covers `pin` (or is ahead of it), so nothing is written. Another history is
+ * refused.
+ */
+export function familyGuardAfter(groupId: string, held: GroupPin | null, pin: GroupPin) {
+    const merged = mergePin(groupId, held, pin);
+    if (merged === 'conflict') throw new GuardConflictError();
+    if (merged === null || !pinAhead(held, merged)) return null;
+    return merged;
 }
 
 export const GUARD_UNREADABLE = 'HushOS couldn’t check this right now.';
@@ -172,7 +209,9 @@ export type GuardSealer = {
     ): Promise<({ contactId: string; value: unknown } | null)[]>;
 };
 
-type RowKind = 'entry' | 'pending' | 'check';
+type RowKind = 'entry' | 'pending' | 'check' | 'family';
+/* A family guard row's id is worked out from this, as a contact's is from their account id. */
+const familyKey = (groupId: string) => `family:${groupId.toLowerCase()}`;
 /* The key-check row's contact id: no account id looks like it, and its kind keeps it apart anyway. */
 const KEY_CHECK = 'key-check';
 const KEY_CHECK_VALUE = { check: 1 };
@@ -188,19 +227,22 @@ interface Schema extends DBSchema {
     'sealed-pending': { key: string; value: SealedRow };
     /* One per account, keyed by the account id: which settings key its rows are sealed under. */
     'sealed-check': { key: string; value: SealedRow };
+    /* Each family's guard, by the account and the row's id (2.8). */
+    'sealed-families': { key: string; value: SealedRow };
 }
 /*
  * Version 2 added the sealed stores; version 1's plaintext ones stay until
- * every account moved. Version 3 added the key-check rows.
+ * every account moved. Version 3 added the key-check rows, version 4 the
+ * family guards.
  */
-const DATABASE_VERSION = 3;
+const DATABASE_VERSION = 4;
 
 const rowKey = (userId: string, id: string) => `${userId}:${id}`;
 
 export function createIndexedDbContactGuard(
     sealer: GuardSealer,
     name = CONTACT_GUARD_DATABASE,
-): ContactGuardStore & { migrate(userId: string): Promise<void> } {
+): ContactGuardStore & FamilyGuardStore & { migrate(userId: string): Promise<void> } {
     let database: Promise<IDBPDatabase<Schema>> | undefined;
     const open = () =>
         (database ??= openDB<Schema>(name, DATABASE_VERSION, {
@@ -210,6 +252,7 @@ export function createIndexedDbContactGuard(
                     db.createObjectStore('sealed-pending', { keyPath: 'key' });
                 }
                 if (oldVersion < 3) db.createObjectStore('sealed-check', { keyPath: 'key' });
+                if (oldVersion < 4) db.createObjectStore('sealed-families', { keyPath: 'key' });
             },
             blocking(_current, _next, event) {
                 (event.target as IDBDatabase).close();
@@ -318,7 +361,8 @@ export function createIndexedDbContactGuard(
         const check = await db.get('sealed-check', userId);
         const kept =
             (await db.count('sealed-entries', account(userId))) +
-            (await db.count('sealed-pending', account(userId)));
+            (await db.count('sealed-pending', account(userId))) +
+            (await db.count('sealed-families', account(userId)));
         if (!check && !kept) return 'empty';
         await sealer.ready(userId);
         const [expected] = await sealer.ids(userId, [KEY_CHECK]);
@@ -332,12 +376,14 @@ export function createIndexedDbContactGuard(
             proven.set(userId, check.envelope);
             return 'held';
         }
-        const [entries, pending] = await Promise.all([
+        const [entries, pending, families] = await Promise.all([
             db.getAll('sealed-entries', account(userId)),
             db.getAll('sealed-pending', account(userId)),
+            db.getAll('sealed-families', account(userId)),
         ]);
         for (const entry of await openRows(userId, 'entry', entries)) entryOf(entry);
         await openRows(userId, 'pending', pending);
+        await openRows(userId, 'family', families);
         const row = await sealCheck(userId);
         const tx = db.transaction('sealed-check', 'readwrite');
         if (!(await tx.store.get(userId))) await tx.store.put(row);
@@ -360,7 +406,7 @@ export function createIndexedDbContactGuard(
     }
     async function openRows(
         userId: string,
-        kind: 'entry' | 'pending',
+        kind: 'entry' | 'pending' | 'family',
         rows: SealedRow[],
     ): Promise<{ contactId: string; value: unknown; row: SealedRow }[]> {
         if (!rows.length) return [];
@@ -486,7 +532,83 @@ export function createIndexedDbContactGuard(
             if (id === null) return;
             await (await open()).delete('sealed-pending', rowKey(userId, id));
         },
+        async family(userId, groupId) {
+            return (await familyRow(userId, groupId)).pin;
+        },
+        keepFamily(userId, groupId, pin) {
+            // Every family guard write is a merge, one at a time across this browser's tabs: an
+            // older pin written late finds a newer one stored and changes nothing.
+            return withGuardLock(userId, async () => {
+                const { pin: held, row: before } = await familyRow(userId, groupId);
+                const next = familyGuardAfter(groupId, held, pin);
+                if (next === null) return held!;
+                const stored = await keyHolds(userId);
+                const [{ id, envelope }] = (await sealer.seal(userId, [
+                    { contactId: familyKey(groupId), kind: 'family', value: next },
+                ])) as [{ id: string; envelope: string }];
+                const check = stored === 'empty' ? await sealCheck(userId) : null;
+                const key = rowKey(userId, id);
+                const tx = (await open()).transaction(
+                    ['sealed-families', 'sealed-check'],
+                    'readwrite',
+                );
+                if (check && !(await tx.objectStore('sealed-check').get(userId)))
+                    await tx.objectStore('sealed-check').put(check);
+                // Written only over the row this merge read: anything else is another writer's.
+                const now = await tx.objectStore('sealed-families').get(key);
+                if ((now?.envelope ?? null) !== (before?.envelope ?? null)) {
+                    tx.abort();
+                    await tx.done.catch(() => {});
+                    throw new GuardRacedError();
+                }
+                await tx.objectStore('sealed-families').put({ key, userId, id, envelope });
+                await tx.done;
+                return next;
+            });
+        },
     };
+
+    /* A family's guard row and the pin it holds: none, or the row opened; a row that does not open fails. */
+    async function familyRow(userId: string, groupId: string) {
+        const id = await idOf(userId, familyKey(groupId));
+        if (id === null) return { pin: null, row: null };
+        const row = (await (await open()).get('sealed-families', rowKey(userId, id))) ?? null;
+        if (!row) return { pin: null, row: null };
+        const [opened] = await openRows(userId, 'family', [row]);
+        if (opened!.contactId !== familyKey(groupId))
+            throw new Error('A family guard record is corrupt.');
+        return { pin: checkGroupPin(groupId, opened!.value), row };
+    }
+}
+
+/* The family guard in memory, for tests: the same merge, nothing sealed. */
+export function createMemoryFamilyGuard(): FamilyGuardStore & {
+    rows: Map<string, GroupPin>;
+    failWrites: number;
+    failReads: boolean;
+} {
+    const rows = new Map<string, GroupPin>();
+    const store = {
+        rows,
+        failWrites: 0,
+        failReads: false,
+        async family(userId: string, groupId: string) {
+            if (store.failReads) throw new Error('This store could not be read.');
+            return structuredClone(rows.get(`${userId}:${groupId}`) ?? null);
+        },
+        async keepFamily(userId: string, groupId: string, pin: GroupPin) {
+            const held = rows.get(`${userId}:${groupId}`) ?? null;
+            const next = familyGuardAfter(groupId, held, pin);
+            if (next === null) return structuredClone(held!);
+            if (store.failWrites > 0) {
+                store.failWrites--;
+                throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+            }
+            rows.set(`${userId}:${groupId}`, structuredClone(next));
+            return structuredClone(next);
+        },
+    };
+    return store;
 }
 
 /*

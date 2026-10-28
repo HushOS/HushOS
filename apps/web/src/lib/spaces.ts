@@ -5,7 +5,8 @@ import type { Pin } from '@hushos/drive/trust';
 import { useQueryClient } from '@tanstack/react-query';
 import { createContext, useContext, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { authClient } from '@/lib/auth-client';
-import { contactPins, openIdentity, trustedSigners } from '@/lib/contacts';
+import { contactPins, familyCheckedOnAccount, openIdentity, trustedSigners } from '@/lib/contacts';
+import { asFirstUse } from '@/lib/groups/family-checks';
 import { driveKeys, forgetSpace, onSpacesClosed, pruneSpaces, registerSpace } from '@/lib/drive';
 import { driveApi } from '@/lib/drive-api';
 import { familyContext, type FamilyDetail } from '@/lib/families';
@@ -112,7 +113,10 @@ export function areaClient(userId: string, groupId: string, state: AreaState): D
                 writers: await writersFor(userId, groupId),
                 nodes,
             });
-            return checked;
+            // A family taken on first use vouches for nobody's keys (2.6): its word reads `seen`.
+            // Settings that can't be read count as first use: an under-claim, never an over-claim.
+            const vouched = await familyCheckedOnAccount(userId, groupId).catch(() => false);
+            return vouched ? checked : asFirstUse(checked, groupId);
         },
         // Personal keys for writers the family's member list does not speak for.
         signers: async () => trustedSigners(userId),

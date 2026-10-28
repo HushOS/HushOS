@@ -1,4 +1,3 @@
-import type { ContactPin } from '@hushos/crypto/contacts';
 import type { Pin } from '@hushos/drive/trust';
 
 /*
@@ -55,40 +54,4 @@ export function pinOf<P extends Pick<Pin, 'userId' | 'trustedVia'>>(
     if (!pin) return null;
     const key = Object.keys(contacts).find((at) => contacts[at] === pin)!;
     return { key, pin };
-}
-
-export const OWN_CHECK_STAYS =
-    'You compared words with them yourself, and that check stays. Check it’s them again if their keys changed.';
-
-/*
- * The pin "Trust as <family> does" saves over `before`. A pin from this
- * person's own words check (no `trustedVia`) is never replaced by a family's
- * word. When the keys move, what this person shared with them waits to be
- * sealed to the new keys, as after a words check (pinContact), and the keys a
- * followed succession left behind go; the server's name and address are kept
- * with the family's name beside them.
- */
-export function familyPin(
-    before: Pin | undefined,
-    pin: ContactPin,
-    family: { groupId: string; name: string },
-): Pin {
-    if (before && !before.trustedVia) throw new Error(OWN_CHECK_STAYS);
-    if (pin.trustedVia !== family.groupId) throw new Error('This pin isn’t that family’s word.');
-    const moved =
-        before !== undefined &&
-        (before.encryptionPublicKey !== pin.encryptionPublicKey ||
-            before.signingPublicKey !== pin.signingPublicKey);
-    const kept = { ...before } as Partial<Pin>;
-    if (moved) {
-        delete kept.previousSigningKeys;
-        delete kept.keysReplacedAt;
-        delete kept.replacementSeen;
-    }
-    return {
-        ...kept,
-        ...pin,
-        trustedViaFamily: family.name,
-        ...(moved || before?.resealShares ? { resealShares: true } : {}),
-    };
 }

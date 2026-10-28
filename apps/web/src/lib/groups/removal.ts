@@ -3,7 +3,7 @@ import { GroupApiError, isNotMember, lapsedPlansIn, type LapsedPlanNamed } from 
 import type { GroupContext } from './context';
 import { refusalCopy } from './copy';
 import { fillGrants, markDepartedLeft, renewHold, stageChange, type StageOutcome } from './outbox';
-import { fetchIdentities, syncGroup, type AreaState } from './sync';
+import { fetchIdentities, syncGroup, type AreaState, type SyncResult } from './sync';
 
 /*
  * Taking someone out of a family, and the work a manager's device does on its
@@ -65,7 +65,7 @@ function failure(staged: StageOutcome, family: string): RemovalOutcome | null {
                   status: 'failed',
                   message:
                       staged.sync.status === 'fork'
-                          ? `The member list of ${family} was shown differently to you.`
+                          ? `${family} looks different on this device.`
                           : `Couldn’t check ${family}. Try again.`,
               };
     if (staged.status !== 'sent') return { status: 'failed', message: 'Nothing was changed.' };
@@ -345,7 +345,23 @@ export async function foldIn(ctx: GroupContext, groupId: string, userIds: readon
     if (staged.status === 'nothing') return { needsCheck: staged.needsCheck, landed: false };
     if (staged.status !== 'sent' || staged.outcome.status !== 'landed')
         return { needsCheck: staged.status === 'sent' ? staged.needsCheck : [], landed: false };
-    const sync = staged.outcome.sync;
+    await resealFolded(ctx, groupId, staged.outcome.sync, members, identities);
+    return { needsCheck: staged.needsCheck, landed: true };
+}
+
+/*
+ * After a fold-in landed: the family key sealed again (route 9) to those of
+ * `members` who still manage the family on the roster it made, under their
+ * new keys. A manager let back in on a Continue over keys nobody checked has
+ * lost the role on that roster (the worker's foldIn), so is sealed nothing.
+ */
+export async function resealFolded(
+    ctx: GroupContext,
+    groupId: string,
+    sync: SyncResult | null,
+    members: readonly { userId: string }[],
+    identities: Awaited<ReturnType<typeof fetchIdentities>>,
+) {
     const holders =
         sync?.status === 'accepted'
             ? sync.view.members.filter(
@@ -356,17 +372,15 @@ export async function foldIn(ctx: GroupContext, groupId: string, userIds: readon
                       members.some((member) => member.userId === entry.userId),
               )
             : [];
-    if (holders.length > 0) {
-        const { seals } = await ctx.rpc('groupReseal', {
-            groupId,
-            holders: holders.map((holder) => ({
-                userId: holder.userId,
-                kemPublicKey: identities.get(holder.userId)!.identity!.kemPublicKey,
-            })),
-        });
-        await ctx.api.putKeySeals(groupId, seals);
-    }
-    return { needsCheck: staged.needsCheck, landed: true };
+    if (holders.length === 0) return;
+    const { seals } = await ctx.rpc('groupReseal', {
+        groupId,
+        holders: holders.map((holder) => ({
+            userId: holder.userId,
+            kemPublicKey: identities.get(holder.userId)!.identity!.kemPublicKey,
+        })),
+    });
+    await ctx.api.putKeySeals(groupId, seals);
 }
 
 /*

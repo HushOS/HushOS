@@ -2,7 +2,6 @@ import { keyChangeWords } from '@/lib/key-change-words';
 import { GroupApiError, NO_ANSWER } from './api';
 import type { GroupNotice } from './context';
 import type { SendOutcome } from './outbox';
-import { joinCheckMessage } from '@hushos/crypto/join-session';
 
 /*
  * What the families pages say when the server refuses something, when the
@@ -99,9 +98,9 @@ export function refusalCopy(
         case 'left-due':
             return leftDueCopy(data, ctx);
         case 'members-changed':
-            return `The member list of ${family} changed while you were working on it. Try again.`;
+            return `${family} changed while you were working on it. Try again.`;
         case 'stale':
-            return `The member list of ${family} changed while you were working on it. Try again.`;
+            return `${family} changed while you were working on it. Try again.`;
         // The family's payer leaving or removed while a change to its plan holds the plan's claim.
         case 'busy':
             return 'Another change to this plan is in progress. Try again in a moment.';
@@ -315,20 +314,4 @@ export function noticeTitle(notice: GroupNotice, family = 'the family') {
     return notice.count === 1
         ? `The member list of ${family} names a folder that isn’t its own`
         : `The member list of ${family} names folders that aren’t its own`;
-}
-
-/*
- * The two hidden words of the join code typed, and not the code's: most
- * likely one misheard, so it is said calmly, and never which one, or a
- * guesser could find them one at a time. The warning that HushOS may be
- * showing a different member list is kept for "They don't match".
- */
-/* After the family's first wrong pair: the calm line (the core's join_check_message says the same). */
-export function wrongWordsCopy(them: string) {
-    return joinCheckMessage(false, them);
-}
-
-/* After a wrong pair again: the alarm's first line. */
-export function mismatchCopy(them: string) {
-    return joinCheckMessage(true, them);
 }

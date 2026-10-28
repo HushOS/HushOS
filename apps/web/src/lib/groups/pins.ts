@@ -1,6 +1,7 @@
 import type { CryptoResults, GroupPin } from '@hushos/crypto';
 import { mergePin, pinAhead, type OpenedArea } from '@hushos/crypto/pins';
 import type { GroupContext } from './context';
+import { withFamilyChecks } from './family-checks';
 
 /*
  * The cross-device mark (F4; docs/groups-design.md 2.7, the 1c plan 1.4).
@@ -45,6 +46,13 @@ const ATTEMPTS = 4;
 export type Settled = { status: 'settled'; pin: GroupPin | null } | Fork;
 
 /*
+ * What vouched for the family in the acceptance being settled: the worker's
+ * `checked`, or a creation this device finished (its own seed vouched, even
+ * when this acceptance ran from the record it wrote first).
+ */
+export type Vouched = Pick<Accepted, 'checked'> & { created?: boolean };
+
+/*
  * Brings the settings pin of `groupId` up to `accepted.pin` (plus the areas
  * opened since). `reaccept` runs acceptance again after the settings were
  * read anew (so the worker holds their pin as a mark); it is called whenever
@@ -55,9 +63,12 @@ export type Settled = { status: 'settled'; pin: GroupPin | null } | Fork;
 export async function settlePin(
     ctx: GroupContext,
     groupId: string,
-    accepted: Pick<Accepted, 'pin'>,
+    accepted: Pick<Accepted, 'pin'> & Partial<Vouched>,
     options: { opened?: readonly OpenedArea[]; reaccept: () => Promise<Reaccepted> },
 ): Promise<Settled> {
+    const checked = accepted.created
+        ? { how: 'created' as const, rosterVersion: 1 }
+        : (accepted.checked ?? null);
     let pin = accepted.pin;
     const again = async () => {
         const result = await options.reaccept();
@@ -79,9 +90,13 @@ export async function settlePin(
             continue;
         }
         if (!pinAhead(current, merged)) return { status: 'settled', pin: current };
+        // Never a family pin into settings without the first-use marker (docs/optional-verification.md
+        // 7.2): the marker and a `before` record for each pin already there go in the same save,
+        // derived again from the settings this attempt read.
+        const marked = withFamilyChecks(settings, ctx.now().toISOString(), { groupId, checked });
         const saved = await ctx.settings.write(version, {
-            ...settings,
-            groups: { ...settings.groups, [groupId]: merged },
+            ...marked,
+            groups: { ...marked.groups, [groupId]: merged },
         });
         if (saved) return { status: 'settled', pin: merged };
         // Another device saved first: its pin may be higher. Accept again with it as a mark.

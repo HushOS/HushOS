@@ -9,7 +9,12 @@ import { FamilyPlan, FamilyStorage, useFamilyPlanGate } from '@/components/famil
 import { InviteDialog } from '@/components/families/invite-dialog';
 import { RenameFamilyDialog } from '@/components/families/rename-dialog';
 import { FolderKeys, KeyChangeNotice } from '@/components/families/key-changes';
-import { InvitationList, MemberList, PendingList } from '@/components/families/members';
+import {
+    ChangedMembers,
+    InvitationList,
+    MemberList,
+    PendingList,
+} from '@/components/families/members';
 import { ServerKnowsLine } from '@/components/families/server-knows';
 import { PendingLabel } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
@@ -71,6 +76,19 @@ export function withPageNotices(notices: readonly GroupNotice[]) {
         reset.add(notice.groupId);
         return true;
     });
+}
+
+/* The organizer's first name when it is someone else: who the hard warning says to tell. */
+function organizerOf(
+    detail:
+        | { members: { userId: string; name: string; state: string; roles: string[] }[] }
+        | undefined,
+    userId: string,
+) {
+    const organizer = detail?.members.find(
+        (member) => member.state === 'active' && member.roles.includes('billing'),
+    );
+    return organizer && organizer.userId !== userId ? firstName(organizer.name) : null;
 }
 
 /* While a key change walks one of the family's folders, the family is checked again this often. */
@@ -162,8 +180,7 @@ export function FamilyPage({
     const family = summary.name;
     const names = firstNames(detail.data);
     const result = sync.data?.result;
-    // Let in, but nothing on this device or account checked the family yet: the join code is
-    // compared on the join screen.
+    // Let in, but this device holds nothing of the family yet: the join screen joins it.
     if (result?.status === 'unchecked')
         return <Navigate to="/app/families/$groupId/join" params={{ groupId }} replace />;
     const view = result?.status === 'accepted' ? result.view : null;
@@ -177,6 +194,17 @@ export function FamilyPage({
     // offered and refused. The server still decides (an unsealed manager or the payer), and its
     // refusal shows in the dialog.
     const cantLeave = detail.data ? leaveBlocker(userId, detail.data.members) : null;
+    // One blue button on the page (6.1): Let them in, or a changed member's Continue, while either
+    // waits; Invite someone otherwise.
+    const waiting =
+        (pending.data ?? []).some((person) => !person.inFamily) ||
+        (manager &&
+            (detail.data?.members ?? []).some(
+                (member) =>
+                    member.state === 'active' &&
+                    member.userId !== userId &&
+                    work.needsCheck.includes(member.userId),
+            ));
 
     return (
         <div className="flex flex-1 flex-col">
@@ -206,8 +234,9 @@ export function FamilyPage({
                 </Link>
                 {manager && !plan.waiting && (
                     <Button
-                        // Outline while you must fix a failed payment: Billing's button is the blue one.
-                        variant={paymentNeedsYou(plan.summary) ? 'outline' : 'default'}
+                        // Outline while you must fix a failed payment (Billing's button is the blue
+                        // one), or while someone waits to be let in or back in.
+                        variant={paymentNeedsYou(plan.summary) || waiting ? 'outline' : 'default'}
                         onClick={() => setInviting(true)}
                     >
                         Invite someone
@@ -221,7 +250,13 @@ export function FamilyPage({
                     {sync.isPlaceholderData && result?.status === 'accepted' && (
                         <CheckingLine family={family} />
                     )}
-                    {result?.status === 'fork' && <ForkAlert family={family} fork={result.fork} />}
+                    {result?.status === 'fork' && (
+                        <ForkAlert
+                            family={family}
+                            fork={result.fork}
+                            organizer={organizerOf(detail.data, userId)}
+                        />
+                    )}
                     {sync.isError && (
                         <Alert variant="warning">
                             <AlertTitle>Couldn’t check {family}</AlertTitle>
@@ -237,22 +272,31 @@ export function FamilyPage({
                         </Alert>
                     )}
                     {ownWrong && (
-                        <Alert variant="destructive">
-                            <AlertTitle>
-                                Your entry in the member list of {family} isn’t your keys
-                            </AlertTitle>
+                        <Alert variant="warning" data-own-entry="wrong">
+                            <AlertTitle>{family} has your account wrong on this device</AlertTitle>
                             <AlertDescription>
-                                Ask someone who manages the family to check your words again.
+                                Ask someone who manages the family to check it’s you, from the
+                                family’s page.
                             </AlertDescription>
                         </Alert>
                     )}
                     {!ownWrong && ownBehind && (
-                        <Alert variant="info">
+                        <Alert variant="info" data-own-entry="behind">
                             <AlertDescription>
-                                The member list of {family} still has your previous keys. A
-                                manager’s device updates it the next time they open the family.
+                                {family} still has your account as it was before you updated it. A
+                                manager’s device catches up the next time they open the family.
                             </AlertDescription>
                         </Alert>
+                    )}
+                    {manager && detail.data && (
+                        <ChangedMembers
+                            userId={userId}
+                            groupId={groupId}
+                            family={family}
+                            members={detail.data.members}
+                            view={view}
+                            needsCheck={work.needsCheck}
+                        />
                     )}
                     {markLeft.length > 0 && (
                         <Alert variant="warning" data-left-due>

@@ -323,7 +323,9 @@ describe('wiping', () => {
         await synced(h);
         h.server.script.push(refusal(404, 'not-member'));
         expect((await sendChainCall(h.ctx, entry())).status).toBe('wiped');
-        expect(h.calls('groupForget')).toEqual([{ groupId: GROUP, checkedAt: expect.any(String) }]);
+        expect(h.calls('groupForget')).toEqual([
+            { groupId: GROUP, guard: null, checkedAt: expect.any(String) },
+        ]);
         expect(await h.store.chain(USER, GROUP)).toBeNull();
         expect(await h.store.outbox(USER, GROUP)).toEqual([]);
         expect(h.mirrorsDeleted).toEqual([[AREA, AREA_2]]);

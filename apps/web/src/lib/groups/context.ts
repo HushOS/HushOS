@@ -6,6 +6,7 @@ import type {
     GroupWriter,
 } from '@hushos/crypto';
 import type { IdentityEnvelope } from '@hushos/crypto/identity';
+import { askPersistentStorage, type FamilyGuardStore } from '@/lib/contact-guard';
 import type { LoadedSettings } from '@/lib/contacts';
 import type { GroupsApi } from './api';
 import type { GroupStore } from './store';
@@ -40,8 +41,13 @@ export type GroupOperation =
     /* Folders the family's member list names that aren't its own, which the worker ignored. */
     | 'groupForeignListings'
     | 'groupForget'
-    /* A member's join code over the committed chain, read to them by the person letting them in. */
+    /* A member's join code over the committed chain, read to an older app's newcomer (one way). */
     | 'groupJoinCode'
+    /* The newcomer's join on first use: the joins record of the head that lets them in. */
+    | 'groupJoinFirstUse'
+    /* The family check: the pair code with one member, and what "They match" writes. */
+    | 'groupPairCode'
+    | 'groupPairMatch'
     | 'groupStoreSeal'
     | 'groupStoreOpen'
     | 'identityConsent'
@@ -72,7 +78,38 @@ export type GroupNotice =
      */
     | { kind: 'foreign-listing'; groupId: string; owner: string | null; count: number };
 
+/*
+ * A family check (docs/optional-verification.md 3.4, 7.2), as filed in the
+ * settings: a pair check (`with`, `code`), or an anchor this person vouched
+ * for without one (`how`: created, a join code compared, or `before`, a
+ * family accepted before first use existed). Any record means checked.
+ */
+export type FamilyCheck = NonNullable<LoadedSettings['settings']['familyChecks']>[string];
+
 export type GroupSettings = LoadedSettings['settings'] & { groups?: Record<string, GroupPin> };
+
+/*
+ * This device's family guard (docs/optional-verification.md 2.8): the latest
+ * pin it accepted for each family, kept apart from the device record and the
+ * settings, never cleared by anything the server answers. `read` throws when
+ * it could not be read (never "none"); `keep` merges a pin in, never lower,
+ * and throws when nothing was written.
+ */
+export type FamilyGuard = {
+    read(groupId: string): Promise<GroupPin | null>;
+    keep(groupId: string, pin: GroupPin): Promise<GroupPin>;
+};
+/* One account's family guard, from the store that keeps every account's (lib/contact-guard.ts). */
+export function familyGuardOf(store: () => FamilyGuardStore, userId: string): FamilyGuard {
+    return {
+        read: (groupId) => store().family(userId, groupId),
+        keep: (groupId, pin) => {
+            // Best-effort storage may be cleared by the browser: the loss residual of 2.8.
+            void askPersistentStorage();
+            return store().keepFamily(userId, groupId, pin);
+        },
+    };
+}
 
 export type SettingsAccess = {
     /*
@@ -124,6 +161,14 @@ export type GroupContext = {
     rpc: GroupRpc;
     store: GroupStore;
     settings: SettingsAccess;
+    guard: FamilyGuard;
+    /*
+     * Which unlock of the account this is: it moves on every lock and unlock.
+     * An acceptance whose guard was stored after a lock writes nothing more on
+     * its chain (docs/optional-verification.md 2.8: the unstored guard went
+     * with the session, so the chain is as if never served).
+     */
+    session?: () => number;
     /* Runs `work` holding `hushos-group-write:<groupId>`, across this browser's tabs. */
     lock<T>(groupId: string, work: () => Promise<T>): Promise<T>;
     sleep(ms: number): Promise<void>;

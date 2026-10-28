@@ -8,7 +8,6 @@ import { useState } from 'react';
 import { firstName } from '@/components/drive/add-someone';
 import { useContactFlow } from '@/components/drive/contact-flow';
 import { useFamilyArea } from '@/components/drive/family-area';
-import { TrustAsFamily } from '@/components/drive/trust-as-family';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { toast } from '@/components/ui/toast';
@@ -190,7 +189,6 @@ export function UnverifiedMark({
     className?: string;
 }) {
     const issues = given ?? (node ? integrityIssues(node) : []);
-    const area = useFamilyArea();
     const queryClient = useQueryClient();
     const userId = useAuthView((state) => state.unlockedUserId);
     const names = useSignerNames(userId, issues.length > 0);
@@ -323,14 +321,6 @@ export function UnverifiedMark({
                                       : 'Check again'
                                   : 'Try again'}
                         </Button>
-                    )}
-                    {/*
-                     * Outside a family's folders, a writer nobody checked who is in one of this
-                     * person's families: their pin can be taken on the family's word, as an
-                     * explicit act (design 2.8).
-                     */}
-                    {!area && userId && action?.kind === 'check' && worst === 'unknown-signer' && (
-                        <TrustAsFamily userId={userId} signer={action.signer} open={open} />
                     )}
                 </PopoverContent>
             </Popover>

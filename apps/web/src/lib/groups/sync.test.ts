@@ -1,7 +1,8 @@
 import type { CryptoResults } from '@hushos/crypto';
 import { OLDER_CHAIN, SPLIT_CHAIN } from '@hushos/crypto/protocol';
 import { describe, expect, test } from 'vitest';
-import { areaWrite, syncGroup, writeRefusal } from './sync';
+import { GUARD_UNREADABLE, GUARD_UNSAVED } from '@/lib/contact-guard';
+import { areaWrite, syncGroup, wipeGroup, writeRefusal } from './sync';
 import { AREA, GROUP, USER, harness, pinAt, refusal } from './test-harness';
 
 /*
@@ -237,7 +238,7 @@ describe('syncing a family', () => {
             breakRoute(h);
             expect(await syncGroup(h.ctx, GROUP), route).toEqual({ status: 'wiped' });
             expect(h.calls('groupForget'), route).toEqual([
-                { groupId: GROUP, checkedAt: expect.any(String) },
+                { groupId: GROUP, guard: null, checkedAt: expect.any(String) },
             ]);
             expect(await h.store.chain(USER, GROUP), route).toBeNull();
             expect(h.settings.doc.groups?.[GROUP], route).toEqual(pinAt(5));
@@ -252,6 +253,56 @@ describe('syncing a family', () => {
         await expect(syncGroup(h.ctx, GROUP)).rejects.toThrow();
         expect(h.calls('groupForget')).toEqual([]);
         expect(await h.store.chain(USER, GROUP)).not.toBeNull();
+    });
+
+    test('a wipe stores the guard the worker hands back first, asks again with it, and deletes nothing until the worker forgot', async () => {
+        const h = harness({ head: 6 });
+        await knownFamily(h);
+        const order: string[] = [];
+        const forget = h.store.forgetGroup.bind(h.store);
+        h.store.forgetGroup = async (userId, groupId) => {
+            order.push('deleted');
+            return forget(userId, groupId);
+        };
+        const keep = h.ctx.guard.keep.bind(h.ctx.guard);
+        h.ctx.guard.keep = async (groupId, pin) => {
+            order.push(`stored ${pin.rosterVersion}`);
+            return keep(groupId, pin);
+        };
+        // The worker holds roster 7 this session and the guard is at nothing: it hands 7 back.
+        let asked = 0;
+        h.results.groupForget = () =>
+            ++asked === 1
+                ? { forgotten: false, guard: pinAt(7), unreadable: false }
+                : { forgotten: true, guard: null, unreadable: false };
+        await wipeGroup(h.ctx, GROUP);
+        expect(order).toEqual(['stored 7', 'deleted']);
+        // Asked again with what is stored now, which covers the session's floor.
+        expect(h.calls('groupForget')).toEqual([
+            { groupId: GROUP, guard: null, checkedAt: expect.any(String) },
+            { groupId: GROUP, guard: pinAt(7), checkedAt: expect.any(String) },
+        ]);
+        expect(await h.store.chain(USER, GROUP)).toBeNull();
+    });
+
+    test('a wipe whose guard can’t be stored, or that the worker never says it forgot, deletes nothing', async () => {
+        for (const kind of ['unsaved', 'never-forgot', 'unreadable'] as const) {
+            const h = harness({ head: 6 });
+            await knownFamily(h);
+            if (kind === 'unsaved') h.guard.failWrites = 1;
+            if (kind === 'unreadable') h.guard.failReads = true;
+            h.results.groupForget = () => ({
+                forgotten: false,
+                guard: pinAt(7),
+                unreadable: kind === 'unreadable',
+            });
+            const wiped = wipeGroup(h.ctx, GROUP);
+            if (kind === 'unsaved') await expect(wiped, kind).rejects.toThrow(GUARD_UNSAVED);
+            else if (kind === 'unreadable')
+                await expect(wiped, kind).rejects.toThrow(GUARD_UNREADABLE);
+            else await wiped;
+            expect(await h.store.chain(USER, GROUP), kind).not.toBeNull();
+        }
     });
 
     test('a record that no longer opens is deleted and the family checked again against the settings pin, and said so', async () => {

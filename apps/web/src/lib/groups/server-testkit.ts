@@ -10,7 +10,8 @@ import { digest } from '@hushos/crypto/signatures';
 import type { ContactPin } from '@hushos/crypto';
 import type { RekeyView } from '@hushos/drive/api';
 import type { GroupApiError, GroupsApi } from './api';
-import type { GroupContext } from './context';
+import { createMemoryFamilyGuard } from '@/lib/contact-guard';
+import { familyGuardOf, type GroupContext } from './context';
 import { createRotationSource } from './rotations';
 import { createMemoryGroupStore } from './store';
 import { account, bytes, pinOf } from './worker-testkit';
@@ -87,6 +88,12 @@ export async function familyServer() {
     const log: { route: string; body?: unknown }[] = [];
     /* Who is asking: the account a test drives. */
     let caller = ALICE;
+    /* Identities route 6 serves in place of a person's own (an account started over). */
+    const servedAs = new Map<string, (typeof people)[typeof ALICE]['served']>();
+    const servedOf = (userId: string) =>
+        servedAs.get(userId) ?? people[userId as keyof typeof people].served;
+    /* Members route 3 says are due to be folded in (their served identity left their entry). */
+    let foldInDue: string[] = [];
     /* The next roster rotation is stored with a previous envelope that opens nothing (a bad rotator). */
     let junkNextPrevious = false;
 
@@ -256,6 +263,22 @@ export async function familyServer() {
             }
             return { group: {} };
         },
+        /* Route 2: the caller's family, as route 2 lists it for them. */
+        listGroups: async () => ({
+            groups:
+                created && members.get(caller)
+                    ? [
+                          {
+                              id: created.id,
+                              kind: 'family',
+                              name: 'Lindqvist',
+                              state: members.get(caller)!.state,
+                              roles: members.get(caller)!.roles,
+                              rosterVersion: rosters.length,
+                          },
+                      ]
+                    : [],
+        }),
         group: async () => ({
             head: await head(),
             members: [...members].map(([userId, member]) => ({ userId, ...member })),
@@ -266,7 +289,7 @@ export async function familyServer() {
                           ...(members.get(caller)?.roles.includes('members')
                               ? {
                                     markLeft: [...departures],
-                                    foldIn: [],
+                                    foldIn: [...foldInDue],
                                     succession: false,
                                     rotations: [],
                                     holds: holds.map((hold) => ({
@@ -291,7 +314,7 @@ export async function familyServer() {
         identities: async () => ({
             identities: [...members.keys()].map((userId) => ({
                 userId,
-                identity: people[userId as keyof typeof people].served,
+                identity: servedOf(userId),
                 links: [],
             })),
             next: null,
@@ -456,7 +479,7 @@ export async function familyServer() {
             [...members.keys()].map((userId) => ({
                 userId,
                 pinned: null,
-                served: people[userId as keyof typeof people].served,
+                served: servedOf(userId),
                 links: [],
                 personal: null,
             })),
@@ -468,6 +491,8 @@ export async function familyServer() {
         },
     });
 
+    /* Alice's family guard: one per browser, kept across her devices' worker sessions here. */
+    const guard = createMemoryFamilyGuard();
     /* Alice's device: one worker session, this server, the memory store, her settings. */
     async function device(): Promise<GroupContext> {
         const opened = await alice.device();
@@ -483,6 +508,7 @@ export async function familyServer() {
             rpc: opened.call as GroupContext['rpc'],
             store: createMemoryGroupStore(),
             settings: opened.settings,
+            guard: familyGuardOf(() => guard, ALICE),
             lock: (_groupId, work) => work(),
             sleep: async () => {},
             now: () => new Date('2026-10-17T12:00:00.000Z'),
@@ -492,9 +518,34 @@ export async function familyServer() {
         };
     }
 
+    /*
+     * Another member's device (Bob's, Carol's): one worker session, this server, a store and a
+     * family guard of its own, their settings with no pins. Drive it after `as(userId)`.
+     */
+    async function deviceOf(userId: typeof BOB | typeof CAROL): Promise<GroupContext> {
+        const who = people[userId];
+        const opened = await who.device();
+        const own = createMemoryFamilyGuard();
+        return {
+            userId,
+            api,
+            rpc: opened.call as GroupContext['rpc'],
+            store: createMemoryGroupStore(),
+            settings: opened.settings,
+            guard: familyGuardOf(() => own, userId),
+            lock: (_groupId, work) => work(),
+            sleep: async () => {},
+            now: () => new Date('2026-10-17T12:00:00.000Z'),
+            identities: async () => ({ identity: who.identity, history: [] }),
+            deleteMirrors: async () => {},
+            rotations: null,
+        };
+    }
+
     return {
         people,
         api,
+        deviceOf,
         drive,
         areas,
         grants,
@@ -506,6 +557,8 @@ export async function familyServer() {
         walked,
         rotations,
         device,
+        /* Alice's family guard (2.8), as her browser keeps it. */
+        familyGuard: guard,
         groupId: () => created!.id,
         workspaceId: () => created!.area.workspaceId,
         /* The next answer of `route` (create, admit, member, remove, rosters, rotation, hold) is this refusal. */
@@ -514,6 +567,14 @@ export async function familyServer() {
         },
         as(userId: string) {
             caller = userId;
+        },
+        /* From now on route 6 serves `served` as this person's identity (they started over). */
+        serveAs(userId: string, served: (typeof people)[typeof ALICE]['served']) {
+            servedAs.set(userId, served);
+        },
+        /* Route 3's `due.foldIn` from now on. */
+        dueFoldIn(userIds: string[]) {
+            foldInDue = [...userIds];
         },
         junkNextPrevious() {
             junkNextPrevious = true;
