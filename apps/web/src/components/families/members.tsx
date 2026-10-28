@@ -101,6 +101,7 @@ function Row({
     data,
     mark,
     below,
+    wrap = false,
     children,
 }: {
     /* The person's name alone: it is what their initials are drawn from. */
@@ -117,12 +118,18 @@ function Row({
     mark?: ReactNode;
     /* A block under the row: a refusal and what can be done about it. */
     below?: ReactNode;
+    /* What sits at the right goes under the name when the row runs out of room (its buttons). */
+    wrap?: boolean;
     children?: ReactNode;
 }) {
     return (
         <li {...data} className="flex flex-col gap-2 border-b border-rule py-2 last:border-0">
-            <div className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-2">
-                <span className="flex min-w-0 flex-[1_1_14rem] items-center gap-3">
+            <div
+                className={`flex min-h-10 items-center gap-x-3 gap-y-2 ${wrap ? 'flex-wrap' : ''}`}
+            >
+                <span
+                    className={`flex min-w-0 items-center gap-3 ${wrap ? 'flex-[1_1_14rem]' : 'flex-1'}`}
+                >
                     {mark ?? <PersonAvatar name={name} seed={seed} />}
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                         <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
@@ -438,6 +445,7 @@ function PendingRow({
                 seed={person.userId}
                 data={{ 'data-pending': person.email }}
                 line={person.email}
+                wrap
                 below={
                     (error || seat || keptOther || (offered && !blocked)) && (
                         <div className="flex flex-col gap-2 pl-12 empty:hidden">

@@ -993,7 +993,7 @@ test.describe.serial('removal, leaving and key changes', () => {
         ).toHaveText('Trips');
         await expect(fileRow(ana.page, 'trip.txt')).toBeVisible();
         await expect(ana.page.locator('[data-family-checking]')).toHaveText(
-            `Checking the member list of ${family}`,
+            `Checking ${family}`,
         );
         await ana.page.screenshot({ path: test.info().outputPath('checking-member-list.png') });
 
@@ -1371,7 +1371,8 @@ test.describe.serial('three people', () => {
         // The held admission now meets a stale answer, and is signed again over the new list.
         release();
         await expect(maya.page.getByText(`Ana is in ${family}`)).toBeVisible({ timeout: 90_000 });
-        expect(admits).toEqual([409, 201]);
+        // Refused as stale once, then stored once.
+        expect(admits).toEqual([409, 200]);
         await maya.page.unroute('**/members/*/admit');
         await expect(ana.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
             timeout: 90_000,
