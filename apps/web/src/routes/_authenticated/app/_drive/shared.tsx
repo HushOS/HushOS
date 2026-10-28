@@ -258,6 +258,11 @@ function WithMe() {
 }
 
 /* Thumbnail, name, from whom, when, size, menu: the columns drop away as the window narrows. */
+// A link button inside a line of text keeps the line's height; on a touch screen its hit area
+// reaches past the words instead.
+const INLINE_LINK =
+    'relative h-auto align-baseline text-[13px] font-semibold pointer-coarse:h-auto pointer-coarse:after:absolute pointer-coarse:after:-inset-3';
+
 const WITH_ME =
     'grid grid-cols-[2.5rem_minmax(0,1fr)_3.5rem] items-center gap-x-4 pr-3 pl-5 sm:grid-cols-[2.5rem_minmax(0,1fr)_8rem_4rem] sm:pr-5 sm:pl-8 md:grid-cols-[2.5rem_minmax(0,1fr)_minmax(0,16rem)_8rem_4rem] lg:grid-cols-[2.5rem_minmax(0,1fr)_minmax(0,16rem)_8rem_6rem_4rem]';
 
@@ -369,7 +374,7 @@ function WithMeRow({
                             {from}’s account changed. Review to open this.{' '}
                             <Button
                                 variant="link"
-                                className="text-[13px] font-semibold"
+                                className={INLINE_LINK}
                                 onClick={() => openFlow({ kind: 'changed', change })}
                             >
                                 Review
@@ -380,7 +385,7 @@ function WithMeRow({
                             {share.error}{' '}
                             <Button
                                 variant="link"
-                                className="text-[13px] font-semibold"
+                                className={INLINE_LINK}
                                 disabled={opening}
                                 onClick={() => void openIt()}
                             >
@@ -392,7 +397,7 @@ function WithMeRow({
                             {GUARD_UNREADABLE}{' '}
                             <Button
                                 variant="link"
-                                className="text-[13px] font-semibold"
+                                className={INLINE_LINK}
                                 onClick={() =>
                                     void queryClient.invalidateQueries({
                                         queryKey: driveKeys.shared,
