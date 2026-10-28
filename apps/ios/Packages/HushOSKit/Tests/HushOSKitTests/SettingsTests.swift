@@ -118,160 +118,202 @@ struct RotationLedgerTests {
     }
 }
 
-struct SettingsMarksTests {
-    let file = FileManager.default.temporaryDirectory.appendingPathComponent("marks-\(UUID().uuidString).json")
-    var marks: SettingsMarks { SettingsMarks(file: file) }
+/*
+ * The rollback marks, sealed under a key from the settings key (RollbackMarks.swift): what the
+ * phone keeps names neither the account nor what it counts, a record that does not open is
+ * refused (never read as "nothing seen"), a mark is never lowered, and a mark that could not be
+ * kept fails the step it guards.
+ */
+struct RollbackMarkStoreTests {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("marks-\(UUID().uuidString)/local/marks", isDirectory: true)
+    let me = UUID().uuidString.lowercased()
+    let floor = MarkFloor()
+    var store: RollbackMarkStore { RollbackMarkStore(folder: folder, floor: floor) }
+    static let envelope = SettingsKeyEnvelope(nonce: "kept-nonce", ciphertext: "kept-ciphertext")
 
-    @Test func olderSettingsAfterANewerOneAreRefused() throws {
-        defer { try? FileManager.default.removeItem(at: file) }
-        // Nothing seen yet: no row and any version are fine.
-        try marks.check(userId: "User-1", served: 0)
-        try marks.check(userId: "User-1", served: 1)
-        marks.record(userId: "User-1", version: 5)
-        try marks.check(userId: "user-1", served: 5)
-        try marks.check(userId: "user-1", served: 6)
-        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try marks.check(userId: "user-1", served: 4) }
-        // Never lowered, and per account.
-        marks.record(userId: "user-1", version: 2)
-        #expect(marks.mark(userId: "user-1") == 5)
-        try marks.check(userId: "user-2", served: 1)
+    static func key(_ byte: UInt8) -> MarksKeys {
+        { _, _ in MarksKey(key: Data(repeating: byte, count: 32), envelope: envelope) }
+    }
+
+    static let noKey: MarksKeys = { _, _ in nil }
+
+    func marks(settings: UInt64 = 0, identity: UInt64 = 0, version: UInt64 = 0) -> RollbackMarks {
+        RollbackMarks(settings: settings, settingsDocument: false, identity: identity, identityVersion: version)
+    }
+
+    func cleanUp() { try? FileManager.default.removeItem(at: folder.deletingLastPathComponent().deletingLastPathComponent()) }
+
+    func files() -> [URL] { (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [] }
+
+    @Test func whatIsKeptIsSealedAndOpensOnlyUnderItsKey() async throws {
+        defer { cleanUp() }
+        try await store.raise(userId: me.uppercased(), to: marks(settings: 7, identity: 3, version: 2), keys: Self.key(1))
+        let kept = try #require(files().first { $0.pathExtension == "json" })
+        let text = try String(contentsOf: kept, encoding: .utf8)
+        #expect(!text.contains(me) && !text.contains("\"settings\"") && !text.contains("identity"), "the record names the account or its marks")
+        #expect(try await store.read(userId: me, keys: Self.key(1)) == marks(settings: 7, identity: 3, version: 2))
+        // A fresh process (no marks in memory) under another settings key, or with none served: refused, never none.
+        let fresh = RollbackMarkStore(folder: folder, floor: MarkFloor())
+        await #expect(throws: AuthError.message(MarksWords.unreadable)) { _ = try await fresh.read(userId: me, keys: Self.key(2)) }
+        await #expect(throws: AuthError.message(MarksWords.unreadable)) { _ = try await fresh.read(userId: me, keys: Self.noKey) }
+        // Nor sealed over under the other key (what it asked for counts in that process only).
+        await #expect(throws: AuthError.message(MarksWords.unreadable)) { try await fresh.raise(userId: me, to: marks(settings: 9), keys: Self.key(2)) }
+        #expect(try await RollbackMarkStore(folder: folder, floor: MarkFloor()).read(userId: me, keys: Self.key(1)) == marks(settings: 7, identity: 3, version: 2))
+    }
+
+    @Test func aDamagedOrSwappedRecordIsRefused() async throws {
+        defer { cleanUp() }
+        let other = UUID().uuidString.lowercased()
+        try await store.raise(userId: me, to: marks(settings: 4), keys: Self.key(1))
+        try await store.raise(userId: other, to: marks(settings: 1), keys: Self.key(1))
+        let mine = try #require(files().first { $0.lastPathComponent == "\(try rollbackMarksSlot(userId: me)).json" })
+        let theirs = folder.appendingPathComponent("\(try rollbackMarksSlot(userId: other)).json")
+        let fresh = RollbackMarkStore(folder: folder, floor: MarkFloor())
+        // Another account's record in this account's slot: bound to its account, so it does not open.
+        try FileManager.default.removeItem(at: mine)
+        try FileManager.default.copyItem(at: theirs, to: mine)
+        await #expect(throws: AuthError.message(MarksWords.unreadable)) { _ = try await fresh.read(userId: me, keys: Self.key(1)) }
+        try Data("not a record".utf8).write(to: mine)
+        await #expect(throws: AuthError.message(MarksWords.unreadable)) { _ = try await fresh.read(userId: me, keys: Self.key(1)) }
+    }
+
+    @Test func nothingKeptReadsAsNoneAndAsksForNoKey() async throws {
+        defer { cleanUp() }
+        #expect(try await store.read(userId: me, keys: { _, _ in Issue.record("asked for a key"); return nil }) == .none)
+        // Raising nothing makes no record (and no settings key for one).
+        try await store.raise(userId: me, to: .none, keys: { _, _ in Issue.record("asked for a key"); return nil })
+        #expect(files().isEmpty)
+    }
+
+    @Test func aMarkIsNeverLoweredAndOlderCopiesAreRefused() async throws {
+        defer { cleanUp() }
+        try await store.raise(userId: me, to: marks(settings: 5, identity: 3, version: 2), keys: Self.key(1))
+        try await store.raise(userId: me, to: marks(settings: 2, identity: 1, version: 1), keys: Self.key(1))
+        let seen = try await RollbackMarkStore(folder: folder, floor: MarkFloor()).read(userId: me, keys: Self.key(1))
+        #expect(seen == marks(settings: 5, identity: 3, version: 2))
+        try SettingsMarks.check(seen, served: 5)
+        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try SettingsMarks.check(seen, served: 4) }
+        // No document at all is a rollback only below the mark (a version 1 row is served as none at its sequence).
+        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try SettingsMarks.check(seen, served: 0) }
+        try IdentityMarks.check(seen, keyVersion: 3, identityVersion: 2)
+        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try IdentityMarks.check(seen, keyVersion: 2, identityVersion: 2) }
+        // The version 1 form once version 2 was opened, at the same key version or above.
+        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try IdentityMarks.check(seen, keyVersion: 3, identityVersion: 1) }
+        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try IdentityMarks.check(seen, keyVersion: 4, identityVersion: 1) }
     }
 
     /*
-     * The server reports the stored sequence with or without a document: a version 1 row is
-     * served as none at its sequence. That is no rollback while the sequence is at the mark;
-     * none at a lower sequence (no row, say) after the mark is.
+     * The app and its extensions raise the same record at once. Each raise opens, raises and seals
+     * the whole record, so without the lock a raise written over another's loses it.
      */
-    @Test func noDocumentIsARollbackOnlyBelowTheMark() throws {
-        defer { try? FileManager.default.removeItem(at: file) }
-        marks.record(userId: "user-1", version: 7)
-        try marks.check(userId: "user-1", served: 7)
-        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try marks.check(userId: "user-1", served: 0) }
-        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try marks.check(userId: "user-1", served: 6) }
-        #expect(marks.mark(userId: "user-1") == 7)
-    }
-
-    @Test func theMarkSurvivesASuccessionAndTakesOverOneKeptPerIdentityKey() throws {
-        defer { try? FileManager.default.removeItem(at: file) }
-        // An earlier version kept the mark under the account and its identity key: 7 seen under the old keys.
-        HighWaterMarks(file: file).raise(SettingsMarks.legacyKey(userId: "user-1", encryptionPublicKey: "old-key"), to: 7)
-        marks.adopt(userId: "user-1", encryptionPublicKeys: ["old-key"])
-        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try marks.check(userId: "user-1", served: 6) }
-        // A succession changes the identity key; the mark is the account's and still refuses the older document.
-        marks.adopt(userId: "user-1", encryptionPublicKeys: ["new-key"])
-        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try marks.check(userId: "user-1", served: 6) }
-        // Taken over, never lowered by it: a higher mark already kept stays.
-        marks.record(userId: "user-1", version: 9)
-        HighWaterMarks(file: file).raise(SettingsMarks.legacyKey(userId: "user-1", encryptionPublicKey: "other-key"), to: 3)
-        marks.adopt(userId: "user-1", encryptionPublicKeys: ["other-key"])
-        #expect(marks.mark(userId: "user-1") == 9)
-    }
-}
-
-/*
- * The app and its extensions raise the same marks file at once. Each raise reads, changes and
- * writes the whole file, so without the lock a raise written over another's loses it, and a
- * lost mark is a rollback this device no longer refuses.
- */
-struct HighWaterMarksTests {
-    let file = FileManager.default.temporaryDirectory.appendingPathComponent("marks-\(UUID().uuidString)/marks.json")
-
-    @Test func raisesFromSeparateWritersAtOnceAreAllKept() throws {
-        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    @Test func raisesFromSeparateWritersAtOnceAreAllKept() async throws {
+        defer { cleanUp() }
         let writers = 8
-        let raises = 40
-        // Each writer its own instance (as each process has), each raise its own key, and one key every writer raises.
-        DispatchQueue.concurrentPerform(iterations: writers) { writer in
-            for step in 1...raises {
-                let marks = HighWaterMarks(file: file)
-                marks.raise("writer-\(writer)-\(step)", to: UInt64(step))
-                marks.raise("shared", to: UInt64(writer * raises + step))
+        let raises = 10
+        await withTaskGroup(of: Void.self) { group in
+            for writer in 0..<writers {
+                group.addTask { [folder, me] in
+                    for step in 1...raises {
+                        // Each its own process: nothing raised in memory reaches another.
+                        let store = RollbackMarkStore(folder: folder, floor: MarkFloor())
+                        let value = UInt64(writer * raises + step)
+                        _ = try? await store.raise(userId: me, to: writer % 2 == 0
+                            ? RollbackMarks(settings: value, settingsDocument: false, identity: 0, identityVersion: 0)
+                            : RollbackMarks(settings: 0, settingsDocument: false, identity: value, identityVersion: 0), keys: Self.key(1))
+                    }
+                }
             }
         }
-        let kept = HighWaterMarks(file: file).load()
-        for writer in 0..<writers {
-            for step in 1...raises { #expect(kept["writer-\(writer)-\(step)"] == UInt64(step), "lost writer \(writer) raise \(step)") }
-        }
-        #expect(kept["shared"] == UInt64(writers * raises))
-        #expect(kept.count == writers * raises + 1)
+        let kept = try await RollbackMarkStore(folder: folder, floor: MarkFloor()).read(userId: me, keys: Self.key(1))
+        #expect(kept.settings == UInt64((writers - 2) * raises + raises))
+        #expect(kept.identity == UInt64(writers * raises))
     }
 
     /* Another process holding the lock, from a descriptor of its own, until the returned closure lets go. */
     func holdLock() throws -> () -> Void {
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let other = open(file.path + ".lock", O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let other = open(folder.appendingPathComponent(".lock").path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
         guard other >= 0, flock(other, LOCK_EX) == 0 else { throw CocoaError(.fileLocking) }
         return { flock(other, LOCK_UN); close(other) }
     }
 
     /*
-     * In the background the system may grant no time, and the file may be locked: the upgrade to
-     * version 2 is then not written. It must still count in this process (or the version 1 form
-     * served next is opened and upgraded again, minting a second ML-DSA key), and must land with
-     * the next write.
+     * In the background the system may grant no time, and the record may be locked: the mark is
+     * then not written, and the step it guards fails. It still counts in this process (or the
+     * version 1 form served next is opened and upgraded again, minting a second ML-DSA key), and
+     * lands with the next write.
      */
-    @Test func aRaiseThatCouldNotBeWrittenStillCountsHereAndLandsWithTheNextWrite() throws {
-        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
-        let me = "user-\(UUID().uuidString)"
+    @Test func aRaiseThatCouldNotBeKeptFailsYetCountsHereAndLandsWithTheNextWrite() async throws {
+        defer { cleanUp() }
         let release = try holdLock()
-        IdentityMarks(file: file, activity: .expired).record(userId: me, keyVersion: 3, identityVersion: 2)
-        #expect(HighWaterMarks(file: file).load()[IdentityMarks.versionKey(userId: me)] == nil, "nothing was written")
-        // Another reader in this process refuses the rollback all the same.
-        let marks = IdentityMarks(file: file)
-        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try marks.check(userId: me, keyVersion: 3, identityVersion: 1) }
-        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try marks.check(userId: me, keyVersion: 2, identityVersion: 2) }
-
-        // The next write, of anything, carries it.
+        let hurried = RollbackMarkStore(folder: folder, activity: .expired, floor: floor)
+        await #expect(throws: AuthError.message(MarksWords.unsaved)) {
+            try await hurried.raise(userId: me, to: marks(identity: 3, version: 2), keys: Self.key(1))
+        }
+        #expect(try await RollbackMarkStore(folder: folder, floor: MarkFloor()).read(userId: me, keys: Self.key(1)) == .none, "nothing was written")
+        let here = try await store.read(userId: me, keys: Self.key(1))
+        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try IdentityMarks.check(here, keyVersion: 3, identityVersion: 1) }
         release()
-        SettingsMarks(file: file).record(userId: me, version: 1)
-        let kept = HighWaterMarks(file: file).load()
-        #expect(kept[IdentityMarks.versionKey(userId: me)] == 2)
-        #expect(kept[IdentityMarks.key(userId: me)] == 3)
+        try await store.raise(userId: me, to: marks(settings: 1), keys: Self.key(1))
+        #expect(try await RollbackMarkStore(folder: folder, floor: MarkFloor()).read(userId: me, keys: Self.key(1)) == marks(settings: 1, identity: 3, version: 2))
     }
 
-    /* Without time from the system the lock is still tried once, without waiting: free, the raise is written at once. */
-    @Test func withoutTimeAFreeLockIsStillWritten() throws {
-        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
-        let me = "user-\(UUID().uuidString)"
-        SettingsMarks(file: file, activity: .expired).record(userId: me, version: 7)
-        #expect(HighWaterMarks(file: file).load()[SettingsMarks.key(userId: me)] == 7)
-    }
-}
-
-/*
- * The highest own identity key version and identity version this device opened: an identity
- * served as current with a lower key version (keys the account replaced), or the version 1
- * form once version 2 was opened (which would be upgraded again into a second ML-DSA key), is
- * refused.
- */
-struct IdentityMarksTests {
-    let file = FileManager.default.temporaryDirectory.appendingPathComponent("identity-marks-\(UUID().uuidString).json")
-    var marks: IdentityMarks { IdentityMarks(file: file) }
-
-    @Test func anIdentityServedBelowTheHighestOpenedHereIsRefused() throws {
-        defer { try? FileManager.default.removeItem(at: file) }
-        try marks.check(userId: "user-1", keyVersion: 1, identityVersion: 2)
-        marks.record(userId: "User-1", keyVersion: 3, identityVersion: 2)
-        try marks.check(userId: "user-1", keyVersion: 3, identityVersion: 2)
-        try marks.check(userId: "user-1", keyVersion: 4, identityVersion: 2)
-        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try marks.check(userId: "user-1", keyVersion: 2, identityVersion: 2) }
-        // Never lowered by a later, lower record, and per account.
-        marks.record(userId: "user-1", keyVersion: 1, identityVersion: 1)
-        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try marks.check(userId: "user-1", keyVersion: 2, identityVersion: 2) }
-        try marks.check(userId: "user-2", keyVersion: 1, identityVersion: 1)
+    @Test func aKeyThatCannotBeHadFailsTheRaise() async throws {
+        defer { cleanUp() }
+        struct Offline: Error {}
+        await #expect(throws: AuthError.message(MarksWords.unsaved)) {
+            try await store.raise(userId: me, to: marks(settings: 2), keys: { _, _ in throw Offline() })
+        }
+        await #expect(throws: AuthError.message(MarksWords.unsaved)) { try await store.raise(userId: me, to: marks(settings: 2), keys: Self.noKey) }
     }
 
-    @Test func theVersionOneFormIsRefusedOnceVersionTwoWasOpenedEvenAtTheSameKeyVersion() throws {
-        defer { try? FileManager.default.removeItem(at: file) }
-        // Before the upgrade: version 1 at key version 3 is what the account has.
-        marks.record(userId: "user-1", keyVersion: 3, identityVersion: 1)
-        try marks.check(userId: "user-1", keyVersion: 3, identityVersion: 1)
-        // Upgraded in place: the key version stays 3, so only the identity version tells the forms apart.
-        marks.record(userId: "user-1", keyVersion: 3, identityVersion: 2)
-        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try marks.check(userId: "user-1", keyVersion: 3, identityVersion: 1) }
-        // Nor at a higher key version: every identity made since the release is version 2.
-        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try marks.check(userId: "user-1", keyVersion: 4, identityVersion: 1) }
-        try marks.check(userId: "user-1", keyVersion: 4, identityVersion: 2)
+    /* The envelope that opened them is kept beside the marks, and offered first next time. */
+    @Test func theSettingsKeyEnvelopeIsKeptBeside() async throws {
+        defer { cleanUp() }
+        try await store.raise(userId: me, to: marks(settings: 3), keys: Self.key(1))
+        let offered = OfferedKeys()
+        _ = try await RollbackMarkStore(folder: folder, floor: MarkFloor()).read(userId: me) { kept, create in
+            offered.add(kept, create)
+            return MarksKey(key: Data(repeating: 1, count: 32), envelope: Self.envelope)
+        }
+        #expect(offered.all == [OfferedKeys.Offer(kept: Self.envelope, create: false)])
+    }
+
+    final class OfferedKeys: @unchecked Sendable {
+        struct Offer: Equatable { let kept: SettingsKeyEnvelope?; let create: Bool }
+        private let lock = NSLock()
+        private var offers: [Offer] = []
+        func add(_ kept: SettingsKeyEnvelope?, _ create: Bool) { lock.withLock { offers.append(Offer(kept: kept, create: create)) } }
+        var all: [Offer] { lock.withLock { offers } }
+    }
+
+    /* What an earlier version kept in the clear, by digest, beside the folder. */
+    func writeLegacy(_ name: String, _ marks: [String: UInt64]) throws {
+        let url = folder.deletingLastPathComponent().appendingPathComponent(name)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(marks).write(to: url)
+    }
+
+    @Test func plaintextMarksOfEarlierVersionsAreSealedAndRemoved() async throws {
+        defer { cleanUp() }
+        let other = UUID().uuidString.lowercased()
+        try writeLegacy("settings-marks.json", [
+            RollbackMarkStore.legacySettingsKey(me): 7,
+            RollbackMarkStore.legacySettingsKey(me, encryptionPublicKey: "old-key"): 9,
+            RollbackMarkStore.legacySettingsKey(other): 2,
+        ])
+        try writeLegacy("identity-marks.json", [RollbackMarkStore.legacyIdentityKey(me): 3, RollbackMarkStore.legacyIdentityVersionKey(me): 2])
+        // The first read counts them and seals them.
+        #expect(try await store.read(userId: me, keys: Self.key(1)) == marks(settings: 7, identity: 3, version: 2))
+        let local = folder.deletingLastPathComponent()
+        #expect(!FileManager.default.fileExists(atPath: local.appendingPathComponent("identity-marks.json").path))
+        let left = try JSONDecoder().decode([String: UInt64].self, from: Data(contentsOf: local.appendingPathComponent("settings-marks.json")))
+        #expect(Set(left.keys) == [RollbackMarkStore.legacySettingsKey(me, encryptionPublicKey: "old-key"), RollbackMarkStore.legacySettingsKey(other)])
+        // A mark kept per identity key moves in once that identity opens: a succession never resets it.
+        try await store.adopt(userId: me, encryptionPublicKeys: ["old-key"], keys: Self.key(1))
+        let fresh = try await RollbackMarkStore(folder: folder, floor: MarkFloor()).read(userId: me, keys: Self.key(1))
+        #expect(fresh.settings == 9)
+        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try SettingsMarks.check(fresh, served: 8) }
     }
 }
 

@@ -141,7 +141,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     /* The identity in use and the earlier ones, opened once and kept until forgotten (see OpenedIdentities). */
     private val ownIdentities = OpenedIdentities(
         open = {
-            openOwnIdentity(api.session.userId, unlockAccount(), SettingsMark.of(context),
+            openOwnIdentity(api.session.userId, unlockAccount(), marks(),
                 served = { Auth.identity(context) },
                 store = { Auth.upgradeIdentity(context, it) },
                 upgraded = { ShareSeals.of(context).lastPass = 0L },
@@ -152,6 +152,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
     )
     /* The settings key, opened under the account key once the server served it (or this device made it). */
     private var settingsKey: ByteArray? = null
+    /* The envelope `settingsKey` came out of, as the server keeps it: kept beside the rollback marks. */
+    private var settingsKeyEnvelope: com.hushos.core.SettingsKeyEnvelope? = null
     private val indexFile = File(context.filesDir, "files-parents.json")
     internal val parents: ConcurrentHashMap<String, String> = ConcurrentHashMap<String, String>().also { map ->
         runCatching {
@@ -355,8 +357,28 @@ class Vault(internal val context: Context, val api: DriveApi) {
     private fun openSettingsKey(stored: Auth.StoredSettings): ByteArray? {
         settingsKey?.let { return it }
         val wrapped = stored.key ?: return null
-        return settingsKeyOpen(api.session.userId, unlockAccount(), wrapped).also { settingsKey = it }
+        return settingsKeyOpen(api.session.userId, unlockAccount(), wrapped).also { settingsKey = it; settingsKeyEnvelope = wrapped }
     }
+
+    /*
+     * The settings key the rollback marks are sealed under (SettingsMark): the envelope kept beside them when it opens
+     * under the account key (it does until a master-key rotation), else the one this vault opened, else the server's
+     * (`served` when the caller has just read it). With `create`, an account with none gets one; without, null.
+     */
+    private fun marksKey(kept: com.hushos.core.SettingsKeyEnvelope?, create: Boolean, served: Auth.StoredSettings?): MarksKey? {
+        if (kept != null) runCatching { settingsKeyOpen(api.session.userId, unlockAccount(), kept) }.getOrNull()?.let { return MarksKey(it, kept) }
+        val cached = settingsKey
+        val cachedEnvelope = settingsKeyEnvelope
+        if (cached != null && cachedEnvelope != null) return MarksKey(cached, cachedEnvelope)
+        val stored = served ?: Auth.settings(context)
+        stored.key?.let { wrapped -> return MarksKey(openSettingsKey(stored) ?: return null, settingsKeyEnvelope ?: wrapped) }
+        if (!create) return null
+        val key = settingsKeyForSave()
+        return settingsKeyEnvelope?.let { MarksKey(key, it) }
+    }
+
+    /* This account's rollback marks, opened under the settings key through this vault. */
+    private fun marks(served: Auth.StoredSettings? = null) = SettingsMark.of(context) { kept, create -> marksKey(kept, create, served) }
 
     /*
      * The settings key for the next save: the stored one, or a new one wrapped under the account key and stored first
@@ -374,6 +396,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             return openSettingsKey(Auth.settings(context)) ?: throw error
         }
         settingsKey = made.key
+        settingsKeyEnvelope = made.envelope
         return made.key
     }
 
@@ -383,11 +406,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * key opened) no longer opens: it reads as no settings at its stored sequence, and the next save goes over it.
      */
     fun loadSettings(): Settings {
-        val mark = SettingsMark.of(context)
         val userId = api.session.userId
-        // A mark an earlier app kept per identity carries over first, so the per-account one never starts lower.
-        mark.settingsSeen(userId, identityKeys().encryptionPublicKey)
+        val identity = identityKeys()
         val stored = Auth.settings(context)
+        val mark = marks(stored)
+        // A mark an earlier app kept per identity carries over first, so the per-account one never starts lower.
+        mark.adopt(userId, listOf(identity.encryptionPublicKey))
         return readServedSettings(userId, stored.envelope, stored.sequence, mark) {
             openSettingsKey(stored) ?: throw AuthFailure("Your settings key is missing. Sign in again.")
         }
@@ -410,7 +434,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
                 // Named over the stored sequence and sealed at one above it, the version the server stores it at.
                 Auth.putSettings(context, settings.version, settingsSeal(api.session.userId, key, next, settings.text()))
                 // Always version 2: from here on, no document at all is a rollback.
-                SettingsMark.of(context).recordSettings(api.session.userId, next, sealedV2 = true)
+                marks().recordSettings(api.session.userId, next, sealedV2 = true)
                 return Settings(settings.json, next)
             } catch (error: AuthFailure) {
                 if (error.status != 409 || ++attempt >= 3) throw error

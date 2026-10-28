@@ -23,9 +23,13 @@ public struct AccountStore: Sendable {
 
     /* Under the group container: kept files, the queue's copies, Save to HushOS's staged copies, the
      * lists of kept files, the last folder, recent searches and the last email (`Unbacked.state`), the
-     * node-to-parent index. The settings marks in `local` stay: they belong to no account's data and
-     * are what catches a server handing an account older settings after it signs in again. */
-    static let accountFiles = ["offline", "transfers", "share-staging", "state", "local/files-parents.json", "local/groups"]
+     * node-to-parent index, the families' records, and the rollback marks (sealed, and the plaintext
+     * files earlier versions kept across sign-outs): a phone signed back in trusts the server as a new
+     * device does, the cost the web accepted too (docs/integrity-design.md, "Rollback marks"). */
+    static let accountFiles = [
+        "offline", "transfers", "share-staging", "state", "local/files-parents.json", "local/groups", "local/marks",
+        "local/settings-marks.json", "local/settings-marks.json.lock", "local/identity-marks.json", "local/identity-marks.json.lock",
+    ]
 
     private var ownerFile: URL { root.appendingPathComponent("local/account-owner") }
 
@@ -92,10 +96,12 @@ public struct AccountStore: Sendable {
 
     /*
      * The server says this phone was removed from the account: the same, except the join checks.
-     * Each family's kept escalation (`local/groups/<user>_<group>.holds`, FamilyJoin) stays, as the
-     * web keeps it through everything but the person's own sign-out: a server that could clear it by
-     * answering "removed" could reset the alarm after every wrong pair. They are sealed under the
-     * account's store key and name only the family; the next sign-in of the account reads them.
+     * Each family's kept escalation (`local/groups/<user>_<group>.holds`, FamilyJoin) stays: a server
+     * that could clear it by answering "removed" could reset the alarm after every wrong pair
+     * (docs/groups-mobile-plan.md). They are sealed under the account's store key, and their names
+     * say which account and family; the next sign-in of the account reads them. The web's removal
+     * deletes its families' store whole, so this is the one thing a removed phone keeps that a
+     * removed browser doesn't.
      */
     public func wipeAfterRemoval() { wipe(keepingJoinChecks: true) }
 
@@ -130,6 +136,8 @@ public struct AccountStore: Sendable {
         return AccountStore(root: group, temporary: FileManager.default.temporaryDirectory) {
             Offline.forgetAll()
             Places.forget()
+            // Marks this process raised and kept in memory for the account.
+            MarkFloor.process.forget()
             // Emptied and vacuumed, so ids and sealed rows don't linger in free pages or the WAL.
             Mirror(url: Unbacked.local.appendingPathComponent("mirror.sqlite"))?.wipe()
             // The remembered device opens this account's key; the next account makes its own.

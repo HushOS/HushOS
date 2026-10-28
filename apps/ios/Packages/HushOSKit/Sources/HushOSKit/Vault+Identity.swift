@@ -90,12 +90,12 @@ extension Vault {
                 // Opening proves each is this account's own (sealed under its root, its keys matching), not one the server added.
                 earlier.append(try identityOpen(userId: session.userId, accountKey: accountKey, envelope: envelope))
             }
+            // A settings mark an earlier version kept under any of these keys becomes the account's, so a
+            // device that saw version 7 before a succession still refuses 6 (identityKeys covers the current key).
+            try await RollbackMarkStore.shared.adopt(userId: session.userId, encryptionPublicKeys: earlier.map(\.encryptionPublicKey), keys: marksKeys())
             guard generation == identityGeneration else { continue }
             earlier.sort { $0.keyVersion > $1.keyVersion }
             earlierIdentities = earlier
-            // A settings mark an earlier version kept under any of these keys becomes the account's, so a
-            // device that saw version 7 before a succession still refuses 6 (identityKeys covers the current key).
-            SettingsMarks.shared.adopt(userId: session.userId, encryptionPublicKeys: earlier.map(\.encryptionPublicKey))
             return [current] + earlier
         }
     }
@@ -118,7 +118,7 @@ extension Vault {
             return try await identityKeys().signingSeed
         } catch let error as DriveAPIError {
             throw error
-        } catch AuthError.message(let text) where text == IdentityMarks.downgraded {
+        } catch AuthError.message(let text) where [IdentityMarks.downgraded, MarksWords.unreadable, MarksWords.unsaved].contains(text) {
             throw DriveAPIError.server(400, text)
         } catch {
             // Without the identity the server would refuse the write; say so rather than send it unsigned.

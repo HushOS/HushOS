@@ -101,6 +101,8 @@ public actor Vault {
     var identityGeneration: UInt64 = 0
     /* The settings key, opened under the account key (see Settings). */
     var settingsKey: Data?
+    /* The envelope `settingsKey` came out of, as the server keeps it: kept beside the rollback marks. */
+    var settingsKeyEnvelope: SettingsKeyEnvelope?
     /* The pins as the last settings read had them (see `knownPins`). */
     var lastPins: [String: ContactPin] = [:]
     /* Whose signatures this person can check, built from the identities and the verified pins (see Integrity); a load that fails is not kept. */
@@ -345,10 +347,11 @@ public actor Vault {
     }
 
     private func openIdentity(generation: UInt64) async throws -> IdentityKeys {
-        let marks = IdentityMarks.shared
+        let marks = RollbackMarkStore.shared
         let accountKey = try unlockAccount()
         var envelope = try await Auth.identity()
-        try marks.check(userId: session.userId, keyVersion: envelope.keyVersion, identityVersion: envelope.version)
+        let seen = try await marks.read(userId: session.userId, keys: marksKeys())
+        try IdentityMarks.check(seen, keyVersion: envelope.keyVersion, identityVersion: envelope.version)
         var keys = try identityOpen(userId: session.userId, accountKey: accountKey, envelope: envelope)
         if keys.identityVersion == 1 {
             let upgraded = try identityUpgrade(userId: session.userId, accountKey: accountKey, envelope: envelope)
@@ -364,10 +367,15 @@ public actor Vault {
             throw AuthError.message("Your keys couldn’t be upgraded. Try again.")
         }
         // The stored identity must still be the one this device has used: same keys, version not lowered.
-        try marks.check(userId: session.userId, keyVersion: keys.keyVersion, identityVersion: keys.identityVersion)
-        marks.record(userId: session.userId, keyVersion: keys.keyVersion, identityVersion: keys.identityVersion)
-        // A settings mark an earlier version kept under this identity's key becomes the account's.
-        SettingsMarks.shared.adopt(userId: session.userId, encryptionPublicKeys: [keys.encryptionPublicKey])
+        try IdentityMarks.check(seen, keyVersion: keys.keyVersion, identityVersion: keys.identityVersion)
+        // Kept before the identity is: one whose mark could not be kept is not taken. A settings mark an
+        // earlier version kept under this identity's key becomes the account's in the same write.
+        try await marks.raise(
+            userId: session.userId,
+            to: RollbackMarks(settings: 0, settingsDocument: false, identity: keys.keyVersion, identityVersion: UInt64(keys.identityVersion)),
+            encryptionPublicKeys: [keys.encryptionPublicKey],
+            keys: marksKeys()
+        )
         // Replaced while this opened: the caller opens again rather than cache what this read.
         guard generation == identityGeneration else { return keys }
         identity = keys

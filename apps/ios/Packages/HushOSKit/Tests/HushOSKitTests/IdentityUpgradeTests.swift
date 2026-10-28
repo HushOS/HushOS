@@ -114,7 +114,10 @@ extension OnFakeDrive {
         @Test func afterAdoptingTheWinnerOfARaceAnOlderIdentityIsRefused() async throws {
             defer { done() }
             // This device had opened the version 1 identity at key version 3 before the release.
-            IdentityMarks.shared.record(userId: me, keyVersion: v2.keyVersion, identityVersion: 1)
+            try await RollbackMarkStore.shared.raise(
+                userId: me, to: RollbackMarks(settings: 0, settingsDocument: false, identity: v2.keyVersion, identityVersion: 1),
+                keys: await vault(IdentityServer(stored: v2)).marksKeys()
+            )
             let old = versionOne(v2)
             // The 409 re-read hands back a version 2 identity of the account at an older key version.
             let older = try identityCreate(userId: me, accountKey: root, keyVersion: v2.keyVersion - 1)
@@ -182,6 +185,8 @@ final class IdentityServer: @unchecked Sendable {
     var sessionGone = false
     /* The account's earlier identities, oldest first. */
     var history: [IdentityEnvelope] = []
+    /* The settings key's envelope, once a device stored one. */
+    var settingsKey: [String: Any]?
     private let lock = NSLock()
     /* The path whose next reply is held (read as the server has it then) until `release()`; whether it arrived. */
     private var holding: String?
@@ -222,7 +227,15 @@ final class IdentityServer: @unchecked Sendable {
         if sessionGone { return (401, ["message": "Sign in to continue."]) }
         if path == "/api/auth/identity", request.httpMethod == "GET" { return (200, ["identity": Auth.json(stored)]) }
         if path == "/api/auth/identity/history", request.httpMethod == "GET" { return (200, ["identities": history.map { Auth.json($0) }]) }
-        if path == "/api/auth/settings", request.httpMethod == "GET" { return (200, ["settingsVersion": 0]) }
+        if path == "/api/auth/settings", request.httpMethod == "GET" {
+            return (200, ["settingsVersion": 0, "settingsKey": settingsKey as Any])
+        }
+        if path == "/api/auth/settings-key", request.httpMethod == "PUT" {
+            // Stored once: the rollback marks are sealed under a key from it.
+            guard settingsKey == nil else { return (409, ["message": "A settings key is already stored."]) }
+            settingsKey = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            return (200, [:])
+        }
         if path == "/api/auth/identity/upgrade", request.httpMethod == "POST" {
             let json = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
             bodies.append(json)
