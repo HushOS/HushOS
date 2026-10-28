@@ -1,0 +1,65 @@
+.github/workflows/ci.yml
+  s_566b8e0c4467a4::t_686f914c3eb52e 131,176,206,262,338,414
+.github/workflows/fuzz.yml
+  s_566b8e0c4467a4::t_13315f50959561 51,94,144
+CONTRIBUTING.md
+  s_566b8e0c4467a4::t_85c84de3b9cc1e 3
+README.md
+  s_566b8e0c4467a4::t_aa462d286e475f 36,77
+apps/web/Dockerfile
+  s_566b8e0c4467a4::t_0f6159e9348b64 1,25,32
+apps/web/package.json
+  s_566b8e0c4467a4::t_6770e080af601a 92
+bun.lock
+  s_566b8e0c4467a4::t_41528dae499205 11,98,128,146,172,192,213,231,250,269,291,304,314,323,333,1089,1237
+compose.yaml
+  s_566b8e0c4467a4::t_706e8ac6f1d643 39
+package.json
+  s_566b8e0c4467a4::t_38e81a27e0b894 69,80,82
+packages/auth/package.json
+  s_566b8e0c4467a4::t_0b9ba7381b8c26 30
+packages/billing/package.json
+  s_566b8e0c4467a4::t_320b97898076e9 27
+packages/crypto/package.json
+  s_566b8e0c4467a4::t_2b2541d9ba48b1 55
+packages/db/Dockerfile
+  s_566b8e0c4467a4::t_8d711cce15cff2 1,25
+packages/db/package.json
+  s_566b8e0c4467a4::t_beffa3cbea4ce0 39
+packages/drive/package.json
+  s_566b8e0c4467a4::t_2c97de34a3c19a 38
+packages/emails/package.json
+  s_566b8e0c4467a4::t_de19695a0b30cf 27
+packages/env/package.json
+  s_566b8e0c4467a4::t_8611bac02929ef 29
+packages/groups/package.json
+  s_566b8e0c4467a4::t_d035d398b0f12d 27
+packages/jobs/Dockerfile
+  s_566b8e0c4467a4::t_54ff27baf981af 1,37
+packages/jobs/package.json
+  s_566b8e0c4467a4::t_1db3c04d760d86 27
+packages/logging/package.json
+  s_566b8e0c4467a4::t_d8bb5ec74410f9 26
+packages/shared/package.json
+  s_566b8e0c4467a4::t_b82a0929d8db88 19
+packages/tokens/package.json
+  s_566b8e0c4467a4::t_8d7f809dde13c9 21
+packages/utils/package.json
+  s_566b8e0c4467a4::t_5d99454b7e8756 19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6d1f1022f3535ab744cdcdc7e8f6ea2aab2f82fe",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
