@@ -61,12 +61,14 @@ type Member = { state: 'active' | 'left'; roles: string[]; name: string; email: 
 export const ALICE = 'a1a1a1a1-0000-4000-8000-000000000001';
 export const BOB = 'b2b2b2b2-0000-4000-8000-000000000002';
 export const CAROL = 'c3c3c3c3-0000-4000-8000-000000000003';
+export const DAVE = 'd4d4d4d4-0000-4000-8000-000000000004';
 
 export async function familyServer() {
     const people = {
         [ALICE]: await account(ALICE),
         [BOB]: await account(BOB),
         [CAROL]: await account(CAROL),
+        [DAVE]: await account(DAVE),
     };
     const alice = people[ALICE];
     const rosters: RosterCallBody['roster'][] = [];
@@ -183,16 +185,29 @@ export async function familyServer() {
         log.push({ route, body: structuredClone(call) });
         refuseFirst(route);
         // The server's rule (packages/db applyRoster): an entry whose roles change is the member
-        // route's target, and only there.
+        // route's target, and only there, but for a Continue's: on POST rosters, an entry with new
+        // keys may lose `members`, and only that.
         if (rosters.length > 0) {
             const before = parseRoster(bytes(rosters.at(-1)!.statement)).members;
             for (const entry of parseRoster(bytes(call.roster.statement)).members) {
                 const was = before.find((at) => at.userId === entry.userId);
                 const roles = (list: readonly string[]) => [...list].sort().join();
+                const rekeyed =
+                    was !== undefined &&
+                    (was.keyVersion !== entry.keyVersion ||
+                        was.encryptionPublicKey !== entry.encryptionPublicKey ||
+                        was.signingPublicKey !== entry.signingPublicKey ||
+                        was.mlDsaPublicKeyDigest !== entry.mlDsaPublicKeyDigest ||
+                        was.kemPublicKeyDigest !== entry.kemPublicKeyDigest);
+                const continued =
+                    route === 'rosters' &&
+                    rekeyed &&
+                    roles(was.roles.filter((role) => role !== 'members')) === roles(entry.roles);
                 if (
                     was?.status === 'active' &&
                     entry.status === 'active' &&
                     roles(was.roles) !== roles(entry.roles) &&
+                    !continued &&
                     (route !== 'member' || entry.userId !== target)
                 ) {
                     log.pop();
@@ -229,9 +244,12 @@ export async function familyServer() {
         return head();
     }
     const named = (userId: string) => ({
-        name: { [ALICE]: 'Alice Lindqvist', [BOB]: 'Bob Lindqvist', [CAROL]: 'Carol Lindqvist' }[
-            userId
-        ]!,
+        name: {
+            [ALICE]: 'Alice Lindqvist',
+            [BOB]: 'Bob Lindqvist',
+            [CAROL]: 'Carol Lindqvist',
+            [DAVE]: 'Dave Lindqvist',
+        }[userId]!,
         email: `${userId}@example.com`,
     });
 
@@ -519,6 +537,7 @@ export async function familyServer() {
         const pins: Record<string, ContactPin> = {
             [BOB]: { ...(await pinOf(people[BOB])), userId: BOB },
             [CAROL]: { ...(await pinOf(people[CAROL])), userId: CAROL },
+            [DAVE]: { ...(await pinOf(people[DAVE])), userId: DAVE },
         };
         const { settings, version } = await opened.settings.read();
         await opened.settings.write(version, { ...settings, contacts: pins });

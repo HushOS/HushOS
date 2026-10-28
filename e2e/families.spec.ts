@@ -1255,7 +1255,7 @@ test.describe.serial('a member’s account changes', () => {
         );
     });
 
-    test('a manager whose account changed gets the folders back on Continue, without the role, through the member route', async () => {
+    test('a manager whose account changed gets the folders back on Continue, without the role, in that one roster', async () => {
         test.setTimeout(420_000);
         const familyPath = '/app/family';
         await openFamilyPage(maya, familyPath, family);
@@ -1307,13 +1307,66 @@ test.describe.serial('a member’s account changes', () => {
         await expect(
             maya.page.getByText('Leo can manage the family again once you’ve checked it’s Leo.'),
         ).toBeVisible();
-        // One call, on the member route for Leo, where the server takes a role change; it landed.
+        // One call, on POST rosters, which takes the role from an entry with new keys; it landed.
         const writes = answers.filter((answer) => answer.method !== 'GET');
         expect(writes).toEqual([
-            { method: 'PATCH', path: expect.stringMatching(/\/members\/[0-9a-f-]+$/), status: 200 },
+            { method: 'POST', path: expect.stringMatching(/\/rosters$/), status: 200 },
         ]);
         await expect(notice).toHaveCount(0, { timeout: 120_000 });
         await expect(leoRow.locator('[data-roles]')).toHaveCount(0, { timeout: 60_000 });
+    });
+
+    test('two members whose accounts changed: one notice naming both, one Continue, one roster', async () => {
+        test.setTimeout(420_000);
+        const familyPath = '/app/family';
+        for (const who of [sam, leo])
+            execFileSync('bun', ['e2e/fixtures/start-over.ts', who.email], {
+                stdio: 'pipe',
+                env: { ...process.env, DATABASE_URL: e2eDatabase().url },
+            });
+        const writes: { method: string; path: string; status: number }[] = [];
+        maya.page.on('response', (response) => {
+            const path = new URL(response.url()).pathname;
+            if (
+                response.request().method() !== 'GET' &&
+                /\/api\/groups\/[0-9a-f-]+\/(rosters|members\/[0-9a-f-]+)$/.test(path)
+            )
+                writes.push({
+                    method: response.request().method(),
+                    path,
+                    status: response.status(),
+                });
+        });
+        await openFamilyPage(maya, familyPath, family);
+        const notice = maya.page.locator(
+            `[data-account-changed~="${sam.email}"][data-account-changed~="${leo.email}"]`,
+        );
+        await expect(notice).toBeVisible({ timeout: 120_000 });
+        await expect(maya.page.locator('[data-account-changed]')).toHaveCount(1);
+        await expect(notice).toContainText(/(Sam’s and Leo’s|Leo’s and Sam’s) accounts changed/);
+        await expect(notice).toContainText(
+            /Continue to give (Sam and Leo|Leo and Sam) the family folders again\./,
+        );
+        await expect(notice.getByRole('button', { name: 'Continue' })).toHaveCount(1);
+        await expect(notice.getByRole('button', { name: 'Check it’s Sam' })).toBeVisible();
+        await expect(notice.getByRole('button', { name: 'Check it’s Leo' })).toBeVisible();
+        expect(writes).toEqual([]);
+
+        await notice.getByRole('button', { name: 'Continue' }).click();
+        await expect(
+            maya.page.getByText(/(Sam and Leo|Leo and Sam) have the family folders again/),
+        ).toBeVisible({ timeout: 120_000 });
+        expect(writes).toEqual([
+            { method: 'POST', path: expect.stringMatching(/\/rosters$/), status: 200 },
+        ]);
+        await expect(maya.page.locator('[data-account-changed]')).toHaveCount(0, {
+            timeout: 120_000,
+        });
+        for (const who of [sam, leo])
+            await expect(maya.page.locator(`[data-member="${who.email}"]`)).not.toContainText(
+                'Account changed',
+                { timeout: 60_000 },
+            );
     });
 
     test('a tab from before the family-write rules changed is refused family changes with 426, and served reads and Drive', async () => {

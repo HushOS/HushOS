@@ -211,33 +211,41 @@ export async function letInWithoutWords(
 }
 
 /*
- * Continue on a member's account change (6.9): the keys HushOS serves now
- * pinned (Continue on the contact, or first-seen when this account had no pin
- * of them), then a roster that writes them into their entry and gives every
- * family folder new keys in the same change (3.3). A manager among them keeps
- * the role only over a verified pin; otherwise it waits for a check (3.6).
+ * Continue on members' account changes (6.9): for each of them, the keys
+ * HushOS serves now pinned (Continue on the contact, or first-seen when this
+ * account had no pin of them), then one roster that writes them all into
+ * their entries and gives every family folder new keys in the same change
+ * (3.3). A manager among them keeps the role only over a verified pin;
+ * otherwise it waits for a check (3.6).
  */
-export async function continueMember(
+export async function continueMembers(
     queryClient: QueryClient,
     userId: string,
     ctx: GroupContext,
     groupId: string,
-    member: { userId: string; email: string; name: string },
+    members: readonly { userId: string; email: string; name: string }[],
     /* First names by user id, to name another member whose account changed too. */
     names: Record<string, string> = {},
 ) {
-    const found = await lookupContact(queryClient, userId, member.email);
-    if (found.contact.userId.toLowerCase() !== member.userId.toLowerCase())
-        throw new Error('That address now belongs to a different account.');
-    if (found.changed)
-        await continueWith(queryClient, userId, {
-            contactId: member.userId,
-            name: member.name,
-            email: member.email,
-        });
-    else if (!found.pinned) {
-        const added = await pinForFamily(queryClient, userId, member);
-        if (added.outcome === 'changed') await continueWith(queryClient, userId, added.change);
+    for (const member of members) {
+        const found = await lookupContact(queryClient, userId, member.email);
+        if (found.contact.userId.toLowerCase() !== member.userId.toLowerCase())
+            throw new Error('That address now belongs to a different account.');
+        if (found.changed)
+            await continueWith(queryClient, userId, {
+                contactId: member.userId,
+                name: member.name,
+                email: member.email,
+            });
+        else if (!found.pinned) {
+            const added = await pinForFamily(queryClient, userId, member);
+            if (added.outcome === 'changed') await continueWith(queryClient, userId, added.change);
+        }
     }
-    return continueFoldIn(ctx, groupId, member.userId, names);
+    return continueFoldIn(
+        ctx,
+        groupId,
+        members.map((member) => member.userId),
+        names,
+    );
 }

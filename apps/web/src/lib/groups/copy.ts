@@ -11,6 +11,12 @@ import type { SendOutcome } from './outbox';
  * and are passed in; a family is named, a person by their first name.
  */
 
+/* "Sam", "Sam and Ana", "Sam, Ana and Lee": names joined as the family page says them. */
+export function namesInWords(names: readonly string[]) {
+    if (names.length <= 1) return names[0] ?? '';
+    return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
+
 export type CopyContext = {
     family?: string;
     /* The person the change was about, by first name. */

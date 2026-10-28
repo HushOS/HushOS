@@ -410,6 +410,49 @@ describe('every roster is checked as devices check it', () => {
         ).toMatchObject({ code: 'invalid', data: { reason: 'rollback' } });
     });
 
+    test('a manager’s entry moved to new keys may lose members on POST rosters (a Continue), and one with the same keys may not', async () => {
+        const { fam, holder } = await withHolder();
+        // Keys unchanged: taking the role is a role change, for the member route only.
+        const same = await nextRoster(fam, fam.organizer, withEntry(fam.h, holder.who.entry([])));
+        expect(
+            await refusal(groups.postRoster(fam.organizer.userId, fam.groupId, same.call)),
+        ).toMatchObject({ code: 'invalid', data: { reason: 'role-change' } });
+        fam.h.rosters.pop();
+        fam.h.statements.pop();
+        // Their account moves to new keys; the roster that writes them in takes the role, with the
+        // succession and the family key sealed to the manager who stays.
+        await succeedIdentity(holder);
+        const { at, call } = await nextRoster(
+            fam,
+            fam.organizer,
+            withEntry(fam.h, holder.who.entry([])),
+        );
+        const landed = await groups.postRoster(fam.organizer.userId, fam.groupId, {
+            ...call,
+            succession: wire(await fam.h.succession(fam.organizer.who)),
+            seals: [
+                await sealWire(
+                    fam.groupId,
+                    fam.organizer.who,
+                    fam.organizer.who,
+                    at,
+                    fam.h.keys.length,
+                ),
+            ],
+        });
+        expect(landed).toMatchObject({ version: 3, groupKeyVersion: 2 });
+        const [row] = await db
+            .select({ roles: groupMemberships.roles })
+            .from(groupMemberships)
+            .where(
+                and(
+                    eq(groupMemberships.groupId, fam.groupId),
+                    eq(groupMemberships.userId, holder.userId),
+                ),
+            );
+        expect(row!.roles).toEqual([]);
+    });
+
     test('only a members holder uploads, and only what they signed', async () => {
         const fam = await family();
         const plain = await member();

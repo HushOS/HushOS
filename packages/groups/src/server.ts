@@ -468,7 +468,15 @@ async function checkRoster(
         signerMlDsaPublicKey: signerMlDsa.mlDsaPublicKey,
         changes: roster.members
             .filter((entry) => entry.sinceVersion === roster.rosterVersion)
-            .map((entry) => ({ userId: entry.userId, status: entry.status, roles: entry.roles })),
+            .map((entry) => {
+                const before = rosterEntry(previous, entry.userId);
+                return {
+                    userId: entry.userId,
+                    status: entry.status,
+                    roles: entry.roles,
+                    rekeyed: before !== undefined && !sameKeys(before, entry),
+                };
+            }),
         dropsHolder: next.droppedHolder,
         commitments: commitmentsOf(roster),
     } as groupsRepository.ParsedRoster;

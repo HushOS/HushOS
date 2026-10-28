@@ -46,14 +46,14 @@ import {
 } from '@/lib/families';
 import { removeBlocker } from '@/lib/family-leave';
 import {
-    continueMember,
+    continueMembers,
     letInWithoutWords,
     memberStandings,
     needsCheckFor,
     type MemberStanding,
 } from '@/lib/family-trust';
 import { GroupApiError, groupsApi } from '@/lib/groups/api';
-import { errorCopy, leftDueCopy, outcomeCopy } from '@/lib/groups/copy';
+import { errorCopy, leftDueCopy, namesInWords, outcomeCopy } from '@/lib/groups/copy';
 import {
     dropKeptAdmission,
     stageChange,
@@ -969,11 +969,15 @@ export function MemberList({
 
 /*
  * "Sam's account changed" on the family page (6.9), for someone who manages
- * the family: one notice per member whose account changed with no signed
- * chain from the keys their entry names. Continue puts them back in the
- * family folders, every folder getting new keys in the same change (3.3);
- * Check it's Sam compares their own twelve words, then does the same. A
- * manager among them manages the family again only once checked (3.6).
+ * the family: one notice naming every member whose account changed with no
+ * signed chain from the keys their entry names ("Sam’s and Ana’s accounts
+ * changed"). Continue puts them all back in the family folders in one change,
+ * every folder getting new keys in it (3.3): every folder's new keys go to
+ * every member, so no one of them can be let back in while another waits.
+ * Check it's Sam compares one person's own twelve words; when Sam is the only
+ * one, Sam goes back in as on Continue, and otherwise the rest wait for
+ * Continue. A manager among them manages the family again only once checked
+ * (3.6).
  */
 export function ChangedMembers({
     userId,
@@ -994,7 +998,7 @@ export function ChangedMembers({
     names: Record<string, string>;
 }) {
     const queryClient = useQueryClient();
-    const [busy, setBusy] = useState<string | null>(null);
+    const [busy, setBusy] = useState(false);
     const [checkingWith, setCheckingWith] = useState<FamilyMember | null>(null);
     const changed = members.filter(
         (member) =>
@@ -1003,22 +1007,23 @@ export function ChangedMembers({
             needsCheck.includes(member.userId),
     );
     if (changed.length === 0) return null;
+    const whos = changed.map((member) => firstName(member.name));
 
-    async function carryOn(member: FamilyMember) {
-        const who = firstName(member.name);
-        const managed = Boolean(
+    async function carryOn(list: readonly FamilyMember[]) {
+        const who = namesInWords(list.map((member) => firstName(member.name)));
+        const managed = list.filter((member) =>
             view?.members
                 .find((entry) => entry.userId === member.userId)
                 ?.roles.includes('members'),
         );
-        setBusy(member.userId);
+        setBusy(true);
         try {
-            const staged = await continueMember(
+            const staged = await continueMembers(
                 queryClient,
                 userId,
                 familyContext(userId),
                 groupId,
-                refOf(member),
+                list.map(refOf),
                 names,
             );
             const failed = stageFailure(staged, { family, person: who });
@@ -1027,19 +1032,27 @@ export function ChangedMembers({
                 staged.status === 'sent' && staged.outcome.status === 'landed'
                     ? staged.outcome.sync
                     : null;
-            const stillManages =
-                kept?.status === 'accepted' &&
-                kept.view.members
-                    .find((entry) => entry.userId === member.userId)
-                    ?.roles.includes('members');
+            const waiting = managed
+                .filter(
+                    (member) =>
+                        !(
+                            kept?.status === 'accepted' &&
+                            kept.view.members
+                                .find((entry) => entry.userId === member.userId)
+                                ?.roles.includes('members')
+                        ),
+                )
+                .map((member) => firstName(member.name));
             cue('success');
             toast.add({
                 type: 'success',
-                title: `${who} has the family folders again`,
+                title: `${who} ${list.length === 1 ? 'has' : 'have'} the family folders again`,
                 description:
-                    managed && !stillManages
-                        ? `${who} can manage the family again once you’ve checked it’s ${who}.`
-                        : undefined,
+                    waiting.length === 1
+                        ? `${waiting[0]} can manage the family again once you’ve checked it’s ${waiting[0]}.`
+                        : waiting.length > 1
+                          ? `${namesInWords(waiting)} can manage the family again once you’ve checked it’s them.`
+                          : undefined,
             });
         } catch (cause) {
             cue('error');
@@ -1049,50 +1062,46 @@ export function ChangedMembers({
                 description: errorCopy(cause, { family, person: who }),
             });
         } finally {
-            setBusy(null);
+            setBusy(false);
             void afterMembershipChange(queryClient, userId);
         }
     }
 
     return (
         <>
-            {changed.map((member) => {
-                const who = firstName(member.name);
-                return (
-                    <Alert
-                        key={member.userId}
-                        variant="info"
-                        data-account-changed={member.email ?? member.userId}
-                    >
-                        <AlertTitle>{who}’s account changed</AlertTitle>
-                        <AlertDescription>
-                            <p>
-                                This happens when someone starts their HushOS account over. Continue
-                                to give {who} the family folders again.
-                            </p>
-                            <div className="mt-3 flex flex-wrap gap-2">
-                                <Button
-                                    disabled={busy !== null}
-                                    onClick={() => void carryOn(member)}
-                                >
-                                    <PendingLabel
-                                        pending={busy === member.userId}
-                                        idle="Continue"
-                                        busy="Continuing"
-                                    />
-                                </Button>
-                                <Button
-                                    variant="outline"
-                                    disabled={busy !== null}
-                                    onClick={() => setCheckingWith(member)}
-                                >
-                                    Check it’s {who}
-                                </Button>
-                            </div>
-                        </AlertDescription>
-                    </Alert>
-                );
-            })}
+            <Alert
+                variant="info"
+                data-account-changed={changed
+                    .map((member) => member.email ?? member.userId)
+                    .join(' ')}
+            >
+                <AlertTitle>
+                    {changed.length === 1
+                        ? `${whos[0]}’s account changed`
+                        : `${namesInWords(whos.map((who) => `${who}’s`))} accounts changed`}
+                </AlertTitle>
+                <AlertDescription>
+                    <p>
+                        This happens when someone starts their HushOS account over. Continue to give{' '}
+                        {namesInWords(whos)} the family folders again.
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                        <Button disabled={busy} onClick={() => void carryOn(changed)}>
+                            <PendingLabel pending={busy} idle="Continue" busy="Continuing" />
+                        </Button>
+                        {changed.map((member) => (
+                            <Button
+                                key={member.userId}
+                                variant="outline"
+                                disabled={busy}
+                                onClick={() => setCheckingWith(member)}
+                            >
+                                Check it’s {firstName(member.name)}
+                            </Button>
+                        ))}
+                    </div>
+                </AlertDescription>
+            </Alert>
             <ContactFlowDialog
                 userId={userId}
                 start={
@@ -1105,9 +1114,11 @@ export function ChangedMembers({
                 }
                 onOpenChange={(open) => !open && setCheckingWith(null)}
                 onResolved={() => {
-                    // Checked over the keys they have now: they go back in, as on Continue.
+                    // Checked over the keys they have now: alone, they go back in, as on Continue;
+                    // with others whose accounts changed too, everyone waits for Continue.
                     const member = checkingWith;
-                    if (member) void carryOn(member);
+                    if (member && changed.length === 1) void carryOn([member]);
+                    else void afterMembershipChange(queryClient, userId);
                 }}
             />
         </>

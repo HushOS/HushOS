@@ -846,6 +846,69 @@ describe('the route policy', () => {
             successionDue: false,
         });
     });
+
+    test('a Continue on account changes may take members from entries with new keys, and only that, on POST rosters', async () => {
+        const creator = await createTestAccount();
+        const group = await family(creator);
+        const sam = await accepted(group.groupId, creator.userId, ['members']);
+        let head = await okHead(
+            await groups.appendChain(
+                admission(group, group.head, creator.userId, sam.userId, ['members']),
+            ),
+        );
+        const ana = await accepted(group.groupId, creator.userId, ['members']);
+        head = await okHead(
+            await groups.appendChain(
+                admission(group, head, creator.userId, ana.userId, ['members']),
+            ),
+        );
+        const write = (changes: Change[], route: groups.ChainRoute, label: string) => {
+            const next = roster(head, creator.userId, label, { changes, dropsHolder: true });
+            return groups.appendChain({
+                groupId: group.groupId,
+                uploaderUserId: creator.userId,
+                expectedRevision: head.revision,
+                route,
+                roster: next,
+                succession: succession(after(head, next), creator.userId, label),
+                cache: {},
+            });
+        };
+        const lets = (userId: string, roles: GroupRole[], rekeyed = true): Change => ({
+            userId,
+            status: 'active',
+            roles,
+            rekeyed,
+        });
+        // Their keys unchanged: a plain role change, refused off the member route.
+        expect(
+            await write([lets(sam.userId, [], false)], { kind: 'roster' }, 'not-rekeyed'),
+        ).toEqual({ status: 'invalid', reason: 'role-change' });
+        // New keys, but a role given rather than `members` taken.
+        expect(
+            await write(
+                [lets(sam.userId, ['members', 'guardian'])],
+                { kind: 'roster' },
+                'gives-a-role',
+            ),
+        ).toEqual({ status: 'invalid', reason: 'role-change' });
+        // New keys and `members` taken, but on another member's route.
+        expect(
+            await write(
+                [lets(sam.userId, []), lets(ana.userId, [])],
+                { kind: 'member', userId: ana.userId },
+                'other-route',
+            ),
+        ).toEqual({ status: 'invalid', reason: 'role-change' });
+        expect((await membership(group.groupId, sam.userId))!.roles).toEqual(['members']);
+        // Both let back in on one roster, neither managing until checked.
+        await okHead(
+            await write([lets(sam.userId, []), lets(ana.userId, [])], { kind: 'roster' }, 'both'),
+        );
+        expect((await membership(group.groupId, sam.userId))!.roles).toEqual([]);
+        expect((await membership(group.groupId, ana.userId))!.roles).toEqual([]);
+        expect((await membership(group.groupId, creator.userId))!.roles).toEqual(ORGANIZER);
+    });
 });
 
 describe('admission', () => {

@@ -828,12 +828,7 @@ async function stageLocked(
         v: 1,
         id: staged.outboxId,
         groupId,
-        // A Continue that also takes a manager's role goes on the member route for them: the server
-        // takes a role change nowhere else.
-        route:
-            op.kind === 'foldIn' && staged.memberRoute
-                ? { kind: 'member', userId: staged.memberRoute }
-                : ROUTES[op.kind](op),
+        route: ROUTES[op.kind](op),
         body: checked.body,
         stagedEnvelope: staged.stagedEnvelope,
         state: 'ready',

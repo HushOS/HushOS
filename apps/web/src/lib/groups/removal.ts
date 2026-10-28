@@ -2,7 +2,7 @@ import type { GroupView } from '@hushos/crypto';
 import { entryCommitment, keyCommitment, pinKeysOfServed } from '@hushos/crypto/pins';
 import { GroupApiError, isNotMember, lapsedPlansIn, type LapsedPlanNamed } from './api';
 import type { GroupContext } from './context';
-import { refusalCopy } from './copy';
+import { namesInWords, refusalCopy } from './copy';
 import { fillGrants, markDepartedLeft, renewHold, stageChange, type StageOutcome } from './outbox';
 import { fetchIdentities, syncGroup, type AreaState, type SyncResult } from './sync';
 
@@ -490,40 +490,53 @@ export class AnotherChangeWaitsError extends Error {
 }
 
 /*
- * Continue on a member's account change (6.9), once this account pins the
- * keys HushOS serves for them now: one roster that writes those keys into
- * their entry and gives every family folder new keys (3.3), sent on the
- * member route when it also takes the role that holds the family's key (the
- * worker's `memberRoute`). A manager among them keeps the role, and gets the
- * family key sealed to their new keys, only over a verified pin. Refused,
- * naming them, while another member's change no signed chain explains waits.
+ * Continue on members' account changes (6.9), once this account pins the
+ * keys HushOS serves for each of them now: one roster that writes those keys
+ * into their entries and gives every family folder new keys (3.3), however
+ * many are let back in, on POST rosters. A manager among them keeps the role,
+ * and gets the family key sealed to their new keys, only over a verified pin;
+ * otherwise the same roster takes the role (the server allows that there for
+ * an entry with new keys), so nothing of the family's is sealed to keys
+ * nobody checked. Everyone whose account changed is let back in together:
+ * every folder's new keys go to every member, so one left out would be sealed
+ * to the keys their account no longer has. A change waiting for someone not
+ * named is refused, naming them, before anything is signed.
  */
 export async function continueFoldIn(
     ctx: GroupContext,
     groupId: string,
-    userId: string,
+    userIds: readonly string[],
     names: Record<string, string> = {},
 ) {
     const rotations = ctx.rotations;
     if (!rotations) throw new Error('Open the family’s folders, then try again.');
+    if (userIds.length === 0) throw new Error('No one is waiting to be let back in.');
+    const named = new Set(userIds.map((id) => id.toLowerCase()));
     const synced = await syncGroup(ctx, groupId);
     if (synced.status !== 'accepted') throw new Error('HushOS couldn’t check this right now.');
     const identities = await fetchIdentities(ctx, groupId);
-    const served = identities.get(userId);
-    if (!served?.identity) throw new Error('HushOS couldn’t load their keys. Try again.');
+    const members = userIds.map((userId) => {
+        const served = identities.get(userId);
+        if (!served?.identity) throw new Error('HushOS couldn’t load their keys. Try again.');
+        return { userId, served: served.identity, links: served.links };
+    });
     for (const entry of synced.view.members) {
-        if (entry.status !== 'active' || entry.userId === userId || entry.userId === ctx.userId)
+        if (
+            entry.status !== 'active' ||
+            named.has(entry.userId.toLowerCase()) ||
+            entry.userId === ctx.userId
+        )
             continue;
         const theirs = identities.get(entry.userId)?.identity;
         if (!theirs) continue;
-        const [named, now] = await Promise.all([
+        const [listed, now] = await Promise.all([
             entryCommitment(entry),
             pinKeysOfServed(theirs, 'seen').then(keyCommitment, () => null),
         ]);
-        if (named !== null && now !== null && named !== now)
+        if (listed !== null && now !== null && listed !== now)
             throw new AnotherChangeWaitsError(
                 names[entry.userId] ?? 'Someone else in the family',
-                names[userId] ?? 'them',
+                namesInWords(userIds.map((userId) => names[userId] ?? 'them')),
             );
     }
     const areas = Object.keys(synced.view.areas).map((workspaceId) => ({ workspaceId, kinds: [] }));
@@ -532,8 +545,8 @@ export async function continueFoldIn(
         groupId,
         {
             kind: 'foldIn',
-            members: [{ userId, served: served.identity, links: served.links }],
-            continued: [userId],
+            members,
+            continued: [...userIds],
             rotations: await rotations.read(groupId, areas),
         },
         { writers: await rotations.writers(groupId) },
@@ -543,7 +556,7 @@ export async function continueFoldIn(
             ctx,
             groupId,
             staged.outcome.sync,
-            [{ userId }],
+            userIds.map((userId) => ({ userId })),
             await fetchIdentities(ctx, groupId),
         );
     return staged;

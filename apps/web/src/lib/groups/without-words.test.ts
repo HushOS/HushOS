@@ -9,7 +9,7 @@ import { GUARD_UNSAVED } from '@/lib/contact-guard';
 import type { GroupContext } from './context';
 import { createFamily, letIn, stageChange, type StageOutcome } from './outbox';
 import { AnotherChangeWaitsError, continueFoldIn, resealFolded, runDue } from './removal';
-import { ALICE, BOB, CAROL, familyServer } from './server-testkit';
+import { ALICE, BOB, CAROL, DAVE, familyServer } from './server-testkit';
 import { fetchIdentities } from './sync';
 import { account, bytes, pinOf } from './worker-testkit';
 
@@ -183,9 +183,9 @@ describe('the manager rule (3.6)', () => {
     });
 });
 
-/* Continue on a member's account change, as the family page does it once their new keys are pinned. */
-const continued = (f: { ctx: GroupContext; groupId: string }, userId: string) =>
-    continueFoldIn(f.ctx, f.groupId, userId, { [BOB]: 'Bob', [CAROL]: 'Carol' });
+/* Continue on members' account changes, as the family page does it once their new keys are pinned. */
+const continued = (f: { ctx: GroupContext; groupId: string }, ...userIds: string[]) =>
+    continueFoldIn(f.ctx, f.groupId, userIds, { [BOB]: 'Bob', [CAROL]: 'Carol', [DAVE]: 'Dave' });
 
 describe('a member’s account change with no signed chain', () => {
     test('is folded in only after Continue, never on its own, and that change rotates every family folder and seals the new keys to the new entry only', async () => {
@@ -233,25 +233,123 @@ describe('a member’s account change with no signed chain', () => {
         ).toEqual(rotated);
     });
 
-    test('while another member’s account change waits too, Continue is refused before anything is signed, naming them', async () => {
+    /*
+     * Everyone whose account changed, let back in by one Continue: one roster with each one's
+     * new keys, every folder rotated once, its new keys sealed to the keys each entry names now
+     * and never to the keys their accounts left; a manager among them loses the role, on POST
+     * rosters, with the family's key sealed to the managers who stay.
+     */
+    async function startOver(f: Awaited<ReturnType<typeof withBob>>, userIds: string[]) {
+        const fresh = new Map<string, Awaited<ReturnType<typeof account>>>();
+        for (const userId of userIds) {
+            const now = await account(userId);
+            fresh.set(userId, now);
+            f.server.serveAs(userId, now.served);
+            await pin(f.ctx, userId, firstSeen({ ...(await pinOf(now)), userId }));
+        }
+        return fresh;
+    }
+    async function oneContinueFor(userIds: string[], managers: string[]) {
+        const f = await withBob({
+            verified: true,
+            roles: managers.includes(BOB) ? ['members'] : [],
+        });
+        // A second family folder, so "every" means more than one.
+        expect(landed(await stageChange(f.ctx, f.groupId, { kind: 'area', name: 'Photos' }))).toBe(
+            true,
+        );
+        for (const userId of userIds.filter((id) => id !== BOB)) {
+            await pin(f.ctx, userId, await pinOf(f.server.people[userId as typeof CAROL]));
+            expect(
+                landed(await letThemIn(f, userId, managers.includes(userId) ? ['members'] : [])),
+            ).toBe(true);
+        }
+        const before = f.server.log.length;
+        const old = new Map<string, string | null>();
+        for (const userId of userIds)
+            old.set(
+                userId,
+                await keyCommitment(await pinOf(f.server.people[userId as typeof BOB])),
+            );
+        const fresh = await startOver(f, userIds);
+        const staged = await continued(f, ...userIds);
+        expect(landed(staged)).toBe(true);
+        // One roster call, on POST rosters, and nothing on the member route.
+        const calls = f.server.log
+            .slice(before)
+            .filter((entry) => ['rosters', 'member'].includes(entry.route));
+        expect(calls.map((entry) => entry.route)).toEqual(['rosters']);
+        const call = calls[0]!.body as RosterCallBody;
+        const roster = parseRoster(bytes(call.roster.statement));
+        const rotated = (call.rotations ?? []).map((rotation) => rotation.workspaceId).sort();
+        expect(rotated).toEqual([...f.server.areas.keys()].sort());
+        for (const userId of userIds) {
+            const entry = entryOf(call, userId);
+            // Each one's entry names their new keys, and no manager role on keys nobody checked.
+            expect(await entryCommitment(entry)).toBe(
+                await keyCommitment(await pinOf(fresh.get(userId)!)),
+            );
+            expect(await entryCommitment(entry)).not.toBe(old.get(userId));
+            expect(entry.roles).toEqual([]);
+            // Every folder's new key and no other, each sealed under this roster, whose entry for
+            // them names the new keys: none to the roster before, whose entry named the old ones.
+            const theirs = (call.grants ?? []).filter((grant) => grant.granteeUserId === userId);
+            expect(theirs.map((grant) => grant.workspaceId).sort()).toEqual(rotated);
+            for (const grant of theirs) {
+                expect(grant.rosterVersion).toBe(roster.rosterVersion);
+                expect(grant.workspaceKeyVersion).toBe(
+                    call.rotations!.find((rotation) => rotation.workspaceId === grant.workspaceId)!
+                        .toVersion,
+                );
+            }
+        }
+        // Nothing of the family sealed to anyone but Alice, the one manager who stays.
+        if (managers.length > 0) expect(call.succession).toBeDefined();
+        expect((call.seals ?? []).map((seal) => seal.holderUserId)).toEqual(
+            managers.length > 0 ? [ALICE] : [],
+        );
+        await resealAfter(f, staged, userIds);
+        expect(f.server.log.slice(before).filter((entry) => entry.route === 'key-seals')).toEqual(
+            [],
+        );
+        // And the family on the server agrees: they're members, the role gone.
+        for (const userId of managers)
+            expect(f.server.members.get(userId)?.roles ?? []).not.toContain('members');
+    }
+    const resealAfter = async (
+        f: Awaited<ReturnType<typeof withBob>>,
+        staged: StageOutcome,
+        userIds: string[],
+    ) => {
+        if (staged.status === 'sent' && staged.outcome.status === 'landed')
+            await resealFolded(
+                f.ctx,
+                f.groupId,
+                staged.outcome.sync,
+                userIds.map((userId) => ({ userId })),
+                await fetchIdentities(f.ctx, f.groupId),
+            );
+    };
+
+    test('two members whose accounts changed are let back in by one Continue, a manager among them losing the role', async () => {
+        await oneContinueFor([BOB, CAROL], [CAROL]);
+    });
+
+    test('three are let back in by one Continue, two managers among them both losing the role', async () => {
+        await oneContinueFor([BOB, CAROL, DAVE], [BOB, DAVE]);
+    });
+
+    test('a Continue that leaves out someone whose account changed too is refused before anything is signed, naming them', async () => {
         const f = await withBob();
         const carol = await pinOf(f.server.people[CAROL]);
         await pin(f.ctx, CAROL, firstSeen(carol));
         expect(landed(await letThemIn(f, CAROL))).toBe(true);
-        // Both start over, with no signed chain from the keys their entries name.
-        const bob = await account(BOB);
-        const carolNow = await account(CAROL);
-        f.server.serveAs(BOB, bob.served);
-        f.server.serveAs(CAROL, carolNow.served);
-        await pin(f.ctx, BOB, firstSeen({ ...(await pinOf(bob)), userId: BOB }));
-        await pin(f.ctx, CAROL, firstSeen({ ...(await pinOf(carolNow)), userId: CAROL }));
+        await startOver(f, [BOB, CAROL]);
         const before = f.server.log.length;
-        const refused = continued(f, BOB);
-        await expect(refused).rejects.toThrow(AnotherChangeWaitsError);
+        await expect(continued(f, BOB)).rejects.toThrow(AnotherChangeWaitsError);
         await expect(continued(f, BOB)).rejects.toThrow(
             'Carol’s account changed too. HushOS can’t give Bob the family folders again while Carol’s change is waiting.',
         );
-        await expect(continued(f, CAROL)).rejects.toThrow(/^Bob’s account changed too/);
         // Nothing signed, nothing sent, nothing kept to send later.
         expect(
             f.server.log
@@ -259,9 +357,8 @@ describe('a member’s account change with no signed chain', () => {
                 .filter((entry) => ['rosters', 'member'].includes(entry.route)),
         ).toEqual([]);
         expect(await f.ctx.store.outbox(ALICE, f.groupId)).toEqual([]);
-        // Once Carol's change is gone (served her old keys again), Bob is let back in alone.
-        f.server.serveAs(CAROL, f.server.people[CAROL].served);
-        expect(landed(await continued(f, BOB))).toBe(true);
+        // Both together go.
+        expect(landed(await continued(f, BOB, CAROL))).toBe(true);
     });
 
     test('a manager let back in that way keeps the folders but not the role: the family’s key is sealed to their new keys only after a check', async () => {
@@ -271,9 +368,9 @@ describe('a member’s account change with no signed chain', () => {
         await pin(f.ctx, BOB, firstSeen({ ...(await pinOf(fresh)), userId: BOB }));
         const staged = await continued(f, BOB);
         expect(landed(staged)).toBe(true);
-        // Taking the role is a role change, which the server takes only on the member route for Bob.
-        expect(f.server.sent('rosters')).toEqual([]);
-        const [call] = f.server.sent('member');
+        // The role goes in the Continue's own roster, on POST rosters.
+        expect(f.server.sent('member')).toEqual([]);
+        const [call] = f.server.sent('rosters');
         expect(entryOf(call!, BOB).roles).toEqual([]);
         // The role going is a new family key, sealed to the managers who remain: Alice alone.
         expect(call!.succession).toBeDefined();
@@ -291,7 +388,7 @@ describe('a member’s account change with no signed chain', () => {
         // Checked over the new keys: managing again, with the family's key sealed to them.
         await pin(f.ctx, BOB, { ...(await pinOf(fresh)), userId: BOB });
         expect(landed(await promote(f, BOB))).toBe(true);
-        const [, roles] = f.server.sent('member');
+        const [roles] = f.server.sent('member');
         expect(
             (roles as RosterCallBody & { keySeal?: { holderUserId: string } }).keySeal,
         ).toMatchObject({ holderUserId: BOB });
