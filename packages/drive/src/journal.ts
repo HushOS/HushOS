@@ -1,4 +1,5 @@
 import type { DBSchema } from 'idb';
+import type { NodeAttributes } from '@hushos/crypto';
 import { cachedConnection } from './connection';
 
 /*
@@ -79,6 +80,8 @@ export type JournalEntry = {
     origin?: UploadOrigin;
     /* How a copy signs; absent on older rows, where a copy signs re-sealed. */
     signAs?: UploadSignatures;
+    /* The attributes the new node's record carries (EnqueueInput.attributes); absent for none. */
+    attributes?: NodeAttributes;
     /* The stash holding this upload's bytes on this device, when it has one. */
     stash?: string | null;
     /* The file this upload moves here, when it is a move; absent on older rows. */
@@ -103,6 +106,8 @@ export type QueuedEntry = {
     origin: UploadOrigin;
     /* How a copy signs; absent on older rows, where a copy signs re-sealed. */
     signAs?: UploadSignatures;
+    /* The attributes the new node's record carries (EnqueueInput.attributes); absent for none. */
+    attributes?: NodeAttributes;
     stash: string | null;
     /* The file this upload moves here, when it is a move; absent on older rows. */
     move?: UploadMove | null;

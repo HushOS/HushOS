@@ -143,7 +143,8 @@ class SaveViewModel(application: Application) : AndroidViewModel(application) {
         }
         val mime = runCatching { context.contentResolver.getType(uri) }.getOrNull()
         val fallback = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "Shared file"
-        return Item((name ?: fallback).replace('/', ' ').trim().ifEmpty { "Shared file" }, mime, size)
+        // As the sharing app gives it, it may hold a lone surrogate: made well formed, so it uploads under a readable name.
+        return Item(com.hushos.app.data.wellFormed((name ?: fallback).replace('/', ' ').trim()).ifEmpty { "Shared file" }, mime, size)
     }
 
     /* Streamed copies, one by one, into the app's own storage (AccountStore wipes it with the cache). */

@@ -17,8 +17,11 @@ extension Vault {
      */
     func mint(_ kind: IdKind, in workspace: String) throws -> NewId { try HushOSCore.newId(kind: kind, scopeId: workspace) }
 
-    /* A new folder; `signing` is `.own` for one this person makes, and a copy's verdict for a copied folder's name. */
-    public func createFolder(in parentId: String, name: String, signing: Signing = .own) async throws -> Opened {
+    /*
+     * A new folder; `signing` is `.own` for one this person makes, and a copy's verdict for a copied folder's name.
+     * `attributes` are a copied folder's source's, carried whole (keys this app doesn't know included); none for a new one.
+     */
+    public func createFolder(in parentId: String, name: String, signing: Signing = .own, attributes: [String: String] = [:]) async throws -> Opened {
         _ = try await loadWorkspace()
         let parent = try await resolve(parentId)
         let family = try familyTarget(parent.node.workspaceId)
@@ -29,7 +32,7 @@ extension Vault {
         let id = made.id
         let (key, wrapped) = try newKey(id, under: parent, keyEpoch: epochs.from, family: family)
         do {
-            let metadata = NodeMetadata(name: name, mime: nil, size: nil, modified: nil)
+            let metadata = NodeMetadata(name: name, mime: nil, size: nil, modified: nil, attributes: attributes)
             let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
             let signature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .folder, version: 1, envelope: sealed, signing: signing)
             let nodes = try await api.createFolders(workspaceId: workspace.workspaceId, folders: [[
@@ -78,7 +81,9 @@ extension Vault {
             guard let opened = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
             key = opened
         }
-        let metadata = NodeMetadata(name: name, mime: item.metadata.mime, size: item.metadata.size, modified: item.metadata.modified)
+        // Everything but the name as it was, attributes this app doesn't know included.
+        let metadata = NodeMetadata(name: name, mime: item.metadata.mime, size: item.metadata.size, modified: item.metadata.modified,
+                                    attributes: item.metadata.attributes)
         let sealed = try metadataSeal(
             ctx: MetadataContext(workspaceId: item.node.workspaceId, nodeId: nodeId, metadataVersion: item.node.metadataVersion + 1),
             nodeKey: key, metadata: metadata
@@ -183,7 +188,8 @@ extension Vault {
         let newName = try checkName(name: name ?? source.name)
         var done = 0
         if source.isFolder {
-            let made = try await createFolder(in: parent.id, name: newName, signing: .copy(try await prior(FamilySync.metadataRecord(of: source.node)) { $0.metadata(of: source.node) }))
+            let made = try await createFolder(in: parent.id, name: newName, signing: .copy(try await prior(FamilySync.metadataRecord(of: source.node)) { $0.metadata(of: source.node) }),
+                                              attributes: source.metadata.attributes)
             done += 1
             progress(done)
             for child in try await children(of: source.id) {
@@ -204,7 +210,8 @@ extension Vault {
         let versionPrior = try await prior(FamilySync.versionRecord(version, of: source.node)) { $0.version(version, of: source.node) }
         let (key, keyEnvelope) = try newKey(id, under: parent, keyEpoch: epochs.from, family: family)
         defer { if family, self.opened[NodeRef(workspaceId: workspace.workspaceId, nodeId: id)] == nil { areaLedger.forgetNodeKey(workspaceId: workspace.workspaceId, nodeId: id) } }
-        let metadata = NodeMetadata(name: newName, mime: source.metadata.mime, size: source.metadata.size, modified: source.metadata.modified)
+        let metadata = NodeMetadata(name: newName, mime: source.metadata.mime, size: source.metadata.size, modified: source.metadata.modified,
+                                    attributes: source.metadata.attributes)
         let metadataEnvelope = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
         let contentKeyEnvelope = try versionReseal(
             ctx: VersionContext(workspaceId: workspace.workspaceId, nodeId: id, versionId: versionId, objectId: version.objectId),
@@ -416,7 +423,7 @@ extension Vault {
     }
 
     private func begin(fileURL: URL, name: String, mime: String?, parentId: String, replacing given: Opened?, thumbnailBytes: UInt32,
-                       signing: (metadata: Signing, version: Signing), waited: Bool = false) async throws -> Begun {
+                       signing: (metadata: Signing, version: Signing), attributes: [String: String] = [:], waited: Bool = false) async throws -> Begun {
         _ = try await loadWorkspace()
         var replacing = given
         // The drive the parent (or the file replaced) lives in: a shared folder's is the granter's.
@@ -434,9 +441,9 @@ extension Vault {
                 replacing = fresh
             }
         }
-        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
-        let plaintextSize = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
-        let modified = ISO8601DateFormatter().string(from: (attributes[.modificationDate] as? Date) ?? Date())
+        let onDisk = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let plaintextSize = (onDisk[.size] as? NSNumber)?.uint64Value ?? 0
+        let modified = ISO8601DateFormatter().string(from: (onDisk[.modificationDate] as? Date) ?? Date())
         let madeVersion = try mint(.version, in: workspace.workspaceId)
         let madeObject = try mint(.object, in: workspace.workspaceId)
         let (versionId, objectId) = (madeVersion.id, madeObject.id)
@@ -466,7 +473,8 @@ extension Vault {
             nodeInput = ["existing": true, "id": nodeId, "keyEpoch": replacing.node.keyEpoch,
                          "expectedVersionId": replacing.node.currentVersion?.id ?? NSNull()]
             // A new version has a new size and date; the sealed metadata says so too, as the lists read it.
-            final = NodeMetadata(name: replacing.metadata.name, mime: mime ?? replacing.metadata.mime, size: plaintextSize, modified: modified)
+            final = NodeMetadata(name: replacing.metadata.name, mime: mime ?? replacing.metadata.mime, size: plaintextSize, modified: modified,
+                                 attributes: replacing.metadata.attributes)
         } else {
             let parent = try await resolve(parentId)
             // The folder's key as the ledger holds it, before anything is asked of the server: a key change that hasn't
@@ -478,7 +486,7 @@ extension Vault {
             let wrapped: Data
             (nodeKey, wrapped) = try newKey(nodeId, under: parent, keyEpoch: epochs.from, family: family)
             madeKey = family ? nodeId : nil
-            final = NodeMetadata(name: try checkName(name: name), mime: mime, size: plaintextSize, modified: modified)
+            final = NodeMetadata(name: try checkName(name: name), mime: mime, size: plaintextSize, modified: modified, attributes: attributes)
             let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: nodeId, metadataVersion: 1), nodeKey: nodeKey, metadata: final)
             nodeInput = ["existing": false, "id": nodeId, "idSeed": made.seed, "parentId": parent.id, "keyEpoch": epochs.from,
                          "parentKeyEpoch": parent.node.keyEpoch, "keyEnvelope": base64urlEncode(bytes: wrapped),
@@ -580,14 +588,16 @@ extension Vault {
 
     /*
      * `signing` is `.own` for what this person uploads; a copy that travels as an upload (into
-     * another drive, or saved from a link or a share) passes the verdicts it is signed by.
+     * another drive, or saved from a link or a share) passes the verdicts it is signed by, and its
+     * source's `attributes`. A new version keeps the replaced file's attributes whatever is passed.
      */
     public func upload(
         fileURL: URL, name: String, mime: String?, in parentId: String, replacing: Opened?,
-        thumbnail: Data? = nil, signing: (metadata: Signing, version: Signing) = (.own, .own), progress: @Sendable (Double) -> Void = { _ in }
+        thumbnail: Data? = nil, signing: (metadata: Signing, version: Signing) = (.own, .own), attributes: [String: String] = [:],
+        progress: @Sendable (Double) -> Void = { _ in }
     ) async throws -> Opened {
         let begun = try await begin(fileURL: fileURL, name: name, mime: mime, parentId: parentId, replacing: replacing,
-                                    thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: signing)
+                                    thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: signing, attributes: attributes)
         var urls = begun.urls
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
@@ -656,10 +666,15 @@ extension Vault {
         public let mime: String?
         public let size: UInt64?
         public let modified: String?
+        /* The record's attributes, carried whole; nil for none (and for an upload stored before attributes). */
+        public var attributes: [String: String]? = nil
         /* Presigned PUT addresses by part number; refreshed when they expire. */
         public var urls: [Int: String]
         /* A replacement's version and the name record it replaces (nil for a new file, or a record kept before it was stored). */
         public var landing: Landing? = nil
+
+        /* The record this upload seals when it lands, attributes and all. */
+        var final: NodeMetadata { NodeMetadata(name: name, mime: mime, size: size, modified: modified, attributes: attributes ?? [:]) }
     }
 
     /*
@@ -719,6 +734,7 @@ extension Vault {
                 uploadId: begun.uploadId, workspaceId: begun.workspaceId, nodeId: begun.nodeId, parentId: begun.parentId,
                 partCount: Int(begun.chunkCount), replacing: begun.replacing,
                 name: begun.final.name, mime: begun.final.mime, size: begun.final.size, modified: begun.final.modified,
+                attributes: begun.final.attributes.isEmpty ? nil : begun.final.attributes,
                 urls: urls.mapValues(\.url), landing: begun.landing
             )
         } catch {
@@ -740,8 +756,7 @@ extension Vault {
     public func finishUpload(_ sealed: SealedUpload, etags: [Int: String]) async throws -> Opened {
         try await complete(uploadId: sealed.uploadId, workspaceId: sealed.workspaceId, nodeId: sealed.nodeId, parentId: sealed.parentId,
                                   replacing: sealed.replacing,
-                                  final: NodeMetadata(name: sealed.name, mime: sealed.mime, size: sealed.size, modified: sealed.modified),
-                                  nodeKey: nil, etags: etags, landing: sealed.landing)
+                                  final: sealed.final, nodeKey: nil, etags: etags, landing: sealed.landing)
     }
 
     /* A new version as the server published it: its name record is repaired only while both are still these. */
@@ -763,7 +778,7 @@ extension Vault {
     @discardableResult
     public func repairLanded(_ sealed: SealedUpload, published: Published) async throws -> Bool {
         try await repairLanded(nodeId: sealed.nodeId, workspaceId: sealed.workspaceId,
-                               final: NodeMetadata(name: sealed.name, mime: sealed.mime, size: sealed.size, modified: sealed.modified), published: published)
+                               final: sealed.final, published: published)
     }
 
     func repairLanded(nodeId: String, workspaceId: String, final: NodeMetadata, published: Published) async throws -> Bool {
@@ -881,7 +896,7 @@ extension Vault {
             metadata = .copy(try await familyPrior(FamilySync.metadataRecord(of: source.node), in: source.node.workspaceId, copying: true))
         }
         if source.isFolder {
-            let made = try await createFolder(in: parentId, name: name ?? source.name, signing: metadata)
+            let made = try await createFolder(in: parentId, name: name ?? source.name, signing: metadata, attributes: source.metadata.attributes)
             for child in try await children(of: source.id) { _ = try await copyAcross(child.id, to: made.id, progress: progress) }
             return made
         }
@@ -903,6 +918,6 @@ extension Vault {
         try await download(source.id, to: file) { progress($0 / 2) }
         let thumbnail = try? await thumbnail(source.id)
         return try await upload(fileURL: file, name: name ?? source.name, mime: source.metadata.mime, in: parentId, replacing: nil, thumbnail: thumbnail,
-                                signing: (metadata, version)) { progress(0.5 + $0 / 2) }
+                                signing: (metadata, version), attributes: source.metadata.attributes) { progress(0.5 + $0 / 2) }
     }
 }

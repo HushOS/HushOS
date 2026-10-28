@@ -40,6 +40,8 @@ extension OnFakeDrive {
             let metadata = try metadataOpen(ctx: MetadataContext(workspaceId: family.workspaceId, nodeId: family.fileId, metadataVersion: 2), nodeKey: family.fileKey,
                                             envelope: try base64urlDecode(value: try #require(renamed["metadataEnvelope"] as? String)))
             #expect(metadata.name == "Recipes (old).txt")
+            // Everything else carried over, attributes this app doesn't know included.
+            #expect(metadata.attributes == FamilyFixture.attributes)
 
             try await phone.vault.trash(family.fileId)
             #expect(server.node(family.fileId)?.trashedAt != nil)
@@ -329,6 +331,11 @@ extension OnFakeDrive {
             let key = try nodeOpen(ctx: NodeKeyContext(workspaceId: family.personal, nodeId: nodeId, parentId: family.personalRoot.id, parentKeyEpoch: 1,
                                                        keyEpoch: try #require((node["keyEpoch"] as? NSNumber)?.uint64Value)),
                                    parentKey: family.personalRootKey, keyEnvelope: try base64urlDecode(value: try #require(node["keyEnvelope"] as? String)))
+            // Made again under the destination's keys, the record keeps the photo's attributes.
+            let metadata = try metadataOpen(ctx: MetadataContext(workspaceId: family.personal, nodeId: nodeId, metadataVersion: 1), nodeKey: key,
+                                            envelope: try base64urlDecode(value: try #require(node["metadataEnvelope"] as? String)))
+            #expect(metadata.name == "Beach.jpg")
+            #expect(metadata.attributes == FamilyFixture.attributes)
             let objectId = try #require(begin.body["objectId"] as? String)
             let suite = UInt32(try #require((begin.body["contentSuite"] as? NSNumber)?.intValue))
             let version = try versionOpen(

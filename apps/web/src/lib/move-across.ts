@@ -130,6 +130,8 @@ export async function moveAcross(
                 // Signed as the person moving it, as a copy is: a family folder's writer
                 // becomes the mover (docs/families-shared-pool.md 3.8).
                 signAs: copySignatureForms(node, 'drive'),
+                // Its record's attributes come along, every key this client does not know included.
+                attributes: node.metadata?.attributes,
                 move: {
                     of: {
                         workspaceId: node.workspaceId,
@@ -150,6 +152,7 @@ export async function moveAcross(
         if (node.kind === 'file') return [await moveFile(node, parent, name)];
         const [made] = await into.createFolderPath(parent, [name], {
             signAs: copySignatureForms(node, 'drive').metadata,
+            attributes: node.metadata?.attributes,
         });
         tick();
         const queued: string[] = [];

@@ -12,6 +12,8 @@ import {
     encryptChunk,
     encryptThumbnail,
     LEGACY_CONTENT_SUITE,
+    metadataContext,
+    openEnvelopeBytes,
     sealDocument,
     sealMetadata,
     sealVersion,
@@ -177,6 +179,34 @@ const metadata = {
     modified: '2026-09-22T10:00:00.000Z',
 };
 const metadataCtx = { workspaceId, nodeId, metadataVersion: 3 };
+/*
+ * The same node's record with attributes: a key no client knows yet, one named
+ * like a field, and values both JSON writers must escape alike. `plaintext` is
+ * what sealMetadata wrote, padding trimmed: the core writes these exact bytes.
+ */
+const attributedMetadata = {
+    name: 'Plans',
+    mime: null,
+    size: null,
+    modified: null,
+    attributes: {
+        colour: 'blue',
+        name: 'not the name',
+        'zz-unknown_1': 'Ünï "quoted" \\ back\nline\ttab \u0001 \u007f \u2028 😀',
+    },
+};
+const attributedCtx = { workspaceId, nodeId, metadataVersion: 4 };
+const attributedEnvelope = await sealMetadata(attributedMetadata, nodeKey, attributedCtx);
+const attributed = {
+    metadata: attributedMetadata,
+    metadataCtx: attributedCtx,
+    metadataEnvelope: encode(attributedEnvelope),
+    plaintext: new TextDecoder()
+        .decode(
+            await openEnvelopeBytes(attributedEnvelope, nodeKey, metadataContext(attributedCtx)),
+        )
+        .trimEnd(),
+};
 const contentKey = random(32);
 const contentNonce = random(16);
 
@@ -250,6 +280,7 @@ const node = {
     metadata,
     metadataCtx,
     metadataEnvelope: encode(await sealMetadata(metadata, nodeKey, metadataCtx)),
+    attributed,
     // Suite 3 with a thumbnail, one chunk of file and zeros.
     version: await version(CONTENT_SUITE, 1000, bytes(300, 5), 0),
     // Suite 3 without one; and an empty file, the smallest bucket.
