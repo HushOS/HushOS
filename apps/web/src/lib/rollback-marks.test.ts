@@ -507,6 +507,23 @@ describe('rollback marks', () => {
         ).rejects.toBeInstanceOf(RollbackMarksError);
     });
 
+    test('after a master-key rotation, the kept envelope is the re-wrapped one, so it still opens', async () => {
+        const keys = server();
+        const b = browser(keys);
+        b.unlock(MAYA);
+        await b.raise(MAYA, { settings: 6, identity: 2 });
+        keys.rotate(MAYA);
+        // Read with the server answering: nothing rises, but the marks opened under its envelope.
+        const after = browser(keys);
+        after.unlock(MAYA);
+        expect((await after.read(MAYA)).settings).toBe(6);
+        // Later the server does not answer: the kept envelope must open under the new account key.
+        keys.down(true);
+        const offline = browser(keys);
+        offline.unlock(MAYA);
+        expect(await offline.read(MAYA)).toMatchObject({ settings: 6, identity: 2 });
+    });
+
     test('plaintext marks that could not be sealed stay, and still count', async () => {
         local.setItem(`hushos.settings-seen:${MAYA}`, '8');
         const b = browser();

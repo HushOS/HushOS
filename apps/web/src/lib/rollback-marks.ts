@@ -160,6 +160,9 @@ function snapshot(storage: Store, userId: string) {
 }
 const unchanged = (a: Map<string, string>, b: Map<string, string>) =>
     a.size === b.size && [...a].every(([key, value]) => b.get(key) === value);
+const sameKey = (a: SettingsKeyEnvelope | null, b: SettingsKeyEnvelope | null) =>
+    a?.nonce === b?.nonce && a?.ciphertext === b?.ciphertext;
+
 export function createRollbackMarks(options: {
     sealer: MarksSealer;
     /* localStorage; throws where the browser refuses site storage. */
@@ -190,7 +193,9 @@ export function createRollbackMarks(options: {
     /*
      * One update of the stored record, alone across tabs: the record is read, opened, raised
      * to `to` and sealed again in one step under one settings key (MarksSealer.update), so it
-     * never moves to another key it did not open under. With nothing
+     * never moves to another key it did not open under. The envelope kept beside it is
+     * replaced by the one that just opened it (after a master-key rotation, the server's
+     * re-wrapped one), so the fallback opens under the account key in use now. With nothing
      * stored, a read asks for no key and finds none.
      */
     async function update(
@@ -216,8 +221,8 @@ export function createRollbackMarks(options: {
                 throw new MarksUnreadableError(error);
             }
             if (!result) throw new MarksUnreadableError();
-            const kept = record?.key ?? key ?? null;
-            if (!record || result.changed) {
+            const kept = key ?? record?.key ?? null;
+            if (!record || result.changed || !sameKey(kept, record.key)) {
                 const next: MarksRecord = { marks: result.envelope, key: kept };
                 storage.setItem(MARKS_PREFIX + slot, JSON.stringify(next));
             }
