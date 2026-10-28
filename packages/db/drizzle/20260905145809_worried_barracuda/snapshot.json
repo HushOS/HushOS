@@ -1,16 +1,35 @@
 {
-    "version": "8",
+    "type": "base",
+    "version": "9",
     "dialect": "postgres",
     "id": "5a77452d-8998-40b6-b48d-44430568084a",
     "prevIds": ["00000000-0000-0000-0000-000000000000"],
+    "footprints": [
+        {
+            "statementType": "create_table",
+            "statementTarget": ["table", "public", "workspaces"],
+            "writes": [
+                "s|tbl|public.workspaces",
+                "n|tbl|public.workspaces",
+                "e|tbl|public.workspaces",
+                "n|rel|public.workspaces",
+                "n|type|public.workspaces",
+                "n|rel|public.workspaces_pkey"
+            ],
+            "reads": ["n|sch|public"]
+        }
+    ],
     "ddl": [
         {
-            "isRlsEnabled": false,
+            "schema": "public",
             "name": "workspaces",
-            "entityType": "tables",
-            "schema": "public"
+            "isRlsEnabled": false,
+            "entityType": "tables"
         },
         {
+            "schema": "public",
+            "table": "workspaces",
+            "name": "id",
             "type": "uuid",
             "typeSchema": null,
             "notNull": true,
@@ -18,12 +37,12 @@
             "default": "gen_random_uuid()",
             "generated": null,
             "identity": null,
-            "name": "id",
-            "entityType": "columns",
-            "schema": "public",
-            "table": "workspaces"
+            "entityType": "columns"
         },
         {
+            "schema": "public",
+            "table": "workspaces",
+            "name": "createdAt",
             "type": "timestamp with time zone",
             "typeSchema": null,
             "notNull": true,
@@ -31,19 +50,15 @@
             "default": "now()",
             "generated": null,
             "identity": null,
-            "name": "createdAt",
-            "entityType": "columns",
-            "schema": "public",
-            "table": "workspaces"
+            "entityType": "columns"
         },
         {
-            "columns": ["id"],
-            "nameExplicit": false,
-            "name": "workspaces_pkey",
             "schema": "public",
             "table": "workspaces",
+            "name": "workspaces_pkey",
+            "columns": ["id"],
+            "nameExplicit": false,
             "entityType": "pks"
         }
-    ],
-    "renames": []
+    ]
 }

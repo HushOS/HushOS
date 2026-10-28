@@ -17,7 +17,7 @@ services:
             retries: 10
 
     garage:
-        image: dxflrs/garage:v2.3.0
+        image: dxflrs/garage:v2.5.0
         restart: unless-stopped
         environment:
             GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?Run bun run setup first}

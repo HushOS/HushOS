@@ -53,7 +53,7 @@ export type {
     SecurityWorkspaceGrant,
 } from './security';
 export type { WorkspaceKeyEnvelope } from './workspace';
-export type { NodeMetadata } from './drive';
+export type { NodeAttributes, NodeMetadata } from './drive';
 export type { Integrity, NodeKind, SignatureForm } from './signatures';
 export { checkId, deriveId, newId, type GroupIdKind, type IdKind } from './ids';
 export type { ContactPin, Settings, SettingsEnvelope, SettingsKeyEnvelope } from './contacts';

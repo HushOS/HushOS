@@ -40,6 +40,12 @@ extension OfflineStore {
             root.appendingPathComponent("share-staging/sheet-1/Scan.pdf"),
             root.appendingPathComponent("state/offline-entries.json"),
             root.appendingPathComponent("local/files-parents.json"),
+            // The rollback marks, sealed, and the plaintext ones an earlier version kept across sign-outs.
+            root.appendingPathComponent("local/marks/dm3BIs9g8rvG3OeM5lsOQA.json"),
+            // A family's join check, named by account and family.
+            root.appendingPathComponent("local/groups/alice_family.holds"),
+            root.appendingPathComponent("local/settings-marks.json"),
+            root.appendingPathComponent("local/identity-marks.json.lock"),
             temporary.appendingPathComponent("opened/node-a/version-1/Tax return.pdf"),
             temporary.appendingPathComponent("links/node-d/version-3/Shared.pdf"),
             temporary.appendingPathComponent("kit-1/hushos-recovery-kit.txt"),
@@ -91,6 +97,15 @@ extension OfflineStore {
         try leaveAlicesData()
         store.wipe()
         for file in alicesFiles { #expect(!exists(file), "\(file.lastPathComponent) survived sign-out") }
+        #expect(counter.count == 1)
+        #expect(store.owner() == nil)
+    }
+
+    @Test func aRemovedDeviceKeepsNothingOfTheAccountEither() throws {
+        store.claim(alice)
+        try leaveAlicesData()
+        store.wipeAfterRemoval()
+        for file in alicesFiles { #expect(!exists(file), "\(file.lastPathComponent) survived the removal") }
         #expect(counter.count == 1)
         #expect(store.owner() == nil)
     }
@@ -158,7 +173,7 @@ extension OfflineStore {
         let node = NodeView(id: id, workspaceId: "w", parentId: "p", kind: folder ? "folder" : "file", keyEpoch: 1, parentKeyEpoch: 1,
                             keyEnvelope: "", metadataVersion: 1, metadataEnvelope: "", currentVersion: nil, trashedAt: nil,
                             changeSeq: 1, createdAt: nil, updatedAt: nil)
-        return Opened(node: node, metadata: NodeMetadata(name: name, mime: nil, size: 3, modified: nil), nodeKey: nil)
+        return Opened(node: node, metadata: NodeMetadata(name: name, mime: nil, size: 3, modified: nil, attributes: [:]), nodeKey: nil)
     }
 
     @Test func keptFoldersAndTheirFilesGoWithTheAccount() {

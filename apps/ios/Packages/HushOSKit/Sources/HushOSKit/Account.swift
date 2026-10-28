@@ -224,8 +224,9 @@ extension Auth {
         return session
     }
 
-    static func call(_ path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> [String: Any] {
-        let session = try session()
+    /* `as` names the session to send: a vault's own, so what it writes never goes out under another account's. */
+    static func call(_ path: String, method: String = "GET", body: [String: Any]? = nil, as owner: SharedKeychain.Session? = nil) async throws -> [String: Any] {
+        let session = try testSession ?? owner ?? session()
         guard let url = URL(string: session.origin + path) else { throw AuthError.message("Bad HushOS address.") }
         var request = URLRequest(url: url)
         request.httpMethod = method
@@ -439,8 +440,8 @@ extension Auth {
     }
 
     /* The recovery key envelope the server keeps, and whether the person confirmed saving the phrase. */
-    public static func recoveryKey() async throws -> (envelope: RecoveryEnvelope, confirmed: Bool) {
-        let reply = try await call("/api/auth/recovery-key")
+    public static func recoveryKey(as owner: SharedKeychain.Session? = nil) async throws -> (envelope: RecoveryEnvelope, confirmed: Bool) {
+        let reply = try await call("/api/auth/recovery-key", as: owner)
         guard let json = reply["recovery"] as? [String: Any] else { throw AuthError.message("This account has no recovery key.") }
         return (recoveryEnvelope(from: json), reply["confirmed"] as? Bool ?? false)
     }

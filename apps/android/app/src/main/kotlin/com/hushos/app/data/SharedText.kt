@@ -30,7 +30,8 @@ object SharedText {
 
     /* A title as a file name: no characters a drive or a phone refuses, not too long, never empty. */
     fun fileName(title: String, fallback: String): String {
-        val clean = title.replace(Regex("""[\\/:*?"<>|\p{Cntrl}]"""), " ").replace(Regex("""\s+"""), " ").trim().trim('.').take(80).trim()
+        // Made well formed last: the subject may hold a lone surrogate, and cutting at 80 may split a pair.
+        val clean = wellFormed(title.replace(Regex("""[\\/:*?"<>|\p{Cntrl}]"""), " ").replace(Regex("""\s+"""), " ").trim().trim('.').take(80).trim())
         return clean.ifEmpty { fallback } + ".txt"
     }
 }

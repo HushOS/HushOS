@@ -31,15 +31,15 @@
         "@hushos/env": "workspace:*",
         "@hushos/logging": "workspace:*",
         "@noble/post-quantum": "0.7.1",
-        "drizzle-orm": "1.0.0-rc.4",
-        "pg": "^8.16.3"
+        "drizzle-orm": "1.0.0-rc.5",
+        "pg": "^8.23.1"
     },
     "devDependencies": {
         "@hushos/config": "workspace:*",
         "@types/bun": "1.4.4",
         "@types/pg": "^8.15.5",
-        "drizzle-kit": "1.0.0-rc.4",
+        "drizzle-kit": "1.0.0-rc.5",
         "typescript": "7.0.2",
-        "vitest": "^5.0.0"
+        "vitest": "^5.0.5"
     }
 }

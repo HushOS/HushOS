@@ -145,7 +145,7 @@ function VersionList({
         setPending('discard');
         try {
             await clientFor(node.workspaceId).discardVersion(node, versionId);
-            cue('droplet');
+            cue('close');
             toast.add({ type: 'success', title: `Earlier version of “${node.name}” deleted` });
         } catch (error) {
             cue('error');

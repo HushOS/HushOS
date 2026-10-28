@@ -112,7 +112,7 @@ function People() {
             await removeContact(queryClient, userId, contact.userId);
             // What they wrote no longer reads as theirs.
             afterTrustChanged(queryClient);
-            cue('droplet');
+            cue('close');
             toast.add({ type: 'success', title: `${firstName(contact.name)} removed` });
         } catch (cause) {
             cue('error');

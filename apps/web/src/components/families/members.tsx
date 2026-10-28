@@ -429,7 +429,7 @@ function PendingRow({
         setError('');
         try {
             await groupsApi.decline(groupId, person.userId);
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: `${first} won’t join ${family}`,
@@ -1409,7 +1409,7 @@ export function InvitationList({
             await groupsApi.revokeInvitation(groupId, invitation.id);
             // This account's record of it, if it asked them to manage the family, goes too.
             await clearInvitedRole(queryClient, userId, groupId, invitation.id).catch(() => false);
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: invitation.email

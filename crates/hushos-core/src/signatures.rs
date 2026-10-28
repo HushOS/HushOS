@@ -1246,7 +1246,7 @@ fn rekeyed_verdict(rekeyed: Option<Rekeyed>, trust: Option<RekeyedTrust>) -> Rek
 /// let ctx = MetadataContext { workspace_id: ws.into(), node_id: n1.into(), metadata_version: 1 };
 /// let statement = MetadataStatement { workspace_id: ws.into(), node_id: n1.into(), kind: NodeKind::File, metadata_version: 1 };
 /// // Sam writes; Maya rotates the folder to epoch 2 and keeps Sam's record.
-/// let origin = metadata_seal(ctx.clone(), old.clone(), NodeMetadata { name: "a.txt".into(), mime: None, size: None, modified: None })?;
+/// let origin = metadata_seal(ctx.clone(), old.clone(), NodeMetadata { name: "a.txt".into(), mime: None, size: None, modified: None, attributes: Default::default() })?;
 /// let signature = metadata_sign(writer.clone(), statement.clone(), origin.clone())?;
 /// let envelope = metadata_rekey(ctx, old.clone(), fresh.clone(), origin.clone())?;
 /// let key_ctx = OriginKeyContext { workspace_id: ws.into(), node_id: n1.into(), key_epoch: 2, record: OriginRecord::Metadata { metadata_version: 1 }, origin_envelope: origin.clone() };
@@ -2095,8 +2095,13 @@ mod tests {
 
     fn rotated() -> Rotated {
         let (sam, maya, old, fresh) = (random(32), random(32), random(32), random(32));
-        let metadata =
-            crate::NodeMetadata { name: "plan.md".into(), mime: None, size: Some(4), modified: None };
+        let metadata = crate::NodeMetadata {
+            name: "plan.md".into(),
+            mime: None,
+            size: Some(4),
+            modified: None,
+            attributes: Default::default(),
+        };
         let origin = crate::metadata_seal(metadata_ctx(), old.clone(), metadata).unwrap();
         let written = metadata_sign(sam.clone(), sealed(), origin.clone()).unwrap();
         let key_envelope = crate::origin_key_wrap(
@@ -2157,7 +2162,13 @@ mod tests {
         let other = crate::metadata_seal(
             metadata_ctx(),
             r.fresh.clone(),
-            crate::NodeMetadata { name: "not-sam.md".into(), mime: None, size: Some(4), modified: None },
+            crate::NodeMetadata {
+                name: "not-sam.md".into(),
+                mime: None,
+                size: Some(4),
+                modified: None,
+                attributes: Default::default(),
+            },
         )
         .unwrap();
         let mut forged = RekeyedMetadata { envelope: other, ..r.record.clone() };
@@ -2248,7 +2259,13 @@ mod tests {
         let other = crate::metadata_seal(
             metadata_ctx(),
             r.fresh.clone(),
-            crate::NodeMetadata { name: "not-sam.md".into(), mime: None, size: Some(4), modified: None },
+            crate::NodeMetadata {
+                name: "not-sam.md".into(),
+                mime: None,
+                size: Some(4),
+                modified: None,
+                attributes: Default::default(),
+            },
         )
         .unwrap();
         let mut forged = RekeyedMetadata { envelope: other, ..r.record.clone() };

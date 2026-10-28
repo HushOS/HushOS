@@ -145,6 +145,8 @@ dependencies {
     testImplementation(libs.jna)
     // android.jar's org.json is stubs that throw on the JVM; settings tests edit real JSON.
     testImplementation(libs.org.json)
+    // Vault against a fake server on loopback (VaultAttributesTest): a real Context for its files, SQLite mirror and preferences.
+    testImplementation(libs.robolectric)
 }
 
 /*

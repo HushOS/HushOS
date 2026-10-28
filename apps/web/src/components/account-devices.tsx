@@ -331,7 +331,7 @@ function RemoveDialog({
                 await authClient.removeDevice(pending.device.id, password);
             else await authClient.removeOtherDevices(password);
             setPassword('');
-            cue('droplet');
+            cue('close');
             toast.add({
                 title: pending.kind === 'remove' ? 'Device removed' : 'Other devices removed',
             });

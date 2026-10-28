@@ -470,7 +470,7 @@ struct FamilyFixture {
         root = try Self.node(id: rootId, in: workspaceId, parent: nil, parentKey: areaKey, key: rootKey, kind: .folder, name: "Photos", writer: creator)
         fileKey = try randomBytes(length: 32)
         file = try Self.node(id: fileId, in: workspaceId, parent: rootId, parentKey: rootKey, key: fileKey, kind: .file,
-                             name: "Recipes.txt", writer: creator)
+                             name: "Recipes.txt", writer: creator, attributes: Self.attributes)
         personalKey = try randomBytes(length: 32)
         personalRootKey = try randomBytes(length: 32)
         personalRoot = try Self.node(id: try newId(kind: .node, scopeId: personal).id, in: personal, parent: nil, parentKey: personalKey, key: personalRootKey,
@@ -481,7 +481,8 @@ struct FamilyFixture {
         // The creator's photo: real content, sealed as an upload seals it, with a signed version.
         photoKey = try randomBytes(length: 32)
         let photoId = try newId(kind: .node, scopeId: workspaceId).id
-        let bare = try Self.node(id: photoId, in: workspaceId, parent: rootId, parentKey: rootKey, key: photoKey, kind: .file, name: "Beach.jpg", writer: creator, keyEpoch: 3)
+        let bare = try Self.node(id: photoId, in: workspaceId, parent: rootId, parentKey: rootKey, key: photoKey, kind: .file, name: "Beach.jpg", writer: creator, keyEpoch: 3,
+                                 attributes: Self.attributes)
         photoBytes = Data((0 ..< 3000).map { UInt8($0 % 251) })
         let versionId = try newId(kind: .version, scopeId: workspaceId).id
         let objectId = try newId(kind: .object, scopeId: workspaceId).id
@@ -512,13 +513,16 @@ struct FamilyFixture {
         photo = bare.with(version: version)
     }
 
+    /* What the fixture's file and photo carry beside their names: a colour, and a key no client knows yet. */
+    static let attributes = ["colour": "green", "zz-unknown": "from a newer client"]
+
     /* A node wrapped under its parent (the area key at version 1 for the top folder) and signed by its writer. */
     static func node(id: String, in workspaceId: String, parent: String?, parentKey: Data, key: Data, kind: NodeKind, name: String, writer: FamilyPerson,
-                     keyEpoch: UInt64 = 1, parentKeyEpoch: UInt64 = 1) throws -> NodeView {
+                     keyEpoch: UInt64 = 1, parentKeyEpoch: UInt64 = 1, attributes: [String: String] = [:]) throws -> NodeView {
         let wrapped = try nodeWrap(ctx: NodeKeyContext(workspaceId: workspaceId, nodeId: id, parentId: parent ?? workspaceId, parentKeyEpoch: parentKeyEpoch, keyEpoch: keyEpoch),
                                    parentKey: parentKey, nodeKey: key)
         let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key,
-                                      metadata: NodeMetadata(name: name, mime: kind == .file ? "text/plain" : nil, size: nil, modified: nil))
+                                      metadata: NodeMetadata(name: name, mime: kind == .file ? "text/plain" : nil, size: nil, modified: nil, attributes: attributes))
         let signature = try metadataSign(signingSeed: writer.keys.signingSeed,
                                          statement: MetadataStatement(workspaceId: workspaceId, nodeId: id, kind: kind, metadataVersion: 1), metadataEnvelope: sealed)
         var node = NodeView(id: id, workspaceId: workspaceId, parentId: parent, kind: kind == .folder ? "folder" : "file", keyEpoch: keyEpoch, parentKeyEpoch: parentKeyEpoch,

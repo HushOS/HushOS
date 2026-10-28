@@ -3420,7 +3420,13 @@ mod tests {
         let envelope = metadata_seal(
             MetadataContext { workspace_id: AREA.into(), node_id: node(FILE), metadata_version: 1 },
             key.to_vec(),
-            NodeMetadata { name: "plan.txt".into(), mime: None, size: None, modified: None },
+            NodeMetadata {
+                name: "plan.txt".into(),
+                mime: None,
+                size: None,
+                modified: None,
+                attributes: Default::default(),
+            },
         )
         .unwrap();
         RotatingNode {

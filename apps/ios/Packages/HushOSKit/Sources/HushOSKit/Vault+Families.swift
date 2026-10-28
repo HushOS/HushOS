@@ -183,7 +183,7 @@ extension Vault {
     func identityEnvelope(atKeyVersion version: UInt64) async throws -> IdentityEnvelope {
         _ = try await identityKeys()
         if let current = identityEnvelope, current.keyVersion == version { return current }
-        if let earlier = try await Auth.identityHistory().first(where: { $0.keyVersion == version }) { return earlier }
+        if let earlier = try await Auth.identityHistory(as: session).first(where: { $0.keyVersion == version }) { return earlier }
         throw DriveAPIError.server(400, "This family folder was shared with keys this account no longer has.")
     }
 

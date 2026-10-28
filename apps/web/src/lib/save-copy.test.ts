@@ -217,3 +217,40 @@ describe('saving a copy across a sign-out', () => {
         expect(enqueue.mock.calls[0]![0][0]!.stash).toBe(stash);
     });
 });
+
+describe('what a copy keeps of its source', () => {
+    test('every folder made and every file queued carries its own source’s attributes', async () => {
+        const { driveClient } = (await import('@/lib/drive')) as unknown as {
+            driveClient: Record<string, unknown>;
+        };
+        const folderAttributes = { colour: 'blue', 'zz-unknown': 'from a newer client' };
+        const fileAttributes = { 'zz-unknown': 'kept' };
+        const folder = {
+            id: 'source-folder',
+            name: 'Plans',
+            kind: 'folder',
+            metadata: { name: 'Plans', attributes: folderAttributes },
+        } as unknown as DriveNode;
+        const inner = {
+            ...file,
+            metadata: { mime: 'text/plain', attributes: fileAttributes },
+        } as unknown as DriveNode;
+        const made: { name: string; attributes: unknown }[] = [];
+        driveClient.createFolderPath = async (
+            _into: DriveNode,
+            [name]: string[],
+            options: { attributes?: unknown },
+        ) => {
+            made.push({ name: name!, attributes: options.attributes });
+            return [{ id: `made-${name}`, name } as DriveNode];
+        };
+        driveClient.listFolder = async () => ({ children: [inner] });
+        await saveCopy(queryClient, [folder], destination, 'drive');
+        expect(made).toEqual([{ name: 'Plans', attributes: folderAttributes }]);
+        expect(enqueue).toHaveBeenCalledTimes(1);
+        expect(enqueue.mock.calls[0]![0][0]).toMatchObject({
+            name: 'payroll.xlsx',
+            attributes: fileAttributes,
+        });
+    });
+});

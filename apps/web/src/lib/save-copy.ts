@@ -112,6 +112,8 @@ export async function saveCopy(
                 name,
                 origin: 'copy',
                 signAs: copySignatureForms(node, source),
+                // Its record's attributes come along, every key this client does not know included.
+                attributes: node.metadata?.attributes,
             });
         } finally {
             await reader.close();
@@ -122,6 +124,7 @@ export async function saveCopy(
         if (node.kind === 'file') return saveFile(node, into, name);
         const [made] = await driveClient.createFolderPath(into, [name], {
             signAs: copySignatureForms(node, source).metadata,
+            attributes: node.metadata?.attributes,
         });
         tick();
         const children = await driveClient.listFolder(node.id);

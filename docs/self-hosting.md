@@ -670,6 +670,8 @@ To use it behind a public hostname, route a second hostname such as `https://sto
 
 One node on one disk is not a backup. Configure the replica bucket, or back up both Garage volumes with the database.
 
+`compose.yaml` pins the Garage release (v2.5.0). Garage does not support downgrades from v2.5.0: a node that has run it must not go back to v2.4 or older, so back up both Garage volumes before you pull a `compose.yaml` that moves the pin, and keep the backup until the new release has run cleanly.
+
 Any hosted S3-compatible bucket works instead: point the `STORAGE_*` settings at it and drop the `garage` services from your Compose command.
 
 ### After restoring the database from a backup

@@ -101,6 +101,8 @@ public actor Vault {
     var identityGeneration: UInt64 = 0
     /* The settings key, opened under the account key (see Settings). */
     var settingsKey: Data?
+    /* The envelope `settingsKey` came out of, as the server keeps it: kept beside the rollback marks. */
+    var settingsKeyEnvelope: SettingsKeyEnvelope?
     /* The pins as the last settings read had them (see `knownPins`). */
     var lastPins: [String: ContactPin] = [:]
     /* Whose signatures this person can check, built from the identities and the verified pins (see Integrity); a load that fails is not kept. */
@@ -274,7 +276,7 @@ public actor Vault {
         let wrapped = try nodeWrap(ctx: ctx, parentKey: workspaceKey, nodeKey: key)
         let sealed = try metadataSeal(
             ctx: MetadataContext(workspaceId: view.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key,
-            metadata: NodeMetadata(name: Self.rootName, mime: nil, size: nil, modified: nil)
+            metadata: NodeMetadata(name: Self.rootName, mime: nil, size: nil, modified: nil, attributes: [:])
         )
         let signature = try await signMetadata(workspaceId: view.workspaceId, nodeId: id, kind: .folder, version: 1, envelope: sealed)
         let made = try await api.createRoot(workspaceId: view.workspaceId, root: [
@@ -345,29 +347,38 @@ public actor Vault {
     }
 
     private func openIdentity(generation: UInt64) async throws -> IdentityKeys {
-        let marks = IdentityMarks.shared
+        let marks = RollbackMarkStore.shared(session: session.token)
         let accountKey = try unlockAccount()
-        var envelope = try await Auth.identity()
-        try marks.check(userId: session.userId, keyVersion: envelope.keyVersion, identityVersion: envelope.version)
+        var envelope = try await Auth.identity(as: session)
+        let seen = try await marks.read(userId: session.userId, keys: marksKeys())
+        try IdentityMarks.check(seen, keyVersion: envelope.keyVersion, identityVersion: envelope.version)
         var keys = try identityOpen(userId: session.userId, accountKey: accountKey, envelope: envelope)
         if keys.identityVersion == 1 {
             let upgraded = try identityUpgrade(userId: session.userId, accountKey: accountKey, envelope: envelope)
             do {
-                envelope = try await Auth.upgradeIdentity(upgraded)
+                envelope = try await Auth.upgradeIdentity(upgraded, as: session)
             } catch AuthError.conflict {
                 // Another device upgraded first: open the identity it stored, never a second ML-DSA key.
-                envelope = try await Auth.identity()
+                envelope = try await Auth.identity(as: session)
             }
             keys = try identityOpen(userId: session.userId, accountKey: accountKey, envelope: envelope)
         }
         guard keys.identityVersion >= 2, keys.mlDsaPublicKey != nil, keys.kemPublicKey != nil else {
             throw AuthError.message("Your keys couldn’t be upgraded. Try again.")
         }
-        // The stored identity must still be the one this device has used: same keys, version not lowered.
-        try marks.check(userId: session.userId, keyVersion: keys.keyVersion, identityVersion: keys.identityVersion)
-        marks.record(userId: session.userId, keyVersion: keys.keyVersion, identityVersion: keys.identityVersion)
-        // A settings mark an earlier version kept under this identity's key becomes the account's.
-        SettingsMarks.shared.adopt(userId: session.userId, encryptionPublicKeys: [keys.encryptionPublicKey])
+        // The stored identity must still be the one this device has used: same keys, version not lowered. Read
+        // again, since the upgrade waited on the server while another process could raise a mark.
+        try IdentityMarks.check(try await marks.read(userId: session.userId, keys: marksKeys()), keyVersion: keys.keyVersion, identityVersion: keys.identityVersion)
+        // Kept before the identity is: one whose mark could not be kept is not taken. A settings mark an
+        // earlier version kept under this identity's key becomes the account's in the same write.
+        let kept = try await marks.raise(
+            userId: session.userId,
+            to: RollbackMarks(settings: 0, settingsDocument: false, identity: keys.keyVersion, identityVersion: UInt64(keys.identityVersion)),
+            encryptionPublicKeys: [keys.encryptionPublicKey],
+            keys: marksKeys()
+        )
+        // And against what the write found, for a mark raised between that read and this write.
+        try IdentityMarks.check(kept, keyVersion: keys.keyVersion, identityVersion: keys.identityVersion)
         // Replaced while this opened: the caller opens again rather than cache what this read.
         guard generation == identityGeneration else { return keys }
         identity = keys
@@ -395,7 +406,7 @@ public actor Vault {
 
     /* The 24 words again, for someone who holds the account key and wants to check their copy. */
     public func recoveryPhrase() async throws -> String {
-        let (envelope, _) = try await Auth.recoveryKey()
+        let (envelope, _) = try await Auth.recoveryKey(as: session)
         return try HushOSCore.recoveryPhrase(userId: session.userId, accountKey: try unlockAccount(), envelope: envelope)
     }
 

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { CryptoRequests, CryptoResults, UploadPartResult } from '@hushos/crypto';
 import { KEY_CHANGE_PENDING } from '@hushos/crypto/protocol';
+import { generateKey, openMetadata, sealMetadata } from '@hushos/crypto/drive';
 import { DriveApiError, type DriveApi, type NodeView } from './api';
 import type { DriveNode, Rpc } from './client';
 import { scopedId } from '../../db/src/ids';
@@ -26,6 +27,9 @@ import {
  */
 
 const CHUNK = 8 * 1024 * 1024;
+/* Ids in the form the envelope contexts take, for the one test that seals a record for real. */
+const WS_ID = '11111111-1111-4111-8111-111111111111';
+const NODE_ID = '22222222-2222-4222-8222-222222222222';
 
 function node(id: string, parentId: string | null = 'root'): DriveNode {
     return {
@@ -143,6 +147,8 @@ function harness(
     /* The key epoch every created node was given, and the parent epoch its key was wrapped under. */
     const givenEpochs: number[] = [];
     const wrappedUnder: number[] = [];
+    /* The metadata every created node was sealed with, in order. */
+    const createdMetadata: CryptoRequests['driveCreateNodes']['nodes'][number]['metadata'][] = [];
     let inFlight = 0;
     let peakInFlight = 0;
     const flying = new Map<string, Set<(result: UploadPartResult) => void>>();
@@ -202,6 +208,7 @@ function harness(
                 for (const n of (input as CryptoRequests['driveCreateNodes']).nodes) {
                     givenEpochs.push(n.keyEpoch);
                     wrappedUnder.push(n.parentKeyEpoch);
+                    createdMetadata.push(n.metadata);
                     signed.push({ operation, signAs: n.signAs });
                 }
                 return {
@@ -447,6 +454,7 @@ function harness(
         signed,
         givenEpochs,
         wrappedUnder,
+        createdMetadata,
         server,
         journal,
         published,
@@ -1751,6 +1759,112 @@ describe('queued rows and stashed copies', () => {
         await restored.manager.restore('ws');
         await settle(2_000);
         expect(restored.signed.map((call) => call.signAs)).toEqual(['resealed', 'resealed']);
+    });
+
+    test('a copy’s node carries its source’s attributes, through a conflict copy and a reload at either stage', async () => {
+        const attributes = { colour: 'blue', 'zz-unknown': 'from a newer client' };
+        const attributesOf = (h: ReturnType<typeof harness>) =>
+            h.createdMetadata.map((metadata) => metadata.attributes);
+        // Straight through, and the "keep both" copy a conflict makes: both carry them.
+        const h = harness({ conflict: true });
+        h.manager.enqueue([
+            {
+                file: fakeFile(CHUNK, 'saved.bin'),
+                parent: node('root', null),
+                origin: 'copy',
+                attributes,
+            },
+        ]);
+        await settle(2_000);
+        expect(attributesOf(h)).toEqual([attributes, attributes]);
+        expect(h.createdMetadata[1]!.name).toBe('saved (conflict copy).bin');
+
+        // Queued when the page went away: the queued row keeps them.
+        const stash = fakeStash();
+        stash.files.set('waiting', fakeFile(CHUNK, 'waiting.bin'));
+        const queued = harness({ stash });
+        queued.manager.enqueue([
+            {
+                file: fakeFile(CHUNK, 'waiting.bin'),
+                parent: node('root', null),
+                origin: 'copy',
+                stash: 'waiting',
+                attributes,
+            },
+        ]);
+        const row = [...queued.journal.queued.values()][0]!;
+        expect(row.attributes).toEqual(attributes);
+        const fresh = createMemoryJournal();
+        await fresh.putQueued(row);
+        const restored = harness({ journal: fresh, stash });
+        await restored.manager.restore('ws');
+        await settle(2_000);
+        expect(attributesOf(restored)).toEqual([attributes]);
+
+        // Begun, then the page went away, then a conflict: the journaled row keeps them for the copy.
+        const begunStash = fakeStash();
+        begunStash.files.set('begun', fakeFile(6 * CHUNK, 'movie.mp4'));
+        const first = harness({ stash: begunStash });
+        const [id] = first.manager.enqueue([
+            {
+                file: fakeFile(6 * CHUNK, 'movie.mp4'),
+                parent: node('root', null),
+                origin: 'copy',
+                stash: 'begun',
+                attributes,
+            },
+        ]);
+        await settle(150);
+        await first.manager.pause(id!);
+        await settle(100);
+        expect(first.journal.entries.get(id!)!.attributes).toEqual(attributes);
+        const second = harness({ journal: first.journal, stash: begunStash, conflict: true });
+        second.server.uploads = first.server.uploads;
+        await second.manager.restore('ws');
+        await settle(2_000);
+        expect(second.server.attached).toHaveLength(1);
+        expect(attributesOf(second)).toEqual([attributes]);
+    });
+
+    test('a file whose name holds a lone surrogate lands with U+FFFD in its place, and its record opens', async () => {
+        const h = harness();
+        const [id] = h.manager.enqueue([
+            { file: fakeFile(CHUNK, 'a\ud800b'), parent: node('root', null) },
+        ]);
+        await settle(2_000);
+        expect(h.item(id!).status).toBe('done');
+        expect(h.item(id!).name).toBe('a�b');
+        const sealed = h.createdMetadata[0]!;
+        expect(sealed.name).toBe('a�b');
+        // Sealed and opened as the worker does: a name that seals is one that opens.
+        const key = generateKey();
+        const ctx = { workspaceId: WS_ID, nodeId: NODE_ID, metadataVersion: 1 };
+        expect(await openMetadata(await sealMetadata(sealed, key, ctx), key, ctx)).toMatchObject({
+            name: 'a�b',
+        });
+    });
+
+    test('a replacement’s "keep both" copy takes the replaced file’s attributes; a new file has none', async () => {
+        const attributes = { colour: 'red' };
+        const replaced = {
+            ...node('doc'),
+            kind: 'file' as const,
+            metadata: { name: 'doc', mime: null, size: 1, modified: null, attributes },
+        };
+        const h = harness({ conflict: true });
+        h.manager.enqueue([
+            { file: fakeFile(CHUNK, 'doc'), parent: node('root', null), replaces: replaced },
+        ]);
+        await settle(2_000);
+        expect(h.server.attached).toHaveLength(1);
+        expect(h.createdMetadata).toHaveLength(1);
+        expect(h.createdMetadata[0]!.attributes).toEqual(attributes);
+
+        const own = harness();
+        own.manager.enqueue([{ file: fakeFile(CHUNK, 'own.bin'), parent: node('root', null) }]);
+        await settle(2_000);
+        expect(own.createdMetadata).toHaveLength(1);
+        expect(own.createdMetadata[0]).not.toHaveProperty('attributes');
     });
 
     test('a copy comes back from its stash and finishes without being asked', async () => {
