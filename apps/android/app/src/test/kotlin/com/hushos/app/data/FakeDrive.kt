@@ -29,7 +29,10 @@ import com.hushos.core.metadataSign
 import com.hushos.core.nodeOpen
 import com.hushos.core.nodeWrap
 import com.hushos.core.randomBytes
+import com.hushos.core.SettingsEnvelope
+import com.hushos.core.SettingsKeyEnvelope
 import com.hushos.core.settingsKeyCreate
+import com.hushos.core.settingsKeyOpen
 import com.hushos.core.settingsSeal
 import com.hushos.core.shareSeal
 import com.hushos.core.versionSeal
@@ -201,8 +204,6 @@ class FakeDrive : AutoCloseable {
 
     private data class Share(val id: String, val node: String, val envelope: String, val keyEpoch: Long)
     private val shares = ArrayList<Share>()
-    private var settings: JSONObject = JSONObject()
-
     /* Grace shares `nodeId` (in her drive) with the account, sealed to its identity in suite 4. */
     fun shareWithMe(nodeId: String) = synchronized(lock) {
         val node = node(nodeId)
@@ -212,16 +213,30 @@ class FakeDrive : AutoCloseable {
         shares.add(Share(UUID.randomUUID().toString(), nodeId, base64urlEncode(envelope), node.keyEpoch))
     }
 
-    /* The account has compared words with Grace: her version 3 pin in its settings, sealed under its settings key. */
+    /* The settings document and its key, as the server keeps them: the key stored once, the document compare-and-set. */
+    private var settingsKey: JSONObject? = null
+    private var settingsDocument: JSONObject? = null
+    private var settingsVersion = 0L
+
+    private fun settingsJson() = JSONObject().put("settings", settingsDocument ?: JSONObject.NULL).put("settingsKey", settingsKey ?: JSONObject.NULL)
+        .put("settingsVersion", settingsVersion)
+
+    /*
+     * The account has compared words with Grace: her version 3 pin in its settings, sealed one version up under the
+     * settings key the server holds (the one a device stored, opened under the account key), or a first one stored here.
+     */
     fun pinGrace() = synchronized(lock) {
         val pin = ContactPin.ofServed(grace.id, "grace@example.org", "Grace", grace.served, "2026-10-01T00:00:00Z")!!
-        val made = settingsKeyCreate(userId, accountKey)
-        val sealed = settingsSeal(userId, made.key, 1uL, Settings.empty().apply { pin(pin) }.text())
-        settings = JSONObject()
-            .put("settings", JSONObject().put("version", sealed.version.toInt()).put("settingsVersion", sealed.settingsVersion.toLong())
-                .put("nonce", sealed.nonce).put("ciphertext", sealed.ciphertext))
-            .put("settingsKey", JSONObject().put("nonce", made.envelope.nonce).put("ciphertext", made.envelope.ciphertext))
-            .put("settingsVersion", sealed.settingsVersion.toLong())
+        val key = settingsKey?.let { settingsKeyOpen(userId, accountKey, SettingsKeyEnvelope(it.getString("nonce"), it.getString("ciphertext"))) }
+            ?: settingsKeyCreate(userId, accountKey).also { settingsKey = JSONObject().put("nonce", it.envelope.nonce).put("ciphertext", it.envelope.ciphertext) }.key
+        val current = settingsDocument?.let {
+            openSettingsText(userId, key, SettingsEnvelope(it.getInt("version").toUInt(), it.getLong("settingsVersion").toULong(), it.getString("nonce"), it.getString("ciphertext")))
+        } ?: Settings.empty(settingsVersion.toULong())
+        current.pin(pin)
+        val sealed = settingsSeal(userId, key, (settingsVersion + 1).toULong(), current.text())
+        settingsDocument = JSONObject().put("version", sealed.version.toInt()).put("settingsVersion", sealed.settingsVersion.toLong())
+            .put("nonce", sealed.nonce).put("ciphertext", sealed.ciphertext)
+        settingsVersion = sealed.settingsVersion.toLong()
     }
 
     private data class Link(val id: String, val node: String, val token: String, val created: com.hushos.core.CreatedLink, val keyEpoch: Long)
@@ -311,7 +326,19 @@ class FakeDrive : AutoCloseable {
             // The account's own routes (Auth.call).
             get && at("auth", "identity") -> ok(JSONObject().put("identity", Auth.json(me.envelope)))
             get && at("auth", "identity", "history") -> ok(JSONObject().put("identities", JSONArray()))
-            get && at("auth", "settings") -> ok(settings)
+            get && at("auth", "settings") -> ok(settingsJson())
+            method == "PUT" && at("auth", "settings-key") -> {
+                if (settingsKey != null) return conflict("A settings key is already stored")
+                settingsKey = JSONObject().put("nonce", body.getString("nonce")).put("ciphertext", body.getString("ciphertext"))
+                ok(JSONObject())
+            }
+            method == "PUT" && at("auth", "settings") -> {
+                if (body.getLong("expectedVersion") != settingsVersion) return conflict("Settings changed since you read them")
+                settingsVersion++
+                settingsDocument = JSONObject().put("version", body.getInt("version")).put("settingsVersion", settingsVersion)
+                    .put("nonce", body.getString("nonce")).put("ciphertext", body.getString("ciphertext"))
+                ok(JSONObject().put("settingsVersion", settingsVersion))
+            }
 
             get && at("drive", "workspace") -> ok(JSONObject().put("workspaceId", workspace).put("changeSeq", changeSeq).put("grant", grant).put("root", node(root).json()))
             get && at("drive", "nodes", "*", "children") -> {
