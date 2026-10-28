@@ -180,15 +180,34 @@ export async function newFolder(page: Page) {
     await page.getByRole('menuitem', { name: /new folder/i }).click();
 }
 
-/* In Contacts: adds someone by email after checking their twelve words are the ones shown. */
+/* In Contacts: adds someone by email, at once and without words (docs/optional-verification.md 6.2). */
 export async function addContact(page: Page, email: string) {
     await page.getByRole('button', { name: 'Add someone' }).click();
     const sheet = page.locator('[data-slot=dialog-content]');
     await sheet.getByLabel('Email').fill(email);
-    await sheet.getByRole('button', { name: 'Look up' }).click();
+    await sheet.getByRole('button', { name: 'Add', exact: true }).click();
+    await expect(sheet).toHaveCount(0, { timeout: 60_000 });
+    await expect(page.locator(`[data-contact="${email}"]`)).toBeVisible({ timeout: 60_000 });
+}
+
+/* Check it's them, from a contact's row: their twelve words, then They match. */
+export async function checkContact(page: Page, email: string, name: string) {
+    await page
+        .locator(`[data-contact="${email}"]`)
+        .getByRole('button', { name: /^More for/ })
+        .click();
+    await page.getByRole('menuitem', { name: /^Check it’s |^Check again$/ }).click();
+    const sheet = page
+        .locator('[data-slot=dialog-content]')
+        .filter({ hasText: `Check it’s ${name}` });
     await expect(sheet.locator('[data-fingerprint-words]')).toBeVisible({ timeout: 60_000 });
     await sheet.getByRole('button', { name: 'They match' }).click();
-    await expect(sheet).toHaveCount(0);
+    await expect(sheet).toHaveCount(0, { timeout: 60_000 });
+    await expect(page.locator(`[data-contact="${email}"]`)).toHaveAttribute(
+        'data-standing',
+        'verified',
+        { timeout: 60_000 },
+    );
 }
 
 /* In the share dialog: picks a contact from Add people, sets what they can do, and shares. */
@@ -522,4 +541,16 @@ function crc32(buffer: Buffer) {
 /* The subjects of every message Mailpit holds for `email`, newest first. */
 export async function mailSubjects(email: string) {
     return (await mailTo(email)).map((message) => message.subject.replace(/\s+/g, ' ').trim());
+}
+
+/*
+ * In Shared with me: opens a share that waits for the person (from someone not in their
+ * contacts, or whose signed succession this device has not followed), with its row's Open.
+ * Listing alone pins nobody and follows nothing (docs/optional-verification.md 2.3, 6.4).
+ */
+export async function openWaiting(page: Page, text: string | RegExp) {
+    const waiting = page.locator('[data-waiting="open"]').filter({ hasText: text }).first();
+    await expect(waiting).toBeVisible({ timeout: 60_000 });
+    await waiting.getByRole('button', { name: 'Open', exact: true }).click();
+    await expect(waiting).toHaveCount(0, { timeout: 60_000 });
 }

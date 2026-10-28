@@ -1,6 +1,7 @@
 import { bytesOf, digestOf, integer, uuid } from './canonical';
 import { CryptoError } from './errors';
 import { fingerprint, hexBytes, keyDigest, publicKeyBytes } from './fingerprint';
+import type { Settings } from './contacts';
 
 /*
  * The rules a device applies to the pins and settings the server hands back.
@@ -353,4 +354,160 @@ export function pinAhead(current: GroupPin | null, next: GroupPin) {
     return Object.entries(next.areas).some(
         ([workspaceId, version]) => version > (current.areas[workspaceId] ?? 0),
     );
+}
+
+/* What a settings document may hold once sealed (contacts.ts sealSettings). */
+export const SETTINGS_MAX_BYTES = 64 * 1024;
+
+/* What adding someone says when the settings have no room for one more pin (docs/optional-verification.md 2.7). */
+export const CONTACTS_FULL = 'Your contacts are full. Remove someone you no longer share with.';
+
+const settingsBytes = (settings: Settings) =>
+    new TextEncoder().encode(JSON.stringify({ ...settings, version: 2 })).length;
+
+/*
+ * The removals a document records (`removedContacts`), oldest first: each a
+ * lowercased account id and when it was removed. Anything malformed is left
+ * out, so an odd value from another client never stops a save.
+ */
+function removalsOf(settings: Settings) {
+    const removed = settings.removedContacts;
+    if (typeof removed !== 'object' || removed === null || Array.isArray(removed)) return [];
+    return Object.entries(removed)
+        .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+        .sort(([, a], [, b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/* Whether this account removed `userId` from its contacts and has not added them back. */
+export function contactRemoved(settings: Settings, userId: string) {
+    return removalsOf(settings).some(([id]) => id === userId.toLowerCase());
+}
+
+/* The settings with `userId`'s removal forgotten (they were added back), as a new document. */
+export function withoutRemoval<S extends Settings>(settings: S, userId: string): S {
+    const id = userId.toLowerCase();
+    const kept = removalsOf(settings).filter(([each]) => each !== id);
+    const next = { ...settings };
+    if (kept.length) next.removedContacts = Object.fromEntries(kept);
+    else delete next.removedContacts;
+    return next;
+}
+
+/*
+ * Removals count against the room a document has (docs/optional-verification.md
+ * 2.7, 2.8): a document that would not seal with them all is kept by
+ * forgetting the oldest removals first, one at a time, until it does. A
+ * forgotten removal only means that person's next share is added on its own
+ * again on a device that never acted on them; a device whose guard holds
+ * them still waits for an Open. A document too large without any removal is
+ * returned as it is, for the caller to refuse.
+ */
+export function settingsThatFit<S extends Settings>(settings: S): S {
+    if (settingsBytes(settings) <= SETTINGS_MAX_BYTES) return settings;
+    const removals = removalsOf(settings);
+    let next = settings;
+    while (removals.length && settingsBytes(next) > SETTINGS_MAX_BYTES) {
+        removals.shift();
+        next = { ...next, removedContacts: Object.fromEntries(removals) };
+        if (!removals.length) delete next.removedContacts;
+    }
+    return next;
+}
+
+/*
+ * The settings with `pin` written for its person, as a new document: the one
+ * given is never changed, so a pin that does not fit leaves nothing behind.
+ * Writing a pin forgets that person's removal (they are a contact again).
+ * Refused, with CONTACTS_FULL, when the document would no longer seal
+ * (SETTINGS_MAX_BYTES, as sealSettings measures it) even with every removal
+ * forgotten. A first-seen pin is about 500 bytes, so a document holds roughly
+ * a hundred people.
+ */
+export function settingsWithPin<S extends Settings>(settings: S, pin: S['contacts'][string]): S {
+    const next = settingsThatFit(
+        withoutRemoval(
+            { ...settings, contacts: { ...settings.contacts, [pin.userId]: pin } },
+            pin.userId,
+        ),
+    );
+    if (settingsBytes(next) > SETTINGS_MAX_BYTES) throw new CryptoError(CONTACTS_FULL);
+    return next;
+}
+
+/*
+ * The settings with `userId`'s pin removed and the removal recorded, at
+ * `at`, so a share from them is never added again on its own (2.8): it waits
+ * until the person opens it. A pin is far larger than a removal, so this
+ * always fits.
+ */
+export function settingsWithoutContact<S extends Settings>(
+    settings: S,
+    userId: string,
+    at: string,
+): S {
+    const id = userId.toLowerCase();
+    const contacts = Object.fromEntries(
+        Object.entries(settings.contacts).filter(([key]) => key.toLowerCase() !== id),
+    ) as S['contacts'];
+    const removals = removalsOf(settings).filter(([each]) => each !== id);
+    removals.push([id, at]);
+    return settingsThatFit({
+        ...settings,
+        contacts,
+        removedContacts: Object.fromEntries(removals),
+    });
+}
+
+/*
+ * What one device keeps per contact, apart from the settings (2.8): the keys
+ * it last acted on for them (the inputs of their key commitment, and the key
+ * version), the signing keys it saw them replace, whether it saw these keys
+ * verified, and a revision that only rises. Never written to the settings,
+ * never cleared by anything the server answers.
+ */
+export type GuardEntry = {
+    revision: number;
+    keyVersion: number | null;
+    encryptionPublicKey: string;
+    signingPublicKey: string;
+    mlDsaPublicKeyHash: string;
+    kemPublicKeyHash: string;
+    previousSigningKeys: string[];
+    verified: boolean;
+};
+
+/*
+ * The guard entry after this device acted on `pin` (adding, sharing,
+ * opening, Continue, a check, a followed succession): the pin's keys at the
+ * next revision. A signing key the guard held before and the pin does not is
+ * kept as replaced; `verified` says whether this device saw these very keys
+ * verified, through this pin or before. Refused for a pin that is neither
+ * verified nor first-seen, so a guard never holds keys that match nothing.
+ */
+export async function nextGuardEntry(
+    previous: GuardEntry | null,
+    pin: PinKeys,
+): Promise<GuardEntry> {
+    const trust = await pinTrust(pin);
+    if (trust !== 'verified' && trust !== 'seen')
+        throw new CryptoError('Only a verified or first-seen pin is remembered.');
+    const keys = (await keyCommitment(pin))!;
+    const same = previous !== null && (await keyCommitment(previous)) === keys;
+    const replaced = [...(previous?.previousSigningKeys ?? [])];
+    if (
+        previous &&
+        previous.signingPublicKey !== pin.signingPublicKey &&
+        !replaced.includes(previous.signingPublicKey)
+    )
+        replaced.push(previous.signingPublicKey);
+    return {
+        revision: (previous?.revision ?? 0) + 1,
+        keyVersion: pin.keyVersion ?? null,
+        encryptionPublicKey: pin.encryptionPublicKey,
+        signingPublicKey: pin.signingPublicKey,
+        mlDsaPublicKeyHash: pin.mlDsaPublicKeyHash!,
+        kemPublicKeyHash: pin.kemPublicKeyHash!,
+        previousSigningKeys: replaced.filter((key) => key !== pin.signingPublicKey),
+        verified: trust === 'verified' || (same && previous?.verified === true),
+    };
 }

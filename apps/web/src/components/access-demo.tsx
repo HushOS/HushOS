@@ -74,7 +74,7 @@ export function AccessDemo() {
         setPeople(people.map((entry) => (entry.id === id ? { ...entry, role } : entry)));
         if (role && !before)
             setNote(
-                `Once you’ve checked it’s ${name} (twelve words, compared when you add them), your device locks a copy of the folder’s key for ${name}, so only ${name}’s devices can open it. ${name} ${role === 'edit' ? 'can add and change files' : 'can open and download'}.`,
+                `Once you’ve added ${name}, your device locks a copy of the folder’s key for ${name}, so only ${name}’s devices can open it. ${name} ${role === 'edit' ? 'can add and change files' : 'can open and download'}.`,
             );
         else if (role)
             setNote(

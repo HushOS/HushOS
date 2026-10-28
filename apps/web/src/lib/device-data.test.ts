@@ -119,6 +119,7 @@ describe('signing out of this browser', () => {
             'hushos-drive',
             'hushos-drive-mirror',
             'hushos-groups',
+            'hushos-contact-guard',
             `hushos-drive-mirror:${WORKSPACE}`,
             'someone-elses-database',
         ])
@@ -322,6 +323,8 @@ const NOT_STORAGE = new Set([
     'hushos-stash',
     'hushos-area-walk:',
     'hushos-group-write:',
+    // The contact guard's Web Lock, per account (lib/contact-guard.ts withGuardLock).
+    'hushos-contact-guard:',
     'hushos-recovery-kit.txt',
     'hushos-report-',
     'hushos-keys',

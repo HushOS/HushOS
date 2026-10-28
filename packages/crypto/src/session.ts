@@ -1,3 +1,4 @@
+import { guardRowId, openGuardRow, sealGuardRow, type GuardRowKind } from './contact-guard';
 import { CryptoError, RefusedError } from './errors';
 import { checkPassword, normalizePassword } from './password';
 import {
@@ -648,6 +649,23 @@ type BaseRequests = {
      */
     driveStashSeal: { userId: string; name: string; bytes: Uint8Array };
     driveStashOpen: { userId: string; name: string; stored: Blob };
+    /*
+     * The contact guard (contact-guard.ts), sealed and opened here under a key
+     * derived from the settings key, so a locked browser holds only
+     * ciphertext. Each needs the settings key open for `userId`. Ids find a
+     * row without saying whom it is about; open answers null for a row that
+     * does not open, which the page treats as unreadable, never as none.
+     */
+    contactGuardIds: { userId: string; contactIds: string[] };
+    contactGuardSeal: {
+        userId: string;
+        rows: { contactId: string; kind: GuardRowKind; value: unknown }[];
+    };
+    contactGuardOpen: {
+        userId: string;
+        kind: GuardRowKind;
+        rows: { id: string; envelope: string }[];
+    };
 };
 export type CryptoRequests = BaseRequests & GroupRequests;
 /* What an upload reads its plaintext from: a file the person chose, or bytes attached to the worker. */
@@ -883,6 +901,9 @@ type BaseResults = {
     };
     driveStashSeal: { parts: Uint8Array<ArrayBuffer>[] };
     driveStashOpen: { parts: Uint8Array<ArrayBuffer>[] };
+    contactGuardIds: { ids: string[] };
+    contactGuardSeal: { rows: { id: string; envelope: string }[] };
+    contactGuardOpen: { rows: ({ contactId: string; value: unknown } | null)[] };
 };
 export type CryptoResults = BaseResults & GroupResults;
 export type DownloadChunkResult =
@@ -3232,6 +3253,45 @@ export function createCryptoSession() {
             case 'driveStashOpen': {
                 const { userId, name, stored } = message.input;
                 return { parts: await openStash(await ownStashKey(userId), name, stored) };
+            }
+            case 'contactGuardIds':
+            case 'contactGuardSeal':
+            case 'contactGuardOpen': {
+                const { userId } = message.input;
+                if (!accountKey || unlockedUserId !== userId)
+                    throw new CryptoError('Unlock your account first.');
+                if (!settingsKey || settingsKey.userId !== userId)
+                    throw new CryptoError('Open your settings key first.');
+                const key = settingsKey.key;
+                if (message.operation === 'contactGuardIds')
+                    return {
+                        ids: await Promise.all(
+                            message.input.contactIds.map((contactId) =>
+                                guardRowId(key, userId, contactId),
+                            ),
+                        ),
+                    };
+                if (message.operation === 'contactGuardSeal')
+                    return {
+                        rows: await Promise.all(
+                            message.input.rows.map((row) =>
+                                sealGuardRow(key, userId, row.contactId, row.kind, row.value),
+                            ),
+                        ),
+                    };
+                const { kind, rows } = message.input;
+                return {
+                    rows: await Promise.all(
+                        rows.map((row) =>
+                            openGuardRow(key, userId, kind, row.id, row.envelope).catch(
+                                (error: unknown) => {
+                                    if (error instanceof CryptoError) return null;
+                                    throw error;
+                                },
+                            ),
+                        ),
+                    ),
+                };
             }
             case 'unlock': {
                 if (phase !== 'unlock')

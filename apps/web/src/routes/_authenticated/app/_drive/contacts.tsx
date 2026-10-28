@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+    CheckIcon,
     EllipsisIcon,
     RotateCcwIcon,
     SearchIcon,
@@ -9,12 +10,13 @@ import {
     UserXIcon,
 } from 'lucide-react';
 import { useState } from 'react';
-import { CheckContact } from '@/components/drive/check-contact';
+import { ContactFlowDialog, type FlowStart } from '@/components/drive/contact-flow';
 import { useDrive } from '@/components/drive/drive-shell';
 import { EmptyState, RowMenuButton, SkeletonRows } from '@/components/drive/file-list';
 import { OwnWordsDialog } from '@/components/own-words-dialog';
 import { PageHeader } from '@/components/page-header';
 import { PersonAvatar } from '@/components/person-avatar';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
     AlertDialog,
     AlertDialogCancel,
@@ -24,15 +26,7 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -44,15 +38,15 @@ import {
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import {
-    acknowledgeSuccession,
-    pinVerified,
+    accountChangeOf,
+    contactStandingsQueryOptions,
     removeContact,
-    replacementUnseen,
     settingsQueryOptions,
+    useAccountChanges,
+    type AccountChange,
     type Pin as ContactPin,
 } from '@/lib/contacts';
 import { afterTrustChanged } from '@/lib/integrity';
-import { formatWhen } from '@/lib/drive';
 import { vouchLine } from '@/lib/family-pin';
 import { cue } from '@/lib/sounds';
 
@@ -62,11 +56,14 @@ export const Route = createFileRoute('/_authenticated/app/_drive/contacts')({
 });
 
 /*
- * Contacts (for a while "People you share with"). Each is added with the key seen the
- * first time, after checking it's them: the other person reads their twelve
- * words from this page, and they have to match. A changed key is shown as a
- * warning to accept, never applied quietly. Adding works here and, so sharing
- * never stops for it, from the share dialog too.
+ * Contacts (for a while "People you share with"). Someone added by email is a
+ * contact at once, remembered with the keys HushOS serves for them then, and
+ * can be shared with straight away (docs/optional-verification.md 6.5).
+ * Checking it's them is a later, optional step: their twelve words, read on a
+ * call or in person, make them Verified. An account that changed with no
+ * signed chain is said calmly on its row, and nothing new is shared with
+ * them until Review (Continue or a check). Adding works here and, so sharing
+ * never stops for it, from the share sheet too.
  */
 const firstName = (name: string) => name.trim().split(/\s+/)[0] ?? name;
 /* A list this long gets a filter; a shorter one fits on a screen and is found by eye. */
@@ -76,11 +73,15 @@ function People() {
     const { userId } = useDrive();
     const queryClient = useQueryClient();
     const settings = useQuery(settingsQueryOptions(userId));
-    const [adding, setAdding] = useState(false);
-    const [checking, setChecking] = useState<ContactPin | null>(null);
+    const standings = useQuery({
+        ...contactStandingsQueryOptions(userId, settings.dataUpdatedAt),
+        enabled: settings.isSuccess,
+    });
+    useAccountChanges();
+    // Add someone, Review, Check it's Maya: one dialog, each step replacing the last.
+    const [flow, setFlow] = useState<FlowStart | null>(null);
     const [removing, setRemoving] = useState<ContactPin | null>(null);
     const [busy, setBusy] = useState(false);
-    const [rechecking, setRechecking] = useState<ContactPin | null>(null);
     const [showingWords, setShowingWords] = useState(false);
     const [query, setQuery] = useState('');
     const contacts = Object.values(settings.data?.settings.contacts ?? {}).sort((a, b) =>
@@ -96,41 +97,20 @@ function People() {
                   contact.email.toLocaleLowerCase().includes(needle),
           )
         : contacts;
-    // Pins made before the words covered every key: nothing is shared through them until checked again.
-    const stale = useQuery({
-        queryKey: ['contacts', 'stale', userId, settings.dataUpdatedAt],
-        queryFn: async () => {
-            const checked = await Promise.all(
-                contacts.map(
-                    async (contact) => [contact.userId, await pinVerified(contact)] as const,
-                ),
-            );
-            return new Set(checked.filter(([, verified]) => !verified).map(([id]) => id));
-        },
-        enabled: settings.isSuccess,
-    });
-
-    // Contacts whose pin followed a signed succession: told once, with the way to compare again.
-    const succeeded = contacts.filter(replacementUnseen);
-
-    async function acknowledge(contact: ContactPin) {
-        try {
-            await acknowledgeSuccession(queryClient, userId, contact.userId);
-        } catch (cause) {
-            cue('error');
-            toast.add({
-                type: 'error',
-                title: 'Couldn’t save that',
-                description: cause instanceof Error ? cause.message : undefined,
-            });
-        }
-    }
+    const standingOf = (contact: ContactPin) =>
+        standings.data?.get(contact.userId.toLowerCase()) ?? null;
+    // Changed here: the settings disagree with this device, or a lookup this session found it.
+    const changeOf = (contact: ContactPin): AccountChange | null =>
+        accountChangeOf(userId, contact.userId) ??
+        (standingOf(contact)?.changed
+            ? { contactId: contact.userId, name: contact.name, email: contact.email }
+            : null);
 
     async function remove(contact: ContactPin) {
         setBusy(true);
         try {
             await removeContact(queryClient, userId, contact.userId);
-            // What they wrote no longer counts as checked.
+            // What they wrote no longer reads as theirs.
             afterTrustChanged(queryClient);
             cue('droplet');
             toast.add({ type: 'success', title: `${firstName(contact.name)} removed` });
@@ -150,12 +130,12 @@ function People() {
         <div className="flex flex-1 flex-col">
             <PageHeader
                 title="Contacts"
-                description="Add people by the email they use for HushOS. Checking it’s really them takes a minute on a call or in person, and is worth doing before you share anything private."
+                description="People you share with. Add someone by the email they use for HushOS."
             >
                 <Button variant="outline" onClick={() => setShowingWords(true)}>
                     Your twelve words
                 </Button>
-                <Button onClick={() => setAdding(true)}>
+                <Button onClick={() => setFlow({ kind: 'add' })}>
                     <UserPlusIcon />
                     Add someone
                 </Button>
@@ -172,30 +152,23 @@ function People() {
                     </Button>
                 </EmptyState>
             )}
-            {succeeded.map((contact) => (
-                <div
-                    key={contact.userId}
-                    data-succession={contact.email}
-                    className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-rule px-5 py-3 sm:px-8"
-                >
-                    <ShieldCheckIcon
-                        className="size-4 shrink-0 text-muted-foreground"
-                        aria-hidden="true"
-                    />
-                    <p className="min-w-0 flex-1 text-sm">
-                        {contact.name} replaced their sharing keys; the change is signed by their
-                        previous keys.
-                    </p>
-                    <span className="flex gap-2">
-                        <Button size="sm" variant="outline" onClick={() => setRechecking(contact)}>
-                            Compare words again
+            {/* What this device remembers couldn't be read: nobody is shown as verified, and acts wait. */}
+            {standings.isError && (
+                <Alert variant="warning" className="mx-5 mb-4 w-auto sm:mx-8">
+                    <AlertTitle>{standings.error.message}</AlertTitle>
+                    <AlertDescription>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="mt-1"
+                            onClick={() => void standings.refetch()}
+                        >
+                            <RotateCcwIcon />
+                            Try again
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => void acknowledge(contact)}>
-                            Dismiss
-                        </Button>
-                    </span>
-                </div>
-            ))}
+                    </AlertDescription>
+                </Alert>
+            )}
             {settings.data && contacts.length === 0 && (
                 <div className="flex flex-col border-y border-rule px-5 py-4 sm:px-8">
                     <span className="text-[15px] font-medium">Nobody here yet</span>
@@ -205,9 +178,7 @@ function People() {
                 </div>
             )}
             {filtering && (
-                <div
-                    className={`relative mx-5 mb-3 max-w-md sm:mx-8 ${succeeded.length > 0 ? 'mt-4' : ''}`}
-                >
+                <div className="relative mx-5 mb-3 max-w-md sm:mx-8">
                     <SearchIcon
                         className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
                         aria-hidden="true"
@@ -238,153 +209,110 @@ function People() {
             </output>
             {shown.length > 0 && (
                 <ul className="flex flex-col border-t border-rule">
-                    {shown.map((contact) => (
-                        <li
-                            key={contact.userId}
-                            data-contact={contact.email}
-                            className="flex min-h-16 items-center gap-3 border-b border-rule py-2 pr-3 pl-5 hover:bg-muted sm:pr-5 sm:pl-8"
-                        >
-                            <PersonAvatar name={contact.name} seed={contact.userId} />
-                            <span className="flex min-w-0 flex-1 flex-col">
-                                <span className="truncate text-[15px] font-medium">
-                                    {contact.name}
+                    {shown.map((contact) => {
+                        const standing = standingOf(contact);
+                        const change = changeOf(contact);
+                        const first = firstName(contact.name);
+                        return (
+                            <li
+                                key={contact.userId}
+                                data-contact={contact.email}
+                                data-standing={
+                                    change ? 'changed' : standing?.verified ? 'verified' : 'seen'
+                                }
+                                className="flex min-h-16 items-center gap-3 border-b border-rule py-2 pr-3 pl-5 hover:bg-muted sm:pr-5 sm:pl-8"
+                            >
+                                <PersonAvatar name={contact.name} seed={contact.userId} />
+                                <span className="flex min-w-0 flex-1 flex-col">
+                                    <span className="truncate text-[15px] font-medium">
+                                        {contact.name}
+                                    </span>
+                                    {change ? (
+                                        <span className="text-[13px] text-muted-foreground">
+                                            Account changed ·{' '}
+                                            <Button
+                                                variant="link"
+                                                className="text-[13px] font-semibold"
+                                                onClick={() => setFlow({ kind: 'changed', change })}
+                                            >
+                                                Review
+                                            </Button>
+                                        </span>
+                                    ) : (
+                                        <span className="truncate text-[13px] text-muted-foreground">
+                                            {contact.email}
+                                            {/* Taken on a family's word: the server's name, the family's keys. */}
+                                            {vouchLine(contact) && ` · ${vouchLine(contact)}`}
+                                        </span>
+                                    )}
                                 </span>
-                                <span className="truncate text-[13px] text-muted-foreground">
-                                    {contact.email}
-                                    {/* Taken on a family's word: the server's name, the family's keys. */}
-                                    {vouchLine(contact) && ` · ${vouchLine(contact)}`}
-                                </span>
-                            </span>
-                            {stale.data?.has(contact.userId) ? (
-                                <Badge variant="warning">Check again</Badge>
-                            ) : (
-                                <span className="hidden text-[13px] text-muted-foreground sm:inline">
-                                    Added {formatWhen(contact.pinnedAt, { lower: true })}
-                                </span>
-                            )}
-                            <DropdownMenu>
-                                <DropdownMenuTrigger
-                                    render={
-                                        <RowMenuButton aria-label={`More for ${contact.name}`} />
-                                    }
-                                >
-                                    <EllipsisIcon className="size-5" aria-hidden="true" />
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="w-56">
-                                    <DropdownMenuGroup>
-                                        {stale.data?.has(contact.userId) ? (
+                                {standing && !change && (
+                                    <span className="inline-flex shrink-0 items-center gap-1 text-[13px] text-muted-foreground">
+                                        {standing.verified && (
+                                            <CheckIcon className="size-3.5" aria-hidden="true" />
+                                        )}
+                                        {standing.verified ? 'Verified' : 'Not verified'}
+                                    </span>
+                                )}
+                                <DropdownMenu>
+                                    <DropdownMenuTrigger
+                                        render={
+                                            <RowMenuButton
+                                                aria-label={`More for ${contact.name}`}
+                                            />
+                                        }
+                                    >
+                                        <EllipsisIcon className="size-5" aria-hidden="true" />
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end" className="w-56">
+                                        <DropdownMenuGroup>
                                             <DropdownMenuItem
-                                                onClick={() => setRechecking(contact)}
+                                                onClick={() =>
+                                                    setFlow({
+                                                        kind: 'check',
+                                                        person: {
+                                                            email: contact.email,
+                                                            name: contact.name,
+                                                        },
+                                                    })
+                                                }
                                             >
                                                 <ShieldCheckIcon aria-hidden="true" />
-                                                Check their words again
+                                                {standing?.verified && !change
+                                                    ? 'Check again'
+                                                    : `Check it’s ${first}`}
                                             </DropdownMenuItem>
-                                        ) : (
-                                            <DropdownMenuItem onClick={() => setChecking(contact)}>
-                                                <ShieldCheckIcon aria-hidden="true" />
-                                                Check it’s them
+                                        </DropdownMenuGroup>
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuGroup>
+                                            <DropdownMenuItem
+                                                variant="destructive"
+                                                disabled={busy}
+                                                onClick={() => setRemoving(contact)}
+                                            >
+                                                <UserXIcon aria-hidden="true" />
+                                                Remove
                                             </DropdownMenuItem>
-                                        )}
-                                    </DropdownMenuGroup>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuGroup>
-                                        <DropdownMenuItem
-                                            variant="destructive"
-                                            disabled={busy}
-                                            onClick={() => setRemoving(contact)}
-                                        >
-                                            <UserXIcon aria-hidden="true" />
-                                            Remove
-                                        </DropdownMenuItem>
-                                    </DropdownMenuGroup>
-                                </DropdownMenuContent>
-                            </DropdownMenu>
-                        </li>
-                    ))}
+                                        </DropdownMenuGroup>
+                                    </DropdownMenuContent>
+                                </DropdownMenu>
+                            </li>
+                        );
+                    })}
                 </ul>
             )}
 
             <OwnWordsDialog userId={userId} open={showingWords} onOpenChange={setShowingWords} />
 
-            <Dialog open={adding} onOpenChange={setAdding}>
-                <DialogContent className="sm:max-w-[480px]">
-                    <DialogHeader>
-                        <DialogTitle>Add someone</DialogTitle>
-                        <DialogDescription>
-                            Then you can share with them. You’ll check it’s them first.
-                        </DialogDescription>
-                    </DialogHeader>
-                    {adding && (
-                        <CheckContact
-                            userId={userId}
-                            onCancel={() => setAdding(false)}
-                            onAdded={(pin) => {
-                                setAdding(false);
-                                toast.add({ type: 'success', title: `${pin.name} added` });
-                            }}
-                        />
-                    )}
-                </DialogContent>
-            </Dialog>
-
-            <Dialog
-                open={rechecking !== null}
-                onOpenChange={(open) => !open && setRechecking(null)}
-            >
-                <DialogContent className="sm:max-w-[480px]">
-                    <DialogHeader>
-                        <DialogTitle>
-                            Check {rechecking ? firstName(rechecking.name) : ''} again
-                        </DialogTitle>
-                        <DialogDescription>
-                            {rechecking && replacementUnseen(rechecking)
-                                ? 'Their keys are new, so their twelve words are too. Read them together once more.'
-                                : 'Their twelve words now cover all of their keys. Read them together once more; shares between you open again once you’ve both done it.'}
-                        </DialogDescription>
-                    </DialogHeader>
-                    {rechecking && (
-                        <CheckContact
-                            userId={userId}
-                            email={rechecking.email}
-                            recheck
-                            onCancel={() => setRechecking(null)}
-                            onAdded={(pin) => {
-                                setRechecking(null);
-                                toast.add({ type: 'success', title: `${pin.name} checked` });
-                            }}
-                        />
-                    )}
-                </DialogContent>
-            </Dialog>
-
             {/*
-             * Checking someone looks up the keys the server serves for them now, and only here
-             * (or on a mark's Check again) does a pin follow a signed succession: never on its own.
+             * Checking someone looks up the keys the server serves for them now, and only here (or
+             * on a mark's Check again, or when sharing) does a pin follow a signed succession.
              */}
-            <Dialog open={checking !== null} onOpenChange={(open) => !open && setChecking(null)}>
-                <DialogContent className="sm:max-w-[480px]">
-                    <DialogHeader>
-                        <DialogTitle>
-                            Check it’s {checking ? firstName(checking.name) : ''}
-                        </DialogTitle>
-                        <DialogDescription>
-                            If their words don’t match, don’t share anything new with them. Remove
-                            them, and add them again once they’ve signed in.
-                        </DialogDescription>
-                    </DialogHeader>
-                    {checking && (
-                        <CheckContact
-                            userId={userId}
-                            email={checking.email}
-                            onCancel={() => setChecking(null)}
-                            onAdded={() => {
-                                setChecking(null);
-                                afterTrustChanged(queryClient);
-                            }}
-                        />
-                    )}
-                </DialogContent>
-            </Dialog>
+            <ContactFlowDialog
+                userId={userId}
+                start={flow}
+                onOpenChange={(open) => !open && setFlow(null)}
+            />
 
             <AlertDialog
                 open={removing !== null}
@@ -397,8 +325,7 @@ function People() {
                         </AlertDialogTitle>
                         <AlertDialogDescription>
                             {removing ? firstName(removing.name) : 'They'} keeps access to anything
-                            you’ve already shared. If you add them again, you’ll check it’s them
-                            again.
+                            you’ve already shared.
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
