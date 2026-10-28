@@ -1,0 +1,23 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_efd5e4c7e9b391::t_96982c817280b2 59
+apps/android/app/src/main/kotlin/com/hushos/app/data/JobNames.kt
+  s_efd5e4c7e9b391::t_159f5cb5fb9349 17,47-49
+apps/android/app/src/test/kotlin/com/hushos/app/data/AccountStoreTest.kt
+  s_efd5e4c7e9b391::t_f671fb587dc5d1 34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fb36fe713245ba5b955a0bae819750a0781d46a2",
+  "prompts": {},
+  "sessions": {
+    "s_efd5e4c7e9b391": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da795f5c-6f7b-4e4b-b602-9bdf2054de0d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
