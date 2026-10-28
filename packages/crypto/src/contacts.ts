@@ -110,13 +110,24 @@ export type Settings = {
     /*
      * Per group, the family check this person made (docs/optional-verification.md
      * 3.4): the pair code compared with member `with` over the roster at
-     * `rosterVersion`. Acceptance holds it as a pair mark (settings-marks.ts
-     * familyCheckOf). Every shipped client keeps it when it saves.
+     * `rosterVersion`, which acceptance holds as a pair mark (settings-marks.ts
+     * familyCheckOf); or, with no code, an anchor this person vouched for
+     * otherwise (7.2: `before`, a family accepted before first use; `created`;
+     * `join`, a join code compared), which is a mark but no pair mark. Every
+     * shipped client keeps it when it saves.
      */
     familyChecks?: Record<
         string,
-        { rosterVersion: number; with: string; code: string[]; checkedAt: string }
+        | { rosterVersion: number; with: string; code: string[]; checkedAt: string }
+        | { rosterVersion: number; how: 'before' | 'created' | 'join'; checkedAt: string }
     >;
+    /*
+     * When this account's first client able to take a family on first use
+     * began recording family checks (7.2): a group pin without a check record
+     * is first-use only once this is set. Saved with, or before, the first
+     * first-use pin, never after.
+     */
+    familyChecksSince?: string;
     /*
      * People this account removed from its contacts and has not added back,
      * by lowercased account id, with when (docs/optional-verification.md

@@ -149,3 +149,12 @@ export const GUARD_CONFLICT =
  */
 export const GUARD_AHEAD =
     'This device already checked a later member list for this family. Sync it first, then remove it.';
+
+/*
+ * The worker's refusal to give the role that holds the family's key (managing
+ * the family) to keys this account never checked: its own verified pin of
+ * them, over the very keys their entry names (docs/optional-verification.md
+ * 3.6). The family page asks for the check before it gets here.
+ */
+export const CHECK_MANAGER_FIRST =
+    'Check it’s them first. Managers are checked before they get the role.';

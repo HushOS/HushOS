@@ -20,7 +20,7 @@ import {
 } from './identity';
 import { CONTENT_SUITE, openNodeKey, wrapNodeKey, wrapPreviousRootKey } from './drive';
 import { decode, encode } from './keys';
-import type { GroupPin } from './pins';
+import { keyCommitment, type GroupPin } from './pins';
 import { FAMILY_SHARING, KEY_CHANGE_PENDING, NOT_CARRIED, SHARED_IN_FAMILY } from './protocol';
 import { createCryptoSession, type CryptoRequests, type CryptoResults } from './session';
 import { openAreaSelfGrant } from './workspace';
@@ -4946,7 +4946,7 @@ describe('joining on first use (docs/optional-verification.md 3.2, 3.3, 2.8)', (
         });
     });
 
-    test('an admission still takes a words check: a first-seen pin of the newcomer lets nobody in yet', async () => {
+    test('an admission over a first-seen pin lets the newcomer in as a member; managing the family waits for a check', async () => {
         const f = await family();
         const carol = await account(CAROL);
         const pin = await pinOf(carol);
@@ -4956,14 +4956,22 @@ describe('joining on first use (docs/optional-verification.md 3.2, 3.3, 2.8)', (
         };
         await saveSettings(f.alice);
         await loadSettings(f.alice);
-        await expect(
+        const admit = (roles: ('members' | 'guardian')[]) =>
             f.alice.call('groupStage', {
                 groupId: f.groupId,
                 expectedRevision: 2,
-                op: { kind: 'admit', userId: CAROL, served: carol.served, roles: [] },
+                op: { kind: 'admit', userId: CAROL, served: carol.served, roles },
                 kems: { [BOB]: f.bob.served.kemPublicKey, [CAROL]: carol.served.kemPublicKey },
-            }),
-        ).rejects.toThrow(/not the keys whose words were checked/);
+            });
+        // The role that holds the family's key: refused before anything is signed.
+        await expect(admit(['members'])).rejects.toThrow(/Managers are checked before/);
+        // As a member: built from the first-seen pin, kept by its key commitment.
+        const staged = await admit([]);
+        expect(staged.outboxId).not.toBeNull();
+        expect('admits' in staged && staged.admits).toEqual({
+            userId: CAROL,
+            keys: await keyCommitment(pin),
+        });
     });
 
     test('a family check over the committed chain: the pair code, and what a match writes', async () => {

@@ -1,5 +1,6 @@
 import { OLDER_CHAIN, type AreaLedger } from './area-ledger';
 import {
+    CHECK_MANAGER_FIRST,
     FAMILY_FORGOTTEN,
     GUARD_AHEAD,
     GUARD_CONFLICT,
@@ -119,6 +120,7 @@ import { decode, encode } from './keys';
 import {
     checkGroupPin,
     checkTime,
+    entryCommitment,
     guardAfter,
     keyCommitment,
     pinVerified,
@@ -363,19 +365,37 @@ export type AreaRotationInput = {
 export type GroupStageOp =
     /*
      * The newcomer's contact pin is the one in the settings this worker last
-     * opened (settingsOpen), never the caller's: only keys whose words this
-     * account checked are let in (the core's admit_body).
+     * opened (settingsOpen), never the caller's: a verified or a first-seen
+     * pin of the served keys, never a family's word (newRosterEntry,
+     * docs/optional-verification.md 3.2). `members` only over a verified pin:
+     * a manager is checked before they get the family's key (3.6).
      */
     | { kind: 'admit'; userId: string; served: ServedIdentity; roles: GroupRole[] }
     /* `endsLapsed`: the lapsed plans (ids) the person pays for that the remover confirmed end. */
     | { kind: 'remove'; userId: string; rotations: AreaRotationInput[]; endsLapsed?: string[] }
     | { kind: 'markLeft'; userIds: string[]; rotations: AreaRotationInput[] }
+    /*
+     * Giving `members` to someone without it needs a verified contact pin of
+     * them, no family's word, over the very keys of their entry now (3.6).
+     */
     | { kind: 'roles'; userId: string; roles: GroupRole[] }
     | {
           kind: 'foldIn';
           members: { userId: string; served: ServedIdentity; links: SuccessionLink[] }[];
           /* The account's earlier identities, for one's own fold-in signed with the keys the old entry names. */
           history?: IdentityEnvelope[];
+          /*
+           * Members whose served keys no signed chain reaches, whom a manager let
+           * back in with Continue (docs/optional-verification.md 3.3, 3.6, 6.9):
+           * their entry is made from this account's contact pin of the served
+           * keys (first-seen or verified, never a family's word), every family
+           * folder is rotated in the same roster, and a manager among them keeps
+           * `members` only over a verified pin, so the family's key is never
+           * sealed to keys nobody checked.
+           */
+          continued?: string[];
+          /* With `continued`: every live family folder's rotation (removal's rule, 3.3). */
+          rotations?: AreaRotationInput[];
       }
     | { kind: 'area'; name: string }
     | { kind: 'rotate'; rotation: AreaRotationInput }
@@ -3187,18 +3207,20 @@ export function createGroupSession(host: GroupHost) {
         let admits: { userId: string; keys: string } | null = null;
         const needsCheck: string[] = [];
         const folded: string[] = [];
+        /* Members let back in on a Continue (foldIn's `continued`): every family folder rotates. */
+        const refolded: string[] = [];
         switch (op.kind) {
             case 'admit': {
                 if (activeWith(entryOf(op.userId)))
                     throw new CryptoError('This person is in the family already.');
                 const pin = contactPin(op.userId);
                 if (!pin) throw new CryptoError(NOT_CHECKED);
-                // newRosterEntry builds from a first-seen pin too (design 3.3), but letting someone
-                // in over one waits for the manager rule beside it (3.6, the web's PR 4): until
-                // then an admission still takes a words check alone, so no role is ever handed to
-                // keys nobody checked.
-                if (!(await pinVerified(pin)))
-                    throw new CryptoError('These are not the keys whose words were checked.');
+                // Let in over a first-seen pin as over a verified one (docs/optional-verification.md
+                // 3.2; newRosterEntry refuses anything else, a family's word included). Managing
+                // the family hands over its key, so that role waits for a check (3.6): the core's
+                // admit_body follows with the phones' release (PR 5).
+                if (op.roles.includes('members') && !(await pinVerified(pin)))
+                    throw new CryptoError(CHECK_MANAGER_FIRST);
                 const entry = await newRosterEntry(pin, op.served, {
                     roles: op.roles,
                     rosterVersion: next,
@@ -3243,24 +3265,55 @@ export function createGroupSession(host: GroupHost) {
                     )
                 )
                     throw new CryptoError(ORGANIZER_FIRST);
+                // The manager rule (docs/optional-verification.md 3.6): `members` is given only to
+                // keys this account checked, its own verified pin of them (never a family's word)
+                // over the very keys their entry names now. A check made before their account
+                // changed, and a Continue since, leaves a first-seen pin: no role on it.
+                if (op.roles.includes('members') && !before.roles.includes('members')) {
+                    const pin = contactPin(op.userId);
+                    if (
+                        !pin ||
+                        (pin.trustedVia !== undefined && pin.trustedVia !== null) ||
+                        !(await pinVerified(pin)) ||
+                        (await keyCommitment(pin)) !== (await entryCommitment(before))
+                    )
+                        throw new CryptoError(CHECK_MANAGER_FIRST);
+                }
                 put({ ...before, roles: [...op.roles] });
                 break;
             }
-            case 'foldIn':
+            case 'foldIn': {
+                const continued = new Set((op.continued ?? []).map((id) => id.toLowerCase()));
+                rotations = op.rotations ?? [];
                 for (const member of op.members) {
-                    const result = await foldInEntry(
-                        active(member.userId),
-                        member.served,
-                        member.links,
-                        next,
-                    );
+                    const entry = active(member.userId);
+                    const result = await foldInEntry(entry, member.served, member.links, next);
                     if (result.changed) {
                         put(result.entry);
                         folded.push(member.userId);
+                    } else if (result.needsCheck && continued.has(entry.userId)) {
+                        // Continue on an account change no signed chain explains (3.3): the entry
+                        // from this account's own pin of the served keys, which Continue (or a
+                        // check) wrote, and the role that holds the family's key only over a
+                        // verified pin (3.6): sealed to their new keys after a check, never before.
+                        const pin = contactPin(entry.userId);
+                        if (!pin) throw new CryptoError(NOT_CHECKED);
+                        const verified = await pinVerified(pin);
+                        put(
+                            await newRosterEntry(pin, member.served, {
+                                roles: entry.roles.filter((role) => verified || role !== 'members'),
+                                rosterVersion: next,
+                            }),
+                        );
+                        folded.push(member.userId);
+                        refolded.push(entry.userId);
                     } else if (result.needsCheck) needsCheck.push(member.userId);
                 }
                 if (folded.length === 0) return { outboxId: null, needsCheck };
+                // Only a Continue rotates: a fold-in along signed chains alone carries none.
+                if (refolded.length === 0) rotations = [];
                 break;
+            }
             case 'area': {
                 const area = await newId('workspace', groupId);
                 newArea = { workspaceId: area.id, idSeed: area.seed, name: op.name };
@@ -3274,9 +3327,17 @@ export function createGroupSession(host: GroupHost) {
                     throw new CryptoError('This folder is not on the family’s member list.');
                 break;
         }
-        // A family's removal rotates every area, and only what is named is rotated.
+        // A family's removal rotates every area, and so does a Continue on an account change no
+        // signed chain explains (the keys left behind may be in someone else's hands, 3.3); only
+        // what is named is rotated.
         const toRotate =
-            op.kind === 'rotate' ? [op.rotation.workspaceId] : areasToRotate(chain, members);
+            op.kind === 'rotate'
+                ? [op.rotation.workspaceId]
+                : refolded.length > 0 && chain.kind === 'family'
+                  ? Object.keys(chain.areaKeys)
+                        .filter((workspaceId) => !chain.retiredAreas.includes(workspaceId))
+                        .sort()
+                  : areasToRotate(chain, members);
         const named = rotations.map((rotation) => rotation.workspaceId).sort();
         if (named.join() !== [...toRotate].sort().join() || new Set(named).size !== named.length)
             throw new CryptoError('Every family folder must get new keys in this change.');
