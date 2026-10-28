@@ -1531,7 +1531,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
      */
     private fun copyFromLink(vault: Vault, link: com.hushos.app.data.LinkVault, item: Opened, parent: String, name: String) {
         if (item.isFolder) {
-            val made = vault.createFolder(parent, name, com.hushos.app.data.Prior.FROM_LINK)
+            val made = vault.createFolder(parent, name, com.hushos.app.data.Prior.FROM_LINK, item.metadata.attributes)
             for (child in link.children(item.id)) copyFromLink(vault, link, child, made.id, child.name)
             return
         }
@@ -1539,7 +1539,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         try {
             val file = File(directory, name)
             link.download(item, file)
-            vault.upload(file, name, item.metadata.mime, parent, null, vault.makeThumbnail(file, item.metadata.mime), com.hushos.app.data.Prior.FROM_LINK)
+            vault.upload(file, name, item.metadata.mime, parent, null, vault.makeThumbnail(file, item.metadata.mime), com.hushos.app.data.Prior.FROM_LINK,
+                item.metadata.attributes)
         } finally {
             directory.deleteRecursively()
         }

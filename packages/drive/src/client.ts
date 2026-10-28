@@ -7,6 +7,7 @@ import type {
     DriveSigners,
     DriveVersionEnvelope,
     GroupRotationTrust,
+    NodeAttributes,
     NodeMetadata,
     ServedRekey,
 } from '@hushos/crypto';
@@ -1028,11 +1029,14 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
      * signatureFormFor): ordinary for folders this person makes, `saved` for
      * those a save from a link recreates, `resealed` for names taken from
      * something this person did not verify, which they re-lock, nothing more.
+     * `attributes` go on the last folder, the one the path names: a copy
+     * passes its source's, so a copied folder keeps its colour and every key
+     * this client does not know.
      */
     async function createFolderPath(
         parent: DriveNode,
         path: string[],
-        options: { signAs?: SignatureForm } = {},
+        options: { signAs?: SignatureForm; attributes?: NodeAttributes } = {},
     ) {
         const ws = parent.workspaceId;
         const names = path.map((name) => checkName(name));
@@ -1055,7 +1059,15 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 parentId: index === 0 ? parent.id : specs[index - 1]!.id,
                 parentKeyEpoch: index === 0 ? parent.keyEpoch : specs[index - 1]!.keyEpoch,
                 keyEpoch: spec.keyEpoch,
-                metadata: { name: spec.name, mime: null, size: null, modified: null },
+                metadata: {
+                    name: spec.name,
+                    mime: null,
+                    size: null,
+                    modified: null,
+                    ...(index === specs.length - 1 && options.attributes
+                        ? { attributes: options.attributes }
+                        : {}),
+                },
                 signAs: options.signAs ?? 'ordinary',
             })),
         });
@@ -1213,7 +1225,10 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         // A folder's name is re-signed as this person's only when the source's verified
         // (and stays saved only when it verified as saved from a link).
         const signAs = (folder: DriveNode) => signatureFormFor(folder.integrity?.metadata);
-        const [made] = await createFolderPath(destination, [name], { signAs: signAs(node) });
+        const [made] = await createFolderPath(destination, [name], {
+            signAs: signAs(node),
+            attributes: node.metadata?.attributes,
+        });
         tick();
         const stack: { source: DriveNode; target: DriveNode }[] = [{ source: node, target: made! }];
         while (stack.length) {
@@ -1223,6 +1238,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 if (child.kind === 'folder') {
                     const [folder] = await createFolderPath(target, [child.name], {
                         signAs: signAs(child),
+                        attributes: child.metadata?.attributes,
                     });
                     stack.push({ source: child, target: folder! });
                 } else if (child.currentVersion) await copyFile(child, target, child.name);

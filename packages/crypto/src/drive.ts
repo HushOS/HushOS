@@ -78,11 +78,32 @@ export const DOCUMENT_ENVELOPE_MAX_BYTES =
     ENVELOPE_NONCE_BYTES + DOCUMENT_MAX_BYTES + CHUNK_TAG_BYTES;
 const DOCUMENT_KIND = /^[a-z][a-z0-9-]{0,31}$/;
 
+/*
+ * Attributes: plain data a feature keeps on a node (a folder's colour), as
+ * short lowercase keys to strings, sealed beside the name. A client carries
+ * every key through unchanged whenever it seals the record again, the ones it
+ * does not know included, so a feature can add one without the others losing
+ * it. New plain data goes here: top-level fields nobody knows are dropped.
+ * Limits: keys match ATTRIBUTE_KEY, at most ATTRIBUTES_MAX_KEYS of them, every
+ * value a string, and the whole plaintext within METADATA_MAX_BYTES. A record
+ * that breaks one is refused, sealing and opening, never trimmed. None is
+ * written as no `attributes` field at all, so a record without any seals to
+ * exactly what it did before attributes; keys are written in sorted order.
+ */
+export const ATTRIBUTE_KEY = /^[a-z][a-z0-9_-]{0,31}$/;
+export const ATTRIBUTES_MAX_KEYS = 32;
+export type NodeAttributes = Record<string, string>;
+
 export type NodeMetadata = {
     name: string;
     mime: string | null;
     size: number | null;
     modified: string | null;
+    /*
+     * Absent for none, as on the wire: openMetadata leaves it out of a record
+     * that has none, and sealMetadata writes none for `{}`.
+     */
+    attributes?: NodeAttributes;
 };
 
 export type NodeKeyContext = {
@@ -296,11 +317,42 @@ export async function openPreviousRootKey(
     return key;
 }
 
+/* A lone surrogate: JSON.parse makes one from "\ud800", TextEncoder would not keep it, Rust refuses it. */
+const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
+/*
+ * A node's attributes as sealed: `undefined` is none, anything else must be a
+ * plain object within the limits. Returns a fresh object with its keys sorted.
+ */
+export function checkAttributes(attributes: unknown): NodeAttributes {
+    if (attributes === undefined) return {};
+    if (
+        typeof attributes !== 'object' ||
+        attributes === null ||
+        Array.isArray(attributes) ||
+        (Object.getPrototypeOf(attributes) !== Object.prototype &&
+            Object.getPrototypeOf(attributes) !== null)
+    )
+        throw new CryptoError('Invalid attributes.');
+    const keys = Object.keys(attributes);
+    if (keys.length > ATTRIBUTES_MAX_KEYS)
+        throw new CryptoError(`An item can have at most ${ATTRIBUTES_MAX_KEYS} attributes.`);
+    const out: NodeAttributes = {};
+    for (const key of keys.sort()) {
+        if (!ATTRIBUTE_KEY.test(key)) throw new CryptoError('Invalid attribute name.');
+        const value = (attributes as Record<string, unknown>)[key];
+        if (typeof value !== 'string' || LONE_SURROGATE.test(value))
+            throw new CryptoError('An attribute must be text.');
+        out[key] = value;
+    }
+    return out;
+}
+
 export async function sealMetadata(
     metadata: NodeMetadata,
     nodeKey: Uint8Array,
     ctx: MetadataContext,
 ) {
+    const attributes = checkAttributes(metadata.attributes);
     const clean: NodeMetadata = {
         name: checkName(metadata.name),
         mime:
@@ -316,8 +368,15 @@ export async function sealMetadata(
                 ? metadata.modified
                 : null,
     };
+    // None is no field at all: such a record seals exactly as one from before attributes.
+    if (Object.keys(attributes).length) clean.attributes = attributes;
     const plaintext = new TextEncoder().encode(JSON.stringify(clean));
-    if (plaintext.length > METADATA_MAX_BYTES) throw new CryptoError('This name is too long.');
+    if (plaintext.length > METADATA_MAX_BYTES)
+        throw new CryptoError(
+            clean.attributes
+                ? 'This name and its attributes are too long to save.'
+                : 'This name is too long.',
+        );
     return seal(
         padded(plaintext, METADATA_PAD_STEP, METADATA_MAX_BYTES),
         nodeKey,
@@ -358,6 +417,13 @@ export async function openMetadata(
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
         throw new CryptoError('This item could not be opened. It may be damaged.');
     const value = parsed as Record<string, unknown>;
+    let attributes: NodeAttributes;
+    try {
+        attributes = checkAttributes(value.attributes);
+    } catch {
+        // Refused whole, never trimmed: a re-save would otherwise drop what it could not read.
+        throw new CryptoError('This item could not be opened. It may be damaged.');
+    }
     return {
         name: checkName(value.name as string),
         mime: typeof value.mime === 'string' ? value.mime : null,
@@ -366,6 +432,7 @@ export async function openMetadata(
                 ? value.size
                 : null,
         modified: typeof value.modified === 'string' ? value.modified : null,
+        ...(Object.keys(attributes).length ? { attributes } : {}),
     };
 }
 

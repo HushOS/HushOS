@@ -16,7 +16,7 @@ import org.junit.Test
 class FolderRefreshTest {
     private fun item(id: String, parent: String?) = Opened(
         NodeView(id, "ws", parent, "file", 1uL, 1uL, "", 1uL, "", null, null, null, null),
-        NodeMetadata(id, null, 10uL, null),
+        NodeMetadata(id, null, 10uL, null, emptyMap()),
     )
 
     private val root = "root"

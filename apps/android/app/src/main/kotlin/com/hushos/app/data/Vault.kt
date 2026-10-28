@@ -207,7 +207,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             view = ensureRoot(view, parentEpoch, api, seal = { id, epoch, parentKeyEpoch ->
                 val key = randomBytes(32u)
                 val wrapped = nodeWrap(NodeKeyContext(ws, id, ws, parentKeyEpoch, epoch), wsKey, key)
-                val sealed = metadataSeal(MetadataContext(ws, id, 1uL), key, NodeMetadata(ROOT_NAME, null, null, null))
+                val sealed = metadataSeal(MetadataContext(ws, id, 1uL), key, NodeMetadata(ROOT_NAME, null, null, null, emptyMap()))
                 SealedRoot(base64urlEncode(wrapped), base64urlEncode(sealed), signMetadata(ws, id, NodeKind.FOLDER, 1uL, sealed))
             })
             runCatching { mirror.putDocument(key, api.workspaceJson().toString()) }
@@ -664,7 +664,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val checked = trust ?: trustForWrite()
         val prior = Prior.of(source.node, checked)
         if (source.isFolder) {
-            val made = createFolder(parentId, name ?: source.name, prior)
+            val made = createFolder(parentId, name ?: source.name, prior, source.metadata.attributes)
             for (child in listChildren(source.id)) copyAcross(child.id, made.id, null, checked, progress)
             return made
         }
@@ -673,7 +673,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             val file = File(directory, source.name)
             download(source.id, file) { progress(it / 2f) }
             val thumb = runCatching { thumbnail(source.id) }.getOrNull()
-            return upload(file, name ?: source.name, source.metadata.mime, parentId, null, thumb, prior) { progress(0.5f + it / 2f) }
+            return upload(file, name ?: source.name, source.metadata.mime, parentId, null, thumb, prior, source.metadata.attributes) { progress(0.5f + it / 2f) }
         } finally {
             directory.deleteRecursively()
         }
@@ -1060,8 +1060,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     // Writes
 
-    /* `copy`: set when the name comes from a record that existed before (a copy, a save from a link); see Prior. */
-    fun createFolder(parentId: String, name: String, copy: Prior? = null): Opened {
+    /*
+     * `copy`: set when the name comes from a record that existed before (a copy, a save from a link); see Prior.
+     * `attributes`: a copied folder's source's, carried whole (keys this app doesn't know included); none for a new one.
+     */
+    fun createFolder(parentId: String, name: String, copy: Prior? = null, attributes: Map<String, String> = emptyMap()): Opened {
         // Shared folders belong to the granter's workspace; an editor writes there, and the id is minted there.
         val parent = resolve(parentId)
         val ws = parent.node.workspaceId
@@ -1071,7 +1074,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val id = made.id
         val key = randomBytes(32u)
         val wrapped = nodeWrap(NodeKeyContext(ws, id, parent.id, parent.node.keyEpoch, epoch), parentKey, key)
-        val metadata = NodeMetadata(checkName(name), null, null, null)
+        val metadata = NodeMetadata(checkName(name), null, null, null, attributes)
         val sealed = metadataSeal(MetadataContext(ws, id, 1uL), key, metadata)
         val signature = if (copy != null) signCopiedMetadata(ws, id, NodeKind.FOLDER, sealed, copy) else signMetadata(ws, id, NodeKind.FOLDER, 1uL, sealed)
         val node = api.createFolder(ws, JSONObject().putId(made).put("parentId", parent.id).put("keyEpoch", epoch.toLong())
@@ -1124,7 +1127,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val checked = trust ?: trustForWrite()
         val prior = Prior.of(source.node, checked)
         if (source.isFolder) {
-            val made = createFolder(parent.id, newName, prior)
+            val made = createFolder(parent.id, newName, prior, source.metadata.attributes)
             for (child in listChildren(source.id)) copy(child.id, made.id, null, checked)
             return made
         }
@@ -1294,9 +1297,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * A file's bytes as a new node under `parentId`, or a new version of `replacing`; a thumbnail rides after the last
      * chunk. `copy`: set when the bytes and name are a copy of a record that existed before (a copy across drives, a
      * save from a link), which decides how the new node is signed; see Prior. Every id is minted in the workspace
-     * written to, fresh for each call: an attempt that stops starts over with new ids and seeds.
+     * written to, fresh for each call: an attempt that stops starts over with new ids and seeds. `attributes`: a copy's
+     * source's, for a new node; a new version keeps the replaced file's whatever is passed.
      */
-    fun upload(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray? = null, copy: Prior? = null, progress: (Float) -> Unit = {}): Opened {
+    fun upload(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray? = null, copy: Prior? = null,
+               attributes: Map<String, String> = emptyMap(), progress: (Float) -> Unit = {}): Opened {
         // The workspace written to: the replaced file's, or the folder's (a share's subtree is the granter's).
         val ws = replacing?.node?.workspaceId ?: resolve(parentId).node.workspaceId
         // A new version carries the old name over into metadata signed again: checked before any byte goes up, so an
@@ -1330,7 +1335,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             nodeId = madeNode.id
             nodeKey = randomBytes(32u)
             val wrapped = nodeWrap(NodeKeyContext(ws, nodeId, parent.id, parent.node.keyEpoch, epoch), parentKey, nodeKey)
-            metadata = NodeMetadata(checkName(name), mime, size, modified)
+            metadata = NodeMetadata(checkName(name), mime, size, modified, attributes)
             val sealed = metadataSeal(MetadataContext(ws, nodeId, 1uL), nodeKey, metadata)
             val signature = if (copy != null) signCopiedMetadata(ws, nodeId, NodeKind.FILE, sealed, copy) else signMetadata(ws, nodeId, NodeKind.FILE, 1uL, sealed)
             nodeInput = JSONObject().put("existing", false).putId(madeNode).put("parentId", parent.id).put("keyEpoch", epoch.toLong())

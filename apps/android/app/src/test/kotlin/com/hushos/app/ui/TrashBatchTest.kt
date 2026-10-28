@@ -25,7 +25,7 @@ import org.junit.Test
 class TrashBatchTest {
     private fun item(id: String, parent: String = "work") = Opened(
         NodeView(id, "ws", parent, "file", 1uL, 1uL, "", 1uL, "", null, null, null, null),
-        NodeMetadata(id, null, 10uL, null),
+        NodeMetadata(id, null, 10uL, null, emptyMap()),
     )
 
     private val thirteen = (1..13).map { item("f$it", parent = if (it % 2 == 0) "work" else "photos") }

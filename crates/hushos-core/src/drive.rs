@@ -16,6 +16,7 @@ use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::Sha256;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use zeroize::Zeroizing;
 
@@ -29,6 +30,9 @@ const METADATA_PAD_STEP: usize = 256;
 const NAME_MAX_CODE_POINTS: usize = 255;
 const MIME_MAX_CHARS: usize = 255;
 const MODIFIED_MAX_CHARS: usize = 64;
+/* An attribute key is `^[a-z][a-z0-9_-]{0,31}$`, as `ATTRIBUTE_KEY` in drive.ts; at most 32 of them. */
+const ATTRIBUTE_KEY_MAX_BYTES: usize = 32;
+const ATTRIBUTES_MAX_KEYS: usize = 32;
 const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 const THUMBNAIL_MAX_BYTES: u32 = 65_536;
 const CONTENT_NONCE_BYTES: usize = 16;
@@ -297,18 +301,57 @@ pub struct NodeMetadata {
     pub size: Option<u64>,
     /// ISO 8601, at most 64 characters.
     pub modified: Option<String>,
+    /// Plain data a feature keeps on the node (a folder's colour): keys match
+    /// `^[a-z][a-z0-9_-]{0,31}$`, at most 32 of them, values are strings, and
+    /// the whole record stays within 4096 bytes. Anything that seals a record
+    /// again carries every key through, the ones it does not know included:
+    /// build the new record from the opened one. Empty is none, and is written
+    /// as no field at all, so a record without attributes seals as it did
+    /// before them; keys are written sorted. A record that breaks a limit is
+    /// refused, sealing and opening, never trimmed.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty", serialize_with = "sorted_attributes")]
+    pub attributes: HashMap<String, String>,
 }
 
-/* The name is exactly what the server must not learn, so it is kept out of prints and logs as well. */
+/* Sorted, as the web writes them: the same record is the same plaintext in both twins. */
+fn sorted_attributes<S: serde::Serializer>(
+    attributes: &HashMap<String, String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_map(attributes.iter().collect::<BTreeMap<_, _>>())
+}
+
+/* The name is exactly what the server must not learn, so it is kept out of prints and logs as well; attribute values with it. */
 impl fmt::Debug for NodeMetadata {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut keys: Vec<&String> = self.attributes.keys().collect();
+        keys.sort();
         f.debug_struct("NodeMetadata")
             .field("name", &Redacted)
             .field("mime", &self.mime)
             .field("size", &self.size)
             .field("modified", &self.modified)
+            .field("attributes", &keys)
             .finish()
     }
+}
+
+/* Why a node's attributes are refused, or `None`: the limits `NodeMetadata::attributes` states. */
+fn attributes_refusal(attributes: &HashMap<String, String>) -> Option<&'static str> {
+    if attributes.len() > ATTRIBUTES_MAX_KEYS {
+        return Some("An item can have at most 32 attributes.");
+    }
+    let valid = |key: &str| {
+        let bytes = key.as_bytes();
+        !bytes.is_empty()
+            && bytes.len() <= ATTRIBUTE_KEY_MAX_BYTES
+            && bytes[0].is_ascii_lowercase()
+            && bytes.iter().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'_' || *b == b'-')
+    };
+    if !attributes.keys().all(|key| valid(key)) {
+        return Some("Invalid attribute name.");
+    }
+    None
 }
 
 #[derive(Debug, Clone)]
@@ -376,7 +419,7 @@ pub fn check_name(name: String) -> CoreResult<String> {
 /// use hushos_core::{metadata_open, metadata_seal, random_bytes, MetadataContext, NodeMetadata};
 /// let key = random_bytes(32)?;
 /// let ctx = MetadataContext { workspace_id: "11111111-1111-4111-8111-111111111111".into(), node_id: "22222222-2222-4222-8222-222222222222".into(), metadata_version: 1 };
-/// let metadata = NodeMetadata { name: "notes.md".into(), mime: Some("text/markdown".into()), size: Some(12), modified: None };
+/// let metadata = NodeMetadata { name: "notes.md".into(), mime: Some("text/markdown".into()), size: Some(12), modified: None, attributes: Default::default() };
 /// let envelope = metadata_seal(ctx.clone(), key.clone(), metadata.clone())?;
 /// assert_eq!(envelope.len(), 24 + 256 + 16, "one padding step");
 /// assert_eq!(metadata_open(ctx, key, envelope)?, metadata);
@@ -385,15 +428,23 @@ pub fn check_name(name: String) -> CoreResult<String> {
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn metadata_seal(ctx: MetadataContext, node_key: Vec<u8>, metadata: NodeMetadata) -> CoreResult<Vec<u8>> {
     expect_len("nodeKey", &node_key, KEY_BYTES)?;
+    if let Some(refusal) = attributes_refusal(&metadata.attributes) {
+        return Err(input(refusal));
+    }
     let clean = NodeMetadata {
         name: check_name(metadata.name)?,
         mime: metadata.mime.filter(|mime| mime.chars().count() <= MIME_MAX_CHARS),
         size: metadata.size.filter(|size| *size <= MAX_SAFE_INTEGER),
         modified: metadata.modified.filter(|modified| modified.chars().count() <= MODIFIED_MAX_CHARS),
+        attributes: metadata.attributes,
     };
     let mut plaintext = serde_json::to_vec(&clean).map_err(|_| input("metadata is not encodable"))?;
     if plaintext.len() > METADATA_MAX_BYTES {
-        return Err(input("This name is too long."));
+        return Err(input(if clean.attributes.is_empty() {
+            "This name is too long."
+        } else {
+            "This name and its attributes are too long to save."
+        }));
     }
     let target = plaintext.len().div_ceil(METADATA_PAD_STEP) * METADATA_PAD_STEP;
     plaintext.resize(target.min(METADATA_MAX_BYTES), b' ');
@@ -410,7 +461,13 @@ pub fn metadata_open(ctx: MetadataContext, node_key: Vec<u8>, envelope: Vec<u8>)
     let plaintext = open(&node_key, &envelope, &metadata_context(&ctx)?)?;
     let text =
         String::from_utf8(plaintext).map_err(|_| CoreError::Sealed("Metadata is not UTF-8.".into()))?;
-    serde_json::from_str(text.trim_end()).map_err(|_| CoreError::Sealed("Metadata is not JSON.".into()))
+    let metadata: NodeMetadata = serde_json::from_str(text.trim_end())
+        .map_err(|_| CoreError::Sealed("Metadata is not JSON.".into()))?;
+    // Refused whole, never trimmed: a re-save would otherwise drop what it could not read.
+    if attributes_refusal(&metadata.attributes).is_some() {
+        return Err(CoreError::Sealed("This item could not be opened. It may be damaged.".into()));
+    }
+    Ok(metadata)
 }
 
 // ---------------------------------------------------------------------------
@@ -1110,7 +1167,7 @@ pub(crate) fn origin_key_context(ctx: &OriginKeyContext) -> CoreResult<Vec<u8>> 
 /// use hushos_core::*;
 /// let (old, new) = (random_bytes(32)?, random_bytes(32)?);
 /// let ctx = MetadataContext { workspace_id: "11111111-1111-4111-8111-111111111111".into(), node_id: "22222222-2222-4222-8222-222222222222".into(), metadata_version: 1 };
-/// let metadata = NodeMetadata { name: "notes.md".into(), mime: None, size: None, modified: None };
+/// let metadata = NodeMetadata { name: "notes.md".into(), mime: None, size: None, modified: None, attributes: Default::default() };
 /// let origin = metadata_seal(ctx.clone(), old.clone(), metadata.clone())?;
 /// let rekeyed = metadata_rekey(ctx.clone(), old.clone(), new.clone(), origin.clone())?;
 /// assert_eq!(rekeyed.len(), origin.len());
@@ -1336,8 +1393,13 @@ mod tests {
             encrypted_key: encode(&random(48)),
         };
         assert!(!format!("{grant:?}").contains(&grant.encrypted_key));
-        let metadata =
-            NodeMetadata { name: "Tax return 2025.pdf".into(), mime: None, size: Some(3), modified: None };
+        let metadata = NodeMetadata {
+            name: "Tax return 2025.pdf".into(),
+            mime: None,
+            size: Some(3),
+            modified: None,
+            attributes: Default::default(),
+        };
         assert!(!format!("{metadata:?}").contains("Tax return"));
     }
 
@@ -1410,18 +1472,36 @@ mod tests {
             node_id: "22222222-2222-4222-8222-222222222222".into(),
             metadata_version: 1,
         };
-        let short = NodeMetadata { name: "a".into(), mime: None, size: None, modified: None };
+        let short = NodeMetadata {
+            name: "a".into(),
+            mime: None,
+            size: None,
+            modified: None,
+            attributes: Default::default(),
+        };
         assert_eq!(
             metadata_seal(ctx.clone(), key.clone(), short).unwrap().len(),
             NONCE_BYTES + 256 + TAG_BYTES
         );
-        let long_name = NodeMetadata { name: "n".repeat(250), mime: None, size: None, modified: None };
+        let long_name = NodeMetadata {
+            name: "n".repeat(250),
+            mime: None,
+            size: None,
+            modified: None,
+            attributes: Default::default(),
+        };
         assert_eq!(
             metadata_seal(ctx.clone(), key.clone(), long_name).unwrap().len(),
             NONCE_BYTES + 512 + TAG_BYTES
         );
         // 255 four-byte code points is a legal name that needs five steps and still fits the cap.
-        let wide = NodeMetadata { name: "\u{1F600}".repeat(255), mime: None, size: None, modified: None };
+        let wide = NodeMetadata {
+            name: "\u{1F600}".repeat(255),
+            mime: None,
+            size: None,
+            modified: None,
+            attributes: Default::default(),
+        };
         let sealed = metadata_seal(ctx.clone(), key.clone(), wide.clone()).unwrap();
         assert_eq!(sealed.len(), NONCE_BYTES + 1280 + TAG_BYTES);
         assert_eq!(metadata_open(ctx, key, sealed).unwrap(), wide);
@@ -1440,15 +1520,219 @@ mod tests {
             mime: Some("x".repeat(256)),
             size: Some(1 << 53),
             modified: Some("2".repeat(65)),
+            attributes: Default::default(),
         };
         let envelope = metadata_seal(ctx.clone(), key.clone(), dirty).unwrap();
         let opened = metadata_open(ctx.clone(), key.clone(), envelope.clone()).unwrap();
-        assert_eq!(opened, NodeMetadata { name: "f".into(), mime: None, size: None, modified: None });
+        assert_eq!(
+            opened,
+            NodeMetadata {
+                name: "f".into(),
+                mime: None,
+                size: None,
+                modified: None,
+                attributes: Default::default()
+            }
+        );
         let mut stale = ctx.clone();
         stale.metadata_version = 3;
         assert!(matches!(metadata_open(stale, key.clone(), envelope), Err(CoreError::Sealed(_))));
-        let bad = NodeMetadata { name: "a/b".into(), mime: None, size: None, modified: None };
+        let bad = NodeMetadata {
+            name: "a/b".into(),
+            mime: None,
+            size: None,
+            modified: None,
+            attributes: Default::default(),
+        };
         assert!(matches!(metadata_seal(ctx, key, bad), Err(CoreError::Input(_))));
+    }
+
+    fn attributes_of(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    fn attributed(attributes: HashMap<String, String>) -> NodeMetadata {
+        NodeMetadata {
+            name: "Plans".into(),
+            mime: None,
+            size: None,
+            modified: Some("2026-10-28T09:00:00.000Z".into()),
+            attributes,
+        }
+    }
+
+    fn metadata_ctx() -> MetadataContext {
+        MetadataContext {
+            workspace_id: "11111111-1111-4111-8111-111111111111".into(),
+            node_id: "22222222-2222-4222-8222-222222222222".into(),
+            metadata_version: 2,
+        }
+    }
+
+    /* An envelope over exactly `plaintext`, as a writer other than metadata_seal could make it. */
+    fn sealed_as(plaintext: &str, key: &[u8]) -> Vec<u8> {
+        seal(key, plaintext.as_bytes(), &metadata_context(&metadata_ctx()).unwrap()).unwrap()
+    }
+
+    fn plaintext_of(envelope: &[u8], key: &[u8]) -> String {
+        let bytes = open(key, envelope, &metadata_context(&metadata_ctx()).unwrap()).unwrap();
+        String::from_utf8(bytes).unwrap().trim_end().to_string()
+    }
+
+    #[test]
+    fn attributes_come_back_exactly_unknown_keys_included_written_sorted() {
+        let key = random(32);
+        let metadata = attributed(attributes_of(&[("zz-future", "kept"), ("colour", "blue"), ("a_b", "")]));
+        let envelope = metadata_seal(metadata_ctx(), key.clone(), metadata.clone()).unwrap();
+        assert_eq!(metadata_open(metadata_ctx(), key.clone(), envelope.clone()).unwrap(), metadata);
+        // The same bytes the web writes: drive.test.ts asserts this exact plaintext.
+        assert_eq!(
+            plaintext_of(&envelope, &key),
+            r#"{"name":"Plans","mime":null,"size":null,"modified":"2026-10-28T09:00:00.000Z","attributes":{"a_b":"","colour":"blue","zz-future":"kept"}}"#
+        );
+        // Debug never prints a value.
+        assert!(!format!("{metadata:?}").contains("blue"));
+    }
+
+    #[test]
+    fn no_attributes_is_no_field_and_records_from_before_them_open() {
+        let key = random(32);
+        let none = metadata_seal(metadata_ctx(), key.clone(), attributed(HashMap::new())).unwrap();
+        assert_eq!(
+            plaintext_of(&none, &key),
+            r#"{"name":"Plans","mime":null,"size":null,"modified":"2026-10-28T09:00:00.000Z"}"#
+        );
+        let old = sealed_as(
+            &format!("{}{}", r#"{"name":"Plans","mime":null,"size":null,"modified":null}"#, " ".repeat(200)),
+            &key,
+        );
+        let opened = metadata_open(metadata_ctx(), key.clone(), old).unwrap();
+        assert!(opened.attributes.is_empty());
+        assert_eq!(opened.name, "Plans");
+        let empty = sealed_as(r#"{"name":"P","attributes":{}}"#, &key);
+        assert!(metadata_open(metadata_ctx(), key, empty).unwrap().attributes.is_empty());
+    }
+
+    #[test]
+    fn an_attribute_named_like_a_known_field_never_stands_in_for_it() {
+        let key = random(32);
+        let attributes =
+            attributes_of(&[("name", "a/b"), ("mime", "text/html"), ("size", "9"), ("modified", "x")]);
+        let metadata = attributed(attributes);
+        let envelope = metadata_seal(metadata_ctx(), key.clone(), metadata.clone()).unwrap();
+        assert_eq!(metadata_open(metadata_ctx(), key.clone(), envelope).unwrap(), metadata);
+        let bad_name = NodeMetadata { name: "a/b".into(), ..attributed(attributes_of(&[("name", "fine")])) };
+        assert!(matches!(metadata_seal(metadata_ctx(), key.clone(), bad_name), Err(CoreError::Input(_))));
+        // A record with no name of its own is refused, whatever its attributes say.
+        let nameless = sealed_as(r#"{"attributes":{"name":"ok"}}"#, &key);
+        assert!(matches!(metadata_open(metadata_ctx(), key.clone(), nameless), Err(CoreError::Sealed(_))));
+        let planted = sealed_as(r#"{"name":"real","size":5,"attributes":{"name":"fake","size":"7"}}"#, &key);
+        let opened = metadata_open(metadata_ctx(), key, planted).unwrap();
+        assert_eq!((opened.name.as_str(), opened.size), ("real", Some(5)));
+    }
+
+    #[test]
+    fn attributes_out_of_bounds_are_refused_sealing_and_opening_never_trimmed() {
+        let key = random(32);
+        let bad_keys = [
+            "",
+            "Colour",
+            "1colour",
+            "-colour",
+            "_colour",
+            "__proto__",
+            "col our",
+            "colör",
+            &"a".repeat(33),
+            "colour\n",
+        ];
+        for bad in bad_keys {
+            let refused =
+                metadata_seal(metadata_ctx(), key.clone(), attributed(attributes_of(&[(bad, "x")])));
+            assert_eq!(refused, Err(input("Invalid attribute name.")), "{bad:?}");
+            let planted =
+                sealed_as(&serde_json::json!({ "name": "P", "attributes": { bad: "x" } }).to_string(), &key);
+            assert!(
+                matches!(metadata_open(metadata_ctx(), key.clone(), planted), Err(CoreError::Sealed(_))),
+                "{bad:?}"
+            );
+        }
+        // At the bounds: 32 characters, and 32 keys.
+        let most: HashMap<String, String> = (0..32).map(|i| (format!("k{i}"), "v".to_string())).collect();
+        let longest = attributes_of(&[(&"a".repeat(32), "x"), ("z", "y")]);
+        for attributes in [most.clone(), longest] {
+            let metadata = attributed(attributes);
+            let envelope = metadata_seal(metadata_ctx(), key.clone(), metadata.clone()).unwrap();
+            assert_eq!(metadata_open(metadata_ctx(), key.clone(), envelope).unwrap(), metadata);
+        }
+        let mut too_many = most;
+        too_many.insert("k99".into(), "v".into());
+        assert_eq!(
+            metadata_seal(metadata_ctx(), key.clone(), attributed(too_many.clone())),
+            Err(input("An item can have at most 32 attributes."))
+        );
+        let planted =
+            sealed_as(&serde_json::json!({ "name": "P", "attributes": too_many }).to_string(), &key);
+        assert!(matches!(metadata_open(metadata_ctx(), key.clone(), planted), Err(CoreError::Sealed(_))));
+        // Values are strings, and the map is an object: anything else is damage, not "none".
+        for value in ["1", "true", "null", r#"["x"]"#, r#"{"x":"y"}"#, r#""\ud800""#] {
+            let planted = sealed_as(&format!(r#"{{"name":"P","attributes":{{"colour":{value}}}}}"#), &key);
+            assert!(
+                matches!(metadata_open(metadata_ctx(), key.clone(), planted), Err(CoreError::Sealed(_))),
+                "{value}"
+            );
+        }
+        for value in ["null", r#"["x"]"#, r#""blue""#, "0"] {
+            let planted = sealed_as(&format!(r#"{{"name":"P","attributes":{value}}}"#), &key);
+            assert!(
+                matches!(metadata_open(metadata_ctx(), key.clone(), planted), Err(CoreError::Sealed(_))),
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_whole_record_stays_within_4096_bytes_one_over_is_refused_not_cut() {
+        let key = random(32);
+        let base = serde_json::to_vec(&attributed(attributes_of(&[("colour", "")]))).unwrap().len();
+        let fits = attributed(attributes_of(&[("colour", &"x".repeat(METADATA_MAX_BYTES - base))]));
+        let envelope = metadata_seal(metadata_ctx(), key.clone(), fits.clone()).unwrap();
+        assert_eq!(envelope.len(), NONCE_BYTES + METADATA_MAX_BYTES + TAG_BYTES);
+        assert_eq!(metadata_open(metadata_ctx(), key.clone(), envelope).unwrap(), fits);
+        let over = attributed(attributes_of(&[("colour", &"x".repeat(METADATA_MAX_BYTES - base + 1))]));
+        assert_eq!(
+            metadata_seal(metadata_ctx(), key.clone(), over),
+            Err(input("This name and its attributes are too long to save."))
+        );
+        // Counted in UTF-8 bytes, not characters.
+        let wide = attributed(attributes_of(&[("colour", &"\u{e9}".repeat(2100))]));
+        assert!(matches!(metadata_seal(metadata_ctx(), key, wide), Err(CoreError::Input(_))));
+    }
+
+    #[test]
+    fn a_tampered_envelope_with_attributes_still_fails() {
+        let key = random(32);
+        let envelope =
+            metadata_seal(metadata_ctx(), key.clone(), attributed(attributes_of(&[("colour", "blue")])))
+                .unwrap();
+        for at in [0, 30, envelope.len() - 1] {
+            let mut flipped = envelope.clone();
+            flipped[at] ^= 1;
+            assert!(matches!(metadata_open(metadata_ctx(), key.clone(), flipped), Err(CoreError::Sealed(_))));
+        }
+        let mut later = metadata_ctx();
+        later.metadata_version = 3;
+        assert!(metadata_open(later, key, envelope.clone()).is_err());
+        assert!(metadata_open(metadata_ctx(), random(32), envelope).is_err());
+    }
+
+    #[test]
+    fn a_rekey_keeps_every_attribute_unknown_keys_included() {
+        let (old, fresh) = (random(32), random(32));
+        let metadata = attributed(attributes_of(&[("colour", "red"), ("later-feature", r#"{"x":1}"#)]));
+        let origin = metadata_seal(metadata_ctx(), old.clone(), metadata.clone()).unwrap();
+        let rekeyed = metadata_rekey(metadata_ctx(), old, fresh.clone(), origin).unwrap();
+        assert_eq!(metadata_open(metadata_ctx(), fresh, rekeyed).unwrap(), metadata);
     }
 
     #[test]
@@ -1879,7 +2163,13 @@ mod tests {
             node_id: "22222222-2222-4222-8222-222222222222".into(),
             metadata_version: 4,
         };
-        let metadata = NodeMetadata { name: "Sam's notes".into(), mime: None, size: Some(3), modified: None };
+        let metadata = NodeMetadata {
+            name: "Sam's notes".into(),
+            mime: None,
+            size: Some(3),
+            modified: None,
+            attributes: Default::default(),
+        };
         let origin = metadata_seal(ctx.clone(), first.clone(), metadata.clone()).unwrap();
         let at_two = origin_key_wrap(
             origin_ctx(&origin, 2),
@@ -1962,7 +2252,13 @@ mod tests {
         }
         assert!(origin_key_wrap(origin_ctx(&origin, MAX_SAFE_INTEGER), key.clone(), random(32)).is_ok());
         // Metadata and version envelopes alike.
-        let metadata = NodeMetadata { name: "a".into(), mime: None, size: None, modified: None };
+        let metadata = NodeMetadata {
+            name: "a".into(),
+            mime: None,
+            size: None,
+            modified: None,
+            attributes: Default::default(),
+        };
         for ctx in [
             MetadataContext { workspace_id: "ws".into(), node_id: n1.into(), metadata_version: 1 },
             MetadataContext {
