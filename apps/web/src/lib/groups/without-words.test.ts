@@ -260,7 +260,9 @@ describe('a member’s account change with no signed chain', () => {
         await pin(f.ctx, BOB, firstSeen({ ...(await pinOf(fresh)), userId: BOB }));
         const staged = await continued(f, BOB);
         expect(landed(staged)).toBe(true);
-        const [call] = f.server.sent('rosters');
+        // Taking the role is a role change, which the server takes only on the member route for Bob.
+        expect(f.server.sent('rosters')).toEqual([]);
+        const [call] = f.server.sent('member');
         expect(entryOf(call!, BOB).roles).toEqual([]);
         // The role going is a new family key, sealed to the managers who remain: Alice alone.
         expect(call!.succession).toBeDefined();
@@ -278,7 +280,7 @@ describe('a member’s account change with no signed chain', () => {
         // Checked over the new keys: managing again, with the family's key sealed to them.
         await pin(f.ctx, BOB, { ...(await pinOf(fresh)), userId: BOB });
         expect(landed(await promote(f, BOB))).toBe(true);
-        const [roles] = f.server.sent('member');
+        const [, roles] = f.server.sent('member');
         expect(
             (roles as RosterCallBody & { keySeal?: { holderUserId: string } }).keySeal,
         ).toMatchObject({ holderUserId: BOB });

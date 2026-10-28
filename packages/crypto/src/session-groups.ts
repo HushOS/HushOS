@@ -763,6 +763,11 @@ export type GroupStaged = {
      * built from (the outbox's `admits`; keyCommitment in ./pins).
      */
     admits: { userId: string; keys: string } | null;
+    /*
+     * The member whose roles this call changes, when it is no role change itself (a Continue on a
+     * manager): sent on the member route for them, the only route the server takes a role change on.
+     */
+    memberRoute?: string | null;
     /* The head the call was built on and its own roster, by digest: whether a kept call landed, or never can. */
     previousRosterDigest: string;
     rosterDigest: string;
@@ -3244,6 +3249,13 @@ export function createGroupSession(host: GroupHost) {
         const folded: string[] = [];
         /* Members let back in on a Continue (foldIn's `continued`): every family folder rotates. */
         const refolded: string[] = [];
+        /*
+         * A member whose roles this roster changes outside a role change (a manager let back in on
+         * a Continue, who keeps the folders but not the role): the server takes a role change only
+         * on the member route, for that member (applyRoster's `role-change`), so the call goes
+         * there, one member at a time.
+         */
+        let rolesOf: string | null = null;
         switch (op.kind) {
             case 'admit': {
                 if (activeWith(entryOf(op.userId)))
@@ -3334,9 +3346,15 @@ export function createGroupSession(host: GroupHost) {
                         const pin = contactPin(entry.userId);
                         if (!pin) throw new CryptoError(NOT_CHECKED);
                         const verified = await pinVerified(pin);
+                        const roles = entry.roles.filter((role) => verified || role !== 'members');
+                        if (roles.length !== entry.roles.length) {
+                            if (rolesOf !== null)
+                                throw new CryptoError('Let one person back in at a time.');
+                            rolesOf = entry.userId;
+                        }
                         put(
                             await newRosterEntry(pin, member.served, {
-                                roles: entry.roles.filter((role) => verified || role !== 'members'),
+                                roles,
                                 rosterVersion: next,
                             }),
                         );
@@ -3499,6 +3517,7 @@ export function createGroupSession(host: GroupHost) {
                 needsCheck,
                 replaced: parts.replaced,
                 admits,
+                memberRoute: rolesOf,
                 previousRosterDigest: chain.rosterDigest,
                 rosterDigest: stagedChain.rosterDigest,
             };

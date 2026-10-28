@@ -992,9 +992,7 @@ test.describe.serial('removal, leaving and key changes', () => {
                 .getByRole('heading', { level: 1 }),
         ).toHaveText('Trips');
         await expect(fileRow(ana.page, 'trip.txt')).toBeVisible();
-        await expect(ana.page.locator('[data-family-checking]')).toHaveText(
-            `Checking ${family}`,
-        );
+        await expect(ana.page.locator('[data-family-checking]')).toHaveText(`Checking ${family}`);
         await ana.page.screenshot({ path: test.info().outputPath('checking-member-list.png') });
 
         // Ana uploads into Trips in that gap, while the walk is held there. Her device knows the
@@ -1183,15 +1181,17 @@ test.describe.serial('a member’s account changes', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
     let maya: Person;
     let sam: Person;
+    let leo: Person;
     const family = 'Holm family';
 
     test.beforeAll(async ({ browser }) => {
         test.setTimeout(300_000);
         maya = await person(browser, 'Maya Holm');
         sam = await person(browser, 'Sam Holm');
+        leo = await person(browser, 'Leo Holm');
     });
     test.afterAll(async () => {
-        for (const who of [maya, sam]) await who?.page.context().close();
+        for (const who of [maya, sam, leo]) await who?.page.context().close();
     });
 
     test('the changed-member notice: one calm Continue, with every family folder’s keys replaced', async () => {
@@ -1253,6 +1253,67 @@ test.describe.serial('a member’s account changes', () => {
         await expect(maya.page.locator(`[data-member="${sam.email}"] [data-checked]`)).toHaveText(
             'Not verified',
         );
+    });
+
+    test('a manager whose account changed gets the folders back on Continue, without the role, through the member route', async () => {
+        test.setTimeout(420_000);
+        const familyPath = '/app/family';
+        await openFamilyPage(maya, familyPath, family);
+        // Invited to manage the family, checked first, so let in as a manager.
+        await maya.page.getByRole('button', { name: 'Invite someone' }).click();
+        const invited = maya.page.getByRole('dialog', { name: 'Invite someone' });
+        await invited.getByLabel('Email').fill(leo.email);
+        await invited.getByRole('checkbox', { name: 'Let them manage the family' }).click();
+        await invited.getByRole('button', { name: 'Send invitation' }).click();
+        await expect(maya.page.locator(`[data-invitation="${leo.email}"]`)).toBeVisible();
+        await accept(leo, family);
+        const row = maya.page.locator(`[data-pending="${leo.email}"]`);
+        await expect(row).toBeVisible({ timeout: 60_000 });
+        await row.getByRole('button', { name: `More for ${leo.name}` }).click();
+        await maya.page.getByRole('menuitem', { name: 'Check it’s Leo first' }).click();
+        const words = maya.page.getByRole('dialog', { name: 'Check it’s Leo' });
+        await expect(words.locator('[data-fingerprint-words]')).toBeVisible({ timeout: 60_000 });
+        await words.getByRole('button', { name: 'They match' }).click();
+        await expect(maya.page.getByText('Leo verified')).toBeVisible({ timeout: 60_000 });
+        await letThemIn(maya, leo, family);
+        const leoRow = maya.page.locator(`[data-member="${leo.email}"]`);
+        await expect(leoRow.locator('[data-roles] [data-slot=badge]')).toHaveText(
+            'Manages the family',
+            { timeout: 60_000 },
+        );
+
+        // Leo starts over: Continue gives the folders back, and the role waits for a check.
+        execFileSync('bun', ['e2e/fixtures/start-over.ts', leo.email], {
+            stdio: 'pipe',
+            env: { ...process.env, DATABASE_URL: e2eDatabase().url },
+        });
+        const answers: { method: string; path: string; status: number }[] = [];
+        maya.page.on('response', (response) => {
+            const path = new URL(response.url()).pathname;
+            if (/\/api\/groups\/[0-9a-f-]+\/(rosters|members\/[0-9a-f-]+)$/.test(path))
+                answers.push({
+                    method: response.request().method(),
+                    path,
+                    status: response.status(),
+                });
+        });
+        await openFamilyPage(maya, familyPath, family);
+        const notice = maya.page.locator(`[data-account-changed="${leo.email}"]`);
+        await expect(notice).toBeVisible({ timeout: 120_000 });
+        await notice.getByRole('button', { name: 'Continue' }).click();
+        await expect(maya.page.getByText('Leo has the family folders again')).toBeVisible({
+            timeout: 120_000,
+        });
+        await expect(
+            maya.page.getByText('Leo can manage the family again once you’ve checked it’s Leo.'),
+        ).toBeVisible();
+        // One call, on the member route for Leo, where the server takes a role change; it landed.
+        const writes = answers.filter((answer) => answer.method !== 'GET');
+        expect(writes).toEqual([
+            { method: 'PATCH', path: expect.stringMatching(/\/members\/[0-9a-f-]+$/), status: 200 },
+        ]);
+        await expect(notice).toHaveCount(0, { timeout: 120_000 });
+        await expect(leoRow.locator('[data-roles]')).toHaveCount(0, { timeout: 60_000 });
     });
 
     test('a tab from an older release is refused family changes with 426, and served reads and Drive', async () => {

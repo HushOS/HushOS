@@ -9,7 +9,7 @@ import { parseRoster, rosterDigest } from '@hushos/crypto/groups';
 import { digest } from '@hushos/crypto/signatures';
 import type { ContactPin } from '@hushos/crypto';
 import type { RekeyView } from '@hushos/drive/api';
-import type { GroupApiError, GroupsApi } from './api';
+import { GroupApiError, type GroupsApi } from './api';
 import { createMemoryFamilyGuard } from '@/lib/contact-guard';
 import { familyGuardOf, type GroupContext } from './context';
 import { createRotationSource } from './rotations';
@@ -179,9 +179,29 @@ export async function familyServer() {
             targetEpoch: rotation.targetEpoch,
         };
     }
-    async function apply(route: string, call: RosterCallBody) {
+    async function apply(route: string, call: RosterCallBody, target: string | null = null) {
         log.push({ route, body: structuredClone(call) });
         refuseFirst(route);
+        // The server's rule (packages/db applyRoster): an entry whose roles change is the member
+        // route's target, and only there.
+        if (rosters.length > 0) {
+            const before = parseRoster(bytes(rosters.at(-1)!.statement)).members;
+            for (const entry of parseRoster(bytes(call.roster.statement)).members) {
+                const was = before.find((at) => at.userId === entry.userId);
+                const roles = (list: readonly string[]) => [...list].sort().join();
+                if (
+                    was?.status === 'active' &&
+                    entry.status === 'active' &&
+                    roles(was.roles) !== roles(entry.roles) &&
+                    (route !== 'member' || entry.userId !== target)
+                ) {
+                    log.pop();
+                    throw new GroupApiError('role-change', 400, 'invalid', {
+                        reason: 'role-change',
+                    });
+                }
+            }
+        }
         rosters.push(call.roster);
         if (call.succession) successions.push(call.succession);
         for (const grant of call.grants ?? []) grants.push({ ...grant, granterUserId: caller });
@@ -333,8 +353,8 @@ export async function familyServer() {
             members.set(userId, { state: 'active', roles: [], ...named(userId) });
             return apply('admit', call);
         },
-        patchMember: (_groupId: string, _userId: string, call: RosterCallBody) =>
-            apply('member', call),
+        patchMember: (_groupId: string, userId: string, call: RosterCallBody) =>
+            apply('member', call, userId),
         removeMember: (_groupId: string, _userId: string, call: RosterCallBody) =>
             apply('remove', call),
         removalPreview: async (_groupId: string, userId: string) => {
