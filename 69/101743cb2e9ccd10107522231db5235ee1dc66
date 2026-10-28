@@ -1,0 +1,65 @@
+.github/workflows/ci.yml
+  s_566b8e0c4467a4::t_8f266c4bea1e2f 131,176,206,262,338,414
+.github/workflows/fuzz.yml
+  s_566b8e0c4467a4::t_e32e83df833566 51,94,144
+CONTRIBUTING.md
+  s_566b8e0c4467a4::t_a699cd1e01a165 3
+README.md
+  s_566b8e0c4467a4::t_8babdecdf63958 36,77
+apps/web/Dockerfile
+  s_566b8e0c4467a4::t_37871b0f7f07a9 1,25,32
+apps/web/package.json
+  s_566b8e0c4467a4::t_fab21da2659aec 92
+bun.lock
+  s_566b8e0c4467a4::t_976826c9aff822 11,98,128,146,172,192,213,231,250,269,291,304,314,323,333,559,561,563,565,567,569,571,573,575,577,579,581,583,585,587,589,641,643,645,647,649,663,665,667,669,709,711,713,715,717,719,721,723,759,761,763,765,767,769,771,773,985,987,989,991,1083,1229,2345,2347,2349,2351,2353,2355
+compose.yaml
+  s_566b8e0c4467a4::t_6367d2ce898083 39
+package.json
+  s_566b8e0c4467a4::t_503dcc96d0e8d7 69,80,82
+packages/auth/package.json
+  s_566b8e0c4467a4::t_721312a3e55d35 30
+packages/billing/package.json
+  s_566b8e0c4467a4::t_49c0482f9fdab5 27
+packages/crypto/package.json
+  s_566b8e0c4467a4::t_9b20c0d9a54a49 55
+packages/db/Dockerfile
+  s_566b8e0c4467a4::t_83550e3d6356fa 1,25
+packages/db/package.json
+  s_566b8e0c4467a4::t_05880986d603e5 39
+packages/drive/package.json
+  s_566b8e0c4467a4::t_ec87eb0e68ebef 38
+packages/emails/package.json
+  s_566b8e0c4467a4::t_18e4837deb7ab9 27
+packages/env/package.json
+  s_566b8e0c4467a4::t_9ea3a81d9b6689 29
+packages/groups/package.json
+  s_566b8e0c4467a4::t_81ddf3ba048ef0 27
+packages/jobs/Dockerfile
+  s_566b8e0c4467a4::t_f2d8204214b14c 1,37
+packages/jobs/package.json
+  s_566b8e0c4467a4::t_a001f81bdb3e80 27
+packages/logging/package.json
+  s_566b8e0c4467a4::t_04ae5ecc1a24b4 26
+packages/shared/package.json
+  s_566b8e0c4467a4::t_c8c368121ac4bc 19
+packages/tokens/package.json
+  s_566b8e0c4467a4::t_e1ad812402bbb8 21
+packages/utils/package.json
+  s_566b8e0c4467a4::t_5c541cde433ff5 19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "69101743cb2e9ccd10107522231db5235ee1dc66",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
