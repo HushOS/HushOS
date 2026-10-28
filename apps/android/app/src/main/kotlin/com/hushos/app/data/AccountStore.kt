@@ -44,7 +44,7 @@ class AccountStore(private val files: File, private val cache: File, private val
         for (name in ACCOUNT_FILES) File(files, name).deleteRecursively()
         // The rollback marks, sealed, and the plaintext file earlier versions kept across sign-outs: a phone signed back
         // in trusts the server as a new device does, the cost the web accepted too (docs/integrity-design.md).
-        for (name in NO_BACKUP_FILES) File(noBackup, name).deleteRecursively()
+        SettingsMark.deleteAll(noBackup)
         // Sign-out and removal: no recovery waits any more. Another account signing in keeps only its own (claim).
         RecoveryWords.keepOnlyFor(keepRecoveryFor)
         // The cache is all account data (opened files, links, the Files app's copies and
@@ -58,12 +58,7 @@ class AccountStore(private val files: File, private val cache: File, private val
         /* Under filesDir: kept files, the upload queue's copies, the node-to-parent index, failed transfers and the ones awaiting a notification. */
         private val ACCOUNT_FILES = listOf("offline", "queue", "files-parents.json", FailedTransfers.FILE, TransferNotices.OUTCOMES, ShareSeals.FILE, PendingRotations.FILE, LandedJobs.DIR)
 
-        /* Under noBackupFilesDir: the rollback marks (SettingsMark). */
-        private val NO_BACKUP_FILES = listOf(SettingsMark.FOLDER, SettingsMark.LEGACY_FILE)
-
         fun of(context: Context): AccountStore = AccountStore(context.filesDir, context.cacheDir, context.noBackupFilesDir) {
-            // What this process raised of the marks, kept in memory.
-            SettingsMark.forgetRaised()
             // Jobs queued for that account would run under the next one's session.
             androidx.work.WorkManager.getInstance(context).cancelAllWorkByTag(TransferQueue.TAG)
             // Finished jobs keep their names in WorkManager's records; failed ones stay on the panel until dealt with,

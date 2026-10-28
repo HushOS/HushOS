@@ -23,7 +23,8 @@ import HushOSCore
  * process at once (`MarkFloor`), so a raise the system gave no time to write still refuses a
  * rollback here (an upgraded identity served as version 1 again would mint a second ML-DSA key)
  * and goes into the next write. The app and its extensions share the records, so every write
- * is one read-open-raise-seal under an exclusive `flock` on `local/marks/.lock` (FileLock).
+ * is one read-open-raise-seal under an exclusive `flock` on `local/marks.lock` (FileLock), and
+ * only while the session it began under is still stored; sign-out deletes them under the same lock.
  *
  * Earlier versions kept the marks in the clear, by digest, in `local/settings-marks.json` and
  * `local/identity-marks.json`, across sign-outs. The account's entries are folded into the
@@ -68,8 +69,36 @@ struct RollbackMarkStore: Sendable {
     let folder: URL
     var activity: FileLock.Activity = .system
     var floor: MarkFloor = .process
+    /*
+     * The session signed in now (its token), or nil. A raise keeps a mark only while the session it
+     * began under is still the one stored: one still waiting for the settings key when the person
+     * signed out (or another account signed in) must not write the marks back after the wipe.
+     */
+    var session: @Sendable () -> String? = { "test" }
 
-    static var shared: RollbackMarkStore { RollbackMarkStore(folder: Unbacked.local.appendingPathComponent("marks", isDirectory: true)) }
+    static var shared: RollbackMarkStore {
+        RollbackMarkStore(folder: Unbacked.local.appendingPathComponent("marks", isDirectory: true)) {
+            (Auth.testSession ?? SharedKeychain.session)?.token
+        }
+    }
+
+    /*
+     * Sign-out: the records and the plaintext files of earlier versions go, and what this process
+     * raised. Under the lock, so a raise already holding it finishes first (and is deleted), and one
+     * after it finds its session gone and writes nothing.
+     */
+    func deleteAll() {
+        floor.forget()
+        let files = FileManager.default
+        let delete = {
+            try? files.removeItem(at: folder)
+            for url in legacyFiles {
+                try? files.removeItem(at: url)
+                try? files.removeItem(atPath: url.path + ".lock")
+            }
+        }
+        if !FileLock.withLock(lockPath, activity: activity, delete) { delete() }
+    }
 
     /* What a slot's file holds: the sealed marks and the settings key's envelope they open under. */
     struct Record: Codable, Equatable {
@@ -82,7 +111,8 @@ struct RollbackMarkStore: Sendable {
         let key: Kept?
     }
 
-    private var lockPath: String { folder.appendingPathComponent(".lock").path }
+    /* Beside the folder, not in it: a lock file deleted with the folder would leave two processes holding different locks. */
+    private var lockPath: String { folder.path + ".lock" }
 
     /* The plaintext files of earlier versions, beside the folder. */
     var legacyFiles: [URL] {
@@ -149,6 +179,7 @@ struct RollbackMarkStore: Sendable {
     @discardableResult
     func raise(userId: String, to: RollbackMarks, encryptionPublicKeys: [String] = [], keys: MarksKeys) async throws -> RollbackMarks {
         let user = userId.lowercased()
+        guard let began = session() else { throw AuthError.message(MarksWords.unsaved) }
         floor.raise(user, to)
         let earlier = legacy(user, encryptionPublicKeys: encryptionPublicKeys)
         let wanted = to.highest(floor.value(user)).highest(earlier.marks)
@@ -169,10 +200,16 @@ struct RollbackMarkStore: Sendable {
             floor.written(user, held)
             return held
         }
-        Unbacked.folder(folder)
         var outcome: Result<RollbackMarks, Error> = .failure(AuthError.message(MarksWords.unsaved))
+        // The lock sits beside the folder: its parent (`local`) is there in the app, made here for any other.
+        try? FileManager.default.createDirectory(at: folder.deletingLastPathComponent(), withIntermediateDirectories: true)
         FileLock.withLock(lockPath, activity: activity) {
-            outcome = Result { try locked(user, url: url, key: key, wanted: wanted, earlier: earlier.keys) }
+            outcome = Result {
+                // Signed out (or someone else signed in) while this waited: the wipe has run or is waiting for this lock.
+                guard session() == began else { throw AuthError.message(MarksWords.unsaved) }
+                Unbacked.folder(folder)
+                return try locked(user, url: url, key: key, wanted: wanted, earlier: earlier.keys)
+            }
         }
         let marks = try outcome.get()
         floor.written(user, marks)

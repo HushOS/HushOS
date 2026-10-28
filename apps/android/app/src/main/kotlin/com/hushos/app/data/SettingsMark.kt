@@ -56,10 +56,18 @@ private fun RollbackMarks.highest(other: RollbackMarks) = RollbackMarks(
  * process at once, so a raise that could not be written refuses a rollback here all the same (an upgraded identity
  * served as version 1 again would mint a second ML-DSA key) and goes into the next write.
  *
+ * Every write runs under one lock, and only while the session it began under is still stored; sign-out deletes the marks
+ * under the same lock (`deleteAll`).
+ *
  * Earlier versions kept the marks in the clear, by digest, in `noBackupFilesDir/settings-seen.json`, across sign-outs.
  * The account's entries are folded into the sealed record the first time it is read or raised, and then removed.
  */
-class SettingsMark(private val folder: File, private val keys: MarksKeys) {
+/*
+ * `session` names the session signed in now (its token), or null. A raise keeps a mark only while the session it began
+ * under is still the one stored: one still waiting for the settings key when the person signed out (or another account
+ * signed in) must not write the marks back after the wipe, which deletes them under the same lock (`deleteAll`).
+ */
+class SettingsMark(private val folder: File, private val keys: MarksKeys, private val session: () -> String? = { "test" }) {
     private val legacyFile = File(folder.parentFile, LEGACY_FILE)
 
     /* What a slot's file holds; null for none. Throws MarksUnreadable for a file that is there and doesn't parse. */
@@ -112,6 +120,7 @@ class SettingsMark(private val folder: File, private val keys: MarksKeys) {
      */
     fun raise(userId: String, to: RollbackMarks, encryptionPublicKeys: List<String> = emptyList()): RollbackMarks {
         val user = userId.lowercase()
+        val began = session() ?: throw MarksUnsaved()
         raiseFloor(user, to)
         val (earlierMarks, earlierKeys) = legacy(user, encryptionPublicKeys)
         val wanted = to.highest(floor(user)).highest(earlierMarks)
@@ -125,6 +134,8 @@ class SettingsMark(private val folder: File, private val keys: MarksKeys) {
             throw MarksUnsaved()
         } ?: throw if (kept == null) MarksUnsaved() else MarksUnreadable()
         val marks = synchronized(LOCK) {
+            // Signed out (or someone else signed in) while this waited: the wipe has run, or waits for this lock.
+            if (session() != began) throw MarksUnsaved()
             // Read again under the lock: what another thread wrote meanwhile is opened and kept.
             val current = record(url)
             val update = try {
@@ -248,9 +259,19 @@ class SettingsMark(private val folder: File, private val keys: MarksKeys) {
         const val FOLDER = "marks"
         const val LEGACY_FILE = "settings-seen.json"
 
-        fun of(context: Context, keys: MarksKeys) = SettingsMark(File(context.noBackupFilesDir, FOLDER), keys)
+        fun of(context: Context, keys: MarksKeys) = SettingsMark(File(context.noBackupFilesDir, FOLDER), keys) { Shared.session(context)?.token }
 
-        /* Sign-out: what this process raised goes with the files. */
+        /*
+         * Sign-out: the records under `noBackup`, the plaintext file of earlier versions, and what this process raised.
+         * Under the lock, so a raise already writing finishes first (and is deleted), and one after finds its session gone.
+         */
+        fun deleteAll(noBackup: File) = synchronized(LOCK) {
+            FLOOR.clear()
+            File(noBackup, FOLDER).deleteRecursively()
+            File(noBackup, LEGACY_FILE).delete()
+        }
+
+        /* What this process raised (tests: a fresh process). */
         fun forgetRaised() = synchronized(LOCK) { FLOOR.clear() }
 
         /* How earlier versions named the marks in the clear: digests, per account, and per identity before that. */

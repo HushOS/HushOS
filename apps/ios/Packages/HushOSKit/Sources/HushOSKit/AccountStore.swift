@@ -27,7 +27,7 @@ public struct AccountStore: Sendable {
      * files earlier versions kept across sign-outs): a phone signed back in trusts the server as a new
      * device does, the cost the web accepted too (docs/integrity-design.md, "Rollback marks"). */
     static let accountFiles = [
-        "offline", "transfers", "share-staging", "state", "local/files-parents.json", "local/groups", "local/marks",
+        "offline", "transfers", "share-staging", "state", "local/files-parents.json", "local/groups", "local/marks", "local/marks.lock",
         "local/settings-marks.json", "local/settings-marks.json.lock", "local/identity-marks.json", "local/identity-marks.json.lock",
     ]
 
@@ -107,6 +107,8 @@ public struct AccountStore: Sendable {
 
     private func wipe(keepingJoinChecks: Bool) {
         let files = FileManager.default
+        // Under the marks' lock, so a raise from before the sign-out can't write them back after.
+        RollbackMarkStore(folder: root.appendingPathComponent("local/marks", isDirectory: true)).deleteAll()
         for name in Self.accountFiles {
             let url = root.appendingPathComponent(name)
             if keepingJoinChecks && name == "local/groups" {
@@ -136,8 +138,6 @@ public struct AccountStore: Sendable {
         return AccountStore(root: group, temporary: FileManager.default.temporaryDirectory) {
             Offline.forgetAll()
             Places.forget()
-            // Marks this process raised and kept in memory for the account.
-            MarkFloor.process.forget()
             // Emptied and vacuumed, so ids and sealed rows don't linger in free pages or the WAL.
             Mirror(url: Unbacked.local.appendingPathComponent("mirror.sqlite"))?.wipe()
             // The remembered device opens this account's key; the next account makes its own.

@@ -90,6 +90,25 @@ extension OnFakeDrive {
             #expect(server.upgrades.isEmpty)
         }
 
+        /*
+         * Another process (the Files extension) opens a newer identity while this one upgrades: the
+         * mark it raised meanwhile counts, and the identity this one opened is refused, not cached.
+         */
+        @Test func aMarkRaisedElsewhereDuringTheUpgradeStillRefusesAnOlderIdentity() async throws {
+            defer { done() }
+            let server = IdentityServer(stored: versionOne(v2))
+            let device = await vault(server)
+            server.hold("/api/auth/identity/upgrade")
+            let opening = Task { try await device.identityKeys() }
+            try await server.waitUntilHeld()
+            try await RollbackMarkStore(folder: RollbackMarkStore.shared.folder, floor: MarkFloor()).raise(
+                userId: me, to: RollbackMarks(settings: 0, settingsDocument: false, identity: v2.keyVersion + 1, identityVersion: 2),
+                keys: await device.marksKeys()
+            )
+            server.release()
+            await #expect(throws: AuthError.message(IdentityMarks.downgraded)) { _ = try await opening.value }
+        }
+
         @Test func ownWordsAreOverTheFourKeysAndMatchWhatAContactPins() async throws {
             defer { done() }
             let server = IdentityServer(stored: versionOne(v2))

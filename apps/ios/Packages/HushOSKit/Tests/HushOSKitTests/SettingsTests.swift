@@ -232,7 +232,7 @@ struct RollbackMarkStoreTests {
     /* Another process holding the lock, from a descriptor of its own, until the returned closure lets go. */
     func holdLock() throws -> () -> Void {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let other = open(folder.appendingPathComponent(".lock").path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        let other = open(folder.path + ".lock", O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
         guard other >= 0, flock(other, LOCK_EX) == 0 else { throw CocoaError(.fileLocking) }
         return { flock(other, LOCK_UN); close(other) }
     }
@@ -256,6 +256,41 @@ struct RollbackMarkStoreTests {
         release()
         try await store.raise(userId: me, to: marks(settings: 1), keys: Self.key(1))
         #expect(try await RollbackMarkStore(folder: folder, floor: MarkFloor()).read(userId: me, keys: Self.key(1)) == marks(settings: 1, identity: 3, version: 2))
+    }
+
+    /*
+     * A raise still waiting for the settings key when the person signs out: the wipe deletes the
+     * marks, and the raise, finding its session gone, must not write them back.
+     */
+    @Test func aRaiseThatWaitedThroughASignOutWritesNothingBack() async throws {
+        defer { cleanUp() }
+        let current = CurrentSession("first")
+        var signedIn = RollbackMarkStore(folder: folder, floor: floor)
+        signedIn.session = { current.token }
+        let store = signedIn
+        try await store.raise(userId: me, to: marks(settings: 2), keys: Self.key(1))
+        await #expect(throws: AuthError.message(MarksWords.unsaved)) {
+            try await store.raise(userId: me, to: marks(identity: 3, version: 2)) { _, _ in
+                // Signed out while the key was being fetched: the session goes, then the wipe.
+                current.token = nil
+                store.deleteAll()
+                return MarksKey(key: Data(repeating: 1, count: 32), envelope: Self.envelope)
+            }
+        }
+        #expect(!FileManager.default.fileExists(atPath: folder.path), "the marks came back after sign-out")
+        // Signed in again (a new session): nothing of the last one, in the files or in memory.
+        current.token = "second"
+        #expect(try await store.read(userId: me, keys: Self.key(1)) == .none)
+    }
+
+    final class CurrentSession: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: String?
+        init(_ token: String?) { value = token }
+        var token: String? {
+            get { lock.withLock { value } }
+            set { lock.withLock { value = newValue } }
+        }
     }
 
     @Test func aKeyThatCannotBeHadFailsTheRaise() async throws {

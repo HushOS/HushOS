@@ -113,6 +113,26 @@ class SettingsMarkTest {
         assertEquals(RollbackMarks(1uL, false, 3uL, 2uL), mark().read(a))
     }
 
+    /* A raise still waiting for the settings key when the person signs out writes nothing back after the wipe. */
+    @Test
+    fun aRaiseThatWaitedThroughASignOutWritesNothingBack() {
+        var token: String? = "first"
+        val noBackup = folder.root
+        val signedIn = SettingsMark(dir, keys(7)) { token }
+        signedIn.recordSettings(a, 2uL, sealedV2 = false)
+        val waiting = SettingsMark(dir, { kept, create ->
+            // Signed out while the key was being fetched: the session goes, then the wipe.
+            token = null
+            SettingsMark.deleteAll(noBackup)
+            keys(7)(kept, create)
+        }) { token }
+        assertThrows(MarksUnsaved::class.java) { waiting.recordIdentity(a, 3uL, 2u) }
+        assertFalse("the marks came back after sign-out", dir.exists())
+        // Signed in again: nothing of the last session, in the files or in memory.
+        token = "second"
+        assertEquals(RollbackMarks(0uL, false, 0uL, 0uL), SettingsMark(dir, keys(7)) { token }.read(a))
+    }
+
     @Test
     fun anOwnIdentityServedBelowWhatWasOpenedOrInTheVersionOneFormIsRefused() {
         mark().checkIdentity(a, 3uL, 1u)

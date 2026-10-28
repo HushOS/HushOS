@@ -366,16 +366,19 @@ public actor Vault {
         guard keys.identityVersion >= 2, keys.mlDsaPublicKey != nil, keys.kemPublicKey != nil else {
             throw AuthError.message("Your keys couldn’t be upgraded. Try again.")
         }
-        // The stored identity must still be the one this device has used: same keys, version not lowered.
-        try IdentityMarks.check(seen, keyVersion: keys.keyVersion, identityVersion: keys.identityVersion)
+        // The stored identity must still be the one this device has used: same keys, version not lowered. Read
+        // again, since the upgrade waited on the server while another process could raise a mark.
+        try IdentityMarks.check(try await marks.read(userId: session.userId, keys: marksKeys()), keyVersion: keys.keyVersion, identityVersion: keys.identityVersion)
         // Kept before the identity is: one whose mark could not be kept is not taken. A settings mark an
         // earlier version kept under this identity's key becomes the account's in the same write.
-        try await marks.raise(
+        let kept = try await marks.raise(
             userId: session.userId,
             to: RollbackMarks(settings: 0, settingsDocument: false, identity: keys.keyVersion, identityVersion: UInt64(keys.identityVersion)),
             encryptionPublicKeys: [keys.encryptionPublicKey],
             keys: marksKeys()
         )
+        // And against what the write found, for a mark raised between that read and this write.
+        try IdentityMarks.check(kept, keyVersion: keys.keyVersion, identityVersion: keys.identityVersion)
         // Replaced while this opened: the caller opens again rather than cache what this read.
         guard generation == identityGeneration else { return keys }
         identity = keys
