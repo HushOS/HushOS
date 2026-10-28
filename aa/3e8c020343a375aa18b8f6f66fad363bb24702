@@ -1,0 +1,29 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_99b7daf35fbe08 30
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_be320f795e2f60::t_a021db0544707a 32-33,35,216-227,230-239,329-341
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "aa3e8c020343a375aa18b8f6f66fad363bb24702",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_be320f795e2f60": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-af59cacbb9c71d980",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
