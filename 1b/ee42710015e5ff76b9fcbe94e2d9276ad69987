@@ -1,0 +1,23 @@
+apps/web/src/lib/contacts.first-use.test.ts
+  s_566b8e0c4467a4::t_5a4ad428212d79 306-334
+apps/web/src/lib/contacts.ts
+  s_566b8e0c4467a4::t_d4d9b3c8c9c09c 1409-1412,1415-1420,1431,1547
+apps/web/src/lib/family-trust.test.ts
+  s_566b8e0c4467a4::t_8ab0ce178e5ebf 6,11,237-284
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1bee42710015e5ff76b9fcbe94e2d9276ad69987",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
