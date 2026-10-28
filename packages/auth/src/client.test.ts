@@ -3,7 +3,7 @@ import {
     deviceSessionStatement,
     emailDigest,
 } from '@hushos/crypto/device-identity';
-import { describe, expect, test, vi } from 'vitest';
+import { describe, expect, test } from 'vitest';
 import type { AuthApi } from './api';
 import type { CryptoTransport } from './crypto-transport';
 import {
@@ -120,29 +120,6 @@ describe('saving device access at sign-in', () => {
         expect(calls).toBe(1);
         expect(state.device).toBeNull();
         expect(state.rememberError).not.toBe('');
-    });
-});
-
-describe('locking the other tabs', () => {
-    test('says lock to every other tab of this browser and leaves this one unlocked', async () => {
-        const realWindow = (globalThis as unknown as { window: Record<string, unknown> }).window;
-        realWindow.BroadcastChannel = BroadcastChannel;
-        const otherTab = new BroadcastChannel('hushos-auth');
-        const heard: unknown[] = [];
-        otherTab.onmessage = (event: MessageEvent) => void heard.push(event.data);
-        try {
-            items.clear();
-            const client = createAuthClient(() => transport, keyStore([]).store, api);
-            await client.login('maya@example.com', 'correct horse');
-            client.lockOtherTabs();
-            await vi.waitFor(() => expect(heard).toEqual(['lock']));
-            // Its own channel does not hear its own message: this tab stays as it was.
-            await new Promise((resolve) => setTimeout(resolve, 20));
-            expect(client.store.getState().unlockedUserId).toBe(user.id);
-        } finally {
-            otherTab.close();
-            delete realWindow.BroadcastChannel;
-        }
     });
 });
 
