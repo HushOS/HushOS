@@ -144,6 +144,17 @@ class SettingsMarkTest {
         assertEquals(9uL, mark().read(a).settings)
     }
 
+    /* Another vault keeps a newer identity's mark while this one waits for the key to keep its own: this one is refused. */
+    @Test
+    fun anIdentityOverTakenWhileItsMarkWaitedIsRefused() {
+        val waiting = mark { kept, create ->
+            SettingsMark(dir, keys(7)).recordIdentity(a, 3uL, 2u)
+            keys(7)(kept, create)
+        }
+        waiting.checkIdentity(a, 1uL, 2u)
+        assertThrows(IdentityRolledBack::class.java) { waiting.recordIdentity(a, 1uL, 2u) }
+    }
+
     @Test
     fun anOwnIdentityServedBelowWhatWasOpenedOrInTheVersionOneFormIsRefused() {
         mark().checkIdentity(a, 3uL, 1u)

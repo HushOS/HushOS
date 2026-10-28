@@ -181,16 +181,19 @@ class SettingsMark(private val folder: File, private val keys: MarksKeys, privat
      * document or not. No document at a sequence at or above the mark is a version 1 row (served as none, since no
      * client opens those any more), unless this device has seen a version 2 document: those are never served as none.
      */
-    fun checkSettings(userId: String, sequence: ULong, present: Boolean) {
-        val seen = read(userId)
+    fun checkSettings(userId: String, sequence: ULong, present: Boolean) = checkSettings(read(userId), sequence, present)
+
+    fun checkSettings(seen: RollbackMarks, sequence: ULong, present: Boolean) {
         if (sequence < seen.settings) throw SettingsRolledBack()
         if (!present && seen.settingsDocument) throw SettingsRolledBack()
     }
 
-    /* Raises the account's settings mark; `sealedV2` also raises the mark that makes "none" a rollback. */
-    fun recordSettings(userId: String, version: ULong, sealedV2: Boolean) {
+    /*
+     * Raises the account's settings mark; `sealedV2` also raises the mark that makes "none" a rollback. Returns what the
+     * write found: a newer mark another vault in this process kept while this one waited for its key counts there.
+     */
+    fun recordSettings(userId: String, version: ULong, sealedV2: Boolean): RollbackMarks =
         raise(userId, RollbackMarks(version, sealedV2, 0uL, 0uL))
-    }
 
     /*
      * An own identity served as current, once opened: refused when its key version is lower than one this device
@@ -198,17 +201,22 @@ class SettingsMark(private val folder: File, private val keys: MarksKeys, privat
      * device has seen version 2, at any key version. The upgrade keeps the key version, so the key version alone does
      * not see that rollback, and opening the version 1 form would mint a second ML-DSA key (docs/identity-pq-design.md 2).
      */
-    fun checkIdentity(userId: String, keyVersion: ULong, identityVersion: UInt) {
-        val seen = read(userId)
+    fun checkIdentity(userId: String, keyVersion: ULong, identityVersion: UInt) = checkIdentity(read(userId), keyVersion, identityVersion)
+
+    private fun checkIdentity(seen: RollbackMarks, keyVersion: ULong, identityVersion: UInt) {
         if (keyVersion < seen.identity) throw IdentityRolledBack()
         // Once version 2 has been seen, the version 1 form is a rollback at any key version: every
         // identity made since the post-quantum release is version 2 (docs/identity-pq-design.md 2).
         if (identityVersion.toULong() < seen.identityVersion) throw IdentityRolledBack()
     }
 
-    /* Raised only once the identity opened under the account key, which binds its key version: a forged one can't lift it. */
+    /*
+     * Raised only once the identity opened under the account key, which binds its key version: a forged one can't lift it.
+     * Checked again against what the write found, since the write may wait for the settings key while another vault in
+     * this process keeps a newer identity's mark.
+     */
     fun recordIdentity(userId: String, keyVersion: ULong, identityVersion: UInt) {
-        raise(userId, RollbackMarks(0uL, false, keyVersion, identityVersion.toULong()))
+        checkIdentity(raise(userId, RollbackMarks(0uL, false, keyVersion, identityVersion.toULong())), keyVersion, identityVersion)
     }
 
     /* What the plaintext file holds for the account: the highest of each mark, and the entries it came from. */

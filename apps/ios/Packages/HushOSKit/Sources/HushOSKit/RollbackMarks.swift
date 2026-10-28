@@ -230,7 +230,13 @@ struct RollbackMarkStore: Sendable {
                 guard signedIn(), floor.generation == generation else { throw AuthError.message(MarksWords.unsaved) }
                 Unbacked.folder(folder)
                 // What this process raised meanwhile (a raise that couldn't be kept) goes in with it.
-                return try locked(user, url: url, key: key, wanted: wanted.highest(floor.value(scoped(user))), earlier: earlier.keys)
+                let marks = try locked(user, url: url, key: key, wanted: wanted.highest(floor.value(scoped(user))), earlier: earlier.keys)
+                // Stalled past a sign-out's wait for this lock (it gives up after a while): what this wrote goes again.
+                guard signedIn(), floor.generation == generation else {
+                    try? FileManager.default.removeItem(at: url)
+                    throw AuthError.message(MarksWords.unsaved)
+                }
+                return marks
             }
         }
         let marks = try outcome.get()

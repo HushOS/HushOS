@@ -336,6 +336,22 @@ struct RollbackMarkStoreTests {
         #expect(try await second.read(userId: me, keys: Self.key(1)) == .none)
     }
 
+    /* A writer that stalled holding the lock past a sign-out finds its session gone after writing, and takes its record back. */
+    @Test func aWriteThatOutlastedASignOutIsTakenBack() async throws {
+        defer { cleanUp() }
+        let checks = CurrentSession("0")
+        var stalled = RollbackMarkStore(folder: folder, floor: floor)
+        // Signed in for the checks before the write, signed out by the one after it.
+        stalled.signedIn = {
+            let seen = Int(checks.token ?? "0") ?? 0
+            checks.token = String(seen + 1)
+            return seen < 2
+        }
+        let store = stalled
+        await #expect(throws: AuthError.message(MarksWords.unsaved)) { try await store.raise(userId: me, to: marks(settings: 4), keys: Self.key(1)) }
+        #expect(files().allSatisfy { $0.pathExtension != "json" }, "a record outlived the sign-out")
+    }
+
     /* A record that is there but can't be read is never "nothing seen", and never written over. */
     @Test func aRecordThatCannotBeReadIsRefused() async throws {
         defer { cleanUp() }
