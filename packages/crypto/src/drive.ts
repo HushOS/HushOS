@@ -317,6 +317,50 @@ export async function openPreviousRootKey(
     return key;
 }
 
+/*
+ * UTF-8 as Rust's String::from_utf8 reads it: invalid bytes throw rather than
+ * become U+FFFD, and a leading byte order mark is kept (so JSON.parse refuses
+ * it, as serde does) rather than dropped.
+ */
+function strictText(bytes: Uint8Array) {
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+}
+
+/*
+ * Whether JSON text JSON.parse already accepted names one key twice in any
+ * object, escapes decoded ("colour" and "\u0063olour" are the same key).
+ */
+export function hasDuplicateKey(text: string) {
+    // One entry per open object (its keys so far) or array (null).
+    const open: (Set<string> | null)[] = [];
+    let keyNext = false;
+    for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (c === '"') {
+            let end = i + 1;
+            while (text[end] !== '"') end += text[end] === '\\' ? 2 : 1;
+            const keys = open.at(-1);
+            if (keys && keyNext) {
+                const key = JSON.parse(text.slice(i, end + 1)) as string;
+                if (keys.has(key)) return true;
+                keys.add(key);
+                keyNext = false;
+            }
+            i = end;
+        } else if (c === '{') {
+            open.push(new Set());
+            keyNext = true;
+        } else if (c === '[') {
+            open.push(null);
+            keyNext = false;
+        } else if (c === '}' || c === ']') {
+            open.pop();
+            keyNext = false;
+        } else if (c === ',') keyNext = open.at(-1) instanceof Set;
+    }
+    return false;
+}
+
 /* A lone surrogate: JSON.parse makes one from "\ud800", TextEncoder would not keep it, Rust refuses it. */
 const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
 /*
@@ -410,7 +454,10 @@ export async function openMetadata(
     }
     let parsed: unknown;
     try {
-        parsed = JSON.parse(new TextDecoder().decode(plaintext));
+        const text = strictText(plaintext);
+        parsed = JSON.parse(text);
+        // JSON.parse keeps the last of two equal keys; serde refuses them, and so does this.
+        if (hasDuplicateKey(text)) throw new CryptoError('Duplicate key.');
     } catch {
         throw new CryptoError('This item could not be opened. It may be damaged.');
     }
@@ -477,7 +524,7 @@ export async function openDocument(
         throw new CryptoError('This document could not be opened. It may be damaged.');
     }
     try {
-        return JSON.parse(new TextDecoder().decode(plaintext));
+        return JSON.parse(strictText(plaintext));
     } catch {
         throw new CryptoError('This document could not be opened. It may be damaged.');
     }

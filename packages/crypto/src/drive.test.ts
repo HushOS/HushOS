@@ -49,6 +49,7 @@ import {
     type OriginKeyContext,
     ATTRIBUTES_MAX_KEYS,
     METADATA_MAX_BYTES,
+    documentContext,
 } from './drive';
 import { encryptKey } from './aead';
 import sodium from 'libsodium-wrappers';
@@ -279,6 +280,74 @@ describe('node attributes', () => {
                 openMetadata(await sealedAs(`{"name":"P","attributes":${value}}`, key), key, ctx),
                 value,
             ).rejects.toThrow('could not be opened');
+    });
+
+    /* Refused alike by the core (drive.rs, `metadata_open_refuses_what_serde_or_the_web_would_read_twice`). */
+    const doubled = [
+        '{"name":"P","attributes":{"colour":1,"colour":"blue"}}',
+        '{"name":"P","attributes":{"colour":"red","colour":"blue"}}',
+        '{"name":"P","attributes":{"colour":"red","\\u0063olour":"blue"}}',
+        '{"name":"P","attributes":{"colour":"red"},"attributes":{"colour":"blue"}}',
+        '{"name":"a/b","name":"P"}',
+        '{"name":"P","x":1,"x":2}',
+        '{"name":"P","x":{"a":1,"a":2}}',
+    ];
+    /* Equal keys in different objects, and quoted keys inside a value, are not doubles. */
+    const single = [
+        '{"name":"P","x":{"name":"y"},"attributes":{"name":"z"}}',
+        '{"name":"P","x":[{"a":1},{"a":2}]}',
+        '{"name":"P","attributes":{"a":"\\"b\\":1,\\"b\\"","b":"x"}}',
+    ];
+
+    test('a key named twice anywhere is refused, not read as its last value', async () => {
+        const key = generateKey();
+        for (const text of doubled)
+            await expect(openMetadata(await sealedAs(text, key), key, ctx), text).rejects.toThrow(
+                'could not be opened',
+            );
+        for (const text of single)
+            await expect(
+                openMetadata(await sealedAs(text, key), key, ctx),
+                text,
+            ).resolves.toMatchObject({ name: 'P' });
+    });
+
+    test('bytes that are not UTF-8, or start with a byte order mark, are refused as damage', async () => {
+        await sodium.ready;
+        const key = generateKey();
+        const encode = (text: string) => new TextEncoder().encode(text);
+        const join = (...parts: Uint8Array[]) => new Uint8Array(parts.flatMap((part) => [...part]));
+        const sealedBytes = async (plaintext: Uint8Array, aad: Uint8Array) => {
+            const nonce = crypto.getRandomValues(new Uint8Array(24));
+            return new Uint8Array([...nonce, ...(await encryptKey(plaintext, key, nonce, aad))]);
+        };
+        const aad = metadataContext(ctx);
+        const cases = [
+            join(
+                encode('{"name":"P","attributes":{"colour":"'),
+                Uint8Array.of(0xff),
+                encode('"}}'),
+            ),
+            join(encode('{"name":"P'), Uint8Array.of(0xc3), encode('"}')),
+            join(Uint8Array.of(0xef, 0xbb, 0xbf), encode('{"name":"P"}')),
+        ];
+        for (const plaintext of cases)
+            await expect(openMetadata(await sealedBytes(plaintext, aad), key, ctx)).rejects.toThrow(
+                'could not be opened',
+            );
+        // A workspace document is opened and sealed again the same way (a family's walk).
+        const docCtx = { workspaceId: WS, kind: 'tags', version: 1 };
+        const bad = join(encode('{"tags":["'), Uint8Array.of(0xff), encode('"]}'));
+        await expect(
+            openDocument(await sealedBytes(bad, documentContext(docCtx)), key, docCtx),
+        ).rejects.toThrow('could not be opened');
+        await expect(
+            openDocument(
+                await sealedBytes(encode('{"tags":["é"]}'), documentContext(docCtx)),
+                key,
+                docCtx,
+            ),
+        ).resolves.toEqual({ tags: ['é'] });
     });
 
     test('the whole plaintext stays within 4096 bytes: one byte over is refused, not cut', async () => {

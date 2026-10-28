@@ -309,7 +309,12 @@ pub struct NodeMetadata {
     /// as no field at all, so a record without attributes seals as it did
     /// before them; keys are written sorted. A record that breaks a limit is
     /// refused, sealing and opening, never trimmed.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty", serialize_with = "sorted_attributes")]
+    #[serde(
+        default,
+        skip_serializing_if = "HashMap::is_empty",
+        serialize_with = "sorted_attributes",
+        deserialize_with = "unique_attributes"
+    )]
     pub attributes: HashMap<String, String>,
 }
 
@@ -319,6 +324,81 @@ fn sorted_attributes<S: serde::Serializer>(
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
     serializer.collect_map(attributes.iter().collect::<BTreeMap<_, _>>())
+}
+
+/* Read refusing a key named twice: serde_json's map would keep the last, and the web refuses it too. */
+fn unique_attributes<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<HashMap<String, String>, D::Error> {
+    struct Unique;
+    impl<'de> serde::de::Visitor<'de> for Unique {
+        type Value = HashMap<String, String>;
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("an object of strings")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            let mut out = HashMap::new();
+            while let Some((key, value)) = map.next_entry::<String, String>()? {
+                if out.insert(key, value).is_some() {
+                    return Err(serde::de::Error::custom("an attribute is named twice"));
+                }
+            }
+            Ok(out)
+        }
+    }
+    deserializer.deserialize_map(Unique)
+}
+
+/*
+ * Whether JSON text names one key twice in any object, escapes decoded, as
+ * `hasDuplicateKey` in drive.ts reads it. Only called on text that is JSON
+ * (an unterminated string ends the scan as no duplicate; serde refuses it).
+ */
+fn has_duplicate_key(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    // One entry per open object (its keys so far) or array (None).
+    let mut open: Vec<Option<std::collections::HashSet<String>>> = Vec::new();
+    let mut key_next = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                let mut end = i + 1;
+                while end < bytes.len() && bytes[end] != b'"' {
+                    end += if bytes[end] == b'\\' { 2 } else { 1 };
+                }
+                if end >= bytes.len() {
+                    return false;
+                }
+                if key_next {
+                    if let Some(Some(keys)) = open.last_mut() {
+                        let Ok(key) = serde_json::from_str::<String>(&text[i..=end]) else { return false };
+                        if !keys.insert(key) {
+                            return true;
+                        }
+                        key_next = false;
+                    }
+                }
+                i = end;
+            }
+            b'{' => {
+                open.push(Some(Default::default()));
+                key_next = true;
+            }
+            b'[' => {
+                open.push(None);
+                key_next = false;
+            }
+            b'}' | b']' => {
+                open.pop();
+                key_next = false;
+            }
+            b',' => key_next = matches!(open.last(), Some(Some(_))),
+            _ => {}
+        }
+        i += 1;
+    }
+    false
 }
 
 /* The name is exactly what the server must not learn, so it is kept out of prints and logs as well; attribute values with it. */
@@ -463,6 +543,10 @@ pub fn metadata_open(ctx: MetadataContext, node_key: Vec<u8>, envelope: Vec<u8>)
         String::from_utf8(plaintext).map_err(|_| CoreError::Sealed("Metadata is not UTF-8.".into()))?;
     let metadata: NodeMetadata = serde_json::from_str(text.trim_end())
         .map_err(|_| CoreError::Sealed("Metadata is not JSON.".into()))?;
+    // Any key named twice, an unknown one included: the web refuses the same text.
+    if has_duplicate_key(text.trim_end()) {
+        return Err(CoreError::Sealed("This item could not be opened. It may be damaged.".into()));
+    }
     // Refused whole, never trimmed: a re-save would otherwise drop what it could not read.
     if attributes_refusal(&metadata.attributes).is_some() {
         return Err(CoreError::Sealed("This item could not be opened. It may be damaged.".into()));
@@ -1688,6 +1772,66 @@ mod tests {
                 matches!(metadata_open(metadata_ctx(), key.clone(), planted), Err(CoreError::Sealed(_))),
                 "{value}"
             );
+        }
+    }
+
+    /* The same cases as drive.test.ts ("a key named twice anywhere is refused"): refused alike. */
+    const DOUBLED: [&str; 7] = [
+        r#"{"name":"P","attributes":{"colour":1,"colour":"blue"}}"#,
+        r#"{"name":"P","attributes":{"colour":"red","colour":"blue"}}"#,
+        r#"{"name":"P","attributes":{"colour":"red","\u0063olour":"blue"}}"#,
+        r#"{"name":"P","attributes":{"colour":"red"},"attributes":{"colour":"blue"}}"#,
+        r#"{"name":"a/b","name":"P"}"#,
+        r#"{"name":"P","x":1,"x":2}"#,
+        r#"{"name":"P","x":{"a":1,"a":2}}"#,
+    ];
+    const SINGLE: [&str; 3] = [
+        r#"{"name":"P","x":{"name":"y"},"attributes":{"name":"z"}}"#,
+        r#"{"name":"P","x":[{"a":1},{"a":2}]}"#,
+        r#"{"name":"P","attributes":{"a":"\"b\":1,\"b\"","b":"x"}}"#,
+    ];
+
+    #[test]
+    fn metadata_open_refuses_what_serde_or_the_web_would_read_twice() {
+        let key = random(32);
+        for text in DOUBLED {
+            let opened = metadata_open(metadata_ctx(), key.clone(), sealed_as(text, &key));
+            assert!(matches!(opened, Err(CoreError::Sealed(_))), "{text}");
+        }
+        for text in SINGLE {
+            assert_eq!(
+                metadata_open(metadata_ctx(), key.clone(), sealed_as(text, &key)).unwrap().name,
+                "P",
+                "{text}"
+            );
+        }
+        // Each layer on its own: serde refuses a struct field named twice, and the attributes reader a key named twice.
+        assert!(serde_json::from_str::<NodeMetadata>(r#"{"name":"a","name":"b"}"#).is_err());
+        assert!(
+            serde_json::from_str::<NodeMetadata>(r#"{"name":"P","attributes":{"c":"x","c":"y"}}"#).is_err()
+        );
+        assert!(
+            serde_json::from_str::<NodeMetadata>(r#"{"name":"P","attributes":{"c":"x","d":"y"}}"#).is_ok()
+        );
+        assert!(has_duplicate_key(r#"{"a":{"b":1,"\u0062":2}}"#));
+        assert!(!has_duplicate_key(r#"{"a":"{\"b\":1,\"b\":2}"}"#));
+    }
+
+    #[test]
+    fn bytes_that_are_not_utf_8_or_start_with_a_byte_order_mark_are_refused() {
+        let key = random(32);
+        let aad = metadata_context(&metadata_ctx()).unwrap();
+        let cases: [&[u8]; 3] = [
+            b"{\"name\":\"P\",\"attributes\":{\"colour\":\"\xff\"}}",
+            b"{\"name\":\"P\xc3\"}",
+            b"\xef\xbb\xbf{\"name\":\"P\"}",
+        ];
+        for plaintext in cases {
+            let envelope = seal(&key, plaintext, &aad).unwrap();
+            assert!(matches!(
+                metadata_open(metadata_ctx(), key.clone(), envelope),
+                Err(CoreError::Sealed(_))
+            ));
         }
     }
 
