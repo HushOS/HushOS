@@ -29,11 +29,11 @@ public struct FamilyRecords: Sendable {
     }
 
     let folder: URL
-    var activity: HighWaterMarks.Activity = .system
+    var activity: FileLock.Activity = .system
 
     public static var shared: FamilyRecords { FamilyRecords(folder: Unbacked.local.appendingPathComponent("groups", isDirectory: true)) }
 
-    init(folder: URL, activity: HighWaterMarks.Activity = .system) {
+    init(folder: URL, activity: FileLock.Activity = .system) {
         self.folder = folder
         self.activity = activity
     }

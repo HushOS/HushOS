@@ -3,6 +3,9 @@ import HushOSCore
 import Testing
 @testable import HushOSKit
 
+/* The core exports a type of the same name (first_seen.rs); the tests mean the kit's. */
+typealias ServedContactKeys = HushOSKit.ServedContactKeys
+
 /* An identity as the web mints one (version 2), opened: what signs, seals and opens below. */
 func makeIdentity(_ userId: String, root: Data? = nil, version: UInt64 = 1) throws -> (envelope: IdentityEnvelope, keys: IdentityKeys, root: Data) {
     let root = try root ?? randomBytes(length: 32)
