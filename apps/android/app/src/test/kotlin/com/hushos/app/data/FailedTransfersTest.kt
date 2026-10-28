@@ -70,7 +70,7 @@ class FailedTransfersTest {
 
     @Test
     fun theRecordGoesWithTheAccount() {
-        val store = AccountStore(files, File(files, "cache"))
+        val store = AccountStore(files, File(files, "cache"), File(files, "no_backup"))
         store.claim("alice")
         record.record(upload("job-1"))
         store.claim("bob")

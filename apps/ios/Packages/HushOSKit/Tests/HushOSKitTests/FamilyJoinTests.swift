@@ -186,39 +186,41 @@ extension OnFakeDrive {
         }
 
         /*
-         * A server can't reset the alarm by saying this phone was removed: after a wrong pair, the
-         * removed-device wipe (and the account's next sign-in claiming the store) keeps the join
-         * check, so the same positions are hidden and the next wrong pair is the alarm. Only the
-         * person's own sign-out removes it.
+         * Nothing of a family stays on a phone removed from the account, or under another account's
+         * sign-in: the join check's escalation goes with the rest (owner, 2026-10-28), so its file no
+         * longer says which account and family used the phone. The accepted cost: a server that
+         * falsely says the phone was removed resets the alarm, and the next wrong pair is calm again.
          */
-        @Test func aRemovedDeviceWipeKeepsTheJoinCheck() async throws {
+        @Test func aRemovedDeviceWipeAndAnotherAccountsSignInDeleteTheJoinCheck() async throws {
             let family = try FamilyFixture()
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("account-\(UUID().uuidString)")
             let account = AccountStore(root: root, temporary: root.appendingPathComponent("tmp"))
             let owner = AccountOwner(userId: family.member.userId, origin: "https://family.test")
-            account.claim(owner)
-            let records = FamilyRecords(folder: root.appendingPathComponent("local/groups"), activity: .expired)
-            let server = FamilyServer(family: family)
-            server.serve(chain: [family.r1, family.r2])
-            try server.storeSettings(pin: nil)
-            let first = try await family.phone(server, records: records)
-            let shown = try showing(try await first.sync.joinStatus(family.groupId))
-            #expect(try await first.sync.confirmJoin(family.groupId, shown, typed: misheard(shown)) == .wrongWords)
-            first.done()
+            let folder = root.appendingPathComponent("local/groups")
+            func wrongPair() async throws {
+                account.claim(owner)
+                let server = FamilyServer(family: family)
+                server.serve(chain: [family.r1, family.r2])
+                try server.storeSettings(pin: nil)
+                let phone = try await family.phone(server, records: FamilyRecords(folder: folder, activity: .expired))
+                defer { phone.done() }
+                let shown = try showing(try await phone.sync.joinStatus(family.groupId))
+                #expect(try await phone.sync.confirmJoin(family.groupId, shown, typed: misheard(shown)) == .wrongWords)
+                #expect(FamilyRecords(folder: folder).read(.holds, userId: family.member.userId, groupId: family.groupId) != nil)
+            }
+            func holdsLeft() -> [String] {
+                ((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []).filter { $0.hasSuffix(".holds") }
+            }
 
-            // "Removed": the device's account data goes; then the account signs in again on this phone.
+            // "Removed": the escalation goes with everything else.
+            try await wrongPair()
             account.wipeAfterRemoval()
-            #expect(account.owner() == nil)
-            account.claim(owner)
-            let again = try await family.phone(server, records: FamilyRecords(folder: root.appendingPathComponent("local/groups"), activity: .expired))
-            defer { again.done() }
-            let next = try showing(try await again.sync.joinStatus(family.groupId))
-            #expect(next.hidden == shown.hidden && next.code == shown.code)
-            #expect(try await again.sync.confirmJoin(family.groupId, next, typed: misheard(next)) == .mismatch)
+            #expect(holdsLeft().isEmpty, "a removed phone kept a family's join check")
 
-            // The person's own sign-out is what clears it.
-            account.wipe()
-            #expect(records.read(.holds, userId: family.member.userId, groupId: family.groupId) == nil)
+            // Another account signing in on the phone: the same.
+            try await wrongPair()
+            account.claim(AccountOwner(userId: UUID().uuidString.lowercased(), origin: "https://family.test"))
+            #expect(holdsLeft().isEmpty, "another account's sign-in kept a family's join check")
         }
 
         /*

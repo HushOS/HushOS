@@ -121,17 +121,22 @@ object TransferQueue {
     }
 
     private fun enqueueUpload(context: Context, id: UUID, file: File, name: String, mime: String?, folderId: String, replacingId: String?): UUID {
-        val request = OneTimeWorkRequestBuilder<UploadWorker>()
-            .setId(id)
-            .setConstraints(constraints())
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-            .setInputData(workDataOf("kind" to UPLOAD, "file" to file.path, "name" to name, "mime" to mime, "folder" to folderId, "replacing" to replacingId))
-            // The panel reads these: a job's input is not visible once it is queued.
-            .addTag(TAG).addTag("kind:$UPLOAD").addTag("name:$name").addTag("file:${file.path}")
-            .build()
+        val request = uploadRequest(id, file, mime, folderId, replacingId)
+        JobNames.of(context).put(id.toString(), name)
         WorkManager.getInstance(context).enqueueUniqueWork("upload-$id", ExistingWorkPolicy.KEEP, request)
         return id
     }
+
+    /* An upload's job as WorkManager keeps it: ids and paths only, never the file's name (JobNames holds that). */
+    internal fun uploadRequest(id: UUID, file: File, mime: String?, folderId: String, replacingId: String?) =
+        OneTimeWorkRequestBuilder<UploadWorker>()
+            .setId(id)
+            .setConstraints(constraints())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .setInputData(workDataOf("kind" to UPLOAD, "file" to file.path, "mime" to mime, "folder" to folderId, "replacing" to replacingId))
+            // The panel reads these: a job's input is not visible once it is queued. The name is the app's (JobNames).
+            .addTag(TAG).addTag("kind:$UPLOAD").addTag("file:${file.path}")
+            .build()
 
     /*
      * Queues a file or a folder to be kept on this phone; one job per item, so asking twice
@@ -139,15 +144,21 @@ object TransferQueue {
      * run under way (which may have missed the change) rather than being dropped.
      */
     fun keep(context: Context, nodeId: String, name: String, folder: Boolean = false, again: Boolean = false, shareRoot: String? = null) {
-        val request = OneTimeWorkRequestBuilder<KeepWorker>()
-            .setConstraints(constraints())
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-            .setInputData(workDataOf("kind" to KEEP, "node" to nodeId, "name" to name, "folder" to folder, "share" to shareRoot))
-            .addTag(TAG).addTag("kind:$KEEP").addTag("name:$name").addTag("node:$nodeId")
-            .apply { if (folder) addTag("folder") }
-            .build()
+        val request = keepRequest(nodeId, folder, shareRoot)
+        // Kept by the app, never in WorkManager's database, which sign-out can't empty (JobNames).
+        JobNames.of(context).put(request.id.toString(), name)
         WorkManager.getInstance(context).enqueueUniqueWork("keep-$nodeId", if (again) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP, request)
     }
+
+    /* A keep's job as WorkManager keeps it: the item's id, never its name. */
+    internal fun keepRequest(nodeId: String, folder: Boolean, shareRoot: String?) =
+        OneTimeWorkRequestBuilder<KeepWorker>()
+            .setConstraints(constraints())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .setInputData(workDataOf("kind" to KEEP, "node" to nodeId, "folder" to folder, "share" to shareRoot))
+            .addTag(TAG).addTag("kind:$KEEP").addTag("node:$nodeId")
+            .apply { if (folder) addTag("folder") }
+            .build()
 
     /* Stops a queued or running transfer and drops an upload's copy. */
     fun cancel(context: Context, id: UUID, file: String?) {
@@ -232,19 +243,22 @@ private fun CoroutineWorker.outcome(error: Exception, inputs: androidx.work.Data
  * A job that failed for good: it goes on the app's own record (FailedTransfers), so its row
  * and its Retry outlive WorkManager pruning finished jobs after a day, and a reboot.
  */
+/* The job's file or folder name: the app's record of it (JobNames), or an older version's input. */
+internal fun CoroutineWorker.jobName(): String = JobNames.of(applicationContext).get(id.toString()) ?: inputData.getString("name") ?: "File"
+
 private fun CoroutineWorker.failed(message: String, inputs: androidx.work.Data = inputData): androidx.work.ListenableWorker.Result {
     val kind = inputData.getString("kind") ?: TransferQueue.UPLOAD
     FailedTransfers.of(applicationContext).record(FailedTransfer(
-        id = id.toString(), kind = kind, name = inputData.getString("name") ?: "File", reason = message, at = System.currentTimeMillis(),
+        id = id.toString(), kind = kind, name = jobName(), reason = message, at = System.currentTimeMillis(),
         file = inputData.getString("file"), mime = inputData.getString("mime"), folder = inputData.getString("folder"), replacing = inputData.getString("replacing"),
         node = inputData.getString("node"), isFolder = kind == TransferQueue.KEEP && inputData.getBoolean("folder", false), shareRoot = inputData.getString("share"),
     ))
-    TransferNotices.ended(applicationContext, TransferNotices.Outcome(id.toString(), inputData.getString("name") ?: "File", kind == TransferQueue.UPLOAD, TransferQueue.reasonWords(message), inputData.getString("folder")))
+    TransferNotices.ended(applicationContext, TransferNotices.Outcome(id.toString(), jobName(), kind == TransferQueue.UPLOAD, TransferQueue.reasonWords(message), inputData.getString("folder")))
     return androidx.work.ListenableWorker.Result.failure(androidx.work.Data.Builder().putAll(inputs).putString("message", message).build())
 }
 
 class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
-    private val name get() = inputData.getString("name") ?: "File"
+    private val name get() = jobName()
 
     override suspend fun getForegroundInfo() = TransferQueue.foreground(applicationContext, id.hashCode(), 0f)
 
@@ -296,7 +310,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
 }
 
 class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
-    private val name get() = inputData.getString("name") ?: "File"
+    private val name get() = jobName()
 
     override suspend fun getForegroundInfo() = TransferQueue.foreground(applicationContext, id.hashCode(), 0f, keeping = true)
 
@@ -324,7 +338,8 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 if (item == null) {
                     // The share stopped: what was kept from it goes, and the app says so.
                     Offline.forgetFolder(applicationContext, id)
-                    return@stoppable Result.success(workDataOf("unshared" to name))
+                    // Said by the panel, which names it from the app's record (JobNames), not this output.
+                    return@stoppable Result.success(workDataOf("unshared" to true))
                 }
                 var shown = 0
                 val report = { fraction: Float, done: Int, total: Int ->
