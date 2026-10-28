@@ -1,0 +1,40 @@
+apps/android/app/src/test/kotlin/com/hushos/app/data/VaultAttributesTest.kt
+  s_566b8e0c4467a4::t_50b4f3e853889b 1-221
+  s_566b8e0c4467a4::t_edb0ba4fde6530 222
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_6ab1aba311ec36 30
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_566b8e0c4467a4::t_a98bcc4b05745d 1-460
+apps/android/app/build.gradle.kts
+  s_566b8e0c4467a4::t_e3fc11c8c158e9 148-149
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_b50a336853faec 17,1525
+apps/android/gradle/libs.versions.toml
+  s_566b8e0c4467a4::t_c9cff72cfc1937 23,43
+apps/android/app/src/main/kotlin/com/hushos/app/data/Links.kt
+  s_670a596f8c0f46::t_99bf219e3c4151 312-333
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a71765593efbafe2204b06d88da4fad310197d84",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_670a596f8c0f46": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a289eedda0e824aae",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
