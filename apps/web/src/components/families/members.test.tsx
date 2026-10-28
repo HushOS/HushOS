@@ -113,7 +113,7 @@ vi.mock('@/lib/groups/copy', async (original) => ({
     errorCopy: (cause: Error) => cause.message,
     outcomeCopy: () => null,
 }));
-const { ChangedMembers } = await import('./members');
+const { ChangedMembers, MemberList } = await import('./members');
 
 const person = (userId: string, name: string, roles: string[] = []): FamilyMember =>
     ({
@@ -134,6 +134,113 @@ function viewWith(managers: string[]): GroupView {
         ],
     } as unknown as GroupView;
 }
+
+function list(needsCheck: string[]) {
+    render(
+        <QueryClientProvider client={new QueryClient()}>
+            <MemberList
+                userId={ALICE}
+                groupId="g"
+                family="Holm family"
+                members={[
+                    person(ALICE, 'Alice Holm', ORGANIZER),
+                    person(SAM, 'Sam Holm'),
+                    person(ANA, 'Ana Holm'),
+                ]}
+                view={viewWith([])}
+                manager
+                names={{ [SAM]: 'Sam', [ANA]: 'Ana' }}
+                needsCheck={needsCheck}
+            />
+        </QueryClientProvider>,
+    );
+}
+
+/* Let them manage the family, on Sam's row, then the check it asks for first. */
+async function askToManageSam(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByRole('button', { name: 'More for Sam Holm' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Let them manage the family' }));
+    await user.click(await screen.findByRole('button', { name: 'Check it’s Sam' }));
+}
+
+const promotedSam = () =>
+    stageChange.mock.calls.some(
+        ([, , op]) =>
+            (op as { kind: string; userId: string; roles: string[] }).kind === 'roles' &&
+            (op as { userId: string }).userId === SAM &&
+            (op as { roles: string[] }).roles.includes('members'),
+    );
+
+/*
+ * A role that waits on a check (DESIGN.md, Members: "Check it's Sam first"):
+ * when the check goes through someone's own twelve words, whether straight
+ * away (their account changed) or because the family check can't be done on
+ * this device, They match must still finish the role change, and someone
+ * whose account changed goes back into the family folders first, so the role
+ * is given over the keys just checked.
+ */
+describe('a role change that waits on a check of their own words', () => {
+    beforeEach(() => {
+        matched = false;
+        order.length = 0;
+        stageChange.mockClear();
+        continueMembers.mockClear();
+        toastAdd.mockClear();
+    });
+
+    test('for someone whose account changed: They match lets them back in, then gives the role', async () => {
+        const user = userEvent.setup();
+        list([SAM]);
+        await askToManageSam(user);
+        // Their account changed, so straight to their own words; nothing is signed before.
+        await user.click(
+            (await screen.findByRole('dialog', { name: 'Their words: Sam Holm' })).querySelector(
+                'button',
+            )!,
+        );
+        await waitFor(() => expect(promotedSam()).toBe(true));
+        expect(order).toEqual(['continue', 'roles']);
+        expect(continueMembers.mock.calls[0]![4]).toEqual([
+            { userId: SAM, name: 'Sam Holm', email: 'sam@example.com' },
+        ]);
+    });
+
+    test('when the family check falls back to their words: They match still gives the role', async () => {
+        const user = userEvent.setup();
+        list([]);
+        await askToManageSam(user);
+        await user.click(await screen.findByRole('button', { name: 'Check Sam’s words' }));
+        await user.click(
+            (await screen.findByRole('dialog', { name: 'Their words: Sam Holm' })).querySelector(
+                'button',
+            )!,
+        );
+        await waitFor(() => expect(promotedSam()).toBe(true));
+        // Their account didn't change: no one is let back in on the way.
+        expect(continueMembers).not.toHaveBeenCalled();
+    });
+
+    test('while someone else’s account change waits too, nothing is signed and the page says why', async () => {
+        const user = userEvent.setup();
+        list([SAM, ANA]);
+        await askToManageSam(user);
+        await user.click(
+            (await screen.findByRole('dialog', { name: 'Their words: Sam Holm' })).querySelector(
+                'button',
+            )!,
+        );
+        await waitFor(() =>
+            expect(toastAdd).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'error',
+                    description: 'Ana’s account changed too. Continue first, then try again.',
+                }),
+            ),
+        );
+        expect(continueMembers).not.toHaveBeenCalled();
+        expect(stageChange).not.toHaveBeenCalled();
+    });
+});
 
 /*
  * Everyone whose account changed, on one notice (6.9): named together, with

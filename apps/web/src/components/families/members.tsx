@@ -651,12 +651,13 @@ export function MemberList({
         member: FamilyMember;
         after?: RoleChange;
     } | null>(null);
-    const [words, setWords] = useState<FamilyMember | null>(null);
+    // Their own twelve words (6.10), with the role change waiting on the check, if one is.
+    const [words, setWords] = useState<{ member: FamilyMember; after?: RoleChange } | null>(null);
     const standings = useMemberStandings(userId, groupId, view);
     const settings = useQuery(settingsQueryOptions(userId));
     // Roles as the member list this device checked says, where it has one; else the server's.
-    const rolesOf = (member: FamilyMember): GroupRole[] =>
-        (view?.members.find((entry) => entry.userId === member.userId)?.roles ??
+    const rolesOf = (member: FamilyMember, at: GroupView | null = view): GroupRole[] =>
+        (at?.members.find((entry) => entry.userId === member.userId)?.roles ??
             member.roles) as GroupRole[];
     // The organizer first, then everyone else in the order the server gives.
     const organizer = (member: FamilyMember) => (rolesOf(member).includes('billing') ? 0 : 1);
@@ -685,18 +686,79 @@ export function MemberList({
     };
     function check(member: FamilyMember, after?: RoleChange) {
         if (changed(member) || (checkedFamilyWith(member) && standingOf(member) !== 'verified'))
-            setWords(member);
+            setWords({ member, after });
         else setCheckingWith({ member, after });
     }
 
-    async function apply(change: RoleChange) {
+    /*
+     * A role change that waited on a check of their own words (DESIGN.md, Members: "Check
+     * it's Sam first"), once they match. Someone whose account changed goes back into the
+     * family folders first, as on Continue, so the role is given over the keys just checked;
+     * while someone else's account change waits too, the change waits for Continue.
+     */
+    async function resume(change: RoleChange) {
+        const { member } = change;
+        if (!needsCheck.includes(member.userId)) return apply(change);
+        const who = firstName(member.name);
+        const others = active
+            .filter(
+                (other) =>
+                    other.userId !== member.userId &&
+                    other.userId !== userId &&
+                    needsCheck.includes(other.userId),
+            )
+            .map((other) => firstName(other.name));
+        if (others.length > 0) {
+            cue('error');
+            toast.add({
+                type: 'error',
+                title: 'Couldn’t change that',
+                description: `${
+                    others.length === 1
+                        ? `${others[0]}’s account`
+                        : `${namesInWords(others.map((other) => `${other}’s`))} accounts`
+                } changed too. Continue first, then try again.`,
+            });
+            return;
+        }
+        setBusy(true);
+        try {
+            const staged = await continueMembers(
+                queryClient,
+                userId,
+                familyContext(userId),
+                groupId,
+                [refOf(member)],
+                names,
+            );
+            const failed = stageFailure(staged, { family, person: who, names });
+            if (failed) throw new Error(failed);
+            const kept =
+                staged.status === 'sent' && staged.outcome.status === 'landed'
+                    ? staged.outcome.sync
+                    : null;
+            await apply(change, kept?.status === 'accepted' ? kept.view : view);
+        } catch (cause) {
+            cue('error');
+            toast.add({
+                type: 'error',
+                title: 'Couldn’t change that',
+                description: errorCopy(cause, { family, person: who, names }),
+            });
+            setBusy(false);
+            void afterFamilyChange(queryClient, userId);
+        }
+    }
+
+    /* `at`: the member list to build on, when it is newer than the page's (after a Continue). */
+    async function apply(change: RoleChange, at: GroupView | null = view) {
         const ctx = familyContext(userId);
         const { member, kind } = change;
         const who = firstName(member.name);
         const ctxCopy = { family, person: who, names };
         setBusy(true);
         try {
-            const roles = rolesOf(member);
+            const roles = rolesOf(member, at);
             const next =
                 kind === 'manage'
                     ? withRole(roles, 'members', true)
@@ -704,8 +766,8 @@ export function MemberList({
                       ? withRole(roles, 'members', false)
                       : withRole(roles, 'billing', true);
             // The manager rule, read again now (3.6): nothing is signed for someone not checked.
-            if (needsCheckFor(roles, next) && view) {
-                const now = await memberStandings(userId, view);
+            if (needsCheckFor(roles, next) && at) {
+                const now = await memberStandings(userId, at);
                 if (now.get(member.userId) !== 'verified') {
                     setCheckFirst(change);
                     return;
@@ -723,7 +785,7 @@ export function MemberList({
                 const second = await stageChange(ctx, groupId, {
                     kind: 'roles',
                     userId,
-                    roles: withRole(rolesOf(me), 'billing', false),
+                    roles: withRole(rolesOf(me, at), 'billing', false),
                 });
                 const stillMine = stageFailure(second, ctxCopy);
                 if (stillMine)
@@ -932,9 +994,10 @@ export function MemberList({
                     organizer={theOrganizer ? firstName(theOrganizer.name) : null}
                     onClose={() => setCheckingWith(null)}
                     onCheckWords={() => {
-                        const member = checkingWith.member;
+                        // Their own words instead, the role change still waiting on them.
+                        const { member, after } = checkingWith;
                         setCheckingWith(null);
-                        setWords(member);
+                        setWords({ member, after });
                     }}
                     onChecked={({ verified }) => {
                         // Once checked, the role change goes ahead (6.9).
@@ -947,11 +1010,19 @@ export function MemberList({
                 userId={userId}
                 start={
                     words
-                        ? { kind: 'check', person: { email: words.email ?? '', name: words.name } }
+                        ? {
+                              kind: 'check',
+                              person: { email: words.member.email ?? '', name: words.member.name },
+                          }
                         : null
                 }
                 onOpenChange={(open) => !open && setWords(null)}
-                onResolved={() => void afterFamilyChange(queryClient, userId)}
+                onResolved={() => {
+                    // They match: the role change waiting on the check goes ahead (6.9).
+                    const after = words?.after;
+                    if (after) void resume(after);
+                    else void afterFamilyChange(queryClient, userId);
+                }}
             />
             {removing && (
                 <RemoveDialog
