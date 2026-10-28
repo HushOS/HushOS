@@ -103,7 +103,10 @@ export async function joinStatus(
  * joins record goes. Null when there is no record, or it did not open.
  */
 async function finishedBefore(ctx: GroupContext, groupId: string): Promise<JoinOutcome | null> {
-    if (!(await ctx.store.chain(ctx.userId, groupId))) return null;
+    if (!(await ctx.store.chain(ctx.userId, groupId))) {
+        await letGoOfUnkept(ctx, groupId);
+        return null;
+    }
     const synced = await syncLocked(ctx, groupId, { flush: false });
     if (synced.status === 'accepted') {
         await ctx.store.deleteJoin(ctx.userId, groupId);
@@ -113,6 +116,20 @@ async function finishedBefore(ctx: GroupContext, groupId: string): Promise<JoinO
     if (synced.status !== 'unchecked') return { status: 'waiting' };
     // A record that did not open and no pin: the join goes on.
     return null;
+}
+
+/*
+ * A join this session committed but couldn't keep on the device: its guard
+ * wasn't stored, and nor was the one letting go of it handed back (acceptJoin),
+ * so the worker still holds the chain as a floor, and the joins record as
+ * used. With no device record, nothing else of the family is the worker's to
+ * hold, so it lets go now, storing the guard it hands back first (2.8). Then
+ * the join runs again from a clean session. While the guard still can't be
+ * stored, that error is the answer and nothing is retried.
+ */
+async function letGoOfUnkept(ctx: GroupContext, groupId: string) {
+    if (!(await forgetInWorker(ctx, groupId)))
+        throw new Error('The family could not be checked. Try again.');
 }
 
 /* The first-use join (groupJoinFirstUse), then its commit. */

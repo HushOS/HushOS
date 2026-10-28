@@ -533,6 +533,51 @@ describe('joining a family on first use', () => {
         expect((await store.chain(BOB, f.groupId))?.rosterVersion).toBe(3);
     });
 
+    test('a join whose guard, and the guard letting go of it, both failed to store joins on the retry once storage is back, with no reload', async () => {
+        const f = await invitedFamily();
+        const store = createMemoryGroupStore();
+        await f.admit();
+        await f.land();
+        let guard!: ReturnType<typeof watched>;
+        const bob = await f.bobDevice(store, (inner) => {
+            guard = watched(inner, { fail: 2 });
+            return guard.guard;
+        });
+        // The acceptance's guard fails, and so does the one the cleanup is handed back.
+        await expect(joinStatus(bob.ctx, f.groupId)).rejects.toThrow(GUARD_UNSAVED);
+        expect(guard.kept).toHaveLength(2);
+        expect(await store.chain(BOB, f.groupId)).toBeNull();
+        expect(await store.join(BOB, f.groupId)).not.toBeNull();
+        expect(await bob.held()).toBeNull();
+        // Storage is back. The retry, in the same session, lets go of the kept chain (storing
+        // its guard first), then joins.
+        const joined = await joinStatus(bob.ctx, f.groupId);
+        expect(joined.status).toBe('joined');
+        expect((await store.chain(BOB, f.groupId))?.rosterVersion).toBe(2);
+        expect(await bob.held()).toMatchObject({ rosterVersion: 2 });
+        expect(await store.join(BOB, f.groupId)).toBeNull();
+        expect(await settingsPinOf(bob.ctx, f.groupId)).toMatchObject({ rosterVersion: 2 });
+    });
+
+    test('while the guard still can’t be stored, the retry says so and the join waits', async () => {
+        const f = await invitedFamily();
+        const store = createMemoryGroupStore();
+        await f.admit();
+        await f.land();
+        let guard!: ReturnType<typeof watched>;
+        const bob = await f.bobDevice(store, (inner) => {
+            guard = watched(inner, { fail: 3 });
+            return guard.guard;
+        });
+        await expect(joinStatus(bob.ctx, f.groupId)).rejects.toThrow(GUARD_UNSAVED);
+        // The retry stores nothing and joins nothing: storage is still failing.
+        await expect(joinStatus(bob.ctx, f.groupId)).rejects.toThrow(GUARD_UNSAVED);
+        expect(await store.chain(BOB, f.groupId)).toBeNull();
+        expect(await store.join(BOB, f.groupId)).not.toBeNull();
+        // And once it's back, the join goes through.
+        expect((await joinStatus(bob.ctx, f.groupId)).status).toBe('joined');
+    });
+
     test('while an accepted chain’s guard isn’t stored, nothing is written under it: no seal, grant or roster, and the floor stays', async () => {
         const f = await invitedFamily();
         const store = createMemoryGroupStore();
