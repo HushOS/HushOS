@@ -349,17 +349,17 @@ public actor Vault {
     private func openIdentity(generation: UInt64) async throws -> IdentityKeys {
         let marks = RollbackMarkStore.shared(session: session.token)
         let accountKey = try unlockAccount()
-        var envelope = try await Auth.identity()
+        var envelope = try await Auth.identity(as: session)
         let seen = try await marks.read(userId: session.userId, keys: marksKeys())
         try IdentityMarks.check(seen, keyVersion: envelope.keyVersion, identityVersion: envelope.version)
         var keys = try identityOpen(userId: session.userId, accountKey: accountKey, envelope: envelope)
         if keys.identityVersion == 1 {
             let upgraded = try identityUpgrade(userId: session.userId, accountKey: accountKey, envelope: envelope)
             do {
-                envelope = try await Auth.upgradeIdentity(upgraded)
+                envelope = try await Auth.upgradeIdentity(upgraded, as: session)
             } catch AuthError.conflict {
                 // Another device upgraded first: open the identity it stored, never a second ML-DSA key.
-                envelope = try await Auth.identity()
+                envelope = try await Auth.identity(as: session)
             }
             keys = try identityOpen(userId: session.userId, accountKey: accountKey, envelope: envelope)
         }
@@ -406,7 +406,7 @@ public actor Vault {
 
     /* The 24 words again, for someone who holds the account key and wants to check their copy. */
     public func recoveryPhrase() async throws -> String {
-        let (envelope, _) = try await Auth.recoveryKey()
+        let (envelope, _) = try await Auth.recoveryKey(as: session)
         return try HushOSCore.recoveryPhrase(userId: session.userId, accountKey: try unlockAccount(), envelope: envelope)
     }
 

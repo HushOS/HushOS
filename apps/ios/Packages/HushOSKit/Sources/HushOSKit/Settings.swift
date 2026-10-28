@@ -316,8 +316,10 @@ extension Vault {
     func loadSettings() async throws -> Settings {
         let marks = RollbackMarkStore.shared(session: session.token)
         let reply = try await Auth.settings(as: session)
-        // The stored sequence decides, document or not: below the mark is a rollback, a version 1 row included.
-        try SettingsMarks.check(try await marks.read(userId: session.userId, keys: marksKeys(served: reply.key)), served: reply.version)
+        let document = reply.envelope?.version == 2
+        // The stored sequence decides, document or not: below the mark is a rollback, a version 1 row included;
+        // and once a version 2 document was seen here, anything else is.
+        try SettingsMarks.check(try await marks.read(userId: session.userId, keys: marksKeys(served: reply.key)), served: reply.version, document: document)
         var settings: Settings
         if let envelope = reply.envelope {
             guard envelope.settingsVersion == reply.version else { throw ContactError.message("Your settings didn’t add up. Try again later.") }
@@ -336,8 +338,8 @@ extension Vault {
         settings.served = reply.envelope
         // Taken only with its mark kept: a later visit could not tell an older copy from it otherwise. Checked
         // again against what the write found, for a newer sequence another read recorded meanwhile.
-        let kept = try await marks.raise(userId: session.userId, to: RollbackMarks(settings: reply.version, settingsDocument: false, identity: 0, identityVersion: 0), keys: marksKeys(served: reply.key))
-        try SettingsMarks.check(kept, served: reply.version)
+        let kept = try await marks.raise(userId: session.userId, to: RollbackMarks(settings: reply.version, settingsDocument: document, identity: 0, identityVersion: 0), keys: marksKeys(served: reply.key))
+        try SettingsMarks.check(kept, served: reply.version, document: document)
         lastPins = settings.contacts
         // The area ledger takes the families' marks from every settings read, as the web's worker does.
         try? useForFamilies(settings)
@@ -361,7 +363,7 @@ extension Vault {
             do {
                 let stored = try await Auth.putSettings(expectedVersion: settings.version, envelope: sealed, as: session)
                 guard stored == sealed.settingsVersion else { throw ContactError.message("Your settings couldn’t be saved. Try again later.") }
-                try await RollbackMarkStore.shared(session: session.token).raise(userId: session.userId, to: RollbackMarks(settings: stored, settingsDocument: false, identity: 0, identityVersion: 0), keys: marksKeys())
+                try await RollbackMarkStore.shared(session: session.token).raise(userId: session.userId, to: RollbackMarks(settings: stored, settingsDocument: true, identity: 0, identityVersion: 0), keys: marksKeys())
                 settings.version = stored
                 settings.envelopeVersion = sealed.version
                 settings.served = sealed

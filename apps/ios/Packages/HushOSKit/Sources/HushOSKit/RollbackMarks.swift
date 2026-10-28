@@ -372,8 +372,13 @@ final class MarkFloor: @unchecked Sendable {
 public enum SettingsMarks {
     public static let rolledBack = "The server sent older settings than this device has seen. Nothing was changed."
 
-    static func check(_ seen: RollbackMarks, served: UInt64) throws {
-        guard served >= seen.settings else { throw ContactError.message(rolledBack) }
+    /*
+     * `document`: whether a version 2 document came with it. Once this phone has opened or saved
+     * one for the account, none (or a version 1 row) at any sequence is an older copy: it would drop
+     * every pin the document held, family pins among them (the web's `settingsDocumentRolledBack`).
+     */
+    static func check(_ seen: RollbackMarks, served: UInt64, document: Bool) throws {
+        guard served >= seen.settings, document || !seen.settingsDocument else { throw ContactError.message(rolledBack) }
     }
 }
 

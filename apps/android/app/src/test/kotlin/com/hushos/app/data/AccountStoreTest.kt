@@ -29,6 +29,8 @@ class AccountStoreTest {
         File(files, "offline/node-e/version-4/Payslip March.pdf"),
         File(files, "queue/job-1/Holiday.jpg"),
         File(files, "files-parents.json"),
+        // The names of queued transfers, kept out of WorkManager's database.
+        File(files, JobNames.FILE),
         File(cache, "opened/node-a/version-1/Tax return.pdf"),
         File(cache, "files/node-b/version-2"),
         File(cache, "thumbnails/node-c"),

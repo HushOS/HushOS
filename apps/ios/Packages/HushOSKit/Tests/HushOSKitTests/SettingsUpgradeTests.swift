@@ -38,6 +38,27 @@ extension OnFakeDrive {
             #expect(try await vault.loadedSettingsHold(node: "node-a", grantee: "someone"))
         }
 
+        /* After saving a version 2 document here, the server serving none again (at a higher sequence even) is refused. */
+        @Test func noDocumentAfterSavingOneIsARollback() async throws {
+            let me = UUID().uuidString.lowercased()
+            let session = SharedKeychain.Session(origin: "https://settings.test", token: "t", userId: me)
+            let server = SettingsServer(storedVersion: 3)
+            SettingsServer.current = server
+            Auth.testSession = session
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [SettingsServerProtocol.self]
+            Auth.testTransport = configuration
+            defer { Auth.testSession = nil; Auth.testTransport = nil; SettingsServer.current = nil }
+            let vault = Vault(api: DriveAPI(session: session, configuration: configuration), session: session)
+            await vault.adopt(settingsKey: try settingsKeyCreate(userId: me, accountKey: try randomBytes(length: 32)).key)
+            _ = try await vault.saveShare(node: "node-a", grantee: "someone")
+            // The server drops the document and serves none, one sequence on, so the sequence alone wouldn't tell.
+            server.envelope = nil
+            server.envelopeVersion = 1
+            server.storedVersion += 1
+            await #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { _ = try await vault.loadedSettingsVersion() }
+        }
+
         @Test func aVersionOneRowBelowThisDevicesMarkIsARollback() async throws {
             let me = UUID().uuidString.lowercased()
             let session = SharedKeychain.Session(origin: "https://settings.test", token: "t", userId: me)

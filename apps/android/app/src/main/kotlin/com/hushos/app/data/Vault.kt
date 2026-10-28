@@ -142,13 +142,13 @@ class Vault(internal val context: Context, val api: DriveApi) {
     private val ownIdentities = OpenedIdentities(
         open = {
             openOwnIdentity(api.session.userId, unlockAccount(), marks(),
-                served = { Auth.identity(context) },
-                store = { Auth.upgradeIdentity(context, it) },
+                served = { Auth.identity(context, api.session) },
+                store = { Auth.upgradeIdentity(context, it, api.session) },
                 upgraded = { ShareSeals.of(context).lastPass = 0L },
             )
         },
         // Each opened under the account key, which proves it is this account's own, not one the server added.
-        history = { Auth.identityHistory(context).mapNotNull { runCatching { identityOpen(api.session.userId, unlockAccount(), it) }.getOrNull() }.reversed() },
+        history = { Auth.identityHistory(context, api.session).mapNotNull { runCatching { identityOpen(api.session.userId, unlockAccount(), it) }.getOrNull() }.reversed() },
     )
     /* The settings key, opened under the account key once the server served it (or this device made it). */
     private var settingsKey: ByteArray? = null
@@ -455,14 +455,14 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * the words are those of the identity the server serves at this moment, re-derived from its private halves. It
      * needs the server: offline it fails rather than show words it can't confirm are current, and a 401 ends the session.
      */
-    fun currentOwnFingerprint(): String = ownFingerprint(ownIdentities.current(Auth.identity(context)))
+    fun currentOwnFingerprint(): String = ownFingerprint(ownIdentities.current(Auth.identity(context, api.session)))
 
     /*
      * A person by email, with what the pin says about them. "Check it's them": the one place a pinned contact's served keys are followed through their succession chain
      * (docs/integrity-design.md, "Who sees whom"), because the person asked. Nothing else follows them on its own.
      */
     fun lookup(email: String): Lookup {
-        val contact = Auth.lookupContact(context, email)
+        val contact = Auth.lookupContact(context, email, api.session)
         val pinned = loadSettings().contacts[contact.userId] ?: return Lookup(contact, null, changed = false)
         val comparison = comparePin(pinned, contact.served)
         // New keys signed by the pinned ones: the pin follows them, and People says so rather than warning.
@@ -499,7 +499,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
      */
     private fun followPin(pin: ContactPin, served: ServedIdentity): ContactPin? {
         if (comparePin(pin, served) != PinComparison.SUCCESSION) return null
-        val links = runCatching { Auth.succession(context, pin.userId) }.getOrNull() ?: return null
+        val links = runCatching { Auth.succession(context, pin.userId, api.session) }.getOrNull() ?: return null
         val next = followSuccession(pin, served, links, Instant.now().toString()) ?: return null
         updateSettings { settings ->
             // Another device may have followed (or re-pinned) first: only a pin still at the old keys is moved.
@@ -526,7 +526,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val nodeKey = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         // The pin as the settings hold it now, not as the sheet last read it.
         val current = loadSettings().contacts[pin.userId] ?: throw SharingRefused("Add ${pin.displayName} in Contacts before you share with them.")
-        val contact = Auth.lookupContact(context, current.email)
+        val contact = Auth.lookupContact(context, current.email, api.session)
         if (contact.userId != current.userId) throw ContactChanged()
         // Other keys than the pinned ones are never followed here: replaced or changed, the person checks them again first.
         val kem = granteeKem(current, contact.served)
@@ -560,12 +560,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val opened = identityKeys()
         // Signed over the identity opened, never over whatever the server serves now.
         val succession = try {
-            succeedOwnIdentity(userId, unlockAccount(), opened, Auth.identity(context))
+            succeedOwnIdentity(userId, unlockAccount(), opened, Auth.identity(context, api.session))
         } catch (error: IdentityMoved) {
             forgetIdentity()
             throw error
         }
-        Auth.succeedIdentity(context, succession)
+        Auth.succeedIdentity(context, succession, api.session)
         // From here the shares wait to be sealed again: a pass cut short is finished on the next Drive open, never by minting again.
         ShareSeals.of(context).pending = succession.identity.keyVersion
         forgetIdentity()
@@ -612,7 +612,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
                     val pin = pins[share.granteeId] ?: return@mapNotNull null
                     if (!needsReseal(share.suite, seals.get(share.id), keys.keyVersion, pin.keyVersion)) return@mapNotNull null
                     // The post-quantum key to seal to is only in a lookup; keys other than the pin's are left out by the plan.
-                    val contact = served.getOrPut(share.granteeId) { runCatching { Auth.lookupContact(context, pin.email) }.getOrNull() }
+                    val contact = served.getOrPut(share.granteeId) { runCatching { Auth.lookupContact(context, pin.email, api.session) }.getOrNull() }
                     val grantee = contact?.takeIf { it.userId == share.granteeId } ?: return@mapNotNull null
                     JSONObject().put("id", share.id).put("granteeUserId", share.granteeId).put("grantee", grantee.served.toJson())
                 }

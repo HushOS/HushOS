@@ -440,8 +440,8 @@ extension Auth {
     }
 
     /* The recovery key envelope the server keeps, and whether the person confirmed saving the phrase. */
-    public static func recoveryKey() async throws -> (envelope: RecoveryEnvelope, confirmed: Bool) {
-        let reply = try await call("/api/auth/recovery-key")
+    public static func recoveryKey(as owner: SharedKeychain.Session? = nil) async throws -> (envelope: RecoveryEnvelope, confirmed: Bool) {
+        let reply = try await call("/api/auth/recovery-key", as: owner)
         guard let json = reply["recovery"] as? [String: Any] else { throw AuthError.message("This account has no recovery key.") }
         return (recoveryEnvelope(from: json), reply["confirmed"] as? Bool ?? false)
     }

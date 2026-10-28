@@ -526,17 +526,18 @@ object Auth {
     }
 
     /* The identity envelope the server keeps for this account. */
-    fun identity(context: Context): com.hushos.core.IdentityEnvelope = identityEnvelope(call(context, "/api/auth/identity").getJSONObject("identity"))
+    fun identity(context: Context, `as`: Shared.Session? = null): com.hushos.core.IdentityEnvelope =
+        identityEnvelope(call(context, "/api/auth/identity", `as` = `as`).getJSONObject("identity"))
 
     /* The account's earlier identities, oldest first, still sealed under the root: shares sealed to earlier keys open only with them. */
-    fun identityHistory(context: Context): List<com.hushos.core.IdentityEnvelope> {
-        val list = call(context, "/api/auth/identity/history").optJSONArray("identities") ?: return emptyList()
+    fun identityHistory(context: Context, `as`: Shared.Session? = null): List<com.hushos.core.IdentityEnvelope> {
+        val list = call(context, "/api/auth/identity/history", `as` = `as`).optJSONArray("identities") ?: return emptyList()
         return (0 until list.length()).map { identityEnvelope(list.getJSONObject(it)) }
     }
 
     /* Stores the next identity, vouched for by the current signing key; the server keeps the current one in the history. */
-    fun succeedIdentity(context: Context, succession: com.hushos.core.IdentitySuccession) {
-        call(context, "/api/auth/identity/succession", JSONObject().put("identity", json(succession.identity)).put("signature", succession.signature))
+    fun succeedIdentity(context: Context, succession: com.hushos.core.IdentitySuccession, `as`: Shared.Session? = null) {
+        call(context, "/api/auth/identity/succession", JSONObject().put("identity", json(succession.identity)).put("signature", succession.signature), `as` = `as`)
     }
 
     /*
@@ -544,15 +545,15 @@ object Auth {
      * ML-DSA and the keys statement); returns the identity the server stored. A 409 (`status`) means another device
      * upgraded first: read the identity again and open that one.
      */
-    fun upgradeIdentity(context: Context, identity: com.hushos.core.IdentityEnvelope): com.hushos.core.IdentityEnvelope =
-        identityEnvelope(call(context, "/api/auth/identity/upgrade", JSONObject().put("identity", json(identity))).getJSONObject("identity"))
+    fun upgradeIdentity(context: Context, identity: com.hushos.core.IdentityEnvelope, `as`: Shared.Session? = null): com.hushos.core.IdentityEnvelope =
+        identityEnvelope(call(context, "/api/auth/identity/upgrade", JSONObject().put("identity", json(identity)), `as` = `as`).getJSONObject("identity"))
 
     /*
      * A contact's whole succession chain (version 2 links only), in order, for the device to check link by link. Asked from the first version
      * whatever the pin holds, so the request does not say which version this device pinned.
      */
-    fun succession(context: Context, userId: String): List<com.hushos.core.SuccessionLink> {
-        val links = call(context, "/api/auth/contacts/${java.net.URLEncoder.encode(userId, "UTF-8")}/succession?from=$CHAIN_FROM").optJSONArray("links") ?: return emptyList()
+    fun succession(context: Context, userId: String, `as`: Shared.Session? = null): List<com.hushos.core.SuccessionLink> {
+        val links = call(context, "/api/auth/contacts/${java.net.URLEncoder.encode(userId, "UTF-8")}/succession?from=$CHAIN_FROM", `as` = `as`).optJSONArray("links") ?: return emptyList()
         return (0 until links.length()).map { index ->
             val link = links.getJSONObject(index)
             com.hushos.core.SuccessionLink(
@@ -616,8 +617,8 @@ object Auth {
         .put("wrappingNonce", grant.wrappingNonce).put("encryptedKey", grant.encryptedKey)
 
     /* A person by email, with their identity's public keys. The address goes in the body, never the URL a log keeps. */
-    fun lookupContact(context: Context, email: String): Contact {
-        val json = call(context, "/api/auth/contacts/lookup", JSONObject().put("email", email)).optJSONObject("contact")
+    fun lookupContact(context: Context, email: String, `as`: Shared.Session? = null): Contact {
+        val json = call(context, "/api/auth/contacts/lookup", JSONObject().put("email", email), `as` = `as`).optJSONObject("contact")
             ?: throw AuthFailure("No HushOS account uses that email.")
         return Contact(json.getString("userId"), json.optString("name"), json.optString("email", email), ServedIdentity.from(json))
     }

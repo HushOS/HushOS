@@ -191,15 +191,29 @@ struct RollbackMarkStoreTests {
         try await store.raise(userId: me, to: marks(settings: 2, identity: 1, version: 1), keys: Self.key(1))
         let seen = try await RollbackMarkStore(folder: folder, floor: MarkFloor()).read(userId: me, keys: Self.key(1))
         #expect(seen == marks(settings: 5, identity: 3, version: 2))
-        try SettingsMarks.check(seen, served: 5)
-        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try SettingsMarks.check(seen, served: 4) }
+        try SettingsMarks.check(seen, served: 5, document: true)
+        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try SettingsMarks.check(seen, served: 4, document: true) }
         // No document at all is a rollback only below the mark (a version 1 row is served as none at its sequence).
-        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try SettingsMarks.check(seen, served: 0) }
+        try SettingsMarks.check(seen, served: 5, document: false)
+        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try SettingsMarks.check(seen, served: 0, document: false) }
         try IdentityMarks.check(seen, keyVersion: 3, identityVersion: 2)
         #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try IdentityMarks.check(seen, keyVersion: 2, identityVersion: 2) }
         // The version 1 form once version 2 was opened, at the same key version or above.
         #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try IdentityMarks.check(seen, keyVersion: 3, identityVersion: 1) }
         #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try IdentityMarks.check(seen, keyVersion: 4, identityVersion: 1) }
+    }
+
+    /*
+     * Once a version 2 document was opened or saved here, the server serving none (or a version 1
+     * row) is an older copy at any sequence: it would drop every pin the document held.
+     */
+    @Test func noDocumentAfterAVersionTwoOneIsARollbackAtAnySequence() async throws {
+        defer { cleanUp() }
+        try await store.raise(userId: me, to: RollbackMarks(settings: 4, settingsDocument: true, identity: 0, identityVersion: 0), keys: Self.key(1))
+        let seen = try await RollbackMarkStore(folder: folder, floor: MarkFloor()).read(userId: me, keys: Self.key(1))
+        try SettingsMarks.check(seen, served: 5, document: true)
+        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try SettingsMarks.check(seen, served: 4, document: false) }
+        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try SettingsMarks.check(seen, served: 9, document: false) }
     }
 
     /*
@@ -429,7 +443,7 @@ struct RollbackMarkStoreTests {
         try await store.adopt(userId: me, encryptionPublicKeys: ["old-key"], keys: Self.key(1))
         let fresh = try await RollbackMarkStore(folder: folder, floor: MarkFloor()).read(userId: me, keys: Self.key(1))
         #expect(fresh.settings == 9)
-        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try SettingsMarks.check(fresh, served: 8) }
+        #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { try SettingsMarks.check(fresh, served: 8, document: true) }
     }
 }
 

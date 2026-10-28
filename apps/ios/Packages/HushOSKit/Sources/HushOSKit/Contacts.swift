@@ -125,9 +125,9 @@ func keysHold(userId: String, _ served: ServedContactKeys, identityVersion: Int?
 }
 
 extension Auth {
-    static func lookupContact(email: String) async throws -> Contact {
+    static func lookupContact(email: String, as owner: SharedKeychain.Session? = nil) async throws -> Contact {
         // In the body, not the query: an address in a URL ends up in logs along the way.
-        let reply = try await call("/api/auth/contacts/lookup", method: "POST", body: ["email": email])
+        let reply = try await call("/api/auth/contacts/lookup", method: "POST", body: ["email": email], as: owner)
         guard let json = reply["contact"] as? [String: Any], let userId = json["userId"] as? String,
               let encryption = json["encryptionPublicKey"] as? String, let signing = json["signingPublicKey"] as? String
         else { throw ContactError.message("No HushOS account uses that email.") }
@@ -230,7 +230,7 @@ extension Vault {
      * fails rather than show words it can't confirm are current, and a 401 is `AuthError.sessionEnded`.
      */
     public func currentOwnFingerprint() async throws -> String {
-        let served = try await Auth.identity()
+        let served = try await Auth.identity(as: session)
         if let opened = identityEnvelope, !served.servesSameIdentity(as: opened) { forgetIdentity() }
         identityCheckedAt = Date()
         return try fingerprint(of: try await identityKeys())
@@ -250,7 +250,7 @@ extension Vault {
      * only "Check again" does.
      */
     public func lookup(email: String) async throws -> Lookup {
-        let contact = try await Auth.lookupContact(email: email)
+        let contact = try await Auth.lookupContact(email: email, as: session)
         let pinned = try await loadSettings().contacts[contact.userId]
         let comparison = pinned?.compare(contact.served)
         return Lookup(contact: contact, pinned: pinned, changed: comparison == .changed || comparison == .succession,
@@ -307,7 +307,7 @@ extension Vault {
         try refuseFamilyWrite(item.node.workspaceId)
         guard let nodeKey = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         guard pin.verified else { throw ContactError.recheck(pin.displayName) }
-        let contact = try await Auth.lookupContact(email: pin.email)
+        let contact = try await Auth.lookupContact(email: pin.email, as: session)
         guard contact.userId == pin.userId else { throw ContactError.changed }
         let sealing = try pin.sealKeys(contact.served)
         let keys = try await identityKeys()
