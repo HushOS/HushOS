@@ -1,0 +1,21 @@
+.github/workflows/ci.yml
+  s_566b8e0c4467a4::t_9d5e5bbfa7207e 188,212,264,280,314,340,356,385,416,437,468
+.github/workflows/fuzz.yml
+  s_566b8e0c4467a4::t_6f58fb931d95fe 67,75,96,107,155,170,199,207
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "74ba706a6a7e8f6d4145fa8a4d9c4f118a160e12",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
