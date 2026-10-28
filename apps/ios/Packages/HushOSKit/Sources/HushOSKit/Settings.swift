@@ -277,7 +277,8 @@ extension Vault {
         var stored = served
         if stored == nil { stored = try await Auth.settings().key }
         if let stored { return MarksKey(key: try openSettingsKey(stored), envelope: settingsKeyEnvelope ?? stored) }
-        guard create else { return nil }
+        // A settings key is stored once and for good: never under a session that isn't this vault's (it's sent with the stored one).
+        guard create, (Auth.testSession ?? SharedKeychain.session)?.token == session.token else { return nil }
         let key = try await ensureSettingsKey(nil)
         guard let settingsKeyEnvelope else { return nil }
         return MarksKey(key: key, envelope: settingsKeyEnvelope)
@@ -333,8 +334,10 @@ extension Vault {
         }
         settings.keyEnvelope = reply.key
         settings.served = reply.envelope
-        // Taken only with its mark kept: a later visit could not tell an older copy from it otherwise.
-        try await marks.raise(userId: session.userId, to: RollbackMarks(settings: reply.version, settingsDocument: false, identity: 0, identityVersion: 0), keys: marksKeys(served: reply.key))
+        // Taken only with its mark kept: a later visit could not tell an older copy from it otherwise. Checked
+        // again against what the write found, for a newer sequence another read recorded meanwhile.
+        let kept = try await marks.raise(userId: session.userId, to: RollbackMarks(settings: reply.version, settingsDocument: false, identity: 0, identityVersion: 0), keys: marksKeys(served: reply.key))
+        try SettingsMarks.check(kept, served: reply.version)
         lastPins = settings.contacts
         // The area ledger takes the families' marks from every settings read, as the web's worker does.
         try? useForFamilies(settings)

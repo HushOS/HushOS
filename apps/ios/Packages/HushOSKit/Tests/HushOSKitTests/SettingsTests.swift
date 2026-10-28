@@ -285,6 +285,32 @@ struct RollbackMarkStoreTests {
         #expect(try await store.read(userId: me, keys: Self.key(1)) == .none)
     }
 
+    /* A raise with nothing to write still answers with what another process wrote while it waited for the key. */
+    @Test func aRaiseThatNeedsNoWriteAnswersWithWhatWasWrittenMeanwhile() async throws {
+        defer { cleanUp() }
+        try await store.raise(userId: me, to: marks(identity: 3, version: 2), keys: Self.key(1))
+        let kept = try await store.raise(userId: me, to: marks(identity: 3, version: 2)) { _, _ in
+            // The Files extension opens a newer identity meanwhile.
+            _ = try? await RollbackMarkStore(folder: folder, floor: MarkFloor()).raise(userId: me, to: marks(identity: 4, version: 2), keys: Self.key(1))
+            return MarksKey(key: Data(repeating: 1, count: 32), envelope: Self.envelope)
+        }
+        #expect(kept.identity == 4)
+    }
+
+    /* What one session raised in this process (an extension that outlived a sign-out) is not another session's. */
+    @Test func whatAProcessRaisedBelongsToItsSession() async throws {
+        defer { cleanUp() }
+        var first = RollbackMarkStore(folder: folder, activity: .expired, floor: floor)
+        first.scope = "first"
+        let release = try holdLock()
+        await #expect(throws: AuthError.message(MarksWords.unsaved)) { try await first.raise(userId: me, to: marks(identity: 3, version: 2), keys: Self.key(1)) }
+        release()
+        #expect(try await first.read(userId: me, keys: Self.key(1)).identity == 3)
+        var second = RollbackMarkStore(folder: folder, floor: floor)
+        second.scope = "second"
+        #expect(try await second.read(userId: me, keys: Self.key(1)) == .none)
+    }
+
     /* A record that is there but can't be read is never "nothing seen", and never written over. */
     @Test func aRecordThatCannotBeReadIsRefused() async throws {
         defer { cleanUp() }

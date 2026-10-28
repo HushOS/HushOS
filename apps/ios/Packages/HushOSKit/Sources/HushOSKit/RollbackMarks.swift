@@ -75,12 +75,16 @@ struct RollbackMarkStore: Sendable {
      * another account signed in) must not write the marks back after the wipe.
      */
     var signedIn: @Sendable () -> Bool = { true }
+    /* Which session this process's raises belong to (`MarkFloor`): another session, even of the same account, starts from none. */
+    var scope = ""
 
     /* The app group's marks, kept for the vault signed in with `session` (its token). */
     static func shared(session token: String) -> RollbackMarkStore {
-        RollbackMarkStore(folder: Unbacked.local.appendingPathComponent("marks", isDirectory: true)) {
+        var store = RollbackMarkStore(folder: Unbacked.local.appendingPathComponent("marks", isDirectory: true)) {
             (Auth.testSession ?? SharedKeychain.session)?.token == token
         }
+        store.scope = token
+        return store
     }
 
     /*
@@ -157,10 +161,10 @@ struct RollbackMarkStore: Sendable {
                 return try await raise(userId: user, to: .none, encryptionPublicKeys: [], keys: keys)
             } catch AuthError.message(let text) where text == MarksWords.unsaved {
                 // Not sealed this time: the plaintext stays, and counts.
-                return try await stored(user, keys: keys).highest(earlier.marks).highest(floor.value(user))
+                return try await stored(user, keys: keys).highest(earlier.marks).highest(floor.value(scoped(user)))
             }
         }
-        return try await stored(user, keys: keys).highest(floor.value(user))
+        return try await stored(user, keys: keys).highest(floor.value(scoped(user)))
     }
 
     private func stored(_ user: String, keys: MarksKeys) async throws -> RollbackMarks {
@@ -193,9 +197,9 @@ struct RollbackMarkStore: Sendable {
         let user = userId.lowercased()
         // What this process raises counts only until the next sign-out: a raise from before it keeps nothing.
         let generation = floor.generation
-        guard signedIn(), floor.raise(user, to, since: generation) else { throw AuthError.message(MarksWords.unsaved) }
+        guard signedIn(), floor.raise(scoped(user), to, since: generation) else { throw AuthError.message(MarksWords.unsaved) }
         let earlier = legacy(user, encryptionPublicKeys: encryptionPublicKeys)
-        let wanted = to.highest(floor.value(user)).highest(earlier.marks)
+        let wanted = to.highest(floor.value(scoped(user))).highest(earlier.marks)
         let url = try file(user)
         let kept = try record(url)
         // Nothing to keep and nothing kept: no record, and no settings key made for one.
@@ -207,11 +211,12 @@ struct RollbackMarkStore: Sendable {
             throw AuthError.message(MarksWords.unsaved)
         }
         guard let key else { throw AuthError.message(kept == nil ? MarksWords.unsaved : MarksWords.unreadable) }
-        // Already held, under the same envelope, with nothing to migrate: no write, so no lock.
-        if let kept, earlier.keys.isEmpty, kept.key == Record.Kept(nonce: key.envelope.nonce, ciphertext: key.envelope.ciphertext),
-           let held = try? rollbackMarksUpdate(settingsKey: key.key, userId: user, envelope: kept.marks, to: .none).marks, held.holds(wanted) {
-            guard signedIn(), floor.raise(user, held, since: generation) else { throw AuthError.message(MarksWords.unsaved) }
-            return held
+        // Already held, under the same envelope, with nothing to migrate: no write, so no lock. Read again
+        // after the wait for the key, so a mark another process raised meanwhile is in what this returns.
+        if let fresh = try record(url), earlier.keys.isEmpty, fresh.key == Record.Kept(nonce: key.envelope.nonce, ciphertext: key.envelope.ciphertext),
+           let held = try? rollbackMarksUpdate(settingsKey: key.key, userId: user, envelope: fresh.marks, to: .none).marks, held.holds(wanted) {
+            guard signedIn(), floor.raise(scoped(user), held, since: generation) else { throw AuthError.message(MarksWords.unsaved) }
+            return held.highest(floor.value(scoped(user)))
         }
         var outcome: Result<RollbackMarks, Error> = .failure(AuthError.message(MarksWords.unsaved))
         // The lock sits beside the folder: its parent (`local`) is there in the app, made here for any other.
@@ -226,7 +231,7 @@ struct RollbackMarkStore: Sendable {
         }
         let marks = try outcome.get()
         // Signed out right after the write: the wipe deleted it, and nothing of it stays here either.
-        guard floor.raise(user, marks, since: generation) else { throw AuthError.message(MarksWords.unsaved) }
+        guard floor.raise(scoped(user), marks, since: generation) else { throw AuthError.message(MarksWords.unsaved) }
         return marks
     }
 
@@ -250,6 +255,9 @@ struct RollbackMarkStore: Sendable {
         forgetLegacy(earlier, sealed: update.marks, user: user)
         return update.marks
     }
+
+    /* This process's raises for `user` under this store's session. */
+    private func scoped(_ user: String) -> String { "\(scope)\n\(user)" }
 
     /* Raises nothing new: folds in the per-identity settings marks an earlier version kept under these keys, if any. */
     func adopt(userId: String, encryptionPublicKeys: [String], keys: MarksKeys) async throws {

@@ -372,7 +372,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
         if (cached != null && cachedEnvelope != null) return MarksKey(cached, cachedEnvelope)
         val stored = served ?: Auth.settings(context)
         stored.key?.let { wrapped -> return MarksKey(openSettingsKey(stored) ?: return null, settingsKeyEnvelope ?: wrapped) }
-        if (!create) return null
+        // A settings key is stored once and for good: never under a session that isn't this vault's (it's sent with the stored one).
+        if (!create || Shared.session(context)?.token != api.session.token) return null
         val key = settingsKeyForSave()
         return settingsKeyEnvelope?.let { MarksKey(key, it) }
     }

@@ -20,6 +20,8 @@ public struct AccountStore: Sendable {
     let temporary: URL
     /* What lives outside files: preferences, the keychain, SQLite. */
     let forgetStores: @Sendable () -> Void
+    /* What this process raised of the rollback marks: the process's own in the app, a store's own in a test. */
+    let marksFloor: MarkFloor
 
     /* Under the group container: kept files, the queue's copies, Save to HushOS's staged copies, the
      * lists of kept files, the last folder, recent searches and the last email (`Unbacked.state`), the
@@ -33,9 +35,10 @@ public struct AccountStore: Sendable {
 
     private var ownerFile: URL { root.appendingPathComponent("local/account-owner") }
 
-    init(root: URL, temporary: URL, forgetStores: @escaping @Sendable () -> Void = {}) {
+    init(root: URL, temporary: URL, marksFloor: MarkFloor = MarkFloor(), forgetStores: @escaping @Sendable () -> Void = {}) {
         self.root = root
         self.temporary = temporary
+        self.marksFloor = marksFloor
         self.forgetStores = forgetStores
     }
 
@@ -108,7 +111,7 @@ public struct AccountStore: Sendable {
     private func wipe(keepingJoinChecks: Bool) {
         let files = FileManager.default
         // Under the marks' lock, so a raise from before the sign-out can't write them back after.
-        RollbackMarkStore(folder: root.appendingPathComponent("local/marks", isDirectory: true)).deleteAll()
+        RollbackMarkStore(folder: root.appendingPathComponent("local/marks", isDirectory: true), floor: marksFloor).deleteAll()
         for name in Self.accountFiles {
             let url = root.appendingPathComponent(name)
             if keepingJoinChecks && name == "local/groups" {
@@ -135,7 +138,7 @@ public struct AccountStore: Sendable {
     public static var shared: AccountStore {
         let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedKeychain.accessGroup)
             ?? FileManager.default.temporaryDirectory.appendingPathComponent("group", isDirectory: true)
-        return AccountStore(root: group, temporary: FileManager.default.temporaryDirectory) {
+        return AccountStore(root: group, temporary: FileManager.default.temporaryDirectory, marksFloor: .process) {
             Offline.forgetAll()
             Places.forget()
             // Emptied and vacuumed, so ids and sealed rows don't linger in free pages or the WAL.
