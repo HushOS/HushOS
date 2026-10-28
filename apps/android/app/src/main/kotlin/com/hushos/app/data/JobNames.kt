@@ -14,7 +14,7 @@ class JobNames(private val file: File, private val now: () -> Long = System::cur
 
     private fun write(json: JSONObject) {
         file.parentFile?.mkdirs()
-        val next = File(file.path + ".next")
+        val next = File(file.path + STAGED_SUFFIX)
         next.writeText(json.toString())
         if (!next.renameTo(file)) { file.writeText(json.toString()); next.delete() }
     }
@@ -44,6 +44,9 @@ class JobNames(private val file: File, private val now: () -> Long = System::cur
     companion object {
         private val LOCK = Any()
         const val FILE = "job-names.json"
+        private const val STAGED_SUFFIX = ".next"
+        /* Written beside and moved over: a write cut short leaves this, names and all, for the wipe to delete too. */
+        const val STAGED = FILE + STAGED_SUFFIX
 
         fun of(context: Context) = JobNames(File(context.filesDir, FILE))
     }
