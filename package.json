@@ -65,15 +65,15 @@
     "devDependencies": {
         "@hushos/billing": "workspace:*",
         "@hushos/config": "workspace:*",
-        "@playwright/test": "1.63.0",
+        "@playwright/test": "1.64.1",
         "@types/bun": "1.4.2",
         "fflate": "^0.8.2",
-        "oxfmt": "0.66.0",
-        "oxlint": "1.81.0",
-        "oxlint-tsgolint": "7.0.2001",
-        "turbo": "2.10.13",
+        "oxfmt": "0.75.0",
+        "oxlint": "1.90.0",
+        "oxlint-tsgolint": "7.0.2005",
+        "turbo": "2.11.10",
         "typescript": "7.0.2",
-        "vitest": "^5.0.0",
+        "vitest": "^5.0.5",
         "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
     },
     "engines": {

@@ -119,7 +119,7 @@ export function StorageFullDialog() {
                 purged += step.purged;
                 if (step.remaining === 0 || step.purged === 0) break;
             }
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: 'Trash emptied',
@@ -149,7 +149,7 @@ export function StorageFullDialog() {
                 purged += step.purged;
                 if (step.remaining === 0 || step.purged === 0) break;
             }
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: purged === 1 ? 'Earlier version removed' : 'Earlier versions removed',

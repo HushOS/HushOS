@@ -20,12 +20,12 @@
         "@hushos/drive": "workspace:*",
         "@hushos/env": "workspace:*",
         "@hushos/logging": "workspace:*",
-        "pg-boss": "^12.30.0"
+        "pg-boss": "^12.38.0"
     },
     "devDependencies": {
         "@hushos/config": "workspace:*",
         "@types/bun": "1.4.2",
         "typescript": "7.0.2",
-        "vitest": "^5.0.0"
+        "vitest": "^5.0.5"
     }
 }

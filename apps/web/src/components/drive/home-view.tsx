@@ -293,7 +293,7 @@ export function HomeView() {
             went = result.gone;
             // Everything picked is in the trash, itself or inside a folder that went.
             if (went.length === nodes.length) {
-                cue('droplet');
+                cue('close');
                 const id = toast.add({
                     type: 'success',
                     title:

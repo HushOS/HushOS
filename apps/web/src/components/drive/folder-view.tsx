@@ -369,7 +369,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         try {
             const root = (await queryClient.fetchQuery(folderQueryOptions(drive.rootId))).folder;
             const made = await saveCopy(queryClient, nodes, root, 'drive');
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 // The same words as the Shared page: no keys, just where it lands.
@@ -456,7 +456,7 @@ export function FolderView({ folderId }: { folderId: string }) {
             went = result.gone;
             // Everything picked is in the trash, itself or inside a folder that went.
             if (went.length === nodes.length) {
-                cue('droplet');
+                cue('close');
                 const id = toast.add({
                     type: 'success',
                     title:
@@ -662,7 +662,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         try {
             if (copy) {
                 moved = await copyInto(queryClient, nodes, destination);
-                cue('droplet');
+                cue('close');
                 toast.add({
                     type: 'success',
                     title:
@@ -679,7 +679,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                 moved++;
             }
             const origin = folder;
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title:
@@ -745,7 +745,7 @@ export function FolderView({ folderId }: { folderId: string }) {
             destination.parentId === null ? displayName(destination) : `“${destination.name}”`;
         try {
             await clientFor(node.workspaceId).move(node, destination);
-            cue('droplet');
+            cue('close');
             toast.add({ type: 'success', title: `“${node.name}” moved to ${where}` });
         } catch (error) {
             cue('error');

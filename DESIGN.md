@@ -390,7 +390,7 @@ Alpine is the system; Dither is its voice on the public face of HushOS. It is th
 
 ## Sound
 
-Sound confirms that something happened; nothing sounds for a hover, a press or a page load. Cues are synthesised on the device by Cuelume and played only through `cue()` in `apps/web/src/lib/sounds.ts`: `success` (saved, copied, shared), `error` (a recoverable error is shown), `ready` (email verified, recovery confirmed), `droplet` (something put away: removed, locked, stopped). Sound is off until the person turns on Interface sounds in the account menu (`localStorage` key `hushos-sounds`). The phones make no interface sounds.
+Sound confirms that something happened; nothing sounds for a hover, a press or a page load. Cues are synthesised on the device by Cuelume and played only through `cue()` in `apps/web/src/lib/sounds.ts`: `success` (saved, copied, shared), `error` (a recoverable error is shown), `ready` (email verified, recovery confirmed), `close` (something put away: removed, locked, stopped). Sound is off until the person turns on Interface sounds in the account menu (`localStorage` key `hushos-sounds`). The phones make no interface sounds.
 
 ## Content
 

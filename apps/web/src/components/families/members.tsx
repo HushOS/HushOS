@@ -608,7 +608,7 @@ export function InvitationList({
         setBusy(invitation.id);
         try {
             await groupsApi.revokeInvitation(groupId, invitation.id);
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: invitation.email
