@@ -15,6 +15,7 @@ const stores = vi.hoisted(() => ({
     stash: vi.fn(),
     mirror: vi.fn(),
     groups: vi.fn(),
+    guard: vi.fn(),
 }));
 /* What the open app holds in memory, and the auth client with a real store to lock. */
 const memory = vi.hoisted(() => ({
@@ -40,6 +41,7 @@ vi.mock('@/lib/drive', () => ({
 vi.mock('@/lib/thumbnails', () => ({ forgetThumbnails: memory.thumbnails }));
 vi.mock('@/lib/previews', () => ({ forgetPreviews: memory.previews }));
 vi.mock('@/lib/groups/store', () => ({ deleteGroupDevice: stores.groups }));
+vi.mock('@/lib/contact-guard', () => ({ deleteContactGuard: stores.guard }));
 vi.mock('@/lib/auth-client', () => ({ authClient: auth }));
 vi.mock('@/lib/return-to', () => ({ forgetReturn: vi.fn() }));
 vi.mock('@/lib/session', () => ({ forgetSession }));
@@ -63,6 +65,7 @@ beforeEach(() => {
     stores.stash.mockResolvedValue(undefined);
     stores.mirror.mockResolvedValue(undefined);
     stores.groups.mockResolvedValue(undefined);
+    stores.guard.mockResolvedValue(undefined);
     auth.store = createStore(() => ({ unlockedUserId: 'maya' as string | null }));
     // Logging out locks this device at once, as the auth client does, then asks the server.
     auth.logout.mockImplementation(async () => auth.store.setState({ unlockedUserId: null }));
@@ -76,6 +79,7 @@ describe('clearing a removed browser', () => {
         expect(stores.stash).toHaveBeenCalledOnce();
         expect(stores.mirror).toHaveBeenCalledOnce();
         expect(stores.groups).toHaveBeenCalledOnce();
+        expect(stores.guard).toHaveBeenCalledOnce();
     });
 
     test.each([
@@ -83,6 +87,7 @@ describe('clearing a removed browser', () => {
         ['the sealed stash', 'stash'],
         ['the mirror', 'mirror'],
         ['the families and their folders’ mirrors', 'groups'],
+        ['the contact guard', 'guard'],
     ] as const)(
         'rejects when %s did not clear, so the removal is not acknowledged',
         async (_label, store) => {

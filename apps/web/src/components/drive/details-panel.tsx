@@ -7,7 +7,9 @@ import { CopyValue } from '@/components/copy-value';
 import { AccessCell, useAccessIndex } from '@/components/drive/access';
 import {
     SavedFromLinkLine,
+    SeenBy,
     UnverifiedMark,
+    useSeenBy,
     useSignerNames,
 } from '@/components/drive/unverified-mark';
 import { useFamilyArea } from '@/components/drive/family-area';
@@ -365,6 +367,8 @@ export function ItemDetails({
     const version = node.kind === 'file' ? node.currentVersion : null;
     const size = contentSize(node);
     const unverified = integrityIssues(node);
+    // Written by someone this person's devices first saw and nobody checked: no mark, just so.
+    const seenBy = useSeenBy(node);
     // A re-keyed item names both people: who wrote it and who locked it again.
     const rekeyed = rekeyedLines(node, names);
     const dropped = droppedLines(node, names);
@@ -422,6 +426,11 @@ export function ItemDetails({
                             <ChangedBy issue={unverified[0]!} />
                             <UnverifiedMark node={node} />
                         </span>
+                    </Fact>
+                )}
+                {seenBy && !rekeyed.writtenBy && (
+                    <Fact label="Added by">
+                        <SeenBy seen={seenBy} />
                     </Fact>
                 )}
                 {rekeyed.writtenBy && unverified.length === 0 && (

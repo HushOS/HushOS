@@ -5,14 +5,7 @@ import { cn } from 'cn';
 import { useId, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import {
-    Dialog,
-    DialogContent,
-    DialogDescription,
-    DialogFooter,
-    DialogHeader,
-    DialogTitle,
-} from '@/components/ui/dialog';
+import { DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { PasswordInput } from '@/components/password-input';
 import { toast } from '@/components/ui/toast';
 import { driveClient, driveError, driveKeys, formatDay } from '@/lib/drive';
@@ -21,7 +14,8 @@ import { LINK_PASSWORD_MIN_LENGTH } from '@hushos/drive/protocol';
 
 /*
  * A link anyone can open, as its owner sees it: one line saying how it stands,
- * and a small dialog for its password and end date. The link's address never
+ * and a step for its password and end date, shown in the share sheet's own
+ * place (share-dialog.tsx). The link's address never
  * changes when these do. The URL is rebuilt on this device from the sealed copy
  * the server holds but cannot open.
  */
@@ -57,37 +51,7 @@ export function describeLink(link: LinkView) {
  * device by whoever opens it; it never reaches the server. The end date keeps what
  * it was unless another is chosen.
  */
-export function LinkOptionsDialog({
-    node,
-    link,
-    open,
-    onOpenChange,
-    onChanged,
-    onTurnOff,
-}: {
-    node: DriveNode;
-    link: LinkView;
-    open: boolean;
-    onOpenChange: (open: boolean) => void;
-    onChanged: () => Promise<unknown>;
-    onTurnOff: () => void;
-}) {
-    return (
-        <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="sm:max-w-[460px]">
-                <LinkOptionsForm
-                    node={node}
-                    link={link}
-                    onDone={() => onOpenChange(false)}
-                    onChanged={onChanged}
-                    onTurnOff={onTurnOff}
-                />
-            </DialogContent>
-        </Dialog>
-    );
-}
-
-function LinkOptionsForm({
+export function LinkOptionsForm({
     node,
     link,
     onDone,

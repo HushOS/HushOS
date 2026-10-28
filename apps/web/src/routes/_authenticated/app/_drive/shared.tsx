@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { cn } from 'cn';
 import { useEffect, useState, type ReactNode } from 'react';
+import { useContactFlow } from '@/components/drive/contact-flow';
 import { useDrive } from '@/components/drive/drive-shell';
 import { EmptyState, RowMenuButton, SkeletonRows } from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
@@ -47,6 +48,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/toast';
+import { accountChangeOf, GUARD_UNREADABLE, useAccountChanges } from '@/lib/contacts';
 import {
     driveClient,
     driveError,
@@ -60,6 +62,7 @@ import {
     sharedQueryOptions,
 } from '@/lib/drive';
 import { downloadNodes } from '@/lib/downloads';
+import { afterTrustChanged } from '@/lib/integrity';
 import { rotateAfterRevoke } from '@/lib/rotation';
 import { saveCopy } from '@/lib/save-copy';
 import { cue } from '@/lib/sounds';
@@ -255,6 +258,11 @@ function WithMe() {
 }
 
 /* Thumbnail, name, from whom, when, size, menu: the columns drop away as the window narrows. */
+// A link button inside a line of text keeps the line's height; on a touch screen its hit area
+// reaches past the words instead.
+const INLINE_LINK =
+    'relative h-auto align-baseline text-[13px] font-semibold pointer-coarse:h-auto pointer-coarse:after:absolute pointer-coarse:after:-inset-3';
+
 const WITH_ME =
     'grid grid-cols-[2.5rem_minmax(0,1fr)_3.5rem] items-center gap-x-4 pr-3 pl-5 sm:grid-cols-[2.5rem_minmax(0,1fr)_8rem_4rem] sm:pr-5 sm:pl-8 md:grid-cols-[2.5rem_minmax(0,1fr)_minmax(0,16rem)_8rem_4rem] lg:grid-cols-[2.5rem_minmax(0,1fr)_minmax(0,16rem)_8rem_6rem_4rem]';
 
@@ -269,36 +277,144 @@ function WithMeRow({
     onSave: (node: DriveNode) => void;
     onReport: (node: DriveNode) => void;
 }) {
+    const { userId } = useDrive();
+    const queryClient = useQueryClient();
+    useAccountChanges();
+    const openFlow = useContactFlow();
+    const [opening, setOpening] = useState(false);
     const from = firstName(share.granter.name);
     const role = share.role === 'editor' ? 'can edit' : 'can view';
-    if (share.error)
+    // Who shared it and when are known without opening it. Its size is not: the exact size is
+    // sealed inside it, and the stored size is padded (to 256 bytes at the least), so a file not
+    // opened yet leaves the cell empty rather than show a size it isn't. A folder has none.
+    const size =
+        share.node.kind === 'folder' ? null : share.error ? undefined : nodeSize(share.node);
+    const facts = (
+        <>
+            <span className="flex min-w-0 items-center gap-2 text-[13px] max-md:hidden">
+                <PersonAvatar name={share.granter.name} seed={share.granter.id} size={24} />
+                <span className="truncate" title={share.granter.email}>
+                    From {from} · {role}
+                </span>
+            </span>
+            <span className="text-[13px] text-muted-foreground tabular-nums max-sm:hidden">
+                {formatWhen(share.createdAt)}
+            </span>
+            <span
+                data-size
+                className="text-right text-[13px] text-muted-foreground tabular-nums max-lg:hidden"
+            >
+                {size === null ? '–' : size === undefined ? '' : formatBytes(size)}
+            </span>
+        </>
+    );
+
+    /* The person opening this share: someone removed is added back, a succession followed, then it opens. */
+    async function openIt() {
+        setOpening(true);
+        try {
+            await driveClient.openShare(share.id);
+            // What they wrote now reads as theirs, and the rest of what they shared opens too.
+            afterTrustChanged(queryClient);
+            await queryClient.invalidateQueries({ queryKey: driveKeys.shared });
+        } catch (cause) {
+            // A change found on the way is said on the row itself (the notice), not as an error.
+            await queryClient.invalidateQueries({ queryKey: driveKeys.shared });
+            if (!accountChangeOf(userId, share.granter.id)) {
+                cue('error');
+                toast.add({
+                    type: 'error',
+                    title: 'Couldn’t open this',
+                    description: driveError(cause),
+                });
+            }
+        } finally {
+            setOpening(false);
+        }
+    }
+
+    if (share.error) {
+        // Waiting on the person, said calmly (6.4): an account that changed, one to open (which
+        // adds or follows them), a check that couldn't run, or someone who can't be added yet.
+        // Anything else couldn't open.
+        const change = accountChangeOf(userId, share.granter.id);
+        const unchecked = share.error === GUARD_UNREADABLE;
+        const waiting = !change && share.waiting;
+        const calm = change !== null || unchecked || share.unverified || waiting;
         return (
             <li
                 data-shared={share.node.name}
-                className="flex h-16 items-center gap-4 border-b border-rule pr-5 pl-5 sm:pr-8 sm:pl-8"
+                data-waiting={
+                    change ? 'changed' : unchecked ? 'unchecked' : waiting ? 'open' : undefined
+                }
+                className={cn(WITH_ME, 'min-h-16 border-b border-rule py-2')}
             >
-                <span
-                    className={cn(
-                        'flex size-10 shrink-0 items-center justify-center rounded-full',
-                        share.unverified
-                            ? 'bg-muted text-muted-foreground'
-                            : 'bg-destructive-soft text-destructive',
-                    )}
-                >
-                    <TriangleAlertIcon className="size-[18px]" aria-hidden="true" />
-                </span>
+                {waiting ? (
+                    <span className="flex size-10 items-center justify-center">
+                        <FileMark node={share.node} size="list" />
+                    </span>
+                ) : (
+                    <span
+                        className={cn(
+                            'flex size-10 shrink-0 items-center justify-center rounded-full',
+                            calm
+                                ? 'bg-muted text-muted-foreground'
+                                : 'bg-destructive-soft text-destructive',
+                        )}
+                    >
+                        <TriangleAlertIcon className="size-[18px]" aria-hidden="true" />
+                    </span>
+                )}
                 <span className="flex min-w-0 flex-col">
                     <span className="truncate text-[15px] font-medium">
-                        Shared by {share.granter.name}
+                        {share.node.kind === 'folder' ? 'Shared folder' : 'Shared file'}
                     </span>
-                    {share.unverified ? (
+                    {change ? (
                         <span className="text-[13px] text-muted-foreground">
-                            Opens once you’ve checked {from}’s words.{' '}
+                            {from}’s account changed. Review to open this.{' '}
+                            <Button
+                                variant="link"
+                                className={INLINE_LINK}
+                                onClick={() => openFlow({ kind: 'changed', change })}
+                            >
+                                Review
+                            </Button>
+                        </span>
+                    ) : waiting ? (
+                        <span className="text-[13px] text-muted-foreground">
+                            {share.error}{' '}
+                            <Button
+                                variant="link"
+                                className={INLINE_LINK}
+                                disabled={opening}
+                                onClick={() => void openIt()}
+                            >
+                                Open
+                            </Button>
+                        </span>
+                    ) : unchecked ? (
+                        <span className="text-[13px] text-muted-foreground">
+                            {GUARD_UNREADABLE}{' '}
+                            <Button
+                                variant="link"
+                                className={INLINE_LINK}
+                                onClick={() =>
+                                    void queryClient.invalidateQueries({
+                                        queryKey: driveKeys.shared,
+                                    })
+                                }
+                            >
+                                Try again
+                            </Button>
+                        </span>
+                    ) : share.unverified ? (
+                        <span className="text-[13px] text-muted-foreground">
+                            {share.error}{' '}
                             <Link
                                 to="/app/contacts"
                                 className="font-semibold underline underline-offset-2"
                             >
-                                Add {from} in Contacts
+                                Go to Contacts
                             </Link>
                         </span>
                     ) : (
@@ -313,8 +429,11 @@ function WithMeRow({
                         </span>
                     )}
                 </span>
+                {facts}
+                <span />
             </li>
         );
+    }
     return (
         <li
             data-shared={share.node.name}
@@ -332,18 +451,7 @@ function WithMeRow({
                     From {from} · {role}
                 </span>
             </span>
-            <span className="flex min-w-0 items-center gap-2 text-[13px] max-md:hidden">
-                <PersonAvatar name={share.granter.name} seed={share.granter.id} size={24} />
-                <span className="truncate" title={share.granter.email}>
-                    From {from} · {role}
-                </span>
-            </span>
-            <span className="text-[13px] text-muted-foreground tabular-nums max-sm:hidden">
-                {formatWhen(share.createdAt)}
-            </span>
-            <span className="text-right text-[13px] text-muted-foreground tabular-nums max-lg:hidden">
-                {share.node.kind === 'folder' ? '–' : formatBytes(nodeSize(share.node))}
-            </span>
+            {facts}
             <span className="flex justify-end">
                 <DropdownMenu>
                     <DropdownMenuTrigger

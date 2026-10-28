@@ -3,8 +3,9 @@ import { newContext, operatorRole, registerAccount } from './helpers';
 
 /*
  * Contacts and the management area, driven as two people: one publishes an
- * identity and reads their own twelve words, the other looks them up, sees the
- * same words, pins it, and finds the pin on a reload. Then one of them is
+ * identity and reads their own twelve words, the other adds them by email with
+ * no words, checks it's them later and sees the same words, and finds the pin
+ * on a reload. Then one of them is
  * made an operator from the command line and reaches the overview; the other
  * is turned away.
  */
@@ -59,56 +60,64 @@ test('everyone sees their own twelve words, and the code they come from', async 
     await bob.keyboard.press('Escape');
 });
 
-test('a lookup shows the other person’s fingerprint, and a pin survives a reload', async () => {
+test('adding someone takes no words, checking them later shows theirs, and a pin survives a reload', async () => {
     await alice.goto('/app/contacts');
     await expect(alice.getByText('Nobody here yet')).toBeVisible({ timeout: 60_000 });
     const sheet = alice.locator('[data-slot=dialog-content]');
     await alice.getByRole('button', { name: 'Add someone' }).click();
     await sheet.getByLabel('Email').fill('nobody-here@hushos.local');
-    await sheet.getByRole('button', { name: 'Look up' }).click();
+    await sheet.getByRole('button', { name: 'Add', exact: true }).click();
     await expect(sheet.getByRole('alert')).toContainText(/No HushOS account/);
 
+    // Added at once: no words, no second step.
     await sheet.getByLabel('Email').fill(bobEmail);
-    await sheet.getByRole('button', { name: 'Look up' }).click();
-    await expect(sheet.locator('[data-fingerprint-words]')).toHaveAttribute(
-        'data-fingerprint-words',
-        bobWords,
-    );
-    await sheet.getByRole('button', { name: 'Show as code' }).click();
-    await expect(sheet.locator('[data-fingerprint]')).toHaveText(bobFingerprint);
-    await expect(sheet.locator('[data-keys]')).toHaveAttribute('data-keys', 'signed');
-    await sheet.getByRole('button', { name: 'They match' }).click();
-    await expect(alice.getByText(/added$/)).toBeVisible();
+    await sheet.getByRole('button', { name: 'Add', exact: true }).click();
+    await expect(sheet).toHaveCount(0, { timeout: 60_000 });
+    await expect(alice.getByText(/ added$/)).toBeVisible();
     const row = alice.locator(`[data-contact="${bobEmail}"]`);
-    await expect(row).toBeVisible();
-    // The key pinned is the one checked, and it can be checked again later. That opens on the
-    // words, not the email form; only a lookup that fails brings the form back, still holding
-    // the address, so it can be corrected.
+    await expect(row).toHaveAttribute('data-standing', 'seen', { timeout: 60_000 });
+    await expect(row).toContainText('Not verified');
+
+    // Checking it's him, any time later, shows the very words Bob reads from his own device.
+    // That opens on the words, never on an email form; a lookup that fails says so.
     const lookup = '**/api/auth/contacts/lookup';
     await alice.route(lookup, (route) =>
         route.continue({ postData: JSON.stringify({ email: 'nobody-here@hushos.local' }) }),
     );
     await row.getByRole('button', { name: /^More for/ }).click();
-    await alice.getByRole('menuitem', { name: 'Check it’s them' }).click();
-    await expect(sheet.getByRole('alert')).toContainText(/No HushOS account/);
-    await expect(sheet.getByLabel('Email')).toHaveValue(bobEmail);
+    await alice.getByRole('menuitem', { name: /^Check it’s / }).click();
+    const check = sheet.filter({ hasText: /^Check it’s / });
+    await expect(check.getByRole('alert')).toContainText(/No HushOS account/, { timeout: 60_000 });
+    await expect(check.getByRole('textbox')).toHaveCount(0);
     await alice.unroute(lookup);
-    await sheet.getByRole('button', { name: 'Look up' }).click();
-    await expect(sheet.locator('[data-fingerprint-words]')).toHaveAttribute(
+    await check.getByRole('button', { name: 'Try again' }).click();
+    await expect(check.locator('[data-fingerprint-words]')).toHaveAttribute(
         'data-fingerprint-words',
         bobWords,
+        { timeout: 60_000 },
     );
-    await alice.keyboard.press('Escape');
+    // The code they come from is under Technical details, for an app that still shows it.
+    await check.getByText('Technical details').click();
+    await expect(check.locator('[data-fingerprint]')).toHaveText(bobFingerprint);
+    await check.getByRole('button', { name: 'They match' }).click();
+    await expect(check).toHaveCount(0);
+    await expect(row).toHaveAttribute('data-standing', 'verified', { timeout: 60_000 });
+    await expect(row).toContainText('Verified');
 
-    // Pins live on the server under the identity key, so a fresh load has them.
+    // Pins live on the server under the settings key, so a fresh load has them.
     await alice.reload();
-    await expect(alice.locator(`[data-contact="${bobEmail}"]`)).toBeVisible({ timeout: 60_000 });
-    // Looking the same person up again is a no-op, not a second pin.
+    await expect(alice.locator(`[data-contact="${bobEmail}"]`)).toHaveAttribute(
+        'data-standing',
+        'verified',
+        { timeout: 60_000 },
+    );
+    // Adding the same person again is said so, not a second pin.
     await alice.getByRole('button', { name: 'Add someone' }).click();
     await sheet.getByLabel('Email').fill(bobEmail);
-    await sheet.getByRole('button', { name: 'Look up' }).click();
-    await expect(sheet.getByRole('button', { name: 'Already in your contacts' })).toBeVisible();
-    await expect(sheet.getByRole('button', { name: 'They match' })).toHaveCount(0);
+    await sheet.getByRole('button', { name: 'Add', exact: true }).click();
+    await expect(sheet.getByText(/is already in your contacts\.$/)).toBeVisible({
+        timeout: 60_000,
+    });
     await alice.keyboard.press('Escape');
 
     await alice
@@ -116,6 +125,9 @@ test('a lookup shows the other person’s fingerprint, and a pin survives a relo
         .getByRole('button', { name: /^More for/ })
         .click();
     await alice.getByRole('menuitem', { name: 'Remove' }).click();
+    await expect(alice.getByRole('alertdialog')).toContainText(
+        'keeps access to anything you’ve already shared.',
+    );
     await alice.getByRole('alertdialog').getByRole('button', { name: 'Remove' }).click();
     await expect(alice.getByText('Nobody here yet')).toBeVisible();
 });

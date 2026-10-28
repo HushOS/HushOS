@@ -1,4 +1,3 @@
-import { encryptKey, decryptKey } from './aead';
 import { OLDER_CHAIN, type AreaLedger } from './area-ledger';
 import {
     FAMILY_FORGOTTEN,
@@ -9,6 +8,12 @@ import {
 } from './protocol';
 import { areaKeyCommitment } from './area-keys';
 import { encodeStatement, sameBytes, uuid } from './canonical';
+import {
+    DEVICE_STORE_VERSION,
+    deriveStoreKey,
+    openStoreBytes,
+    sealStoreBytes,
+} from './device-store';
 import type { ContactPin } from './contacts';
 import {
     contactPinOf,
@@ -1052,23 +1057,11 @@ export type GroupHost = {
  */
 const STORE_INFO = 'hushos/group/device-store/v1';
 const STORE_DOMAIN = 'hushos/group/device-store';
-const STORE_VERSION = 1;
+const STORE_VERSION = DEVICE_STORE_VERSION;
 type Store = DeviceStore | 'chains' | 'staged' | 'joins' | 'holds';
 
-async function storeKey(root: Uint8Array<ArrayBuffer>) {
-    const material = await crypto.subtle.importKey('raw', root, 'HKDF', false, ['deriveBits']);
-    return new Uint8Array(
-        await crypto.subtle.deriveBits(
-            {
-                name: 'HKDF',
-                hash: 'SHA-256',
-                salt: new Uint8Array(32),
-                info: new TextEncoder().encode(STORE_INFO),
-            },
-            material,
-            256,
-        ),
-    );
+function storeKey(root: Uint8Array<ArrayBuffer>) {
+    return deriveStoreKey(root, STORE_INFO);
 }
 function storeContext(userId: string, groupId: string, store: Store) {
     return encodeStatement([
@@ -1089,18 +1082,7 @@ async function sealDeviceBytes(
 ) {
     const key = await storeKey(root);
     try {
-        const nonce = crypto.getRandomValues(new Uint8Array(24));
-        const sealed = await encryptKey(
-            plaintext,
-            key,
-            nonce,
-            storeContext(userId, groupId, store),
-        );
-        const out = new Uint8Array(1 + nonce.length + sealed.length);
-        out[0] = STORE_VERSION;
-        out.set(nonce, 1);
-        out.set(sealed, 1 + nonce.length);
-        return encode(out);
+        return await sealStoreBytes(key, storeContext(userId, groupId, store), plaintext);
     } finally {
         key.fill(0);
     }
@@ -1115,23 +1097,10 @@ async function openDeviceBytes(
 ) {
     const refused = () =>
         new CryptoError('This saved family record could not be opened on this account.');
-    let bytes: Uint8Array;
-    try {
-        bytes = decode(envelope);
-    } catch {
-        throw refused();
-    }
-    if (bytes.length < 1 + 24 + 16 || bytes[0] !== STORE_VERSION) throw refused();
+    const context = storeContext(userId, groupId, store);
     const key = await storeKey(root);
     try {
-        return await decryptKey(
-            bytes.subarray(25),
-            key,
-            bytes.subarray(1, 25),
-            storeContext(userId, groupId, store),
-        );
-    } catch {
-        throw refused();
+        return await openStoreBytes(key, context, envelope, refused);
     } finally {
         key.fill(0);
     }

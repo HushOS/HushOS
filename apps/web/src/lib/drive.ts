@@ -20,6 +20,7 @@ import {
     trustedSigners,
     trustGrantee,
     trustGranter,
+    onGuardMovedElsewhere,
 } from '@/lib/contacts';
 import { driveApi, linkApi, reportApi } from '@/lib/drive-api';
 import { keyChangeWords } from '@/lib/key-change-words';
@@ -53,6 +54,8 @@ export const driveClient = createDriveClient(authClient.rpc, driveApi, {
     reportApi,
     ledger: sharingLedger(() => authClient.store.getState().unlockedUserId),
 });
+// Another tab continued, checked or added someone: the catalogue's verdicts are judged again.
+onGuardMovedElsewhere(() => void driveClient.recheckIntegrity().catch(() => {}));
 
 /*
  * Family folders each have a Drive client of their own (lib/spaces.ts, loaded

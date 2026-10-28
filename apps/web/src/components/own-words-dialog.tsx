@@ -13,8 +13,8 @@ import { useAuthView } from '@/lib/auth-view';
 import { ownFingerprintQueryOptions } from '@/lib/contacts';
 
 /*
- * What others check when they add this person: their twelve words, read aloud
- * from here. A dialog rather than a section of People, so it is one click away
+ * What others compare when they check it's this person: their twelve words,
+ * read aloud from here. A dialog rather than a section of People, so it is one click away
  * however many people are listed, and from the account menu or the command
  * palette on any page while someone waits on a call.
  *
@@ -48,8 +48,8 @@ export function OwnWordsDialog({
                 <DialogHeader>
                     <DialogTitle>Your twelve words</DialogTitle>
                     <DialogDescription>
-                        When someone adds you, they’ll ask you to read these. They’re the same on
-                        all your devices.
+                        When someone checks it’s you, read these to them. They’re the same on all
+                        your devices.
                     </DialogDescription>
                 </DialogHeader>
                 <div className="min-h-36">

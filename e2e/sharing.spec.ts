@@ -15,11 +15,12 @@ import {
 } from './helpers';
 
 /*
- * Sharing to an account, end to end as two people: the owner pins the other
- * person's fingerprint, shares a folder with a file in it, the other person
- * sees it under "Shared with me" waiting until they pin the owner's key after
- * comparing words too (never on first use), opens the folder, previews the file, adds one of their own as an editor, and loses
- * everything the moment the owner stops sharing.
+ * Sharing to an account, end to end as two people: the owner adds the other
+ * person by email (no words: their keys are pinned on first use), shares a
+ * folder with a file in it, the other person opens it from "Shared with me" at
+ * once (the owner's keys pinned on first open), previews the file, adds one of
+ * their own as an editor, and loses everything the moment the owner stops
+ * sharing.
  */
 
 test.describe.configure({ mode: 'serial' });
@@ -49,18 +50,10 @@ test.afterAll(async () => {
     await guest.context().close();
 });
 
-test('the owner pins the guest and shares a folder as editor', async () => {
+test('the owner adds the guest without words and shares a folder as editor', async () => {
     await owner.goto('/app/contacts');
-    await owner.getByRole('button', { name: 'Add someone' }).click();
-    await dialog(owner).getByLabel('Email').fill(guestEmail);
-    await dialog(owner).getByRole('button', { name: 'Look up' }).click();
-    await expect(dialog(owner).locator('[data-fingerprint-words]')).toBeVisible({
-        timeout: 60_000,
-    });
-    // The guest's post-quantum key is served with a binding their identity signed.
-    await expect(dialog(owner).locator('[data-keys]')).toHaveAttribute('data-keys', 'signed');
-    await dialog(owner).getByRole('button', { name: 'They match' }).click();
-    await expect(owner.locator(`[data-contact="${guestEmail}"]`)).toBeVisible();
+    await addContact(owner, guestEmail);
+    await expect(owner.locator(`[data-contact="${guestEmail}"]`)).toContainText('Not verified');
 
     await owner.goto('/app/drive');
     await newFolder(owner);
@@ -95,21 +88,20 @@ test('the owner pins the guest and shares a folder as editor', async () => {
         .toContain('E2E Tester shared something with you · HushOS');
 });
 
-test('the guest’s share stays shut until they check the owner’s words, then opens, and they add a file', async () => {
+test('the guest opens the share, which adds the owner as it is listed, and they add a file', async () => {
     await guest.goto('/app/shared');
-    // Not pinned yet: nothing is trusted on first use, so the share waits, named only as the server knows it.
-    const waiting = guest.locator('[data-shared="Shared folder"]');
-    await expect(waiting).toBeVisible({ timeout: 60_000 });
-    await expect(waiting).toContainText('Opens once you’ve checked E2E’s words.');
-    await guest.goto('/app/contacts');
-    await expect(guest.locator('[data-contact]')).toHaveCount(0, { timeout: 60_000 });
-    await addContact(guest, ownerEmail);
-    await expect(guest.locator('[data-contact]')).toHaveCount(1);
-
-    await guest.goto('/app/shared');
+    // Never added: listing it adds the owner, first-seen, and it opens with nothing more said.
+    await expect(guest.locator('[data-waiting]')).toHaveCount(0);
     const item = guest.locator('[data-shared="Project"]');
     await expect(item).toBeVisible({ timeout: 60_000 });
     await expect(item).toContainText('From E2E · can edit');
+    await guest.goto('/app/contacts');
+    await expect(guest.locator(`[data-contact="${ownerEmail}"]`)).toHaveAttribute(
+        'data-standing',
+        'seen',
+        { timeout: 60_000 },
+    );
+    await guest.goto('/app/shared');
     await guest.locator('[data-shared="Project"]').getByRole('link', { name: 'Project' }).click();
     await expect(guest).toHaveURL(/\/app\/drive\/f\//);
     await expect(row(guest, 'notes.md')).toBeVisible({ timeout: 60_000 });

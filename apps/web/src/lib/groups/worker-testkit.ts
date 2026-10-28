@@ -83,14 +83,20 @@ export async function account(userId: string) {
         };
         // An empty document stored once, so every read opens one in the worker.
         if (!stored.envelope) await settings.write(stored.version, { version: 2, contacts: {} });
-        /* A lock and an unlock in the same page: the worker forgets every key and family, then opens again. */
-        const lock = async () => {
-            session.reset();
+        /* Unlocking again after `locked`: the account key, the identity and the settings key. */
+        const unlock = async () => {
             await call('restore', { deviceKey, bundle });
             await call('identityOpen', { userId, identity, history: [] });
             await call('settingsKeyOpen', { userId, settingsKey: stored.key! });
         };
-        return { call, settings, lock };
+        /* A lock and an unlock in the same page: the worker forgets every key and family, then opens again. */
+        const lock = async () => {
+            session.reset();
+            await unlock();
+        };
+        /* A lock alone: the worker holds no key until `unlock`. */
+        const locked = () => session.reset();
+        return { call, settings, lock, locked, unlock };
     };
     return { userId, identity, served: publicIdentity(identity), stored, device };
 }

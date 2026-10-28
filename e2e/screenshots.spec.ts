@@ -450,7 +450,7 @@ async function wideShots(p: Page, suffix: string, scale: Scale) {
         const before = await links.count();
         await links.first().getByRole('button', { name: 'More for this link' }).click();
         await p.getByRole('menuitem', { name: 'Turn off link' }).click();
-        await p.getByRole('alertdialog').getByRole('button', { name: 'Turn off link' }).click();
+        await dialog(p).getByRole('button', { name: 'Turn off link' }).click();
         await expect(links).toHaveCount(before - 1, { timeout: 30_000 });
     }
     await dialog(p).getByRole('button', { name: 'New link' }).click();
