@@ -1,0 +1,27 @@
+apps/web/src/lib/contact-guard.ts
+  s_566b8e0c4467a4::t_196df1b5767cda 78-81,234-239,241,248,366,380,406-407,518-630
+apps/web/src/lib/contacts.ts
+  s_566b8e0c4467a4::t_d4faefbe1370cf 39,580-582,584,586-587
+apps/web/src/lib/device-data.ts
+  s_566b8e0c4467a4::t_927ea1e3941e43 64-66,148-150
+apps/web/src/lib/family-guard.test.ts
+  s_566b8e0c4467a4::t_cc5eac32aaa037 5-12,17-18,62-65,70-100
+apps/web/src/lib/groups/join.test.ts
+  s_566b8e0c4467a4::t_65f73bff88a348 7,185
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3656e2c989d83ec402aa867abcf42767f2e4e765",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
