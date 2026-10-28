@@ -282,7 +282,7 @@ describe('node attributes', () => {
             ).rejects.toThrow('could not be opened');
     });
 
-    /* Refused alike by the core (drive.rs, `metadata_open_refuses_what_serde_or_the_web_would_read_twice`). */
+    /* Refused alike by the core (drive.rs, `metadata_open_refuses_what_the_twins_would_read_differently`). */
     const doubled = [
         '{"name":"P","attributes":{"colour":1,"colour":"blue"}}',
         '{"name":"P","attributes":{"colour":"red","colour":"blue"}}',
@@ -291,15 +291,22 @@ describe('node attributes', () => {
         '{"name":"a/b","name":"P"}',
         '{"name":"P","x":1,"x":2}',
         '{"name":"P","x":{"a":1,"a":2}}',
+        // A lone surrogate in any string, key or value, unknown fields included: the core cannot hold one.
+        '{"name":"P","x":{"\\ud800":1,"a":1,"a":2}}',
+        '{"name":"P","\\ud800":1}',
+        '{"name":"P","x":"\\ud800"}',
+        '{"name":"P","x":["\\udc00"]}',
     ];
     /* Equal keys in different objects, and quoted keys inside a value, are not doubles. */
     const single = [
         '{"name":"P","x":{"name":"y"},"attributes":{"name":"z"}}',
         '{"name":"P","x":[{"a":1},{"a":2}]}',
         '{"name":"P","attributes":{"a":"\\"b\\":1,\\"b\\"","b":"x"}}',
+        // A pair written as escapes is one character, in a name, a value or an unknown field.
+        '{"name":"P\\ud83d\\ude00","attributes":{"colour":"\\ud83d\\ude00"},"x":"\\ud83d\\ude00"}',
     ];
 
-    test('a key named twice anywhere is refused, not read as its last value', async () => {
+    test('a key named twice or a lone surrogate anywhere is refused; a pair written as escapes opens', async () => {
         const key = generateKey();
         for (const text of doubled)
             await expect(openMetadata(await sealedAs(text, key), key, ctx), text).rejects.toThrow(
@@ -309,7 +316,15 @@ describe('node attributes', () => {
             await expect(
                 openMetadata(await sealedAs(text, key), key, ctx),
                 text,
-            ).resolves.toMatchObject({ name: 'P' });
+            ).resolves.toMatchObject({ name: expect.stringMatching(/^P/) });
+        const paired = await openMetadata(await sealedAs(single.at(-1)!, key), key, ctx);
+        expect(paired).toEqual({
+            name: 'P\u{1F600}',
+            mime: null,
+            size: null,
+            modified: null,
+            attributes: { colour: '\u{1F600}' },
+        });
     });
 
     test('bytes that are not UTF-8, or start with a byte order mark, are refused as damage', async () => {

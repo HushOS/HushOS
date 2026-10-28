@@ -326,11 +326,18 @@ function strictText(bytes: Uint8Array) {
     return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
 }
 
+/* A lone surrogate: JSON.parse makes one from "\ud800", TextEncoder would not keep it, Rust refuses it. */
+const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
+
 /*
- * Whether JSON text JSON.parse already accepted names one key twice in any
- * object, escapes decoded ("colour" and "\u0063olour" are the same key).
+ * Whether JSON text JSON.parse already accepted reads differently in the core:
+ * an object names one key twice, escapes decoded ("colour" and "\u0063olour"
+ * are the same key), where JSON.parse keeps the last and serde refuses; or a
+ * string anywhere, key or value, unknown fields included, holds a lone
+ * surrogate ("\ud800"), which JSON.parse keeps and Rust cannot hold. A pair
+ * written as escapes is one character and reads alike in both.
  */
-export function hasDuplicateKey(text: string) {
+export function ambiguousJson(text: string) {
     // One entry per open object (its keys so far) or array (null).
     const open: (Set<string> | null)[] = [];
     let keyNext = false;
@@ -339,9 +346,13 @@ export function hasDuplicateKey(text: string) {
         if (c === '"') {
             let end = i + 1;
             while (text[end] !== '"') end += text[end] === '\\' ? 2 : 1;
+            // Every string, keys and values alike: the text has no raw lone surrogates
+            // (strictText refused them), so only an escape can make one.
+            const decoded = JSON.parse(text.slice(i, end + 1)) as string;
+            if (LONE_SURROGATE.test(decoded)) return true;
             const keys = open.at(-1);
             if (keys && keyNext) {
-                const key = JSON.parse(text.slice(i, end + 1)) as string;
+                const key = decoded;
                 if (keys.has(key)) return true;
                 keys.add(key);
                 keyNext = false;
@@ -361,8 +372,6 @@ export function hasDuplicateKey(text: string) {
     return false;
 }
 
-/* A lone surrogate: JSON.parse makes one from "\ud800", TextEncoder would not keep it, Rust refuses it. */
-const LONE_SURROGATE = /[\uD800-\uDFFF]/u;
 /*
  * A node's attributes as sealed: `undefined` is none, anything else must be a
  * plain object within the limits. Returns a fresh object with its keys sorted.
@@ -456,8 +465,8 @@ export async function openMetadata(
     try {
         const text = strictText(plaintext);
         parsed = JSON.parse(text);
-        // JSON.parse keeps the last of two equal keys; serde refuses them, and so does this.
-        if (hasDuplicateKey(text)) throw new CryptoError('Duplicate key.');
+        // What the core would read differently (a key named twice, a lone surrogate): refused alike.
+        if (ambiguousJson(text)) throw new CryptoError('Ambiguous JSON.');
     } catch {
         throw new CryptoError('This item could not be opened. It may be damaged.');
     }

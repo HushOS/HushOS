@@ -350,11 +350,14 @@ fn unique_attributes<'de, D: serde::Deserializer<'de>>(
 }
 
 /*
- * Whether JSON text names one key twice in any object, escapes decoded, as
- * `hasDuplicateKey` in drive.ts reads it. Only called on text that is JSON
- * (an unterminated string ends the scan as no duplicate; serde refuses it).
+ * Whether JSON text reads differently on the web, as `ambiguousJson` in
+ * drive.ts reads it: an object names one key twice, escapes decoded; or a
+ * string anywhere, key or value, unknown fields included, does not decode
+ * (a lone surrogate such as "\ud800", which serde may skip unread in an
+ * ignored value while JSON.parse keeps it). Text that is not JSON is refused
+ * too; serde refuses it before this runs.
  */
-fn has_duplicate_key(text: &str) -> bool {
+fn ambiguous_json(text: &str) -> bool {
     let bytes = text.as_bytes();
     // One entry per open object (its keys so far) or array (None).
     let mut open: Vec<Option<std::collections::HashSet<String>>> = Vec::new();
@@ -368,12 +371,13 @@ fn has_duplicate_key(text: &str) -> bool {
                     end += if bytes[end] == b'\\' { 2 } else { 1 };
                 }
                 if end >= bytes.len() {
-                    return false;
+                    return true;
                 }
+                // Every string, keys and values alike: one that does not decode is a refusal, never "no duplicate".
+                let Ok(decoded) = serde_json::from_str::<String>(&text[i..=end]) else { return true };
                 if key_next {
                     if let Some(Some(keys)) = open.last_mut() {
-                        let Ok(key) = serde_json::from_str::<String>(&text[i..=end]) else { return false };
-                        if !keys.insert(key) {
+                        if !keys.insert(decoded) {
                             return true;
                         }
                         key_next = false;
@@ -543,8 +547,8 @@ pub fn metadata_open(ctx: MetadataContext, node_key: Vec<u8>, envelope: Vec<u8>)
         String::from_utf8(plaintext).map_err(|_| CoreError::Sealed("Metadata is not UTF-8.".into()))?;
     let metadata: NodeMetadata = serde_json::from_str(text.trim_end())
         .map_err(|_| CoreError::Sealed("Metadata is not JSON.".into()))?;
-    // Any key named twice, an unknown one included: the web refuses the same text.
-    if has_duplicate_key(text.trim_end()) {
+    // Any key named twice or string that does not decode, unknown fields included: the web refuses the same text.
+    if ambiguous_json(text.trim_end()) {
         return Err(CoreError::Sealed("This item could not be opened. It may be damaged.".into()));
     }
     // Refused whole, never trimmed: a re-save would otherwise drop what it could not read.
@@ -1775,8 +1779,8 @@ mod tests {
         }
     }
 
-    /* The same cases as drive.test.ts ("a key named twice anywhere is refused"): refused alike. */
-    const DOUBLED: [&str; 7] = [
+    /* The same cases as drive.test.ts ("a key named twice or a lone surrogate anywhere is refused"): refused alike. */
+    const DOUBLED: [&str; 11] = [
         r#"{"name":"P","attributes":{"colour":1,"colour":"blue"}}"#,
         r#"{"name":"P","attributes":{"colour":"red","colour":"blue"}}"#,
         r#"{"name":"P","attributes":{"colour":"red","\u0063olour":"blue"}}"#,
@@ -1784,27 +1788,34 @@ mod tests {
         r#"{"name":"a/b","name":"P"}"#,
         r#"{"name":"P","x":1,"x":2}"#,
         r#"{"name":"P","x":{"a":1,"a":2}}"#,
+        // A lone surrogate in any string, key or value, unknown fields included: the core cannot hold one.
+        r#"{"name":"P","x":{"\ud800":1,"a":1,"a":2}}"#,
+        r#"{"name":"P","\ud800":1}"#,
+        r#"{"name":"P","x":"\ud800"}"#,
+        r#"{"name":"P","x":["\udc00"]}"#,
     ];
-    const SINGLE: [&str; 3] = [
+    const SINGLE: [&str; 4] = [
         r#"{"name":"P","x":{"name":"y"},"attributes":{"name":"z"}}"#,
         r#"{"name":"P","x":[{"a":1},{"a":2}]}"#,
         r#"{"name":"P","attributes":{"a":"\"b\":1,\"b\"","b":"x"}}"#,
+        // A pair written as escapes is one character, in a name, a value or an unknown field.
+        r#"{"name":"P\ud83d\ude00","attributes":{"colour":"\ud83d\ude00"},"x":"\ud83d\ude00"}"#,
     ];
 
     #[test]
-    fn metadata_open_refuses_what_serde_or_the_web_would_read_twice() {
+    fn metadata_open_refuses_what_the_twins_would_read_differently() {
         let key = random(32);
         for text in DOUBLED {
             let opened = metadata_open(metadata_ctx(), key.clone(), sealed_as(text, &key));
             assert!(matches!(opened, Err(CoreError::Sealed(_))), "{text}");
         }
         for text in SINGLE {
-            assert_eq!(
-                metadata_open(metadata_ctx(), key.clone(), sealed_as(text, &key)).unwrap().name,
-                "P",
-                "{text}"
-            );
+            let opened = metadata_open(metadata_ctx(), key.clone(), sealed_as(text, &key));
+            assert!(opened.is_ok_and(|m| m.name.starts_with('P')), "{text}");
         }
+        let paired = metadata_open(metadata_ctx(), key.clone(), sealed_as(SINGLE[3], &key)).unwrap();
+        assert_eq!(paired.name, "P\u{1F600}");
+        assert_eq!(paired.attributes, attributes_of(&[("colour", "\u{1F600}")]));
         // Each layer on its own: serde refuses a struct field named twice, and the attributes reader a key named twice.
         assert!(serde_json::from_str::<NodeMetadata>(r#"{"name":"a","name":"b"}"#).is_err());
         assert!(
@@ -1813,8 +1824,8 @@ mod tests {
         assert!(
             serde_json::from_str::<NodeMetadata>(r#"{"name":"P","attributes":{"c":"x","d":"y"}}"#).is_ok()
         );
-        assert!(has_duplicate_key(r#"{"a":{"b":1,"\u0062":2}}"#));
-        assert!(!has_duplicate_key(r#"{"a":"{\"b\":1,\"b\":2}"}"#));
+        assert!(ambiguous_json(r#"{"a":{"b":1,"\u0062":2}}"#));
+        assert!(!ambiguous_json(r#"{"a":"{\"b\":1,\"b\":2}"}"#));
     }
 
     #[test]
