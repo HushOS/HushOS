@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import type { GroupView } from '@hushos/crypto';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { FamilyMember } from '@/lib/families';
+import type * as Pending from '@/lib/family-pending';
 import type * as Copy from '@/lib/groups/copy';
 
 /*
@@ -32,14 +33,29 @@ const continueMembers = vi.fn(async (..._args: unknown[]) => {
     };
 });
 const toastAdd = vi.fn();
+/* This account's settings, as the settings query reads them. */
+let settingsDoc: Record<string, unknown> = { version: 2, contacts: {} };
+/* What clearing a waiting role saves: the same change, on the settings above. */
+const clearPendingRoles = vi.fn(
+    async (_queryClient: unknown, _userId: string, groupId: string, userIds: string[] | 'all') => {
+        const { withoutPendingRoles } =
+            await vi.importActual<typeof Pending>('@/lib/family-pending');
+        settingsDoc = withoutPendingRoles(settingsDoc as never, groupId, userIds) as never;
+        return true;
+    },
+);
+/* The family as a sync reads it now: Sam managing it, when another device gave the role. */
+let syncedView: GroupView | null = null;
 
 vi.mock('@/components/drive/contact-flow', () => ({
     ContactFlowDialog: ({
         start,
         onResolved,
+        onOpenChange,
     }: {
         start: { person: { name: string } } | null;
         onResolved?: () => void;
+        onOpenChange: (open: boolean) => void;
     }) =>
         start ? (
             <dialog open aria-label={`Their words: ${start.person.name}`}>
@@ -47,6 +63,8 @@ vi.mock('@/components/drive/contact-flow', () => ({
                     onClick={() => {
                         matched = true;
                         onResolved?.();
+                        // Done: the flow closes.
+                        onOpenChange(false);
                     }}
                 >
                     They match
@@ -54,13 +72,37 @@ vi.mock('@/components/drive/contact-flow', () => ({
             </dialog>
         ) : null,
 }));
-vi.mock('./family-check', () => ({
-    FamilyCheckDialog: ({ onCheckWords }: { onCheckWords: () => void }) => (
-        <dialog open aria-label="Family check">
-            <button onClick={onCheckWords}>Check Sam’s words</button>
-        </dialog>
-    ),
-}));
+vi.mock('./family-check', async () => {
+    const { useQueryClient } = await import('@tanstack/react-query');
+    return {
+        FamilyCheckDialog: ({
+            onCheckWords,
+            onChecked,
+            onClose,
+        }: {
+            onCheckWords: () => void;
+            onChecked?: (result: { verified: boolean }) => void;
+            onClose: () => void;
+        }) => {
+            const queryClient = useQueryClient();
+            return (
+                <dialog open aria-label="Family check">
+                    <button onClick={onCheckWords}>Check Sam’s words</button>
+                    <button
+                        onClick={() => {
+                            // The family check's They match: verified, and the page reads again.
+                            matched = true;
+                            onChecked?.({ verified: true });
+                            void queryClient.invalidateQueries().then(onClose);
+                        }}
+                    >
+                        Family words match
+                    </button>
+                </dialog>
+            );
+        },
+    };
+});
 vi.mock('./remove-dialog', () => ({ RemoveDialog: () => null }));
 vi.mock('./family-billing', () => ({ SeatHelp: () => null, SeatNote: () => null }));
 vi.mock('@/components/drive/file-list', () => ({
@@ -75,11 +117,13 @@ vi.mock('@/lib/contacts', () => ({
     guardRevision: () => 0,
     settingsQueryOptions: (userId: string) => ({
         queryKey: ['settings', userId],
-        queryFn: async () => ({ settings: { version: 2, contacts: {} } }),
+        queryFn: async () => ({ settings: settingsDoc }),
     }),
 }));
 vi.mock('@/lib/families', () => ({
-    afterFamilyChange: vi.fn(async () => {}),
+    afterFamilyChange: vi.fn(async (queryClient: { invalidateQueries: () => Promise<void> }) =>
+        queryClient.invalidateQueries(),
+    ),
     afterMembershipChange: vi.fn(async () => {}),
     familiesQueryOptions: vi.fn(),
     pendingQueryOptions: vi.fn(),
@@ -107,6 +151,14 @@ vi.mock('@/lib/groups/api', () => ({ GroupApiError: class extends Error {}, grou
 vi.mock('@/lib/groups/outbox', () => ({
     dropKeptAdmission: vi.fn(),
     stageChange: (...args: unknown[]) => stageChange(...args),
+}));
+vi.mock('@/lib/family-pending', async (original) => ({
+    ...(await original<typeof Pending>()),
+    clearPendingRoles: (...args: Parameters<typeof clearPendingRoles>) =>
+        clearPendingRoles(...args),
+}));
+vi.mock('@/lib/groups/sync', () => ({
+    syncGroup: async () => (syncedView ? { status: 'accepted', view: syncedView } : null),
 }));
 vi.mock('@/lib/groups/copy', async (original) => ({
     ...(await original<typeof Copy>()),
@@ -345,5 +397,174 @@ describe('the notice for accounts that changed', () => {
         );
         await waitFor(() => expect(continueMembers).toHaveBeenCalledTimes(1));
         expect(continuedFor()).toEqual([SAM]);
+    });
+});
+
+/*
+ * The manager role this account asked for at invitation (6.8), held back at
+ * Let them in: kept only in its own settings, shown only here as "Will manage
+ * the family once checked", and offered once Sam reads Verified, from any
+ * check. Never from anything the server says.
+ */
+describe('a manager role held back at Let them in', () => {
+    const invited = () =>
+        (settingsDoc = {
+            version: 2,
+            contacts: {},
+            pendingRoles: { g: { [SAM]: { roles: ['members'], since: '2026-10-28T00:00:00Z' } } },
+        });
+    let client: QueryClient;
+    function page(options: { manager?: boolean; members?: FamilyMember[] } = {}) {
+        client = new QueryClient();
+        render(
+            <QueryClientProvider client={client}>
+                <MemberList
+                    userId={ALICE}
+                    groupId="g"
+                    family="Holm family"
+                    members={
+                        options.members ?? [
+                            person(ALICE, 'Alice Holm', ORGANIZER),
+                            person(SAM, 'Sam Holm'),
+                            person(ANA, 'Ana Holm'),
+                        ]
+                    }
+                    view={viewWith([])}
+                    manager={options.manager ?? true}
+                    names={{ [SAM]: 'Sam', [ANA]: 'Ana' }}
+                />
+            </QueryClientProvider>,
+        );
+    }
+    const prompt = () => screen.queryByRole('alertdialog', { name: /was invited to manage/ });
+    const samRow = () => document.querySelector('[data-member="sam@example.com"]')!;
+    async function checkSamInTheFamily(user: ReturnType<typeof userEvent.setup>) {
+        await user.click(await screen.findByRole('button', { name: 'More for Sam Holm' }));
+        await user.click(await screen.findByRole('menuitem', { name: 'Check it’s Sam' }));
+    }
+
+    beforeEach(() => {
+        matched = false;
+        syncedView = null;
+        settingsDoc = { version: 2, contacts: {} };
+        stageChange.mockClear();
+        clearPendingRoles.mockClear();
+        toastAdd.mockClear();
+    });
+
+    test('says so under Sam on this account’s devices, and asks after a family check', async () => {
+        const user = userEvent.setup();
+        invited();
+        page();
+        await waitFor(() =>
+            expect(samRow().textContent).toContain('Will manage the family once checked'),
+        );
+        expect(prompt()).toBeNull();
+        await checkSamInTheFamily(user);
+        await user.click(await screen.findByRole('button', { name: 'Family words match' }));
+        const asked = await screen.findByRole('alertdialog', {
+            name: 'Sam was invited to manage the family',
+        });
+        expect(asked.textContent).toContain('Let them manage it now?');
+        // Let them manage it: the role, and nothing waits any more.
+        await user.click(screen.getByRole('button', { name: 'Let them manage it' }));
+        await waitFor(() => expect(promotedSam()).toBe(true));
+        await waitFor(() =>
+            expect(clearPendingRoles).toHaveBeenCalledWith(expect.anything(), ALICE, 'g', [SAM]),
+        );
+    });
+
+    test('asks after a check of Sam’s own words', async () => {
+        const user = userEvent.setup();
+        invited();
+        page();
+        await checkSamInTheFamily(user);
+        await user.click(await screen.findByRole('button', { name: 'Check Sam’s words' }));
+        await user.click(
+            (await screen.findByRole('dialog', { name: 'Their words: Sam Holm' })).querySelector(
+                'button',
+            )!,
+        );
+        expect(
+            await screen.findByRole('alertdialog', {
+                name: 'Sam was invited to manage the family',
+            }),
+        ).toBeTruthy();
+    });
+
+    test('asks after a check on another of this account’s devices; Not now clears it and gives nothing', async () => {
+        const user = userEvent.setup();
+        invited();
+        page();
+        await waitFor(() =>
+            expect(samRow().textContent).toContain('Will manage the family once checked'),
+        );
+        // Checked elsewhere: this device only reads it.
+        matched = true;
+        await client.invalidateQueries();
+        await screen.findByRole('alertdialog', { name: 'Sam was invited to manage the family' });
+        await user.click(screen.getByRole('button', { name: 'Not now' }));
+        await waitFor(() =>
+            expect(clearPendingRoles).toHaveBeenCalledWith(expect.anything(), ALICE, 'g', [SAM]),
+        );
+        expect(stageChange).not.toHaveBeenCalled();
+        await waitFor(() => expect(prompt()).toBeNull());
+        await client.invalidateQueries();
+        await waitFor(() =>
+            expect(samRow().textContent).not.toContain('Will manage the family once checked'),
+        );
+    });
+
+    test('never comes from the server: no waiting role here, no line and no question, however Sam was invited', async () => {
+        matched = true;
+        page({
+            members: [
+                person(ALICE, 'Alice Holm', ORGANIZER),
+                // What route 3 and the invitation say: Sam asked to manage it.
+                { ...person(SAM, 'Sam Holm'), invitationRoles: ['members'] } as FamilyMember,
+                person(ANA, 'Ana Holm'),
+            ],
+        });
+        await waitFor(() => expect(samRow().textContent).toContain('Verified'));
+        expect(samRow().textContent).not.toContain('Will manage the family once checked');
+        expect(prompt()).toBeNull();
+    });
+
+    test('asks only while this account manages the family', async () => {
+        invited();
+        matched = true;
+        page({ manager: false });
+        await waitFor(() => expect(samRow().textContent).toContain('Verified'));
+        expect(prompt()).toBeNull();
+    });
+
+    test('given meanwhile from another device, Let them manage it ends quietly', async () => {
+        const user = userEvent.setup();
+        invited();
+        matched = true;
+        page();
+        await screen.findByRole('alertdialog', { name: 'Sam was invited to manage the family' });
+        stageChange.mockRejectedValueOnce(new Error('Sam already manages the family.'));
+        syncedView = viewWith([SAM]);
+        await user.click(screen.getByRole('button', { name: 'Let them manage it' }));
+        await waitFor(() =>
+            expect(clearPendingRoles).toHaveBeenCalledWith(expect.anything(), ALICE, 'g', [SAM]),
+        );
+        expect(toastAdd).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'error' }));
+    });
+
+    test('goes when Sam is removed or leaves', async () => {
+        invited();
+        page({
+            members: [
+                person(ALICE, 'Alice Holm', ORGANIZER),
+                { ...person(SAM, 'Sam Holm'), state: 'removed' } as unknown as FamilyMember,
+                person(ANA, 'Ana Holm'),
+            ],
+        });
+        await waitFor(() =>
+            expect(clearPendingRoles).toHaveBeenCalledWith(expect.anything(), ALICE, 'g', [SAM]),
+        );
+        await waitFor(() => expect(settingsDoc.pendingRoles).toBeUndefined());
     });
 });

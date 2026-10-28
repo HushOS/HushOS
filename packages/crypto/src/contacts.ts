@@ -129,6 +129,18 @@ export type Settings = {
      */
     familyChecksSince?: string;
     /*
+     * Per group, then per person by account id: a role asked for when this
+     * account invited them and held back at Let them in until they are
+     * checked (docs/optional-verification.md 3.6, 6.8), with when. Only this
+     * account's devices read it, never the server's invitation roles: once
+     * the person reads Verified here, this account is asked whether to give
+     * it. Cleared when given, declined, or the person or family is gone.
+     */
+    pendingRoles?: Record<
+        string,
+        Record<string, { roles: ('members' | 'billing')[]; since: string }>
+    >;
+    /*
      * People this account removed from its contacts and has not added back,
      * by lowercased account id, with when (docs/optional-verification.md
      * 2.8): a share from them is never added on its own, it waits until the

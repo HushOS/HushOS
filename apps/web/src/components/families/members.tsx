@@ -1,7 +1,7 @@
 import type { GroupRole, GroupView } from '@hushos/crypto';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckIcon, EllipsisIcon, MailIcon } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { ContactFlowDialog, type FlowStart } from '@/components/drive/contact-flow';
 import { RowMenuButton } from '@/components/drive/file-list';
 import { PendingLabel } from '@/components/motion';
@@ -45,6 +45,7 @@ import {
     type PendingPerson,
 } from '@/lib/families';
 import { removeBlocker } from '@/lib/family-leave';
+import { clearPendingRoles, pendingRolesDone, pendingRolesOf } from '@/lib/family-pending';
 import {
     continueMembers,
     letInWithoutWords,
@@ -60,6 +61,7 @@ import {
     type OutboxEntry,
     type StageOutcome,
 } from '@/lib/groups/outbox';
+import { syncGroup } from '@/lib/groups/sync';
 import { cue } from '@/lib/sounds';
 import { SeatHelp, SeatNote } from './family-billing';
 import { FamilyCheckDialog, type FamilyMemberRef } from './family-check';
@@ -655,6 +657,12 @@ export function MemberList({
     const [words, setWords] = useState<{ member: FamilyMember; after?: RoleChange } | null>(null);
     const standings = useMemberStandings(userId, groupId, view);
     const settings = useQuery(settingsQueryOptions(userId));
+    // The manager role this account asked for at invitation, waiting for a check (6.8): read only
+    // from its own settings, never from the server's invitation roles.
+    const invitedToManage = (member: FamilyMember) =>
+        pendingRolesOf(settings.data?.settings, groupId, member.userId).includes('members');
+    // Answered here (Let them manage it, Not now) while the save that clears it is on its way.
+    const [answered, setAnswered] = useState<readonly string[]>([]);
     // Roles as the member list this device checked says, where it has one; else the server's.
     const rolesOf = (member: FamilyMember, at: GroupView | null = view): GroupRole[] =>
         (at?.members.find((entry) => entry.userId === member.userId)?.roles ??
@@ -750,8 +758,16 @@ export function MemberList({
         }
     }
 
-    /* `at`: the member list to build on, when it is newer than the page's (after a Continue). */
-    async function apply(change: RoleChange, at: GroupView | null = view) {
+    /*
+     * `at`: the member list to build on, when it is newer than the page's (after a Continue).
+     * `invited`: the manager role asked for at invitation (6.8), whose waiting record goes once
+     * given; given meanwhile from another tab or device, it ends quietly.
+     */
+    async function apply(
+        change: RoleChange,
+        at: GroupView | null = view,
+        { invited = false }: { invited?: boolean } = {},
+    ) {
         const ctx = familyContext(userId);
         const { member, kind } = change;
         const who = firstName(member.name);
@@ -803,7 +819,17 @@ export function MemberList({
                           ? `${who} no longer manages the family`
                           : `${who} is the organizer`,
             });
+            if (kind === 'manage')
+                await clearPendingRoles(queryClient, userId, groupId, [member.userId]).catch(
+                    () => false,
+                );
         } catch (cause) {
+            if (invited && (await managesNow(member))) {
+                await clearPendingRoles(queryClient, userId, groupId, [member.userId]).catch(
+                    () => false,
+                );
+                return;
+            }
             cue('error');
             toast.add({
                 type: 'error',
@@ -815,6 +841,65 @@ export function MemberList({
             void afterFamilyChange(queryClient, userId);
         }
     }
+
+    /* Whether `member` manages the family on the member list as it is now (another device gave it). */
+    async function managesNow(member: FamilyMember) {
+        const synced = await syncGroup(familyContext(userId), groupId).catch(() => null);
+        return Boolean(
+            synced?.status === 'accepted' &&
+            synced.view.members
+                .find((entry) => entry.userId === member.userId)
+                ?.roles.includes('members'),
+        );
+    }
+
+    /*
+     * The member this account invited to manage the family, now Verified here, from whatever
+     * check (on this device or another of this account's): asked whether to give the role, once,
+     * while this account manages the family, they don't have it yet, and nothing else is open.
+     */
+    const askInvited =
+        manager &&
+        !busy &&
+        !checking &&
+        !confirming &&
+        !checkFirst &&
+        !removing &&
+        !checkingWith &&
+        !words
+            ? (active.find(
+                  (member) =>
+                      member.userId !== userId &&
+                      invitedToManage(member) &&
+                      !answered.includes(member.userId) &&
+                      standingOf(member) === 'verified' &&
+                      !changed(member) &&
+                      !rolesOf(member).includes('members'),
+              ) ?? null)
+            : null;
+    function answerInvited(member: FamilyMember, give: boolean) {
+        setAnswered((list) => [...list, member.userId]);
+        if (give) void apply({ member, kind: 'manage' }, view, { invited: true });
+        else
+            void clearPendingRoles(queryClient, userId, groupId, [member.userId]).catch(
+                () => false,
+            );
+    }
+
+    // What no longer waits (they left, were removed, or manage the family now) goes from this
+    // account's settings, on whichever of its devices sees it first; doing it twice is harmless.
+    const done = pendingRolesDone(
+        settings.data?.settings,
+        groupId,
+        members,
+        (id) => view?.members.find((entry) => entry.userId === id)?.roles,
+    ).join();
+    useEffect(() => {
+        if (done)
+            void clearPendingRoles(queryClient, userId, groupId, done.split(',')).catch(
+                () => false,
+            );
+    }, [done, groupId, queryClient, userId]);
 
     /* A role change that needs a check: asked first, unless this person checked them already. */
     function ask(change: RoleChange) {
@@ -843,7 +928,15 @@ export function MemberList({
                         data={{ 'data-member': member.email ?? member.userId }}
                         line={member.email ?? ''}
                         badges={<RoleBadges roles={roles} />}
-                        note={!self && changed(member) ? 'Account changed' : undefined}
+                        note={
+                            self
+                                ? undefined
+                                : changed(member)
+                                  ? 'Account changed'
+                                  : invitedToManage(member) && !roles.includes('members')
+                                    ? 'Will manage the family once checked'
+                                    : undefined
+                        }
                     >
                         {!self && <CheckedLabel standing={standingOf(member)} />}
                         {!self && (
@@ -948,6 +1041,31 @@ export function MemberList({
                                 void apply(change);
                             }}
                         />
+                    )}
+                </AlertDialogContent>
+            </AlertDialog>
+            <AlertDialog
+                open={askInvited !== null}
+                onOpenChange={(open) => !open && askInvited && answerInvited(askInvited, false)}
+            >
+                <AlertDialogContent data-invited-to-manage>
+                    {askInvited && (
+                        <>
+                            <AlertDialogHeader>
+                                <AlertDialogTitle>
+                                    {firstName(askInvited.name)} was invited to manage the family
+                                </AlertDialogTitle>
+                                <AlertDialogDescription>
+                                    Let them manage it now?
+                                </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                                <AlertDialogCancel>Not now</AlertDialogCancel>
+                                <Button onClick={() => answerInvited(askInvited, true)}>
+                                    Let them manage it
+                                </Button>
+                            </AlertDialogFooter>
+                        </>
                     )}
                 </AlertDialogContent>
             </AlertDialog>

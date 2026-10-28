@@ -60,7 +60,9 @@ vi.mock('@/lib/own-identity', () => ({
 
 const { compareAndSetSettings, readSettingsForFamilies, setContactGuard, contactGuardEntry } =
     await import('./contacts');
+const { pendingRolesOf } = await import('./family-pending');
 const {
+    continueMembers,
     familyCheckCode,
     familyCheckMatch,
     letInWithoutWords,
@@ -309,6 +311,84 @@ describe('checking each other in a family', () => {
         ).toEqual({ checked: false, verified: false });
         expect(f.stored.version).toBe(before);
         expect(await pinTrust((await f.settings()).contacts[BOB]!)).toBe('seen');
+    });
+});
+
+describe('a manager role held back at Let them in (6.8)', () => {
+    test('is kept in this account’s settings, in the same save as the first-seen pin, and sent nowhere', async () => {
+        const f = await aliceFamily();
+        // Every settings save, opened: what each one held.
+        const saves: Record<string, unknown>[] = [];
+        const save = auth.saveSettings.getMockImplementation()!;
+        auth.saveSettings.mockImplementation(async (input) => {
+            const out = await save(input);
+            const { settings } = (await f.ctx.rpc(
+                'settingsOpen' as never,
+                {
+                    userId: ALICE,
+                    envelope: f.stored.envelope,
+                } as never,
+            )) as { settings: Record<string, unknown> };
+            saves.push(settings);
+            return out;
+        });
+        const result = await letInWithoutWords(f.queryClient, ALICE, f.ctx, f.groupId, {
+            userId: BOB,
+            email: BOB_EMAIL,
+            roles: ['members'],
+            identity: f.server.people[BOB].served,
+        });
+        expect(result).toMatchObject({ outcome: 'staged', heldBack: ['members'] });
+        // The save that wrote Bob's first-seen pin wrote the waiting role too.
+        const first = saves.find((at) => (at.contacts as Record<string, unknown>)[BOB]);
+        expect(first?.pendingRoles).toEqual({
+            [f.groupId]: { [BOB]: { roles: ['members'], since: expect.any(String) } },
+        });
+        expect(pendingRolesOf(await f.settings(), f.groupId, BOB)).toEqual(['members']);
+        // Nothing of it reaches the server: Bob is let in as a member, and no call names it.
+        expect(JSON.stringify(f.server.log)).not.toContain('pendingRoles');
+        const [admit] = f.server.sent('admit');
+        expect(JSON.stringify(admit)).not.toContain('pendingRoles');
+        expect(f.server.members.get(BOB)?.roles).toEqual([]);
+    });
+
+    test('survives a save by a tab that doesn’t know it: a check of Bob’s words and a sync', async () => {
+        const f = await aliceFamily();
+        await letInWithoutWords(f.queryClient, ALICE, f.ctx, f.groupId, {
+            userId: BOB,
+            email: BOB_EMAIL,
+            roles: ['members'],
+            identity: f.server.people[BOB].served,
+        });
+        const before = f.stored.version;
+        // An older release's acts, through the very save paths it runs (saveSettings,
+        // compareAndSetSettings, the worker's settingsOpen and settingsSeal, all as on main):
+        // Check it's Bob through his words, then a sync that writes the family's pin.
+        const { lookupContact, pinContact } = await import('./contacts');
+        await pinContact(
+            f.queryClient,
+            ALICE,
+            await lookupContact(f.queryClient, ALICE, BOB_EMAIL),
+        );
+        await f.view();
+        expect(f.stored.version).toBeGreaterThan(before);
+        expect(pendingRolesOf(await f.settings(), f.groupId, BOB)).toEqual(['members']);
+    });
+
+    test('goes with a Continue on Bob’s account change', async () => {
+        const f = await aliceFamily();
+        await letInWithoutWords(f.queryClient, ALICE, f.ctx, f.groupId, {
+            userId: BOB,
+            email: BOB_EMAIL,
+            roles: ['members'],
+            identity: f.server.people[BOB].served,
+        });
+        const fresh = await account(BOB);
+        f.serve(fresh.served);
+        f.server.serveAs(BOB, fresh.served);
+        const staged = await continueMembers(f.queryClient, ALICE, f.ctx, f.groupId, [bob]);
+        expect(staged).toMatchObject({ status: 'sent', outcome: { status: 'landed' } });
+        expect(pendingRolesOf(await f.settings(), f.groupId, BOB)).toEqual([]);
     });
 });
 

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, Navigate, useNavigate } from '@tanstack/react-router';
 import { ChevronDownIcon, RotateCcwIcon } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { useDrive } from '@/components/drive/drive-shell';
 import { CheckingLine, ForkAlert, NoticeList } from '@/components/families/family-alerts';
@@ -59,6 +59,8 @@ import {
 } from '@/lib/family-billing';
 import { formatQuota, formatSpace, storageQueryOptions } from '@/lib/queries';
 import { leaveBlocker } from '@/lib/family-leave';
+import { clearPendingRoles, pendingFamiliesGone } from '@/lib/family-pending';
+import { settingsQueryOptions } from '@/lib/contacts';
 import { useFamilyWork } from '@/lib/family-work';
 import { cue } from '@/lib/sounds';
 
@@ -119,6 +121,20 @@ export function FamilyPage({
     const { userId } = useDrive();
     const families = useQuery(familiesQueryOptions(userId));
     const summary = families.data?.find((family) => family.id === groupId);
+    // Manager roles held back in a family this account is no longer in (it left, or the family
+    // ended) wait for nothing: they go from its settings.
+    const settings = useQuery(settingsQueryOptions(userId));
+    const gone = families.data
+        ? pendingFamiliesGone(
+              settings.data?.settings,
+              families.data.map((family) => family.id),
+          ).join()
+        : '';
+    const queryClient = useQueryClient();
+    useEffect(() => {
+        for (const id of gone ? gone.split(',') : [])
+            void clearPendingRoles(queryClient, userId, id, 'all').catch(() => false);
+    }, [gone, queryClient, userId]);
     const detail = useQuery({
         ...familyQueryOptions(userId, groupId),
         enabled: summary?.state === 'active',
