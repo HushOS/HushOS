@@ -66,29 +66,40 @@ function ColourForm({
     const [customOpen, setCustomOpen] = useState(!swatch);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
+    /*
+     * Each folder as its save returned it. A batch that fails partway keeps these, so
+     * Save again starts from what is now stored: the folders already done are not sent
+     * again at the version they were read at, which the server would refuse as stale.
+     */
+    const [saved, setSaved] = useState<ReadonlyMap<string, DriveNode>>(new Map());
     const what = nodes.length === 1 ? `“${nodes[0]!.name}”` : `${nodes.length} folders`;
 
     async function submit() {
-        const changing = nodes.filter((node) => folderColour(node) !== value);
+        const current = nodes.map((node) => saved.get(node.id) ?? node);
+        const changing = current.filter((node) => folderColour(node) !== value);
         if (!changing.length) {
             onOpenChange(false);
             return;
         }
         setPending(true);
         setError('');
+        const done = new Map(saved);
+        const parents = new Set<string | null>();
         try {
-            const parents = new Set<string | null>();
             for (const node of changing) {
-                const saved = await clientFor(node.workspaceId).recolour(node, value);
-                parents.add(saved.parentId);
+                const result = await clientFor(node.workspaceId).recolour(node, value);
+                done.set(node.id, result);
+                parents.add(result.parentId);
             }
-            await Promise.all([...parents].map((parent) => invalidateFolders(queryClient, parent)));
             cue('success');
             onOpenChange(false);
         } catch (error) {
             cue('error');
             setError(driveError(error));
         } finally {
+            setSaved(done);
+            // The lists show what was saved, all of it or the part before a failure.
+            await Promise.all([...parents].map((parent) => invalidateFolders(queryClient, parent)));
             setPending(false);
         }
     }
