@@ -1,0 +1,33 @@
+apps/web/src/lib/groups/context.ts
+  s_566b8e0c4467a4::t_1fa4b29e5b6296 51-52
+apps/web/src/lib/groups/join.test.ts
+  s_566b8e0c4467a4::t_9c3bed94ceb6b4 4,237,536-594
+apps/web/src/lib/groups/sync.ts
+  s_566b8e0c4467a4::t_8814c4feddc289 243-244,246-252,257-261,523
+apps/web/src/lib/groups/test-harness.ts
+  s_566b8e0c4467a4::t_042aba4cc9d646 217
+packages/crypto/src/area-ledger.ts
+  s_566b8e0c4467a4::t_ff7845252d6534 9-15,186-198,345,446-455,458,468,681,700,717,1159-1161
+packages/crypto/src/protocol.ts
+  s_566b8e0c4467a4::t_48b1ce56d227d7 63,162-171
+packages/crypto/src/session-groups.ts
+  s_566b8e0c4467a4::t_eef1f331fed48e 5,505-509,742-748,951-952,1765-1770,1872,1890,2677-2681,2702-2707,3080-3081,3083,3211,3646,3731,3772,4031,4166-4181
+packages/crypto/src/session.groups.test.ts
+  s_566b8e0c4467a4::t_3d8c2e668cf5cf 4860-4863
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0db53ff215b60c4944e0a61ade32ef0c72fdc629",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
