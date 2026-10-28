@@ -347,91 +347,90 @@ export function MemberList({
                                 : undefined
                         }
                     >
-                        {manager &&
-                            !self && (
-                                // A bare ⋯ sits where Drive's, People's and Shared's do: the row's
-                                // gutter is for bordered buttons, which a ghost button would sit inside.
-                                <span className="-mr-2 sm:-mr-3">
-                                    <DropdownMenu>
-                                        <DropdownMenuTrigger
-                                            render={
-                                                <RowMenuButton
-                                                    aria-label={`More for ${member.name}`}
-                                                    disabled={busy}
-                                                />
-                                            }
-                                        >
-                                            <EllipsisIcon className="size-5" aria-hidden="true" />
-                                        </DropdownMenuTrigger>
-                                        <DropdownMenuContent align="end" className="w-64">
-                                            <DropdownMenuGroup>
-                                                {roles.includes('members') ? (
-                                                    <DropdownMenuItem
-                                                        disabled={checking}
-                                                        onClick={() =>
-                                                            setConfirming({ member, kind: 'stop' })
-                                                        }
-                                                    >
-                                                        Stop them managing the family
-                                                    </DropdownMenuItem>
-                                                ) : (
-                                                    <DropdownMenuItem
-                                                        disabled={checking}
-                                                        onClick={() =>
-                                                            setConfirming({
-                                                                member,
-                                                                kind: 'manage',
-                                                            })
-                                                        }
-                                                    >
-                                                        Let them manage the family
-                                                    </DropdownMenuItem>
-                                                )}
-                                                {iAmOrganizer && !roles.includes('billing') && (
-                                                    <DropdownMenuItem
-                                                        disabled={checking}
-                                                        onClick={() =>
-                                                            setConfirming({
-                                                                member,
-                                                                kind: 'organizer',
-                                                            })
-                                                        }
-                                                    >
-                                                        Make them the organizer
-                                                    </DropdownMenuItem>
-                                                )}
+                        {manager && !self && (
+                            // A bare ⋯ sits where Drive's, People's and Shared's do: the row's
+                            // gutter is for bordered buttons, which a ghost button would sit inside.
+                            <span className="-mr-2 sm:-mr-3">
+                                <DropdownMenu>
+                                    <DropdownMenuTrigger
+                                        render={
+                                            <RowMenuButton
+                                                aria-label={`More for ${member.name}`}
+                                                disabled={busy}
+                                            />
+                                        }
+                                    >
+                                        <EllipsisIcon className="size-5" aria-hidden="true" />
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end" className="w-64">
+                                        <DropdownMenuGroup>
+                                            {roles.includes('members') ? (
                                                 <DropdownMenuItem
-                                                    onClick={() => setShowingCode(member)}
+                                                    disabled={checking}
+                                                    onClick={() =>
+                                                        setConfirming({ member, kind: 'stop' })
+                                                    }
                                                 >
-                                                    Show {who}’s join code
+                                                    Stop them managing the family
                                                 </DropdownMenuItem>
-                                            </DropdownMenuGroup>
-                                            <DropdownMenuSeparator />
-                                            <DropdownMenuGroup>
-                                                {removeBlocked(member) ? (
-                                                    <DropdownMenuItem
-                                                        disabled
-                                                        data-remove-blocked="last-billing"
-                                                        className="flex-col items-start gap-0.5"
-                                                    >
-                                                        <span>Remove from family</span>
-                                                        <span className="text-xs text-muted-foreground">
-                                                            {removeBlocked(member)}
-                                                        </span>
-                                                    </DropdownMenuItem>
-                                                ) : (
-                                                    <DropdownMenuItem
-                                                        variant="destructive"
-                                                        onClick={() => setRemoving(member)}
-                                                    >
-                                                        Remove from family
-                                                    </DropdownMenuItem>
-                                                )}
-                                            </DropdownMenuGroup>
-                                        </DropdownMenuContent>
-                                    </DropdownMenu>
-                                </span>
-                            )}
+                                            ) : (
+                                                <DropdownMenuItem
+                                                    disabled={checking}
+                                                    onClick={() =>
+                                                        setConfirming({
+                                                            member,
+                                                            kind: 'manage',
+                                                        })
+                                                    }
+                                                >
+                                                    Let them manage the family
+                                                </DropdownMenuItem>
+                                            )}
+                                            {iAmOrganizer && !roles.includes('billing') && (
+                                                <DropdownMenuItem
+                                                    disabled={checking}
+                                                    onClick={() =>
+                                                        setConfirming({
+                                                            member,
+                                                            kind: 'organizer',
+                                                        })
+                                                    }
+                                                >
+                                                    Make them the organizer
+                                                </DropdownMenuItem>
+                                            )}
+                                            <DropdownMenuItem
+                                                onClick={() => setShowingCode(member)}
+                                            >
+                                                Show {who}’s join code
+                                            </DropdownMenuItem>
+                                        </DropdownMenuGroup>
+                                        <DropdownMenuSeparator />
+                                        <DropdownMenuGroup>
+                                            {removeBlocked(member) ? (
+                                                <DropdownMenuItem
+                                                    disabled
+                                                    data-remove-blocked="last-billing"
+                                                    className="flex-col items-start gap-0.5"
+                                                >
+                                                    <span>Remove from family</span>
+                                                    <span className="text-xs text-muted-foreground">
+                                                        {removeBlocked(member)}
+                                                    </span>
+                                                </DropdownMenuItem>
+                                            ) : (
+                                                <DropdownMenuItem
+                                                    variant="destructive"
+                                                    onClick={() => setRemoving(member)}
+                                                >
+                                                    Remove from family
+                                                </DropdownMenuItem>
+                                            )}
+                                        </DropdownMenuGroup>
+                                    </DropdownMenuContent>
+                                </DropdownMenu>
+                            </span>
+                        )}
                     </Row>
                 );
             })}
