@@ -8,7 +8,7 @@
         "@hushos/billing": "workspace:*",
         "@hushos/config": "workspace:*",
         "@playwright/test": "1.63.0",
-        "@types/bun": "1.4.2",
+        "@types/bun": "1.4.4",
         "fflate": "^0.8.2",
         "oxfmt": "0.66.0",
         "oxlint": "1.81.0",
@@ -95,7 +95,7 @@
         "@testing-library/jest-dom": "7.0.1",
         "@testing-library/react": "16.3.3",
         "@testing-library/user-event": "14.6.7",
-        "@types/bun": "1.4.2",
+        "@types/bun": "1.4.4",
         "@types/hast": "3",
         "@types/mdx": "^2.0.14",
         "@types/react": "^19.0.0",
@@ -125,7 +125,7 @@
       },
       "devDependencies": {
         "@hushos/config": "workspace:*",
-        "@types/bun": "1.4.2",
+        "@types/bun": "1.4.4",
         "fake-indexeddb": "6.2.5",
         "typescript": "7.0.2",
         "vitest": "^5.0.0",
@@ -143,7 +143,7 @@
       },
       "devDependencies": {
         "@hushos/config": "workspace:*",
-        "@types/bun": "1.4.2",
+        "@types/bun": "1.4.4",
         "typescript": "7.0.2",
         "vitest": "^5.0.0",
       },
@@ -169,7 +169,7 @@
       "devDependencies": {
         "@hushos/config": "workspace:*",
         "@jazzer.js/core": "4.0.0",
-        "@types/bun": "1.4.2",
+        "@types/bun": "1.4.4",
         "esbuild": "0.28.2",
         "fast-check": "4.10.2",
         "typescript": "7.0.2",
@@ -189,7 +189,7 @@
       },
       "devDependencies": {
         "@hushos/config": "workspace:*",
-        "@types/bun": "1.4.2",
+        "@types/bun": "1.4.4",
         "@types/pg": "^8.15.5",
         "drizzle-kit": "1.0.0-rc.4",
         "typescript": "7.0.2",
@@ -210,7 +210,7 @@
       },
       "devDependencies": {
         "@hushos/config": "workspace:*",
-        "@types/bun": "1.4.2",
+        "@types/bun": "1.4.4",
         "fake-indexeddb": "6.2.5",
         "typescript": "7.0.2",
         "vitest": "^5.0.0",
@@ -228,7 +228,7 @@
       "devDependencies": {
         "@hushos/config": "workspace:*",
         "@react-email/ui": "6.9.3",
-        "@types/bun": "1.4.2",
+        "@types/bun": "1.4.4",
         "@types/nodemailer": "8.0.1",
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",
@@ -247,7 +247,7 @@
       },
       "devDependencies": {
         "@hushos/config": "workspace:*",
-        "@types/bun": "1.4.2",
+        "@types/bun": "1.4.4",
         "typescript": "7.0.2",
         "vitest": "^5.0.0",
       },
@@ -266,7 +266,7 @@
       "devDependencies": {
         "@hushos/config": "workspace:*",
         "@polar-sh/sdk": "1.0.0-alpha.20",
-        "@types/bun": "1.4.2",
+        "@types/bun": "1.4.4",
         "@types/pg": "^8.15.5",
         "drizzle-orm": "1.0.0-rc.4",
         "libsodium-wrappers": "0.8.4",
@@ -288,7 +288,7 @@
       },
       "devDependencies": {
         "@hushos/config": "workspace:*",
-        "@types/bun": "1.4.2",
+        "@types/bun": "1.4.4",
         "typescript": "7.0.2",
         "vitest": "^5.0.0",
       },
@@ -301,7 +301,7 @@
       },
       "devDependencies": {
         "@hushos/config": "workspace:*",
-        "@types/bun": "1.4.2",
+        "@types/bun": "1.4.4",
         "typescript": "7.0.2",
         "vitest": "^5.0.0",
       },
@@ -311,7 +311,7 @@
       "version": "0.0.0",
       "devDependencies": {
         "@hushos/config": "workspace:*",
-        "@types/bun": "1.4.2",
+        "@types/bun": "1.4.4",
         "typescript": "7.0.2",
       },
     },
@@ -320,7 +320,7 @@
       "version": "0.0.0",
       "devDependencies": {
         "@hushos/config": "workspace:*",
-        "@types/bun": "1.4.2",
+        "@types/bun": "1.4.4",
         "typescript": "7.0.2",
         "vitest": "^5.0.0",
       },
@@ -330,7 +330,7 @@
       "version": "0.0.0",
       "devDependencies": {
         "@hushos/config": "workspace:*",
-        "@types/bun": "1.4.2",
+        "@types/bun": "1.4.4",
         "typescript": "7.0.2",
       },
     },
@@ -1086,7 +1086,7 @@
 
     "@types/aria-query": ["@types/aria-query@5.0.4", "", {}, "sha512-rfT93uj5s0PRL7EzccGMs3brplhcrghnDoV26NqKhCAS1hVo+WdNsPvE/yb6ilfr5hi2MEk6d5EWJTKdxg8jVw=="],
 
-    "@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
+    "@types/bun": ["@types/bun@1.4.4", "", { "dependencies": { "bun-types": "1.4.4" } }, "sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ=="],
 
     "@types/chai": ["@types/chai@5.2.3", "", { "dependencies": { "@types/deep-eql": "*", "assertion-error": "^2.0.1" } }, "sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA=="],
 
@@ -1234,7 +1234,7 @@
 
     "buffer-from": ["buffer-from@1.1.2", "", {}, "sha512-E+XQCRwSbaaiChtv6k6Dwgc+bx+Bs6vuKJHHl5kox/BaKbhiXzqQOwK4cO22yElGp2OCmjwVhT3HmxgyPGnJfQ=="],
 
-    "bun-types": ["bun-types@1.4.2", "", { "dependencies": { "@types/node": "*" } }, "sha512-bxV1FgK7yBIzjRe5zBozIM4Bem11ZJcCXSrjWRG3YWLt8yFDePu4cLjpebO8OvPeIE9trbyPF4fuj3Cia4Fj3w=="],
+    "bun-types": ["bun-types@1.4.4", "", { "dependencies": { "@types/node": "*", "undici-types": "*" } }, "sha512-yjrJh5oGX7mMPKGd19YXyIjmEuj4G4zNC30bs7PM9Az7NQ3ndF3j6hbeRdvJTRQEhJ/FYQwW0a2moweEi2hMxQ=="],
 
     "caniuse-lite": ["caniuse-lite@1.0.30001810", "", {}, "sha512-TITQPUkaz+aVk5GL6NhOdwk1aEaNTSDPsGFWrTuhKGtjTF70jL/Oht2W4c6rXUe5fu7Ie19VIahAXHIIiWWNeg=="],
 
