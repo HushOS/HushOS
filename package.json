@@ -66,7 +66,7 @@
         "@hushos/billing": "workspace:*",
         "@hushos/config": "workspace:*",
         "@playwright/test": "1.64.1",
-        "@types/bun": "1.4.2",
+        "@types/bun": "1.4.4",
         "fflate": "^0.8.2",
         "oxfmt": "0.75.0",
         "oxlint": "1.90.0",
@@ -77,9 +77,9 @@
         "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
     },
     "engines": {
-        "bun": ">=1.4.2"
+        "bun": ">=1.4.4"
     },
-    "packageManager": "bun@1.4.2",
+    "packageManager": "bun@1.4.4",
     "intent": {
         "skills": [
             "*"

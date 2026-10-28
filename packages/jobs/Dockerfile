@@ -1,4 +1,4 @@
-FROM oven/bun:1.4.2 AS manifests
+FROM oven/bun:1.4.4 AS manifests
 WORKDIR /app
 COPY package.json bun.lock ./
 # Dependency patches bun install applies (package.json's patchedDependencies).
@@ -34,7 +34,7 @@ COPY packages/drive ./packages/drive
 COPY packages/jobs ./packages/jobs
 RUN bun run --cwd packages/jobs build
 
-FROM oven/bun:1.4.2-slim AS worker
+FROM oven/bun:1.4.4-slim AS worker
 WORKDIR /app
 ENV NODE_ENV=production
 ARG RELEASE_SHA

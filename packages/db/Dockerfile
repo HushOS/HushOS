@@ -1,4 +1,4 @@
-FROM oven/bun:1.4.2 AS manifests
+FROM oven/bun:1.4.4 AS manifests
 WORKDIR /app
 COPY package.json bun.lock ./
 # Dependency patches bun install applies (package.json's patchedDependencies).
@@ -22,7 +22,7 @@ COPY packages/utils/package.json ./packages/utils/package.json
 FROM manifests AS migration-deps
 RUN bun install --frozen-lockfile --filter @hushos/db
 
-FROM oven/bun:1.4.2-slim AS migrate
+FROM oven/bun:1.4.4-slim AS migrate
 WORKDIR /app
 COPY --from=migration-deps /app/node_modules ./node_modules
 COPY --from=migration-deps /app/packages/db/node_modules ./packages/db/node_modules
