@@ -36,12 +36,13 @@ import { REPORT_CATEGORIES } from '@hushos/drive/api';
 import * as drive from '@hushos/drive/server';
 import * as groups from '@hushos/groups/server';
 import {
+    GROUP_WRITE_HEADER,
     MAX_GRANTS_PER_CALL,
     MAX_ROTATIONS_PER_CALL,
     MAX_SEALS_PER_CALL,
 } from '@hushos/groups/protocol';
 import { createGroupRequestHandler } from '@/lib/group-requests';
-import { groupWriteMinimums } from '@/lib/group-write-floor';
+import { followsGroupWrites, groupWriteMinimums } from '@/lib/group-write-floor';
 import { boundTrashBatch } from '@/lib/trash-batch-request';
 import { storageEnv } from '@hushos/env/storage';
 import { CANCELLATION_REASONS } from '@hushos/billing/protocol';
@@ -684,15 +685,22 @@ async function groupUser(request: Request, sessionToken: string | null) {
  * The routes that let people in, change roles or seal family keys
  * (docs/optional-verification.md 7.3): as groupUser, but a client below the
  * family-change floor is refused with 426 before anything is read or stored,
- * so a tab still running an earlier release can't change a family. Every
- * other route keeps serving it (lib/group-write-floor.ts).
+ * so a tab still running code from before the family-write rules changed
+ * can't change a family. Every other route keeps serving it
+ * (lib/group-write-floor.ts).
  */
 const groupWriteFloor = groupWriteMinimums(
     clientMinimums,
     parseMinimums(storageEnv.GROUP_WRITE_CLIENT_MINIMUMS),
 );
 async function groupWriter(request: Request, sessionToken: string | null) {
-    requireClient(request, groupWriteFloor);
+    const client = requireClient(request, groupWriteFloor);
+    if (!followsGroupWrites(client.name, request.headers.get(GROUP_WRITE_HEADER)))
+        throw new drive.DriveError(
+            'unsupported',
+            'This version of HushOS is out of date. Reload the page to update.',
+            426,
+        );
     return groupUser(request, sessionToken);
 }
 

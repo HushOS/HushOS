@@ -1,5 +1,6 @@
 import { treaty } from '@elysia/eden';
 import { CLIENT_HEADER } from '@hushos/drive/protocol';
+import { GROUP_WRITE_HEADER, GROUP_WRITE_PROTOCOL } from '@hushos/groups/protocol';
 import type { Api } from '@/lib/api.server';
 import { HUSHOS_VERSION } from '@/lib/version';
 
@@ -7,7 +8,11 @@ function createClient(credentials: RequestCredentials) {
     return treaty<Api>(window.location.origin, {
         // The client the Drive API is asked to serve, by product version; a stale tab
         // after a deploy that raised the minimum is told to reload rather than fail oddly.
-        headers: { [CLIENT_HEADER]: `web/${HUSHOS_VERSION}` },
+        // And the family-write rules this tab follows: family changes from older code are refused.
+        headers: {
+            [CLIENT_HEADER]: `web/${HUSHOS_VERSION}`,
+            [GROUP_WRITE_HEADER]: String(GROUP_WRITE_PROTOCOL),
+        },
         fetch: { credentials, cache: 'no-store' },
         onRequest: () => ({ signal: AbortSignal.timeout(30_000) }),
     });

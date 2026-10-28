@@ -1316,14 +1316,14 @@ test.describe.serial('a member’s account changes', () => {
         await expect(leoRow.locator('[data-roles]')).toHaveCount(0, { timeout: 60_000 });
     });
 
-    test('a tab from an older release is refused family changes with 426, and served reads and Drive', async () => {
+    test('a tab from before the family-write rules changed is refused family changes with 426, and served reads and Drive', async () => {
         test.setTimeout(300_000);
-        // Every request from Maya's tab says it is an older release, as a tab left open would.
+        // Every request from Maya's tab goes without the family-write number, as a tab left open
+        // from before the number existed would, under the same release version as today's.
         const answers: { method: string; path: string; status: number }[] = [];
         await maya.page.route('**/api/**', async (route) => {
-            const response = await route.fetch({
-                headers: { ...route.request().headers(), 'hushos-client': 'web/0.0.1' },
-            });
+            const { 'hushos-group-write': _number, ...headers } = route.request().headers();
+            const response = await route.fetch({ headers });
             answers.push({
                 method: route.request().method(),
                 path: new URL(route.request().url()).pathname,

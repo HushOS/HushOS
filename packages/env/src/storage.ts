@@ -54,10 +54,10 @@ export const storageEnv = createEnv({
             )
             .optional(),
         // The oldest client the family-changing routes still serve, same format
-        // (docs/optional-verification.md 7.3): the higher of this, the Drive
-        // minimum and the built-in web floor (this server's own release), so it
-        // only ever raises the floor. Reads, invitations and joining are not
-        // floored by it.
+        // (docs/optional-verification.md 7.3): the higher of this and the Drive
+        // minimum, so it only ever raises the floor. Web tabs are also held to
+        // the built-in family-write number (GROUP_WRITE_PROTOCOL), which this
+        // doesn't change. Reads, invitations and joining are not floored by it.
         GROUP_WRITE_CLIENT_MINIMUMS: z
             .string()
             .regex(
