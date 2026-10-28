@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { planTierName } from '@hushos/billing/protocol';
 import { readFileSync } from 'node:fs';
@@ -25,30 +26,25 @@ import {
 } from './helpers';
 
 /*
- * Families on the web (groups milestone 1c), driven as the people in them: a
- * family is created, someone is invited by email and accepts, reads their
- * twelve words to the one letting them in, who checks them and lets them in;
- * then both screens show a join code, and the newcomer joins only once they
- * say the two match.
+ * Families on the web (groups milestone 1c, docs/optional-verification.md),
+ * driven as the people in them: a family is created, someone is invited by
+ * email and accepts, and a manager lets them in with one click. No words on
+ * either side: the newcomer's device joins on first use. Any two members can
+ * check each other later, with the same twelve words on both screens.
  *
  * 1. Two people: the newcomer signs up from the invitation and comes back to
- *    it; "Let them in" stays shut until their words are checked; the code the
- *    newcomer's screen works out is the admin's, a reload keeps nothing, "They
- *    don't match" says not to use the family and keeps nothing either; the
- *    admin shows the code again from Members; then "They match" joins. Then
- *    the family's folders: the newcomer uploads into "Family" and the creator
- *    sees it with no mark (her own words check of him vouches); the creator
- *    uploads, and the newcomer, who never checked her words, sees "Verified by
- *    Lindqvist family" in Info; the creator makes a second family folder, and
- *    the newcomer opens it and adds to it. Last, the newcomer rotates his
- *    account key: his self-grants for both folders are rewrapped as the
- *    family's, and a fresh device opens both without writing new ones.
+ *    it, waits, and is let in with one click, with no words anywhere; both
+ *    rows read Not verified. Then the family's folders: the newcomer uploads
+ *    into "Family" and the creator, whose family it is, sees it vouched for by
+ *    the family; the creator uploads, and the newcomer, whose device took the
+ *    family on first use, sees it as Not verified, never as verified by the
+ *    family. Then the two check each other: words that differ save nothing,
+ *    the same words on both screens make both rows Verified. Then a second
+ *    family folder, and the newcomer's account key rotation.
  * 2. Three people: an invitation opened by the wrong account; the admin on two
  *    devices, one admission held on the wire while the other device lets
- *    someone else in, so the held one meets a stale answer, is signed again
- *    over the new member list, and the code shown is the stored one's; the
- *    newcomer compares against the other person's code first, which doesn't
- *    match and keeps nothing; and an invitation that was used up.
+ *    someone else in, so the held one meets a stale answer and is signed
+ *    again over the new member list; and an invitation that was used up.
  * 3. Removal, leaving and key changes, with three people: a copy inside a
  *    family folder; Replace keys, with an upload into a folder the walk has
  *    not reached waiting for it and then landing; a removal (hold, finish,
@@ -182,15 +178,18 @@ async function accept(newcomer: Person, family: string) {
 }
 
 async function acceptOpened(newcomer: Person, family: string) {
-    await expect(
-        newcomer.page.getByRole('heading', { name: new RegExp(`invited you to ${family}`) }),
-    ).toBeVisible({ timeout: 60_000 });
-    // The token left the address bar once the page kept it.
-    await expect.poll(() => new URL(newcomer.page.url()).hash).toBe('');
-    await newcomer.page.getByRole('button', { name: 'Accept' }).click();
     await expect(newcomer.page.getByRole('heading', { name: `Join ${family}` })).toBeVisible({
         timeout: 60_000,
     });
+    await expect(
+        newcomer.page.getByText('Family folders are shared with everyone in the family.'),
+    ).toBeVisible();
+    // The token left the address bar once the page kept it.
+    await expect.poll(() => new URL(newcomer.page.url()).hash).toBe('');
+    await newcomer.page.getByRole('button', { name: 'Join', exact: true }).click();
+    await expect(
+        newcomer.page.getByRole('heading', { name: /^Waiting (for|to be let in)/ }),
+    ).toBeVisible({ timeout: 60_000 });
 }
 
 /* A second device of an existing account, signed in with the password. */
@@ -210,107 +209,44 @@ async function signIn(
     return { ...who, page };
 }
 
-/*
- * The admin's dialog, step 1: the newcomer's twelve words as the admin's
- * screen shows them are the ones on the newcomer's join screen. "Let them in"
- * stays shut until they match.
- */
-async function checkWords(admin: Person, newcomer: Person) {
-    const first = newcomer.name.split(' ')[0]!;
-    const own = newcomer.page.locator('[data-fingerprint-words]');
-    await expect(own).toBeVisible({ timeout: 60_000 });
-    await expect(newcomer.page.getByText(/^Waiting for .+ to let you in$/)).toBeVisible();
+/* No words anywhere on a page: no twelve words, no join code, nothing that holds them. */
+async function noWords(page: Page) {
+    await expect(page.locator('[data-fingerprint-words], [data-words], [data-kind]')).toHaveCount(
+        0,
+    );
+}
 
+/*
+ * Let them in (docs/optional-verification.md 6.8): the newcomer waits, the manager clicks the
+ * row's Let them in once, and the newcomer's page moves on to the family by itself, with no
+ * words on either screen.
+ */
+async function letThemIn(admin: Person, newcomer: Person, family: string) {
+    const first = newcomer.name.split(' ')[0]!;
+    await expect(
+        newcomer.page.getByRole('heading', { name: /^Waiting (for|to be let in)/ }),
+    ).toBeVisible({ timeout: 60_000 });
+    await noWords(newcomer.page);
     const row = admin.page.locator(`[data-pending="${newcomer.email}"]`);
     await expect(row).toBeVisible({ timeout: 30_000 });
+    await noWords(admin.page);
     await row.getByRole('button', { name: 'Let them in' }).click();
-    const dialog = admin.page.getByRole('dialog', { name: `Let ${first} in` });
-    const letInButton = dialog.getByRole('button', { name: 'Let them in' });
-    await expect(dialog.locator('[data-fingerprint-words]')).toHaveAttribute(
-        'data-fingerprint-words',
-        (await own.getAttribute('data-fingerprint-words'))!,
-        { timeout: 60_000 },
-    );
-    await expect(letInButton).toBeDisabled();
-    // No code before they're in.
-    await expect(dialog.locator('[data-kind=join-code]')).toHaveCount(0);
-    await dialog.getByRole('button', { name: 'They match', exact: true }).click();
-    await expect(dialog.getByText(`${first} is saved as someone you checked`)).toBeVisible();
-    await expect(letInButton).toBeEnabled();
+    await expect(admin.page.getByText(`${first} is in ${family}`)).toBeVisible({ timeout: 90_000 });
+    await expect(row).toHaveCount(0, { timeout: 60_000 });
+    await expect(newcomer.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+        timeout: 90_000,
+    });
+    await noWords(newcomer.page);
+}
+
+/* Check it's Sam, from a member's row menu (6.10): the dialog, once its words are there. */
+async function openCheck(who: Person, other: Person) {
+    const first = other.name.split(' ')[0]!;
+    await who.page.getByRole('button', { name: `More for ${other.name}` }).click();
+    await who.page.getByRole('menuitem', { name: `Check it’s ${first}` }).click();
+    const dialog = who.page.getByRole('dialog', { name: `Check it’s ${first}` });
+    await expect(dialog.locator('[data-kind=pair-code]')).toBeVisible({ timeout: 90_000 });
     return dialog;
-}
-
-/* Step 2, "Let them in": sent, and once it landed the dialog shows the join code. */
-async function letIn(dialog: Locator, first: string, family: string) {
-    await dialog.getByRole('button', { name: 'Let them in' }).click();
-    return shownCode(dialog, first, family);
-}
-
-async function shownCode(dialog: Locator, first: string, family: string) {
-    await expect(dialog.getByText(`${first} is in ${family}.`)).toBeVisible({ timeout: 90_000 });
-    const code = dialog.locator('[data-kind=join-code]');
-    await expect(code).toBeVisible();
-    return words(code);
-}
-
-/*
- * The code on the newcomer's screen, once they're in: ten words shown and two
- * hidden (`?`), at positions the newcomer's device picked for this showing.
- * It must be the admin's code at every shown word.
- */
-async function newcomerCode(newcomer: Person, admin: string[]) {
-    await expect(newcomer.page.getByRole('heading', { name: 'Compare the join code' })).toBeVisible(
-        { timeout: 90_000 },
-    );
-    const list = newcomer.page.locator('[data-kind=join-code]');
-    const shown = await words(list);
-    const hidden = (await list.getAttribute('data-hidden'))!.split(' ').map(Number);
-    expect(hidden).toHaveLength(2);
-    expect(shown).toEqual(admin.map((word, at) => (hidden.includes(at + 1) ? '?' : word)));
-    // Each hidden word is an empty field to type it into.
-    for (const at of hidden)
-        await expect(newcomer.page.getByLabel(`Word ${at}`, { exact: true })).toHaveValue('');
-    // And is nowhere on the page: not in the list beyond shown cells that happen to hold the same
-    // word, and in no words or code attribute anywhere (where a code would sit if it leaked).
-    const leaks = await newcomer.page.evaluate(
-        ({ words: secret }) => {
-            const count = (text: string, word: string) =>
-                (text.match(new RegExp(`\\b${word}\\b`, 'g')) ?? []).length;
-            const list = document.querySelector('[data-kind=join-code]')!;
-            const shownTimes = (word: string) =>
-                (list.getAttribute('data-words') ?? '').split(' ').filter((at) => at === word)
-                    .length;
-            const data = [...document.body.querySelectorAll('*')]
-                .flatMap((element) =>
-                    // Attributes that carry words or codes (data-slot and the like carry UI names).
-                    [...element.attributes].filter((attribute) =>
-                        /^data-.*(words|code|fingerprint|hidden)/.test(attribute.name),
-                    ),
-                )
-                .map((attribute) => attribute.value)
-                .join(' ');
-            const cells = [...list.querySelectorAll('li')].map((cell) =>
-                (cell.textContent ?? '').replace(/^\d+/, '').trim(),
-            );
-            return secret.filter(
-                (word) =>
-                    cells.filter((text) => text === word).length !== shownTimes(word) ||
-                    count(data, word) !== shownTimes(word),
-            );
-        },
-        { words: hidden.map((at) => admin[at - 1]!) },
-    );
-    expect(leaks).toEqual([]);
-    return hidden;
-}
-
-/* The two hidden words typed as the admin reads `read` out, then "They match". */
-async function typeHidden(newcomer: Person, hidden: number[], read: string[]) {
-    const match = newcomer.page.getByRole('button', { name: 'They match' });
-    await expect(match).toBeDisabled();
-    for (const at of hidden)
-        await newcomer.page.getByLabel(`Word ${at}`, { exact: true }).fill(read[at - 1]!);
-    await match.click();
 }
 
 test.describe.serial('two people', () => {
@@ -385,77 +321,41 @@ test.describe.serial('two people', () => {
         await acceptOpened(sam, family);
     });
 
-    test('the newcomer is let in once their words are checked, then compares the join code, and joins only on a match', async () => {
+    test('the newcomer is let in with one click and joins with no words anywhere, and each reads the other as Not verified', async () => {
         test.setTimeout(300_000);
-        const dialog = await checkWords(maya, sam);
-        const code = await letIn(dialog, 'Sam', family);
-        await expect(
-            dialog.getByText(
-                'Read all twelve words to Sam. Two are hidden on Sam’s screen; Sam types those.',
-            ),
-        ).toBeVisible();
-        await expect(maya.page.locator(`[data-member="${sam.email}"]`)).toContainText('Member');
-
-        // Sam's screen moves on by itself, to the same code with two words hidden.
-        const first = await newcomerCode(sam, code);
-        // Shown, not kept: a reload works the same code out again, hiding two words afresh.
-        await sam.page.reload();
-        await newcomerCode(sam, code);
-        expect(first).toHaveLength(2);
-
-        // "They don't match": the warning, and nothing kept.
-        await sam.page.getByRole('button', { name: 'They don’t match' }).click();
-        await expect(
-            sam.page.getByRole('heading', { name: `Don’t use ${family} yet` }),
-        ).toBeFocused();
-        await expect(
-            sam.page.getByText(
-                'The join code doesn’t match what Maya sees. HushOS may be showing you a different member list. Don’t use this family until you’ve sorted it out together.',
-            ),
-        ).toBeVisible();
-        // The family page has nothing checked to show: it sends Sam back to compare.
-        await sam.page.goto(new URL(sam.page.url()).pathname.replace(/\/join$/, ''));
-        const hidden = await newcomerCode(sam, code);
-
-        // Maya closed the dialog: the code again from Members, over the stored member list.
-        await dialog.getByRole('button', { name: 'Done' }).click();
-        await maya.page.getByRole('button', { name: 'More for Sam Lindqvist' }).click();
-        await maya.page.getByRole('menuitem', { name: 'Show Sam’s join code' }).click();
-        const again = maya.page.getByRole('dialog', { name: 'Sam’s join code' });
-        await expect(again.locator('[data-kind=join-code]')).toHaveAttribute(
-            'data-words',
-            code.join(' '),
+        // While Sam waits, Let them in is the page's one blue button; Invite someone steps back.
+        const row = maya.page.locator(`[data-pending="${sam.email}"]`);
+        await expect(row).toBeVisible({ timeout: 30_000 });
+        await expect(row.getByRole('button', { name: 'Let them in' })).toHaveAttribute(
+            'data-variant',
+            'default',
+        );
+        await expect(row.getByRole('button', { name: 'Not now' })).toHaveAttribute(
+            'data-variant',
+            'outline',
+        );
+        await expect(maya.page.getByRole('button', { name: 'Invite someone' })).toHaveAttribute(
+            'data-variant',
+            'outline',
+        );
+        await expect(sam.page.getByText('Maya lets you in from the family’s page.')).toBeVisible();
+        await letThemIn(maya, sam, family);
+        await expect(maya.page.locator(`[data-member="${sam.email}"] [data-checked]`)).toHaveText(
+            'Not verified',
             { timeout: 60_000 },
         );
-        await maya.page.keyboard.press('Escape');
-
-        // A typo in one hidden word: said calmly, naming neither word, and nothing kept; the
-        // alarm is only for "They don't match".
-        const [, last] = hidden as [number, number];
-        const typo = code.map((word, at) =>
-            at === last - 1 ? (word === 'abandon' ? 'ability' : 'abandon') : word,
-        );
-        await typeHidden(sam, hidden, typo);
-        await expect(sam.page.locator('[data-wrong-words]')).toHaveText(
-            'One of the words doesn’t match. Ask Maya to read them again. If they still don’t match, choose They don’t match.',
+        await expect(sam.page.locator(`[data-member="${maya.email}"] [data-checked]`)).toHaveText(
+            'Not verified',
             { timeout: 60_000 },
         );
-        await expect(sam.page.locator('[data-mismatch]')).toHaveCount(0);
-        // Both fields marked alike, so the page never says which word was wrong.
-        for (const at of hidden)
-            await expect(sam.page.getByLabel(`Word ${at}`, { exact: true })).toHaveAttribute(
-                'aria-invalid',
-                'true',
-            );
-        await sam.page.getByLabel(`Word ${last}`, { exact: true }).fill(code[last - 1]!);
-        await expect(sam.page.locator('[data-wrong-words]')).toHaveCount(0);
-        await sam.page.getByRole('button', { name: 'They match' }).click();
-        await expect(sam.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
-            timeout: 90_000,
-        });
         await expect(
             sam.page.locator(`[data-member="${maya.email}"] [data-roles] [data-slot=badge]`),
         ).toHaveText(['Organizer', 'Manages the family']);
+        // A plain member carries no role badge, and their own row no label.
+        await expect(maya.page.locator(`[data-member="${sam.email}"] [data-roles]`)).toHaveCount(0);
+        await expect(sam.page.locator(`[data-member="${sam.email}"] [data-checked]`)).toHaveCount(
+            0,
+        );
         await openTechnical(sam.page);
         await expect(sam.page.getByText('Member list version')).toBeVisible();
         // A plain member may leave: offered, under Technical details and leaving.
@@ -475,7 +375,8 @@ test.describe.serial('two people', () => {
         await expect(sam.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
             timeout: 60_000,
         });
-        await expect(sam.page.getByText(/shown differently/)).toHaveCount(0);
+        await expect(sam.page.getByText(/looks different/)).toHaveCount(0);
+        await noWords(sam.page);
     });
 
     test('family folders: each side’s uploads are checked, and the family vouches where no words were compared', async () => {
@@ -485,24 +386,74 @@ test.describe.serial('two people', () => {
         await upload(sam, 'from-sam.txt', 'Written by Sam\n');
         await expect(mark(sam.page, 'from-sam.txt')).toHaveCount(0);
 
-        // Maya sees it with no mark: she checked Sam's words herself, so her own check vouches
-        // and Info says nothing more.
+        // Maya made the family, so its member list is hers to vouch with: no mark, and Info
+        // says the family vouches for Sam's file.
         await openFamilyFolder(maya, family, 'Family');
         await expect(fileRow(maya.page, 'from-sam.txt')).toBeVisible({ timeout: 60_000 });
         await expect(mark(maya.page, 'from-sam.txt')).toHaveCount(0);
         const mayaInfo = await info(maya, 'from-sam.txt');
-        await expect(mayaInfo.locator('[data-verified-by]')).toHaveCount(0);
+        await expect(mayaInfo.locator('[data-verified-by]')).toHaveText(
+            'Verified by Lindqvist family',
+        );
         await maya.page.keyboard.press('i');
 
-        // Sam never compared Maya's words: what she adds is verified by the family's member list.
+        // Sam's device took the family on first use: what Maya adds has no mark, and Info says
+        // it is hers, not verified, never "Verified by" a family nobody checked.
         await upload(maya, 'from-maya.txt', 'Written by Maya\n');
         await expect(fileRow(sam.page, 'from-maya.txt')).toBeVisible({ timeout: 60_000 });
         await expect(mark(sam.page, 'from-maya.txt')).toHaveCount(0);
         const samInfo = await info(sam, 'from-maya.txt');
-        await expect(samInfo.locator('[data-verified-by]')).toHaveText(
-            'Verified by Lindqvist family',
-        );
+        await expect(samInfo.locator('[data-verified-by]')).toHaveCount(0);
+        await expect(samInfo.locator('[data-integrity-seen]')).toContainText('Not verified');
         await sam.page.keyboard.press('i');
+    });
+
+    test('they check each other later: words that differ save nothing, and the same words on both screens make both rows Verified', async () => {
+        test.setTimeout(300_000);
+        await openFamilyPage(maya, '/app/family', family);
+        await openFamilyPage(sam, '/app/family', family);
+        const mayaSide = await openCheck(maya, sam);
+        await expect(mayaSide).toContainText(
+            'Ask Sam to open Lindqvist family and choose Check it’s Maya beside your name.',
+        );
+        const samSide = await openCheck(sam, maya);
+        const mayaWords = await words(mayaSide.locator('[data-kind=pair-code]'));
+        expect(mayaWords).toHaveLength(12);
+        expect(await words(samSide.locator('[data-kind=pair-code]'))).toEqual(mayaWords);
+
+        // Sam says they don't match: what to do, and nothing saved on either side.
+        await samSide.getByRole('button', { name: 'They don’t match' }).click();
+        await expect(samSide).toContainText(
+            'These don’t match. Make sure you’re both in Lindqvist family, reload, and compare again. If they still don’t match, ask Maya to help.',
+        );
+        await samSide.getByRole('button', { name: 'Done' }).click();
+        await expect(sam.page.locator(`[data-member="${maya.email}"] [data-checked]`)).toHaveText(
+            'Not verified',
+        );
+
+        // Compared again, the same words: They match on each side.
+        const again = await openCheck(sam, maya);
+        expect(await words(again.locator('[data-kind=pair-code]'))).toEqual(mayaWords);
+        await again.getByRole('button', { name: 'They match' }).click();
+        await expect(sam.page.getByText('You and Maya checked each other')).toBeVisible({
+            timeout: 60_000,
+        });
+        await mayaSide.getByRole('button', { name: 'They match' }).click();
+        await expect(maya.page.getByText('You and Sam checked each other')).toBeVisible({
+            timeout: 60_000,
+        });
+        await expect(maya.page.locator(`[data-member="${sam.email}"] [data-checked]`)).toHaveText(
+            'Verified',
+            { timeout: 60_000 },
+        );
+        await expect(sam.page.locator(`[data-member="${maya.email}"] [data-checked]`)).toHaveText(
+            'Verified',
+            { timeout: 60_000 },
+        );
+        // And the row menu offers Check again from now on.
+        await sam.page.getByRole('button', { name: `More for ${maya.name}` }).click();
+        await expect(sam.page.getByRole('menuitem', { name: 'Check again' })).toBeVisible();
+        await sam.page.keyboard.press('Escape');
     });
 
     test('in a family folder: copying but no sharing or reporting; downloads byte for byte; versions read-only where the keys changed; and My files never lists it', async () => {
@@ -836,14 +787,7 @@ test.describe.serial('removal, leaving and key changes', () => {
         for (const newcomer of [sam, ana]) {
             await invite(maya, newcomer.email);
             await accept(newcomer, family);
-            const first = newcomer.name.split(' ')[0]!;
-            const dialog = await checkWords(maya, newcomer);
-            const code = await letIn(dialog, first, family);
-            await typeHidden(newcomer, await newcomerCode(newcomer, code), code);
-            await expect(
-                newcomer.page.getByRole('heading', { level: 1, name: family }),
-            ).toBeVisible({ timeout: 90_000 });
-            await dialog.getByRole('button', { name: 'Done' }).click();
+            await letThemIn(maya, newcomer, family);
         }
         await openFamilyFolder(sam, family, 'Family');
         await upload(sam, 'from-sam.txt', 'Written by Sam\n');
@@ -856,8 +800,8 @@ test.describe.serial('removal, leaving and key changes', () => {
         await create.getByRole('button', { name: /^Create/ }).click();
         await expect(fileRow(maya.page, 'Trips')).toBeVisible({ timeout: 60_000 });
 
-        // A copy inside the family folder: judged by the family, so Sam's file, which Maya
-        // checked, is copied as hers, with no mark.
+        // A copy inside the family folder: judged by the family, which Maya made, so Sam's file
+        // is copied as hers, with no mark.
         await expect(fileRow(maya.page, 'from-sam.txt')).toBeVisible({ timeout: 60_000 });
         await maya.page.getByRole('button', { name: 'More for from-sam.txt' }).click();
         await maya.page.getByRole('menuitem', { name: /^Copy(?: \S+)?$/ }).click();
@@ -866,11 +810,13 @@ test.describe.serial('removal, leaving and key changes', () => {
         await expect(copy).toHaveCount(0, { timeout: 60_000 });
         await expect(fileRow(maya.page, 'from-sam (copy).txt')).toBeVisible({ timeout: 60_000 });
         await expect(mark(maya.page, 'from-sam (copy).txt')).toHaveCount(0);
-        // Ana never checked anyone's words: the copy reads verified by the family.
+        // Ana's device took the family on first use: the copy is Maya's, not verified, with no mark.
         await openFamilyFolder(ana, family, 'Family');
         await expect(fileRow(ana.page, 'from-sam (copy).txt')).toBeVisible({ timeout: 60_000 });
+        await expect(mark(ana.page, 'from-sam (copy).txt')).toHaveCount(0);
         const copied = await info(ana, 'from-sam (copy).txt');
-        await expect(copied.locator('[data-verified-by]')).toHaveText(`Verified by ${family}`);
+        await expect(copied.locator('[data-verified-by]')).toHaveCount(0);
+        await expect(copied.locator('[data-integrity-seen]')).toContainText('Not verified');
         await ana.page.keyboard.press('i');
         const [download] = await Promise.all([
             ana.page.waitForEvent('download'),
@@ -1225,6 +1171,133 @@ test.describe.serial('removal, leaving and key changes', () => {
     });
 });
 
+/*
+ * A member whose account changed with no signed handover (docs/optional-verification.md 3.3,
+ * 6.9): the server serves Sam brand-new keys (written straight into the test database, as an
+ * account started over looks to everyone else). Maya's family page says so calmly, nothing is
+ * folded in on its own, and Continue gives Sam the family folders again, every folder's keys
+ * replaced in the same change. And the family-change floor (7.3): a tab from an older release
+ * is refused family changes and served everything else.
+ */
+test.describe.serial('a member’s account changes', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+    let maya: Person;
+    let sam: Person;
+    const family = 'Holm family';
+
+    test.beforeAll(async ({ browser }) => {
+        test.setTimeout(300_000);
+        maya = await person(browser, 'Maya Holm');
+        sam = await person(browser, 'Sam Holm');
+    });
+    test.afterAll(async () => {
+        for (const who of [maya, sam]) await who?.page.context().close();
+    });
+
+    test('the changed-member notice: one calm Continue, with every family folder’s keys replaced', async () => {
+        test.setTimeout(420_000);
+        await createFamily(maya, family);
+        const familyPath = new URL(maya.page.url()).pathname;
+        await invite(maya, sam.email);
+        await accept(sam, family);
+        await letThemIn(maya, sam, family);
+
+        execFileSync('bun', ['e2e/fixtures/start-over.ts', sam.email], {
+            stdio: 'pipe',
+            env: { ...process.env, DATABASE_URL: e2eDatabase().url },
+        });
+        const rosters: string[] = [];
+        maya.page.on('request', (request) => {
+            if (
+                request.method() === 'POST' &&
+                /\/api\/groups\/[0-9a-f-]+\/rosters$/.test(request.url())
+            )
+                rosters.push(request.postData() ?? '');
+        });
+        await openFamilyPage(maya, familyPath, family);
+        const notice = maya.page.locator(`[data-account-changed="${sam.email}"]`);
+        await expect(notice).toBeVisible({ timeout: 120_000 });
+        await expect(notice).toContainText('Sam’s account changed');
+        await expect(notice).toContainText(
+            'This happens when someone starts their HushOS account over. Continue to give Sam the family folders again.',
+        );
+        // Calm: never the alarm colour; Continue the blue button, the check beside it.
+        await expect(notice).not.toHaveAttribute('data-variant', 'destructive');
+        await expect(notice.getByRole('button', { name: 'Continue' })).toHaveAttribute(
+            'data-variant',
+            'default',
+        );
+        await expect(notice.getByRole('button', { name: 'Check it’s Sam' })).toHaveAttribute(
+            'data-variant',
+            'outline',
+        );
+        await expect(maya.page.locator(`[data-member="${sam.email}"]`)).toContainText(
+            'Account changed',
+        );
+        // Nothing was folded in on its own meanwhile.
+        expect(rosters).toEqual([]);
+
+        await notice.getByRole('button', { name: 'Continue' }).click();
+        await expect(maya.page.getByText('Sam has the family folders again')).toBeVisible({
+            timeout: 120_000,
+        });
+        // One change: Sam's new keys, and every family folder rotated in it.
+        expect(rosters).toHaveLength(1);
+        const call = JSON.parse(rosters[0]!) as { rotations?: { workspaceId: string }[] };
+        expect(call.rotations).toHaveLength(1);
+        await expect(notice).toHaveCount(0, { timeout: 120_000 });
+        await expect(maya.page.locator(`[data-member="${sam.email}"]`)).not.toContainText(
+            'Account changed',
+            { timeout: 60_000 },
+        );
+        await expect(maya.page.locator(`[data-member="${sam.email}"] [data-checked]`)).toHaveText(
+            'Not verified',
+        );
+    });
+
+    test('a tab from an older release is refused family changes with 426, and served reads and Drive', async () => {
+        test.setTimeout(300_000);
+        // Every request from Maya's tab says it is an older release, as a tab left open would.
+        const answers: { method: string; path: string; status: number }[] = [];
+        await maya.page.route('**/api/**', async (route) => {
+            const response = await route.fetch({
+                headers: { ...route.request().headers(), 'hushos-client': 'web/0.0.1' },
+            });
+            answers.push({
+                method: route.request().method(),
+                path: new URL(route.request().url()).pathname,
+                status: response.status(),
+            });
+            await route.fulfill({ response });
+        });
+        // Opening the family and its folders still works: reads and Drive are served.
+        await maya.page.getByRole('link', { name: 'Family folders', exact: true }).first().click();
+        await expect(maya.page).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
+        await expect(maya.page.locator('[data-area="Family"]')).toBeVisible({ timeout: 90_000 });
+        // A family change (a new family folder): refused, said plainly, and nothing made.
+        await maya.page.getByRole('button', { name: 'New family folder' }).click();
+        const create = maya.page.getByRole('dialog', { name: 'New family folder' });
+        await create.getByLabel('Name').fill('Photos');
+        await create.getByRole('button', { name: 'Create folder' }).click();
+        await expect(
+            create.getByText(
+                'Update HushOS to do this. Reload the page to get the latest version.',
+            ),
+        ).toBeVisible({ timeout: 90_000 });
+        expect(
+            answers.filter((answer) => /\/api\/groups\/[0-9a-f-]+\/areas$/.test(answer.path)),
+        ).toEqual([{ method: 'POST', path: expect.any(String), status: 426 }]);
+        expect(answers.filter((answer) => answer.method === 'GET' && answer.status >= 400)).toEqual(
+            [],
+        );
+        await maya.page.keyboard.press('Escape');
+        await maya.page.unroute('**/api/**');
+        await maya.page.reload();
+        await expect(maya.page.locator('[data-area="Family"]')).toBeVisible({ timeout: 90_000 });
+        await expect(maya.page.locator('[data-area="Photos"]')).toHaveCount(0);
+    });
+});
+
 test.describe.serial('three people', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
     let maya: Person;
@@ -1242,7 +1315,7 @@ test.describe.serial('three people', () => {
         for (const who of [maya, ana, ben]) await who?.page.context().close();
     });
 
-    test('an admission that meets a stale answer is signed again, its code is the stored one, and comparing the wrong code keeps nothing', async ({
+    test('an admission that meets a stale answer is signed again over the new member list, with no words on either side', async ({
         browser,
     }) => {
         test.setTimeout(480_000);
@@ -1253,7 +1326,7 @@ test.describe.serial('three people', () => {
         // Ana's invitation opened by Ben's account: refused, and nothing accepted.
         const anaLink = await invitationPath(ana.email);
         await ben.page.goto(anaLink);
-        await ben.page.getByRole('button', { name: 'Accept' }).click();
+        await ben.page.getByRole('button', { name: 'Join', exact: true }).click();
         await expect(
             ben.page.getByText(/This invitation is for another email address than/),
         ).toBeVisible({ timeout: 30_000 });
@@ -1275,70 +1348,39 @@ test.describe.serial('three people', () => {
         let arrived!: () => void;
         const held = new Promise<void>((resolve) => (arrived = resolve));
         let holding = true;
+        const admits: number[] = [];
         await maya.page.route('**/members/*/admit', async (route) => {
             if (holding) {
                 holding = false;
                 arrived();
                 await released;
             }
-            await route.continue();
+            const response = await route.fetch();
+            admits.push(response.status());
+            await route.fulfill({ response });
         });
-        const anaDialog = await checkWords(maya, ana);
-        await anaDialog.getByRole('button', { name: 'Let them in' }).click();
+        await maya.page
+            .locator(`[data-pending="${ana.email}"]`)
+            .getByRole('button', { name: 'Let them in' })
+            .click();
         await held;
 
         // Meanwhile the other device lets Ben in, on the same member list.
-        const benDialog = await checkWords(other, ben);
-        const benCode = await letIn(benDialog, 'Ben', family);
-        await typeHidden(ben, await newcomerCode(ben, benCode), benCode);
-        await expect(ben.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
-            timeout: 90_000,
-        });
+        await letThemIn(other, ben, family);
 
-        // The held admission now meets a stale answer: signed again over the new member list.
+        // The held admission now meets a stale answer, and is signed again over the new list.
         release();
-        const anaCode = await shownCode(anaDialog, 'Ana', family);
-        await expect(
-            anaDialog.getByText(
-                `${family} changed while you were letting Ana in, so HushOS signed it again.`,
-            ),
-        ).toBeVisible();
-        expect(anaCode).not.toEqual(benCode);
+        await expect(maya.page.getByText(`Ana is in ${family}`)).toBeVisible({ timeout: 90_000 });
+        expect(admits).toEqual([409, 201]);
         await maya.page.unroute('**/members/*/admit');
-
-        // Ana's screen works out the same code from the stored member list.
-        const anaHidden = await newcomerCode(ana, anaCode);
-        // Ben's code read to her by mistake, its two words typed: refused calmly the first time,
-        // and nothing is kept.
-        await typeHidden(ana, anaHidden, benCode);
-        await expect(ana.page.locator('[data-wrong-words]')).toBeVisible({ timeout: 60_000 });
-        await expect(ana.page.locator('[data-mismatch]')).toHaveCount(0);
-        // Read out again, still wrong for the same code: the warning, not another calm retry.
-        await ana.page.getByRole('button', { name: 'They match' }).click();
-        await expect(
-            ana.page.getByRole('heading', { name: `Don’t use ${family} yet` }),
-        ).toBeVisible({ timeout: 60_000 });
-        await expect(ana.page.locator('[data-mismatch]')).toBeVisible();
-        // A reload asks the same two words (held in this tab), and a second miss is still the
-        // warning; Ana's own code, read out at last, joins.
-        await ana.page.reload();
-        const asked = await newcomerCode(ana, anaCode);
-        expect(asked).toEqual(anaHidden);
-        await typeHidden(ana, asked, benCode);
-        await expect(ana.page.locator('[data-mismatch]')).toBeVisible({ timeout: 60_000 });
-        await ana.page.reload();
-        await typeHidden(ana, await newcomerCode(ana, anaCode), anaCode);
         await expect(ana.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
             timeout: 90_000,
         });
-        await anaDialog.getByRole('button', { name: 'Done' }).click();
+        await noWords(ana.page);
         for (const who of [ana, ben])
-            await expect(maya.page.locator(`[data-member="${who.email}"]`)).toContainText(
-                'Member',
-                {
-                    timeout: 60_000,
-                },
-            );
+            await expect(
+                maya.page.locator(`[data-member="${who.email}"] [data-checked]`),
+            ).toHaveText('Not verified', { timeout: 60_000 });
         await other.page.context().close();
 
         // The invitation is used up now.
@@ -1792,13 +1834,7 @@ test.describe.serial('deleting a family folder', () => {
         groupPath = new URL(ida.page.url()).pathname;
         await invite(ida, leo.email);
         await accept(leo, family);
-        const dialog = await checkWords(ida, leo);
-        const code = await letIn(dialog, 'Leo', family);
-        await typeHidden(leo, await newcomerCode(leo, code), code);
-        await expect(leo.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
-            timeout: 90_000,
-        });
-        await dialog.getByRole('button', { name: 'Done' }).click();
+        await letThemIn(ida, leo, family);
 
         // A second folder, which Leo opens and adds to.
         await ida.page.getByRole('link', { name: 'Family folders', exact: true }).first().click();
@@ -1891,7 +1927,6 @@ test.describe.serial('deleting a family folder', () => {
         await openFamilyPage(ida, groupPath, family);
         await invite(ida, mia.email);
         await accept(mia, family);
-        const dialog = await checkWords(ida, mia);
         // The admission grants the one live folder: the deleted one's key is asked for by nobody.
         const admission = ida.page.waitForRequest(
             (request) =>
@@ -1901,15 +1936,9 @@ test.describe.serial('deleting a family folder', () => {
                 ),
             { timeout: 120_000 },
         );
-        const code = await letIn(dialog, 'Mia', family);
+        await letThemIn(ida, mia, family);
         const body = (await admission).postDataJSON() as { grants?: { workspaceId: string }[] };
         expect(body.grants).toHaveLength(1);
-        await typeHidden(mia, await newcomerCode(mia, code), code);
-        // Exactly the family's page: "Join Berg family" is the join screen still.
-        await expect(
-            mia.page.getByRole('heading', { level: 1, name: family, exact: true }),
-        ).toBeVisible({ timeout: 90_000 });
-        await dialog.getByRole('button', { name: 'Done' }).click();
         // Mia opens the family's live folder, and the deleted one is listed for nobody.
         await openFamilyFolder(mia, family, 'Family');
         await upload(mia, 'list.txt', 'Milk\n');
@@ -2298,13 +2327,7 @@ test.describe.serial('one view for a family member, with one pool', () => {
             { timeout: 60_000 },
         );
         await acceptOpened(theo, family);
-        const dialog = await checkWords(rosa, theo);
-        const code = await letIn(dialog, 'Theo', family);
-        await typeHidden(theo, await newcomerCode(theo, code), code);
-        await expect(theo.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
-            timeout: 90_000,
-        });
-        await dialog.getByRole('button', { name: 'Done' }).click();
+        await letThemIn(rosa, theo, family);
 
         // His own files now draw from the pool: the figures are the family's, his own beside them.
         await expect.poll(async () => (await storageOf(theo)).pool?.name).toBe(family);
@@ -2835,16 +2858,16 @@ test.describe
         }
         await invite(ivy, ben.email);
         await ben.page.goto(await invitationPath(ben.email));
-        await expect(
-            ben.page.getByRole('heading', { name: /invited you to Strand family/ }),
-        ).toBeVisible({ timeout: 60_000 });
+        await expect(ben.page.getByRole('heading', { name: 'Join Strand family' })).toBeVisible({
+            timeout: 60_000,
+        });
         await expect(
             ben.page.getByText(
                 'You’re in Aalto family. To join Strand family, leave yours first, from its page.',
                 { exact: false },
             ),
         ).toBeVisible();
-        await expect(ben.page.getByRole('button', { name: 'Accept' })).toBeDisabled();
+        await expect(ben.page.getByRole('button', { name: 'Join', exact: true })).toBeDisabled();
         // Nothing about storage for someone who can't join yet.
         await expect(ben.page.locator('[data-join-storage]')).toHaveCount(0);
     });
