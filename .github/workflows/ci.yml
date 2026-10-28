@@ -129,8 +129,8 @@ jobs:
             - uses: oven-sh/setup-bun@v2
               with:
                   bun-version: 1.4.4
-            - run: bun scripts/ci-install.ts
-              timeout-minutes: 14
+            - run: bun install --frozen-lockfile
+              timeout-minutes: 5
             - name: Lint, format, and typecheck
               run: bun run check
             # Loads every browser spec without a server or a browser: an import Bun can't resolve
@@ -175,8 +175,8 @@ jobs:
             - uses: oven-sh/setup-bun@v2
               with:
                   bun-version: 1.4.4
-            - run: bun scripts/ci-install.ts
-              timeout-minutes: 14
+            - run: bun install --frozen-lockfile
+              timeout-minutes: 5
             - name: Build
               run: bun run build
             # The Start plugin regenerates the route tree during the build; a commit
@@ -206,8 +206,8 @@ jobs:
             - uses: oven-sh/setup-bun@v2
               with:
                   bun-version: 1.4.4
-            - run: bun scripts/ci-install.ts
-              timeout-minutes: 14
+            - run: bun install --frozen-lockfile
+              timeout-minutes: 5
             - name: Build
               run: bun run build
             - name: Pack the server output
@@ -263,8 +263,8 @@ jobs:
             - uses: oven-sh/setup-bun@v2
               with:
                   bun-version: 1.4.4
-            - run: bun scripts/ci-install.ts
-              timeout-minutes: 14
+            - run: bun install --frozen-lockfile
+              timeout-minutes: 5
             - uses: actions/download-artifact@v8
               with:
                   name: web-output
@@ -340,8 +340,8 @@ jobs:
             - uses: oven-sh/setup-bun@v2
               with:
                   bun-version: 1.4.4
-            - run: bun scripts/ci-install.ts
-              timeout-minutes: 14
+            - run: bun install --frozen-lockfile
+              timeout-minutes: 5
             - uses: actions/download-artifact@v8
               with:
                   name: web-output
@@ -417,8 +417,8 @@ jobs:
             - uses: oven-sh/setup-bun@v2
               with:
                   bun-version: 1.4.4
-            - run: bun scripts/ci-install.ts
-              timeout-minutes: 14
+            - run: bun install --frozen-lockfile
+              timeout-minutes: 5
             - uses: actions/download-artifact@v8
               with:
                   name: web-output-macos

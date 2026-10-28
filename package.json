@@ -74,7 +74,7 @@
         "turbo": "2.11.10",
         "typescript": "7.0.2",
         "vitest": "^5.0.5",
-        "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+        "xlsx": "file:vendor/xlsx-0.20.3.tgz"
     },
     "engines": {
         "bun": ">=1.4.4"
