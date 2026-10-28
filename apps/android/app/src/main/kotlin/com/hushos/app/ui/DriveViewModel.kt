@@ -14,6 +14,7 @@ import com.hushos.app.BuildConfig
 import com.hushos.app.data.rethrowIfCancelled
 import com.hushos.app.data.Auth
 import com.hushos.app.data.catalogueAll
+import com.hushos.app.data.saveFromLink
 import com.hushos.app.data.BillingSummary
 import com.hushos.app.data.StorageAllowance
 import com.hushos.app.data.NotAuthenticated
@@ -1526,29 +1527,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         val ticket = begin("copy", item.name)
         var reason: String? = null
         notify("Saving a copy of “${item.name}”. It shows up in Files as it copies.")
-        val ok = write(root, { reason = it }) { vault -> copyFromLink(vault, link, item, root, freeName(item.name, taken)) }
+        val ok = write(root, { reason = it }) { vault -> vault.saveFromLink(link, item, root, freeName(item.name, taken)) }
         finish(ticket, failed = !ok, message = reason)
-    }
-
-    /*
-     * A visitor sees no signatures, so everything saved from a link, every folder the save creates included, is signed
-     * with the saved statements: no mark, and Info says who saved it and that the original can't be confirmed.
-     */
-    private fun copyFromLink(vault: Vault, link: com.hushos.app.data.LinkVault, item: Opened, parent: String, name: String) {
-        if (item.isFolder) {
-            val made = vault.createFolder(parent, name, com.hushos.app.data.Prior.FROM_LINK, item.metadata.attributes)
-            for (child in link.children(item.id)) copyFromLink(vault, link, child, made.id, child.name)
-            return
-        }
-        val directory = File(context.cacheDir, "copy-" + java.util.UUID.randomUUID())
-        try {
-            val file = File(directory, name)
-            link.download(item, file)
-            vault.upload(file, name, item.metadata.mime, parent, null, vault.makeThumbnail(file, item.metadata.mime), com.hushos.app.data.Prior.FROM_LINK,
-                item.metadata.attributes)
-        } finally {
-            directory.deleteRecursively()
-        }
     }
 
     /* A link's password and end date; the address stays the same. */
