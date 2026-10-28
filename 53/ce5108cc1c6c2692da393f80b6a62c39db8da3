@@ -1,0 +1,30 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Account.swift
+  s_efd5e4c7e9b391::t_fcdbaba30eb516 227-229
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/RollbackMarks.swift
+  s_efd5e4c7e9b391::t_3d04a0258aaaac 181-183,185
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Settings.swift
+  s_efd5e4c7e9b391::t_3d04a0258aaaac 278,280,299-300,305,318,362
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsTests.swift
+  s_efd5e4c7e9b391::t_91bb28a36dddfd 300-311
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Contacts.swift
+  s_efd5e4c7e9b391::t_fcdbaba30eb516 161-162,182
+  s_efd5e4c7e9b391::t_3d04a0258aaaac 185,190-191
+apps/android/app/src/main/kotlin/com/hushos/app/data/SettingsMark.kt
+  s_efd5e4c7e9b391::t_8a140c2740ec9d 109-111,113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "53ce5108cc1c6c2692da393f80b6a62c39db8da3",
+  "prompts": {},
+  "sessions": {
+    "s_efd5e4c7e9b391": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da795f5c-6f7b-4e4b-b602-9bdf2054de0d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
