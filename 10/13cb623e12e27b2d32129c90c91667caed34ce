@@ -1,0 +1,28 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_efd5e4c7e9b391::t_73a1139fe95cee 375-376
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/RollbackMarks.swift
+  s_efd5e4c7e9b391::t_73a1139fe95cee 78-79,83,86-87,164,167,200,202,214-219,234,259-260
+  s_efd5e4c7e9b391::t_290de9d365febb 261
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsTests.swift
+  s_efd5e4c7e9b391::t_a5ee1d0d25e31f 288-313
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AccountStore.swift
+  s_efd5e4c7e9b391::t_1347047e0599b7 23-24,38,41,114,141
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Settings.swift
+  s_efd5e4c7e9b391::t_73a1139fe95cee 280-281,337-340
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1013cb623e12e27b2d32129c90c91667caed34ce",
+  "prompts": {},
+  "sessions": {
+    "s_efd5e4c7e9b391": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da795f5c-6f7b-4e4b-b602-9bdf2054de0d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
