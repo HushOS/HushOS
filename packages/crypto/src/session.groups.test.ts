@@ -2876,6 +2876,41 @@ describe('group verdicts', () => {
         ).resolves.toMatchObject({ metadata: 'unsigned' });
     });
 
+    test('a first-seen pin, which the web passes as the family’s word: other keys in the entry are a key conflict, the same keys the family’s word', async () => {
+        const f = await family();
+        const folderOf = await bobsFolder(f);
+        const verify = async (who: GroupWriter) =>
+            (
+                await f.alice.call('groupVerify', {
+                    groupId: f.groupId,
+                    workspaceId: f.ws,
+                    writers: [who],
+                    nodes: [folderOf.signed],
+                })
+            ).nodes[0]!;
+        // As apps/web/src/lib/groups/writers.ts passes a pin of Bob taken without words.
+        const firstSeen = async (who: { userId: string; served: Account['served'] }) => ({
+            ...(await writerPinOf(who)),
+            trustedVia: f.groupId,
+        });
+        // The keys Alice first saw are the ones his entry names: the family's word, never her own
+        // check (the page reads it `seen`).
+        await expect(
+            verify(writer({ pinned: await firstSeen(f.bob) }, f.bob.served)),
+        ).resolves.toMatchObject({ metadata: 'verified', via: f.groupId });
+        // Another manager put other keys in his entry: the keys she first saw disagree, and no
+        // succession joins them.
+        const carol = await account(CAROL);
+        await expect(
+            verify(
+                writer(
+                    { pinned: await firstSeen({ userId: BOB, served: carol.served }) },
+                    f.bob.served,
+                ),
+            ),
+        ).resolves.toMatchObject({ metadata: 'key-conflict', via: null });
+    });
+
     test('a walk keeps a member’s record as theirs, re-keyed, with no word of who is leaving, and one nobody can check no longer stops it', async () => {
         const f = await family();
         const bobs = await bobsFolder(f);
