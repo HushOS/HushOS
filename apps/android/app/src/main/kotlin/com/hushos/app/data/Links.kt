@@ -309,3 +309,25 @@ class LinkVault(origin: String, url: String, val api: PublicApi = PublicApi(orig
         return api.post("/reports", body).optBoolean("duplicate")
     }
 }
+
+/*
+ * Save to my Drive from a link (DriveViewModel.saveLinkCopy): the item read through the link and uploaded under this
+ * account's keys, folders node by node, each record keeping its attributes. A visitor sees no signatures, so everything
+ * saved from a link, every folder the save creates included, is signed with the saved statements: no mark, and Info
+ * says who saved it and that the original can't be confirmed.
+ */
+fun Vault.saveFromLink(link: LinkVault, item: Opened, parent: String, name: String) {
+    if (item.isFolder) {
+        val made = createFolder(parent, name, Prior.FROM_LINK, item.metadata.attributes)
+        for (child in link.children(item.id)) saveFromLink(link, child, made.id, child.name)
+        return
+    }
+    val directory = File(context.cacheDir, "copy-" + java.util.UUID.randomUUID())
+    try {
+        val file = File(directory, name)
+        link.download(item, file)
+        upload(file, name, item.metadata.mime, parent, null, makeThumbnail(file, item.metadata.mime), Prior.FROM_LINK, item.metadata.attributes)
+    } finally {
+        directory.deleteRecursively()
+    }
+}
