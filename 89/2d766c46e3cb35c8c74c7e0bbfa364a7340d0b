@@ -1,0 +1,98 @@
+apps/android/AGENTS.md
+  h_f7ba60a6997566 40,58
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  h_f7ba60a6997566 17,45-47,59,61
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  h_f7ba60a6997566 392-394,498-500,529-530,533-534,539-540,548-549,555-556,620-621,633,641-642,646,648
+apps/android/app/src/main/kotlin/com/hushos/app/data/Contacts.kt
+  h_f7ba60a6997566 377-378,383
+apps/android/app/src/main/kotlin/com/hushos/app/data/JobNames.kt
+  h_f7ba60a6997566 1-53
+apps/android/app/src/main/kotlin/com/hushos/app/data/SettingsMark.kt
+  h_f7ba60a6997566 4-6,8-9,17-64,66-68,70-115,120-122,124-175,184,186-188,191-197,204-207,210,213-217,219-267,272-275,277-279,281-283,285-296,298-304,306-310
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  h_f7ba60a6997566 124-132,136-138,147-155,158-159,246-248,252,256,261,313,341-342
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  h_f7ba60a6997566 143-145,150,154-155,359,362-381,388,392-393,396,399,410-412,414,435,437,457,464,501,528,562,567,614
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  h_f7ba60a6997566 311-314,320,325,344,358
+apps/android/app/src/test/kotlin/com/hushos/app/data/AccountStoreTest.kt
+  h_f7ba60a6997566 19,32-34,41-43,51,53,112-126
+apps/android/app/src/test/kotlin/com/hushos/app/data/FailedTransfersTest.kt
+  h_f7ba60a6997566 73
+apps/android/app/src/test/kotlin/com/hushos/app/data/JobNamesTest.kt
+  h_f7ba60a6997566 1-50
+apps/android/app/src/test/kotlin/com/hushos/app/data/OwnIdentityTest.kt
+  h_f7ba60a6997566 34
+apps/android/app/src/test/kotlin/com/hushos/app/data/RecoveryWordsTest.kt
+  h_f7ba60a6997566 56
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsKeyTest.kt
+  h_f7ba60a6997566 60,80
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsMarkTest.kt
+  h_f7ba60a6997566 3-6,10,14,17-21,26-36,40-43,48-99,102-105,107-113,116,118-132,135,137-144,147,149-155,159-166,171-200
+apps/ios/AGENTS.md
+  h_f7ba60a6997566 70,79,109,122
+apps/ios/App/AppModel.swift
+  h_f7ba60a6997566 310
+apps/ios/Files/FileProviderExtension.swift
+  h_f7ba60a6997566 40-48
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Account.swift
+  h_f7ba60a6997566 227-229,443-444
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AccountStore.swift
+  h_f7ba60a6997566 23-24,28-34,38,41,74,98-102,104,106-108,116-118,128
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Auth.swift
+  h_f7ba60a6997566 142-146
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Contacts.swift
+  h_f7ba60a6997566 128,130,161-162,182,185,190-191,233,253,310
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyRecords.swift
+  h_f7ba60a6997566 32,36
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FileLock.swift
+  h_f7ba60a6997566 1-97
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/RollbackMarks.swift
+  h_f7ba60a6997566 5-31,33-36,38-42,44-61,64-66,68-84,86-87,91-93,95-110,113-117,119-121,125-126,128-148,150-151,155-157,159-190,195-199,202-227,229-250,253-272,274-275,277-282,284-306,308,311-320,325-328,332-339,341-347,349-350,352-353,358-363,367-370,372,376-378,380-381,386-390,392,395-397
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Settings.swift
+  h_f7ba60a6997566 262,266-290,299-300,302,305,317-322,339-342,364,366
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Shares.swift
+  h_f7ba60a6997566 110-111
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Succession.swift
+  h_f7ba60a6997566 204
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Families.swift
+  h_f7ba60a6997566 186
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Identity.swift
+  h_f7ba60a6997566 6-7,16-17,23,26,34-35,89,93-95,113,121,200,209,257
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  h_f7ba60a6997566 104-105,350,352-354,359,362,369-381,409
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/AccountStoreTests.swift
+  h_f7ba60a6997566 43-48,104-112
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyJoinTests.swift
+  h_f7ba60a6997566 189-192,194,199-213,215-216,218-223
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/IdentityUpgradeTests.swift
+  h_f7ba60a6997566 93-111,136-139,207-208,249-257
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/IntegrityTests.swift
+  h_f7ba60a6997566 6-8
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsTests.swift
+  h_f7ba60a6997566 121-135,138-141,144-161,164-217,219-224,226-238,241-243,248-249,255-258,260-261,263-269,271-272,275-299,302-424,427-446
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsUpgradeTests.swift
+  h_f7ba60a6997566 41-61,72-73
+crates/hushos-core/src/lib.rs
+  h_f7ba60a6997566 39,68
+crates/hushos-core/src/rollback_marks.rs
+  h_f7ba60a6997566 1-266
+docs/groups-mobile-plan.md
+  h_f7ba60a6997566 168,170
+docs/integrity-design.md
+  h_f7ba60a6997566 224
+docs/optional-verification.md
+  h_f7ba60a6997566 134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "892d766c46e3cb35c8c74c7e0bbfa364a7340d0b",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
