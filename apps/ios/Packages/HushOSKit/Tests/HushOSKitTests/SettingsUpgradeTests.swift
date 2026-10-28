@@ -49,7 +49,7 @@ extension OnFakeDrive {
             defer { Auth.testSession = nil; Auth.testTransport = nil; SettingsServer.current = nil }
             let vault = Vault(api: DriveAPI(session: session, configuration: configuration), session: session)
             await vault.adopt(settingsKey: try settingsKeyCreate(userId: me, accountKey: try randomBytes(length: 32)).key)
-            try await RollbackMarkStore.shared.raise(userId: me, to: RollbackMarks(settings: 9, settingsDocument: false, identity: 0, identityVersion: 0), keys: await vault.marksKeys())
+            try await RollbackMarkStore.shared(session: "t").raise(userId: me, to: RollbackMarks(settings: 9, settingsDocument: false, identity: 0, identityVersion: 0), keys: await vault.marksKeys())
             await #expect(throws: ContactError.message(SettingsMarks.rolledBack)) { _ = try await vault.loadedSettingsVersion() }
             #expect(SettingsServer.current?.puts == 0)
         }

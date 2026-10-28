@@ -262,25 +262,39 @@ struct RollbackMarkStoreTests {
      * A raise still waiting for the settings key when the person signs out: the wipe deletes the
      * marks, and the raise, finding its session gone, must not write them back.
      */
-    @Test func aRaiseThatWaitedThroughASignOutWritesNothingBack() async throws {
+    @Test(arguments: [3, 2])
+    func aRaiseThatWaitedThroughASignOutWritesNothingBack(settings: UInt64) async throws {
         defer { cleanUp() }
         let current = CurrentSession("first")
         var signedIn = RollbackMarkStore(folder: folder, floor: floor)
-        signedIn.session = { current.token }
+        signedIn.signedIn = { current.token == "first" }
         let store = signedIn
         try await store.raise(userId: me, to: marks(settings: 2), keys: Self.key(1))
+        // A higher mark (written under the lock) and one already held (no write at all) alike.
         await #expect(throws: AuthError.message(MarksWords.unsaved)) {
-            try await store.raise(userId: me, to: marks(identity: 3, version: 2)) { _, _ in
-                // Signed out while the key was being fetched: the session goes, then the wipe.
+            try await store.raise(userId: me, to: marks(settings: settings)) { _, _ in
+                // Signed out while the key was being fetched, and another session signed in: the wipe ran between.
                 current.token = nil
                 store.deleteAll()
+                current.token = "second"
                 return MarksKey(key: Data(repeating: 1, count: 32), envelope: Self.envelope)
             }
         }
         #expect(!FileManager.default.fileExists(atPath: folder.path), "the marks came back after sign-out")
-        // Signed in again (a new session): nothing of the last one, in the files or in memory.
-        current.token = "second"
+        // Nothing of the last session, in the files or in this process.
         #expect(try await store.read(userId: me, keys: Self.key(1)) == .none)
+    }
+
+    /* A record that is there but can't be read is never "nothing seen", and never written over. */
+    @Test func aRecordThatCannotBeReadIsRefused() async throws {
+        defer { cleanUp() }
+        try await store.raise(userId: me, to: marks(settings: 5), keys: Self.key(1))
+        let mine = folder.appendingPathComponent("\(try rollbackMarksSlot(userId: me)).json")
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: mine.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: mine.path) }
+        let fresh = RollbackMarkStore(folder: folder, floor: MarkFloor())
+        await #expect(throws: AuthError.message(MarksWords.unreadable)) { _ = try await fresh.read(userId: me, keys: Self.key(1)) }
+        await #expect(throws: AuthError.message(MarksWords.unreadable)) { try await fresh.raise(userId: me, to: marks(settings: 1), keys: Self.key(1)) }
     }
 
     final class CurrentSession: @unchecked Sendable {

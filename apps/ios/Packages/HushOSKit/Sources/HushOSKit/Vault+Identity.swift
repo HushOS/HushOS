@@ -92,7 +92,7 @@ extension Vault {
             }
             // A settings mark an earlier version kept under any of these keys becomes the account's, so a
             // device that saw version 7 before a succession still refuses 6 (identityKeys covers the current key).
-            try await RollbackMarkStore.shared.adopt(userId: session.userId, encryptionPublicKeys: earlier.map(\.encryptionPublicKey), keys: marksKeys())
+            try await RollbackMarkStore.shared(session: session.token).adopt(userId: session.userId, encryptionPublicKeys: earlier.map(\.encryptionPublicKey), keys: marksKeys())
             guard generation == identityGeneration else { continue }
             earlier.sort { $0.keyVersion > $1.keyVersion }
             earlierIdentities = earlier

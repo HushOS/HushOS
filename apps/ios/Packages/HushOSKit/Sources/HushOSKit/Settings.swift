@@ -313,7 +313,7 @@ extension Vault {
      * reproduces): it reads as empty settings, and the next save starts afresh at version 2.
      */
     func loadSettings() async throws -> Settings {
-        let marks = RollbackMarkStore.shared
+        let marks = RollbackMarkStore.shared(session: session.token)
         let reply = try await Auth.settings()
         // The stored sequence decides, document or not: below the mark is a rollback, a version 1 row included.
         try SettingsMarks.check(try await marks.read(userId: session.userId, keys: marksKeys(served: reply.key)), served: reply.version)
@@ -358,7 +358,7 @@ extension Vault {
             do {
                 let stored = try await Auth.putSettings(expectedVersion: settings.version, envelope: sealed)
                 guard stored == sealed.settingsVersion else { throw ContactError.message("Your settings couldn’t be saved. Try again later.") }
-                try await RollbackMarkStore.shared.raise(userId: session.userId, to: RollbackMarks(settings: stored, settingsDocument: false, identity: 0, identityVersion: 0), keys: marksKeys())
+                try await RollbackMarkStore.shared(session: session.token).raise(userId: session.userId, to: RollbackMarks(settings: stored, settingsDocument: false, identity: 0, identityVersion: 0), keys: marksKeys())
                 settings.version = stored
                 settings.envelopeVersion = sealed.version
                 settings.served = sealed

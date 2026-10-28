@@ -378,7 +378,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     /* This account's rollback marks, opened under the settings key through this vault. */
-    private fun marks(served: Auth.StoredSettings? = null) = SettingsMark.of(context) { kept, create -> marksKey(kept, create, served) }
+    private fun marks(served: Auth.StoredSettings? = null) = SettingsMark.of(context, api.session.token) { kept, create -> marksKey(kept, create, served) }
 
     /*
      * The settings key for the next save: the stored one, or a new one wrapped under the account key and stored first

@@ -63,11 +63,11 @@ private fun RollbackMarks.highest(other: RollbackMarks) = RollbackMarks(
  * The account's entries are folded into the sealed record the first time it is read or raised, and then removed.
  */
 /*
- * `session` names the session signed in now (its token), or null. A raise keeps a mark only while the session it began
- * under is still the one stored: one still waiting for the settings key when the person signed out (or another account
- * signed in) must not write the marks back after the wipe, which deletes them under the same lock (`deleteAll`).
+ * `signedIn` says whether the session these marks are kept for (the vault's) is still the one stored. A raise keeps a
+ * mark only while it is: one still waiting for the settings key when the person signed out (or another account signed
+ * in) must not write the marks back after the wipe, which deletes them under the same lock (`deleteAll`).
  */
-class SettingsMark(private val folder: File, private val keys: MarksKeys, private val session: () -> String? = { "test" }) {
+class SettingsMark(private val folder: File, private val keys: MarksKeys, private val signedIn: () -> Boolean = { true }) {
     private val legacyFile = File(folder.parentFile, LEGACY_FILE)
 
     /* What a slot's file holds; null for none. Throws MarksUnreadable for a file that is there and doesn't parse. */
@@ -120,8 +120,9 @@ class SettingsMark(private val folder: File, private val keys: MarksKeys, privat
      */
     fun raise(userId: String, to: RollbackMarks, encryptionPublicKeys: List<String> = emptyList()): RollbackMarks {
         val user = userId.lowercase()
-        val began = session() ?: throw MarksUnsaved()
-        raiseFloor(user, to)
+        // What this process raises counts only until the next sign-out: a raise from before it keeps nothing.
+        val generation = synchronized(LOCK) { GENERATION }
+        if (!signedIn() || !raiseFloor(user, to, generation)) throw MarksUnsaved()
         val (earlierMarks, earlierKeys) = legacy(user, encryptionPublicKeys)
         val wanted = to.highest(floor(user)).highest(earlierMarks)
         val url = file(user)
@@ -135,7 +136,7 @@ class SettingsMark(private val folder: File, private val keys: MarksKeys, privat
         } ?: throw if (kept == null) MarksUnsaved() else MarksUnreadable()
         val marks = synchronized(LOCK) {
             // Signed out (or someone else signed in) while this waited: the wipe has run, or waits for this lock.
-            if (session() != began) throw MarksUnsaved()
+            if (!signedIn()) throw MarksUnsaved()
             // Read again under the lock: what another thread wrote meanwhile is opened and kept.
             val current = record(url)
             val update = try {
@@ -159,7 +160,8 @@ class SettingsMark(private val folder: File, private val keys: MarksKeys, privat
             forgetLegacy(earlierKeys, update.marks, user)
             update.marks
         }
-        raiseFloor(user, marks)
+        // Signed out right after the write: the wipe deleted it, and nothing of it stays here either.
+        if (!raiseFloor(user, marks, generation)) throw MarksUnsaved()
         return marks
     }
 
@@ -246,33 +248,48 @@ class SettingsMark(private val folder: File, private val keys: MarksKeys, privat
 
     private fun floor(user: String) = synchronized(LOCK) { FLOOR["${folder.path}\n$user"] ?: NONE }
 
-    private fun raiseFloor(user: String, marks: RollbackMarks) {
-        synchronized(LOCK) { FLOOR["${folder.path}\n$user"] = (FLOOR["${folder.path}\n$user"] ?: NONE).highest(marks) }
+    /* Raises what this process counts for `user`, unless a sign-out came since `generation`; whether it did. */
+    private fun raiseFloor(user: String, marks: RollbackMarks, generation: Long): Boolean = synchronized(LOCK) {
+        if (GENERATION != generation) return false
+        FLOOR["${folder.path}\n$user"] = (FLOOR["${folder.path}\n$user"] ?: NONE).highest(marks)
+        true
     }
 
     companion object {
         private val LOCK = Any()
         /* What this process raised, per folder and account, whether or not it reached the file. */
         private val FLOOR = HashMap<String, RollbackMarks>()
+        /* Moved by every sign-out: a raise begun before it keeps nothing. */
+        private var GENERATION = 0L
 
         /* Under noBackupFilesDir: the sealed records, and the plaintext file earlier versions kept. */
         const val FOLDER = "marks"
         const val LEGACY_FILE = "settings-seen.json"
 
-        fun of(context: Context, keys: MarksKeys) = SettingsMark(File(context.noBackupFilesDir, FOLDER), keys) { Shared.session(context)?.token }
+        /* The marks kept for the vault signed in with `token`. */
+        fun of(context: Context, token: String, keys: MarksKeys) =
+            SettingsMark(File(context.noBackupFilesDir, FOLDER), keys) { Shared.session(context)?.token == token }
 
         /*
          * Sign-out: the records under `noBackup`, the plaintext file of earlier versions, and what this process raised.
          * Under the lock, so a raise already writing finishes first (and is deleted), and one after finds its session gone.
          */
-        fun deleteAll(noBackup: File) = synchronized(LOCK) {
-            FLOOR.clear()
-            File(noBackup, FOLDER).deleteRecursively()
-            File(noBackup, LEGACY_FILE).delete()
+        fun deleteAll(noBackup: File) {
+            synchronized(LOCK) {
+                FLOOR.clear()
+                GENERATION++
+                File(noBackup, FOLDER).deleteRecursively()
+                File(noBackup, LEGACY_FILE).delete()
+            }
         }
 
         /* What this process raised (tests: a fresh process). */
-        fun forgetRaised() = synchronized(LOCK) { FLOOR.clear() }
+        fun forgetRaised() {
+            synchronized(LOCK) {
+                FLOOR.clear()
+                GENERATION++
+            }
+        }
 
         /* How earlier versions named the marks in the clear: digests, per account, and per identity before that. */
         fun legacyKey(userId: String): String = keyDigest("settings\n${userId.lowercase()}".toByteArray(Charsets.UTF_8))

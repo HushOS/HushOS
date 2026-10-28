@@ -347,7 +347,7 @@ public actor Vault {
     }
 
     private func openIdentity(generation: UInt64) async throws -> IdentityKeys {
-        let marks = RollbackMarkStore.shared
+        let marks = RollbackMarkStore.shared(session: session.token)
         let accountKey = try unlockAccount()
         var envelope = try await Auth.identity()
         let seen = try await marks.read(userId: session.userId, keys: marksKeys())

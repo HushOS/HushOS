@@ -101,7 +101,7 @@ extension OnFakeDrive {
             server.hold("/api/auth/identity/upgrade")
             let opening = Task { try await device.identityKeys() }
             try await server.waitUntilHeld()
-            try await RollbackMarkStore(folder: RollbackMarkStore.shared.folder, floor: MarkFloor()).raise(
+            try await RollbackMarkStore(folder: RollbackMarkStore.shared(session: "t").folder, floor: MarkFloor()).raise(
                 userId: me, to: RollbackMarks(settings: 0, settingsDocument: false, identity: v2.keyVersion + 1, identityVersion: 2),
                 keys: await device.marksKeys()
             )
@@ -133,7 +133,7 @@ extension OnFakeDrive {
         @Test func afterAdoptingTheWinnerOfARaceAnOlderIdentityIsRefused() async throws {
             defer { done() }
             // This device had opened the version 1 identity at key version 3 before the release.
-            try await RollbackMarkStore.shared.raise(
+            try await RollbackMarkStore.shared(session: "t").raise(
                 userId: me, to: RollbackMarks(settings: 0, settingsDocument: false, identity: v2.keyVersion, identityVersion: 1),
                 keys: await vault(IdentityServer(stored: v2)).marksKeys()
             )
