@@ -1,4 +1,4 @@
-import type { DriveNode } from '@hushos/drive/client';
+import { randomFolderColour, type DriveNode } from '@hushos/drive/client';
 import type { QueryClient } from '@tanstack/react-query';
 import { askCollision, type CollisionDecision } from '@/lib/collisions';
 import {
@@ -83,7 +83,10 @@ export async function enqueueDropped(
             if (!deeper) refuseUnlessWaiting(same);
             continue;
         }
-        const [created] = await clientFor(parent.workspaceId).createFolderPath(parent, [name]);
+        // An uploaded folder starts with a colour of its own, as one made by hand does.
+        const [created] = await clientFor(parent.workspaceId).createFolderPath(parent, [name], {
+            attributes: { colour: randomFolderColour() },
+        });
         madeHere.add(created!.id);
         parents.set(key, created!);
         createdAny = true;

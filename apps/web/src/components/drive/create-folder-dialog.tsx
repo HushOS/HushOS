@@ -1,5 +1,5 @@
 import type { DriveNode } from '@hushos/drive/client';
-import { splitPath } from '@hushos/drive/client';
+import { randomFolderColour, splitPath } from '@hushos/drive/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { useId, useState } from 'react';
 import { PendingLabel } from '@/components/motion';
@@ -71,7 +71,11 @@ function CreateFolderForm({
         try {
             const refused = refuseWrite(parent);
             if (refused) throw new Error(refused);
-            const nodes = await clientFor(parent.workspaceId).createFolderPath(parent, segments);
+            // The folder the path names starts with a random colour; the ones above it show
+            // their default (colour.ts) until someone picks one.
+            const nodes = await clientFor(parent.workspaceId).createFolderPath(parent, segments, {
+                attributes: { colour: randomFolderColour() },
+            });
             await invalidateFolders(queryClient, parent.id);
             cue('success');
             onCreated?.(nodes);

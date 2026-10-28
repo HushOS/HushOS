@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import com.hushos.core.folderShades
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -265,13 +266,22 @@ fun Mark(item: Opened, bitmap: ImageBitmap?, box: Dp = 36.dp) {
         return
     }
     if (item.isFolder) {
+        // Its own colour: the shades the Rust core works out from its `colour` attribute,
+        // or from its id when it has none (the web's FolderMark draws the same).
+        val shades = remember(item.id, item.metadata.attributes) { folderShades(item.id, item.metadata.attributes) }
+        val front = Color(
+            (if (alpine.dark) { if (alpine.high) shades.darkHighFront else shades.darkFront } else { if (alpine.high) shades.lightHighFront else shades.lightFront }).toInt(),
+        )
+        val back = Color(
+            (if (alpine.dark) { if (alpine.high) shades.darkHighBack else shades.darkBack } else { if (alpine.high) shades.lightHighBack else shades.lightBack }).toInt(),
+        )
         Canvas(Modifier.size(box)) {
             val w = size.width * 0.86f
             val s = w / 56f
             translate((size.width - w) / 2, (size.height - 46f * s) / 2) {
                 scale(s, s, pivot = Offset.Zero) {
-                    drawPath(folderBack, alpine.folderBack)
-                    drawPath(folderFront, alpine.folderFront)
+                    drawPath(folderBack, back)
+                    drawPath(folderFront, front)
                 }
             }
         }

@@ -565,7 +565,7 @@ struct LinkBrowserView: View {
     private func linkRow(_ item: Opened) -> some View {
         HStack(spacing: Alpine.Space.s3) {
             if item.isFolder {
-                FolderGlyph().frame(width: Theme.mark * 0.9, height: Theme.mark * 0.9 * 46 / 56).frame(width: Theme.mark, height: Theme.mark)
+                FolderGlyph(folder: item).frame(width: Theme.mark * 0.9, height: Theme.mark * 0.9 * 46 / 56).frame(width: Theme.mark, height: Theme.mark)
             } else {
                 PageGlyph(label: FileMark.label(for: item)).frame(width: Theme.mark * 0.66, height: Theme.mark * 0.66 * 54 / 44).frame(width: Theme.mark, height: Theme.mark)
             }

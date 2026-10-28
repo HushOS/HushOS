@@ -77,6 +77,7 @@ const tree: Record<string, NodeView[]> = {
 
 function harness() {
     const sealed: { operation: string; id: string; metadata: unknown }[] = [];
+    const renamed: { nodeId: string; metadataVersion: number }[] = [];
     const parentOf = new Map<string, string | null>([[ROOT, null]]);
     for (const [parent, children] of Object.entries(tree))
         for (const child of children) parentOf.set(child.id, parent);
@@ -101,7 +102,10 @@ function harness() {
         copy: async (_ws: string, _source: string, input: { node: { id: string } }) => ({
             node: node(input.node.id, DEST, 'file'),
         }),
-        rename: async (_ws: string, nodeId: string) => ({ node: node(nodeId, ROOT) }),
+        rename: async (_ws: string, nodeId: string, input: { metadataVersion: number }) => {
+            renamed.push({ nodeId, metadataVersion: input.metadataVersion });
+            return { node: node(nodeId, ROOT) };
+        },
     } as unknown as DriveApi;
     const rpc = (async (operation: string, input: Record<string, unknown>) => {
         switch (operation) {
@@ -163,7 +167,7 @@ function harness() {
                 throw new Error(`unexpected ${operation}`);
         }
     }) as unknown as Rpc;
-    return { api, rpc, sealed };
+    return { api, rpc, sealed, renamed };
 }
 
 async function opened() {
@@ -234,6 +238,59 @@ describe('attributes when a record is sealed again', () => {
                 modified: null,
                 attributes: { colour: 'green' },
             },
+        ]);
+    });
+});
+
+describe('a folder’s colour', () => {
+    test('a colour change keeps the name and every other attribute, and stores lower case', async () => {
+        const { client, folder, sealed, renamed } = await opened();
+        await client.recolour(folder, ' #7C5CBF ');
+        expect(sealed).toEqual([
+            {
+                operation: 'driveSealMetadata',
+                id: FOLDER,
+                metadata: {
+                    name: FOLDER,
+                    mime: null,
+                    size: 3,
+                    modified: '2026-10-01T00:00:00.000Z',
+                    attributes: { colour: '#7c5cbf', 'zz-unknown': 'from a newer client' },
+                },
+            },
+        ]);
+        // Saved against the version it was read at, so a change made meanwhile is refused.
+        expect(renamed).toEqual([{ nodeId: FOLDER, metadataVersion: 1 }]);
+    });
+
+    test.each(['#fff', 'purple', 'oklch(0.7 0.1 250)', ''])(
+        'a colour that is not one (%j) is refused before anything is sealed',
+        async (colour) => {
+            const { client, folder, sealed, renamed } = await opened();
+            await expect(client.recolour(folder, colour)).rejects.toThrow('Choose a colour.');
+            expect(sealed).toEqual([]);
+            expect(renamed).toEqual([]);
+        },
+    );
+
+    test('a file has no colour', async () => {
+        const { client, sealed } = await opened();
+        const file = (await client.listFolder(FOLDER)).children.find((c) => c.id === FILE)!;
+        await expect(client.recolour(file, '#123456')).rejects.toThrow();
+        expect(sealed).toEqual([]);
+    });
+
+    test('a folder whose record did not open is not given a colour, which would lose its name', async () => {
+        const { client, folder, sealed } = await opened();
+        await expect(client.recolour({ ...folder, metadata: null }, '#123456')).rejects.toThrow();
+        expect(sealed).toEqual([]);
+    });
+
+    test('a rename still repairs a folder whose record did not open', async () => {
+        const { client, folder, sealed } = await opened();
+        await client.rename({ ...folder, metadata: null }, 'Recovered');
+        expect(sealed.map((s) => s.metadata)).toEqual([
+            { name: 'Recovered', mime: null, size: null, modified: null },
         ]);
     });
 });
