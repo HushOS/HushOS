@@ -3,8 +3,9 @@ import { appEnv } from '@hushos/env/app';
 
 /*
  * The files that let the iOS and Android apps open this instance's links: a
- * share link (/s/<token>#<secret>), the emailed recovery link, and the app's own pages. Everything else
- * (the website, sign-up, billing, the operator console) stays in the browser.
+ * share link (/s/<token>#<secret>), the emailed recovery and sign-up links, and the app's own pages.
+ * Everything else (the website, the sign-up form with its plans and codes, billing, the operator
+ * console) stays in the browser.
  * Each is served only when its app is configured, so an instance without apps
  * says nothing about any.
  */
@@ -21,6 +22,7 @@ const appPaths = [
     { '/': '/app/billing*', exclude: true, comment: 'Plans are bought on the web' },
     { '/': '/s/*', comment: 'Share links; the key is in the fragment' },
     { '/': '/recover/complete', comment: 'The emailed link that starts recovery in the app' },
+    { '/': '/register/complete', comment: 'The emailed link that carries sign-up on in the app' },
     { '/': '/app', comment: 'Home' },
     { '/': '/app/drive*', comment: 'Files, a folder, or a file in the viewer' },
     { '/': '/app/shared*', comment: 'Shared with me and by me' },

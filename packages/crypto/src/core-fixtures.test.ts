@@ -102,6 +102,41 @@ describe('records sealed by the Rust core', () => {
         expect(opened).toEqual(decode(core.account.accountKey, 32));
     });
 
+    it('opens every part of a sign-up the core made under its one account key', async () => {
+        const { signup } = core;
+        const { envelope } = signup;
+        expect([envelope.keyVersion, envelope.credentialVersion]).toEqual([1, 1]);
+        const wrap = await wrappingKey(signup.exportKey, decode(envelope.wrappingSalt, 32));
+        const root = await decryptKey(
+            decode(envelope.encryptedKey, 48),
+            wrap,
+            decode(envelope.wrappingNonce, 24),
+            accountKeyContext(signup.userId, 1, 1),
+        );
+        expect(root).toEqual(decode(signup.accountKey, 32));
+        // The phrase the app reads back opens the same key, as recovery on the web will.
+        const recovery = signup.recovery as never;
+        expect(await readRecoveryPhrase(root, signup.userId, recovery)).toBe(signup.phrase);
+        expect((await openRecovery(signup.phrase, signup.userId, recovery)).accountKey).toEqual(
+            root,
+        );
+        await expect(
+            verifyOwnIdentity(root, signup.userId, signup.identity as IdentityEnvelope),
+        ).resolves.toBeUndefined();
+        expect(signup.workspace.grant.workspaceId).toBe(signup.workspace.id);
+        expect(
+            await openWorkspaceKey(root, signup.userId, signup.workspace.grant as never),
+        ).toEqual(decode(signup.workspaceKey, 32));
+        // Bound to the account: under another user id the grant and the identity stay shut.
+        const other = crypto.randomUUID();
+        await expect(
+            openWorkspaceKey(root, other, signup.workspace.grant as never),
+        ).rejects.toThrow();
+        await expect(
+            verifyOwnIdentity(root, other, signup.identity as IdentityEnvelope),
+        ).rejects.toThrow();
+    });
+
     it('restores the account key from a device bundle the core made', async () => {
         const deviceKey = await crypto.subtle.importKey(
             'raw',

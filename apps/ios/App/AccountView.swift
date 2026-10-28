@@ -1096,7 +1096,8 @@ struct SavedCheck: View {
         Section {
             Button { saved.toggle() } label: {
                 HStack(alignment: .top, spacing: Alpine.Space.s3) {
-                    Image(systemName: saved ? "checkmark.square.fill" : "square").font(.title3).foregroundStyle(saved ? Alpine.primary : Alpine.field)
+                    // Round, as on the sign-up's agree row and iOS's own.
+                    Image(systemName: saved ? "checkmark.circle.fill" : "circle").font(.title3).foregroundStyle(saved ? Alpine.primary : Alpine.field)
                     Text("I’ve saved my kit or written the words down, somewhere private.").foregroundStyle(Alpine.ink).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .contentShape(Rectangle())
@@ -1104,9 +1105,10 @@ struct SavedCheck: View {
             .buttonStyle(.plain)
             .accessibilityAddTraits(saved ? .isSelected : [])
             .alpineRow()
+            .listRowSeparator(.hidden)
             Button(action: next) { Text(title).frame(maxWidth: .infinity) }
                 .buttonStyle(PrimaryCapsuleStyle()).disabled(!saved)
-                .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
         }
     }
 }
@@ -1172,10 +1174,10 @@ struct CheckWordsView: View {
                 Button(action: finish) { Text(pending ? "Saving…" : "Finish").frame(maxWidth: .infinity) }
                     .buttonStyle(PrimaryCapsuleStyle())
                     .disabled(pending || questions.isEmpty || !questions.allSatisfy { right($0.position) })
-                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets()).listRowSeparator(.hidden)
                 Button("Show my words again") { back() }
                     .font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
-                    .frame(maxWidth: .infinity).listRowBackground(Color.clear)
+                    .frame(maxWidth: .infinity, minHeight: Theme.control).listRowBackground(Color.clear).listRowSeparator(.hidden)
             }
         }
         .listStyle(.insetGrouped)

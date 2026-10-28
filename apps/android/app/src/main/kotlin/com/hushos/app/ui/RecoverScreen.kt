@@ -93,7 +93,7 @@ fun RecoverScreen(model: DriveViewModel, state: DriveState) {
                 DriveViewModel.RecoveryStep.EMAIL -> EmailStep(model, flow)
                 DriveViewModel.RecoveryStep.SENT -> SentStep(model, flow)
                 DriveViewModel.RecoveryStep.CHECKING -> {
-                    Heading("Checking your link…", null)
+                    FlowHeading("Checking your link…", null)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                         Text("This only takes a moment.", Modifier.padding(start = AlpineSpace.S3), color = Alpine.colors.inkMuted)
@@ -108,7 +108,7 @@ fun RecoverScreen(model: DriveViewModel, state: DriveState) {
 }
 
 @Composable
-private fun Heading(title: String, description: String?) {
+internal fun FlowHeading(title: String, description: String?) {
     Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2), modifier = Modifier.padding(top = AlpineSpace.S4)) {
         Text(title, style = MaterialTheme.typography.headlineMedium)
         description?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = Alpine.colors.inkMuted) }
@@ -116,7 +116,7 @@ private fun Heading(title: String, description: String?) {
 }
 
 @Composable
-private fun Note(text: String, danger: Boolean = true) {
+internal fun FlowNote(text: String, danger: Boolean = true) {
     val alpine = Alpine.colors
     Text(text, color = if (danger) alpine.danger else alpine.success, style = MaterialTheme.typography.bodyMedium,
         modifier = Modifier.fillMaxWidth().background(if (danger) alpine.dangerSoft else alpine.successSoft, RoundedCornerShape(10.dp)).padding(AlpineSpace.S3))
@@ -127,8 +127,8 @@ private fun EmailStep(model: DriveViewModel, flow: DriveViewModel.RecoveryFlow) 
     var email by rememberSaveable { mutableStateOf(flow.email) }
     var tried by remember { mutableStateOf(false) }
     val invalid = !email.contains("@")
-    Heading("Reset your password", "You’ll need your recovery kit, or the 24 words on it. We’ll email you a link to start.")
-    flow.error?.let { Note(it) }
+    FlowHeading("Reset your password", "You’ll need your recovery kit, or the 24 words on it. We’ll email you a link to start.")
+    flow.error?.let { FlowNote(it) }
     OutlinedTextField(email, { email = it }, label = { Text("Email") }, singleLine = true, enabled = !flow.pending,
         isError = tried && invalid, supportingText = if (tried && invalid) ({ Text("Enter your email address.") }) else null,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, autoCorrectEnabled = false), modifier = Modifier.fillMaxWidth())
@@ -140,9 +140,9 @@ private fun EmailStep(model: DriveViewModel, flow: DriveViewModel.RecoveryFlow) 
 @Composable
 private fun SentStep(model: DriveViewModel, flow: DriveViewModel.RecoveryFlow) {
     Icon(Icons.Outlined.Mail, null, tint = Alpine.colors.primary, modifier = Modifier.padding(top = AlpineSpace.S4).size(32.dp))
-    Heading("Check your inbox", "We sent a link to ${flow.email}. Open it to reset your password. It works once, for 30 minutes.")
-    if (flow.resent) Note("New link sent to ${flow.email}.", danger = false)
-    flow.error?.let { Note(it) }
+    FlowHeading("Check your inbox", "We sent a link to ${flow.email}. Open it to reset your password. It works once, for 30 minutes.")
+    if (flow.resent) FlowNote("New link sent to ${flow.email}.", danger = false)
+    flow.error?.let { FlowNote(it) }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         TextButton(onClick = model::recoveryEmailAgain) { Text("Use another email") }
         TextButton(enabled = !flow.pending, onClick = { model.sendRecoveryEmail(flow.email, again = true) }) { Text(if (flow.pending) "Sending…" else "Send a new link") }
@@ -156,7 +156,7 @@ private fun LinkFailed(model: DriveViewModel, flow: DriveViewModel.RecoveryFlow)
     val error = flow.error.orEmpty()
     val otherFlow = error.contains("different account flow")
     val expired = Regex("expired|invalid|used|not valid|no longer", RegexOption.IGNORE_CASE).containsMatchIn(error)
-    Heading(
+    FlowHeading(
         when { otherFlow -> "This link is for something else"; expired -> "This link has expired"; else -> "This link didn’t work" },
         when {
             otherFlow -> "It creates an account rather than resetting a password. Open the newest email, or ask for a new link here."
@@ -211,12 +211,12 @@ private fun KitStep(model: DriveViewModel, flow: DriveViewModel.RecoveryFlow, in
     val passwordError = if (password.length < 12) "Use at least 12 characters." else null
     val confirmError = if (confirm != password) "The passwords don’t match." else null
 
-    Heading(
+    FlowHeading(
         if (choosing) "Use your recovery kit" else "Choose a new password",
         if (choosing) "Your email is confirmed. Your kit shows the account is yours; then you choose a new password."
         else "Resetting gives you a new recovery phrase; you’ll save it next.",
     )
-    flow.error?.let { Note(it) }
+    flow.error?.let { FlowNote(it) }
     when {
         mode == KitMode.SCAN -> {
             Text("Hold your kit’s code inside the frame.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
@@ -224,7 +224,7 @@ private fun KitStep(model: DriveViewModel, flow: DriveViewModel.RecoveryFlow, in
             TextButton(onClick = { mode = KitMode.CHOOSE }) { Text("Cancel") }
         }
         choosing -> {
-            if (notKit) Note("That isn’t a HushOS recovery kit. Choose hushos-recovery-kit.txt, or type the words.")
+            if (notKit) FlowNote("That isn’t a HushOS recovery kit. Choose hushos-recovery-kit.txt, or type the words.")
             KitChoice(Icons.Outlined.QrCodeScanner, "Scan your kit", "Point the camera at the printed kit.") {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) mode = KitMode.SCAN
                 else permission.launch(Manifest.permission.CAMERA)

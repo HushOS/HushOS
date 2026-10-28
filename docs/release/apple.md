@@ -200,7 +200,7 @@ https://developer.apple.com/help/app-store-connect/test-a-beta-version/testfligh
 Apple requires an internal group before an external one, and reviews the first build for each version (https://developer.apple.com/help/app-store-connect/test-a-beta-version/invite-external-testers).
 
 1. **TestFlight > Test Information** (https://developer.apple.com/help/app-store-connect/test-a-beta-version/provide-test-information):
-    - **Beta App Description:** `HushOS is an end-to-end encrypted drive. Sign in with your HushOS account (free at hushos.com). Please try uploading photos and files, sharing a folder, making a link, and keeping a folder on your phone.`
+    - **Beta App Description:** `HushOS is an end-to-end encrypted drive. Create a free account in the app, or sign in with the review account. Please try uploading photos and files, sharing a folder, making a link, and keeping a folder on your phone.`
     - **Feedback Email:** `hello@hushos.com` (also the reply-to on invitations).
     - **Marketing URL:** `https://hushos.com`. **Privacy Policy URL:** `https://hushos.com/privacy`.
     - **Beta App Review Information:** contact `<<your name, phone, email>>`; **Sign-in required**: on; user name and password of the review account (section 9); notes: the review notes from section 15.
@@ -224,7 +224,7 @@ App Store Connect > HushOS > **iOS App 1.0.0** (left column, under "iOS App"):
     - **Notes** (4000 bytes max):
 
         ```text
-        HushOS is an end-to-end encrypted cloud drive. The app is free and sign-in only: accounts are created for free on our website (hushos.com), where paid storage plans are also sold. The app sells nothing and has no buttons or links to buy (guideline 3.1.3(f), a free companion app to a cloud storage service).
+        HushOS is an end-to-end encrypted cloud drive. The app is free. Accounts can be created for free in the app (Create an account on the sign-in screen) or on our website (hushos.com), where paid storage plans are also sold. The app sells nothing and has no buttons or links to buy, during sign-up or after (guideline 3.1.3(f), a free companion app to a cloud storage service). Accounts can be deleted in the app: Account > Advanced > Delete account.
 
         Demo account: the sign-in above. It holds sample folders and photos, a folder shared with a second account, and a link. A second account for testing Delete account: appreview-delete@hushos.com / <<password>>. Please use that one for deletion, so the demo account stays available.
 

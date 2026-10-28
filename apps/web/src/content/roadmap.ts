@@ -174,6 +174,13 @@ export const sections: RoadmapSection[] = [
                 body: 'Built, with the same folders, sharing, links, offline files and Files app as the Android app, and being prepared for the App Store.',
             },
             {
+                id: 'app-sign-up',
+                status: 'now',
+                area: 'Apps',
+                title: 'Create your account in the app',
+                body: 'Make your account on your phone, without the web: confirm your email, choose a password, save your recovery kit, and your drive opens. Built for Android and iPhone, and coming in their next releases.',
+            },
+            {
                 id: 'families-on-phones',
                 status: 'now',
                 area: 'Apps',

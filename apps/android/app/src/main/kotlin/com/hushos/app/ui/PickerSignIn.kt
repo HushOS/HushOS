@@ -25,10 +25,13 @@ import androidx.lifecycle.repeatOnLifecycle
 /* Set by a file picker's sign-in screen: Forgot your password sends the person to the app's own screen instead. */
 val LocalRecoverInApp = compositionLocalOf<(() -> Unit)?> { null }
 
+/* The same for Create an account: sign-up's emailed link opens the app's own screen, so it runs there. */
+val LocalSignUpInApp = compositionLocalOf<(() -> Unit)?> { null }
+
 /*
  * When sign-in started from a file picker goes back to it: once the account is open on this phone, whether it was
  * opened here or in the app's own screen (a sign-in there, or a recovery, which always runs there), and, after a
- * recovery on this phone, only once its new words are confirmed as saved.
+ * recovery or a sign-up on this phone, only once its words are confirmed as saved.
  *
  * Only this phone's own recovery holds (`localUnsaved`, RecoveryWords: kept in a file, so it outlives the app being
  * stopped with the words on screen). An account that never confirmed its kit for another reason (a new account, keys
@@ -64,7 +67,7 @@ object PickerReturn {
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun PickerSignIn(model: DriveViewModel, recoverInApp: () -> Unit, showWords: () -> Unit, done: () -> Unit) {
+fun PickerSignIn(model: DriveViewModel, recoverInApp: () -> Unit, signUpInApp: () -> Unit, showWords: () -> Unit, done: () -> Unit) {
     val state by model.state.collectAsStateWithLifecycle()
     val waitingFor by com.hushos.app.data.RecoveryWords.waitingFor.collectAsStateWithLifecycle()
     val signedInAs = state.user?.id?.takeIf { state.gate == Gate.SIGNED_IN }
@@ -93,6 +96,6 @@ fun PickerSignIn(model: DriveViewModel, recoverInApp: () -> Unit, showWords: () 
             }
         }
         state.gate == Gate.SIGNED_IN -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingIndicator() }
-        else -> CompositionLocalProvider(LocalRecoverInApp provides recoverInApp) { HushOSApp(model) }
+        else -> CompositionLocalProvider(LocalRecoverInApp provides recoverInApp, LocalSignUpInApp provides signUpInApp) { HushOSApp(model) }
     }
 }

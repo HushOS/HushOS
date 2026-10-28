@@ -113,8 +113,8 @@ struct MainView: View {
                     case .files, .node: tab = .files
                     case .shared, .share, .incompleteShare: tab = .shared
                     case .trash: tab = .account
-                    // The reset link never routes here: AppModel.open sends it to the reset screen; an invitation opens its sheet.
-                    case .recover, .join, .incompleteInvite, nil: break
+                    // The reset and sign-up links never route here: AppModel.open sends each to its screen; an invitation opens its sheet.
+                    case .recover, .register, .join, .incompleteInvite, nil: break
                     }
                 }
                 // A tap on a transfers notification: the list for a failure, else where the files are.

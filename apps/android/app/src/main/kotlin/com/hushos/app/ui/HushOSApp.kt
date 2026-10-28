@@ -1,6 +1,7 @@
 package com.hushos.app.ui
 
 import androidx.compose.runtime.remember
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.material3.CircularProgressIndicator
@@ -96,6 +97,19 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
         if (flow.step != DriveViewModel.RecoveryStep.NEW_PHRASE) { RecoverScreen(model, state); return }
         if (state.gate == Gate.SIGNED_IN) { PhraseScreen(model, fresh = true) { model.leaveRecovery() }; return }
     }
+    // Sign-up, signed out until the account exists; then its recovery kit, with no way into Drive but checking it.
+    model.signup?.let { flow ->
+        if (flow.step != DriveViewModel.SignupStep.PHRASE) { SignupScreen(model, state); return }
+        if (state.gate == Gate.SIGNED_IN) {
+            BackHandler {}
+            PhraseScreen(model, fresh = true, firstKit = true) { model.leaveSignup(); model.openRequest("files::") }
+            return
+        }
+    }
+    // Words this phone made (a sign-up or a recovery) that the app was stopped before they were checked: shown again first.
+    val waitingFor by com.hushos.app.data.RecoveryWords.waitingFor.collectAsStateWithLifecycle()
+    val signedInAs = state.user?.id?.takeIf { state.gate == Gate.SIGNED_IN }
+    if (signedInAs != null && waitingFor?.equals(signedInAs, ignoreCase = true) == true) { WordsWaiting(model); return }
     when (state.gate) {
         Gate.CHECKING -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingIndicator() }
         Gate.SIGNED_OUT -> if (state.accountDeleted) AccountDeletedScreen(onDone = model::clearSignedOut) else SignInScreen(model, state)
@@ -134,6 +148,25 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
             text = { Text(problem.body) },
         )
     }
+}
+
+/*
+ * A new account's or a recovery's words, left unchecked when the app was stopped: the server decides. Checked already
+ * (on the web, say) lets Drive open; waiting, or no answer, keeps the words and their check up, as the web's setup page does.
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun WordsWaiting(model: DriveViewModel) {
+    var unsaved by remember { mutableStateOf<Boolean?>(null) }
+    var asked by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        unsaved = model.recoveryWordsUnsaved()
+        asked = true
+        if (unsaved == false) com.hushos.app.data.RecoveryWords.settled()
+    }
+    if (!asked || unsaved == false) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingIndicator() }; return }
+    BackHandler {}
+    PhraseScreen(model, fresh = true, firstKit = true) { com.hushos.app.data.RecoveryWords.settled() }
 }
 
 private enum class Tab(val label: String) { HOME("Home"), FILES("Files"), SHARED("Shared"), ACCOUNT("Account") }
