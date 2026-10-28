@@ -136,11 +136,12 @@ class SettingsMark(private val folder: File, private val keys: MarksKeys, privat
         } ?: throw if (kept == null) MarksUnsaved() else MarksUnreadable()
         val marks = synchronized(LOCK) {
             // Signed out (or someone else signed in) while this waited: the wipe has run, or waits for this lock.
-            if (!signedIn()) throw MarksUnsaved()
-            // Read again under the lock: what another thread wrote meanwhile is opened and kept.
+            if (!signedIn() || GENERATION != generation) throw MarksUnsaved()
+            // Read again under the lock: what another thread wrote meanwhile is opened and kept, and what this process
+            // raised meanwhile (a raise that couldn't be kept) goes in with it.
             val current = record(url)
             val update = try {
-                rollbackMarksUpdate(key.key, user, current?.marks, wanted)
+                rollbackMarksUpdate(key.key, user, current?.marks, wanted.highest(FLOOR["${folder.path}\n$user"] ?: NONE))
             } catch (_: CoreException) {
                 throw MarksUnreadable()
             }

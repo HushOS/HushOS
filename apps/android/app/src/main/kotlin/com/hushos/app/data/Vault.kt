@@ -370,10 +370,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val cached = settingsKey
         val cachedEnvelope = settingsKeyEnvelope
         if (cached != null && cachedEnvelope != null) return MarksKey(cached, cachedEnvelope)
-        val stored = served ?: Auth.settings(context)
+        val stored = served ?: Auth.settings(context, api.session)
         stored.key?.let { wrapped -> return MarksKey(openSettingsKey(stored) ?: return null, settingsKeyEnvelope ?: wrapped) }
-        // A settings key is stored once and for good: never under a session that isn't this vault's (it's sent with the stored one).
-        if (!create || Shared.session(context)?.token != api.session.token) return null
+        if (!create) return null
         val key = settingsKeyForSave()
         return settingsKeyEnvelope?.let { MarksKey(key, it) }
     }
@@ -387,14 +386,15 @@ class Vault(internal val context: Context, val api: DriveApi) {
      */
     private fun settingsKeyForSave(): ByteArray {
         settingsKey?.let { return it }
-        val stored = Auth.settings(context)
+        val stored = Auth.settings(context, api.session)
         openSettingsKey(stored)?.let { return it }
         val made = settingsKeyCreate(api.session.userId, unlockAccount())
         try {
-            Auth.putSettingsKey(context, made.envelope)
+            // Under this vault's own session: a key is stored once and for good, so never into another account.
+            Auth.putSettingsKey(context, made.envelope, api.session)
         } catch (error: AuthFailure) {
             if (error.status != 409) throw error
-            return openSettingsKey(Auth.settings(context)) ?: throw error
+            return openSettingsKey(Auth.settings(context, api.session)) ?: throw error
         }
         settingsKey = made.key
         settingsKeyEnvelope = made.envelope
@@ -409,7 +409,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     fun loadSettings(): Settings {
         val userId = api.session.userId
         val identity = identityKeys()
-        val stored = Auth.settings(context)
+        val stored = Auth.settings(context, api.session)
         val mark = marks(stored)
         // A mark an earlier app kept per identity carries over first, so the per-account one never starts lower.
         mark.adopt(userId, listOf(identity.encryptionPublicKey))
@@ -433,7 +433,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             try {
                 // Always version 2, under the settings key: a version 1 document is moved over by its first save here.
                 // Named over the stored sequence and sealed at one above it, the version the server stores it at.
-                Auth.putSettings(context, settings.version, settingsSeal(api.session.userId, key, next, settings.text()))
+                Auth.putSettings(context, settings.version, settingsSeal(api.session.userId, key, next, settings.text()), api.session)
                 // Always version 2: from here on, no document at all is a rollback.
                 marks().recordSettings(api.session.userId, next, sealedV2 = true)
                 return Settings(settings.json, next)

@@ -224,9 +224,10 @@ struct RollbackMarkStore: Sendable {
         FileLock.withLock(lockPath, activity: activity) {
             outcome = Result {
                 // Signed out (or someone else signed in) while this waited: the wipe has run or is waiting for this lock.
-                guard signedIn() else { throw AuthError.message(MarksWords.unsaved) }
+                guard signedIn(), floor.generation == generation else { throw AuthError.message(MarksWords.unsaved) }
                 Unbacked.folder(folder)
-                return try locked(user, url: url, key: key, wanted: wanted, earlier: earlier.keys)
+                // What this process raised meanwhile (a raise that couldn't be kept) goes in with it.
+                return try locked(user, url: url, key: key, wanted: wanted.highest(floor.value(scoped(user))), earlier: earlier.keys)
             }
         }
         let marks = try outcome.get()

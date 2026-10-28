@@ -139,8 +139,11 @@ public enum Auth {
         let user = try JSONDecoder().decode(SessionUser.self, from: JSONSerialization.data(withJSONObject: userJson))
         guard let envelopeJson = finished.body["envelope"] as? [String: Any] else { throw AuthError.message("Signed in, but HushOS returned no account key.") }
         guard let token = finished.cookie else { throw AuthError.noSession }
-        // Another account's data on this phone goes before this one's session exists.
-        AccountStore.shared.claim(AccountOwner(userId: user.id, origin: origin))
+        // Another account's data on this phone goes before this one's session exists, and that account's session goes
+        // first, so nothing still at work for it (a rollback mark, in this process or an extension) writes after the wipe.
+        let owner = AccountOwner(userId: user.id, origin: origin)
+        if AccountStore.shared.owner() != owner { SharedKeychain.delete(SharedKeychain.sessionAccount) }
+        AccountStore.shared.claim(owner)
         try SharedKeychain.write(SharedKeychain.configAccount, SharedKeychain.Config(origin: origin))
         try SharedKeychain.write(SharedKeychain.sessionAccount, SharedKeychain.Session(origin: origin, token: token, userId: user.id))
         // A device the proof did not bring back describes itself and gets a key; a failure waits for the next launch.

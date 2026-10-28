@@ -132,6 +132,18 @@ class SettingsMarkTest {
         assertEquals(RollbackMarks(0uL, false, 0uL, 0uL), SettingsMark(dir, keys(7)) { token == "second" }.read(a))
     }
 
+    /* A raise that couldn't be kept while another waited for its key goes into that one's write, never lost. */
+    @Test
+    fun aRaiseThatFailedMeanwhileLandsWithTheWriteInFlight() {
+        val offline: MarksKeys = { _, _ -> throw AuthFailure("We couldn't reach HushOS.") }
+        val waiting = mark { kept, create ->
+            assertThrows(MarksUnsaved::class.java) { SettingsMark(dir, offline).recordSettings(a, 9uL, sealedV2 = false) }
+            keys(7)(kept, create)
+        }
+        waiting.recordSettings(a, 3uL, sealedV2 = false)
+        assertEquals(9uL, mark().read(a).settings)
+    }
+
     @Test
     fun anOwnIdentityServedBelowWhatWasOpenedOrInTheVersionOneFormIsRefused() {
         mark().checkIdentity(a, 3uL, 1u)

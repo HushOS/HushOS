@@ -297,6 +297,19 @@ struct RollbackMarkStoreTests {
         #expect(kept.identity == 4)
     }
 
+    /* A raise that couldn't be kept while another waited for its key goes into that one's write, never lost. */
+    @Test func aRaiseThatFailedMeanwhileLandsWithTheWriteInFlight() async throws {
+        defer { cleanUp() }
+        let hurried = RollbackMarkStore(folder: folder, activity: .expired, floor: floor)
+        try await store.raise(userId: me, to: marks(settings: 3)) { _, _ in
+            let release = try holdLock()
+            _ = try? await hurried.raise(userId: me, to: marks(settings: 9), keys: Self.key(1))
+            release()
+            return MarksKey(key: Data(repeating: 1, count: 32), envelope: Self.envelope)
+        }
+        #expect(try await RollbackMarkStore(folder: folder, floor: MarkFloor()).read(userId: me, keys: Self.key(1)).settings == 9)
+    }
+
     /* What one session raised in this process (an extension that outlived a sign-out) is not another session's. */
     @Test func whatAProcessRaisedBelongsToItsSession() async throws {
         defer { cleanUp() }
