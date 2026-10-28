@@ -328,7 +328,6 @@ function PendingRow({
                 const result = await letInWithoutWords(queryClient, userId, ctx, groupId, {
                     userId: person.userId,
                     email: person.email,
-                    roles: fresh.roles as GroupRole[],
                     identity: fresh.identity,
                 });
                 if (result.outcome === 'changed') {

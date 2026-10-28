@@ -21,9 +21,10 @@ import { cue } from '@/lib/sounds';
 /*
  * "Invite someone" (docs/optional-verification.md 6.8): the server mails a
  * link to the address. Accepting it does not let anyone in: they wait until a
- * manager lets them in, with no words on either side. Asked to manage the
- * family, they join as a member and get the role once whoever lets them in
- * has checked it's them (3.6).
+ * manager lets them in, with no words on either side, always as a member.
+ * Asked to manage the family, the role waits on this account's own record of
+ * it (lib/family-pending.ts): once they're checked here, this account is
+ * asked whether to give it (3.6, 6.8).
  */
 export function InviteDialog({
     userId,

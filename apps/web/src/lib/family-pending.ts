@@ -36,6 +36,13 @@ export function pendingRolesOf(
         : [];
 }
 
+/* Whether this account asked `email` to manage the family (an invitation's record, tied or not). */
+export function invitedToManage(settings: Settings | undefined, groupId: string, email: string) {
+    return Object.values(settings?.pendingRoles?.[lower(groupId)] ?? {}).some(
+        (entry) => entry.email === lower(email) && entry.roles.includes('members'),
+    );
+}
+
 /* The settings with Invite someone's "Let them manage the family" kept for `invitationId`. */
 export function withInvitedRole(
     settings: Settings,

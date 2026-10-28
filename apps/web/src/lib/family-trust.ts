@@ -9,6 +9,7 @@ import {
     contactStandings,
     continueWith,
     lookupContact,
+    readSettingsForFamilies,
     saveFamilyCheck,
     type Pin,
 } from '@/lib/contacts';
@@ -16,7 +17,7 @@ import { pinOf } from '@/lib/family-pin';
 import type { GroupContext } from '@/lib/groups/context';
 import { memberJoinCode } from '@/lib/groups/join';
 import { letIn } from '@/lib/groups/outbox';
-import { clearPendingRoles } from '@/lib/family-pending';
+import { clearPendingRoles, invitedToManage } from '@/lib/family-pending';
 import { continueFoldIn } from '@/lib/groups/removal';
 import { fetchServed, syncGroup } from '@/lib/groups/sync';
 
@@ -177,10 +178,15 @@ export async function pinForFamily(
 
 /*
  * "Let them in" (6.8): one click. The newcomer pinned first-seen when this
- * account has no pin of them (or the one it holds), the roles asked for at
- * invitation kept only where a check allows them (3.2, 3.6: a manager joins
- * as a member until checked), then the admission signed over that pin and
- * sent (letIn). `heldBack` names the roles held back for a check.
+ * account has no pin of them (or the one it holds), then the admission signed
+ * over that pin and sent (letIn), always as a plain member: the roles the
+ * server keeps for the invitation are only its word, so none of them is
+ * signed in (3.6). A role is given afterwards: by the inviter's own record of
+ * Invite someone, which asks once the person reads Verified on the inviter's
+ * device (straight away when they are checked already), or by a manager's own
+ * "Let them manage the family" or "Make them the organizer". `heldBack` says
+ * whether this account asked them to manage the family and they are not
+ * checked yet, for the page to say they can once they are.
  */
 export async function letInWithoutWords(
     queryClient: QueryClient,
@@ -190,26 +196,26 @@ export async function letInWithoutWords(
     person: {
         userId: string;
         email: string;
-        roles: GroupRole[];
         identity: Parameters<typeof letIn>[2]['served'];
     },
 ) {
-    // The server's roles can only hold a role back here, never record that one is owed: only the
-    // inviter's own record of Invite someone does that (lib/family-pending.ts).
     const pinned = await pinForFamily(queryClient, userId, person);
     if (pinned.outcome === 'changed') return pinned;
     const verified = (await pinTrust(pinned.pin)) === 'verified' && !pinned.pin.trustedVia;
-    const roles = verified ? person.roles : person.roles.filter((role) => role !== 'members');
     const staged = await letIn(
         ctx,
         groupId,
-        { kind: 'admit', userId: person.userId, served: person.identity, roles },
+        { kind: 'admit', userId: person.userId, served: person.identity, roles: [] },
         pinned.pin,
     );
+    const { settings } = await readSettingsForFamilies(userId);
     return {
         outcome: 'staged' as const,
         staged,
-        heldBack: person.roles.filter((role) => !roles.includes(role)),
+        heldBack:
+            !verified && invitedToManage(settings, groupId, person.email)
+                ? (['members'] as GroupRole[])
+                : [],
     };
 }
 

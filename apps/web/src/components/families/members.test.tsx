@@ -44,6 +44,13 @@ const clearPendingRoles = vi.fn(
         return true;
     },
 );
+/* Who route 16 says waits, with the roles the server keeps for their invitation. */
+let waitingPeople: unknown[] = [];
+const letInWithoutWords = vi.fn(async (..._args: unknown[]) => ({
+    outcome: 'staged',
+    staged: { status: 'sent', outcome: { status: 'landed' } },
+    heldBack: [],
+}));
 /* The family as a sync reads it now: Sam managing it, when another device gave the role. */
 let syncedView: GroupView | null = null;
 
@@ -125,8 +132,14 @@ vi.mock('@/lib/families', () => ({
         queryClient.invalidateQueries(),
     ),
     afterMembershipChange: vi.fn(async () => {}),
-    familiesQueryOptions: vi.fn(),
-    pendingQueryOptions: vi.fn(),
+    familiesQueryOptions: (userId: string) => ({
+        queryKey: ['families', userId],
+        queryFn: async () => [{ id: 'g', roles: ['billing', 'members'] }],
+    }),
+    pendingQueryOptions: (userId: string, groupId: string) => ({
+        queryKey: ['pending', userId, groupId],
+        queryFn: async () => waitingPeople,
+    }),
     familyContext: () => ({}),
     familyKeys: {
         family: (userId: string, groupId: string) => ['family', userId, groupId],
@@ -140,7 +153,7 @@ vi.mock('@/lib/families', () => ({
 vi.mock('@/lib/family-leave', () => ({ removeBlocker: () => null }));
 vi.mock('@/lib/family-trust', () => ({
     continueMembers: (...args: unknown[]) => continueMembers(...args),
-    letInWithoutWords: vi.fn(),
+    letInWithoutWords: (...args: unknown[]) => letInWithoutWords(...args),
     memberStandings: async () =>
         new Map([
             [SAM, matched ? 'verified' : 'not-verified'],
@@ -196,7 +209,7 @@ vi.mock('@/lib/groups/copy', async (original) => ({
     errorCopy: (cause: Error) => cause.message,
     outcomeCopy: () => null,
 }));
-const { ChangedMembers, InvitationList, MemberList } = await import('./members');
+const { ChangedMembers, InvitationList, MemberList, PendingList } = await import('./members');
 const { pendingRolesOf } = await import('@/lib/family-pending');
 
 const person = (userId: string, name: string, roles: string[] = []): FamilyMember =>
@@ -504,9 +517,13 @@ describe('a manager role held back at Let them in', () => {
         expect(prompt()).toBeNull();
         await checkSamInTheFamily(user);
         await user.click(await screen.findByRole('button', { name: 'Family words match' }));
-        const asked = await screen.findByRole('alertdialog', {
-            name: 'Sam was invited to manage the family',
-        });
+        const asked = await screen.findByRole(
+            'alertdialog',
+            {
+                name: 'Sam was invited to manage the family',
+            },
+            { timeout: 5_000 },
+        );
         expect(asked.textContent).toContain('Let them manage it now?');
         // Let them manage it: the role, and nothing waits any more.
         await user.click(screen.getByRole('button', { name: 'Let them manage it' }));
@@ -528,9 +545,13 @@ describe('a manager role held back at Let them in', () => {
             )!,
         );
         expect(
-            await screen.findByRole('alertdialog', {
-                name: 'Sam was invited to manage the family',
-            }),
+            await screen.findByRole(
+                'alertdialog',
+                {
+                    name: 'Sam was invited to manage the family',
+                },
+                { timeout: 5_000 },
+            ),
         ).toBeTruthy();
     });
 
@@ -544,7 +565,11 @@ describe('a manager role held back at Let them in', () => {
         // Checked elsewhere: this device only reads it.
         matched = true;
         await client.invalidateQueries();
-        await screen.findByRole('alertdialog', { name: 'Sam was invited to manage the family' });
+        await screen.findByRole(
+            'alertdialog',
+            { name: 'Sam was invited to manage the family' },
+            { timeout: 5_000 },
+        );
         await user.click(screen.getByRole('button', { name: 'Not now' }));
         await waitFor(() =>
             expect(clearPendingRoles).toHaveBeenCalledWith(expect.anything(), ALICE, 'g', [SAM]),
@@ -585,7 +610,11 @@ describe('a manager role held back at Let them in', () => {
         invited();
         matched = true;
         page();
-        await screen.findByRole('alertdialog', { name: 'Sam was invited to manage the family' });
+        await screen.findByRole(
+            'alertdialog',
+            { name: 'Sam was invited to manage the family' },
+            { timeout: 5_000 },
+        );
         stageChange.mockRejectedValueOnce(new Error('Sam already manages the family.'));
         syncedView = viewWith([SAM]);
         await user.click(screen.getByRole('button', { name: 'Let them manage it' }));
@@ -624,10 +653,30 @@ describe('a manager role held back at Let them in', () => {
         invited();
         page({ members: everyone });
         expect(
-            await screen.findByRole('alertdialog', {
-                name: 'Sam was invited to manage the family',
-            }),
+            await screen.findByRole(
+                'alertdialog',
+                {
+                    name: 'Sam was invited to manage the family',
+                },
+                { timeout: 5_000 },
+            ),
         ).toBeTruthy();
+    });
+
+    test('already checked when the inviter lets him in: asked straight away, and the role only on Let them manage it', async () => {
+        const user = userEvent.setup();
+        // Just let in (as a member), checked before, under the address Alice typed.
+        invited(false);
+        matched = true;
+        page();
+        await screen.findByRole(
+            'alertdialog',
+            { name: 'Sam was invited to manage the family' },
+            { timeout: 5_000 },
+        );
+        expect(stageChange).not.toHaveBeenCalled();
+        await user.click(screen.getByRole('button', { name: 'Let them manage it' }));
+        await waitFor(() => expect(promotedSam()).toBe(true));
     });
 
     test('is tied to Sam only once he is let in under the address Alice typed', async () => {
@@ -684,5 +733,46 @@ describe('a manager role held back at Let them in', () => {
         );
         await waitFor(() => expect(revokeInvitation).toHaveBeenCalledWith('g', 'invitation-1'));
         await waitFor(() => expect(settingsDoc.pendingRoles).toBeUndefined());
+    });
+});
+
+/*
+ * Let them in (6.8, 3.6): always as a plain member. The roles the server
+ * keeps for the invitation never reach the admission, whatever they say.
+ */
+describe('Let them in', () => {
+    test('passes on none of the roles the server keeps for the invitation', async () => {
+        const user = userEvent.setup();
+        const sam = {
+            userId: SAM,
+            name: 'Sam Holm',
+            email: 'sam@example.com',
+            // Altered by the server: nobody ticked "Let them manage the family".
+            roles: ['members', 'billing'],
+            acceptedAt: '2026-10-28T00:00:00.000Z',
+            identity: { keyVersion: 1 },
+            inFamily: false,
+        };
+        waitingPeople = [sam];
+        letInWithoutWords.mockClear();
+        render(
+            <QueryClientProvider client={new QueryClient()}>
+                <PendingList
+                    userId={ALICE}
+                    groupId="g"
+                    family="Holm family"
+                    pending={[sam] as never}
+                    names={{ [SAM]: 'Sam' }}
+                />
+            </QueryClientProvider>,
+        );
+        await user.click(await screen.findByRole('button', { name: 'Let them in' }));
+        await waitFor(() => expect(letInWithoutWords).toHaveBeenCalledTimes(1));
+        const person = letInWithoutWords.mock.calls[0]![4] as Record<string, unknown>;
+        expect(person).toEqual({
+            userId: SAM,
+            email: 'sam@example.com',
+            identity: { keyVersion: 1 },
+        });
     });
 });

@@ -1276,6 +1276,12 @@ test.describe.serial('a member’s account changes', () => {
         await words.getByRole('button', { name: 'They match' }).click();
         await expect(maya.page.getByText('Leo verified')).toBeVisible({ timeout: 60_000 });
         await letThemIn(maya, leo, family);
+        // Let in as a member, always; checked already, so Maya is asked straight away.
+        const asked = maya.page.locator('[data-invited-to-manage]');
+        await expect(asked).toContainText('Leo was invited to manage the family', {
+            timeout: 90_000,
+        });
+        await asked.getByRole('button', { name: 'Let them manage it' }).click();
         const leoRow = maya.page.locator(`[data-member="${leo.email}"]`);
         await expect(leoRow.locator('[data-roles] [data-slot=badge]')).toHaveText(
             'Manages the family',

@@ -1430,6 +1430,7 @@ const ORGANIZER_FIRST = 'Make someone else the organizer first.';
 /* The core's NOT_MANAGER, NOT_CHECKED, UNCHANGED and SELF_TAKE. */
 const NOT_MANAGER = 'Only someone who manages the family can change its members.';
 const NOT_CHECKED = 'Check their words first.';
+const ADMIT_AS_MEMBER = 'Let them in first. Roles are given afterwards.';
 const UNCHANGED = 'That doesn’t change their roles.';
 const SELF_TAKE = 'Ask another manager to take this role from you.';
 /*
@@ -3251,11 +3252,12 @@ export function createGroupSession(host: GroupHost) {
                 const pin = contactPin(op.userId);
                 if (!pin) throw new CryptoError(NOT_CHECKED);
                 // Let in over a first-seen pin as over a verified one (docs/optional-verification.md
-                // 3.2; newRosterEntry refuses anything else, a family's word included). Managing
-                // the family hands over its key, so that role waits for a check (3.6): the core's
-                // admit_body follows with the phones' release (PR 5).
-                if (op.roles.includes('members') && !(await pinVerified(pin)))
-                    throw new CryptoError(CHECK_MANAGER_FIRST);
+                // 3.2; newRosterEntry refuses anything else, a family's word included), and always
+                // as a plain member: the roles an invitation carries are the server's word, so none
+                // is ever signed in on admission. A role is a role change afterwards, by a manager
+                // who chose it, under the manager rule (3.6). The core's admit_body follows with the
+                // phones' release (PR 5).
+                if (op.roles.length > 0) throw new CryptoError(ADMIT_AS_MEMBER);
                 const entry = await newRosterEntry(pin, op.served, {
                     roles: op.roles,
                     rosterVersion: next,

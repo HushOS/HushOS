@@ -2,6 +2,7 @@
 import 'fake-indexeddb/auto';
 import type { ContactIdentity } from '@hushos/auth/api';
 import type { SettingsEnvelope } from '@hushos/crypto';
+import { parseRoster } from '@hushos/crypto/groups';
 import { pinTrust } from '@hushos/crypto/pins';
 import { CHECK_MANAGER_FIRST } from '@hushos/crypto/protocol';
 import { QueryClient } from '@tanstack/react-query';
@@ -11,7 +12,7 @@ import type { GroupContext } from './groups/context';
 import { createFamily, stageChange } from './groups/outbox';
 import { ALICE, BOB, familyServer } from './groups/server-testkit';
 import { fetchServed, syncGroup } from './groups/sync';
-import { account } from './groups/worker-testkit';
+import { account, bytes } from './groups/worker-testkit';
 
 /*
  * Checking each other in a family (docs/optional-verification.md 3.4, 6.10),
@@ -156,11 +157,11 @@ async function aliceFamily() {
         const result = await letInWithoutWords(queryClient, ALICE, ctx, groupId, {
             userId: BOB,
             email: BOB_EMAIL,
-            roles: [],
             identity,
         });
         if (result.outcome !== 'staged') throw new Error(result.outcome);
         expect(result.staged).toMatchObject({ status: 'sent', outcome: { status: 'landed' } });
+        return result;
     };
     const settings = async () => (await readSettingsForFamilies(ALICE)).settings;
     const view = async () => {
@@ -334,20 +335,52 @@ describe('a manager role asked for at Invite someone (6.8)', () => {
         expect(pendingRolesOf(await f.settings(), f.groupId, BOB)).toEqual(['members']);
     }
 
-    test('Let them in never records one from the server’s invitation roles, whoever presses it', async () => {
+    /* Check it's Bob through his words, before he is let in. */
+    async function checkedBob(f: Awaited<ReturnType<typeof aliceFamily>>) {
+        const { addContact, lookupContact, pinContact } = await import('./contacts');
+        await addContact(f.queryClient, ALICE, BOB_EMAIL);
+        await pinContact(
+            f.queryClient,
+            ALICE,
+            await lookupContact(f.queryClient, ALICE, BOB_EMAIL),
+        );
+    }
+
+    test('someone already checked is let in with no role, whatever the server says, and nothing is owed', async () => {
         const f = await aliceFamily();
-        // The server says Bob was asked to manage the family; nobody here asked.
-        const result = await letInWithoutWords(f.queryClient, ALICE, f.ctx, f.groupId, {
-            userId: BOB,
-            email: BOB_EMAIL,
-            roles: ['members'],
-            identity: f.server.people[BOB].served,
-        });
-        // Held back all the same (safe that way), and nothing says it is owed.
-        expect(result).toMatchObject({ outcome: 'staged', heldBack: ['members'] });
+        await checkedBob(f);
+        // Nothing of what route 16 says Bob was invited as is taken: Let them in has no roles.
+        const result = await f.letBobIn();
+        expect(result.heldBack).toEqual([]);
+        const [admit] = f.server.sent('admit');
+        expect(
+            parseRoster(bytes(admit!.roster.statement)).members.find((m) => m.userId === BOB)
+                ?.roles,
+        ).toEqual([]);
+        expect((admit as { keySeal?: unknown }).keySeal).toBeUndefined();
         expect(f.server.members.get(BOB)?.roles).toEqual([]);
         expect((await f.settings()).pendingRoles).toBeUndefined();
-        expect(pendingRolesOf(await f.settings(), f.groupId, BOB)).toEqual([]);
+    });
+
+    test('with the inviter’s record, let in as a member all the same: checked, the page asks next; not yet, it says they can once checked', async () => {
+        const f = await aliceFamily();
+        await keepInvitedRole(f.queryClient, ALICE, f.groupId, INVITATION, BOB_EMAIL);
+        await checkedBob(f);
+        const result = await f.letBobIn();
+        expect(result.heldBack).toEqual([]);
+        expect(f.server.members.get(BOB)?.roles).toEqual([]);
+        // The record is still there for the question to come from.
+        expect((await f.settings()).pendingRoles?.[f.groupId]?.[INVITATION]).toMatchObject({
+            email: BOB_EMAIL.toLowerCase(),
+        });
+        // Not checked: the same admission, and the page says they can manage it once checked.
+        const g = await aliceFamily();
+        await keepInvitedRole(g.queryClient, ALICE, g.groupId, INVITATION, BOB_EMAIL);
+        expect((await g.letBobIn()).heldBack).toEqual(['members']);
+        expect(g.server.members.get(BOB)?.roles).toEqual([]);
+        // With no record of this account's, nothing is said to wait, whatever the server says.
+        const h = await aliceFamily();
+        expect((await h.letBobIn()).heldBack).toEqual([]);
     });
 
     test('is the inviter’s own, kept by invitation and address, and nothing of it reaches the server', async () => {

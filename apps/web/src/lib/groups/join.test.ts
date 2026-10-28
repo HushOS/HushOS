@@ -238,12 +238,13 @@ async function invitedFamily() {
         bobDevice,
         rosters,
         /* Alice signs Bob's admission ("Let them in", before it reaches the server). */
-        admit: async (
-            roles: ('billing' | 'guardian' | 'members')[] = [],
-            { verified = false }: { verified?: boolean } = {},
-        ) => {
-            // Let them in pins Bob first seen (no words), unless Alice checked him first.
-            const pin = await pinOf(bob);
+        admit: async ({
+            verified = false,
+            keys = bob,
+        }: { verified?: boolean; keys?: Awaited<ReturnType<typeof account>> } = {}) => {
+            // Let them in pins Bob first seen (no words), unless Alice checked him first; `keys`
+            // are whose the server served as his (another history's admission names other keys).
+            const pin = { ...(await pinOf(keys)), userId: BOB };
             const { settings, version } = await aliceDevice.settings.read();
             await aliceDevice.settings.write(version, {
                 ...settings,
@@ -256,8 +257,8 @@ async function invitedFamily() {
             admitted = await aliceDevice.call('groupStage', {
                 groupId,
                 expectedRevision: 1,
-                op: { kind: 'admit', userId: BOB, served: bob.served, roles },
-                kems: { [BOB]: bob.served.kemPublicKey },
+                op: { kind: 'admit', userId: BOB, served: keys.served, roles: [] },
+                kems: { [BOB]: keys.served.kemPublicKey },
             });
             if (admitted.outboxId === null) throw new Error('nothing staged');
             signed.push(admitted);
@@ -681,8 +682,9 @@ describe('joining a family on first use', () => {
         const f = await invitedFamily();
         const store = createMemoryGroupStore();
         await f.admit();
-        // A second admission Alice signed at the same version: the server's other history.
-        await f.admit(['guardian']);
+        // A second admission Alice signed at the same version: the server's other history, over
+        // keys it served as Bob's (an admission names no role, so that is all another can differ in).
+        await f.admit({ keys: await account(BOB) });
         f.serveInstead(0);
         await f.land();
         const bob = await f.bobDevice(store);

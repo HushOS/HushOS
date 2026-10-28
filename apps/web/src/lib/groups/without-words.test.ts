@@ -67,6 +67,9 @@ async function letThemIn(
     );
 }
 
+const promote = (f: { ctx: GroupContext; groupId: string }, userId: string) =>
+    stageChange(f.ctx, f.groupId, { kind: 'roles', userId, roles: ['members'] });
+
 const entryOf = (call: RosterCallBody, userId: string) =>
     parseRoster(bytes(call.roster.statement)).members.find((m) => m.userId === userId)!;
 const landed = (staged: StageOutcome) =>
@@ -112,20 +115,28 @@ describe('letting someone in without words', () => {
         expect(await f.ctx.store.outbox(ALICE, f.groupId)).toEqual([]);
     });
 
-    test('lets in someone asked to manage the family only over a check; first seen, nothing is signed', async () => {
+    test('never lets anyone in with a role, checked or not: a role is a change of its own afterwards', async () => {
         const f = await family();
         const carol = await pinOf(f.server.people[CAROL]);
-        await pin(f.ctx, CAROL, firstSeen(carol));
-        await expect(letThemIn(f, CAROL, ['members'])).rejects.toThrow(CHECK_MANAGER_FIRST);
+        for (const trust of [firstSeen(carol), carol]) {
+            await pin(f.ctx, CAROL, trust);
+            for (const roles of [['members'], ['billing']] as ('members' | 'billing')[][])
+                await expect(letThemIn(f, CAROL, roles)).rejects.toThrow(
+                    'Let them in first. Roles are given afterwards.',
+                );
+        }
         expect(f.server.sent('admit')).toEqual([]);
         expect(await f.ctx.store.outbox(ALICE, f.groupId)).toEqual([]);
-        // Checked first (Check it's Carol first): the role, and the family's key sealed to her.
-        await pin(f.ctx, CAROL, carol);
-        expect(landed(await letThemIn(f, CAROL, ['members']))).toBe(true);
+        // As a member, then the role as its own change, with the family's key sealed to her.
+        expect(landed(await letThemIn(f, CAROL))).toBe(true);
         const [call] = f.server.sent('admit');
-        expect(entryOf(call!, CAROL).roles).toEqual(['members']);
+        expect(entryOf(call!, CAROL).roles).toEqual([]);
+        expect((call as RosterCallBody & { keySeal?: unknown }).keySeal).toBeUndefined();
+        expect(landed(await promote(f, CAROL))).toBe(true);
+        const [roles] = f.server.sent('member');
+        expect(entryOf(roles!, CAROL).roles).toEqual(['members']);
         expect(
-            (call as RosterCallBody & { keySeal?: { holderUserId: string } }).keySeal,
+            (roles as RosterCallBody & { keySeal?: { holderUserId: string } }).keySeal,
         ).toMatchObject({ holderUserId: CAROL });
     });
 });
@@ -137,12 +148,20 @@ async function withBob(
     const f = await family();
     const bob = await pinOf(f.server.people[BOB]);
     await pin(f.ctx, BOB, options.verified ? bob : firstSeen(bob));
-    expect(landed(await letThemIn(f, BOB, options.roles ?? []))).toBe(true);
+    expect(landed(await letThemIn(f, BOB))).toBe(true);
+    // Roles are never let in with: their own change, on the next roster.
+    if (options.roles?.length)
+        expect(
+            landed(
+                await stageChange(f.ctx, f.groupId, {
+                    kind: 'roles',
+                    userId: BOB,
+                    roles: options.roles,
+                }),
+            ),
+        ).toBe(true);
     return { ...f, bob };
 }
-
-const promote = (f: { ctx: GroupContext; groupId: string }, userId: string) =>
-    stageChange(f.ctx, f.groupId, { kind: 'roles', userId, roles: ['members'] });
 
 describe('the manager rule (3.6)', () => {
     test('making someone a manager without a check is refused before anything is signed, and goes ahead after one', async () => {
@@ -261,9 +280,8 @@ describe('a member’s account change with no signed chain', () => {
         );
         for (const userId of userIds.filter((id) => id !== BOB)) {
             await pin(f.ctx, userId, await pinOf(f.server.people[userId as typeof CAROL]));
-            expect(
-                landed(await letThemIn(f, userId, managers.includes(userId) ? ['members'] : [])),
-            ).toBe(true);
+            expect(landed(await letThemIn(f, userId))).toBe(true);
+            if (managers.includes(userId)) expect(landed(await promote(f, userId))).toBe(true);
         }
         const before = f.server.log.length;
         const old = new Map<string, string | null>();
@@ -369,8 +387,9 @@ describe('a member’s account change with no signed chain', () => {
         await pin(f.ctx, BOB, firstSeen({ ...(await pinOf(fresh)), userId: BOB }));
         const staged = await continued(f, BOB);
         expect(landed(staged)).toBe(true);
-        // The role goes in the Continue's own roster, on POST rosters.
-        expect(f.server.sent('member')).toEqual([]);
+        // The role goes in the Continue's own roster, on POST rosters: the only member-route call
+        // is the one that made Bob a manager in setting up.
+        expect(f.server.sent('member')).toHaveLength(1);
         const [call] = f.server.sent('rosters');
         expect(entryOf(call!, BOB).roles).toEqual([]);
         // The role going is a new family key, sealed to the managers who remain: Alice alone.
@@ -389,7 +408,7 @@ describe('a member’s account change with no signed chain', () => {
         // Checked over the new keys: managing again, with the family's key sealed to them.
         await pin(f.ctx, BOB, { ...(await pinOf(fresh)), userId: BOB });
         expect(landed(await promote(f, BOB))).toBe(true);
-        const [roles] = f.server.sent('member');
+        const roles = f.server.sent('member').at(-1);
         expect(
             (roles as RosterCallBody & { keySeal?: { holderUserId: string } }).keySeal,
         ).toMatchObject({ holderUserId: BOB });
