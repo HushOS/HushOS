@@ -1,0 +1,31 @@
+.env.example
+  s_566b8e0c4467a4::t_aed99f63afa590 81-82
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_cb2ea34a0d7c63 44,277-278,683-698,2516-2520,2538,2555,2636,2650,2664,2710-2714,2729,2758,2781,2795
+apps/web/src/lib/group-write-floor.test.ts
+  s_566b8e0c4467a4::t_5a3d7d74570648 1-127
+apps/web/src/lib/group-write-floor.ts
+  s_566b8e0c4467a4::t_0a26898e2f4a72 1-52
+compose.yaml
+  s_566b8e0c4467a4::t_424fdda7157939 130
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_66a8cf6bad6cd0 702-704
+packages/env/src/storage.ts
+  s_566b8e0c4467a4::t_c17114d515d9f3 56-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9ab2315f336accc58ed2abea65c41195fd9f828e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
