@@ -178,8 +178,11 @@ struct RollbackMarkStore: Sendable {
         }
         // A record kept with no settings key served to open it: refused, never "none".
         guard let key else { throw AuthError.message(MarksWords.unreadable) }
+        // Read again after the wait for the key: another process may have raised a mark meanwhile (the same
+        // settings key opens it); gone means a sign-out wiped it.
+        guard let fresh = try self.record(url) else { return .none }
         do {
-            return try rollbackMarksUpdate(settingsKey: key.key, userId: user, envelope: record.marks, to: .none).marks
+            return try rollbackMarksUpdate(settingsKey: key.key, userId: user, envelope: fresh.marks, to: .none).marks
         } catch {
             throw AuthError.message(MarksWords.unreadable)
         }

@@ -297,6 +297,18 @@ struct RollbackMarkStoreTests {
         #expect(kept.identity == 4)
     }
 
+    /* A read answers with what another process wrote while it waited for the key, not what it found before. */
+    @Test func aReadAnswersWithWhatWasWrittenMeanwhile() async throws {
+        defer { cleanUp() }
+        try await store.raise(userId: me, to: marks(identity: 3, version: 1), keys: Self.key(1))
+        let seen = try await RollbackMarkStore(folder: folder, floor: MarkFloor()).read(userId: me) { _, _ in
+            // The Files extension opens the upgraded identity meanwhile.
+            _ = try? await RollbackMarkStore(folder: folder, floor: MarkFloor()).raise(userId: me, to: marks(identity: 3, version: 2), keys: Self.key(1))
+            return MarksKey(key: Data(repeating: 1, count: 32), envelope: Self.envelope)
+        }
+        #expect(throws: AuthError.message(IdentityMarks.downgraded)) { try IdentityMarks.check(seen, keyVersion: 3, identityVersion: 1) }
+    }
+
     /* A raise that couldn't be kept while another waited for its key goes into that one's write, never lost. */
     @Test func aRaiseThatFailedMeanwhileLandsWithTheWriteInFlight() async throws {
         defer { cleanUp() }

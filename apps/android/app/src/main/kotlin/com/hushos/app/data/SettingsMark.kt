@@ -106,8 +106,11 @@ class SettingsMark(private val folder: File, private val keys: MarksKeys, privat
         } catch (_: CoreException) {
             throw MarksUnreadable()
         } ?: throw MarksUnreadable()
+        // Read again after the wait for the key: another thread may have raised a mark meanwhile (the same settings key
+        // opens it); gone means a sign-out wiped it.
+        val fresh = record(file(user)) ?: return NONE
         return try {
-            rollbackMarksUpdate(key.key, user, record.marks, NONE).marks
+            rollbackMarksUpdate(key.key, user, fresh.marks, NONE).marks
         } catch (_: CoreException) {
             throw MarksUnreadable()
         }

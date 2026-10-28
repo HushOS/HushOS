@@ -224,8 +224,9 @@ extension Auth {
         return session
     }
 
-    static func call(_ path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> [String: Any] {
-        let session = try session()
+    /* `as` names the session to send: a vault's own, so what it writes never goes out under another account's. */
+    static func call(_ path: String, method: String = "GET", body: [String: Any]? = nil, as owner: SharedKeychain.Session? = nil) async throws -> [String: Any] {
+        let session = try testSession ?? owner ?? session()
         guard let url = URL(string: session.origin + path) else { throw AuthError.message("Bad HushOS address.") }
         var request = URLRequest(url: url)
         request.httpMethod = method

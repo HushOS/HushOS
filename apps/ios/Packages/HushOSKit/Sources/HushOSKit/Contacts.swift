@@ -158,8 +158,8 @@ extension Auth {
      * the settings key beside it, and the stored sequence: always the row's, version 1 or 2,
      * 0 when there is none. A save names that sequence and is sealed one above it.
      */
-    static func settings() async throws -> (envelope: SettingsEnvelope?, key: SettingsKeyEnvelope?, version: UInt64) {
-        let reply = try await call("/api/auth/settings")
+    static func settings(as owner: SharedKeychain.Session? = nil) async throws -> (envelope: SettingsEnvelope?, key: SettingsKeyEnvelope?, version: UInt64) {
+        let reply = try await call("/api/auth/settings", as: owner)
         let envelope = (reply["settings"] as? [String: Any]).map { json in
             SettingsEnvelope(
                 version: UInt32((json["version"] as? NSNumber)?.intValue ?? 0), settingsVersion: (json["settingsVersion"] as? NSNumber)?.uint64Value ?? 0,
@@ -179,16 +179,16 @@ extension Auth {
 
     /* The settings version the server stored the document as. */
     @discardableResult
-    static func putSettings(expectedVersion: UInt64, envelope: SettingsEnvelope) async throws -> UInt64 {
+    static func putSettings(expectedVersion: UInt64, envelope: SettingsEnvelope, as owner: SharedKeychain.Session? = nil) async throws -> UInt64 {
         let reply = try await call("/api/auth/settings", method: "PUT", body: [
             "expectedVersion": expectedVersion, "version": envelope.version, "nonce": envelope.nonce, "ciphertext": envelope.ciphertext,
-        ])
+        ], as: owner)
         return (reply["settingsVersion"] as? NSNumber)?.uint64Value ?? envelope.settingsVersion
     }
 
     /* Stored once; 409 (`AuthError.conflict`) when another device stored one first. */
-    static func putSettingsKey(_ key: SettingsKeyEnvelope) async throws {
-        _ = try await call("/api/auth/settings-key", method: "PUT", body: json(key))
+    static func putSettingsKey(_ key: SettingsKeyEnvelope, as owner: SharedKeychain.Session? = nil) async throws {
+        _ = try await call("/api/auth/settings-key", method: "PUT", body: json(key), as: owner)
     }
 }
 
