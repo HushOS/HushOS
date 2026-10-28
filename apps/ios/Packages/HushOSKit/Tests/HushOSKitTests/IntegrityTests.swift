@@ -11,14 +11,14 @@ func makeIdentity(_ userId: String, root: Data? = nil, version: UInt64 = 1) thro
 }
 
 /* The keys the server serves for an identity: its four public keys and version. */
-func servedOf(_ envelope: IdentityEnvelope, mlDsa: Bool = true, kem: Bool = true) -> ServedContactKeys {
-    ServedContactKeys(keyVersion: envelope.keyVersion, encryptionPublicKey: envelope.encryptionPublicKey, signingPublicKey: envelope.signingPublicKey,
+func servedOf(_ envelope: IdentityEnvelope, mlDsa: Bool = true, kem: Bool = true) -> HushOSKit.ServedContactKeys {
+    HushOSKit.ServedContactKeys(keyVersion: envelope.keyVersion, encryptionPublicKey: envelope.encryptionPublicKey, signingPublicKey: envelope.signingPublicKey,
                       mlDsaPublicKey: mlDsa ? envelope.mlDsa?.publicKey : nil, kemPublicKey: kem ? envelope.kem?.publicKey : nil)
 }
 
 /* A version 3 pin made after a words check over these keys. */
 func pinned(_ userId: String, _ keys: IdentityKeys, name: String = "Maya", keyVersion: UInt64? = 1) throws -> ContactPin {
-    let served = ServedContactKeys(keyVersion: keyVersion, encryptionPublicKey: keys.encryptionPublicKey, signingPublicKey: keys.signingPublicKey,
+    let served = HushOSKit.ServedContactKeys(keyVersion: keyVersion, encryptionPublicKey: keys.encryptionPublicKey, signingPublicKey: keys.signingPublicKey,
                                    mlDsaPublicKey: keys.mlDsaPublicKey, kemPublicKey: keys.kemPublicKey)
     return try ContactPin.of(served, userId: userId, email: "\(name.lowercased())@example.com", name: name, pinnedAt: "2026-10-01T00:00:00Z")
 }
@@ -363,7 +363,7 @@ struct SuccessionFollowTests {
 
         // A valid chain that ends somewhere other than the served keys, or at them with another ML-KEM key.
         #expect(pin.follow(servedOf(stranger.envelope), links: [good]) == .changed)
-        let otherKem = ServedContactKeys(keyVersion: 2, encryptionPublicKey: second.identity.encryptionPublicKey, signingPublicKey: second.identity.signingPublicKey,
+        let otherKem = HushOSKit.ServedContactKeys(keyVersion: 2, encryptionPublicKey: second.identity.encryptionPublicKey, signingPublicKey: second.identity.signingPublicKey,
                                          mlDsaPublicKey: second.identity.mlDsa!.publicKey, kemPublicKey: stranger.envelope.kem!.publicKey)
         #expect(pin.follow(otherKem, links: [good]) == .changed)
         // New keys served without an ML-DSA key: never a succession, whatever the chain says.
