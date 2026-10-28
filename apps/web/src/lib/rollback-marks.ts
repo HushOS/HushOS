@@ -76,6 +76,16 @@ export class MarksUnreadableError extends Error {
     }
 }
 
+/* Saving a mark failed: what was just opened is not taken, since a later visit could not tell. */
+export const MARKS_UNSAVED =
+    'HushOS couldn’t record what this browser has seen of your account, so nothing was opened. Try again.';
+export class MarksUnsavedError extends Error {
+    override name = 'MarksUnsavedError';
+    constructor(cause?: unknown) {
+        super(MARKS_UNSAVED, { cause });
+    }
+}
+
 /* The worker's side, under the settings key (rollbackMarksUpdate). */
 export type MarksSealer = {
     /*
@@ -229,7 +239,11 @@ export function createRollbackMarks(options: {
             return result.marks;
         });
     }
-    /* Raises the stored marks to at least `to`, never lowering any; returns what is stored. */
+    /*
+     * Raises the stored marks to at least `to`, never lowering any; returns what is stored.
+     * Rejects when they could not be stored: what the caller was about to take is then not
+     * taken, since nothing here could tell a later older copy from it.
+     */
     async function raise(userId: string, to: Partial<RollbackMarks>) {
         const storage = storageOrNone();
         if (!storage) return highestMarks(NO_MARKS, to);
@@ -305,11 +319,17 @@ const marks = createRollbackMarks({
             : work(),
 });
 
-/* A raise that could not be kept leaves this device a little less able to tell an old copy. */
-function raiseQuietly(userId: string, to: Partial<RollbackMarks>) {
+/*
+ * Raising a mark is part of taking what it marks: when the mark cannot be stored (the
+ * settings key the server would not serve, the worker locked, storage full), the caller's
+ * step fails rather than go on with something a later visit could not check.
+ */
+function raiseOrFail(userId: string, to: Partial<RollbackMarks>) {
     return marks.raise(userId, to).then(
         () => {},
-        (error: unknown) => console.warn('A rollback mark could not be saved here.', error),
+        (error: unknown) => {
+            throw error instanceof MarksUnreadableError ? error : new MarksUnsavedError(error);
+        },
     );
 }
 
@@ -325,7 +345,7 @@ export async function settingsSeen(userId: string) {
     return (await marks.read(userId)).settings;
 }
 export function rememberSettingsSeen(userId: string, version: number) {
-    return raiseQuietly(userId, { settings: version });
+    return raiseOrFail(userId, { settings: version });
 }
 /*
  * The settings document mark: whether this device has opened or saved a
@@ -340,7 +360,7 @@ export async function settingsDocumentSeen(userId: string) {
     return (await marks.read(userId)).settingsDocument;
 }
 export function rememberSettingsDocumentSeen(userId: string) {
-    return raiseQuietly(userId, { settingsDocument: true });
+    return raiseOrFail(userId, { settingsDocument: true });
 }
 /* Whether settings served as `served` ('none', or a document's version) are older than this device has seen. */
 export function settingsDocumentRolledBack(served: 'none' | 1 | 2, documentSeen: boolean) {
@@ -369,7 +389,7 @@ export async function identityVersionSeen(userId: string) {
     return (await marks.read(userId)).identityVersion;
 }
 export function rememberIdentitySeen(userId: string, keyVersion: number, identityVersion: number) {
-    return raiseQuietly(userId, { identity: keyVersion, identityVersion });
+    return raiseOrFail(userId, { identity: keyVersion, identityVersion });
 }
 /*
  * Whether the identity served as current is older than one this device has

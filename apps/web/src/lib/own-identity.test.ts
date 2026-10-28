@@ -171,3 +171,16 @@ describe('opening this account’s identity', () => {
         expect(stubborn.marks().identityVersion).toBe(0);
     });
 });
+
+describe('the mark an opened identity leaves', () => {
+    test('is part of opening it: when it cannot be kept, the identity is not taken', async () => {
+        const s = steps(v1, {
+            remember: async () => {
+                throw new Error(
+                    'HushOS couldn’t record what this browser has seen of your account.',
+                );
+            },
+        });
+        await expect(openOwnIdentity(s.value)).rejects.toThrow('couldn’t record');
+    });
+});
