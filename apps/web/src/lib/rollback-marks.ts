@@ -132,6 +132,13 @@ function plaintextMarks(storage: Store, userId: string) {
     }
     return { keys, marks, fieldOf };
 }
+/* Whether `sealed` already holds what `mark` says. */
+const holds = (sealed: RollbackMarks, mark: Partial<RollbackMarks>) =>
+    (mark.settings ?? 0) <= sealed.settings &&
+    (!mark.settingsDocument || sealed.settingsDocument) &&
+    (mark.identity ?? 0) <= sealed.identity &&
+    (mark.identityVersion ?? 0) <= sealed.identityVersion;
+
 /*
  * What a slot holds: the marks, sealed, and the settings key's envelope as the server keeps it
  * (wrapped under the account key), so the marks still open when the settings can't be fetched.
@@ -153,13 +160,6 @@ function parse(raw: string): MarksRecord | null {
         return null;
     }
 }
-/* The plaintext keys as read, and the highest of each mark. */
-function snapshot(storage: Store, userId: string) {
-    const { keys, marks } = plaintextMarks(storage, userId);
-    return { found: new Map(keys.map((key) => [key, storage.getItem(key) ?? ''])), marks };
-}
-const unchanged = (a: Map<string, string>, b: Map<string, string>) =>
-    a.size === b.size && [...a].every(([key, value]) => b.get(key) === value);
 const sameKey = (a: SettingsKeyEnvelope | null, b: SettingsKeyEnvelope | null) =>
     a?.nonce === b?.nonce && a?.ciphertext === b?.ciphertext;
 
@@ -237,34 +237,32 @@ export function createRollbackMarks(options: {
         return update(storage, userId, to, true);
     }
     /*
-     * This device's marks for `userId`, migrating plaintext ones first. Throws
-     * MarksUnreadableError when they are there and cannot be read.
+     * This device's marks for `userId`. Plaintext marks of earlier versions count at their
+     * highest on every read, and are sealed; each plaintext key goes only once the sealed
+     * record holds what it says, read again just before it is deleted, so a higher value an
+     * older tab wrote meanwhile stays (and counts) until a later read seals it. Throws
+     * MarksUnreadableError when the marks are there and cannot be read.
      */
     async function read(userId: string): Promise<RollbackMarks> {
         const storage = storageOrNone();
         if (!storage) return NO_MARKS;
         await requireUnlocked(userId);
-        const stored = await update(storage, userId, {}, false);
-        let plaintext = snapshot(storage, userId);
-        if (!plaintext.found.size) return stored;
-        let marks = highestMarks(stored, plaintext.marks);
-        // A tab still on an earlier version can write a plaintext mark at any time. Only what
-        // was sealed is deleted, and only if it is still what was read; anything newer is
-        // sealed first. A write that fails keeps the plaintext for the next read.
-        for (let attempt = 0; attempt < 3; attempt++) {
-            try {
-                marks = await update(storage, userId, plaintext.marks, true);
-            } catch (error) {
-                if (error instanceof MarksUnreadableError) throw error;
-                return marks;
-            }
-            const now = snapshot(storage, userId);
-            if (unchanged(plaintext.found, now.found)) {
-                for (const key of now.found.keys()) storage.removeItem(key);
-                return marks;
-            }
-            plaintext = now;
-            marks = highestMarks(marks, now.marks);
+        const plaintext = plaintextMarks(storage, userId);
+        if (!plaintext.keys.length) return update(storage, userId, {}, false);
+        let sealed: RollbackMarks;
+        try {
+            sealed = await update(storage, userId, plaintext.marks, true);
+        } catch (error) {
+            if (error instanceof MarksUnreadableError) throw error;
+            // Not sealed this time: the plaintext stays, and counts.
+            return highestMarks(await update(storage, userId, {}, false), plaintext.marks);
+        }
+        let marks = sealed;
+        for (const key of plaintext.keys) {
+            const mark = plaintext.fieldOf(key, storage.getItem(key));
+            if (!mark) continue;
+            if (holds(sealed, mark)) storage.removeItem(key);
+            else marks = highestMarks(marks, mark);
         }
         return marks;
     }

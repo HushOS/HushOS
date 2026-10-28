@@ -466,6 +466,9 @@ describe('rollback marks', () => {
             if (once) local.setItem(`hushos.settings-seen:${MAYA}`, '12');
             once = false;
         });
+        // It counts at once, and stays in the clear until the sealed record holds it.
+        expect((await b.read(MAYA)).settings).toBe(12);
+        expect(local.getItem(`hushos.settings-seen:${MAYA}`)).toBe('12');
         expect((await b.read(MAYA)).settings).toBe(12);
         expect(local.getItem(`hushos.settings-seen:${MAYA}`)).toBeNull();
         expect((await b.read(MAYA)).settings).toBe(12);
@@ -522,6 +525,28 @@ describe('rollback marks', () => {
         const offline = browser(keys);
         offline.unlock(MAYA);
         expect(await offline.read(MAYA)).toMatchObject({ settings: 6, identity: 2 });
+    });
+
+    test('a plaintext mark an older tab raises while the migration deletes is never deleted', async () => {
+        local.setItem(`hushos.settings-seen:${MAYA}`, '5');
+        local.setItem(`hushos.identity-seen:${MAYA}`, '1');
+        const b = browser();
+        b.unlock(MAYA);
+        // Just as the first plaintext key goes, a tab on the earlier version raises the other.
+        const removeItem = local.removeItem;
+        local.removeItem = (key: string) => {
+            if (key === `hushos.settings-seen:${MAYA}`)
+                local.setItem(`hushos.identity-seen:${MAYA}`, '4');
+            removeItem(key);
+        };
+        try {
+            expect((await b.read(MAYA)).identity).toBe(4);
+        } finally {
+            local.removeItem = removeItem;
+        }
+        expect(local.getItem(`hushos.identity-seen:${MAYA}`)).toBe('4');
+        expect((await b.read(MAYA)).identity).toBe(4);
+        expect(local.getItem(`hushos.identity-seen:${MAYA}`)).toBeNull();
     });
 
     test('plaintext marks that could not be sealed stay, and still count', async () => {
