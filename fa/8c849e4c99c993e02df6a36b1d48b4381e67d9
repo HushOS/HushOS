@@ -1,0 +1,37 @@
+.env.example
+  s_566b8e0c4467a4::t_8eeecb077516cb 81-82
+apps/web/src/lib/api-client.ts
+  s_566b8e0c4467a4::t_818129eca22cdf 3,11-15
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_35ed111a6f24f0 39,45,688-690,697-703
+apps/web/src/lib/group-write-floor.test.ts
+  s_566b8e0c4467a4::t_8098e31874d305 2,6-7,12-18,23-54,56,58-60,63,66-68,70-72,118-119,121
+apps/web/src/lib/group-write-floor.ts
+  s_566b8e0c4467a4::t_f6a81a122896af 2,6-13,15-20,23-25,38,44-45,48-64
+docs/optional-verification.md
+  s_566b8e0c4467a4::t_e2d107e40bca8d 35,323,468,470,518
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_ba77facc16d9c1 702,704
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_66b6f8bde8b5d4 1319,1321-1322,1325-1326
+packages/env/src/storage.ts
+  s_566b8e0c4467a4::t_0542a29ab1e3f5 57-60
+packages/groups/src/protocol.ts
+  s_566b8e0c4467a4::t_68d734ca53ccad 124-139
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fa8c849e4c99c993e02df6a36b1d48b4381e67d9",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
