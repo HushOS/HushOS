@@ -1,0 +1,65 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NodeRow.kt
+  s_ec12ebe02de5ff::t_5c0247be78a586 3,269-277,283-284
+apps/ios/App/ActionSheets.swift
+  s_ec12ebe02de5ff::t_5b9d875f28063c 212
+apps/ios/App/Glyphs.swift
+  s_ec12ebe02de5ff::t_6acf87bd2fe6d2 8-11,13-15,31,33
+apps/ios/App/NodeRow.swift
+  s_ec12ebe02de5ff::t_4e634045aa7881 352,379-392
+apps/ios/App/Received.swift
+  s_ec12ebe02de5ff::t_ea3ec617383229 568
+apps/web/src/components/drive/create-folder-dialog.tsx
+  s_efd5e4c7e9b391::t_b71b1bacf0af08 2,74-78
+apps/web/src/components/drive/file-mark.tsx
+  s_efd5e4c7e9b391::t_1173b03853333b 1,35-42
+apps/web/src/components/drive/folder-colour-dialog.tsx
+  s_efd5e4c7e9b391::t_131486487de655 1-204
+apps/web/src/components/drive/folder-view.tsx
+  s_efd5e4c7e9b391::t_f6933c29a247c1 10,272,938,1475,1534-1537
+apps/web/src/components/drive/node-actions.tsx
+  s_efd5e4c7e9b391::t_a6253a85e896b8 13-14,101-102,175-180,290,310-311,322-324,429-433
+apps/web/src/components/drive/tag-colour.tsx
+  s_efd5e4c7e9b391::t_fadd64500f651a 173
+apps/web/src/components/folder-mark.tsx
+  s_efd5e4c7e9b391::t_48c1489384e06e 1,3,5-19,23,25-31,46-51
+apps/web/src/lib/uploads.ts
+  s_efd5e4c7e9b391::t_5298bb6871c4c3 1,86-89
+apps/web/src/styles.css
+  s_efd5e4c7e9b391::t_428f0b5db0e129 212-214,222-225,233-236,244-247,255-258,267-270,278-281,289-292,300-312
+crates/hushos-core/src/colour.rs
+  s_ec12ebe02de5ff::t_92f5fe944cb88e 1-211
+crates/hushos-core/src/lib.rs
+  s_efd5e4c7e9b391::t_3ce2a0d4c85809 19,50
+packages/drive/src/client.attributes.test.ts
+  s_efd5e4c7e9b391::t_e54be36a4a7ead 80,105-108,170,244-296
+packages/drive/src/client.ts
+  s_efd5e4c7e9b391::t_1b4e4b4e22b095 19,195,1103-1135,1142,2238
+packages/drive/src/colour.test.ts
+  s_efd5e4c7e9b391::t_8b8030022de785 1-85
+packages/drive/src/colour.ts
+  s_efd5e4c7e9b391::t_959c8e202431e0 1-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "26b2968f1f87380c84772344a370bccf5c193c5f",
+  "prompts": {},
+  "sessions": {
+    "s_ec12ebe02de5ff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3f79b7e-f7a1-4c9c-9a58-b7059252bcae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_efd5e4c7e9b391": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "da795f5c-6f7b-4e4b-b602-9bdf2054de0d",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
