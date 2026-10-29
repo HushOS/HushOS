@@ -86,7 +86,7 @@ struct SearchView: View {
             .alpineGrouped()
             .environment(\.defaultMinListRowHeight, 1) // Item rows set their own 56pt; furniture rows keep their own height.
             .listSectionSpacing(Alpine.Space.s4)
-            .screenChrome(title: "Search")
+            .screenChrome(title: "Search", root: true)
             .navigationDestination(for: Opened.self) { folder in
                 FolderView(folderId: folder.id, title: folder.name)
             }

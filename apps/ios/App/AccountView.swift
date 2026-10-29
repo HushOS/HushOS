@@ -25,6 +25,14 @@ struct AccountView: View {
     @State private var showingWords = false
     @State private var signingOut = false
     @State private var showingTrash = false
+    /* Account has finished appearing: a link may push onto its stack. */
+    @State private var onScreen = false
+
+    private func openTrash(_ link: AppLink?) {
+        guard onScreen, link == .trash else { return }
+        store.route = nil
+        showingTrash = true
+    }
 
     var body: some View {
         NavigationStack {
@@ -85,7 +93,7 @@ struct AccountView: View {
             .alpineGrouped()
             .listSectionSpacing(Alpine.Space.s4)
             .navigationTitle("Account")
-            .screenChrome(title: "Account")
+            .screenChrome(title: "Account", root: true)
             .navigationDestination(isPresented: $showingTrash) { TrashView().environment(store) }
             // Families, a family folder and its subfolders, all pushed by value and declared at the stack's root (FamilyRoute).
             .navigationDestination(for: FamilyRoute.self) { route in
@@ -110,12 +118,10 @@ struct AccountView: View {
                 // Signing out removes the kept copies; say so only when there are some.
                 Text("This iPhone leaves your list of devices, and you’ll need your email and password to sign back in on it." + (Offline.entries().isEmpty ? "" : " Files kept on this iPhone are removed."))
             }
-            .onChange(of: store.route, initial: true) { _, link in
-                if link == .trash {
-                    store.route = nil
-                    showingTrash = true
-                }
-            }
+            // A link to the Trash pushes it once Account has finished appearing, as a tap would (Appeared.swift).
+            .onFinishedAppearing { onScreen = true }
+            .onChange(of: store.route, initial: true) { _, link in openTrash(link) }
+            .onChange(of: onScreen) { _, _ in openTrash(store.route) }
             .refreshable {
                 await load()
                 await store.refreshFamilies()

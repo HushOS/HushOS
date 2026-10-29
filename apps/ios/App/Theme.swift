@@ -257,12 +257,18 @@ func changedLabel(_ date: Date?) -> String? {
 }
 
 /*
- * Every screen's header is iOS's own navigation bar: the large title the screens had, on the
- * same row as the screen's actions (inlineLarge: nothing sits in a row above the title, as
- * DESIGN.md asks of the phones), the actions as toolbar items (the system groups them in one
- * glass capsule) and the system's Back. Being the system's, the bar moves where iOS puts bars: iPhone Duo's vertical
- * strip, the sidebar's toggle on a wide window. The look is Alpine's through the bar
- * appearance (`Theme.configureAppearance`) and the app's tint.
+ * Every screen's header is iOS's own navigation bar, so the bar moves where iOS puts bars
+ * (iPhone Duo's vertical strip, the tab sidebar's toggle on a wide window), with the screen's
+ * actions as toolbar items (the system groups them in one glass capsule) and the system's Back.
+ * The look is Alpine's through the bar appearance (`Theme.configureAppearance`) and the tint.
+ *
+ * - A tab root (Home, Files, Shared, Account, Search) has its big title on the row with its
+ *   buttons (inlineLarge; nothing sits in a row above the title, as DESIGN.md asks of phones).
+ * - A pushed screen (a folder, Trash, Devices, …) follows Apple's Files app: the title leading,
+ *   right after Back, on the same row as the buttons (the browser role, which leads the title,
+ *   with the title inline). UIKit documents that a large inline title reverts to its own row
+ *   under the buttons once there is a Back button (`UINavigationItem.LargeTitleDisplayMode.inline`),
+ *   so a pushed screen never asks for one.
  */
 
 /* An icon in the bar: the system sizes it and makes the 44pt target. */
@@ -285,20 +291,21 @@ struct HeaderWord: View {
 
 extension View {
     /*
-     * The chrome of a screen: the system bar with this large title and these actions at its
-     * trailing end; on a wide window the rows keep a readable column.
+     * The chrome of a screen: the system bar with this title and these actions at its trailing
+     * end; `root` for a tab's first screen. On a wide window the rows keep a readable column.
      */
-    func screenChrome<Actions: View>(title: String, @ViewBuilder actions: @escaping () -> Actions) -> some View {
-        modifier(ScreenChrome(title: title, actions: actions))
+    func screenChrome<Actions: View>(title: String, root: Bool = false, @ViewBuilder actions: @escaping () -> Actions) -> some View {
+        modifier(ScreenChrome(title: title, root: root, actions: actions))
     }
 
-    func screenChrome(title: String) -> some View {
-        modifier(ScreenChrome(title: title, actions: { EmptyView() }))
+    func screenChrome(title: String, root: Bool = false) -> some View {
+        modifier(ScreenChrome(title: title, root: root, actions: { EmptyView() }))
     }
 }
 
 private struct ScreenChrome<Actions: View>: ViewModifier {
     let title: String
+    let root: Bool
     let actions: () -> Actions
     @State private var width: CGFloat = 0
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -310,8 +317,16 @@ private struct ScreenChrome<Actions: View>: ViewModifier {
             .contentMargins(.horizontal, ReadableColumn.margin(forWidth: width, regularHeight: verticalSizeClass == .regular), for: .scrollContent)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .navigationTitle(title)
-            .toolbarTitleDisplayMode(.inlineLarge)
+            .toolbarTitleDisplayMode(root ? .inlineLarge : .inline)
+            .toolbarRole(root ? .automatic : .browser)
             .toolbar {
+                if !root {
+                    // Sized as Apple's Files sizes a folder's title beside Back; the system's own inline title is 17pt.
+                    ToolbarItem(placement: .title) {
+                        Text(title).font(.title3.weight(.bold)).foregroundStyle(Alpine.ink).lineLimit(1)
+                            .accessibilityAddTraits(.isHeader)
+                    }
+                }
                 ToolbarItemGroup(placement: .topBarTrailing) { actions() }
             }
     }

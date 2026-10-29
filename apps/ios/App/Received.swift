@@ -19,6 +19,8 @@ struct SharedView: View {
     @State private var mineError: String?
     @State private var linkText = ""
     @State private var openingLink: String?
+    /* Shared has finished appearing: a link may push onto its stack. */
+    @State private var onScreen = false
     @State private var showingPeople = false
     /* A granter whose keys changed since they were pinned: checked again from a fresh lookup, which can follow their succession. */
     @State private var checkingAgain: CheckTarget?
@@ -32,6 +34,27 @@ struct SharedView: View {
 
     private var loadKey: Int { visible ? (byMe ? store.sharingVersion : -1) : -2 }
 
+    private func handle(_ link: AppLink?) {
+        guard onScreen else { return }
+        switch link {
+        case .shared(let mine):
+            store.route = nil
+            openingLink = nil
+            byMe = mine
+        case .share(let url):
+            store.route = nil
+            byMe = false
+            show(link: url)
+        case .incompleteShare:
+            store.route = nil
+            byMe = false
+            // No key to open it with: the browser says the link is incomplete and asks for the whole one.
+            show(link: "incomplete")
+        default:
+            break
+        }
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -43,7 +66,7 @@ struct SharedView: View {
             .environment(\.defaultMinListRowHeight, 1)
             .listSectionSpacing(Alpine.Space.s4)
             .navigationTitle("Shared")
-            .screenChrome(title: "Shared") { peopleButton }
+            .screenChrome(title: "Shared", root: true) { peopleButton }
             .sheet(isPresented: $showingPeople) { PeopleView().environment(store) }
             .sheet(item: $checkingAgain) { target in
                 NavigationStack {
@@ -65,25 +88,10 @@ struct SharedView: View {
             } message: {
                 Text(stopMessage)
             }
-            .onChange(of: store.route, initial: true) { _, link in
-                switch link {
-                case .shared(let mine):
-                    store.route = nil
-                    openingLink = nil
-                    byMe = mine
-                case .share(let url):
-                    store.route = nil
-                    byMe = false
-                    show(link: url)
-                case .incompleteShare:
-                    store.route = nil
-                    byMe = false
-                    // No key to open it with: the browser says the link is incomplete and asks for the whole one.
-                    show(link: "incomplete")
-                default:
-                    break
-                }
-            }
+            // A link pushes its page once Shared has finished appearing, as a tap would (Appeared.swift).
+            .onFinishedAppearing { onScreen = true }
+            .onChange(of: onScreen) { _, _ in handle(store.route) }
+            .onChange(of: store.route, initial: true) { _, link in handle(link) }
             .refreshable { await load() }
             // One load at a time, the last one asked: switching sides, and By me again whenever what this
             // account shares changed (a restore, a change from another device, a share stopped), cancel the

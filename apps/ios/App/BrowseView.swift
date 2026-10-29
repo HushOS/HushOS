@@ -10,11 +10,8 @@ struct BrowseView: View {
     @State private var rootId: String?
     @State private var path: [Opened] = []
     /*
-     * The top folder is on screen. A link waits for it and then pushes its folders the way a tap does,
-     * so a folder opened from a link looks exactly like one opened by hand (iOS 27.2 drew a folder set as
-     * the stack's first path with its title on a row of its own, under Back and the buttons). On iOS 26
-     * and 27.0 a push as the Files tab first appears can draw the bar over the status bar now and then:
-     * an iOS bug, accepted by the owner on 2026-10-29 (apps/ios/AGENTS.md).
+     * The top folder has finished appearing (Appeared.swift). A link waits for that and then pushes its
+     * folders the way a tap does, so a folder opened from a link looks exactly like one opened by hand.
      */
     @State private var shown = false
 
@@ -23,7 +20,7 @@ struct BrowseView: View {
             Group {
                 if let rootId {
                     FolderView(folderId: rootId, title: "Files", isRoot: true)
-                        .onAppear { shown = true }
+                        .onFinishedAppearing { shown = true }
                 } else {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).background(Alpine.ground)
                 }
@@ -193,7 +190,10 @@ struct FolderView: View {
             }
         }
         .alpineGrouped()
-        .screenChrome(title: headerTitle) { headerActions }
+        .screenChrome(title: headerTitle, root: isRoot) { headerActions }
+        // "Search in Lisbon 2026": this folder and the ones inside it, in the system's field under the bar as in
+        // Apple's Files. The top level searches from the search tab.
+        .folderSearch(isRoot ? nil : title, text: $query, focused: $searchFocused)
         // While selecting, Done ends it; Back would leave with a selection made.
         .navigationBarBackButtonHidden(selecting)
         .toolbar(selecting ? .hidden : .automatic, for: .tabBar)
@@ -279,10 +279,6 @@ struct FolderView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: Alpine.Space.s3) {
             if store.offline { OfflineCapsule() }
-            // Our own field, not the system's .searchable: on iOS 27.0 any search field the system attaches to a
-            // pushed folder, with the title inlineLarge, drew the bar up in the status bar when a link opened the
-            // folder as the Files tab first appeared.
-            if !isRoot, !selecting, store.folders[folderId] != nil { searchField }
             if let banner, !searching {
                 AccessBanner(text: banner.text, link: banner.link) {
                     if let folder = store.known(banner.folder) { action = .share(folder) }
@@ -427,24 +423,6 @@ struct FolderView: View {
                 .nodeActions(item, action: $action, store: store, select: { startSelecting(item) })
                 .itemRow()
         }
-    }
-
-    /* "Search in Lisbon 2026": this folder and the ones inside it. The top level searches from the search tab. */
-    private var searchField: some View {
-        HStack(spacing: Alpine.Space.s2) {
-            Image(systemName: "magnifyingglass").foregroundStyle(Alpine.inkMuted)
-            TextField("Search in \(title)", text: $query)
-                .focused($searchFocused)
-                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                .foregroundStyle(Alpine.ink)
-            if !query.isEmpty {
-                Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Alpine.inkMuted) }
-                    .buttonStyle(.plain).accessibilityLabel("Clear search")
-            }
-        }
-        .padding(.horizontal, 14).frame(height: Theme.control)
-        .background(Alpine.ink.opacity(0.06), in: Capsule())
-        .highContrastEdge(Capsule())
     }
 
     /* Select all and Done while selecting; otherwise Add and More. */
@@ -759,6 +737,18 @@ enum SortKey: String, CaseIterable {
                 before = x < y
             }
             return ascending ? before : !before
+        }
+    }
+}
+
+extension View {
+    /* The system's search field under the bar, always showing, as Apple's Files has it; none where `title` is nil. */
+    @ViewBuilder func folderSearch(_ title: String?, text: Binding<String>, focused: FocusState<Bool>.Binding) -> some View {
+        if let title {
+            searchable(text: text, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search in \(title)")
+                .searchFocused(focused)
+        } else {
+            self
         }
     }
 }
