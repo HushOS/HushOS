@@ -105,15 +105,27 @@ private struct NodeActionSheets: ViewModifier {
 /*
  * Info beside the tabs while the window has room; folded or turned upright with it open, the same
  * Info as a sheet, so nothing the person had open goes. Its Who can open and Tags open their
- * sheets from here.
+ * sheets from here. While it is beside the list the tab sidebar folds away (SidebarAroundInfo).
  */
 struct InfoBeside: ViewModifier {
     let store: DriveStore
     @Environment(\.roomBeside) private var room
     @State private var next: NodeAction?
+    /* The sidebar folds away while Info is beside the list, so the list keeps its width (the owner's call). */
+    @State private var sidebar = TabSidebar()
+    @State private var sidebarRule = SidebarAroundInfo()
 
     func body(content: Self.Content) -> some View {
         content
+            .background { TabSidebarFinder(sidebar: sidebar) }
+            .onChange(of: room && store.infoBeside != nil) { _, beside in
+                guard let shown = sidebar.shown else { return }
+                if beside {
+                    if sidebarRule.infoOpened(sidebarShown: shown) { sidebar.show(false) }
+                } else if sidebarRule.infoClosed(sidebarShown: shown) {
+                    sidebar.show(true)
+                }
+            }
             // A rename, a move, the Trash or a sync from another device: Info shows the item as it is now, or closes once it's gone.
             .onChange(of: store.infoBeside.map { store.known($0.item.id) }) { _, current in
                 guard let follow = store.infoBeside else { return }

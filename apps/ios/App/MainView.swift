@@ -14,6 +14,7 @@ struct MainView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var store: DriveStore?
     @State private var tab: MainTab = .home
     @State private var showingTransfers = false
@@ -22,9 +23,10 @@ struct MainView: View {
     @State private var webOnly = false
     /* A mailed family invitation opened from its link: the invitation, then joining, in a sheet. */
     @State private var invitation: InvitationLink?
-    /* The window's width, which decides between a tab bar and a sidebar, Info as a sheet or a column. */
+    /* The window's width, which decides between Info as a sheet or a column beside the list. */
     @State private var width: CGFloat = 0
-    private var roomBeside: Bool { RoomBeside.fits(width: width, regularHeight: verticalSizeClass == .regular) }
+    private var roomBeside: Bool { RoomBeside.info(width: width, regularHeight: verticalSizeClass == .regular) }
+    private var sidebar: Bool { RoomBeside.sidebar(regularWidth: horizontalSizeClass == .regular, regularHeight: verticalSizeClass == .regular) }
 
     /* The background queue's records and this session's transfers, as rows. */
     private func rows(_ store: DriveStore) -> [TransferRowModel] {
@@ -75,7 +77,7 @@ struct MainView: View {
                 }
                 .tabViewSearchActivation(.searchTabSelection)
                 .tabViewStyle(.sidebarAdaptable)
-                .sidebarWhereThereIsRoom(roomBeside))
+                .sidebarWhereThereIsRoom(sidebar))
                 .tabBarMinimizeBehavior(.onScrollDown)
                 .modifier(InfoBeside(store: store))
                 .environment(\.roomBeside, roomBeside)
@@ -223,19 +225,20 @@ struct MainView: View {
 }
 
 extension EnvironmentValues {
-    /* Whether the window has room for Info beside the list (RoomBeside); MainView sets it. */
+    /* Whether the window has room for Info beside the list (RoomBeside.info); MainView sets it. */
     @Entry var roomBeside = false
 }
 
 extension View {
     /*
-     * The tabs as a sidebar where it fits beside the screen (iPhone Duo's inner display on its
-     * side, an iPad), as Apple asks of a foldable; the system's tab bar everywhere else (RoomBeside
-     * says why). The tab and what each tab has open stay as the window changes.
+     * The tabs as a sidebar where both size classes are regular (iPhone Duo's inner display either
+     * way up, an iPad), as Apple asks of a foldable; the system's tab bar everywhere else, the outer
+     * display included. The sidebar's toggle lives in the system navigation bar every screen shows.
+     * The tab and what each tab has open stay as the window changes.
      */
-    @ViewBuilder func sidebarWhereThereIsRoom(_ room: Bool) -> some View {
+    @ViewBuilder func sidebarWhereThereIsRoom(_ sidebar: Bool) -> some View {
         if #available(iOS 27.0, *) {
-            defaultTabBarPlacement(room ? .sidebar : .automatic)
+            defaultTabBarPlacement(sidebar ? .sidebar : .automatic)
         } else {
             self
         }
