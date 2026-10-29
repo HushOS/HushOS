@@ -1,0 +1,29 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_cb3e8307185b26 537
+apps/ios/App/BrowseView.swift
+  s_566b8e0c4467a4::t_7fb5d905cf8ecd 424,431
+apps/ios/App/NodeRow.swift
+  s_566b8e0c4467a4::t_35dbc097611711 379-402
+apps/ios/App/Received.swift
+  s_566b8e0c4467a4::t_61053438b029d2 225
+apps/ios/App/RecentsView.swift
+  s_566b8e0c4467a4::t_c02656c092551b 221,228
+apps/ios/App/SearchView.swift
+  s_566b8e0c4467a4::t_098ff4c855d293 117,125
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f7ae936a5793e32c2d0c7f44d4ff36190192233d",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
