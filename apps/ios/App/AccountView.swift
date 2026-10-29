@@ -99,6 +99,10 @@ struct AccountView: View {
             .sheet(isPresented: $changingPassword) { ChangePasswordSheet().environment(store) }
             .sheet(isPresented: $showingPhrase) { RecoveryPhraseSheet().environment(store) }
             .sheet(isPresented: $showingPeople) { PeopleView().environment(store) }
+            #if DEBUG
+            // Evidence runs: -HushOSPeople YES opens Contacts (DebugStart).
+            .task { if DebugStart.people { showingPeople = true } }
+            #endif
             .sheet(isPresented: $showingWords) { OwnWordsSheet().environment(store) }
             .alert("Sign out of HushOS?", isPresented: $signingOut) {
                 Button("Cancel", role: .cancel) {}

@@ -241,6 +241,10 @@ struct FolderView: View {
             if store.folders[folderId] == nil { await store.refresh(folder: folderId) }
             if store.tags.tags.isEmpty { await store.refreshTags() }
             loaded = true
+            #if DEBUG
+            // Evidence runs: -HushOSInfo <id> or -HushOSShare <id> opens that row's Info or Share (DebugStart).
+            if let item = DebugStart.item(in: store.folders[folderId] ?? []) { action = item }
+            #endif
         }
         // Back in the foreground, a family folder checks its family again (at most once a minute).
         .onChange(of: scenePhase) { _, phase in

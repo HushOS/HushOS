@@ -177,6 +177,10 @@ struct MainView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).background(Alpine.ground)
             }
         }
+        #if DEBUG
+        // Evidence runs: -HushOSTab files|shared|account|search picks the tab at launch (DebugStart).
+        .task { if let start = DebugStart.tab { tab = start } }
+        #endif
         // A new vault (a sign-in again after Change password or Rotate account key ended the old session)
         // replaces the store's in place: the old one's session is dead and its keys may be too.
         .task(id: model.vault.map(ObjectIdentifier.init)) {
