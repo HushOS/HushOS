@@ -1,0 +1,29 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_690a88c39b07ee 67
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Adaptive.kt
+  s_566b8e0c4467a4::t_5cdc887112c8ed 109-110,115-116,123-131
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_a1aa7117a46012 1962-1964
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_566b8e0c4467a4::t_6242b0e8e8dbe1 264-272,276
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_566b8e0c4467a4::t_b509bea6cc1f14 186-188
+apps/android/app/src/test/kotlin/com/hushos/app/data/InfoShareListTest.kt
+  s_566b8e0c4467a4::t_c22ae634a8438a 1-113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8aff4e09374abc10a65b63dcd90ce2f38aa10830",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
