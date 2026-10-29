@@ -566,7 +566,22 @@ public actor Vault {
             after = page.nextCursor
         } while after != nil
         guard let base = first else { throw DriveAPIError.notFound("This folder no longer exists.") }
+        evictMissing(from: folderId, in: workspaceId, named: all)
         return Listing(folder: base.folder, ancestors: base.ancestors, children: all, nextCursor: nil)
+    }
+
+    /*
+     * A folder's completed listing (every page) is the server's word on what is in it: a row this process
+     * holds under that folder, in that workspace, that the listing no longer names is gone, trashed or
+     * deleted elsewhere. A received share has no feed here to say so. Only that folder's own listing
+     * counts; a row merely forgotten to be read again (a rotation) was never held, so it isn't evicted.
+     */
+    private func evictMissing(from folderId: String, in workspaceId: String, named children: [NodeView]) {
+        let folder = folderId.lowercased()
+        let named = Set(children.map { $0.id.lowercased() })
+        for (nodeId, row) in opened.values(in: workspaceId) where row.node.parentId?.lowercased() == folder && !named.contains(nodeId) {
+            remove(nodeId, in: workspaceId)
+        }
     }
 
     /* A folder's children, opened and sorted folders first. */

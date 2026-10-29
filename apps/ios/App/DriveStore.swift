@@ -682,6 +682,8 @@ final class DriveStore {
             let children = try await vault.children(of: id)
             folders[id] = children
             folderProblems[id] = nil
+            // The listing may have confirmed a row of it gone (a share's file trashed elsewhere): Info beside the list closes.
+            await followInfo()
             for child in children { names[child.id] = child.name }
             await judgeFamilyItems(children)
         } catch {
@@ -1222,6 +1224,9 @@ final class DriveStore {
             settle: { [weak self] folders in Task { await self?.settle(folders) } }
         ))
         busy = false
+        // The lists let go of the rows first (`drop`), the vault marks them gone after: Info looks again only now,
+        // so it never settles on what it read in between and waits on a sync that may not come.
+        await followInfo()
         reportFailures(result.failed.map(\.error), single: items.count == 1)
     }
 
@@ -1426,6 +1431,7 @@ final class DriveStore {
 
     func purge(_ item: Opened) async {
         _ = await onTrashRow(item) { try await vault.purge(item.id) }
+        await followInfo()
     }
 
     /*
