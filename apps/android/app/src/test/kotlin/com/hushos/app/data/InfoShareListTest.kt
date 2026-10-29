@@ -87,6 +87,27 @@ class InfoShareListTest {
     }
 
     @Test
+    fun aShareItemMovedIntoASiblingFolderKeepsInfoOpen() {
+        val shown = vault.liveItem(t, theirs)!!
+        val evidence = com.hushos.app.ui.ParentRefresh()
+        // Info open on t.txt in S, and S refreshed: t.txt is listed there.
+        evidence.observe(theirs, s, t, loading = true)
+        val listedInS = vault.listChildren(s)
+        assertEquals(true, evidence.observe(theirs, s, t, loading = false))
+        // U's list as the screen holds it, from before the move: without t.txt.
+        val staleU = vault.listChildren(u)
+        // Moved into U (here or by Grace): the row now says U, before U reloads.
+        val moved = shown.copy(node = shown.node.copy(parentId = u))
+        val refreshed = evidence.observe(theirs, u, t, loading = false)
+        val verdict = infoLookup(
+            live = true, held = true, removed = false, outOfReach = false, seen = true,
+            missingFromList = missingFromShareList(moved, vault.ownWorkspaceId, refreshed, staleU),
+        )
+        assertEquals(InfoLookup.SHOW, verdict)
+        assertEquals(true, listedInS.any { it.id == t })
+    }
+
+    @Test
     fun aTrashedSiblingStillInTheCacheIsUnaffected() {
         // U is in the trash as this device holds it: the listing leaves it out, and the Trash keeps reading this row.
         val held = vault.nodes.row(theirs, u)!!

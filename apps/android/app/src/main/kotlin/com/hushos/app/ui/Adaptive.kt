@@ -129,6 +129,25 @@ fun missingFromShareList(item: Opened, own: String?, refreshed: Boolean, listed:
     own != null && item.node.workspaceId != own && refreshed && listed != null &&
         listed.none { it.id == item.id && it.node.workspaceId == item.node.workspaceId }
 
+/*
+ * Whether the folder an item is in now has finished a refresh since Info began watching it there: the evidence
+ * `missingFromShareList` needs. Kept per (workspace, parent, item): a move puts the item under a parent whose list
+ * the screen holds from before (a move changes the cached parent before the destination reloads), so a refresh
+ * seen under the old parent says nothing about the new one, and only a load of the new parent that began after
+ * the move counts. Fed once a pass with whether that parent is loading.
+ */
+class ParentRefresh {
+    private var key: Triple<String, String?, String>? = null
+    private var loadSeen = false
+
+    fun observe(workspaceId: String, parentId: String?, itemId: String, loading: Boolean): Boolean {
+        val now = Triple(workspaceId, parentId, itemId)
+        if (now != key) { key = now; loadSeen = false }
+        if (loading) { loadSeen = true; return false }
+        return loadSeen
+    }
+}
+
 val LocalFrame = compositionLocalOf { AppFrame(NavKind.BAR, infoBeside = false, sheetMaxDp = null) }
 
 /*

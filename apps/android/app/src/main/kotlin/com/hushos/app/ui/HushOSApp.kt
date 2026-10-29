@@ -264,16 +264,15 @@ private fun Main(model: DriveViewModel, state: DriveState) {
         // A received share's item after its own parent's list was refreshed: still named there, or gone from it.
         val shown = live ?: last.get()
         val parent = shown?.node?.parentId
-        val sawLoad = remember(id) { java.util.concurrent.atomic.AtomicBoolean(false) }
-        val refreshed = remember(id) { java.util.concurrent.atomic.AtomicBoolean(false) }
+        // Evidence of a refresh counts only for the parent the item is in now: moved elsewhere, the new folder's
+        // list says nothing until a refresh of it, begun after the move, has finished.
+        val parentRefresh = remember(id) { ParentRefresh() }
         val parentLoading = parent != null && parent in state.loading
-        androidx.compose.runtime.SideEffect {
-            if (parentLoading && shown != null) sawLoad.set(true) else if (!parentLoading && sawLoad.get()) refreshed.set(true)
-        }
+        val refreshed = shown != null && parentRefresh.observe(shown.node.workspaceId, parent, id, parentLoading)
         val lookup = infoLookup(
             live = live != null, held = model.holds(id, workspace), removed = checked?.let { model.removed(it, id) } == true,
             outOfReach = checked?.let { model.outOfReach(it) } == true, seen = last.get() != null,
-            missingFromList = shown != null && missingFromShareList(shown, model.ownWorkspace(), refreshed.get() || (!parentLoading && sawLoad.get()), parent?.let { state.folders[it] }),
+            missingFromList = shown != null && missingFromShareList(shown, model.ownWorkspace(), refreshed, parent?.let { state.folders[it] }),
         )
         when (lookup) {
             InfoLookup.SHOW -> live

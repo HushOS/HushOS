@@ -121,5 +121,25 @@ class AdaptiveTest {
         // Never shown in this process (the system restarted the app): looked up once.
         assertEquals(InfoLookup.FIND, lookup())
     }
+
+    /*
+     * Info on a share item, its folder refreshed, then the item moved into a sibling folder: the move changes the
+     * cached parent before the sibling reloads, and the sibling's list on screen is from before (without the item).
+     * Evidence kept by item alone counted the old folder's refresh for the new one and closed Info on that stale list.
+     */
+    @Test
+    fun aRefreshOfTheOldFolderSaysNothingAfterAMove() {
+        val evidence = ParentRefresh()
+        assertEquals(false, evidence.observe("theirs", "S", "t", loading = false))
+        assertEquals(false, evidence.observe("theirs", "S", "t", loading = true))
+        assertEquals(true, evidence.observe("theirs", "S", "t", loading = false))
+        // Moved into U: nothing about U yet, so Info stays whatever U's old list says.
+        assertEquals(false, evidence.observe("theirs", "U", "t", loading = false))
+        // U refreshed after the move: now its list counts.
+        assertEquals(false, evidence.observe("theirs", "U", "t", loading = true))
+        assertEquals(true, evidence.observe("theirs", "U", "t", loading = false))
+        // The same id in another workspace is another node, with no refresh of its own yet.
+        assertEquals(false, evidence.observe("mine", "U", "t", loading = false))
+    }
 }
 
