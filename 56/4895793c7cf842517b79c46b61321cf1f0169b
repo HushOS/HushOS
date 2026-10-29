@@ -1,0 +1,21 @@
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_0ab75934537e9d 48-49
+apps/ios/App/BrowseView.swift
+  s_566b8e0c4467a4::t_79ab754ca7dca3 13-17,19,22-24,26-28,32-35,37-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "564895793c7cf842517b79c46b61321cf1f0169b",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
