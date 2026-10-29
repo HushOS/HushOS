@@ -35,7 +35,7 @@ enum Theme {
     static let divider = Color(uiColor: UIColor { traits in
         let dark = traits.userInterfaceStyle == .dark
         guard traits.accessibilityContrast == .high else {
-            return dark ? UIColor(red: 0x26 / 255, green: 0x2B / 255, blue: 0x3A / 255, alpha: 1) : UIColor(red: 0xE2 / 255, green: 0xE5 / 255, blue: 0xEE / 255, alpha: 1)
+            return dark ? UIColor(red: 0x38 / 255, green: 0x38 / 255, blue: 0x3A / 255, alpha: 1) : UIColor(red: 0xE2 / 255, green: 0xE5 / 255, blue: 0xEE / 255, alpha: 1)
         }
         return dark ? UIColor(red: 0x3A / 255, green: 0x41 / 255, blue: 0x55 / 255, alpha: 1) : UIColor(red: 0xC5 / 255, green: 0xCA / 255, blue: 0xD8 / 255, alpha: 1)
     })
