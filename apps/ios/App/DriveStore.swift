@@ -684,7 +684,14 @@ final class DriveStore {
             folderProblems[id] = nil
             // A received share's item missing from its folder listed afresh closes Info (there is no feed for
             // their drive); the vault keeps its row, so nothing a close decides changes what it holds.
-            if let follow = infoBeside, isReceived(follow.item), follow.missing(from: id, children: children) { infoBeside = nil }
+            if var follow = infoBeside, isReceived(follow.item) {
+                // Read only: the vault's row as it is now, so a move made here (adopted there before this
+                // refresh of the folder it left) is followed, and only its current folder's listing counts.
+                if case .live(let row) = await vault.standing(of: follow.item.ref) { follow.adopt(row) }
+                if infoBeside?.item.ref == follow.item.ref {
+                    if follow.missing(from: id, children: children) { infoBeside = nil } else if infoBeside != follow { infoBeside = follow }
+                }
+            }
             for child in children { names[child.id] = child.name }
             await judgeFamilyItems(children)
         } catch {

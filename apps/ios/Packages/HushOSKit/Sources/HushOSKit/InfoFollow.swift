@@ -49,6 +49,12 @@ public struct InfoFollow: Equatable, Sendable {
      * the share's folder listed afresh without the item closes Info, a decision on the lists alone (main's
      * behaviour), and the vault keeps its row. `folderId`: the folder just listed; `children`: what it lists.
      */
+    /* The vault's current row of the item (a move or rename made here is adopted there first): Info follows it. */
+    public mutating func adopt(_ row: Opened) {
+        guard row.ref == item.ref else { return }
+        item = row
+    }
+
     public func missing(from folderId: String, children: [Opened]) -> Bool {
         guard item.node.parentId?.lowercased() == folderId.lowercased() else { return false }
         return !children.contains { $0.ref == item.ref }

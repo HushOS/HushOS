@@ -193,6 +193,23 @@ struct InfoFollowTests {
         #expect(await share.vault.standing(of: share.file.ref) == .live(follow.item))
     }
 
+    /*
+     * Moved here from the share's top folder into its subfolder: the vault adopts the new parent before the
+     * folder it left is listed again. Info follows the vault's row and stays, showing the new folder; only
+     * the listing of the folder it is in now could close it.
+     */
+    @Test func aShareItemMovedHereStaysWhenTheFolderItLeftIsListedAgain() async throws {
+        let share = try await share()
+        var follow = InfoFollow(try #require(await share.vault.standing(of: share.file.ref).liveRow))
+        let moved = try share.sealed(share.file.id, parent: share.sub.id, kind: "file", parentKey: try randomBytes(length: 32), key: share.fileKey, name: "Menu.pdf")
+        _ = try await share.vault.adopt(moved, nodeKey: share.fileKey, metadata: follow.item.metadata, in: share.workspace)
+        share.list([share.sub])
+        let children = try await share.vault.children(of: share.root.id)
+        if case .live(let row) = await share.vault.standing(of: share.file.ref) { follow.adopt(row) }
+        #expect(!follow.missing(from: share.root.id, children: children))
+        #expect(follow.item.node.parentId == share.sub.id)
+    }
+
     /* Another folder's listing says nothing about the item: Info stays. */
     @Test func anotherFolderListedAgainKeepsInfoOpen() async throws {
         let share = try await share()
