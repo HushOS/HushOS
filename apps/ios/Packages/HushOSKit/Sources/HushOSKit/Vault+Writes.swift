@@ -239,7 +239,7 @@ extension Vault {
 
     public func trash(_ nodeId: String) async throws {
         try await sendTrash(nodeId)
-        forget(nodeId)
+        remove(nodeId)
     }
 
     /* The single route's trash, without forgetting the row: the caller forgets it once the lists let go. */
@@ -272,12 +272,12 @@ extension Vault {
             send: { workspace, chunk in try await self.sendTrashBatch(workspace, chunk) },
             // One request an item: each row leaves the lists, then this device forgets it, as for a batch.
             sequential: { chunk in
-                await TrashBatch.trashEach(chunk, trash: { id in try await self.sendTrash(id) }, moved: { id in await moved([id]); await self.forget([id]) })
+                await TrashBatch.trashEach(chunk, trash: { id in try await self.sendTrash(id) }, moved: { id in await moved([id]); await self.remove([id]) })
                     .map { $0.map { TrashBatch.Move.trashed } }
             },
             ancestors: { chains[$0] ?? [] },
-            // Called after `moved`: the row leaves the lists first, then this device forgets it.
-            forget: { ids in await self.forget(ids) },
+            // Called after `moved`: the row leaves the lists first, then this device lets it go as confirmed gone.
+            forget: { ids in await self.remove(ids) },
             moved: { landed in await moved(landed.map(\.id)) }
         )
     }
@@ -287,7 +287,10 @@ extension Vault {
         return try await api.trashBatch(workspaceId: workspace, ids: ids)
     }
 
-    /* Forgets each of these rows: what a batch moved, once the lists let go of them. */
+    /* Lets each of these rows go as confirmed gone: what a batch moved, once the lists let go of them. */
+    func remove(_ ids: [String]) { for id in ids { remove(id) } }
+
+    /* Drops each of these rows to be read again. */
     func forget(_ ids: [String]) { for id in ids { forget(id) } }
 
     /*
@@ -356,7 +359,7 @@ extension Vault {
     public func purge(_ nodeId: String) async throws {
         let workspace = try await loadWorkspace()
         try await api.purge(nodeId: nodeId, workspaceId: workspace.workspaceId)
-        forget(nodeId)
+        remove(nodeId, in: workspace.workspaceId)
     }
 
     public func emptyTrash() async throws -> EmptyTrashResult {
@@ -846,7 +849,7 @@ extension Vault {
             case "tombstone":
                 if let id = change.nodeId {
                     deleted.append(id)
-                    forget(id)
+                    remove(id)
                 }
             default:
                 break

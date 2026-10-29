@@ -1091,6 +1091,35 @@ final class DriveStore {
         FilesDomain.signal(folderId: item.node.parentId)
     }
 
+    /*
+     * Info beside the list, checked against the vault's rows (never the lists' caches, where a trashed
+     * folder's files linger with no trashedAt of their own): shown as the server has it now, closed on a
+     * removal the server confirmed or a share no longer listed, kept as it was while its row is only
+     * being read again (InfoFollow, the same rule as Android's).
+     */
+    func followInfo() async {
+        guard var follow = infoBeside else { return }
+        let item = follow.item
+        let standing = await vault.standing(of: NodeRef(workspaceId: item.node.workspaceId, nodeId: item.id))
+        let step = follow.update(standing, outOfReach: outOfReach(item))
+        // Another item opened, or Info closed, while the vault answered.
+        guard infoBeside?.item.id == item.id else { return }
+        switch step {
+        case .close: infoBeside = nil
+        case .show: if infoBeside != follow { infoBeside = follow }
+        case .hold: break
+        case .find: if let found = await lookUp(item.id), infoBeside?.item.id == item.id { infoBeside = InfoFollow(found) }
+        }
+    }
+
+    /* In a workspace that is neither this account's, a family's, nor among the shares just listed (unshared, revoked). */
+    private func outOfReach(_ item: Opened) -> Bool {
+        let workspace = item.node.workspaceId.lowercased()
+        guard let own = myWorkspace, workspace != own.lowercased(), !isFamily(item) else { return false }
+        guard mountsLoaded, mountsError == nil else { return false }
+        return !mounts.contains { $0.share.workspaceId.lowercased() == workspace }
+    }
+
     /* The item as the server has it now: the folder listed again, the row picked out. */
     func reload(_ item: Opened) async throws -> Opened? {
         await vault.forget(item.id)

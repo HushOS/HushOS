@@ -80,7 +80,7 @@ private struct NodeActionSheets: ViewModifier {
         content
             .onChange(of: besideList, initial: true) { _, moving in
                 guard moving, case .info(let item) = action else { return }
-                store.infoBeside = InfoFollow(item, current: store.known(item.id))
+                store.infoBeside = InfoFollow(item)
                 action = nil
             }
             // Sharing may have changed who can open what; the rows and banners ask again.
@@ -126,11 +126,9 @@ struct InfoBeside: ViewModifier {
                     sidebar.show(true)
                 }
             }
-            // A rename, a move, the Trash or a sync from another device: Info shows the item as it is now, or closes once it's gone.
-            .onChange(of: store.infoBeside.map { store.known($0.item.id) }) { _, current in
-                guard let follow = store.infoBeside else { return }
-                store.infoBeside = follow.following(current ?? nil)
-            }
+            // A rename, a move, the Trash or a sync from another device: Info shows the item as it is now, or
+            // closes once the server confirmed it gone (DriveStore.followInfo).
+            .task(id: InfoWatch(store: store)) { await store.followInfo() }
             .inspector(isPresented: Binding(get: { room && store.infoBeside != nil }, set: { shown in if !shown, room { store.infoBeside = nil } })) {
                 if let item = store.infoBeside?.item {
                     InfoSheet(item: item, close: { store.infoBeside = nil }, open: { action in next = action })
@@ -528,5 +526,20 @@ enum OpenIn {
                 }, actionLabel: "Send a copy")
             }
         }
+    }
+}
+
+/* What Info beside the list is checked again on: the catalogue, the shares listed, the item, and its cached row. */
+private struct InfoWatch: Hashable {
+    let version: Int
+    let shares: [String]
+    let item: String?
+    let cached: Opened?
+
+    @MainActor init(store: DriveStore) {
+        version = store.catalogueVersion
+        shares = store.mountsLoaded ? store.mounts.map(\.share.workspaceId) : []
+        item = store.infoBeside?.item.id
+        cached = store.infoBeside.flatMap { store.known($0.item.id) }
     }
 }
