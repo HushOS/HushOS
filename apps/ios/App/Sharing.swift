@@ -147,8 +147,9 @@ struct ShareItemSheet: View {
                 }
                 Section {
                     if loaded && links.isEmpty {
-                        HStack(alignment: .top, spacing: Alpine.Space.s3) {
-                            Image(systemName: "link").foregroundStyle(Alpine.inkMuted)
+                        // On the first line's baseline at the text's size, as the sign-in banner's icon.
+                        HStack(alignment: .firstTextBaseline, spacing: Alpine.Space.s3) {
+                            Image(systemName: "link").font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
                             Text(linkedAbove == nil ? "No links. A link lets anyone who has it view “\(item.name)”, with a password or an end date if you like." : "No links of its own. A link here would open only “\(item.name)”.")
                                 .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
                         }

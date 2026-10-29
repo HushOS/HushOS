@@ -73,8 +73,10 @@ struct SignInView: View {
                     }
 
                     if !formError.isEmpty {
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: "exclamationmark.circle").font(.body.weight(.semibold))
+                        // The icon sits on the first line's baseline at the text's size, so it lines up with that
+                        // line however many lines the message takes.
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Image(systemName: "exclamationmark.circle").font(Theme.Text.callout.weight(.semibold))
                             Text(formError).font(Theme.Text.callout).frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .foregroundStyle(Alpine.danger)
