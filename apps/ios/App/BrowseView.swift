@@ -181,7 +181,9 @@ struct FolderView: View {
                     Section {
                         content
                     } header: {
-                        header.listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: Alpine.Space.s3, trailing: 0))
+                        // Only with something in it, so the first row starts at the list's own first-section margin,
+                        // as on Home, Shared and Account.
+                        if headerShown { header.listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: Alpine.Space.s3, trailing: 0)) }
                     }
                 }
                 .listStyle(.insetGrouped)
@@ -273,6 +275,11 @@ struct FolderView: View {
             guard gone, loaded, store.folderProblems[folderId] == nil, !store.loading.contains(folderId) else { return }
             Task { await store.refresh(folder: folderId) }
         }
+    }
+
+    /* Whether `header` has anything to show (it is the offline line, who can open the folder and the tag filter). */
+    private var headerShown: Bool {
+        store.offline || (!searching && (banner != nil || store.receivedSentence(for: folderId) != nil)) || store.tags.tags.contains { $0.id == tagFilter }
     }
 
     /* The title and its actions, then search, offline, who can open it and the tag filter: the same over rows and tiles. */

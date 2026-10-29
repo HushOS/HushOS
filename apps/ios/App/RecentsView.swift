@@ -77,13 +77,17 @@ struct HomeView: View {
                         }
                         .bareRow(top: Alpine.Space.s8)
                     } header: {
-                        top
+                        // Only with something in it: an empty header would push the first card down past the
+                        // list's own first-section margin, which Files, Shared and Account start at.
+                        if store.offline { top }
                     }
                 } else {
                     Section {
                         NavigationLink { OnThisPhoneView() } label: { onThisPhone }.itemRow()
                     } header: {
-                        top
+                        // Only with something in it: an empty header would push the first card down past the
+                        // list's own first-section margin, which Files, Shared and Account start at.
+                        if store.offline { top }
                     }
                     Section {
                         ForEach(rows) { item in row(item) }

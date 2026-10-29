@@ -58,7 +58,9 @@ struct SharedView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {} header: { header }
+                // The picker and the paste field as the list's first rows, so they start at the list's own first-section
+                // margin, the same gap under the title as the other tabs' first card.
+                Section { header.bareRow(top: 0, bottom: 0) }
                 if byMe { sharedByMe } else { sharedWithMe }
             }
             .listStyle(.insetGrouped)
@@ -130,8 +132,6 @@ struct SharedView: View {
             .pickerStyle(.segmented)
             if !byMe { pasteField }
         }
-        .textCase(nil)
-        .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
     }
 
     /* The app's field (as the tag sheet's "Find or add a tag"), with Open beside it at the same height, not inside it. */
