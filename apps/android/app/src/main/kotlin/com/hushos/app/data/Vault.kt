@@ -917,6 +917,18 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
     fun item(id: String): Opened? = nodes.find(id)
 
+    /* The row while it is live: neither it nor a folder above it in the trash (NodeCache.live); in `workspaceId` when given. */
+    fun liveItem(id: String, workspaceId: String? = null): Opened? = nodes.live(id, workspaceId)
+
+    /* Whether this device holds a row for `id` at all, live or trashed; in `workspaceId` when given. */
+    fun holds(id: String, workspaceId: String? = null): Boolean = (if (workspaceId != null) nodes.row(workspaceId, id) else nodes.find(id)) != null
+
+    /* Whether the server said this workspace's node `id` is gone since this device last held it (NodeCache.remove). */
+    fun removed(workspaceId: String, id: String): Boolean = nodes.gone(workspaceId, id)
+
+    /* This account's own workspace once opened, without asking the server. */
+    val ownWorkspaceId: String? get() = workspace?.workspaceId
+
     /* A folder's name for "Was in …": the top folder is Files, as the tab calls it. */
     fun folderName(id: String?): String? {
         val folder = nodes.find(id ?: return null) ?: return null
@@ -963,6 +975,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     fun forget(workspaceId: String, id: String) {
         nodes.forget(workspaceId, id)
+    }
+
+    /* `forget`, for a row the server said is gone (trashed from here, tombstoned, purged): Info closes on it. */
+    fun remove(workspaceId: String, id: String) {
+        nodes.remove(workspaceId, id)
     }
 
     /* Every page of a folder, every key along the way opened; parents first, folders before files. */
@@ -1182,7 +1199,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     fun trash(id: String) {
         val workspace = sendTrash(id)
-        forget(workspace, id)
+        remove(workspace, id)
     }
 
     /* The single route's trash, without forgetting the row: its workspace, for the caller to forget it once the lists let go. */
@@ -1206,12 +1223,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
             send = { ws, chunk -> api.trashBatch(ws, chunk) },
             // One request an item: each row leaves the lists, then this device forgets it, as for a batch.
             sequential = { chunk ->
-                trashEach(chunk, { id -> sendTrash(id) }) { id -> moved(listOf(id)); workspaces[id]?.let { forget(it, id) } }
+                trashEach(chunk, { id -> sendTrash(id) }) { id -> moved(listOf(id)); workspaces[id]?.let { remove(it, id) } }
                     .map { outcome -> outcome.map { TrashMove.TRASHED } }
             },
             ancestors = { id -> nodes.find(id)?.let { ancestorIds(it) }.orEmpty() },
             // Called after `moved`: the row leaves the lists first, then this device forgets it.
-            forget = { landed -> for (id in landed) workspaces[id]?.let { forget(it, id) } },
+            forget = { landed -> for (id in landed) workspaces[id]?.let { remove(it, id) } },
             moved = { landed -> moved(landed.map { it.first }) },
         )
     }
@@ -1266,7 +1283,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     fun purge(id: String) {
         val ws = workspaceId
         api.purge(id, ws)
-        forget(ws, id)
+        remove(ws, id)
     }
 
     fun emptyTrash(): EmptyTrashResult = api.emptyTrash(workspaceId)

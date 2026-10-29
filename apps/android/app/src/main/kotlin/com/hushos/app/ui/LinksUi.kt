@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import androidx.compose.runtime.retain.retain
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -175,19 +176,19 @@ fun ShareSheet(model: DriveViewModel, state: DriveState, start: Opened, dismiss:
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // The sheet can move up to the folder someone has access through.
-    var target by remember { mutableStateOf(start) }
+    var target by retain { mutableStateOf(start) }
     val item = model.item(target.id) ?: target
     var shares by remember(target.id) { mutableStateOf<List<OwnedShare>?>(null) }
     var pins by remember { mutableStateOf<List<ContactPin>>(emptyList()) }
     var links by remember(target.id) { mutableStateOf<List<Pair<LinkView, String?>>?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
-    var chosen by remember { mutableStateOf<ContactPin?>(null) }
-    var role by remember { mutableStateOf("viewer") }
+    var chosen by retain { mutableStateOf<ContactPin?>(null) }
+    var role by retain { mutableStateOf("viewer") }
     var pending by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
-    var person by remember { mutableStateOf<OwnedShare?>(null) }
-    var inherited by remember { mutableStateOf<Triple<String, String, Opened>?>(null) }
-    var checking by remember { mutableStateOf<String?>(null) }
+    var person by retain { mutableStateOf<OwnedShare?>(null) }
+    var inherited by retain { mutableStateOf<Triple<String, String, Opened>?>(null) }
+    var checking by retain { mutableStateOf<String?>(null) }
     suspend fun load() {
         val current = model.item(target.id) ?: target
         shares = model.shares(current) ?: emptyList()
@@ -547,10 +548,10 @@ private fun LinkCard(model: DriveViewModel, item: Opened, link: LinkView, url: S
 private fun LinkOptionsSheet(model: DriveViewModel, item: Opened, link: LinkView, dismiss: () -> Unit, onTurnOff: () -> Unit, onChanged: () -> Unit) {
     val alpine = Alpine.colors
     val scope = rememberCoroutineScope()
-    var withPassword by remember { mutableStateOf(link.hasPassword) }
-    var password by remember { mutableStateOf("") }
+    var withPassword by retain { mutableStateOf(link.hasPassword) }
+    var password by retain { mutableStateOf("") }
     // "keep" leaves the end date as it is; the rest set a new one from today.
-    var ends by remember { mutableStateOf(if (link.expiresAt != null) "keep" else "never") }
+    var ends by retain { mutableStateOf(if (link.expiresAt != null) "keep" else "never") }
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val choices = buildList {
@@ -804,9 +805,9 @@ fun PeopleSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit) {
     var pins by remember { mutableStateOf<List<ContactPin>?>(null) }
     var email by rememberSaveable { mutableStateOf("") }
     var query by rememberSaveable { mutableStateOf("") }
-    var checking by remember { mutableStateOf<Pair<String, ContactPin?>?>(null) }
-    var open by remember { mutableStateOf<ContactPin?>(null) }
-    var removing by remember { mutableStateOf<ContactPin?>(null) }
+    var checking by retain { mutableStateOf<Pair<String, ContactPin?>?>(null) }
+    var open by retain { mutableStateOf<ContactPin?>(null) }
+    var removing by retain { mutableStateOf<ContactPin?>(null) }
     // By name, as iOS and the web list them (accents count, case doesn't), not newest first.
     val byName = remember { java.text.Collator.getInstance().apply { strength = java.text.Collator.SECONDARY } }
     suspend fun load() { pins = (model.contacts() ?: emptyList()).sortedWith(compareBy(byName) { it.name }) }
@@ -938,10 +939,10 @@ private val CATEGORY_LABELS = mapOf(
 fun ReportSheet(item: Opened, team: String, dismiss: () -> Unit, from: String? = null, submit: suspend (String, String, String?) -> Boolean?) {
     val alpine = Alpine.colors
     val scope = rememberCoroutineScope()
-    var category by remember { mutableStateOf<String?>(null) }
-    var picking by remember { mutableStateOf(false) }
-    var reason by remember { mutableStateOf("") }
-    var email by remember { mutableStateOf("") }
+    var category by retain { mutableStateOf<String?>(null) }
+    var picking by retain { mutableStateOf(false) }
+    var reason by retain { mutableStateOf("") }
+    var email by retain { mutableStateOf("") }
     var pending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var result by remember { mutableStateOf<Boolean?>(null) }
@@ -1102,8 +1103,8 @@ internal fun LinkBrowser(model: DriveViewModel, state: DriveState, session: Link
     val children = session.children
     var opening by remember { mutableStateOf<Pair<String, Float>?>(null) }
     var menu by remember { mutableStateOf(false) }
-    var reporting by remember { mutableStateOf(false) }
-    var whole by remember { mutableStateOf("") }
+    var reporting by retain { mutableStateOf(false) }
+    var whole by retain { mutableStateOf("") }
     val current = stack.lastOrNull() ?: root
     // A link's secret opens everything behind it: the screen holding it (and what it opened) stays out of captures.
     SecureWindow()

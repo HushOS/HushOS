@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import androidx.compose.runtime.retain.retain
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -203,9 +204,9 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
         else if (awaitingTrash) { awaitingTrash = false; picked = emptySet(); selecting = false }
     }
     val clearSelection = { if (!trashing) { picked = emptySet(); selecting = false } }
-    var movingMany by remember { mutableStateOf(false) }
-    var sendingMany by remember { mutableStateOf<List<Opened>?>(null) }
-    var taggingMany by remember { mutableStateOf<List<Opened>?>(null) }
+    var movingMany by retain { mutableStateOf(false) }
+    var sendingMany by retain { mutableStateOf<List<Opened>?>(null) }
+    var taggingMany by retain { mutableStateOf<List<Opened>?>(null) }
     var selectMenu by remember { mutableStateOf(false) }
     var folderMenu by remember { mutableStateOf(false) }
     BackHandler(enabled = stack.size > floor || onLeave != null) { if (stack.size > floor) stack.removeAt(stack.lastIndex) else onLeave?.invoke() }

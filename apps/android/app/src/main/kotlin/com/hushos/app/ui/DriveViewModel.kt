@@ -1953,6 +1953,28 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     /* The opened item for an id, when this session knows it (the catalogue opens the whole drive). */
     fun item(id: String): Opened? = vault?.item(id)
 
+    /* `item`, only while it is live (not trashed, nor inside a trashed folder); null when gone or not yet loaded. */
+    fun liveItem(id: String, workspaceId: String? = null): Opened? = vault?.liveItem(id, workspaceId)
+
+    /* Whether the rows on this device include `id`, live or trashed. */
+    fun holds(id: String, workspaceId: String? = null): Boolean = vault?.holds(id, workspaceId) == true
+
+    /* This account's own workspace, once the drive is open. */
+    fun ownWorkspace(): String? = vault?.ownWorkspaceId
+
+    /* Whether the server said this workspace's node `id` is gone since this device last held it. */
+    fun removed(workspaceId: String, id: String): Boolean = vault?.removed(workspaceId, id) == true
+
+    /*
+     * Whether a row of `workspaceId` can no longer be reached: not this account's own workspace, and not among the
+     * shares the server listed last. Unknown (shares not listed yet, the drive not open): false.
+     */
+    fun outOfReach(workspaceId: String): Boolean {
+        val own = vault?.ownWorkspaceId ?: return false
+        val shares = state.value.shares ?: return false
+        return workspaceId != own && shares.none { it.share.workspaceId == workspaceId }
+    }
+
     /* A kept folder off the phone (from one of its files, or On this phone): everything that came with it goes. */
     fun forgetKeptFolder(id: String) = viewModelScope.launch {
         androidx.work.WorkManager.getInstance(context).cancelUniqueWork("keep-$id")

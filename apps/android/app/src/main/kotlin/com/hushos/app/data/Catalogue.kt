@@ -129,7 +129,7 @@ fun Vault.sync(): Set<String>? = synchronized(syncLock) {
             "tombstone" -> {
                 val id = change.nodeId ?: continue
                 (nodes.row(workspaceId, id)?.node?.parentId ?: parents[id])?.let { catalogueChildren[it]?.remove(id); touched.add(it) }
-                forget(workspaceId, id)
+                remove(workspaceId, id)
                 touched.add(id)
             }
         }

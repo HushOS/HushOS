@@ -119,7 +119,8 @@ fun whenText(millis: Long?): String? {
 /*
  * One node in a list, as the board draws it: 56dp, a 36dp mark, the name, and a
  * line saying who can open it and when it changed. Selecting tints the row and
- * puts a check where the mark was; ⋮ opens the item sheet.
+ * puts a check where the mark was; the row whose Info is open beside the list is
+ * tinted too, without the check. ⋮ opens the item sheet.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -149,9 +150,10 @@ fun NodeRow(
     val who = shownWho(model, state, item, note)
     val time = if (away) "Not on this phone" else note ?: listOfNotNull(whenText(if (recent) item.changedMillis else item.modifiedMillis), item.size?.let { formatBytes(it) }).joinToString(" · ").ifEmpty { null }
     val keepProblem = keepProblemOf(state, item, note)
+    val showingInfo = LocalInfoShown.current == (item.node.workspaceId to item.id)
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp)
-            .background(if (selected) alpine.tint else Color.Transparent)
+            .background(if (selected || showingInfo) alpine.tint else Color.Transparent)
             .semantics { this.selected = selected }
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(start = AlpineSpace.S4, end = if (onMore != null && !selecting) AlpineSpace.S1 else AlpineSpace.S4),

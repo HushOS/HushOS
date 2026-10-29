@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import androidx.compose.runtime.retain.retain
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -319,7 +320,8 @@ private fun planInk(state: DriveState) = plan(state).let { plan ->
 private fun AccountPage(title: String, onBack: (() -> Unit)?, actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {}, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
     val alpine = Alpine.colors
     Scaffold(contentWindowInsets = WindowInsets(0), containerColor = alpine.ground, topBar = { DestinationBar(title, onBack = onBack, actions = actions) }) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S8)) {
+        // A settings page is a form: on a wide window its fields and buttons keep a phone's width.
+        Column(Modifier.padding(padding).fillMaxSize().readableWidth(Frame.Form).verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S8)) {
             content()
         }
     }
@@ -334,9 +336,9 @@ private fun PlanScreen(model: DriveViewModel, state: DriveState, onBack: () -> U
     val alpine = Alpine.colors
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var removing by remember { mutableStateOf(false) }
+    var removing by retain { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
-    var showingTrash by remember { mutableStateOf(false) }
+    var showingTrash by retain { mutableStateOf(false) }
     LaunchedEffect(Unit) { model.refreshStorage(); model.refreshAccount() }
     if (showingTrash) {
         BackHandler { showingTrash = false }
@@ -450,9 +452,9 @@ fun PasswordField(value: String, onChange: (String) -> Unit, label: String, modi
 private fun PasswordScreen(model: DriveViewModel, onBack: () -> Unit) {
     val alpine = Alpine.colors
     // Passwords stay in memory, never in saved state (which outlives the process on disk).
-    var current by remember { mutableStateOf("") }
-    var new by remember { mutableStateOf("") }
-    var repeat by remember { mutableStateOf("") }
+    var current by retain { mutableStateOf("") }
+    var new by retain { mutableStateOf("") }
+    var repeat by retain { mutableStateOf("") }
     var pending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val mismatch = repeat.isNotEmpty() && new != repeat
@@ -676,7 +678,7 @@ private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: ()
         AccountRow("Delete account", "Every file, every earlier version and the account. It can’t be undone.", Icons.Outlined.DeleteForever, danger = true) { deleting = true }
     }
     if (deleting) {
-        var password by remember { mutableStateOf("") }
+        var password by retain { mutableStateOf("") }
         var typed by rememberSaveable { mutableStateOf("") }
         var pending by remember { mutableStateOf(false) }
         var error by remember { mutableStateOf<String?>(null) }
@@ -708,7 +710,7 @@ private fun AdvancedScreen(model: DriveViewModel, state: DriveState, onReset: ()
 @Composable
 private fun ResetKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
     val alpine = Alpine.colors
-    var password by remember { mutableStateOf("") }
+    var password by retain { mutableStateOf("") }
     var pending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     // Only whether the keys were reset is saved state: the phrase is read again from the account when the page shows,
