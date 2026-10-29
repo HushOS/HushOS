@@ -71,4 +71,28 @@ class AdaptiveTest {
         assertNull(tabletopSheetMax(841f, 700f, tabletop = true))
         assertNull(tabletopSheetMax(841f, 200f, tabletop = true))
     }
+
+    @Test
+    fun withTheKeyboardUpASheetMayRiseOverTheFold() {
+        assertEquals(420.5f, sheetLimit(420.5f, keyboard = false)!!, 0.001f)
+        assertNull(sheetLimit(420.5f, keyboard = true))
+        assertNull(sheetLimit(null, keyboard = false))
+    }
+
+    /*
+     * Info shows its item only while the lists would: before, a row that went away (trashed here or on another
+     * device, inside a trashed folder, unshared) stayed on screen from the first lookup, with Share and Tags live.
+     */
+    @Test
+    fun infoClosesWhenItsItemIsGoneAndLooksUpOnlyWhatThisDeviceNeverHad() {
+        assertEquals(InfoLookup.SHOW, infoLookup(live = true, held = true, seen = false))
+        // Trashed, or inside a trashed folder: the row is still held, but not live.
+        assertEquals(InfoLookup.CLOSE, infoLookup(live = false, held = true, seen = true))
+        assertEquals(InfoLookup.CLOSE, infoLookup(live = false, held = true, seen = false))
+        // Shown before and now gone from this device (unshared, revoked, trashed here): no lookup brings it back.
+        assertEquals(InfoLookup.CLOSE, infoLookup(live = false, held = false, seen = true))
+        // After the system restarted the app, before the catalogue is back: looked up once.
+        assertEquals(InfoLookup.FIND, infoLookup(live = false, held = false, seen = false))
+    }
 }
+

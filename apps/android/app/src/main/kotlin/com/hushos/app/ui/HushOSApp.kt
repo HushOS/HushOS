@@ -248,10 +248,22 @@ private fun Main(model: DriveViewModel, state: DriveState) {
         }
     }
     LaunchedEffect(tab) { if (infoId != null && infoTab != tab) closeInfo() }
-    // Found again after the system restarted the app; gone (trashed, unshared): Info closes.
+    // Read again on every change the lists redraw for (state is new after each sync, trash or unshare): gone
+    // (trashed, inside a trashed folder, unshared) closes Info; after a restart the row is looked up once.
     val infoItem = infoId?.takeIf { infoTab == tab }?.let { id ->
-        val found by androidx.compose.runtime.produceState(model.item(id), id) { if (value == null) value = model.find(id) ?: run { closeInfo(); null } }
-        model.item(id) ?: found
+        val live = model.liveItem(id)
+        // Not state: it only matters to a later pass, and is set after this one is applied.
+        val seen = remember(id) { java.util.concurrent.atomic.AtomicBoolean(false) }
+        if (live != null) androidx.compose.runtime.SideEffect { seen.set(true) }
+        when (infoLookup(live = live != null, held = model.holds(id), seen = seen.get())) {
+            InfoLookup.SHOW -> live
+            InfoLookup.CLOSE -> { LaunchedEffect(id) { closeInfo() }; null }
+            InfoLookup.FIND -> {
+                // `find` opens the row's folder, so once found the row is held and the next pass shows it live.
+                val found by androidx.compose.runtime.produceState<com.hushos.app.data.Opened?>(null, id) { value = model.find(id) ?: run { closeInfo(); null } }
+                found?.takeIf { model.liveItem(it.id) != null }
+            }
+        }
     }
     val searching = tab == Tab.HOME && home == "search"
     // Search takes the whole screen on a phone, as Material's search view does; a rail stays beside it.

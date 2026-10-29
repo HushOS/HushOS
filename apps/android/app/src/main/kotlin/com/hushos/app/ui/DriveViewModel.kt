@@ -1953,6 +1953,12 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     /* The opened item for an id, when this session knows it (the catalogue opens the whole drive). */
     fun item(id: String): Opened? = vault?.item(id)
 
+    /* `item`, only while it is live (not trashed, nor inside a trashed folder); null when gone or not yet loaded. */
+    fun liveItem(id: String): Opened? = vault?.liveItem(id)
+
+    /* Whether the rows on this device include `id`, live or trashed: if so, a missing live row means it is gone. */
+    fun holds(id: String): Boolean = vault?.holds(id) == true
+
     /* A kept folder off the phone (from one of its files, or On this phone): everything that came with it goes. */
     fun forgetKeptFolder(id: String) = viewModelScope.launch {
         androidx.work.WorkManager.getInstance(context).cancelUniqueWork("keep-$id")

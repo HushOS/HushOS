@@ -68,6 +68,13 @@ fun tabletopSheetMax(windowHeightDp: Float, hingeBottomDp: Float?, tabletop: Boo
 
 private const val SheetMinBelowFold = 240f
 
+/*
+ * A sheet's tallest right now: below the fold while the device stands half open, unless the keyboard is
+ * up. The keyboard takes most of the lower half itself, so a sheet held there would leave its field a
+ * strip too thin to see; it rises over the fold until the keyboard goes, then settles below it again.
+ */
+fun sheetLimit(belowFoldDp: Float?, keyboard: Boolean): Float? = if (keyboard) null else belowFoldDp
+
 /* The frame this window gets: navigation, whether Info sits beside the list, and a tabletop sheet's limit. */
 data class AppFrame(val nav: NavKind, val infoBeside: Boolean, val sheetMaxDp: Float?)
 
@@ -81,6 +88,21 @@ fun windowDp(): Pair<Float, Float> {
 /* The lower edge of a separating horizontal hinge (tabletop), in dp from the window's top. */
 fun horizontalHingeBottomDp(info: WindowAdaptiveInfo, density: Float): Float? =
     info.windowPosture.hingeList.firstOrNull { !it.isVertical && it.isSeparating }?.bounds?.bottom?.div(density)
+
+/* What Info does with its item now. */
+enum class InfoLookup { SHOW, FIND, CLOSE }
+
+/*
+ * Info follows the rows the lists follow. `live`: the row is there and live. `held`: this device has a row
+ * for it, live or not (a trashed one, or one inside a trashed folder, is held but not live). `seen`: this
+ * Info showed it live before. A row this process never had (after the system restarted the app, before the
+ * catalogue is back) is looked up once; anything else that is not live is gone (trashed, unshared, revoked).
+ */
+fun infoLookup(live: Boolean, held: Boolean, seen: Boolean): InfoLookup = when {
+    live -> InfoLookup.SHOW
+    held || seen -> InfoLookup.CLOSE
+    else -> InfoLookup.FIND
+}
 
 val LocalFrame = compositionLocalOf { AppFrame(NavKind.BAR, infoBeside = false, sheetMaxDp = null) }
 

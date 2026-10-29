@@ -917,6 +917,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
     fun item(id: String): Opened? = nodes.find(id)
 
+    /* The row while it is live: neither it nor a folder above it in the trash (NodeCache.live). */
+    fun liveItem(id: String): Opened? = nodes.live(id)
+
+    /* Whether this device holds a row for `id` at all, live or trashed. */
+    fun holds(id: String): Boolean = nodes.find(id) != null
+
     /* A folder's name for "Was in …": the top folder is Files, as the tab calls it. */
     fun folderName(id: String?): String? {
         val folder = nodes.find(id ?: return null) ?: return null

@@ -26,6 +26,22 @@ class NodeCache(private val ownWorkspace: () -> String?) {
         return byWorkspace.values.firstOrNull()
     }
 
+    /*
+     * `find`, while the row is still somewhere a person can see it: not in the trash, and no folder above it
+     * (as far as this device holds them, in the row's own workspace) in the trash either. Trashing a folder
+     * marks only the folder, so a file inside stays an untrashed row the whole time it is gone.
+     */
+    fun live(nodeId: String): Opened? {
+        val row = find(nodeId) ?: return null
+        var cursor: Opened? = row
+        var steps = 0
+        while (cursor != null && steps++ < 256) {
+            if (cursor.node.trashedAt != null) return null
+            cursor = cursor.node.parentId?.let { row(row.node.workspaceId, it) }
+        }
+        return row
+    }
+
     fun putKey(workspaceId: String, nodeId: String, key: ByteArray) {
         keys.getOrPut(nodeId) { ConcurrentHashMap() }[workspaceId] = key
     }

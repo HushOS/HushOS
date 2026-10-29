@@ -81,4 +81,37 @@ class NodeCacheTest {
         checkSuite(served(null).envelopeSuite)
         checkSuite(served("1").envelopeSuite)
     }
+
+    /*
+     * Info and the lists read the same rows. Trashing a folder marks only the folder, so a file inside it
+     * stays an untrashed row: `find` still answers with it (what Info showed, with live Share and Tags, after
+     * the folder went to the Trash on another device), `live` does not. A row of its own in the trash is not
+     * live either, and a trashed folder of another workspace never hides this one's row.
+     */
+    @Test
+    fun aRowInsideATrashedFolderOrTrashedItselfIsNotLive() {
+        val cache = NodeCache { own }
+        fun put(id: String, parent: String?, trashed: Boolean = false, ws: String = own) = cache.put(
+            Opened(NodeView(id, ws, parent, "file", 1uL, 1uL, "", 1uL, "", null, if (trashed) "2026-10-29T10:00:00Z" else null, null, null), NodeMetadata(id, null, null, null, emptyMap())),
+            ownKey,
+        )
+        put("root", null)
+        put("trip", "root", trashed = true)
+        put("days", "trip")
+        put("photo.jpg", "days")
+        put("notes.md", "root")
+        put("old.txt", "root", trashed = true)
+        assertEquals("photo.jpg", cache.find("photo.jpg")?.id)
+        assertNull(cache.live("photo.jpg"))
+        assertNull(cache.live("days"))
+        assertNull(cache.live("old.txt"))
+        assertEquals("notes.md", cache.live("notes.md")?.id)
+        assertNull(cache.live("never-seen"))
+        // Ancestors are looked up in the row's own workspace: another workspace's trashed folder by the same id
+        // says nothing about this one's tree, and this one's trashed folder hides nothing of a share's.
+        put("root", null, trashed = true, ws = theirs)
+        assertEquals("notes.md", cache.live("notes.md")?.id)
+        put("shared.pdf", "trip", ws = theirs)
+        assertEquals("shared.pdf", cache.live("shared.pdf")?.id)
+    }
 }
