@@ -1,0 +1,79 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_814aa5663cef59 538
+apps/android/AGENTS.md
+  s_ac9770791c3968::t_ea2fa3a015042d 63-69
+apps/android/app/build.gradle.kts
+  s_ac9770791c3968::t_28f137ffbff26f 130-137
+apps/android/app/src/main/kotlin/com/hushos/app/data/Catalogue.kt
+  s_ac9770791c3968::t_790ca0f7df76ba 132
+apps/android/app/src/main/kotlin/com/hushos/app/data/NodeCache.kt
+  s_ac9770791c3968::t_d3a3d0ca112677 17-22,35-51,60,63,68-75
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_ac9770791c3968::t_ecbec0d3e3e765 920-931,980-984,1202,1226,1231,1286
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_ac9770791c3968::t_4a9e4000e670a8 3,323-324,339,341,455-457,681,713
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Adaptive.kt
+  s_ac9770791c3968::t_cf640766c6f11d 1-168
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AddMenu.kt
+  s_ac9770791c3968::t_6c95cd10a369c7 3,79-80,82-84,277-279
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Components.kt
+  s_ac9770791c3968::t_b6a489493f89df 4,23-24,274,278-291,293-299,301-302
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DevicesScreen.kt
+  s_ac9770791c3968::t_ed49744ff239ab 3,47-49,137
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_ac9770791c3968::t_7bb7ed08d1722b 1956-1977
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_ac9770791c3968::t_98231475f9884c 3,207-209
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HomeScreen.kt
+  s_ac9770791c3968::t_e099dd798a1a2b 3,262,333-335
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_ac9770791c3968::t_4198cc8903f481 3-27,119-120,124,162-167,170,218-297,301-302,304-310,313-324,327,329,338-378,392-459
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_ac9770791c3968::t_f8f663683b1cdb 3,12-21,201-202,278-280,328,498-499,501,600-629,637,699,702
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_ac9770791c3968::t_bb982be1470e44 3,179,185-186,189-191,551-552,554,808-810,942-945,1106-1107
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NodeRow.kt
+  s_ac9770791c3968::t_ee157e01bb0ac5 122-123,153,156
+apps/android/app/src/main/kotlin/com/hushos/app/ui/RecoverScreen.kt
+  s_ac9770791c3968::t_c2ee3fa1416360 3,180-183,185-186
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Screens.kt
+  s_ac9770791c3968::t_de8fcba8ff9ef9 3,143,145-146,251-252,254
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SharedScreen.kt
+  s_ac9770791c3968::t_3dfabbfe167460 3,101,107-112
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SignInScreen.kt
+  s_ac9770791c3968::t_e8915767a53073 3,63
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_ac9770791c3968::t_ea5154bc3b65da 186-188
+apps/android/app/src/test/kotlin/com/hushos/app/data/InfoShareListTest.kt
+  s_ac9770791c3968::t_53db1d7f1d43a0 1-134
+apps/android/app/src/test/kotlin/com/hushos/app/data/NodeCacheTest.kt
+  s_ac9770791c3968::t_93ab7764291d28 84-162,164
+apps/android/app/src/test/kotlin/com/hushos/app/ui/AdaptiveTest.kt
+  s_ac9770791c3968::t_5544f186baf6e3 1-145
+apps/android/gradle/libs.versions.toml
+  s_ac9770791c3968::t_ae8471f143ee62 8-10,41-46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9d3742c53c5d1d50e13397dec040fef803907975",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_ac9770791c3968": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1882a-46a8-7232-84d2-8814e7669080",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
