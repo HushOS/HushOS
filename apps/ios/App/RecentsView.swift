@@ -178,7 +178,7 @@ struct HomeView: View {
                 }
                 .padding(.vertical, 1)
             }
-            .scrollClipDisabled()
+            .chipRowClip()
             Button("Manage") { managingTags = true }.font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
                 .buttonStyle(.borderless)
         }
@@ -254,7 +254,7 @@ struct TypeChips: View {
                 }
             }
         }
-        .scrollClipDisabled()
+        .chipRowClip()
     }
 }
 

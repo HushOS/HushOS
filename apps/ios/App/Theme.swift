@@ -99,6 +99,36 @@ extension View {
     }
 }
 
+extension View {
+    /*
+     * A row of chips scrolls past its column to the screen's edge, except where that edge holds
+     * a vertical bar (iPhone Duo's strip of status, tabs and back): chips drawn into the strip
+     * would sit under the system's controls, so there the row stops at its column.
+     */
+    func chipRowClip() -> some View {
+        modifier(ChipRowClip())
+    }
+}
+
+private struct ChipRowClip: ViewModifier {
+    func body(content: Self.Content) -> some View {
+        if #available(iOS 27.1, *) {
+            content.modifier(BarAwareChipRowClip())
+        } else {
+            content.scrollClipDisabled()
+        }
+    }
+}
+
+@available(iOS 27.1, *)
+private struct BarAwareChipRowClip: ViewModifier {
+    @Environment(\.toolbarVerticalEdge) private var barEdge
+
+    func body(content: Self.Content) -> some View {
+        content.scrollClipDisabled(barEdge == nil)
+    }
+}
+
 private struct CardEdge<S: InsettableShape>: ViewModifier {
     let shape: S
 
