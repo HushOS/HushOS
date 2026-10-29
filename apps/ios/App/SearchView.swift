@@ -114,7 +114,7 @@ struct SearchView: View {
             NavigationLink(value: item) { NodeRow(item: item, location: location) }
                 .simultaneousGesture(TapGesture().onEnded { remember(query) })
                 .nodeActions(item, action: $action, store: store)
-                .itemRow()
+                .itemRow(item: item)
         } else {
             Button {
                 remember(query)
@@ -122,7 +122,7 @@ struct SearchView: View {
             } label: { NodeRow(item: item, location: location) }
                 .buttonStyle(.plain)
                 .nodeActions(item, action: $action, store: store)
-                .itemRow()
+                .itemRow(item: item)
         }
     }
 

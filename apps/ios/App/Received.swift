@@ -222,7 +222,7 @@ struct SharedView: View {
                 Divider()
                 Button("Report", systemImage: "flag") { action = .report(root) }
             }
-            .itemRow()
+            .itemRow(item: root)
         } else if let trust = mount.trust {
             // Shut until the granter is checked in Contacts (the server's word for their key is not enough),
             // checked again after their keys changed, or, signed with keys they replaced, sealed again by them.
