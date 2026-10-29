@@ -45,6 +45,13 @@ enum Theme {
     static let row: CGFloat = 56
     static let mark: CGFloat = 36
 
+    /*
+     * Between the system bar and a list's first card or control. The bar ends 20pt below a big title and 10pt
+     * below a search field; 2 more puts the first card where main's one-row header put it (22 and 12 on
+     * iPhone 17), the same on every screen.
+     */
+    static let listTop: CGFloat = 2
+
     /* UIKit's own bars, which SwiftUI's large titles are drawn by. */
     @MainActor static func configureAppearance() {
         let large = UIFontMetrics(forTextStyle: .largeTitle).scaledFont(for: .systemFont(ofSize: 34, weight: .heavy))
@@ -315,6 +322,9 @@ private struct ScreenChrome<Actions: View>: ViewModifier {
             // Where the window is wider than a list reads well (iPhone Duo's inner display on its side, an
             // iPad), the rows keep a readable column in the middle rather than stretching edge to edge.
             .contentMargins(.horizontal, ReadableColumn.margin(forWidth: width, regularHeight: verticalSizeClass == .regular), for: .scrollContent)
+            // The list starts just under the system bar, as main's own header had its first card: the inset-grouped
+            // list's own top margin (about 35pt) left a gap the old header never had.
+            .contentMargins(.top, Theme.listTop, for: .scrollContent)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .navigationTitle(title)
             .toolbarTitleDisplayMode(root ? .inlineLarge : .inline)
