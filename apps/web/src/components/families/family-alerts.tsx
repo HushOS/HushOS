@@ -8,6 +8,7 @@ const FROM: Record<string, string> = {
     pin: 'your account’s earlier check',
     cache: 'this device’s earlier check',
     join: 'the join code you compared',
+    pair: 'the family check you made',
     served: 'what the server shows now',
 };
 
@@ -19,25 +20,35 @@ const FROM: Record<string, string> = {
 export function CheckingLine({ family }: { family: string }) {
     return (
         <output className="block text-[13px] text-muted-foreground" data-family-checking>
-            Checking the member list of {family}
+            Checking {family}
         </output>
     );
 }
 
 /*
- * The hard warning (the 1c plan, section 3): an inline danger alert, never a
- * toast. Both sides' digests and where each came from go under Technical
- * details. Nothing resolves it automatically (decision D5); changes from
- * this device stop, since staging needs a chain that accepted.
+ * The hard warning (docs/optional-verification.md 6.11): an inline alert in
+ * the warning role, never destructive and never a toast. Both sides' digests
+ * and where each came from go under Technical details. Nothing resolves it
+ * automatically (decision D5); changes from this device stop, since staging
+ * needs a chain that accepted.
  */
-export function ForkAlert({ family, fork }: { family: string; fork: RosterFork }) {
+export function ForkAlert({
+    family,
+    fork,
+    organizer = null,
+}: {
+    family: string;
+    fork: RosterFork;
+    /* The organizer's first name, when it is someone else: who to tell. */
+    organizer?: string | null;
+}) {
     return (
-        <Alert variant="destructive" data-fork={fork.version}>
-            <AlertTitle>The member list of {family} was shown differently to you</AlertTitle>
+        <Alert variant="warning" data-fork={fork.version}>
+            <AlertTitle>{family} looks different on this device</AlertTitle>
             <AlertDescription>
                 <p>
-                    This device won’t change anything in {family} until it’s sorted. Tell the other
-                    members, and don’t use this family until you’ve sorted it out together.
+                    HushOS has paused changes to the family here. Let {organizer ?? 'the others'}{' '}
+                    know, and check each other from the family page.
                 </p>
                 <details className="group mt-2">
                     <summary className="flex w-fit cursor-pointer list-none items-center gap-1 text-[13px] font-semibold text-foreground [&::-webkit-details-marker]:hidden">

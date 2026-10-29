@@ -179,12 +179,12 @@ export default function GroupInvitation({
                             }}
                         >
                             {/*
-                             * Who checks is any manager, not always the inviter, and the name may be
-                             * the server's fallback ("A HushOS member"), so the check names nobody.
+                             * Who lets them in is any manager, not always the inviter, and the name
+                             * may be the server's fallback ("A HushOS member"), so it names nobody.
                              */}
-                            Open the link to accept, signed in with this address. Then, on a call or
-                            in person, you and a manager of the family check it’s really each other,
-                            and you’re let in. Nothing in the family is shared with you before that.
+                            Open the link to accept, signed in with this address. Then someone who
+                            manages the family lets you in. Nothing in the family is shared with you
+                            before that.
                         </Text>
                     </Section>
                     <Section className="email-pad" style={{ padding: '0 28px 24px' }}>

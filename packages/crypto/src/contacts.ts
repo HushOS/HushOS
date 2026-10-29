@@ -110,12 +110,37 @@ export type Settings = {
     /*
      * Per group, the family check this person made (docs/optional-verification.md
      * 3.4): the pair code compared with member `with` over the roster at
-     * `rosterVersion`. Acceptance holds it as a pair mark (settings-marks.ts
-     * familyCheckOf). Every shipped client keeps it when it saves.
+     * `rosterVersion`, which acceptance holds as a pair mark (settings-marks.ts
+     * familyCheckOf); or, with no code, an anchor this person vouched for
+     * otherwise (7.2: `before`, a family accepted before first use; `created`;
+     * `join`, a join code compared), which is a mark but no pair mark. Every
+     * shipped client keeps it when it saves.
      */
     familyChecks?: Record<
         string,
-        { rosterVersion: number; with: string; code: string[]; checkedAt: string }
+        | { rosterVersion: number; with: string; code: string[]; checkedAt: string }
+        | { rosterVersion: number; how: 'before' | 'created' | 'join'; checkedAt: string }
+    >;
+    /*
+     * When this account's first client able to take a family on first use
+     * began recording family checks (7.2): a group pin without a check record
+     * is first-use only once this is set. Saved with, or before, the first
+     * first-use pin, never after.
+     */
+    familyChecksSince?: string;
+    /*
+     * Per group, then per invitation id: the manager role this account asked
+     * for when it sent Invite someone (docs/optional-verification.md 3.6,
+     * 6.8), with the address it typed and when, and the member's account id
+     * once one with that address was let in. Only this account's devices
+     * read it, never the server's invitation roles: once that member reads
+     * Verified here, this account is asked whether to give the role. Cleared
+     * when given, declined, or the invitation, the person or the family is
+     * gone.
+     */
+    pendingRoles?: Record<
+        string,
+        Record<string, { email: string; roles: 'members'[]; since: string; userId?: string }>
     >;
     /*
      * People this account removed from its contacts and has not added back,

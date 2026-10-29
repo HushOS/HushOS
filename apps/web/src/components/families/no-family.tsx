@@ -59,8 +59,8 @@ export function NoFamily({
                 title="Family"
                 description={
                     billing
-                        ? 'A family shares one plan’s storage, for everyone’s own files and the family folders, and everyone in it is checked before they join. You can be in one family.'
-                        : 'A family shares folders, and everyone in it is checked before they join. You can be in one family.'
+                        ? 'A family shares one plan’s storage, for everyone’s own files and the family folders. You can be in one family.'
+                        : 'A family shares folders. You can be in one family.'
                 }
             >
                 <Button onClick={() => setCreating(true)}>Create a family</Button>
@@ -85,7 +85,7 @@ export function NoFamily({
                                 }
                             >
                                 <span className="text-muted-foreground">
-                                    You accepted. Check each other’s words to finish.
+                                    You accepted. You’re in once someone who manages it lets you in.
                                 </span>
                             </Setting>
                         ))}

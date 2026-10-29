@@ -1,13 +1,15 @@
 import type { CryptoRequests, GroupPin, RosterCallBody } from '@hushos/crypto';
 import { keyCommitment, type PinKeys } from '@hushos/crypto/pins';
 import { GroupApiError, type ChainHead, type GroupsApi } from './api';
-import type {
-    GroupContext,
-    GroupOperation,
-    GroupSettings,
-    RotationSource,
-    SettingsAccess,
+import {
+    familyGuardOf,
+    type GroupContext,
+    type GroupOperation,
+    type GroupSettings,
+    type RotationSource,
+    type SettingsAccess,
 } from './context';
+import { createMemoryFamilyGuard } from '@/lib/contact-guard';
 import { createMemoryGroupStore, type GroupStore } from './store';
 
 /*
@@ -212,6 +214,7 @@ export function harness(
         groupStoreOpen: (input) => ({ value: JSON.parse(input.envelope.slice('sealed:'.length)) }),
         groupDrop: () => ({ dropped: true }),
         groupForget: () => ({ forgotten: true, guard: null }),
+        groupGuardKept: () => ({ kept: true }),
         groupOpenSeal: () => ({ groupKeyVersion: 1 }),
         groupAccept: () => ({
             status: 'accepted',
@@ -331,12 +334,14 @@ export function harness(
     };
 
     const mirrorsDeleted: string[][] = [];
+    const guard = createMemoryFamilyGuard();
     const ctx: GroupContext = {
         userId: USER,
         api,
         rpc,
         store,
         settings,
+        guard: familyGuardOf(() => guard, USER),
         lock: async (groupId, work) => {
             if (held.has(groupId)) throw new Error('The write lock was taken twice.');
             held.add(groupId);
@@ -373,5 +378,6 @@ export function harness(
         rotationLog,
         mirrorsDeleted,
         results,
+        guard,
     };
 }

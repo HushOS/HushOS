@@ -1,4 +1,5 @@
 import type { GuardEntry } from '@hushos/crypto/first-seen';
+import { checkGroupPin, mergePin, pinAhead, type GroupPin } from '@hushos/crypto/pins';
 import { deleteDB, openDB, type DBSchema, type IDBPDatabase } from 'idb';
 
 /*
@@ -70,6 +71,43 @@ export interface ContactGuardStore {
         keep?: PendingAct,
     ): Promise<void>;
     dropPending(userId: string, contactId: string): Promise<void>;
+}
+
+/*
+ * The family guard (docs/optional-verification.md 2.8, "per family"): the
+ * latest group pin this device accepted for a family, sealed as the contact
+ * guard is, in a database of its own (createIndexedDbFamilyGuard), deleted on
+ * sign-out, never written to the settings and never cleared by a `not-member`
+ * answer. It only ever moves
+ * up: every write is mergePin against what is stored, under the account's
+ * lock, so a late write of an older pin changes nothing, and one from another
+ * history is refused (GuardConflictError) rather than written over it.
+ */
+export interface FamilyGuardStore {
+    /* The guard this device holds for a family: null for none; throws when it could not be read. */
+    family(userId: string, groupId: string): Promise<GroupPin | null>;
+    /* `pin` merged into what is stored (never lower), and what is stored after; throws when not written. */
+    keepFamily(userId: string, groupId: string, pin: GroupPin): Promise<GroupPin>;
+}
+
+/* A family guard of another history than the one stored: never written over it. */
+export class GuardConflictError extends Error {
+    override name = 'GuardConflictError';
+    constructor() {
+        super('This family looks different on this device. Nothing was saved.');
+    }
+}
+
+/*
+ * The guard merged: what to store over `held`, or null when `held` already
+ * covers `pin` (or is ahead of it), so nothing is written. Another history is
+ * refused.
+ */
+export function familyGuardAfter(groupId: string, held: GroupPin | null, pin: GroupPin) {
+    const merged = mergePin(groupId, held, pin);
+    if (merged === 'conflict') throw new GuardConflictError();
+    if (merged === null || !pinAhead(held, merged)) return null;
+    return merged;
 }
 
 export const GUARD_UNREADABLE = 'HushOS couldn’t check this right now.';
@@ -172,7 +210,9 @@ export type GuardSealer = {
     ): Promise<({ contactId: string; value: unknown } | null)[]>;
 };
 
-type RowKind = 'entry' | 'pending' | 'check';
+type RowKind = 'entry' | 'pending' | 'check' | 'family';
+/* A family guard row's id is worked out from this, as a contact's is from their account id. */
+const familyKey = (groupId: string) => `family:${groupId.toLowerCase()}`;
 /* The key-check row's contact id: no account id looks like it, and its kind keeps it apart anyway. */
 const KEY_CHECK = 'key-check';
 const KEY_CHECK_VALUE = { check: 1 };
@@ -191,7 +231,12 @@ interface Schema extends DBSchema {
 }
 /*
  * Version 2 added the sealed stores; version 1's plaintext ones stay until
- * every account moved. Version 3 added the key-check rows.
+ * every account moved. Version 3 added the key-check rows. Never raised for
+ * something an open tab of an earlier release doesn't need: that tab's
+ * connection closes on `versionchange` and can't open this database again
+ * (VersionError), so its contacts and sharing stop until it reloads
+ * (docs/optional-verification.md 7.3). The family guards have a database of
+ * their own for that reason (createIndexedDbFamilyGuard).
  */
 const DATABASE_VERSION = 3;
 
@@ -358,24 +403,8 @@ export function createIndexedDbContactGuard(
         if (!id) throw new Error('A contact guard id could not be worked out.');
         return id;
     }
-    async function openRows(
-        userId: string,
-        kind: 'entry' | 'pending',
-        rows: SealedRow[],
-    ): Promise<{ contactId: string; value: unknown; row: SealedRow }[]> {
-        if (!rows.length) return [];
-        await sealer.ready(userId);
-        const opened = await sealer.open(
-            userId,
-            kind,
-            rows.map((row) => ({ id: row.id, envelope: row.envelope })),
-        );
-        return rows.map((row, index) => {
-            const value = opened[index];
-            // Sealed under another key, for another place, or altered: never read as none.
-            if (!value) throw new Error('A contact guard record could not be opened.');
-            return { ...value, row };
-        });
+    function openRows(userId: string, kind: 'entry' | 'pending', rows: SealedRow[]) {
+        return openSealed(sealer, userId, kind, rows);
     }
     function entryOf(opened: { value: unknown; row: SealedRow }) {
         const entry = checkGuardEntry(opened.value);
@@ -487,6 +516,183 @@ export function createIndexedDbContactGuard(
             await (await open()).delete('sealed-pending', rowKey(userId, id));
         },
     };
+}
+
+/* Rows opened by the sealer; one sealed under another key, for another place, or altered fails. */
+async function openSealed(
+    sealer: GuardSealer,
+    userId: string,
+    kind: 'entry' | 'pending' | 'family',
+    rows: SealedRow[],
+): Promise<{ contactId: string; value: unknown; row: SealedRow }[]> {
+    if (!rows.length) return [];
+    await sealer.ready(userId);
+    const opened = await sealer.open(
+        userId,
+        kind,
+        rows.map((row) => ({ id: row.id, envelope: row.envelope })),
+    );
+    return rows.map((row, index) => {
+        const value = opened[index];
+        // Sealed under another key, for another place, or altered: never read as none.
+        if (!value) throw new Error('A contact guard record could not be opened.');
+        return { ...value, row };
+    });
+}
+
+export const FAMILY_GUARD_DATABASE = 'hushos-family-guard';
+
+interface FamilySchema extends DBSchema {
+    /* One per account, keyed by the account id: which settings key its rows are sealed under. */
+    'sealed-check': { key: string; value: SealedRow };
+    /* Each family's guard, by the account and the row's id (2.8). */
+    'sealed-families': { key: string; value: SealedRow };
+}
+
+/*
+ * The family guards on this browser (docs/optional-verification.md 2.8, "per
+ * family"), sealed by the same worker under the same settings-derived key as
+ * the contact guard, with a key-check row of their own, in a database of
+ * their own: adding them to the contact guard's would raise its version, and
+ * every open tab of an earlier release would lose its contacts until it
+ * reloaded. Deleted on sign-out with the rest (lib/device-data.ts).
+ */
+export function createIndexedDbFamilyGuard(
+    sealer: GuardSealer,
+    name = FAMILY_GUARD_DATABASE,
+): FamilyGuardStore {
+    let database: Promise<IDBPDatabase<FamilySchema>> | undefined;
+    const open = () =>
+        (database ??= openDB<FamilySchema>(name, 1, {
+            upgrade(db) {
+                db.createObjectStore('sealed-check', { keyPath: 'key' });
+                db.createObjectStore('sealed-families', { keyPath: 'key' });
+            },
+            blocking(_current, _next, event) {
+                (event.target as IDBDatabase).close();
+                database = undefined;
+            },
+            terminated() {
+                database = undefined;
+            },
+        }).catch((error: unknown) => {
+            database = undefined;
+            throw error;
+        }));
+    const account = (userId: string) => IDBKeyRange.bound(`${userId}:`, `${userId}:\uffff`);
+
+    /* The key-check row for an account, sealed under the settings key open now. */
+    async function sealCheck(userId: string): Promise<SealedRow> {
+        await sealer.ready(userId);
+        const [{ id, envelope }] = (await sealer.seal(userId, [
+            { contactId: KEY_CHECK, kind: 'check', value: KEY_CHECK_VALUE },
+        ])) as [{ id: string; envelope: string }];
+        return { key: userId, userId, id, envelope };
+    }
+    /*
+     * 'empty' when this account keeps no family guard here; 'held' when its key-check row
+     * opens under the settings key open now. Anything else (a check row of another key, rows
+     * with none) fails, so a row looked up by an id worked out under the wrong key is never
+     * read as missing.
+     */
+    const proven = new Map<string, string>();
+    async function keyHolds(userId: string): Promise<'empty' | 'held'> {
+        const db = await open();
+        const check = await db.get('sealed-check', userId);
+        const kept = await db.count('sealed-families', account(userId));
+        if (!check && !kept) return 'empty';
+        if (!check) throw new Error('A family guard record could not be opened.');
+        await sealer.ready(userId);
+        const [expected] = await sealer.ids(userId, [KEY_CHECK]);
+        if (check.id !== expected)
+            throw new Error('These family records were saved under another settings key.');
+        if (proven.get(userId) === check.envelope) return 'held';
+        const [opened] = await sealer.open(userId, 'check', [check]);
+        if (!opened || opened.contactId !== KEY_CHECK)
+            throw new Error('A family guard record could not be opened.');
+        proven.set(userId, check.envelope);
+        return 'held';
+    }
+
+    /* A family's guard row and the pin it holds: none, or the row opened; a row that does not open fails. */
+    async function familyRow(userId: string, groupId: string) {
+        if ((await keyHolds(userId)) === 'empty') return { pin: null, row: null };
+        const [id] = await sealer.ids(userId, [familyKey(groupId)]);
+        if (!id) throw new Error('A family guard id could not be worked out.');
+        const row = (await (await open()).get('sealed-families', rowKey(userId, id))) ?? null;
+        if (!row) return { pin: null, row: null };
+        const [opened] = await openSealed(sealer, userId, 'family', [row]);
+        if (opened!.contactId !== familyKey(groupId))
+            throw new Error('A family guard record is corrupt.');
+        return { pin: checkGroupPin(groupId, opened!.value), row };
+    }
+
+    return {
+        async family(userId, groupId) {
+            return (await familyRow(userId, groupId)).pin;
+        },
+        keepFamily(userId, groupId, pin) {
+            // Every family guard write is a merge, one at a time across this browser's tabs: an
+            // older pin written late finds a newer one stored and changes nothing.
+            return withGuardLock(userId, async () => {
+                const { pin: held, row: before } = await familyRow(userId, groupId);
+                const next = familyGuardAfter(groupId, held, pin);
+                if (next === null) return held!;
+                const stored = await keyHolds(userId);
+                const [{ id, envelope }] = (await sealer.seal(userId, [
+                    { contactId: familyKey(groupId), kind: 'family', value: next },
+                ])) as [{ id: string; envelope: string }];
+                const check = stored === 'empty' ? await sealCheck(userId) : null;
+                const key = rowKey(userId, id);
+                const tx = (await open()).transaction(
+                    ['sealed-families', 'sealed-check'],
+                    'readwrite',
+                );
+                if (check && !(await tx.objectStore('sealed-check').get(userId)))
+                    await tx.objectStore('sealed-check').put(check);
+                // Written only over the row this merge read: anything else is another writer's.
+                const now = await tx.objectStore('sealed-families').get(key);
+                if ((now?.envelope ?? null) !== (before?.envelope ?? null)) {
+                    tx.abort();
+                    await tx.done.catch(() => {});
+                    throw new GuardRacedError();
+                }
+                await tx.objectStore('sealed-families').put({ key, userId, id, envelope });
+                await tx.done;
+                return next;
+            });
+        },
+    };
+}
+
+/* The family guard in memory, for tests: the same merge, nothing sealed. */
+export function createMemoryFamilyGuard(): FamilyGuardStore & {
+    rows: Map<string, GroupPin>;
+    failWrites: number;
+    failReads: boolean;
+} {
+    const rows = new Map<string, GroupPin>();
+    const store = {
+        rows,
+        failWrites: 0,
+        failReads: false,
+        async family(userId: string, groupId: string) {
+            if (store.failReads) throw new Error('This store could not be read.');
+            return structuredClone(rows.get(`${userId}:${groupId}`) ?? null);
+        },
+        async keepFamily(userId: string, groupId: string, pin: GroupPin) {
+            const held = rows.get(`${userId}:${groupId}`) ?? null;
+            const next = familyGuardAfter(groupId, held, pin);
+            if (next === null) return structuredClone(held!);
+            if (store.failWrites > 0) {
+                store.failWrites--;
+                throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+            }
+            rows.set(`${userId}:${groupId}`, structuredClone(next));
+            return structuredClone(next);
+        },
+    };
+    return store;
 }
 
 /*

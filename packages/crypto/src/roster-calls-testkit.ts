@@ -388,12 +388,11 @@ export async function callSpecs(): Promise<Json[]> {
             }),
         },
         {
+            // Never with a role: the invitation's roles are the server's word (3.6). The core
+            // still builds it until the phones' release follows (PR 5).
             name: 'admit-manager',
             op: { kind: 'admit', who: 5, roles: ['members'] },
-            expected: built({ kind: 'admit', userId: u(5) }, 1, changed(5, ['members']), {
-                keySeal: u(5),
-                grants: grants(5),
-            }),
+            refused: 'Let them in first. Roles are given afterwards.',
         },
         {
             name: 'grant-members',

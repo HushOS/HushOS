@@ -36,16 +36,19 @@ import { backfillConsent } from '@/lib/consent-backfill';
 import {
     askPersistentStorage,
     createIndexedDbContactGuard,
+    createIndexedDbFamilyGuard,
     GuardRacedError,
     GuardUnreadableError,
     GuardUnsavedError,
     withGuardLock,
     type ContactGuardStore,
+    type FamilyGuardStore,
     type PendingAct,
     type GuardSealer,
 } from '@/lib/contact-guard';
 import { onStaleIdentity } from '@/lib/drive-api';
 import { pinOf } from '@/lib/family-pin';
+import { familyChecked, withFamilyChecks } from '@/lib/groups/family-checks';
 import { openOwnIdentity, type OwnIdentity } from '@/lib/own-identity';
 import {
     identitySeen,
@@ -571,6 +574,17 @@ function contactGuard(): Guard {
 export function setContactGuard(next: Guard | undefined) {
     guard = next;
     guardMoved(null);
+}
+
+/*
+ * The family guard on this browser (2.8, "per family"): sealed as the contact
+ * guard is, in a database of its own, and deleted on sign-out.
+ * lib/groups/client.ts reads and merges it per family.
+ */
+let familyStore: FamilyGuardStore | undefined;
+export function familyGuardStore(): FamilyGuardStore {
+    familyStore ??= createIndexedDbFamilyGuard(guardSealer);
+    return familyStore;
 }
 
 /*
@@ -1282,13 +1296,15 @@ export async function addContact(
     userId: string,
     email: string,
     writer?: string,
+    /* Where they were first met (Technical details only; no rule reads it): `family` when let in. */
+    firstSeen: 'added' | 'family' = 'added',
 ): Promise<Added> {
     const { contact } = await authClient.lookupContact(email);
     if (writer !== undefined && contact.userId.toLowerCase() !== writer.toLowerCase())
         throw new Error('This isn’t the account that wrote it. Check the address, then try again.');
     if (!(await keysHold(contact.userId, contact))) throw new Error(notUpgradedWords(contact.name));
     return withGuardLock(userId, () =>
-        decidedAgain(() => addDecided(queryClient, userId, contact)),
+        decidedAgain(() => addDecided(queryClient, userId, contact, firstSeen)),
     );
 }
 
@@ -1310,6 +1326,7 @@ async function addDecided(
     queryClient: QueryClient,
     userId: string,
     contact: ContactIdentity,
+    firstSeen: 'added' | 'family' = 'added',
 ): Promise<Added> {
     const standing = await stand(userId, contact.userId, contact, { act: true, follow: true });
     if (standing.kind === 'ok') return { outcome: 'already', pin: standing.pin };
@@ -1336,7 +1353,7 @@ async function addDecided(
             'seen',
         )),
         pinnedAt: new Date().toISOString(),
-        firstSeen: 'added',
+        firstSeen,
     };
     // Over nobody: a pin another device saved meanwhile is kept, or stops the add.
     const { pin } = await commitTrust(
@@ -1390,9 +1407,18 @@ async function sameKeys(a: Pin | null, b: Pin | null) {
  * the compare-and-set (another device may have saved since the act was
  * decided): a pin of the target's own keys already there is kept exactly as
  * it is, its verified state included, unless `verify` asks for a verified one
- * over first-seen keys; the target is written only over the pin the act was
+ * over first-seen keys, or for this person's own check over a family's word
+ * (`trustedVia` reads verified, but the manager rule and the Verified label
+ * want a check of one's own, docs/optional-verification.md 3.4, 3.6, 3.8);
+ * the target is written only over the pin the act was
  * decided from (`expected`, null for nobody); anything else stops the act.
  */
+/*
+ * A pin taken on a family's word (Trust as family, before 3.7) rather than this person's own
+ * check; `trustedViaFamily` is only that family's name beside it.
+ */
+const familysWord = (pin: Pin) => pin.trustedVia !== undefined && pin.trustedVia !== null;
+
 async function withPinIf(
     settings: LoadedSettings['settings'],
     target: Pin,
@@ -1403,7 +1429,7 @@ async function withPinIf(
     if (
         current !== null &&
         (await sameKeys(current, target)) &&
-        (!verify || (await pinTrust(current)) === 'verified')
+        (!verify || ((await pinTrust(current)) === 'verified' && !familysWord(current)))
     )
         return withoutRemoval(settings, target.userId);
     if (await sameKeys(current, expected)) return withPinOnce(settings, target);
@@ -1519,6 +1545,7 @@ export async function pinContact(queryClient: QueryClient, userId: string, looku
             // left behind; the pin is the reader's own now, not a family's word.
             const kept = { ...before } as Partial<Pin>;
             delete kept.trustedVia;
+            delete kept.trustedViaFamily;
             target = {
                 ...kept,
                 userId: contact.userId,
@@ -1537,6 +1564,83 @@ export async function pinContact(queryClient: QueryClient, userId: string, looku
     });
     clearChange(userId, contact.userId);
     return pin;
+}
+
+/*
+ * This device's guard entry for a person, with an act left pending settled
+ * first, for a family check (groupPairMatch takes it): null for none, and a
+ * read that fails is never none (GuardUnreadableError).
+ */
+export async function contactGuardEntry(userId: string, contactId: string) {
+    return withGuardLock(userId, async () => {
+        const loaded = await loadSettings(userId);
+        const pin = pinOf(loaded.settings.contacts, contactId)?.pin ?? null;
+        return (await guardFor(userId, contactId, pin, loaded.version)).entry;
+    });
+}
+
+/*
+ * "They match" in a family check (docs/optional-verification.md 3.4): what
+ * the worker allowed (groupPairMatch), saved in one settings write, then the
+ * guard moved. `check` is the family's check record; `keys` the verified pin
+ * keys of the other member, only when the worker found them the very keys
+ * their entry names and the ones this device holds for them. With keys, the
+ * act commits as every trust-changing act does (2.8: a pending record, the
+ * save, the guard), from the guard entry it was decided over; a guard that
+ * moved meanwhile stops it before anything is saved. With none, only the
+ * check record is saved, and the pin and the guard stay as they were.
+ * `familyChecks` and the first-use marker go in that same save (7.2).
+ */
+export async function saveFamilyCheck(
+    queryClient: QueryClient | undefined,
+    userId: string,
+    input: {
+        groupId: string;
+        member: { userId: string; email: string; name: string };
+        check: { rosterVersion: number; with: string; code: string[]; checkedAt: string };
+        keys: Omit<Pin, 'userId' | 'email' | 'name' | 'pinnedAt'> | null;
+        /* The guard entry groupPairMatch was given. */
+        decidedOver: GuardEntry | null;
+    },
+): Promise<{ verified: boolean }> {
+    const withCheck = (settings: LoadedSettings['settings']) => {
+        const marked = withFamilyChecks(settings, input.check.checkedAt);
+        return {
+            ...marked,
+            familyChecks: { ...marked.familyChecks, [input.groupId]: input.check },
+        };
+    };
+    if (!input.keys) {
+        await saveSettings(queryClient ?? boundQueryClient, userId, withCheck);
+        return { verified: false };
+    }
+    const keys = input.keys;
+    const contactId = input.member.userId;
+    await withGuardLock(userId, async () => {
+        const loaded = await loadSettings(userId);
+        const before = pinOf(loaded.settings.contacts, contactId)?.pin ?? null;
+        const { entry } = await guardFor(userId, contactId, before, loaded.version);
+        // Decided over this very entry, or not at all: a Continue or a check since is its own act.
+        if ((entry?.revision ?? 0) !== (input.decidedOver?.revision ?? 0))
+            throw new TrustMovedError();
+        const kept = { ...before } as Partial<Pin>;
+        delete kept.trustedVia;
+        delete kept.trustedViaFamily;
+        const target = {
+            ...kept,
+            userId: contactId,
+            email: before?.email ?? input.member.email,
+            name: before?.name ?? input.member.name,
+            ...keys,
+            pinnedAt: new Date().toISOString(),
+            firstSeen: before?.firstSeen ?? 'family',
+        } as Pin;
+        await commitTrust(queryClient, userId, contactId, entry, target, async (settings) =>
+            withCheck(await withPinIf(settings, target, before, { verify: true })),
+        );
+    });
+    clearChange(userId, contactId);
+    return { verified: true };
 }
 
 /*
@@ -1839,6 +1943,15 @@ function cachedSettings(userId: string) {
     return boundQueryClient
         ? boundQueryClient.fetchQuery(settingsQueryOptions(userId))
         : loadSettings(userId);
+}
+
+/*
+ * Whether this person vouched for a family (docs/optional-verification.md
+ * 3.4, 7.2: a check record, or a pin from before first use), from the
+ * settings as cached: what its folders' verdicts say of members' work (2.6).
+ */
+export async function familyCheckedOnAccount(userId: string, groupId: string) {
+    return familyChecked((await cachedSettings(userId)).settings, groupId);
 }
 
 /*

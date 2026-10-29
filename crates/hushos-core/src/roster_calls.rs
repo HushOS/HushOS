@@ -61,6 +61,10 @@ pub const ORGANIZER_FIRST: &str = "Make someone else the organizer first.";
 pub const NOT_MANAGER: &str = "Only someone who manages the family can change its members.";
 /// An admission for someone this account holds no contact pin of (their words never checked).
 pub const NOT_CHECKED: &str = "Check their words first.";
+/// An admission naming a role: everyone is let in as a plain member, since the roles an
+/// invitation carries are the server's word; a role is a role change afterwards, by a manager
+/// who chose it (docs/optional-verification.md 3.2, 3.6). The worker's `groupStage` twin.
+pub const ADMIT_AS_MEMBER: &str = "Let them in first. Roles are given afterwards.";
 /// A role change that changes nothing (a grant to a holder, a take from a non-holder).
 pub const UNCHANGED: &str = "That doesn’t change their roles.";
 /// Taking `members` from oneself: the succession must be signed by someone who keeps it.
@@ -691,6 +695,10 @@ impl AreaLedger {
                 // keys their words check confirmed (a group's word, or a pin short of a key part,
                 // admits no one, as the worker's newRosterEntry refuses it).
                 let found = self.contact_pin(&user_id).ok_or_else(|| input(NOT_CHECKED))?;
+                // Never with a role, whatever the invitation says ([`ADMIT_AS_MEMBER`]).
+                if !roles.is_empty() {
+                    return Err(input(ADMIT_AS_MEMBER));
+                }
                 let pin = found.checked().ok_or_else(|| input(NOT_THE_PINNED_KEYS))?;
                 // roster_entry_new builds from a first-seen pin too (design 3.3), but letting
                 // someone in over one waits for the manager rule beside it (3.6, the web's PR 4):
@@ -1085,17 +1093,18 @@ impl AreaLedger {
     /// `user_id`'s entry made only from the keys their words check confirmed
     /// (the contact pin of them in the settings this account last opened,
     /// [`AreaLedger::use_settings_envelope`], and `served`, their served identity:
-    /// [`crate::roster_entry_new`]) with `roles` (their invitation's), the
-    /// roster signed over the committed chain, the newcomer granted every live
-    /// family folder's current key, and with `members` the current group key
-    /// sealed to them. `me` is the account the ledger opened with its
+    /// [`crate::roster_entry_new`]) as a plain member: `roles` must be empty
+    /// ([`ADMIT_AS_MEMBER`] otherwise, after the contact pin is found), since
+    /// an invitation's roles are only the server's word. The roster signed
+    /// over the committed chain, and the newcomer granted every live family
+    /// folder's current key. `me` is the account the ledger opened with its
     /// identities, `identity` its open identity's envelope; `kems` every
     /// member's ML-KEM key as route 6 served it (each checked against its
     /// entry when sealed); `expected_revision` the head's revision from route
     /// 3. In the worker's order: the account (error), the chain
     /// ([`RosterCall::SyncFirst`]), `members` ([`NOT_MANAGER`]), the seed
     /// ([`RosterCall::OpenKeyFirst`]), the identity (error), someone already
-    /// in, no contact pin ([`NOT_CHECKED`]), keys not the pinned ones (errors
+    /// in, no contact pin ([`NOT_CHECKED`]), a role ([`ADMIT_AS_MEMBER`]), keys not the pinned ones (errors
     /// the person reads), then every live folder open
     /// ([`RosterCall::OpenFoldersFirst`], before anything is signed; a deleted
     /// folder is granted nothing).

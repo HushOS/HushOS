@@ -27,9 +27,11 @@ const VERSION = 1;
 /*
  * `check` is one row per account (apps/web lib/contact-guard.ts): it proves
  * which settings key the account's rows are sealed under, so rows sealed
- * under another one are never read as none.
+ * under another one are never read as none. `family` is a family's guard
+ * (2.8, "per family"): the latest group pin this device accepted, found by
+ * an id worked out from the group id as a contact's is from theirs.
  */
-export type GuardRowKind = 'entry' | 'pending' | 'check';
+export type GuardRowKind = 'entry' | 'pending' | 'check' | 'family';
 
 const refused = () => new CryptoError('This saved contact record could not be opened.');
 

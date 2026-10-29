@@ -53,6 +53,18 @@ export const storageEnv = createEnv({
                 'Use name/version pairs separated by commas, for example web/1.0.0,ios/1.0.0.',
             )
             .optional(),
+        // The oldest client the family-changing routes still serve, same format
+        // (docs/optional-verification.md 7.3): the higher of this and the Drive
+        // minimum, so it only ever raises the floor. Web tabs are also held to
+        // the built-in family-write number (GROUP_WRITE_PROTOCOL), which this
+        // doesn't change. Reads, invitations and joining are not floored by it.
+        GROUP_WRITE_CLIENT_MINIMUMS: z
+            .string()
+            .regex(
+                /^[a-z][a-z0-9-]{0,31}\/[0-9]+(\.[0-9]+){0,3}(,[a-z][a-z0-9-]{0,31}\/[0-9]+(\.[0-9]+){0,3})*$/,
+                'Use name/version pairs separated by commas, for example web/1.2.0.',
+            )
+            .optional(),
         DRIVE_MAX_FILE_BYTES: z
             .string()
             .regex(/^[0-9]{1,16}$/)

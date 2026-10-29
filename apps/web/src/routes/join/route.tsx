@@ -46,7 +46,7 @@ export const Route = createFileRoute('/join')({
  * opened (route 14) and accepted (route 15), which leads to the join screen.
  * The tab's copy goes once the invitation is accepted, turns out used up, is
  * for another address, or the person switches account. Accepting lets nobody
- * in: the words and the join code come next. Someone already in a family
+ * in: a manager does, from the family's page. Someone already in a family
  * (one per account) is told to leave theirs first, and can't accept; the
  * invitation stays open, so they come back to the same link.
  */
@@ -273,21 +273,16 @@ function OpenInvitation({
               : `Once you’re let in, your files use the family’s storage. They take ${ownFiles} now.`;
     return (
         <AuthLayout
-            title={
+            title={`Join ${invitation.name}`}
+            // Names are the server's word (D10): the address goes beside the inviter's.
+            description={`${
                 inviter
-                    ? `${inviter.name} invited you to ${invitation.name}`
-                    : `You’re invited to ${invitation.name}`
-            }
-            description={inviter?.email ? `From ${inviter.email}` : undefined}
+                    ? `${inviter.name}${inviter.email ? ` (${inviter.email})` : ''} invited you.`
+                    : 'You’re invited.'
+            } Family folders are shared with everyone in the family.`}
             art="JOIN"
             footer={signedInAs}
         >
-            {!yours && (
-                <p className="text-[15px] leading-relaxed">
-                    After you accept, you and {inviter ? inviter.name.split(/\s+/)[0] : 'they'}{' '}
-                    check it’s really each other, on a call or in person. Then you’re let in.
-                </p>
-            )}
             {!yours && storageLine && (
                 <p className="text-[15px] leading-relaxed" data-join-storage>
                     {storageLine}
@@ -319,10 +314,14 @@ function OpenInvitation({
                         disabled={accepting || code === 'email-mismatch' || yours !== null}
                         onClick={() => void accept()}
                     >
-                        {accepting ? 'Accepting…' : 'Accept'}
+                        {accepting ? 'Joining' : 'Join'}
                     </Button>
                 }
-            />
+            >
+                <Link to="/app/drive" className={authLink}>
+                    Not now
+                </Link>
+            </AuthActions>
         </AuthLayout>
     );
 }

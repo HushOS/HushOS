@@ -2,6 +2,7 @@ import { INVITATION_DAYS } from '@hushos/groups/protocol';
 import { useQueryClient } from '@tanstack/react-query';
 import { useId, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
     Dialog,
     DialogContent,
@@ -12,14 +13,18 @@ import {
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
 import { familyKeys } from '@/lib/families';
+import { keepInvitedRole } from '@/lib/family-pending';
 import { GroupApiError, groupsApi } from '@/lib/groups/api';
 import { errorCopy } from '@/lib/groups/copy';
 import { cue } from '@/lib/sounds';
 
 /*
- * "Invite someone": the server mails a link to the address. Accepting it does
- * not let anyone in: they wait until a manager checks it's them and reads
- * them the join code.
+ * "Invite someone" (docs/optional-verification.md 6.8): the server mails a
+ * link to the address. Accepting it does not let anyone in: they wait until a
+ * manager lets them in, with no words on either side, always as a member.
+ * Asked to manage the family, the role waits on this account's own record of
+ * it (lib/family-pending.ts): once they're checked here, this account is
+ * asked whether to give it (3.6, 6.8).
  */
 export function InviteDialog({
     userId,
@@ -37,6 +42,7 @@ export function InviteDialog({
     const id = useId();
     const queryClient = useQueryClient();
     const [email, setEmail] = useState('');
+    const [manage, setManage] = useState(false);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
     // Only an address the server can't use marks the field: not a dropped connection, a full
@@ -51,13 +57,20 @@ export function InviteDialog({
         setError('');
         setBadAddress(false);
         try {
-            await groupsApi.invite(groupId, address, []);
+            const sent = await groupsApi.invite(groupId, address, manage ? ['members'] : []);
+            // Asked to manage the family: this account's own record of it (6.8), which is what
+            // later asks it, once they're let in and checked. Not saved, nothing is ever asked.
+            if (manage)
+                await keepInvitedRole(queryClient, userId, groupId, sent.id, address).catch(
+                    () => false,
+                );
             cue('success');
             toast.add({ type: 'success', title: `Invitation sent to ${address}` });
             void queryClient.invalidateQueries({
                 queryKey: familyKeys.invitations(userId, groupId),
             });
             setEmail('');
+            setManage(false);
             onOpenChange(false);
         } catch (cause) {
             cue('error');
@@ -79,8 +92,7 @@ export function InviteDialog({
                 <DialogHeader>
                     <DialogTitle>Invite someone</DialogTitle>
                     <DialogDescription>
-                        They’ll get an email with a link. Once they accept, you check it’s them
-                        before they join.
+                        We’ll email them a link. Once they accept, you let them in.
                     </DialogDescription>
                 </DialogHeader>
                 <form
@@ -115,6 +127,27 @@ export function InviteDialog({
                         >
                             {error || `The invitation is open for ${INVITATION_DAYS} days.`}
                         </p>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                        <label
+                            htmlFor={`${id}-manage`}
+                            className="flex min-h-9 items-center gap-2.5 text-sm pointer-coarse:min-h-11"
+                        >
+                            <Checkbox
+                                id={`${id}-manage`}
+                                checked={manage}
+                                onCheckedChange={(value) => setManage(value === true)}
+                            />
+                            Let them manage the family
+                        </label>
+                        {manage && (
+                            <p
+                                className="pl-[1.625rem] text-[13px] text-muted-foreground"
+                                data-manage-hint
+                            >
+                                They can manage the family once you’ve checked it’s them.
+                            </p>
+                        )}
                     </div>
                     <div className="flex justify-end gap-2">
                         <Button

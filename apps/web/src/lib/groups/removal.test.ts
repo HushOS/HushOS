@@ -39,9 +39,18 @@ async function family(options: { bobRoles?: ('members' | 'billing')[]; carol?: b
             kind: 'admit',
             userId,
             served: who.served,
-            roles,
+            roles: [],
         });
         expect(staged).toMatchObject({ status: 'sent', outcome: { status: 'landed' } });
+        // Roles never come with the admission: a role change of their own (the testkit's device
+        // holds a verified pin of everyone).
+        if (roles.length > 0)
+            expect(await stageChange(ctx, groupId, { kind: 'roles', userId, roles })).toMatchObject(
+                {
+                    status: 'sent',
+                    outcome: { status: 'landed' },
+                },
+            );
     };
     await admit(BOB, options.bobRoles);
     if (options.carol) await admit(CAROL);
@@ -130,7 +139,8 @@ describe('removing someone: hold, finish, remove', () => {
         expect(
             server.log.map((entry) => entry.route).filter((route) => route !== 'remove-preview'),
         ).not.toContain('hold');
-        expect(server.sent('member')).toEqual([]);
+        // Only the role change that made Bob a manager in setting up.
+        expect(server.sent('member')).toHaveLength(1);
         expect(server.sent('remove')).toEqual([]);
         // Confirmed by id: the call carries it, and Bob is removed.
         expect(
@@ -171,13 +181,14 @@ describe('removing someone: hold, finish, remove', () => {
         expect(outcome).toEqual({ status: 'removed' });
         // No walk was running, so no earlier key change is said to be finished.
         expect(steps).toEqual(['demote', 'hold', 'remove']);
-        const [demotion] = server.sent('member');
+        const demotion = server.sent('member').at(-1);
         expect(demotion!.succession).toBeDefined();
         expect(rotationsOf(demotion!)).toEqual([]);
+        // After the role change that made Bob a manager in setting up.
         const order = server.log
             .map((entry) => entry.route)
             .filter((route) => ['member', 'hold', 'remove'].includes(route));
-        expect(order).toEqual(['hold', 'member', 'hold', 'hold', 'remove']);
+        expect(order).toEqual(['member', 'hold', 'member', 'hold', 'hold', 'remove']);
     });
 
     test('a third manager’s pause is said as theirs, and a demotion that did not end it offers nothing more', async () => {

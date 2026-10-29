@@ -61,6 +61,9 @@ export const ACCOUNT_DATA = {
             // The contact guard: whom this account acted on and the keys it trusted, sealed
             // (lib/contact-guard.ts).
             'hushos-contact-guard',
+            // Each family's guard: the latest member list this device accepted, sealed
+            // (lib/contact-guard.ts createIndexedDbFamilyGuard).
+            'hushos-family-guard',
         ],
         // Each family folder's mirror (lib/groups/store.ts AREA_MIRROR_PREFIX).
         prefixes: ['hushos-drive-mirror:'],
@@ -142,7 +145,9 @@ export const STORAGE_OWNERS: Record<
     'apps/web/src/routes/join/route.tsx': { session: ['hushos.invite'] },
     'apps/web/src/lib/link-sent.ts': { session: ['hushos-link-sent'] },
     'apps/web/src/lib/groups/store.ts': { databases: ['hushos-groups', 'hushos-drive-mirror:'] },
-    'apps/web/src/lib/contact-guard.ts': { databases: ['hushos-contact-guard'] },
+    'apps/web/src/lib/contact-guard.ts': {
+        databases: ['hushos-contact-guard', 'hushos-family-guard'],
+    },
     'apps/web/src/lib/groups/client.ts': { databases: [] },
     'apps/web/src/lib/spaces.ts': { databases: [] },
     'apps/web/src/lib/drive.ts': { databases: [] },
