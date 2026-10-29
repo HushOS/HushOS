@@ -76,9 +76,9 @@ final class DriveStore {
     /*
      * Info shown beside the tabs where the window has room (RoomBeside: iPhone Duo's inner display on
      * its side, an iPad): the shell draws it, so it stays open across tabs, pushes and folding (as a
-     * sheet once there is no room).
+     * sheet once there is no room). It follows the item as the lists change (`InfoFollow`).
      */
-    var infoBeside: Opened?
+    var infoBeside: InfoFollow?
     var deepSiblings: [Opened] = []
     /* What others shared with this account, opened: the Shared tab and the folder picker read it. */
     /*

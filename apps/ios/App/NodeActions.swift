@@ -80,7 +80,7 @@ private struct NodeActionSheets: ViewModifier {
         content
             .onChange(of: besideList, initial: true) { _, moving in
                 guard moving, case .info(let item) = action else { return }
-                store.infoBeside = item
+                store.infoBeside = InfoFollow(item, current: store.known(item.id))
                 action = nil
             }
             // Sharing may have changed who can open what; the rows and banners ask again.
@@ -114,14 +114,19 @@ struct InfoBeside: ViewModifier {
 
     func body(content: Self.Content) -> some View {
         content
+            // A rename, a move, the Trash or a sync from another device: Info shows the item as it is now, or closes once it's gone.
+            .onChange(of: store.infoBeside.map { store.known($0.item.id) }) { _, current in
+                guard let follow = store.infoBeside else { return }
+                store.infoBeside = follow.following(current ?? nil)
+            }
             .inspector(isPresented: Binding(get: { room && store.infoBeside != nil }, set: { shown in if !shown, room { store.infoBeside = nil } })) {
-                if let item = store.infoBeside {
+                if let item = store.infoBeside?.item {
                     InfoSheet(item: item, close: { store.infoBeside = nil }, open: { action in next = action })
                         .environment(store)
                         .inspectorColumnWidth(320)
                 }
             }
-            .sheet(item: Binding(get: { room ? nil : store.infoBeside }, set: { item in if item == nil, !room { store.infoBeside = nil } })) { item in
+            .sheet(item: Binding(get: { room ? nil : store.infoBeside?.item }, set: { item in if item == nil, !room { store.infoBeside = nil } })) { item in
                 InfoSheet(item: item, open: { action in next = action }).environment(store)
             }
             .nodeActionSheets(action: $next, store: store, beside: false)
