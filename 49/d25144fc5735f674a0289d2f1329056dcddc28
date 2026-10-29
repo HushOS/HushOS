@@ -1,0 +1,39 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_566b8e0c4467a4::t_495841d10f34a3 3,339,341,455-457,681,713
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AddMenu.kt
+  s_566b8e0c4467a4::t_8b56cf2eb5a343 3,79-80,82-84,277-279
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DevicesScreen.kt
+  s_566b8e0c4467a4::t_ba6e1a39cdec86 3,47-49,137
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_566b8e0c4467a4::t_6981b198379131 3,207-209
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HomeScreen.kt
+  s_566b8e0c4467a4::t_0416e63a73a4d3 3,262,333-335
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_566b8e0c4467a4::t_667096a48dfeb1 3,201-202,328,498-499,501,699,702
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_566b8e0c4467a4::t_bce606f9eadd74 3,179,185-186,189-191,551-552,554,808-810,942-945,1106-1107
+apps/android/app/src/main/kotlin/com/hushos/app/ui/RecoverScreen.kt
+  s_566b8e0c4467a4::t_612935c55829f9 3,180-183,185-186
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Screens.kt
+  s_566b8e0c4467a4::t_40764af35344b7 3,143,145-146,251-252,254
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SharedScreen.kt
+  s_566b8e0c4467a4::t_f985c976a41242 3,101,107-112
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SignInScreen.kt
+  s_566b8e0c4467a4::t_4cd3d178221da8 3,63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "49d25144fc5735f674a0289d2f1329056dcddc28",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
