@@ -114,4 +114,28 @@ class NodeCacheTest {
         put("shared.pdf", "trip", ws = theirs)
         assertEquals("shared.pdf", cache.live("shared.pdf")?.id)
     }
+
+    /*
+     * Absence alone never means gone: rows forgotten to be read again (every row after a rotation, one row a catalogue
+     * update reopens) are not removed. Only what the server said is gone is, until a row by that id comes back.
+     */
+    @Test
+    fun onlyARemovalMarksARowGoneAndItsReturnClearsIt() {
+        val cache = NodeCache { own }
+        fun row(id: String) = Opened(NodeView(id, own, "root", "file", 1uL, 1uL, "", 1uL, "", null, null, null, null), NodeMetadata(id, null, null, null, emptyMap()))
+        cache.put(row("a.txt"), ownKey)
+        cache.put(row("b.txt"), ownKey)
+        cache.forget(own, "a.txt")
+        cache.forgetRows()
+        assertNull(cache.find("a.txt"))
+        assertEquals(false, cache.gone("a.txt"))
+        assertEquals(false, cache.gone("b.txt"))
+        cache.put(row("b.txt"), ownKey)
+        cache.remove(own, "b.txt")
+        assertNull(cache.find("b.txt"))
+        assertEquals(true, cache.gone("b.txt"))
+        // Restored: back, and no longer gone.
+        cache.put(row("b.txt"), ownKey)
+        assertEquals(false, cache.gone("b.txt"))
+    }
 }

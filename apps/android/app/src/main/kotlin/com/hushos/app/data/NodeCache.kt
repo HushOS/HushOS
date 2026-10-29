@@ -14,6 +14,11 @@ class NodeCache(private val ownWorkspace: () -> String?) {
     /* node id -> workspace id -> value: an id-only lookup stays one map read. */
     private val keys = ConcurrentHashMap<String, ConcurrentHashMap<String, ByteArray>>()
     private val rows = ConcurrentHashMap<String, ConcurrentHashMap<String, Opened>>()
+    /*
+     * Ids the server said are gone (trashed from here, tombstoned in the feed, purged), until a row by that id is
+     * put again. Not the rows dropped to be read again (`forget`, `forgetRows`): absence alone never means gone.
+     */
+    private val gone = ConcurrentHashMap.newKeySet<String>()
 
     fun key(workspaceId: String, nodeId: String): ByteArray? = keys[nodeId]?.get(workspaceId)
     fun key(item: Opened): ByteArray? = key(item.node.workspaceId, item.id)
@@ -50,12 +55,21 @@ class NodeCache(private val ownWorkspace: () -> String?) {
     fun put(row: Opened, key: ByteArray) {
         putKey(row.node.workspaceId, row.id, key)
         rows.getOrPut(row.id) { ConcurrentHashMap() }[row.node.workspaceId] = row
+        gone.remove(row.id)
     }
 
-    /* Drops the row (its key stays, for children still wrapped under it). */
+    /* Drops the row to be read again (its key stays, for children still wrapped under it). */
     fun forget(workspaceId: String, nodeId: String) {
         rows[nodeId]?.remove(workspaceId)
     }
+
+    /* Drops the row because the server said it is gone: `gone` answers for it until it comes back. */
+    fun remove(workspaceId: String, nodeId: String) {
+        gone.add(nodeId)
+        forget(workspaceId, nodeId)
+    }
+
+    fun gone(nodeId: String): Boolean = nodeId in gone
 
     fun forgetRows() = rows.clear()
 

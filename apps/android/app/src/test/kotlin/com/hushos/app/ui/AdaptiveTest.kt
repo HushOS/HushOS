@@ -79,20 +79,47 @@ class AdaptiveTest {
         assertNull(sheetLimit(null, keyboard = false))
     }
 
+    @Test
+    fun aBoundedSheetLeavesRoomForWhatMaterialAddsAroundItsContent() {
+        // Below the Fold's hinge, 420.5 dp; the handle (48) and the navigation bar's inset (24) as laid out.
+        assertEquals(348.5f, sheetContentMax(420.5f, sheetDp = 500f, contentDp = 428f), 0.001f)
+        // Not laid out yet: nothing assumed around it, corrected on the next pass.
+        assertEquals(420.5f, sheetContentMax(420.5f, sheetDp = 0f, contentDp = 0f), 0.001f)
+        // More around it than the limit allows: no room, never a negative height.
+        assertEquals(0f, sheetContentMax(40f, sheetDp = 500f, contentDp = 428f), 0.001f)
+    }
+
+    private fun lookup(live: Boolean = false, held: Boolean = false, removed: Boolean = false, outOfReach: Boolean = false, seen: Boolean = false) =
+        infoLookup(live = live, held = held, removed = removed, outOfReach = outOfReach, seen = seen)
+
     /*
-     * Info shows its item only while the lists would: before, a row that went away (trashed here or on another
-     * device, inside a trashed folder, unshared) stayed on screen from the first lookup, with Share and Tags live.
+     * Info shows its item only while the lists would: a row that went away (trashed here or on another device,
+     * inside a trashed folder, unshared) stayed on screen from the first lookup, with Share and Tags live.
      */
     @Test
-    fun infoClosesWhenItsItemIsGoneAndLooksUpOnlyWhatThisDeviceNeverHad() {
-        assertEquals(InfoLookup.SHOW, infoLookup(live = true, held = true, seen = false))
+    fun infoClosesOnARemovalTheServerConfirmed() {
+        assertEquals(InfoLookup.SHOW, lookup(live = true, held = true))
         // Trashed, or inside a trashed folder: the row is still held, but not live.
-        assertEquals(InfoLookup.CLOSE, infoLookup(live = false, held = true, seen = true))
-        assertEquals(InfoLookup.CLOSE, infoLookup(live = false, held = true, seen = false))
-        // Shown before and now gone from this device (unshared, revoked, trashed here): no lookup brings it back.
-        assertEquals(InfoLookup.CLOSE, infoLookup(live = false, held = false, seen = true))
-        // After the system restarted the app, before the catalogue is back: looked up once.
-        assertEquals(InfoLookup.FIND, infoLookup(live = false, held = false, seen = false))
+        assertEquals(InfoLookup.CLOSE, lookup(held = true, seen = true))
+        assertEquals(InfoLookup.CLOSE, lookup(held = true))
+        // Trashed from here, tombstoned in the feed, purged: gone, and no lookup brings it back.
+        assertEquals(InfoLookup.CLOSE, lookup(removed = true, seen = true))
+        // A share's item once the shares listed no longer include its workspace, even while its row lingers.
+        assertEquals(InfoLookup.CLOSE, lookup(live = true, held = true, outOfReach = true, seen = true))
+    }
+
+    /*
+     * A rotation (after Stop sharing) forgets every row before the lists reload them, and a catalogue update forgets a
+     * row before it reopens it: a pass in that gap (a notice, transfer progress) saw the row missing and closed Info and
+     * its Share sheet while the owner still had the item. Absent without a removal, Info keeps what it showed.
+     */
+    @Test
+    fun rowsForgottenMidRebuildKeepInfoOpen() {
+        assertEquals(InfoLookup.HOLD, lookup(seen = true))
+        // Then the reload puts the row back.
+        assertEquals(InfoLookup.SHOW, lookup(live = true, held = true, seen = true))
+        // Never shown in this process (the system restarted the app): looked up once.
+        assertEquals(InfoLookup.FIND, lookup())
     }
 }
 

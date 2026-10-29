@@ -248,15 +248,21 @@ private fun Main(model: DriveViewModel, state: DriveState) {
         }
     }
     LaunchedEffect(tab) { if (infoId != null && infoTab != tab) closeInfo() }
-    // Read again on every change the lists redraw for (state is new after each sync, trash or unshare): gone
-    // (trashed, inside a trashed folder, unshared) closes Info; after a restart the row is looked up once.
+    // Read again on every change the lists redraw for (state is new after each sync, trash or unshare). A removal the
+    // server confirmed closes Info; rows dropped to be read again (a rotation, a catalogue update) keep the last one shown.
     val infoItem = infoId?.takeIf { infoTab == tab }?.let { id ->
         val live = model.liveItem(id)
         // Not state: it only matters to a later pass, and is set after this one is applied.
-        val seen = remember(id) { java.util.concurrent.atomic.AtomicBoolean(false) }
-        if (live != null) androidx.compose.runtime.SideEffect { seen.set(true) }
-        when (infoLookup(live = live != null, held = model.holds(id), seen = seen.get())) {
+        val last = remember(id) { java.util.concurrent.atomic.AtomicReference<com.hushos.app.data.Opened?>(null) }
+        if (live != null) androidx.compose.runtime.SideEffect { last.set(live) }
+        val shown = live ?: last.get()
+        val lookup = infoLookup(
+            live = live != null, held = model.holds(id), removed = model.removed(id),
+            outOfReach = shown?.let { model.outOfReach(it.node.workspaceId) } == true, seen = last.get() != null,
+        )
+        when (lookup) {
             InfoLookup.SHOW -> live
+            InfoLookup.HOLD -> last.get()
             InfoLookup.CLOSE -> { LaunchedEffect(id) { closeInfo() }; null }
             InfoLookup.FIND -> {
                 // `find` opens the row's folder, so once found the row is held and the next pass shows it live.

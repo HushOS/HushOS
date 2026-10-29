@@ -75,6 +75,14 @@ private const val SheetMinBelowFold = 240f
  */
 fun sheetLimit(belowFoldDp: Float?, keyboard: Boolean): Float? = if (keyboard) null else belowFoldDp
 
+/*
+ * The content's tallest so that the whole sheet fits `limitDp`: the limit less what the sheet adds around its
+ * content (`sheetDp - contentDp`: the drag handle and the bottom inset as laid out). Before the first layout
+ * (nothing measured yet) it assumes nothing is added; the next pass corrects it before the sheet has risen.
+ */
+fun sheetContentMax(limitDp: Float, sheetDp: Float, contentDp: Float): Float =
+    (limitDp - (sheetDp - contentDp).coerceAtLeast(0f)).coerceAtLeast(0f)
+
 /* The frame this window gets: navigation, whether Info sits beside the list, and a tabletop sheet's limit. */
 data class AppFrame(val nav: NavKind, val infoBeside: Boolean, val sheetMaxDp: Float?)
 
@@ -89,18 +97,24 @@ fun windowDp(): Pair<Float, Float> {
 fun horizontalHingeBottomDp(info: WindowAdaptiveInfo, density: Float): Float? =
     info.windowPosture.hingeList.firstOrNull { !it.isVertical && it.isSeparating }?.bounds?.bottom?.div(density)
 
-/* What Info does with its item now. */
-enum class InfoLookup { SHOW, FIND, CLOSE }
+/* What Info does with its item now: show it live, keep showing it as last seen, look it up, or close. */
+enum class InfoLookup { SHOW, HOLD, FIND, CLOSE }
 
 /*
- * Info follows the rows the lists follow. `live`: the row is there and live. `held`: this device has a row
- * for it, live or not (a trashed one, or one inside a trashed folder, is held but not live). `seen`: this
- * Info showed it live before. A row this process never had (after the system restarted the app, before the
- * catalogue is back) is looked up once; anything else that is not live is gone (trashed, unshared, revoked).
+ * Info follows the rows the lists follow, and closes only on a removal the server confirmed:
+ * - `live`: the row is there and live: shown.
+ * - `held`: the row is there but not live (trashed, or inside a trashed folder): closed.
+ * - `removed`: the server said it is gone (trashed from here, tombstoned in the feed, purged): closed.
+ * - `outOfReach`: in a workspace that is neither this account's nor among the shares just listed (unshared, revoked): closed.
+ * - Otherwise the row is merely absent: dropped to be read again (a rotation forgets every row before the lists reload,
+ *   a catalogue update forgets then reopens), so Info keeps what it showed (`seen`); never seen in this process (after
+ *   the system restarted the app), it is looked up once.
  */
-fun infoLookup(live: Boolean, held: Boolean, seen: Boolean): InfoLookup = when {
+fun infoLookup(live: Boolean, held: Boolean, removed: Boolean, outOfReach: Boolean, seen: Boolean): InfoLookup = when {
+    outOfReach || removed -> InfoLookup.CLOSE
     live -> InfoLookup.SHOW
-    held || seen -> InfoLookup.CLOSE
+    held -> InfoLookup.CLOSE
+    seen -> InfoLookup.HOLD
     else -> InfoLookup.FIND
 }
 
