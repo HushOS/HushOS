@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import androidx.compose.runtime.retain.retain
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -258,7 +259,7 @@ fun SearchScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) {
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(TypeFilter.ALL) }
     var selected by rememberSavedItem(model)
-    var folder by remember { mutableStateOf<Opened?>(null) }
+    var folder by retain { mutableStateOf<Opened?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
@@ -329,9 +330,9 @@ fun SearchScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) {
 fun OnThisPhoneScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) {
     val alpine = Alpine.colors
     var selected by rememberSavedItem(model)
-    var removing by remember { mutableStateOf<Offline.Entry?>(null) }
-    var removingFolder by remember { mutableStateOf<Offline.Folder?>(null) }
-    var browsing by remember { mutableStateOf<Opened?>(null) }
+    var removing by retain { mutableStateOf<Offline.Entry?>(null) }
+    var removingFolder by retain { mutableStateOf<Offline.Folder?>(null) }
+    var browsing by retain { mutableStateOf<Opened?>(null) }
     val context = LocalContext.current
     BackHandler(onBack = onBack)
     LaunchedEffect(Unit) { model.refreshOffline() }

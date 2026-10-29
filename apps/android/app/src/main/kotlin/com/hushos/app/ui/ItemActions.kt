@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import androidx.compose.runtime.retain.retain
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
@@ -197,7 +198,8 @@ private fun SheetDivider() = HorizontalDivider(Modifier.padding(horizontal = Alp
  */
 @Composable
 fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: ItemSheet = ItemSheet.MENU, onSelect: (() -> Unit)? = null, dismiss: () -> Unit) {
-    var sheet by remember { mutableStateOf(open) }
+    // Saved, so a fold, an unfold or a rotation keeps the sheet that was open (Rename, Share, Move), not the menu.
+    var sheet by rememberSaveable { mutableStateOf(open) }
     val context = LocalContext.current
     val owner = ownerOf(model, state, item)
     val mine = owner == Owner.ME
@@ -323,7 +325,7 @@ fun MovePicker(model: DriveViewModel, state: DriveState, items: List<Opened>, di
     val first = items.first()
     val excluded = items.map { it.id }.toSet()
     // null: the top, where Files and the shared folders sit side by side.
-    var trail by remember { mutableStateOf(listOf(Place(state.rootId, "Files", state.rootId?.let { model.item(it) }?.node?.workspaceId))) }
+    var trail by retain { mutableStateOf(listOf(Place(state.rootId, "Files", state.rootId?.let { model.item(it) }?.node?.workspaceId))) }
     val here = trail.lastOrNull()
     val folderId = here?.id
     LaunchedEffect(Unit) { if (state.shares == null) model.refreshShares() }
@@ -493,10 +495,10 @@ fun VersionsSheet(model: DriveViewModel, state: DriveState, item: Opened, dismis
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var sizes by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
-    var menu by remember { mutableStateOf<VersionListView?>(null) }
-    var deleting by remember { mutableStateOf<VersionListView?>(null) }
+    var menu by retain { mutableStateOf<VersionListView?>(null) }
+    var deleting by retain { mutableStateOf<VersionListView?>(null) }
     var restoring by remember { mutableStateOf<String?>(null) }
-    var sending by remember { mutableStateOf<VersionListView?>(null) }
+    var sending by retain { mutableStateOf<VersionListView?>(null) }
     var reload by remember { mutableStateOf(0) }
     val current = model.item(item.id) ?: item
     LaunchedEffect(item.id, reload) {
@@ -694,10 +696,10 @@ private fun Fact(label: String, value: String, primary: Boolean = false, onClick
 fun ItemTagsSheet(model: DriveViewModel, state: DriveState, items: List<Opened>, dismiss: () -> Unit) {
     val alpine = Alpine.colors
     // Tag id to on (true), off (false), or left as each item has it (null).
-    var choice by remember { mutableStateOf<Map<String, Boolean?>>(emptyMap()) }
+    var choice by retain { mutableStateOf<Map<String, Boolean?>>(emptyMap()) }
     var query by rememberSaveable { mutableStateOf("") }
     var colour by rememberSaveable { mutableStateOf(OFFERED_TAG_COLOURS.first()) }
-    var managing by remember { mutableStateOf(false) }
+    var managing by retain { mutableStateOf(false) }
     LaunchedEffect(Unit) { model.refreshTags() }
     val carried = { tagId: String -> items.count { tagId in state.tags.tagsOf(it.id).map { t -> t.id } } }
     val stateOf = { tagId: String ->

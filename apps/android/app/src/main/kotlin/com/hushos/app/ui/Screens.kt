@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import androidx.compose.runtime.retain.retain
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.heightIn
@@ -139,10 +140,10 @@ fun openWith(context: android.content.Context, uri: android.net.Uri, mime: Strin
 fun TagManagerSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit) {
     val alpine = Alpine.colors
     var newName by rememberSaveable { mutableStateOf("") }
-    var renaming by remember { mutableStateOf<com.hushos.app.data.Tag?>(null) }
+    var renaming by retain { mutableStateOf<com.hushos.app.data.Tag?>(null) }
     var renameDraft by rememberSaveable { mutableStateOf("") }
-    var deleting by remember { mutableStateOf<com.hushos.app.data.Tag?>(null) }
-    var colouring by remember { mutableStateOf<com.hushos.app.data.Tag?>(null) }
+    var deleting by retain { mutableStateOf<com.hushos.app.data.Tag?>(null) }
+    var colouring by retain { mutableStateOf<com.hushos.app.data.Tag?>(null) }
     LaunchedEffect(Unit) { model.refreshTags() }
     Sheet(onDismissRequest = dismiss) {
         Text("Tags", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
@@ -247,10 +248,10 @@ fun ColourDialog(name: String, current: String, onPick: (String) -> Unit, onDism
 fun TrashScreen(model: DriveViewModel, state: DriveState, onBack: (() -> Unit)? = null) {
     val alpine = Alpine.colors
     var confirmEmpty by rememberSaveable { mutableStateOf(false) }
-    var selected by remember { mutableStateOf<com.hushos.app.data.TrashItem?>(null) }
-    var deleting by remember { mutableStateOf<com.hushos.app.data.TrashItem?>(null) }
+    var selected by retain { mutableStateOf<com.hushos.app.data.TrashItem?>(null) }
+    var deleting by retain { mutableStateOf<com.hushos.app.data.TrashItem?>(null) }
     // Rows picked to restore or delete together; a long press starts it, as in Files.
-    var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var picked by retain { mutableStateOf<Set<String>>(emptySet()) }
     var confirmMany by rememberSaveable { mutableStateOf(false) }
     val ids = state.trash.map { it.item.id }.toSet()
     // Rows restored or deleted, here or elsewhere, leave the selection.

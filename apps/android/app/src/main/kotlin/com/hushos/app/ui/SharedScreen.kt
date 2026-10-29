@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import androidx.compose.runtime.retain.retain
 import android.content.Context
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -97,18 +98,18 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
     var openedId by rememberSaveable { mutableStateOf<String?>(null) }
     val opened = openedId?.let { id -> state.shares?.firstNotNullOfOrNull { it.root?.takeIf { root -> root.id == id } } ?: model.item(id) }
     // A pasted link carries its key: memory only, never the saved-state bundle the system writes to disk.
-    var linkText by remember { mutableStateOf("") }
+    var linkText by retain { mutableStateOf("") }
     // Saveable, as on Account: a rotation keeps People (and Your twelve words above it) open.
     var people by rememberSaveable { mutableStateOf(false) }
     var byMe by rememberSaveable { mutableStateOf(false) }
     var mine by remember { mutableStateOf<List<SharedByMe>?>(null) }
     var mineFailed by remember { mutableStateOf(false) }
-    var received by remember { mutableStateOf<Vault.ShareMount?>(null) }
-    var reporting by remember { mutableStateOf<Vault.ShareMount?>(null) }
-    var outgoing by remember { mutableStateOf<Outgoing?>(null) }
-    var stopping by remember { mutableStateOf<Outgoing?>(null) }
-    var sharing by remember { mutableStateOf<Opened?>(null) }
-    var sending by remember { mutableStateOf<Opened?>(null) }
+    var received by retain { mutableStateOf<Vault.ShareMount?>(null) }
+    var reporting by retain { mutableStateOf<Vault.ShareMount?>(null) }
+    var outgoing by retain { mutableStateOf<Outgoing?>(null) }
+    var stopping by retain { mutableStateOf<Outgoing?>(null) }
+    var sharing by retain { mutableStateOf<Opened?>(null) }
+    var sending by retain { mutableStateOf<Opened?>(null) }
     var reload by remember { mutableStateOf(0) }
     suspend fun loadMine() { val rows = model.sharedByMe(); mineFailed = rows == null; if (rows != null) mine = rows }
     // Read again when what this account shares changed (a restore, a change from another device, a share stopped) while it is open.
