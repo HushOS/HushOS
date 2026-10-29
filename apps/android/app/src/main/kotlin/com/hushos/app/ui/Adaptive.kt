@@ -160,6 +160,9 @@ interface InfoHost {
 
 val LocalInfo = compositionLocalOf<InfoHost?> { null }
 
+/* The item whose Info is open beside the list, by workspace and id: its row takes the selection tint, as the web's selected row does. */
+val LocalInfoShown = compositionLocalOf<Pair<String, String>?> { null }
+
 /* A single column that stops at `max` and centres on a wider window; full width below it. */
 fun Modifier.readableWidth(max: Dp = Frame.Readable): Modifier =
     this.fillMaxWidth().wrapContentWidth(Alignment.CenterHorizontally).widthIn(max = max)

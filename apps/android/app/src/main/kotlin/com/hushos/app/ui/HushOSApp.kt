@@ -299,6 +299,7 @@ private fun Main(model: DriveViewModel, state: DriveState) {
         LocalNotice provides { state.notice?.let { NoticeBar(it, model, Modifier.padding(12.dp)) } },
         LocalFootBars provides footBars,
         LocalFrame provides frame,
+        LocalInfoShown provides infoItem?.takeIf { beside }?.let { it.node.workspaceId to it.id },
     ) {
     NavigationSuiteScaffoldLayout(
         navigationSuiteType = suiteType,
