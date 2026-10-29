@@ -45,6 +45,13 @@ enum Theme {
     static let row: CGFloat = 56
     static let mark: CGFloat = 36
 
+    /*
+     * Between the system bar and a list's first card or control. The bar ends 20pt below a big title and 10pt
+     * below a search field; 2 more puts the first card where main's one-row header put it (22 and 12 on
+     * iPhone 17), the same on every screen.
+     */
+    static let listTop: CGFloat = 2
+
     /* UIKit's own bars, which SwiftUI's large titles are drawn by. */
     @MainActor static func configureAppearance() {
         let large = UIFontMetrics(forTextStyle: .largeTitle).scaledFont(for: .systemFont(ofSize: 34, weight: .heavy))
@@ -96,6 +103,36 @@ extension View {
     /* Raised furniture (notices, bars): a soft ink shadow normally, a solid edge in high contrast where shadows carry nothing. */
     func alpineRaised<S: InsettableShape>(_ shape: S) -> some View {
         modifier(Raised(shape: shape))
+    }
+}
+
+extension View {
+    /*
+     * A row of chips scrolls past its column to the screen's edge, except where that edge holds
+     * a vertical bar (iPhone Duo's strip of status, tabs and back): chips drawn into the strip
+     * would sit under the system's controls, so there the row stops at its column.
+     */
+    func chipRowClip() -> some View {
+        modifier(ChipRowClip())
+    }
+}
+
+private struct ChipRowClip: ViewModifier {
+    func body(content: Self.Content) -> some View {
+        if #available(iOS 27.1, *) {
+            content.modifier(BarAwareChipRowClip())
+        } else {
+            content.scrollClipDisabled()
+        }
+    }
+}
+
+@available(iOS 27.1, *)
+private struct BarAwareChipRowClip: ViewModifier {
+    @Environment(\.toolbarVerticalEdge) private var barEdge
+
+    func body(content: Self.Content) -> some View {
+        content.scrollClipDisabled(barEdge == nil)
     }
 }
 
@@ -227,150 +264,94 @@ func changedLabel(_ date: Date?) -> String? {
 }
 
 /*
- * Every screen's header, as Home has it: one row with the large title on the left and
- * the screen's actions on the right in one glass capsule; a pushed screen puts its back
- * button in front of the title. It scrolls with the list; once it has gone, a compact
- * bar with the same title and actions takes its place (`screenChrome`).
+ * Every screen's header is iOS's own navigation bar, so the bar moves where iOS puts bars
+ * (iPhone Duo's vertical strip, the tab sidebar's toggle on a wide window), with the screen's
+ * actions as toolbar items (the system groups them in one glass capsule) and the system's Back.
+ * The look is Alpine's through the bar appearance (`Theme.configureAppearance`) and the tint.
+ *
+ * - A tab root (Home, Files, Shared, Account, Search) has its big title on the row with its
+ *   buttons (inlineLarge; nothing sits in a row above the title, as DESIGN.md asks of phones).
+ * - A pushed screen (a folder, Trash, Devices, …) follows Apple's Files app: the title leading,
+ *   right after Back, on the same row as the buttons (the browser role, which leads the title,
+ *   with the title inline). UIKit documents that a large inline title reverts to its own row
+ *   under the buttons once there is a Back button (`UINavigationItem.LargeTitleDisplayMode.inline`),
+ *   so a pushed screen never asks for one.
  */
-struct ScreenHeader<Actions: View>: View {
-    let title: String
-    var back: (() -> Void)? = nil
-    @ViewBuilder var actions: () -> Actions
 
-    var body: some View {
-        HStack(spacing: Alpine.Space.s3) {
-            if let back { BackButton(action: back) }
-            Text(title)
-                .font(Theme.Text.titleLarge).kerning(-1)
-                .foregroundStyle(Alpine.ink)
-                .lineLimit(1).minimumScaleFactor(0.6)
-                .accessibilityAddTraits(.isHeader)
-            Spacer(minLength: Alpine.Space.s2)
-            HeaderActions(content: actions)
-        }
-        .frame(minHeight: Theme.control)
-        .padding(.horizontal, Alpine.Space.s1)
-        .textCase(nil)
-    }
-}
-
-extension ScreenHeader where Actions == EmptyView {
-    init(title: String, back: (() -> Void)? = nil) {
-        self.init(title: title, back: back) { EmptyView() }
-    }
-}
-
-/* The actions beside a title, grouped in one glass capsule as the system groups bar buttons. */
-struct HeaderActions<Content: View>: View {
-    @ViewBuilder var content: () -> Content
-    /* No capsule around nothing: a screen whose actions are all hidden right now draws none. */
-    @State private var width: CGFloat = 0
-
-    var body: some View {
-        HStack(spacing: 0) { content() }
-            .font(.body.weight(.semibold))
-            .foregroundStyle(Alpine.primary)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
-            .glassEffect(width > 0 ? .regular.interactive() : .identity, in: .capsule)
-            .highContrastEdge(Capsule().inset(by: width > 0 ? 0 : 1000))
-    }
-}
-
-/* An icon in a header capsule: a 44pt target. */
+/* An icon in the bar: the system sizes it and makes the 44pt target. */
 struct HeaderIcon: View {
     let symbol: String
 
     var body: some View {
-        Image(systemName: symbol).font(.system(size: 17, weight: .semibold)).frame(width: Theme.control, height: Theme.control).contentShape(Rectangle())
+        Image(systemName: symbol)
     }
 }
 
-/* A word in a header capsule ("Done", "Select all"). */
+/* A word in the bar ("Done", "Select all"), one line always: a word that wraps reads as two buttons. */
 struct HeaderWord: View {
     let text: String
 
     var body: some View {
-        // One line always: a header word that wraps ("Empty / Trash") reads as two buttons.
-        Text(text).font(.body.weight(.semibold)).lineLimit(1).fixedSize(horizontal: true, vertical: false)
-            .padding(.horizontal, 14).frame(minHeight: Theme.control).contentShape(Rectangle())
-    }
-}
-
-struct BackButton: View {
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: "chevron.left").font(.system(size: 17, weight: .semibold)).foregroundStyle(Alpine.ink)
-                .frame(width: Theme.control, height: Theme.control).contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .circle)
-        .highContrastEdge(Circle())
-        .accessibilityLabel("Back")
+        Text(text).lineLimit(1)
     }
 }
 
 extension View {
     /*
-     * The chrome around a list that starts with a ScreenHeader: no system bar (so nothing
-     * sits empty above the title), and once the header has scrolled away a compact bar
-     * with the same back button, title and actions fades in at the top.
+     * The chrome of a screen: the system bar with this title and these actions at its trailing
+     * end; `root` for a tab's first screen. On a wide window the rows keep a readable column.
      */
-    func screenChrome<Actions: View>(title: String, back: (() -> Void)? = nil, @ViewBuilder actions: @escaping () -> Actions) -> some View {
-        modifier(ScreenChrome(title: title, back: back, actions: actions))
+    func screenChrome<Actions: View>(title: String, root: Bool = false, @ViewBuilder actions: @escaping () -> Actions) -> some View {
+        modifier(ScreenChrome(title: title, root: root, actions: actions))
     }
 
-    func screenChrome(title: String, back: (() -> Void)? = nil) -> some View {
-        modifier(ScreenChrome(title: title, back: back, actions: { EmptyView() }))
+    func screenChrome(title: String, root: Bool = false) -> some View {
+        modifier(ScreenChrome(title: title, root: root, actions: { EmptyView() }))
     }
 }
 
 private struct ScreenChrome<Actions: View>: ViewModifier {
     let title: String
-    let back: (() -> Void)?
+    let root: Bool
     let actions: () -> Actions
-    @State private var collapsed = false
+    @State private var width: CGFloat = 0
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     func body(content: Self.Content) -> some View {
         content
-            .toolbar(.hidden, for: .navigationBar)
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                geometry.contentOffset.y + geometry.contentInsets.top > 56
-            } action: { _, past in
-                withAnimation(.easeOut(duration: 0.18)) { collapsed = past }
-            }
-            .overlay(alignment: .top) {
-                if collapsed {
-                    ZStack {
-                        Text(title).font(.headline).foregroundStyle(Alpine.ink).lineLimit(1).padding(.horizontal, 110)
-                        HStack {
-                            if let back { BackButton(action: back) }
-                            Spacer()
-                            HeaderActions(content: actions)
-                        }
+            // Where the window is wider than a list reads well (iPhone Duo's inner display on its side, an
+            // iPad), the rows keep a readable column in the middle rather than stretching edge to edge.
+            .contentMargins(.horizontal, ReadableColumn.margin(forWidth: width, regularHeight: verticalSizeClass == .regular), for: .scrollContent)
+            // The list starts just under the system bar, as main's own header had its first card: the inset-grouped
+            // list's own top margin (about 35pt) left a gap the old header never had.
+            .contentMargins(.top, Theme.listTop, for: .scrollContent)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+            .navigationTitle(title)
+            .toolbarTitleDisplayMode(root ? .inlineLarge : .inline)
+            .toolbarRole(root ? .automatic : .browser)
+            .toolbar {
+                if !root {
+                    // Sized as Apple's Files sizes a folder's title beside Back; the system's own inline title is 17pt.
+                    ToolbarItem(placement: .title) {
+                        Text(title).font(.title3.weight(.bold)).foregroundStyle(Alpine.ink).lineLimit(1)
+                            .accessibilityAddTraits(.isHeader)
                     }
-                    .padding(.horizontal, Alpine.Space.s4).padding(.bottom, 6)
-                    .frame(maxWidth: .infinity)
-                    .background {
-                        // Ground, fading out below, so rows pass under it the way they pass under a system bar.
-                        LinearGradient(colors: [Alpine.ground, Alpine.ground, Alpine.ground.opacity(0)], startPoint: .top, endPoint: .bottom)
-                            .ignoresSafeArea(edges: .top)
-                    }
-                    .transition(.opacity)
                 }
+                ToolbarItemGroup(placement: .topBarTrailing) { actions() }
             }
     }
 }
 
-/* The system bar is hidden on screens that draw their own header; the edge swipe still goes back. */
-extension UINavigationController: @retroactive UIGestureRecognizerDelegate {
-    override open func viewDidLoad() {
-        super.viewDidLoad()
-        interactivePopGestureRecognizer?.delegate = self
-    }
+/* How wide a list or a settings page gets before it stops growing and centres instead. */
+enum ReadableColumn {
+    static let width: CGFloat = 720
 
-    public func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        viewControllers.count > 1
+    /*
+     * Each side's margin, the list's own 16 outside a centred column; nil (the system's own
+     * margins, as today) wherever the window is no wider than the column, and on any iPhone screen
+     * on its side (compact height), which stays as it is.
+     */
+    static func margin(forWidth available: CGFloat, regularHeight: Bool) -> CGFloat? {
+        regularHeight && available > width ? (available - width) / 2 + Alpine.Space.s4 : nil
     }
 }

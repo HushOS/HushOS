@@ -22,10 +22,6 @@ struct DevicesView: View {
 
     var body: some View {
         List {
-            Section {} header: {
-                ScreenHeader(title: "Devices", back: { dismiss() })
-                    .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
-            }
             if let problem {
                 Section {
                     Text(problem).foregroundStyle(Alpine.danger)
@@ -67,7 +63,7 @@ struct DevicesView: View {
         .listStyle(.insetGrouped)
         .alpineGrouped()
         .navigationTitle("Devices")
-        .screenChrome(title: "Devices", back: { dismiss() })
+        .screenChrome(title: "Devices")
         .refreshable { await load() }
         .task { await load() }
         .alert(removing.map { "Remove \($0.label)?" } ?? "", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
