@@ -128,14 +128,37 @@ class NodeCacheTest {
         cache.forget(own, "a.txt")
         cache.forgetRows()
         assertNull(cache.find("a.txt"))
-        assertEquals(false, cache.gone("a.txt"))
-        assertEquals(false, cache.gone("b.txt"))
+        assertEquals(false, cache.gone(own, "a.txt"))
+        assertEquals(false, cache.gone(own, "b.txt"))
         cache.put(row("b.txt"), ownKey)
         cache.remove(own, "b.txt")
         assertNull(cache.find("b.txt"))
-        assertEquals(true, cache.gone("b.txt"))
+        assertEquals(true, cache.gone(own, "b.txt"))
         // Restored: back, and no longer gone.
         cache.put(row("b.txt"), ownKey)
-        assertEquals(false, cache.gone("b.txt"))
+        assertEquals(false, cache.gone(own, "b.txt"))
+    }
+
+    /*
+     * A received share's node can carry the same id as one of this account's own; they are two nodes. Removing one
+     * left both marked gone, and Info, which asks about removal before liveness, closed on the one still there.
+     */
+    @Test
+    fun aRemovalMarksOnlyItsOwnWorkspacesNode() {
+        val cache = NodeCache { own }
+        fun row(ws: String) = Opened(NodeView(nodeId, ws, "parent", "file", 1uL, 1uL, "", 1uL, "", null, null, null, null), NodeMetadata("f", null, null, null, emptyMap()))
+        cache.put(row(own), ownKey)
+        cache.put(row(theirs), serverKey)
+        cache.remove(own, nodeId)
+        assertEquals(true, cache.gone(own, nodeId))
+        assertEquals(false, cache.gone(theirs, nodeId))
+        assertEquals(theirs, cache.live(nodeId, theirs)?.node?.workspaceId)
+        assertNull(cache.live(nodeId, own))
+        // Both gone, then the share's comes back: only its mark clears.
+        cache.remove(theirs, nodeId)
+        cache.put(row(theirs), serverKey)
+        assertEquals(false, cache.gone(theirs, nodeId))
+        assertEquals(true, cache.gone(own, nodeId))
     }
 }
+

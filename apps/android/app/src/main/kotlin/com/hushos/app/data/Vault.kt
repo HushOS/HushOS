@@ -917,14 +917,14 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
     fun item(id: String): Opened? = nodes.find(id)
 
-    /* The row while it is live: neither it nor a folder above it in the trash (NodeCache.live). */
-    fun liveItem(id: String): Opened? = nodes.live(id)
+    /* The row while it is live: neither it nor a folder above it in the trash (NodeCache.live); in `workspaceId` when given. */
+    fun liveItem(id: String, workspaceId: String? = null): Opened? = nodes.live(id, workspaceId)
 
-    /* Whether this device holds a row for `id` at all, live or trashed. */
-    fun holds(id: String): Boolean = nodes.find(id) != null
+    /* Whether this device holds a row for `id` at all, live or trashed; in `workspaceId` when given. */
+    fun holds(id: String, workspaceId: String? = null): Boolean = (if (workspaceId != null) nodes.row(workspaceId, id) else nodes.find(id)) != null
 
-    /* Whether the server said `id` is gone since this device last held it (NodeCache.remove). */
-    fun removed(id: String): Boolean = nodes.gone(id)
+    /* Whether the server said this workspace's node `id` is gone since this device last held it (NodeCache.remove). */
+    fun removed(workspaceId: String, id: String): Boolean = nodes.gone(workspaceId, id)
 
     /* This account's own workspace once opened, without asking the server. */
     val ownWorkspaceId: String? get() = workspace?.workspaceId

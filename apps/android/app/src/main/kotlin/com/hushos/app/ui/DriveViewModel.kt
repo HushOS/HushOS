@@ -1954,13 +1954,13 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     fun item(id: String): Opened? = vault?.item(id)
 
     /* `item`, only while it is live (not trashed, nor inside a trashed folder); null when gone or not yet loaded. */
-    fun liveItem(id: String): Opened? = vault?.liveItem(id)
+    fun liveItem(id: String, workspaceId: String? = null): Opened? = vault?.liveItem(id, workspaceId)
 
     /* Whether the rows on this device include `id`, live or trashed. */
-    fun holds(id: String): Boolean = vault?.holds(id) == true
+    fun holds(id: String, workspaceId: String? = null): Boolean = vault?.holds(id, workspaceId) == true
 
-    /* Whether the server said `id` is gone since this device last held it. */
-    fun removed(id: String): Boolean = vault?.removed(id) == true
+    /* Whether the server said this workspace's node `id` is gone since this device last held it. */
+    fun removed(workspaceId: String, id: String): Boolean = vault?.removed(workspaceId, id) == true
 
     /*
      * Whether a row of `workspaceId` can no longer be reached: not this account's own workspace, and not among the

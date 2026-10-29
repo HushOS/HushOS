@@ -251,14 +251,16 @@ private fun Main(model: DriveViewModel, state: DriveState) {
     // Read again on every change the lists redraw for (state is new after each sync, trash or unshare). A removal the
     // server confirmed closes Info; rows dropped to be read again (a rotation, a catalogue update) keep the last one shown.
     val infoItem = infoId?.takeIf { infoTab == tab }?.let { id ->
-        val live = model.liveItem(id)
         // Not state: it only matters to a later pass, and is set after this one is applied.
         val last = remember(id) { java.util.concurrent.atomic.AtomicReference<com.hushos.app.data.Opened?>(null) }
+        // Once shown, the node Info means is that workspace's: a share's node by the same id as one of this
+        // account's own is another node, and neither one's removal or return speaks for the other.
+        val workspace = last.get()?.node?.workspaceId
+        val live = model.liveItem(id, workspace)
         if (live != null) androidx.compose.runtime.SideEffect { last.set(live) }
-        val shown = live ?: last.get()
         val lookup = infoLookup(
-            live = live != null, held = model.holds(id), removed = model.removed(id),
-            outOfReach = shown?.let { model.outOfReach(it.node.workspaceId) } == true, seen = last.get() != null,
+            live = live != null, held = model.holds(id, workspace), removed = workspace?.let { model.removed(it, id) } == true,
+            outOfReach = workspace?.let { model.outOfReach(it) } == true, seen = last.get() != null,
         )
         when (lookup) {
             InfoLookup.SHOW -> live
@@ -267,7 +269,7 @@ private fun Main(model: DriveViewModel, state: DriveState) {
             InfoLookup.FIND -> {
                 // `find` opens the row's folder, so once found the row is held and the next pass shows it live.
                 val found by androidx.compose.runtime.produceState<com.hushos.app.data.Opened?>(null, id) { value = model.find(id) ?: run { closeInfo(); null } }
-                found?.takeIf { model.liveItem(it.id) != null }
+                found?.takeIf { model.liveItem(it.id, it.node.workspaceId) != null }
             }
         }
     }
