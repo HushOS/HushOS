@@ -1,0 +1,33 @@
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_e5032472fc328f 48-49
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_0165553f2fcd10 28-35,96,121-124
+apps/ios/App/Appeared.swift
+  s_566b8e0c4467a4::t_1dd02878f14002 1-43
+apps/ios/App/BrowseView.swift
+  s_566b8e0c4467a4::t_483b2951060b36 13-14,23,193-196,743-754
+apps/ios/App/Received.swift
+  s_566b8e0c4467a4::t_bc3ab8dfe32baf 22-23,37-57,69,91-94
+apps/ios/App/RecentsView.swift
+  s_566b8e0c4467a4::t_7eb27545e96fc6 100
+apps/ios/App/SearchView.swift
+  s_566b8e0c4467a4::t_e46339ceaf5557 89
+apps/ios/App/Theme.swift
+  s_566b8e0c4467a4::t_9748b583b3deb3 260-271,294-295,297-298,301-302,308,320-321,323-329
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7364116d8c3b998ab98f33361729cade33102712",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
