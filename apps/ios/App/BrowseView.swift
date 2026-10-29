@@ -421,14 +421,14 @@ struct FolderView: View {
         } else if item.isFolder {
             NavigationLink(value: item) { NodeRow(item: item, location: searching ? store.location(of: item) : nil) }
                 .nodeActions(item, action: $action, store: store, select: { startSelecting(item) })
-                .itemRow()
+                .itemRow(item: item)
         } else {
             // Offline, a file that isn't on this phone won't open: it dims.
             let away = store.offline && !Offline.isKept(item.id)
             Button { open(item) } label: { NodeRow(item: item, location: searching ? store.location(of: item) : nil).opacity(away ? 0.5 : 1) }
                 .buttonStyle(.plain)
                 .nodeActions(item, action: $action, store: store, select: { startSelecting(item) })
-                .itemRow()
+                .itemRow(item: item)
         }
     }
 
