@@ -149,8 +149,6 @@ struct FolderView: View {
         return selection.isEmpty ? "Select items" : "\(selection.count) selected"
     }
 
-    /* Back in front of the title in a pushed folder; none at the top, or while selecting (Done ends it). */
-    private var back: (() -> Void)? { isRoot || selecting ? nil : { dismiss() } }
 
     var body: some View {
         Group {
@@ -178,7 +176,12 @@ struct FolderView: View {
             }
         }
         .alpineGrouped()
-        .screenChrome(title: headerTitle, back: back) { headerActions }
+        .screenChrome(title: headerTitle) { headerActions }
+        // "Search in Lisbon 2026": this folder and the ones inside it, in the system bar's search field under
+        // the title. The top level searches from the search tab.
+        .folderSearch(isRoot ? nil : title, text: $query, focused: $searchFocused)
+        // While selecting, Done ends it; Back would leave with a selection made.
+        .navigationBarBackButtonHidden(selecting)
         .toolbar(selecting ? .hidden : .automatic, for: .tabBar)
         .navigationDestination(for: Opened.self) { folder in
             FolderView(folderId: folder.id, title: folder.name)
@@ -261,9 +264,7 @@ struct FolderView: View {
     /* The title and its actions, then search, offline, who can open it and the tag filter: the same over rows and tiles. */
     private var header: some View {
         VStack(alignment: .leading, spacing: Alpine.Space.s3) {
-            ScreenHeader(title: headerTitle, back: back) { headerActions }
             if store.offline { OfflineCapsule() }
-            if !isRoot, !selecting, store.folders[folderId] != nil { searchField }
             if let banner, !searching {
                 AccessBanner(text: banner.text, link: banner.link) {
                     if let folder = store.known(banner.folder) { action = .share(folder) }
@@ -410,34 +411,14 @@ struct FolderView: View {
         }
     }
 
-    /* "Search in Lisbon 2026": this folder and the ones inside it. The top level searches from the search tab. */
-    private var searchField: some View {
-        HStack(spacing: Alpine.Space.s2) {
-            Image(systemName: "magnifyingglass").foregroundStyle(Alpine.inkMuted)
-            TextField("Search in \(title)", text: $query)
-                .focused($searchFocused)
-                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                .foregroundStyle(Alpine.ink)
-            if !query.isEmpty {
-                Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Alpine.inkMuted) }
-                    .buttonStyle(.plain).accessibilityLabel("Clear search")
-            }
-        }
-        .padding(.horizontal, 14).frame(height: Theme.control)
-        .background(Alpine.ink.opacity(0.06), in: Capsule())
-        .highContrastEdge(Capsule())
-    }
-
     /* Select all and Done while selecting; otherwise Add and More. */
     @ViewBuilder private var headerActions: some View {
         if selecting {
             let all = !children.isEmpty && selection.count == children.count
             Button { selection = all ? [] : Set(children.map(\.id)) } label: { HeaderWord(text: all ? "Deselect all" : "Select all") }
                 .disabled(trashingSelection)
-                .buttonStyle(.plain)
             Button { endSelecting() } label: { HeaderWord(text: "Done") }
                 .disabled(trashingSelection)
-                .buttonStyle(.plain)
         } else {
             // A folder you can only view takes nothing new.
             if !readOnly, store.known(folderId).map({ store.role(of: $0) != .viewer }) ?? true {
@@ -742,6 +723,19 @@ enum SortKey: String, CaseIterable {
                 before = x < y
             }
             return ascending ? before : !before
+        }
+    }
+}
+
+extension View {
+    /* The system's search field under the title, always showing; none where `title` is nil. */
+    @ViewBuilder func folderSearch(_ title: String?, text: Binding<String>, focused: FocusState<Bool>.Binding) -> some View {
+        if let title {
+            searchable(text: text, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search in \(title)")
+                .searchFocused(focused)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+        } else {
+            self
         }
     }
 }

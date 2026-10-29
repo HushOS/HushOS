@@ -107,16 +107,13 @@ struct SharedView: View {
 
     private var peopleButton: some View {
         Button { showingPeople = true } label: {
-            HStack(spacing: 6) { Image(systemName: "person.2"); Text("People") }
-                .font(.body.weight(.semibold)).padding(.horizontal, 14).frame(minHeight: Theme.control).contentShape(Rectangle())
+            Label("People", systemImage: "person.2").labelStyle(.titleAndIcon)
         }
-        .buttonStyle(.plain)
         .accessibilityLabel("Contacts")
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: Alpine.Space.s3) {
-            ScreenHeader(title: "Shared") { peopleButton }
             if store.offline { OfflineCapsule() }
             Picker("Which", selection: $byMe) {
                 Text("With me").tag(false)
@@ -438,20 +435,6 @@ struct LinkBrowserView: View {
 
     var body: some View {
         List {
-            Section {} header: {
-                ScreenHeader(title: current?.name ?? "Shared link", back: { dismiss() }) {
-                    if current != nil {
-                        Menu {
-                            Button("Save a copy to my files", systemImage: "plus.square.on.square") { save() }
-                            Divider()
-                            Button("Report", systemImage: "flag") { reporting = true }
-                        } label: { HeaderIcon(symbol: "ellipsis") }
-                        .accessibilityLabel("More")
-                    }
-                }
-                .textCase(nil)
-                .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
-            }
             if let problem {
                 problemView(problem).bareRow(top: Alpine.Space.s8)
             } else if needsPassword {
@@ -493,7 +476,16 @@ struct LinkBrowserView: View {
         .alpineGrouped()
         .environment(\.defaultMinListRowHeight, 1)
         .navigationTitle(current?.name ?? "Shared link")
-        .screenChrome(title: current?.name ?? "Shared link", back: { dismiss() })
+        .screenChrome(title: current?.name ?? "Shared link") {
+            if current != nil {
+                Menu {
+                    Button("Save a copy to my files", systemImage: "plus.square.on.square") { save() }
+                    Divider()
+                    Button("Report", systemImage: "flag") { reporting = true }
+                } label: { HeaderIcon(symbol: "ellipsis") }
+                .accessibilityLabel("More")
+            }
+        }
         .navigationDestination(for: LinkTarget.self) { target in
             LinkBrowserView(url: target.url, folder: target.folder, vault: linkVault)
         }

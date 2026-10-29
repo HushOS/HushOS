@@ -31,7 +31,6 @@ struct AccountView: View {
             List {
                 Section {} header: {
                     VStack(alignment: .leading, spacing: Alpine.Space.s3) {
-                        ScreenHeader(title: "Account")
                         if store.offline { OfflineCapsule() }
                         profile
                     }
@@ -301,7 +300,6 @@ struct PlansView: View {
         List {
             Section {} header: {
                 VStack(alignment: .leading, spacing: Alpine.Space.s3) {
-                    ScreenHeader(title: "Plan and storage", back: { dismiss() }).padding(.bottom, Alpine.Space.s2)
                     HStack(alignment: .firstTextBaseline, spacing: Alpine.Space.s2) {
                         Text(formatSpace(used)).font(Theme.Text.titleLarge).foregroundStyle(Alpine.ink)
                         Text("of \(formatQuota(allowance?.quota ?? 0)) used").font(.body).foregroundStyle(Alpine.inkMuted)
@@ -376,7 +374,7 @@ struct PlansView: View {
         .listStyle(.insetGrouped)
         .alpineGrouped()
         .navigationTitle("Plan and storage")
-        .screenChrome(title: "Plan and storage", back: { dismiss() })
+        .screenChrome(title: "Plan and storage")
         .alert("Remove earlier versions?", isPresented: $removing) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) { removeVersions() }
@@ -524,10 +522,6 @@ struct AdvancedView: View {
 
     var body: some View {
         List {
-            Section {} header: {
-                ScreenHeader(title: "Advanced", back: { dismiss() })
-                    .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
-            }
             Section {
                 Button { replacing = true } label: {
                     HStack(spacing: Alpine.Space.s3) {
@@ -600,7 +594,7 @@ struct AdvancedView: View {
         .listStyle(.insetGrouped)
         .alpineGrouped()
         .navigationTitle("Advanced")
-        .screenChrome(title: "Advanced", back: { dismiss() })
+        .screenChrome(title: "Advanced")
         .sheet(isPresented: $resetting) { ResetKeysSheet().environment(store) }
         .sheet(isPresented: $replacing) { ReplaceKeysSheet().environment(store) }
         .sheet(isPresented: $deleting) { DeleteAccountSheet() }

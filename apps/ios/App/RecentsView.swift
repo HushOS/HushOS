@@ -129,7 +129,6 @@ struct HomeView: View {
     /* The title with Add, then the offline line: the furniture above On this phone. */
     private var top: some View {
         VStack(alignment: .leading, spacing: Alpine.Space.s3) {
-            ScreenHeader(title: "Home") { addMenu }
             if store.offline { OfflineCapsule() }
         }
         .textCase(nil)
@@ -280,16 +279,12 @@ struct TrashView: View {
         if selecting {
             let all = !store.trash.isEmpty && selection.count == store.trash.count
             Button { selection = all ? [] : Set(store.trash.map(\.item.id)) } label: { HeaderWord(text: all ? "Deselect all" : "Select all") }
-                .buttonStyle(.plain)
             Button { selecting = false; selection = [] } label: { HeaderWord(text: "Done") }
-                .buttonStyle(.plain)
         } else if store.emptyingTrash {
             EmptyView()
         } else if !store.trash.isEmpty {
             Button { selecting = true } label: { HeaderWord(text: "Select") }
-                .buttonStyle(.plain)
             Button(role: .destructive) { confirmEmpty = true } label: { HeaderWord(text: "Empty Trash").foregroundStyle(Alpine.danger) }
-                .buttonStyle(.plain)
         }
     }
     private var picked: [(item: Opened, parentTrashed: Bool)] { store.trash.filter { selection.contains($0.item.id) } }
@@ -349,7 +344,6 @@ struct TrashView: View {
         }
         .alpineRow() } header: {
             VStack(alignment: .leading, spacing: Alpine.Space.s3) {
-                ScreenHeader(title: "Trash", back: selecting ? nil : { dismissView() }) { trashActions }
                 if store.offline { OfflineCapsule() }
                 if let emptying = store.emptying {
                     // The count and a bar while the rows go one by one.
@@ -382,7 +376,9 @@ struct TrashView: View {
         .alpineGrouped()
         .listStyle(.insetGrouped)
         .navigationTitle("Trash")
-        .screenChrome(title: "Trash", back: selecting ? nil : { dismissView() }) { trashActions }
+        .screenChrome(title: "Trash") { trashActions }
+        // While picking, Done ends it; Back would leave with a selection made.
+        .navigationBarBackButtonHidden(selecting)
         .refreshable {
             // A pull asks the server: the catalogue alone may not know yet.
             await store.sync()
@@ -643,10 +639,6 @@ struct OnThisPhoneView: View {
 
     var body: some View {
         List {
-            Section {} header: {
-                ScreenHeader(title: "On this phone", back: { dismissView() })
-                    .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
-            }
             if entries.isEmpty && keptFolders.isEmpty {
                 EmptyStateView(title: "Nothing on this phone yet",
                                message: "Choose Keep on this phone on any file or folder to open it without a connection.")
@@ -716,7 +708,7 @@ struct OnThisPhoneView: View {
         .environment(\.defaultMinListRowHeight, 1) // Item rows set their own 56pt; furniture rows keep their own height.
         .listSectionSpacing(Alpine.Space.s3)
         .navigationTitle("On this phone")
-        .screenChrome(title: "On this phone", back: { dismissView() })
+        .screenChrome(title: "On this phone")
         .navigationDestination(item: $showing) { folder in
             FolderView(folderId: folder.id, title: folder.id == store.rootId ? "Files" : folder.name, isRoot: folder.id == store.rootId)
         }

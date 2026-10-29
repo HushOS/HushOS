@@ -24,19 +24,23 @@ struct SignInView: View {
     private enum Field { case email, password }
 
     var body: some View {
-        NavigationStack { form.toolbar(.hidden, for: .navigationBar).navigationDestination(isPresented: $showingServer) { SelfHostingView() } }
+        NavigationStack {
+            form
+                // The system bar: the large title with the gear beside it, as every screen carries its actions.
+                .navigationTitle("Welcome back")
+                .navigationBarTitleDisplayMode(.large)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { showingServer = true } label: { HeaderIcon(symbol: "gearshape") }
+                            .accessibilityLabel("Self-hosting")
+                    }
+                }
+                .navigationDestination(isPresented: $showingServer) { SelfHostingView() }
+        }
     }
 
     private var form: some View {
         VStack(spacing: 0) {
-            // The title at the top with the gear beside it, as every screen carries its actions.
-            ScreenHeader(title: "Welcome back") {
-                Button { showingServer = true } label: { HeaderIcon(symbol: "gearshape") }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Self-hosting")
-            }
-            .padding(.horizontal, Alpine.Space.s4).padding(.top, Alpine.Space.s2)
-
             ScrollView {
                 VStack(alignment: .leading, spacing: Alpine.Space.s6) {
                     if let host = model.selfHostedName {
