@@ -9,33 +9,50 @@ struct BrowseView: View {
     @Environment(DriveStore.self) private var store
     @State private var rootId: String?
     @State private var path: [Opened] = []
+    /*
+     * The stack exists. A link that arrives as the Files tab first appears (one opened from another
+     * tab, a notification, a cold launch) sets the stack's first path instead of pushing into it as it
+     * appears: on iOS 27.0 that push, with the title inlineLarge, left the system bar drawn up in the
+     * status bar now and then.
+     */
+    @State private var ready = false
 
     var body: some View {
-        NavigationStack(path: $path) {
-            Group {
-                if let rootId {
+        Group {
+            if let rootId, ready {
+                NavigationStack(path: $path) {
                     FolderView(folderId: rootId, title: "Files", isRoot: true)
-                } else {
-                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).background(Alpine.ground)
                 }
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).background(Alpine.ground)
             }
         }
-        .task { rootId = await store.loadRoot() }
-        .onChange(of: store.route, initial: true) { _, link in
-            guard let link else { return }
-            switch link {
-            case .files(let folder, let preview):
-                store.route = nil
-                Task { await open(folder: folder, preview: preview) }
-            case .node(let id):
-                store.route = nil
-                Task {
-                    guard let item = await store.lookUp(id) else { return gone() }
-                    if item.isFolder { await open(folder: item.id, preview: nil) } else { await open(folder: item.node.parentId, preview: item.id) }
-                }
-            default:
-                break
-            }
+        .task {
+            rootId = await store.loadRoot()
+            // A link waiting for this tab: its folders become the stack's first path.
+            if let link = store.route { await route(link) }
+            ready = true
+            // One that came while the first path was being worked out goes the ordinary way.
+            if let link = store.route { await route(link) }
+        }
+        .onChange(of: store.route) { _, link in
+            guard ready, let link else { return }
+            Task { await route(link) }
+        }
+    }
+
+    /* A link's folder or file: the folders down to it, and a file opened in the viewer over them. */
+    private func route(_ link: AppLink) async {
+        switch link {
+        case .files(let folder, let preview):
+            store.route = nil
+            await open(folder: folder, preview: preview)
+        case .node(let id):
+            store.route = nil
+            guard let item = await store.lookUp(id) else { return gone() }
+            if item.isFolder { await open(folder: item.id, preview: nil) } else { await open(folder: item.node.parentId, preview: item.id) }
+        default:
+            break
         }
     }
 
@@ -177,9 +194,6 @@ struct FolderView: View {
         }
         .alpineGrouped()
         .screenChrome(title: headerTitle) { headerActions }
-        // "Search in Lisbon 2026": this folder and the ones inside it, in the system bar's search field under
-        // the title. The top level searches from the search tab.
-        .folderSearch(isRoot ? nil : title, text: $query, focused: $searchFocused)
         // While selecting, Done ends it; Back would leave with a selection made.
         .navigationBarBackButtonHidden(selecting)
         .toolbar(selecting ? .hidden : .automatic, for: .tabBar)
@@ -265,6 +279,10 @@ struct FolderView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: Alpine.Space.s3) {
             if store.offline { OfflineCapsule() }
+            // Our own field, not the system's .searchable: on iOS 27.0 any search field the system attaches to a
+            // pushed folder, with the title inlineLarge, drew the bar up in the status bar when a link opened the
+            // folder as the Files tab first appeared.
+            if !isRoot, !selecting, store.folders[folderId] != nil { searchField }
             if let banner, !searching {
                 AccessBanner(text: banner.text, link: banner.link) {
                     if let folder = store.known(banner.folder) { action = .share(folder) }
@@ -409,6 +427,24 @@ struct FolderView: View {
                 .nodeActions(item, action: $action, store: store, select: { startSelecting(item) })
                 .itemRow()
         }
+    }
+
+    /* "Search in Lisbon 2026": this folder and the ones inside it. The top level searches from the search tab. */
+    private var searchField: some View {
+        HStack(spacing: Alpine.Space.s2) {
+            Image(systemName: "magnifyingglass").foregroundStyle(Alpine.inkMuted)
+            TextField("Search in \(title)", text: $query)
+                .focused($searchFocused)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .foregroundStyle(Alpine.ink)
+            if !query.isEmpty {
+                Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Alpine.inkMuted) }
+                    .buttonStyle(.plain).accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 14).frame(height: Theme.control)
+        .background(Alpine.ink.opacity(0.06), in: Capsule())
+        .highContrastEdge(Capsule())
     }
 
     /* Select all and Done while selecting; otherwise Add and More. */
@@ -723,19 +759,6 @@ enum SortKey: String, CaseIterable {
                 before = x < y
             }
             return ascending ? before : !before
-        }
-    }
-}
-
-extension View {
-    /* The system's search field under the title, always showing; none where `title` is nil. */
-    @ViewBuilder func folderSearch(_ title: String?, text: Binding<String>, focused: FocusState<Bool>.Binding) -> some View {
-        if let title {
-            searchable(text: text, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search in \(title)")
-                .searchFocused(focused)
-                .textInputAutocapitalization(.never).autocorrectionDisabled()
-        } else {
-            self
         }
     }
 }
