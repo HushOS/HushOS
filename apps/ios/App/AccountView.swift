@@ -37,13 +37,11 @@ struct AccountView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {} header: {
-                    VStack(alignment: .leading, spacing: Alpine.Space.s3) {
-                        if store.offline { OfflineCapsule() }
-                        profile
-                    }
-                    .textCase(nil)
-                    .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
+                // Who is signed in, as the first row (iOS Settings' account row, Android's AccountScreen): a tap edits the name.
+                Section {
+                    Button { editName() } label: { profile }.alpineRow()
+                } header: {
+                    if store.offline { OfflineCapsule().textCase(nil).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: Alpine.Space.s3, trailing: 0)) }
                 }
                 Section {
                     NavigationLink { PlansView(allowance: allowance, billing: billing, breakdown: breakdown) { await load() }.environment(store) } label: { planCard }
@@ -140,19 +138,23 @@ struct AccountView: View {
         breakdown = try? await store.vault.storageBreakdown()
     }
 
+    /* Avatar, name and email, with the chevron that says the row opens something (the name). */
     private var profile: some View {
-        VStack(spacing: Alpine.Space.s1) {
-            PersonAvatar(name: model.user?.name.isEmpty == false ? model.user!.name : (model.user?.email ?? ""), seed: model.user?.id ?? "", size: 76)
-            Text(model.user.map { $0.name.isEmpty ? "Signed in" : $0.name } ?? "Signed in").font(.title2.weight(.bold)).foregroundStyle(Alpine.ink).padding(.top, Alpine.Space.s2)
-            if let email = model.user?.email, !email.isEmpty { Text(email).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted) }
-            Button("Edit name") { editName() }
-                .font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
-                .padding(.horizontal, Alpine.Space.s4).frame(minHeight: 36)
-                .background(Alpine.ink.opacity(0.07), in: Capsule())
-                .buttonStyle(.plain).padding(.top, Alpine.Space.s2)
+        HStack(spacing: Alpine.Space.s3) {
+            PersonAvatar(name: model.user?.name.isEmpty == false ? model.user!.name : (model.user?.email ?? ""), seed: model.user?.id ?? "", size: 52)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.user.map { $0.name.isEmpty ? "Signed in" : $0.name } ?? "Signed in").font(Theme.Text.headline).foregroundStyle(Alpine.ink)
+                if let email = model.user?.email, !email.isEmpty {
+                    Text(email).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1).truncationMode(.middle)
+                }
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(Alpine.inkMuted).accessibilityHidden(true)
         }
-        .frame(maxWidth: .infinity)
         .padding(.vertical, Alpine.Space.s2)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Edit name")
     }
 
     private var plan: PlanDisplay { PlanDisplay(allowance: allowance, billing: billing) }
