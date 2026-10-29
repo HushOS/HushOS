@@ -258,9 +258,12 @@ private fun Main(model: DriveViewModel, state: DriveState) {
         val workspace = last.get()?.node?.workspaceId
         val live = model.liveItem(id, workspace)
         if (live != null) androidx.compose.runtime.SideEffect { last.set(live) }
+        // On the first pass nothing has been shown yet: the live row's own workspace answers for it, so a share
+        // already taken back closes Info at once rather than after some unrelated redraw.
+        val checked = workspace ?: live?.node?.workspaceId
         val lookup = infoLookup(
-            live = live != null, held = model.holds(id, workspace), removed = workspace?.let { model.removed(it, id) } == true,
-            outOfReach = workspace?.let { model.outOfReach(it) } == true, seen = last.get() != null,
+            live = live != null, held = model.holds(id, workspace), removed = checked?.let { model.removed(it, id) } == true,
+            outOfReach = checked?.let { model.outOfReach(it) } == true, seen = last.get() != null,
         )
         when (lookup) {
             InfoLookup.SHOW -> live
