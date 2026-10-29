@@ -1,0 +1,73 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_ebce1c1791b9fa 321,537
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_01fbe821b9ba8a 48-50
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_4db26c282079d0 28-35,40-44,94,107-110,119-122,141,143-152,155-157,385,605
+apps/ios/App/ActionSheets.swift
+  s_566b8e0c4467a4::t_bd516459db1ad6 471,473-474,477-480
+apps/ios/App/Appeared.swift
+  s_566b8e0c4467a4::t_02da01d5f17bd7 1-43
+apps/ios/App/BrowseView.swift
+  s_566b8e0c4467a4::t_5304fc24c4ece1 12-16,23,31-52,184-186,195-200,263-266,280-284,750-761
+apps/ios/App/DevicesView.swift
+  s_566b8e0c4467a4::t_a4088d0ad7e37e 66
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_4707966fb00c04 76-81,685-694,1104-1138,1241-1243,1448
+apps/ios/App/Families.swift
+  s_566b8e0c4467a4::t_7f7becfab3f032 384
+apps/ios/App/HushOSApp.swift
+  s_566b8e0c4467a4::t_34ac3a777d8e65 78-81
+apps/ios/App/InnerDisplayHarness.swift
+  s_566b8e0c4467a4::t_daadc76e8cb132 1-82
+apps/ios/App/MainView.swift
+  s_566b8e0c4467a4::t_9b18ee57b04368 16-17,26-29,78-80,82-83,190-194,226-246
+apps/ios/App/NodeActions.swift
+  s_566b8e0c4467a4::t_e6a5e1fdfc0ca9 56-99,102-142,531-545
+apps/ios/App/Received.swift
+  s_566b8e0c4467a4::t_69b87fae78e048 22-23,37-57,61-63,71,93-96,120,487-496
+apps/ios/App/RecentsView.swift
+  s_566b8e0c4467a4::t_334c1241de91c3 80-82,88-90,104,184,260,383-385,715
+apps/ios/App/SearchView.swift
+  s_566b8e0c4467a4::t_742b7f032f1a5f 89
+apps/ios/App/Sharing.swift
+  s_566b8e0c4467a4::t_56b5499ae10aa8 150-152
+apps/ios/App/SignInView.swift
+  s_566b8e0c4467a4::t_cb9c0156b746ef 27-39,76-79
+apps/ios/App/TabSidebar.swift
+  s_566b8e0c4467a4::t_63d299113b1687 1-59
+apps/ios/App/Theme.swift
+  s_566b8e0c4467a4::t_45bf42a5ee828d 48-54,109-138,267-278,281,286,290,295,301-302,304-305,308-309,315,317-318,322-337,340,345-347,349-355
+apps/ios/App/Viewer.swift
+  s_566b8e0c4467a4::t_59ee7e7d4944fc 37-75,96,99,113-123,125,128,159-164,166-167,169-172
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/InfoFollow.swift
+  s_566b8e0c4467a4::t_9ba7ced2310bc4 1-74
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/RoomBeside.swift
+  s_566b8e0c4467a4::t_8cacd6034f4b59 1-46
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Catalogue.swift
+  s_566b8e0c4467a4::t_adf49611cc0ad6 168
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_566b8e0c4467a4::t_cfc4b9a51765f1 241,243,269-270,278,282-283,293-296,365,830,856
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_566b8e0c4467a4::t_aaae89061bc64f 91-96,476,506,521,526-562
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/InfoFollowTests.swift
+  s_566b8e0c4467a4::t_923c84ac5d2c51 1-345
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RoomBesideTests.swift
+  s_566b8e0c4467a4::t_45796919fa8038 1-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d2ebac930fa350c6d326148f7b91b9aac489cc2e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
