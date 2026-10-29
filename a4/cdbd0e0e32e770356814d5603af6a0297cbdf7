@@ -1,0 +1,29 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_b578b42b1549bc 67
+apps/android/app/src/main/kotlin/com/hushos/app/data/NodeCache.kt
+  s_566b8e0c4467a4::t_60fb3fc3fb16d3 18-20,22,40-42,60,70,74
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_8a007fc3780762 920-921,923-924,926-927
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_4215c877f50d43 1957,1960,1962-1963
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_566b8e0c4467a4::t_5dca886dc045d2 256-259,262-263,272
+apps/android/app/src/test/kotlin/com/hushos/app/data/NodeCacheTest.kt
+  s_566b8e0c4467a4::t_264b3c922fef19 131-132,136,139-161,164
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a4cdbd0e0e32e770356814d5603af6a0297cbdf7",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
