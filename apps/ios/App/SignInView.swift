@@ -28,7 +28,7 @@ struct SignInView: View {
             form
                 // The system bar: the large title with the gear beside it, as every screen carries its actions.
                 .navigationTitle("Welcome back")
-                .navigationBarTitleDisplayMode(.large)
+                .toolbarTitleDisplayMode(.inlineLarge)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { showingServer = true } label: { HeaderIcon(symbol: "gearshape") }

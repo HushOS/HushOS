@@ -257,9 +257,10 @@ func changedLabel(_ date: Date?) -> String? {
 }
 
 /*
- * Every screen's header is iOS's own navigation bar: the large title the screens had, with
- * the screen's actions as toolbar items (the system groups them in one glass capsule) and the
- * system's Back. Being the system's, the bar moves where iOS puts bars: iPhone Duo's vertical
+ * Every screen's header is iOS's own navigation bar: the large title the screens had, on the
+ * same row as the screen's actions (inlineLarge: nothing sits in a row above the title, as
+ * DESIGN.md asks of the phones), the actions as toolbar items (the system groups them in one
+ * glass capsule) and the system's Back. Being the system's, the bar moves where iOS puts bars: iPhone Duo's vertical
  * strip, the sidebar's toggle on a wide window. The look is Alpine's through the bar
  * appearance (`Theme.configureAppearance`) and the app's tint.
  */
@@ -309,7 +310,7 @@ private struct ScreenChrome<Actions: View>: ViewModifier {
             .contentMargins(.horizontal, ReadableColumn.margin(forWidth: width, regularHeight: verticalSizeClass == .regular), for: .scrollContent)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.large)
+            .toolbarTitleDisplayMode(.inlineLarge)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) { actions() }
             }
