@@ -106,17 +106,28 @@ enum class InfoLookup { SHOW, HOLD, FIND, CLOSE }
  * - `held`: the row is there but not live (trashed, or inside a trashed folder): closed.
  * - `removed`: the server said it is gone (trashed from here, tombstoned in the feed, purged): closed.
  * - `outOfReach`: in a workspace that is neither this account's nor among the shares just listed (unshared, revoked): closed.
+ * - `missingFromList`: a received share's item absent from the list its own parent shows after a refresh
+ *   (`missingFromShareList`): closed. The share's feed is its owner's, so nothing else here hears of a trash there.
  * - Otherwise the row is merely absent: dropped to be read again (a rotation forgets every row before the lists reload,
  *   a catalogue update forgets then reopens), so Info keeps what it showed (`seen`); never seen in this process (after
  *   the system restarted the app), it is looked up once.
  */
-fun infoLookup(live: Boolean, held: Boolean, removed: Boolean, outOfReach: Boolean, seen: Boolean): InfoLookup = when {
-    outOfReach || removed -> InfoLookup.CLOSE
+fun infoLookup(live: Boolean, held: Boolean, removed: Boolean, outOfReach: Boolean, seen: Boolean, missingFromList: Boolean = false): InfoLookup = when {
+    outOfReach || removed || missingFromList -> InfoLookup.CLOSE
     live -> InfoLookup.SHOW
     held -> InfoLookup.CLOSE
     seen -> InfoLookup.HOLD
     else -> InfoLookup.FIND
 }
+
+/*
+ * Whether a received share's item is gone from what the screen shows: `item` is in another workspace than this
+ * account's `own`, its own parent was refreshed since Info showed it, and that parent's list as the screen has it
+ * (`listed`) does not name it. A decision for Info alone: the cache keeps every row as it was.
+ */
+fun missingFromShareList(item: Opened, own: String?, refreshed: Boolean, listed: List<Opened>?): Boolean =
+    own != null && item.node.workspaceId != own && refreshed && listed != null &&
+        listed.none { it.id == item.id && it.node.workspaceId == item.node.workspaceId }
 
 val LocalFrame = compositionLocalOf { AppFrame(NavKind.BAR, infoBeside = false, sheetMaxDp = null) }
 

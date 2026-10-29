@@ -261,9 +261,19 @@ private fun Main(model: DriveViewModel, state: DriveState) {
         // On the first pass nothing has been shown yet: the live row's own workspace answers for it, so a share
         // already taken back closes Info at once rather than after some unrelated redraw.
         val checked = workspace ?: live?.node?.workspaceId
+        // A received share's item after its own parent's list was refreshed: still named there, or gone from it.
+        val shown = live ?: last.get()
+        val parent = shown?.node?.parentId
+        val sawLoad = remember(id) { java.util.concurrent.atomic.AtomicBoolean(false) }
+        val refreshed = remember(id) { java.util.concurrent.atomic.AtomicBoolean(false) }
+        val parentLoading = parent != null && parent in state.loading
+        androidx.compose.runtime.SideEffect {
+            if (parentLoading && shown != null) sawLoad.set(true) else if (!parentLoading && sawLoad.get()) refreshed.set(true)
+        }
         val lookup = infoLookup(
             live = live != null, held = model.holds(id, workspace), removed = checked?.let { model.removed(it, id) } == true,
             outOfReach = checked?.let { model.outOfReach(it) } == true, seen = last.get() != null,
+            missingFromList = shown != null && missingFromShareList(shown, model.ownWorkspace(), refreshed.get() || (!parentLoading && sawLoad.get()), parent?.let { state.folders[it] }),
         )
         when (lookup) {
             InfoLookup.SHOW -> live

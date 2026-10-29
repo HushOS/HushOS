@@ -1959,6 +1959,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     /* Whether the rows on this device include `id`, live or trashed. */
     fun holds(id: String, workspaceId: String? = null): Boolean = vault?.holds(id, workspaceId) == true
 
+    /* This account's own workspace, once the drive is open. */
+    fun ownWorkspace(): String? = vault?.ownWorkspaceId
+
     /* Whether the server said this workspace's node `id` is gone since this device last held it. */
     fun removed(workspaceId: String, id: String): Boolean = vault?.removed(workspaceId, id) == true
 
