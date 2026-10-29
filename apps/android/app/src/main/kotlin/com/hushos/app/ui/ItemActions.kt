@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import androidx.compose.runtime.retain.retain
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
@@ -8,6 +9,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -187,7 +198,8 @@ private fun SheetDivider() = HorizontalDivider(Modifier.padding(horizontal = Alp
  */
 @Composable
 fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: ItemSheet = ItemSheet.MENU, onSelect: (() -> Unit)? = null, dismiss: () -> Unit) {
-    var sheet by remember { mutableStateOf(open) }
+    // Saved, so a fold, an unfold or a rotation keeps the sheet that was open (Rename, Share, Move), not the menu.
+    var sheet by rememberSaveable { mutableStateOf(open) }
     val context = LocalContext.current
     val owner = ownerOf(model, state, item)
     val mine = owner == Owner.ME
@@ -263,7 +275,9 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
         ItemSheet.TAGS -> ItemTagsSheet(model, state, listOf(item), dismiss)
         ItemSheet.SHARE -> ShareSheet(model, state, item, dismiss)
         ItemSheet.SEND -> SendCopy(model, state, listOf(item), dismiss)
-        ItemSheet.INFO -> InfoSheet(model, state, item, onShare = { sheet = ItemSheet.SHARE }, onTags = { sheet = ItemSheet.TAGS }, dismiss = dismiss)
+        // Main shows Info: beside the list when the window has room, otherwise as this same sheet.
+        ItemSheet.INFO -> LocalInfo.current?.let { host -> LaunchedEffect(item.id) { host.open(item); dismiss() } }
+            ?: InfoSheet(model, state, item, onShare = { sheet = ItemSheet.SHARE }, onTags = { sheet = ItemSheet.TAGS }, dismiss = dismiss)
         ItemSheet.REPORT -> ReportSheet(item, model.reportsGoTo(state), dismiss) { category, reason, email -> model.report(item, category, reason, email) }
     }
 }
@@ -311,7 +325,7 @@ fun MovePicker(model: DriveViewModel, state: DriveState, items: List<Opened>, di
     val first = items.first()
     val excluded = items.map { it.id }.toSet()
     // null: the top, where Files and the shared folders sit side by side.
-    var trail by remember { mutableStateOf(listOf(Place(state.rootId, "Files", state.rootId?.let { model.item(it) }?.node?.workspaceId))) }
+    var trail by retain { mutableStateOf(listOf(Place(state.rootId, "Files", state.rootId?.let { model.item(it) }?.node?.workspaceId))) }
     val here = trail.lastOrNull()
     val folderId = here?.id
     LaunchedEffect(Unit) { if (state.shares == null) model.refreshShares() }
@@ -481,10 +495,10 @@ fun VersionsSheet(model: DriveViewModel, state: DriveState, item: Opened, dismis
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var sizes by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
-    var menu by remember { mutableStateOf<VersionListView?>(null) }
-    var deleting by remember { mutableStateOf<VersionListView?>(null) }
+    var menu by retain { mutableStateOf<VersionListView?>(null) }
+    var deleting by retain { mutableStateOf<VersionListView?>(null) }
     var restoring by remember { mutableStateOf<String?>(null) }
-    var sending by remember { mutableStateOf<VersionListView?>(null) }
+    var sending by retain { mutableStateOf<VersionListView?>(null) }
     var reload by remember { mutableStateOf(0) }
     val current = model.item(item.id) ?: item
     LaunchedEffect(item.id, reload) {
@@ -583,6 +597,36 @@ private fun VersionRow(item: Opened, title: String, detail: String?, faded: Bool
 /* Info: what it is, and who can open it and its tags as ways in, not dead text. */
 @Composable
 fun InfoSheet(model: DriveViewModel, state: DriveState, item: Opened, onShare: () -> Unit, onTags: () -> Unit, dismiss: () -> Unit) {
+    Sheet(onDismissRequest = dismiss, full = true) { InfoBody(model, state, item, onShare, onTags) }
+}
+
+/*
+ * Info beside the list, on a window with room for two panes (DESIGN.md's details panel): the
+ * sheet's contents under a title and Close, on a surface card that keeps clear of the status bar.
+ */
+@Composable
+fun InfoPane(model: DriveViewModel, state: DriveState, item: Opened, onShare: () -> Unit, onTags: () -> Unit, onClose: () -> Unit) {
+    val alpine = Alpine.colors
+    val shape = RoundedCornerShape(com.hushos.tokens.AlpineRadius.Card)
+    Column(
+        Modifier.fillMaxSize()
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top + WindowInsetsSides.End))
+            .padding(top = AlpineSpace.S2, end = AlpineSpace.S3, bottom = AlpineSpace.S3)
+            .then(if (alpine.high) Modifier.border(1.dp, alpine.divider, shape) else Modifier.raised(shape))
+            .background(alpine.surface, shape).clip(shape),
+    ) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = AlpineSpace.S4, end = AlpineSpace.S1), verticalAlignment = Alignment.CenterVertically) {
+            Text("Info", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f).semantics { heading() })
+            IconButton(onClick = onClose) { Icon(Icons.Outlined.Close, "Close Info") }
+        }
+        // Rows paint themselves in Material's surface: the card's own colour here, as inside a sheet.
+        MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(surface = alpine.surface)) { InfoBody(model, state, item, onShare, onTags) }
+    }
+}
+
+/* What Info says, in the sheet and in the pane alike. */
+@Composable
+private fun InfoBody(model: DriveViewModel, state: DriveState, item: Opened, onShare: () -> Unit, onTags: () -> Unit) {
     val alpine = Alpine.colors
     LaunchedEffect(item.id) { model.thumbnail(item) }
     val thumbnail = state.thumbnails[item.id]
@@ -590,7 +634,7 @@ fun InfoSheet(model: DriveViewModel, state: DriveState, item: Opened, onShare: (
     val mine = ownerOf(model, state, item) == Owner.ME
     val created = item.node.createdAt?.let { runCatching { whenText(Instant.parse(it).toEpochMilli()) }.getOrNull() }
     val folder = item.node.parentId?.let { parent -> if (parent == state.rootId) "Files" else model.item(parent)?.name }
-    Sheet(onDismissRequest = dismiss, full = true) {
+    run {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S6)) {
             Column(Modifier.fillMaxWidth().padding(bottom = AlpineSpace.S4), horizontalAlignment = Alignment.CenterHorizontally) {
                 Mark(item, bitmap, box = if (bitmap != null) 120.dp else 88.dp)
@@ -652,10 +696,10 @@ private fun Fact(label: String, value: String, primary: Boolean = false, onClick
 fun ItemTagsSheet(model: DriveViewModel, state: DriveState, items: List<Opened>, dismiss: () -> Unit) {
     val alpine = Alpine.colors
     // Tag id to on (true), off (false), or left as each item has it (null).
-    var choice by remember { mutableStateOf<Map<String, Boolean?>>(emptyMap()) }
+    var choice by retain { mutableStateOf<Map<String, Boolean?>>(emptyMap()) }
     var query by rememberSaveable { mutableStateOf("") }
     var colour by rememberSaveable { mutableStateOf(OFFERED_TAG_COLOURS.first()) }
-    var managing by remember { mutableStateOf(false) }
+    var managing by retain { mutableStateOf(false) }
     LaunchedEffect(Unit) { model.refreshTags() }
     val carried = { tagId: String -> items.count { tagId in state.tags.tagsOf(it.id).map { t -> t.id } } }
     val stateOf = { tagId: String ->

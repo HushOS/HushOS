@@ -1,6 +1,7 @@
 package com.hushos.app.ui
 
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -19,6 +20,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -268,15 +271,35 @@ val LocalFootBars = androidx.compose.runtime.compositionLocalOf { 0.dp }
  * Material's `surface` is the sheet's own colour, so rows (ListItem paints itself
  * in `surface`) sit on the sheet rather than banding it with the screen's ground.
  */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun Sheet(onDismissRequest: () -> Unit, full: Boolean = false, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
     val alpine = Alpine.colors
+    // Whether the keyboard is up in the sheet's own window, where its fields are: read inside, kept here.
+    val keyboard = remember { androidx.compose.runtime.mutableStateOf(false) }
+    // Standing half open on a horizontal hinge, the whole sheet (handle, content and the navigation bar's
+    // inset) keeps below the fold and opens there at once; with the keyboard up it may rise above it.
+    val belowFold = LocalFrame.current.sheetMaxDp
+    val limit = sheetLimit(belowFold, keyboard.value)
+    // The sheet's own height and its content's, as laid out: what Material adds around the content (the drag
+    // handle, the navigation bar's or the keyboard's inset) is the difference, whatever it is on this device.
+    // Only measured: a height limit on the sheet itself would reach Material's anchors, which then place a
+    // sheet that fills it at the top of the window, above the fold.
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    var sheetPx by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    var contentPx by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    val contentMax = limit?.let { sheetContentMax(it, with(density) { sheetPx.toDp().value }, with(density) { contentPx.toDp().value }) }
     // `full`: a sheet with its own header and long content opens at full height, not half way.
-    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = full)
-    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismissRequest, sheetState = sheetState, containerColor = alpine.surface) {
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = full || belowFold != null)
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismissRequest, sheetState = sheetState, containerColor = alpine.surface,
+        modifier = Modifier.onSizeChanged { sheetPx = it.height },
+    ) {
+        val open = WindowInsets.isImeVisible
+        androidx.compose.runtime.SideEffect { keyboard.value = open }
         val notice = LocalNotice.current
-        Box {
+        // Bounded, the content takes what is left below the fold and scrolls in its own list, as every long sheet does.
+        Box((if (contentMax != null) Modifier.heightIn(max = contentMax.dp) else Modifier).onSizeChanged { contentPx = it.height }) {
             MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(surface = alpine.surface)) {
                 Column { content() }
             }

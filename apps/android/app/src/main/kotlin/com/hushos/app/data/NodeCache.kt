@@ -14,6 +14,12 @@ class NodeCache(private val ownWorkspace: () -> String?) {
     /* node id -> workspace id -> value: an id-only lookup stays one map read. */
     private val keys = ConcurrentHashMap<String, ConcurrentHashMap<String, ByteArray>>()
     private val rows = ConcurrentHashMap<String, ConcurrentHashMap<String, Opened>>()
+    /*
+     * Nodes the server said are gone (trashed from here, tombstoned in the feed, purged), by workspace and node as
+     * rows are, until that workspace's row comes back: a share's node by the same id as one of this account's own
+     * is another node. Not the rows dropped to be read again (`forget`, `forgetRows`): absence never means gone.
+     */
+    private val gone = ConcurrentHashMap<String, MutableSet<String>>()
 
     fun key(workspaceId: String, nodeId: String): ByteArray? = keys[nodeId]?.get(workspaceId)
     fun key(item: Opened): ByteArray? = key(item.node.workspaceId, item.id)
@@ -26,6 +32,23 @@ class NodeCache(private val ownWorkspace: () -> String?) {
         return byWorkspace.values.firstOrNull()
     }
 
+    /*
+     * `find`, while the row is still somewhere a person can see it: not in the trash, and no folder above it
+     * (as far as this device holds them, in the row's own workspace) in the trash either. Trashing a folder
+     * marks only the folder, so a file inside stays an untrashed row the whole time it is gone.
+     */
+    fun live(nodeId: String, workspaceId: String? = null): Opened? {
+        // In a given workspace only, when the caller knows which node it means (Info, after it showed one).
+        val row = (if (workspaceId != null) row(workspaceId, nodeId) else find(nodeId)) ?: return null
+        var cursor: Opened? = row
+        var steps = 0
+        while (cursor != null && steps++ < 256) {
+            if (cursor.node.trashedAt != null) return null
+            cursor = cursor.node.parentId?.let { row(row.node.workspaceId, it) }
+        }
+        return row
+    }
+
     fun putKey(workspaceId: String, nodeId: String, key: ByteArray) {
         keys.getOrPut(nodeId) { ConcurrentHashMap() }[workspaceId] = key
     }
@@ -34,12 +57,21 @@ class NodeCache(private val ownWorkspace: () -> String?) {
     fun put(row: Opened, key: ByteArray) {
         putKey(row.node.workspaceId, row.id, key)
         rows.getOrPut(row.id) { ConcurrentHashMap() }[row.node.workspaceId] = row
+        gone[row.id]?.remove(row.node.workspaceId)
     }
 
-    /* Drops the row (its key stays, for children still wrapped under it). */
+    /* Drops the row to be read again (its key stays, for children still wrapped under it). */
     fun forget(workspaceId: String, nodeId: String) {
         rows[nodeId]?.remove(workspaceId)
     }
+
+    /* Drops the row because the server said it is gone: `gone` answers for it until it comes back. */
+    fun remove(workspaceId: String, nodeId: String) {
+        gone.getOrPut(nodeId) { ConcurrentHashMap.newKeySet() }.add(workspaceId)
+        forget(workspaceId, nodeId)
+    }
+
+    fun gone(workspaceId: String, nodeId: String): Boolean = gone[nodeId]?.contains(workspaceId) == true
 
     fun forgetRows() = rows.clear()
 

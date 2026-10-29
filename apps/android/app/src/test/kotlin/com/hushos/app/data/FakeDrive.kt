@@ -183,6 +183,9 @@ class FakeDrive : AutoCloseable {
 
     fun children(parentId: String): List<Node> = synchronized(lock) { nodes.values.filter { it.parentId == parentId } }
 
+    /* Gone from the server's listings, as a trash or a purge on another device leaves it (the children route omits trashed rows). */
+    fun drop(id: String) = synchronized(lock) { nodes.remove(id); bump(nodes.values.first()) }
+
     fun child(parentId: String, name: String): Node = children(parentId).singleOrNull { record(it.id).name == name }
         ?: throw AssertionError("No single “$name” in $parentId: ${children(parentId).map { record(it.id).name }}")
 
