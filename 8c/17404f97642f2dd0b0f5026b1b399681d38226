@@ -1,0 +1,27 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_23b72c1c6c4c24 67
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Adaptive.kt
+  s_566b8e0c4467a4::t_d7545d14f1147e 132-150
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_566b8e0c4467a4::t_61384d527ae7e1 267-269,271,275
+apps/android/app/src/test/kotlin/com/hushos/app/data/InfoShareListTest.kt
+  s_566b8e0c4467a4::t_0ddfbebddd3251 89-109
+apps/android/app/src/test/kotlin/com/hushos/app/ui/AdaptiveTest.kt
+  s_566b8e0c4467a4::t_12e882af76a37a 124-143
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8c17404f97642f2dd0b0f5026b1b399681d38226",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
