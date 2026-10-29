@@ -1,0 +1,25 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_72e698082aac7d 538
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Adaptive.kt
+  s_566b8e0c4467a4::t_75d202e3a9c9e3 163-165
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_566b8e0c4467a4::t_e620edcdfad19f 302
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NodeRow.kt
+  s_566b8e0c4467a4::t_2803237c029e1c 122-123,153,156
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cce4f74f0e35a16685e7969e6efebc50da7e1824",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
