@@ -36,12 +36,15 @@ const toastAdd = vi.fn();
 /* This account's settings, as the settings query reads them. */
 let settingsDoc: Record<string, unknown> = { version: 2, contacts: {} };
 /* What clearing a waiting role saves: the same change, on the settings above. */
+/*
+ * The change is made when the call is, never after an await: a write landing later would reach
+ * the next test's settings, which beforeEach has just set (it did, under load).
+ */
+const { withoutPendingRoles } = await vi.importActual<typeof Pending>('@/lib/family-pending');
 const clearPendingRoles = vi.fn(
-    async (_queryClient: unknown, _userId: string, groupId: string, userIds: string[] | 'all') => {
-        const { withoutPendingRoles } =
-            await vi.importActual<typeof Pending>('@/lib/family-pending');
+    (_queryClient: unknown, _userId: string, groupId: string, userIds: string[] | 'all') => {
         settingsDoc = withoutPendingRoles(settingsDoc as never, groupId, userIds) as never;
-        return true;
+        return Promise.resolve(true);
     },
 );
 /* Who route 16 says waits, with the roles the server keeps for their invitation. */
@@ -517,13 +520,9 @@ describe('a manager role held back at Let them in', () => {
         expect(prompt()).toBeNull();
         await checkSamInTheFamily(user);
         await user.click(await screen.findByRole('button', { name: 'Family words match' }));
-        const asked = await screen.findByRole(
-            'alertdialog',
-            {
-                name: 'Sam was invited to manage the family',
-            },
-            { timeout: 5_000 },
-        );
+        const asked = await screen.findByRole('alertdialog', {
+            name: 'Sam was invited to manage the family',
+        });
         expect(asked.textContent).toContain('Let them manage it now?');
         // Let them manage it: the role, and nothing waits any more.
         await user.click(screen.getByRole('button', { name: 'Let them manage it' }));
@@ -545,13 +544,9 @@ describe('a manager role held back at Let them in', () => {
             )!,
         );
         expect(
-            await screen.findByRole(
-                'alertdialog',
-                {
-                    name: 'Sam was invited to manage the family',
-                },
-                { timeout: 5_000 },
-            ),
+            await screen.findByRole('alertdialog', {
+                name: 'Sam was invited to manage the family',
+            }),
         ).toBeTruthy();
     });
 
@@ -565,11 +560,7 @@ describe('a manager role held back at Let them in', () => {
         // Checked elsewhere: this device only reads it.
         matched = true;
         await client.invalidateQueries();
-        await screen.findByRole(
-            'alertdialog',
-            { name: 'Sam was invited to manage the family' },
-            { timeout: 5_000 },
-        );
+        await screen.findByRole('alertdialog', { name: 'Sam was invited to manage the family' });
         await user.click(screen.getByRole('button', { name: 'Not now' }));
         await waitFor(() =>
             expect(clearPendingRoles).toHaveBeenCalledWith(expect.anything(), ALICE, 'g', [SAM]),
@@ -610,11 +601,7 @@ describe('a manager role held back at Let them in', () => {
         invited();
         matched = true;
         page();
-        await screen.findByRole(
-            'alertdialog',
-            { name: 'Sam was invited to manage the family' },
-            { timeout: 5_000 },
-        );
+        await screen.findByRole('alertdialog', { name: 'Sam was invited to manage the family' });
         stageChange.mockRejectedValueOnce(new Error('Sam already manages the family.'));
         syncedView = viewWith([SAM]);
         await user.click(screen.getByRole('button', { name: 'Let them manage it' }));
@@ -653,13 +640,9 @@ describe('a manager role held back at Let them in', () => {
         invited();
         page({ members: everyone });
         expect(
-            await screen.findByRole(
-                'alertdialog',
-                {
-                    name: 'Sam was invited to manage the family',
-                },
-                { timeout: 5_000 },
-            ),
+            await screen.findByRole('alertdialog', {
+                name: 'Sam was invited to manage the family',
+            }),
         ).toBeTruthy();
     });
 
@@ -669,11 +652,7 @@ describe('a manager role held back at Let them in', () => {
         invited(false);
         matched = true;
         page();
-        await screen.findByRole(
-            'alertdialog',
-            { name: 'Sam was invited to manage the family' },
-            { timeout: 5_000 },
-        );
+        await screen.findByRole('alertdialog', { name: 'Sam was invited to manage the family' });
         expect(stageChange).not.toHaveBeenCalled();
         await user.click(screen.getByRole('button', { name: 'Let them manage it' }));
         await waitFor(() => expect(promotedSam()).toBe(true));
