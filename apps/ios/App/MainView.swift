@@ -13,6 +13,7 @@ enum MainTab: Hashable { case home, files, shared, account, search }
 struct MainView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var store: DriveStore?
     @State private var tab: MainTab = .home
     @State private var showingTransfers = false
@@ -21,6 +22,9 @@ struct MainView: View {
     @State private var webOnly = false
     /* A mailed family invitation opened from its link: the invitation, then joining, in a sheet. */
     @State private var invitation: InvitationLink?
+    /* The window's width, which decides between a tab bar and a sidebar, Info as a sheet or a column. */
+    @State private var width: CGFloat = 0
+    private var roomBeside: Bool { RoomBeside.fits(width: width, regularHeight: verticalSizeClass == .regular) }
 
     /* The background queue's records and this session's transfers, as rows. */
     private func rows(_ store: DriveStore) -> [TransferRowModel] {
@@ -69,8 +73,12 @@ struct MainView: View {
                         SearchView(query: $searchQuery).environment(store)
                     }
                 }
-                .tabViewSearchActivation(.searchTabSelection))
+                .tabViewSearchActivation(.searchTabSelection)
+                .tabViewStyle(.sidebarAdaptable)
+                .sidebarWhereThereIsRoom(roomBeside))
                 .tabBarMinimizeBehavior(.onScrollDown)
+                .modifier(InfoBeside(store: store))
+                .environment(\.roomBeside, roomBeside)
                 .sheet(isPresented: $showingTransfers) {
                     TransfersSheet(
                         rows: rows(store), offline: store.offline,
@@ -181,6 +189,7 @@ struct MainView: View {
         // Evidence runs: -HushOSTab files|shared|account|search picks the tab at launch (DebugStart).
         .task { if let start = DebugStart.tab { tab = start } }
         #endif
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         // A new vault (a sign-in again after Change password or Rotate account key ended the old session)
         // replaces the store's in place: the old one's session is dead and its keys may be too.
         .task(id: model.vault.map(ObjectIdentifier.init)) {
@@ -209,6 +218,26 @@ struct MainView: View {
             store.notify("This link doesn’t look right. Ask for a new one.")
         case .failure(.unsupported):
             break
+        }
+    }
+}
+
+extension EnvironmentValues {
+    /* Whether the window has room for Info beside the list (RoomBeside); MainView sets it. */
+    @Entry var roomBeside = false
+}
+
+extension View {
+    /*
+     * The tabs as a sidebar where it fits beside the screen (iPhone Duo's inner display on its
+     * side, an iPad), as Apple asks of a foldable; the system's tab bar everywhere else (RoomBeside
+     * says why). The tab and what each tab has open stay as the window changes.
+     */
+    @ViewBuilder func sidebarWhereThereIsRoom(_ room: Bool) -> some View {
+        if #available(iOS 27.0, *) {
+            defaultTabBarPlacement(room ? .sidebar : .automatic)
+        } else {
+            self
         }
     }
 }

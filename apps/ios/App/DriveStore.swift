@@ -73,6 +73,12 @@ final class DriveStore {
     var route: AppLink?
     /* A file a link asked to open in the viewer, and the files beside it. */
     var deepFile: Opened?
+    /*
+     * Info shown beside the tabs where the window has room (RoomBeside: iPhone Duo's inner display on
+     * its side, an iPad): the shell draws it, so it stays open across tabs, pushes and folding (as a
+     * sheet once there is no room).
+     */
+    var infoBeside: Opened?
     var deepSiblings: [Opened] = []
     /* What others shared with this account, opened: the Shared tab and the folder picker read it. */
     /*

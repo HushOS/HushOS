@@ -53,22 +53,78 @@ extension View {
             }
     }
 
-    func nodeActionSheets(action: Binding<NodeAction?>, store: DriveStore) -> some View {
-        // Sharing may have changed who can open what; the rows and banners ask again.
-        self.sheet(item: action, onDismiss: { Task { await store.refreshSharing() } }) { shown in
-            switch shown {
-            case .move(let items): MovePicker(items: items).environment(store)
-            case .share(let item): ShareItemSheet(item: item).environment(store)
-            case .sendCopy(let item): SendCopySheet(item: item).environment(store)
-            case .versions(let item): VersionsSheet(item: item).environment(store)
-            case .tags(let item): ItemTagsSheet(item: item).environment(store)
-            case .info(let item): InfoSheet(item: item) { next in action.wrappedValue = next }.environment(store)
-            case .report(let item):
-                ReportSheet(item: item, from: store.mounts.first { $0.share.workspaceId == item.node.workspaceId }?.share.granter.name) { category, reason, email in
-                    try await store.vault.report(item, category: category, reason: reason, email: email)
+    /* `beside`: Info may open beside the list where there is room; off inside the viewer, which covers the shell. */
+    func nodeActionSheets(action: Binding<NodeAction?>, store: DriveStore, beside: Bool = true) -> some View {
+        modifier(NodeActionSheets(action: action, store: store, beside: beside))
+    }
+}
+
+/*
+ * Where an item action opens: a sheet, except Info where the window has room beside the list
+ * (iPhone Duo's inner display on its side, an iPad: RoomBeside), which goes beside it as the web's
+ * details panel does (DESIGN.md Details). The shell shows it (`DriveStore.infoBeside`, MainView),
+ * so a push, a tab or a fold never closes it. Anywhere narrower nothing changes.
+ */
+private struct NodeActionSheets: ViewModifier {
+    @Binding var action: NodeAction?
+    let store: DriveStore
+    let beside: Bool
+    @Environment(\.roomBeside) private var room
+
+    private var besideList: Bool {
+        guard beside, room, case .info = action else { return false }
+        return true
+    }
+
+    func body(content: Self.Content) -> some View {
+        content
+            .onChange(of: besideList, initial: true) { _, moving in
+                guard moving, case .info(let item) = action else { return }
+                store.infoBeside = item
+                action = nil
+            }
+            // Sharing may have changed who can open what; the rows and banners ask again.
+            .sheet(item: Binding(get: { besideList ? nil : action }, set: { next in if next == nil, besideList { return }; action = next }),
+                   onDismiss: { Task { await store.refreshSharing() } }) { shown in
+                switch shown {
+                case .move(let items): MovePicker(items: items).environment(store)
+                case .share(let item): ShareItemSheet(item: item).environment(store)
+                case .sendCopy(let item): SendCopySheet(item: item).environment(store)
+                case .versions(let item): VersionsSheet(item: item).environment(store)
+                case .tags(let item): ItemTagsSheet(item: item).environment(store)
+                case .info(let item): InfoSheet(item: item, open: { next in action = next }).environment(store)
+                case .report(let item):
+                    ReportSheet(item: item, from: store.mounts.first { $0.share.workspaceId == item.node.workspaceId }?.share.granter.name) { category, reason, email in
+                        try await store.vault.report(item, category: category, reason: reason, email: email)
+                    }
                 }
             }
-        }
+    }
+}
+
+/*
+ * Info beside the tabs while the window has room; folded or turned upright with it open, the same
+ * Info as a sheet, so nothing the person had open goes. Its Who can open and Tags open their
+ * sheets from here.
+ */
+struct InfoBeside: ViewModifier {
+    let store: DriveStore
+    @Environment(\.roomBeside) private var room
+    @State private var next: NodeAction?
+
+    func body(content: Self.Content) -> some View {
+        content
+            .inspector(isPresented: Binding(get: { room && store.infoBeside != nil }, set: { shown in if !shown, room { store.infoBeside = nil } })) {
+                if let item = store.infoBeside {
+                    InfoSheet(item: item, close: { store.infoBeside = nil }, open: { action in next = action })
+                        .environment(store)
+                        .inspectorColumnWidth(320)
+                }
+            }
+            .sheet(item: Binding(get: { room ? nil : store.infoBeside }, set: { item in if item == nil, !room { store.infoBeside = nil } })) { item in
+                InfoSheet(item: item, open: { action in next = action }).environment(store)
+            }
+            .nodeActionSheets(action: $next, store: store, beside: false)
     }
 }
 

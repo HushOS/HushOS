@@ -58,7 +58,7 @@ struct FileViewer: View {
             foot
         }
         .background(Alpine.ground)
-        .nodeActionSheets(action: $action, store: store)
+        .nodeActionSheets(action: $action, store: store, beside: false)
         // Somewhere else was asked for (a link, Info's Folder row): get out of its way.
         .onChange(of: store.route) { _, link in if link != nil { dismiss() } }
         .task(id: "\(current.id)-\(attempt)") {
