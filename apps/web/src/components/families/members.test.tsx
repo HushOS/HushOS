@@ -374,6 +374,9 @@ const continuedFor = () =>
 
 describe('the notice for accounts that changed', () => {
     beforeEach(() => {
+        // Nobody checked yet: the standings read Not verified until They match.
+        matched = false;
+        settingsDoc = { version: 2, contacts: {} };
         continueMembers.mockClear();
         toastAdd.mockClear();
     });
@@ -422,10 +425,20 @@ describe('the notice for accounts that changed', () => {
         expect(continuedFor()).toEqual([SAM, ANA, LEE]);
     });
 
-    test('Check it’s Sam checks Sam alone: with others waiting, no one is let back in yet', async () => {
-        const user = userEvent.setup();
+    test('only Continue, at every width: Check it’s Sam is in Sam’s row menu', async () => {
         notice([SAM, ANA]);
-        await user.click(await screen.findByRole('button', { name: 'Check it’s Sam' }));
+        const shown = await screen.findByText('Sam’s and Ana’s accounts changed');
+        const alert = shown.closest('[data-account-changed]')!;
+        expect([...alert.querySelectorAll('button')].map((button) => button.textContent)).toEqual([
+            'Continue',
+        ]);
+    });
+
+    test('Check it’s Sam from the row menu checks Sam alone: with others waiting, no one is let back in yet', async () => {
+        const user = userEvent.setup();
+        list([SAM, ANA]);
+        await user.click(await screen.findByRole('button', { name: 'More for Sam Holm' }));
+        await user.click(await screen.findByRole('menuitem', { name: 'Check it’s Sam' }));
         await user.click(
             (await screen.findByRole('dialog', { name: 'Their words: Sam Holm' })).querySelector(
                 'button',
@@ -434,10 +447,11 @@ describe('the notice for accounts that changed', () => {
         expect(continueMembers).not.toHaveBeenCalled();
     });
 
-    test('Check it’s Sam, when Sam is the only one, lets Sam back in', async () => {
+    test('Check it’s Sam from the row menu, when Sam is the only one, lets Sam back in', async () => {
         const user = userEvent.setup();
-        notice([SAM]);
-        await user.click(await screen.findByRole('button', { name: 'Check it’s Sam' }));
+        list([SAM]);
+        await user.click(await screen.findByRole('button', { name: 'More for Sam Holm' }));
+        await user.click(await screen.findByRole('menuitem', { name: 'Check it’s Sam' }));
         await user.click(
             (await screen.findByRole('dialog', { name: 'Their words: Sam Holm' })).querySelector(
                 'button',
@@ -445,6 +459,11 @@ describe('the notice for accounts that changed', () => {
         );
         await waitFor(() => expect(continueMembers).toHaveBeenCalledTimes(1));
         expect(continuedFor()).toEqual([SAM]);
+        await waitFor(() =>
+            expect(toastAdd).toHaveBeenCalledWith(
+                expect.objectContaining({ title: 'Sam has the family folders again' }),
+            ),
+        );
     });
 });
 

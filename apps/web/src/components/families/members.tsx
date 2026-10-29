@@ -764,6 +764,50 @@ export function MemberList({
     }
 
     /*
+     * Check it's Sam from the row menu (6.9), They match, for someone whose account changed:
+     * checked over the keys they have now, they go back into the family folders as on the
+     * notice's Continue, when they're the only one. With others whose accounts changed too,
+     * everyone waits for Continue.
+     */
+    async function backIn(member: FamilyMember) {
+        const alone =
+            needsCheck.includes(member.userId) &&
+            !active.some(
+                (other) =>
+                    other.userId !== member.userId &&
+                    other.userId !== userId &&
+                    needsCheck.includes(other.userId),
+            );
+        if (!alone) return void afterFamilyChange(queryClient, userId);
+        const who = firstName(member.name);
+        setBusy(true);
+        try {
+            const staged = await continueMembers(
+                queryClient,
+                userId,
+                familyContext(userId),
+                groupId,
+                [refOf(member)],
+                names,
+            );
+            const failed = stageFailure(staged, { family, person: who, names });
+            if (failed) throw new Error(failed);
+            cue('success');
+            toast.add({ type: 'success', title: `${who} has the family folders again` });
+        } catch (cause) {
+            cue('error');
+            toast.add({
+                type: 'error',
+                title: 'Couldn’t do that',
+                description: errorCopy(cause, { family, person: who, names }),
+            });
+        } finally {
+            setBusy(false);
+            void afterMembershipChange(queryClient, userId);
+        }
+    }
+
+    /*
      * `at`: the member list to build on, when it is newer than the page's (after a Continue).
      * `invited`: the manager role asked for at invitation (6.8), whose waiting record goes once
      * given; given meanwhile from another tab or device, it ends quietly.
@@ -1145,9 +1189,11 @@ export function MemberList({
                 }
                 onOpenChange={(open) => !open && setWords(null)}
                 onResolved={() => {
-                    // They match: the role change waiting on the check goes ahead (6.9).
+                    // They match: the role change waiting on the check goes ahead (6.9); someone
+                    // whose account changed, and the only one, goes back in as on Continue.
                     const after = words?.after;
                     if (after) void resume(after);
+                    else if (words) void backIn(words.member);
                     else void afterFamilyChange(queryClient, userId);
                 }}
             />
@@ -1172,10 +1218,10 @@ export function MemberList({
  * changed"). Continue puts them all back in the family folders in one change,
  * every folder getting new keys in it (3.3): every folder's new keys go to
  * every member, so no one of them can be let back in while another waits.
- * Check it's Sam compares one person's own twelve words; when Sam is the only
- * one, Sam goes back in as on Continue, and otherwise the rest wait for
- * Continue. A manager among them manages the family again only once checked
- * (3.6).
+ * Continue is the notice's only button, at every width: Check it's Sam is in
+ * Sam's row menu (MemberList), where a check of Sam's own words lets Sam back
+ * in as Continue does when Sam is the only one. A manager among them manages
+ * the family again only once checked (3.6).
  */
 export function ChangedMembers({
     userId,
@@ -1197,7 +1243,6 @@ export function ChangedMembers({
 }) {
     const queryClient = useQueryClient();
     const [busy, setBusy] = useState(false);
-    const [checkingWith, setCheckingWith] = useState<FamilyMember | null>(null);
     const changed = members.filter(
         (member) =>
             member.state === 'active' &&
@@ -1287,38 +1332,9 @@ export function ChangedMembers({
                         <Button disabled={busy} onClick={() => void carryOn(changed)}>
                             <PendingLabel pending={busy} idle="Continue" busy="Continuing" />
                         </Button>
-                        {changed.map((member) => (
-                            <Button
-                                key={member.userId}
-                                variant="outline"
-                                disabled={busy}
-                                onClick={() => setCheckingWith(member)}
-                            >
-                                Check it’s {firstName(member.name)}
-                            </Button>
-                        ))}
                     </div>
                 </AlertDescription>
             </Alert>
-            <ContactFlowDialog
-                userId={userId}
-                start={
-                    checkingWith
-                        ? {
-                              kind: 'check',
-                              person: { email: checkingWith.email ?? '', name: checkingWith.name },
-                          }
-                        : null
-                }
-                onOpenChange={(open) => !open && setCheckingWith(null)}
-                onResolved={() => {
-                    // Checked over the keys they have now: alone, they go back in, as on Continue;
-                    // with others whose accounts changed too, everyone waits for Continue.
-                    const member = checkingWith;
-                    if (member && changed.length === 1) void carryOn([member]);
-                    else void afterMembershipChange(queryClient, userId);
-                }}
-            />
         </>
     );
 }

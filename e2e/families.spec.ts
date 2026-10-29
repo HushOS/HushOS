@@ -1227,10 +1227,11 @@ test.describe.serial('a member’s account changes', () => {
             'data-variant',
             'default',
         );
-        await expect(notice.getByRole('button', { name: 'Check it’s Sam' })).toHaveAttribute(
-            'data-variant',
-            'outline',
-        );
+        // Continue is the notice's only button; Check it's Sam is in Sam's row menu.
+        await expect(notice.getByRole('button')).toHaveCount(1);
+        await maya.page.getByRole('button', { name: `More for ${sam.name}` }).click();
+        await expect(maya.page.getByRole('menuitem', { name: 'Check it’s Sam' })).toBeVisible();
+        await maya.page.keyboard.press('Escape');
         await expect(maya.page.locator(`[data-member="${sam.email}"]`)).toContainText(
             'Account changed',
         );
@@ -1354,8 +1355,7 @@ test.describe.serial('a member’s account changes', () => {
             /Continue to give (Sam and Leo|Leo and Sam) the family folders again\./,
         );
         await expect(notice.getByRole('button', { name: 'Continue' })).toHaveCount(1);
-        await expect(notice.getByRole('button', { name: 'Check it’s Sam' })).toBeVisible();
-        await expect(notice.getByRole('button', { name: 'Check it’s Leo' })).toBeVisible();
+        await expect(notice.getByRole('button')).toHaveCount(1);
         expect(writes).toEqual([]);
 
         await notice.getByRole('button', { name: 'Continue' }).click();
