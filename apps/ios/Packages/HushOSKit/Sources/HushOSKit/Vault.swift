@@ -88,6 +88,12 @@ public actor Vault {
     /* By workspace and node (see NodeTable): a received share's key never answers for one of the account's own nodes. */
     var nodeKeys = NodeTable<Data>()
     var opened = NodeTable<Opened>()
+    /*
+     * Rows the server confirmed gone (trashed from here, a feed tombstone, a purge), by workspace and
+     * node: `remove`, never `forget`, which only drops a row to be read again. Info beside the list
+     * closes on these (RowStanding); a row opened again (a restore, a sync) is no longer gone.
+     */
+    var removedRows = Set<NodeRef>()
     /* The identity in use, and the earlier ones (newest first) that shares sealed before a succession still need; see Vault+Identity. */
     var identity: IdentityKeys?
     var earlierIdentities: [IdentityKeys]?
@@ -467,6 +473,7 @@ public actor Vault {
         )
         let result = Opened(node: node, metadata: metadata, nodeKey: key)
         opened[node.ref] = result
+        removedRows.remove(node.ref)
         return result
     }
 
@@ -496,6 +503,7 @@ public actor Vault {
         nodeKeys[node.ref] = key
         let result = Opened(node: node, metadata: metadata, nodeKey: key)
         opened[node.ref] = result
+        removedRows.remove(node.ref)
         if let parent = node.parentId { rememberParent(node.id, parent: parent) }
         /*
          * A write the server answered (a move, a copy, a new folder) is filed in the catalogue
@@ -510,8 +518,46 @@ public actor Vault {
         return result
     }
 
+    /* Drops a row to be read again: no verdict on whether it still exists. */
     public func forget(_ id: String) {
         opened.remove(id: id)
+    }
+
+    /*
+     * Drops a row the server confirmed gone, and marks it so (`removedRows`): exactly that workspace's row,
+     * never another workspace's row under the same id (a share's node id is the server's to pick).
+     */
+    func remove(_ ref: NodeRef) {
+        removedRows.insert(ref)
+        opened[ref] = nil
+    }
+
+    /* `remove` by id: in `workspaceId` when known, else the workspace this process holds the id in (its own first). */
+    func remove(_ id: String, in workspaceId: String? = nil) {
+        guard let ref = workspaceId.map({ NodeRef(workspaceId: $0, nodeId: id) }) ?? opened.ref(for: id)
+                ?? workspace.map({ NodeRef(workspaceId: $0.workspaceId, nodeId: id) }) else { return }
+        remove(ref)
+    }
+
+    /*
+     * Where a row stands now, for Info beside the list (InfoFollow): live with its current record;
+     * held but not live (trashed, or a trashed folder above it in its own workspace); removed (it, or
+     * a folder above it, confirmed gone); or absent (dropped to be read again, or never opened here).
+     */
+    public func standing(of ref: NodeRef) -> RowStanding {
+        if removedRows.contains(ref) { return .removed }
+        guard let row = opened[ref] else { return .absent }
+        var cursor = row
+        for _ in 0 ..< 256 {
+            if cursor.node.trashedAt != nil { return .held }
+            guard let parentId = cursor.node.parentId else { break }
+            let parent = NodeRef(workspaceId: ref.workspaceId, nodeId: parentId)
+            if removedRows.contains(parent) { return .removed }
+            // A folder above that this process doesn't hold (above a share's root, or being read again): no verdict.
+            guard let next = opened[parent] else { break }
+            cursor = next
+        }
+        return .live(row)
     }
 
     /* Fetches a folder's listing, opening every key along the way; all pages. */

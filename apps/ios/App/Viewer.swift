@@ -34,8 +34,46 @@ struct FileViewer: View {
     private var index: Int { items.firstIndex { $0.id == current.id } ?? 0 }
 
     var body: some View {
+        NavigationStack {
+            page
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { toolbar }
+        }
+    }
+
+    /* The system's bars: Done, the name and where you are, Share and More above; who can open it and Send a copy below. */
+    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .cancellationAction) {
+            Button { dismiss() } label: { HeaderWord(text: "Done") }
+        }
+        ToolbarItem(placement: .principal) { title }
+        if version == nil {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if store.role(of: current) == .owner {
+                    Button { action = .share(current) } label: { HeaderIcon(symbol: "person.badge.plus") }
+                        .accessibilityLabel("Share")
+                }
+                Menu { NodeMenu(item: current, action: $action) } label: { HeaderIcon(symbol: "ellipsis") }
+                    .accessibilityLabel("More")
+            }
+            ToolbarItem(placement: .bottomBar) {
+                HStack(spacing: Alpine.Space.s2) {
+                    access.font(Theme.Text.footnote).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Text([current.size.map { formatBytes(Int64($0)) }, changedLabel(current.modified)].compactMap { $0 }.joined(separator: " · "))
+                        .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
+                }
+                .padding(.horizontal, Alpine.Space.s2)
+            }
+            ToolbarItem(placement: .bottomBar) {
+                Button { action = .sendCopy(current) } label: { HeaderIcon(symbol: "square.and.arrow.up") }
+                    .accessibilityLabel("Send a copy")
+            }
+        }
+    }
+
+    private var page: some View {
         VStack(spacing: 0) {
-            header
             ZStack {
                 if let url {
                     QuickLookView(url: url).ignoresSafeArea(edges: .horizontal)
@@ -55,10 +93,10 @@ struct FileViewer: View {
                 if version == nil, items.count > 1 { edges }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            foot
+            if version != nil { versionFoot }
         }
         .background(Alpine.ground)
-        .nodeActionSheets(action: $action, store: store)
+        .nodeActionSheets(action: $action, store: store, beside: false)
         // Somewhere else was asked for (a link, Info's Folder row): get out of its way.
         .onChange(of: store.route) { _, link in if link != nil { dismiss() } }
         .task(id: "\(current.id)-\(attempt)") {
@@ -72,40 +110,22 @@ struct FileViewer: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: Alpine.Space.s2) {
-            Button { dismiss() } label: { HeaderWord(text: "Done") }
-                .buttonStyle(.plain).foregroundStyle(Alpine.primary)
-                .glassEffect(.regular.interactive(), in: .capsule).highContrastEdge(Capsule())
-            Spacer(minLength: 0)
-            VStack(spacing: 1) {
-                Text(current.name).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink).lineLimit(1)
-                if let provenance = version.map({ store.provenance(of: $0, in: current) }) ?? store.provenance(of: current) {
-                    // In place of the position or size: who wrote it comes first when it can't be checked, an earlier version too.
-                    UnverifiedMark(provenance: provenance).frame(minHeight: 16)
-                } else if let saved = version.map({ store.savedCopy(of: $0, in: current) }) ?? store.savedCopy(of: current) {
-                    // Saved from a link: where it came from, in the subtitle's place and colour.
-                    Text(saved.line).font(.caption).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text(subtitle).font(.caption).foregroundStyle(Alpine.inkMuted).lineLimit(1)
-                }
-            }
-            Spacer(minLength: 0)
-            if version == nil {
-                HeaderActions {
-                    if store.role(of: current) == .owner {
-                        Button { action = .share(current) } label: { HeaderIcon(symbol: "person.badge.plus") }
-                            .buttonStyle(.plain).accessibilityLabel("Share")
-                    }
-                    Menu { NodeMenu(item: current, action: $action) } label: { HeaderIcon(symbol: "ellipsis") }
-                        .accessibilityLabel("More")
-                }
+    /* The name, and under it where you are in the folder, its size and date, or who wrote it when that can't be checked. */
+    private var title: some View {
+        VStack(spacing: 1) {
+            Text(current.name).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink).lineLimit(1)
+            if let provenance = version.map({ store.provenance(of: $0, in: current) }) ?? store.provenance(of: current) {
+                // In place of the position or size: who wrote it comes first when it can't be checked, an earlier version too.
+                UnverifiedMark(provenance: provenance).frame(minHeight: 16)
+            } else if let saved = version.map({ store.savedCopy(of: $0, in: current) }) ?? store.savedCopy(of: current) {
+                // Saved from a link: where it came from, in the subtitle's place and colour.
+                Text(saved.line).font(.caption).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
-                Color.clear.frame(width: 72, height: Theme.control)
+                Text(subtitle).font(.caption).foregroundStyle(Alpine.inkMuted).lineLimit(1)
             }
         }
-        .padding(.horizontal, Alpine.Space.s4).padding(.vertical, Alpine.Space.s2)
+        .padding(.horizontal, Alpine.Space.s2)
     }
 
     private var subtitle: String {
@@ -136,35 +156,20 @@ struct FileViewer: View {
         current = items[next]
     }
 
-    @ViewBuilder private var foot: some View {
-        if version != nil {
-            HStack(spacing: Alpine.Space.s3) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Earlier version").font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink)
-                    if let versionNote { Text(versionNote).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted) }
-                }
-                Spacer(minLength: 0)
-                if let onRestore { Button("Restore", action: onRestore).buttonStyle(PrimaryCapsuleStyle()) }
+    /* An earlier version: which it is, and Restore. */
+    private var versionFoot: some View {
+        HStack(spacing: Alpine.Space.s3) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Earlier version").font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink)
+                if let versionNote { Text(versionNote).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted) }
             }
-            .padding(Alpine.Space.s3).padding(.leading, Alpine.Space.s1)
-            .background(Alpine.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .alpineRaised(RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .padding(.horizontal, Alpine.Space.s4).padding(.bottom, Alpine.Space.s2)
-        } else {
-            HStack(spacing: Alpine.Space.s2) {
-                access.font(Theme.Text.footnote).lineLimit(1)
-                Spacer(minLength: 0)
-                Text([current.size.map { formatBytes(Int64($0)) }, changedLabel(current.modified)].compactMap { $0 }.joined(separator: " · "))
-                    .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
-                Button { action = .sendCopy(current) } label: { HeaderIcon(symbol: "square.and.arrow.up") }
-                    .buttonStyle(.plain).foregroundStyle(Alpine.primary).accessibilityLabel("Send a copy")
-            }
-            .padding(.leading, Alpine.Space.s4).padding(.trailing, Alpine.Space.s1)
-            .frame(height: 62)
-            .glassEffect(.regular, in: .capsule)
-            .highContrastEdge(Capsule())
-            .padding(.horizontal, Alpine.Space.s4).padding(.bottom, Alpine.Space.s2)
+            Spacer(minLength: 0)
+            if let onRestore { Button("Restore", action: onRestore).buttonStyle(PrimaryCapsuleStyle()) }
         }
+        .padding(Alpine.Space.s3).padding(.leading, Alpine.Space.s1)
+        .background(Alpine.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .alpineRaised(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .padding(.horizontal, Alpine.Space.s4).padding(.bottom, Alpine.Space.s2)
     }
 
     /* Who can open it, on the foot's one line in ink; an open link adds the small link icon, as rows do. */
