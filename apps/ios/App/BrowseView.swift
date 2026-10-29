@@ -10,33 +10,33 @@ struct BrowseView: View {
     @State private var rootId: String?
     @State private var path: [Opened] = []
     /*
-     * The stack exists. A link that arrives as the Files tab first appears (one opened from another
-     * tab, a notification, a cold launch) sets the stack's first path instead of pushing into it as it
-     * appears: on iOS 27.0 that push, with the title inlineLarge, left the system bar drawn up in the
-     * status bar now and then.
+     * The top folder is on screen. A link waits for it and then pushes its folders the way a tap does,
+     * so a folder opened from a link looks exactly like one opened by hand (iOS 27.2 drew a folder set as
+     * the stack's first path with its title on a row of its own, under Back and the buttons). On iOS 26
+     * and 27.0 a push as the Files tab first appears can draw the bar over the status bar now and then:
+     * an iOS bug, accepted by the owner on 2026-10-29 (apps/ios/AGENTS.md).
      */
-    @State private var ready = false
+    @State private var shown = false
 
     var body: some View {
-        Group {
-            if let rootId, ready {
-                NavigationStack(path: $path) {
+        NavigationStack(path: $path) {
+            Group {
+                if let rootId {
                     FolderView(folderId: rootId, title: "Files", isRoot: true)
+                        .onAppear { shown = true }
+                } else {
+                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).background(Alpine.ground)
                 }
-            } else {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).background(Alpine.ground)
             }
         }
-        .task {
-            rootId = await store.loadRoot()
-            // A link waiting for this tab: its folders become the stack's first path.
-            if let link = store.route { await route(link) }
-            ready = true
-            // One that came while the first path was being worked out goes the ordinary way.
-            if let link = store.route { await route(link) }
+        .task { rootId = await store.loadRoot() }
+        .onChange(of: store.route, initial: true) { _, link in
+            guard shown, let link else { return }
+            Task { await route(link) }
         }
-        .onChange(of: store.route) { _, link in
-            guard ready, let link else { return }
+        // A link that came before the top folder was on screen.
+        .onChange(of: shown) { _, now in
+            guard now, let link = store.route else { return }
             Task { await route(link) }
         }
     }
