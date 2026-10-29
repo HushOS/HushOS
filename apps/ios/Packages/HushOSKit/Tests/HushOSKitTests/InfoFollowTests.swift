@@ -9,7 +9,7 @@ import Testing
  * another device. Nor may it close on a row only being read again (a key rotation, a catalogue
  * update), which would shut Info under the person's hand. The vault's rows decide it, not the
  * lists' caches: a trashed folder's descendants stay in cached folder lists with no trashedAt of
- * their own, which kept Info open on them.
+ * their own, which kept Info open on them. Nothing that only closes Info changes what the vault holds.
  */
 struct InfoFollowTests {
     let session = SharedKeychain.Session(origin: "https://drive.test", token: "token", userId: UUID().uuidString.lowercased())
@@ -180,34 +180,44 @@ struct InfoFollowTests {
     }
 
     /*
-     * A file in a received share, trashed on the granter's device: there is no feed here for their drive,
-     * so Info asks about it, and its folder listed without it is the server's word that it is gone.
+     * A file in a received share, trashed on the granter's device: there is no feed here for their drive, so
+     * its folder listed afresh without it closes Info. That is the lists' word only: the vault keeps the row,
+     * since nothing that only closes Info may change what it holds (a trashed row would leave the Trash).
      */
-    @Test func theInfoItemGoneOnTheServerClosesIt() async throws {
+    @Test func aShareItemMissingFromItsFolderListedAgainClosesInfoAndLeavesTheVaultAlone() async throws {
         let share = try await share()
-        var follow = InfoFollow(try #require(await share.vault.item(share.file.id)))
+        let follow = InfoFollow(try #require(await share.vault.standing(of: share.file.ref).liveRow))
         share.list([share.sub])
-        #expect(follow.update(await share.vault.recheck(follow.item), outOfReach: false) == .close)
+        let children = try await share.vault.children(of: share.root.id)
+        #expect(follow.missing(from: share.root.id, children: children))
+        #expect(await share.vault.standing(of: share.file.ref) == .live(follow.item))
     }
 
-    /* Still there (renamed meanwhile): Info stays, with the name the server has now. */
-    @Test func theInfoItemLiveOnTheServerHoldsIt() async throws {
+    /* Another folder's listing says nothing about the item: Info stays. */
+    @Test func anotherFolderListedAgainKeepsInfoOpen() async throws {
         let share = try await share()
-        var follow = InfoFollow(try #require(await share.vault.item(share.file.id)))
-        let renamed = try share.sealed(share.file.id, parent: share.root.id, kind: "file", parentKey: share.rootKey, key: share.fileKey, name: "Menu (summer).pdf")
-        share.list([renamed, share.sub])
-        #expect(follow.update(await share.vault.recheck(follow.item), outOfReach: false) == .show)
-        #expect(follow.item.name == "Menu (summer).pdf")
+        let follow = InfoFollow(try #require(await share.vault.standing(of: share.file.ref).liveRow))
+        DriveStub.list(share.sub.id, Listing(folder: share.sub, ancestors: [share.root], children: [], nextCursor: nil))
+        let children = try await share.vault.children(of: share.sub.id)
+        #expect(!follow.missing(from: share.sub.id, children: children))
     }
 
-    /* No answer is no verdict: a row only being read again stays as Info last showed it. */
-    @Test func noAnswerKeepsTheLastRowShown() async throws {
-        let share = try await share()
-        var follow = InfoFollow(try #require(await share.vault.item(share.file.id)))
-        await share.vault.forget(share.file.id)
-        DriveStub.unlist(share.root.id)
-        #expect(follow.update(await share.vault.recheck(follow.item), outOfReach: false) == .hold)
-        #expect(follow.item.name == "Menu.pdf")
+    /*
+     * A folder trashed on another device: its file reads as held and Info closes straight away, while the
+     * folder stays in the Trash (catalogueTrash lists from these rows).
+     */
+    @Test func aHeldRowClosesInfoAndStaysInTheTrash() async throws {
+        let drive = try await drive()
+        var (follow, ref) = try await opened(drive)
+        await drive.vault.forget(folderId)
+        try await drive.vault.open(try row(folderId, parent: rootId, kind: "folder", parentKey: drive.rootKey, key: drive.folderKey,
+                                           name: "Lisbon 2026", trashed: "2026-10-30T09:00:00Z"))
+        await drive.vault.markCatalogueReady()
+        #expect(await drive.vault.standing(of: ref) == .held)
+        #expect(follow.update(await drive.vault.standing(of: ref), outOfReach: false) == .close)
+        let trash = try #require(await drive.vault.catalogueTrash())
+        #expect(trash.contains { $0.item.id == folderId })
+        #expect(await drive.vault.item(fileId) != nil)
     }
 
     /*
@@ -226,12 +236,12 @@ struct InfoFollowTests {
         #expect(await drive.vault.standing(of: NodeRef(workspaceId: workspace, nodeId: siblingId)) == .held)
     }
 
-    /* A share's file gone, under the same id as one of the own drive's files: only the share's row goes. */
+    /* A share's file confirmed gone, under the same id as one of the own drive's files: only the share's row goes. */
     @Test func theSameIdInAnotherWorkspaceIsUntouched() async throws {
         let share = try await share(fileId: fileId)
         var follow = InfoFollow(try #require(await share.vault.standing(of: share.file.ref).liveRow))
-        share.list([share.sub])
-        #expect(follow.update(await share.vault.recheck(follow.item), outOfReach: false) == .close)
+        await share.vault.remove(fileId, in: share.workspace)
+        #expect(follow.update(await share.vault.standing(of: share.file.ref), outOfReach: false) == .close)
         #expect(await share.vault.standing(of: NodeRef(workspaceId: workspace, nodeId: fileId)) == .live(try #require(await share.vault.item(fileId))))
         #expect(await share.vault.item(fileId)?.node.workspaceId == workspace)
     }
@@ -267,11 +277,6 @@ final class DriveStub: URLProtocol {
     static func list(_ folderId: String, _ listing: Listing) {
         let data = try? JSONEncoder().encode(listing)
         lock.withLock { listings[folderId.lowercased()] = data }
-    }
-
-    /* No answer for this folder any more: its listing fails as an unreachable server would. */
-    static func unlist(_ folderId: String) {
-        _ = lock.withLock { listings.removeValue(forKey: folderId.lowercased()) }
     }
 
     override class func canInit(with request: URLRequest) -> Bool { true }

@@ -682,10 +682,9 @@ final class DriveStore {
             let children = try await vault.children(of: id)
             folders[id] = children
             folderProblems[id] = nil
-            // Info's item missing from its folder listed afresh: ask about it (a share's file trashed elsewhere).
-            if let shown = infoBeside?.item, shown.node.parentId?.lowercased() == id.lowercased(), !children.contains(where: { $0.ref == shown.ref }) {
-                await followInfo(recheck: true)
-            }
+            // A received share's item missing from its folder listed afresh closes Info (there is no feed for
+            // their drive); the vault keeps its row, so nothing a close decides changes what it holds.
+            if let follow = infoBeside, isReceived(follow.item), follow.missing(from: id, children: children) { infoBeside = nil }
             for child in children { names[child.id] = child.name }
             await judgeFamilyItems(children)
         } catch {
@@ -1101,16 +1100,10 @@ final class DriveStore {
      * removal the server confirmed or a share no longer listed, kept as it was while its row is only
      * being read again (InfoFollow, the same rule as Android's).
      */
-    func followInfo(recheck: Bool = false) async {
+    func followInfo() async {
         guard var follow = infoBeside else { return }
         let item = follow.item
-        var standing = await vault.standing(of: item.ref)
-        // A received share has no feed here: a row it can't place is asked about (its folder listed for it alone),
-        // and so is one missing from its folder's fresh listing. The own drive's feed says the rest.
-        let shared = item.node.workspaceId.lowercased() != myWorkspace?.lowercased()
-        if recheck || (standing == .absent && shared) {
-            standing = await vault.recheck(item)
-        }
+        let standing = await vault.standing(of: item.ref)
         let step = follow.update(standing, outOfReach: outOfReach(item))
         // Another item opened, or Info closed, while the vault answered.
         guard infoBeside?.item.id == item.id else { return }
@@ -1120,6 +1113,12 @@ final class DriveStore {
         case .hold: break
         case .find: if let found = await lookUp(item.id), infoBeside?.item.id == item.id { infoBeside = InfoFollow(found) }
         }
+    }
+
+    /* In someone else's drive that this account reaches through a share: neither its own nor a family's. */
+    private func isReceived(_ item: Opened) -> Bool {
+        guard let own = myWorkspace else { return false }
+        return item.node.workspaceId.lowercased() != own.lowercased() && !isFamily(item)
     }
 
     /* In a workspace that is neither this account's, a family's, nor among the shares just listed (unshared, revoked). */

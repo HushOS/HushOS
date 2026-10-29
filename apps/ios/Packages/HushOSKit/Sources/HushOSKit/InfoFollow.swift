@@ -44,6 +44,16 @@ public struct InfoFollow: Equatable, Sendable {
         self.item = item
     }
 
+    /*
+     * A received share has no feed here, and nothing that only closes Info may change what the vault holds:
+     * the share's folder listed afresh without the item closes Info, a decision on the lists alone (main's
+     * behaviour), and the vault keeps its row. `folderId`: the folder just listed; `children`: what it lists.
+     */
+    public func missing(from folderId: String, children: [Opened]) -> Bool {
+        guard item.node.parentId?.lowercased() == folderId.lowercased() else { return false }
+        return !children.contains { $0.ref == item.ref }
+    }
+
     /* `outOfReach`: its workspace is neither this account's, a family's, nor among the shares just listed. */
     public mutating func update(_ standing: RowStanding, outOfReach: Bool) -> InfoLookup {
         var live: Opened?

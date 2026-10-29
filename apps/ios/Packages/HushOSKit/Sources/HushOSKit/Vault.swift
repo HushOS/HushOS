@@ -540,44 +540,6 @@ public actor Vault {
     }
 
     /*
-     * Asks the server about the one row Info beside the list shows, when this process can't say (absent
-     * from its folder's fresh listing, or absent in a received share, which has no feed here). There is no
-     * single-node read in the API, so the item's own parent is listed, every page, and only this row is
-     * judged: named there, it is live (opened again if it changed); not named, or its folder trashed or
-     * gone, it is removed, exactly this workspace's ref. A row that changed here while the listing was out
-     * (a move, an upload, a create adopted meanwhile) is left as it is now, and so is any other failure.
-     */
-    public func recheck(_ item: Opened) async -> RowStanding {
-        let ref = item.ref
-        let before = opened[ref]?.node
-        guard let parentId = before?.parentId ?? item.node.parentId else { return standing(of: ref) }
-        var named: NodeView?
-        do {
-            var after: String? = nil
-            repeat {
-                let page = try await api.children(of: parentId, workspaceId: ref.workspaceId, after: after)
-                if let found = page.children.first(where: { $0.id.lowercased() == ref.nodeId }) { named = found }
-                after = page.nextCursor
-            } while after != nil
-        } catch DriveAPIError.trashed, DriveAPIError.notFound {
-            named = nil
-        } catch {
-            return standing(of: ref)
-        }
-        // Changed here while the listing was out: what this process did since is newer than the answer.
-        guard opened[ref]?.node == before else { return standing(of: ref) }
-        guard let named else {
-            remove(ref)
-            return .removed
-        }
-        if before != named, (try? parentKey(for: named)) != nil {
-            opened[ref] = nil
-            _ = try? open(named)
-        }
-        return standing(of: ref)
-    }
-
-    /*
      * Where a row stands now, for Info beside the list (InfoFollow): live with its current record;
      * held but not live (trashed, or a trashed folder above it in its own workspace); removed (it, or
      * a folder above it, confirmed gone); or absent (dropped to be read again, or never opened here).
