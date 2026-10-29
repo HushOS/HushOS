@@ -682,8 +682,10 @@ final class DriveStore {
             let children = try await vault.children(of: id)
             folders[id] = children
             folderProblems[id] = nil
-            // The listing may have confirmed a row of it gone (a share's file trashed elsewhere): Info beside the list closes.
-            await followInfo()
+            // Info's item missing from its folder listed afresh: ask about it (a share's file trashed elsewhere).
+            if let shown = infoBeside?.item, shown.node.parentId?.lowercased() == id.lowercased(), !children.contains(where: { $0.ref == shown.ref }) {
+                await followInfo(recheck: true)
+            }
             for child in children { names[child.id] = child.name }
             await judgeFamilyItems(children)
         } catch {
@@ -1099,10 +1101,16 @@ final class DriveStore {
      * removal the server confirmed or a share no longer listed, kept as it was while its row is only
      * being read again (InfoFollow, the same rule as Android's).
      */
-    func followInfo() async {
+    func followInfo(recheck: Bool = false) async {
         guard var follow = infoBeside else { return }
         let item = follow.item
-        let standing = await vault.standing(of: NodeRef(workspaceId: item.node.workspaceId, nodeId: item.id))
+        var standing = await vault.standing(of: item.ref)
+        // A received share has no feed here: a row it can't place is asked about (its folder listed for it alone),
+        // and so is one missing from its folder's fresh listing. The own drive's feed says the rest.
+        let shared = item.node.workspaceId.lowercased() != myWorkspace?.lowercased()
+        if recheck || (standing == .absent && shared) {
+            standing = await vault.recheck(item)
+        }
         let step = follow.update(standing, outOfReach: outOfReach(item))
         // Another item opened, or Info closed, while the vault answered.
         guard infoBeside?.item.id == item.id else { return }

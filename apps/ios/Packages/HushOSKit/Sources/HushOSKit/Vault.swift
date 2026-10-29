@@ -523,11 +523,58 @@ public actor Vault {
         opened.remove(id: id)
     }
 
-    /* Drops a row the server confirmed gone, and marks it so (`removedRows`). */
+    /*
+     * Drops a row the server confirmed gone, and marks it so (`removedRows`): exactly that workspace's row,
+     * never another workspace's row under the same id (a share's node id is the server's to pick).
+     */
+    func remove(_ ref: NodeRef) {
+        removedRows.insert(ref)
+        opened[ref] = nil
+    }
+
+    /* `remove` by id: in `workspaceId` when known, else the workspace this process holds the id in (its own first). */
     func remove(_ id: String, in workspaceId: String? = nil) {
-        if let ref = opened.ref(for: id) { removedRows.insert(ref) }
-        if let ws = workspaceId ?? workspace?.workspaceId { removedRows.insert(NodeRef(workspaceId: ws, nodeId: id)) }
-        opened.remove(id: id)
+        guard let ref = workspaceId.map({ NodeRef(workspaceId: $0, nodeId: id) }) ?? opened.ref(for: id)
+                ?? workspace.map({ NodeRef(workspaceId: $0.workspaceId, nodeId: id) }) else { return }
+        remove(ref)
+    }
+
+    /*
+     * Asks the server about the one row Info beside the list shows, when this process can't say (absent
+     * from its folder's fresh listing, or absent in a received share, which has no feed here). There is no
+     * single-node read in the API, so the item's own parent is listed, every page, and only this row is
+     * judged: named there, it is live (opened again if it changed); not named, or its folder trashed or
+     * gone, it is removed, exactly this workspace's ref. A row that changed here while the listing was out
+     * (a move, an upload, a create adopted meanwhile) is left as it is now, and so is any other failure.
+     */
+    public func recheck(_ item: Opened) async -> RowStanding {
+        let ref = item.ref
+        let before = opened[ref]?.node
+        guard let parentId = before?.parentId ?? item.node.parentId else { return standing(of: ref) }
+        var named: NodeView?
+        do {
+            var after: String? = nil
+            repeat {
+                let page = try await api.children(of: parentId, workspaceId: ref.workspaceId, after: after)
+                if let found = page.children.first(where: { $0.id.lowercased() == ref.nodeId }) { named = found }
+                after = page.nextCursor
+            } while after != nil
+        } catch DriveAPIError.trashed, DriveAPIError.notFound {
+            named = nil
+        } catch {
+            return standing(of: ref)
+        }
+        // Changed here while the listing was out: what this process did since is newer than the answer.
+        guard opened[ref]?.node == before else { return standing(of: ref) }
+        guard let named else {
+            remove(ref)
+            return .removed
+        }
+        if before != named, (try? parentKey(for: named)) != nil {
+            opened[ref] = nil
+            _ = try? open(named)
+        }
+        return standing(of: ref)
     }
 
     /*
@@ -566,22 +613,7 @@ public actor Vault {
             after = page.nextCursor
         } while after != nil
         guard let base = first else { throw DriveAPIError.notFound("This folder no longer exists.") }
-        evictMissing(from: folderId, in: workspaceId, named: all)
         return Listing(folder: base.folder, ancestors: base.ancestors, children: all, nextCursor: nil)
-    }
-
-    /*
-     * A folder's completed listing (every page) is the server's word on what is in it: a row this process
-     * holds under that folder, in that workspace, that the listing no longer names is gone, trashed or
-     * deleted elsewhere. A received share has no feed here to say so. Only that folder's own listing
-     * counts; a row merely forgotten to be read again (a rotation) was never held, so it isn't evicted.
-     */
-    private func evictMissing(from folderId: String, in workspaceId: String, named children: [NodeView]) {
-        let folder = folderId.lowercased()
-        let named = Set(children.map { $0.id.lowercased() })
-        for (nodeId, row) in opened.values(in: workspaceId) where row.node.parentId?.lowercased() == folder && !named.contains(nodeId) {
-            remove(nodeId, in: workspaceId)
-        }
     }
 
     /* A folder's children, opened and sorted folders first. */

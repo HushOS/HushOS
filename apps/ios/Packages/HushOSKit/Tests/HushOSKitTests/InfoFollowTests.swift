@@ -30,6 +30,7 @@ struct InfoFollowTests {
 
     struct Drive {
         let vault: Vault
+        let root: NodeView
         let folder: NodeView
         let file: NodeView
         let folderKey: Data
@@ -51,7 +52,7 @@ struct InfoFollowTests {
         try await vault.open(folder)
         let file = try row(fileId, parent: folderId, kind: "file", parentKey: folderKey, key: fileKey, name: "Trip plan.md")
         try await vault.open(file)
-        return Drive(vault: vault, folder: folder, file: file, folderKey: folderKey, fileKey: fileKey, rootKey: rootKey)
+        return Drive(vault: vault, root: root, folder: folder, file: file, folderKey: folderKey, fileKey: fileKey, rootKey: rootKey)
     }
 
     func opened(_ drive: Drive) async throws -> (InfoFollow, NodeRef) {
@@ -138,61 +139,101 @@ struct InfoFollowTests {
         #expect(follow.update(await vault.standing(of: ref), outOfReach: false) == .close)
     }
 
-    /* A received share: its top folder `shareRoot`, a file and a subfolder in it, opened from a listing. */
+    /* A received share: its top folder, a file and a subfolder in it, opened from a listing; the own drive beside it. */
     struct Share {
         let vault: Vault
+        let drive: Drive
         let workspace: String
         let root: NodeView
         let file: NodeView
         let sub: NodeView
-        let key: Data
-    }
+        let rootKey: Data
+        let fileKey: Data
 
-    func share() async throws -> Share {
-        let drive = try await drive()
-        let theirs = UUID().uuidString.lowercased(), granter = try randomBytes(length: 32), key = try randomBytes(length: 32)
-        let shareRoot = UUID().uuidString.lowercased(), file = UUID().uuidString.lowercased(), sub = UUID().uuidString.lowercased()
         func sealed(_ id: String, parent: String?, kind: String, parentKey: Data, key: Data, name: String) throws -> NodeView {
-            let ctx = NodeKeyContext(workspaceId: theirs, nodeId: id, parentId: parent ?? theirs, parentKeyEpoch: 1, keyEpoch: 1)
-            let metadata = try metadataSeal(ctx: MetadataContext(workspaceId: theirs, nodeId: id, metadataVersion: 1), nodeKey: key,
+            let ctx = NodeKeyContext(workspaceId: workspace, nodeId: id, parentId: parent ?? workspace, parentKeyEpoch: 1, keyEpoch: 1)
+            let metadata = try metadataSeal(ctx: MetadataContext(workspaceId: workspace, nodeId: id, metadataVersion: 1), nodeKey: key,
                                             metadata: NodeMetadata(name: name, mime: nil, size: nil, modified: nil, attributes: [:]))
-            return NodeView(id: id, workspaceId: theirs, parentId: parent, kind: kind, keyEpoch: 1, parentKeyEpoch: 1,
+            return NodeView(id: id, workspaceId: workspace, parentId: parent, kind: kind, keyEpoch: 1, parentKeyEpoch: 1,
                             keyEnvelope: base64urlEncode(bytes: try nodeWrap(ctx: ctx, parentKey: parentKey, nodeKey: key)),
                             metadataVersion: 1, metadataEnvelope: base64urlEncode(bytes: metadata), currentVersion: nil,
                             trashedAt: nil, changeSeq: 1, createdAt: nil, updatedAt: nil)
         }
-        let root = try sealed(shareRoot, parent: nil, kind: "folder", parentKey: granter, key: key, name: "Shared to me")
+
+        /* The share's top folder listed with these children. */
+        func list(_ children: [NodeView]) { DriveStub.list(root.id, Listing(folder: root, ancestors: [], children: children, nextCursor: nil)) }
+    }
+
+    /* `fileId`: the shared file's id; the server picks it, so it may be one of the own drive's. */
+    func share(fileId sharedFile: String = UUID().uuidString.lowercased()) async throws -> Share {
+        let drive = try await drive()
+        let theirs = UUID().uuidString.lowercased(), granter = try randomBytes(length: 32), key = try randomBytes(length: 32), fileKey = try randomBytes(length: 32)
+        var share = Share(vault: drive.vault, drive: drive, workspace: theirs, root: drive.root, file: drive.file, sub: drive.folder, rootKey: key, fileKey: fileKey)
+        let root = try share.sealed(UUID().uuidString.lowercased(), parent: nil, kind: "folder", parentKey: granter, key: key, name: "Shared to me")
         _ = try await drive.vault.adopt(root, nodeKey: key, metadata: NodeMetadata(name: "Shared to me", mime: nil, size: nil, modified: nil, attributes: [:]), in: theirs)
-        let fileRow = try sealed(file, parent: shareRoot, kind: "file", parentKey: key, key: try randomBytes(length: 32), name: "Menu.pdf")
-        let subRow = try sealed(sub, parent: shareRoot, kind: "folder", parentKey: key, key: try randomBytes(length: 32), name: "Photos")
-        DriveStub.list(shareRoot, Listing(folder: root, ancestors: [], children: [fileRow, subRow], nextCursor: nil))
-        DriveStub.list(sub, Listing(folder: subRow, ancestors: [root], children: [], nextCursor: nil))
-        _ = try await drive.vault.children(of: shareRoot)
-        return Share(vault: drive.vault, workspace: theirs, root: root, file: fileRow, sub: subRow, key: key)
+        let file = try share.sealed(sharedFile, parent: root.id, kind: "file", parentKey: key, key: fileKey, name: "Menu.pdf")
+        let sub = try share.sealed(UUID().uuidString.lowercased(), parent: root.id, kind: "folder", parentKey: key, key: try randomBytes(length: 32), name: "Photos")
+        share = Share(vault: drive.vault, drive: drive, workspace: theirs, root: root, file: file, sub: sub, rootKey: key, fileKey: fileKey)
+        share.list([file, sub])
+        _ = try await drive.vault.children(of: root.id)
+        return share
     }
 
     /*
      * A file in a received share, trashed on the granter's device: there is no feed here for their drive,
-     * so the share's folder listed again without it is the server's word that it is gone. Fails if the
-     * re-list leaves the earlier row standing, which kept Info open on it while the share existed.
+     * so Info asks about it, and its folder listed without it is the server's word that it is gone.
      */
-    @Test func aSharesFileMissingFromItsFolderListedAgainClosesInfo() async throws {
+    @Test func theInfoItemGoneOnTheServerClosesIt() async throws {
         let share = try await share()
-        let ref = NodeRef(workspaceId: share.workspace, nodeId: share.file.id)
         var follow = InfoFollow(try #require(await share.vault.item(share.file.id)))
-        DriveStub.list(share.root.id, Listing(folder: share.root, ancestors: [], children: [share.sub], nextCursor: nil))
-        _ = try await share.vault.children(of: share.root.id)
-        #expect(follow.update(await share.vault.standing(of: ref), outOfReach: false) == .close)
+        share.list([share.sub])
+        #expect(follow.update(await share.vault.recheck(follow.item), outOfReach: false) == .close)
     }
 
-    /* Another folder's listing says nothing about the file: Info stays on it. */
-    @Test func anotherFolderListedAgainKeepsInfoOpen() async throws {
+    /* Still there (renamed meanwhile): Info stays, with the name the server has now. */
+    @Test func theInfoItemLiveOnTheServerHoldsIt() async throws {
         let share = try await share()
-        let ref = NodeRef(workspaceId: share.workspace, nodeId: share.file.id)
         var follow = InfoFollow(try #require(await share.vault.item(share.file.id)))
-        _ = try await share.vault.children(of: share.sub.id)
-        #expect(follow.update(await share.vault.standing(of: ref), outOfReach: false) == .show)
+        let renamed = try share.sealed(share.file.id, parent: share.root.id, kind: "file", parentKey: share.rootKey, key: share.fileKey, name: "Menu (summer).pdf")
+        share.list([renamed, share.sub])
+        #expect(follow.update(await share.vault.recheck(follow.item), outOfReach: false) == .show)
+        #expect(follow.item.name == "Menu (summer).pdf")
+    }
+
+    /* No answer is no verdict: a row only being read again stays as Info last showed it. */
+    @Test func noAnswerKeepsTheLastRowShown() async throws {
+        let share = try await share()
+        var follow = InfoFollow(try #require(await share.vault.item(share.file.id)))
+        await share.vault.forget(share.file.id)
+        DriveStub.unlist(share.root.id)
+        #expect(follow.update(await share.vault.recheck(follow.item), outOfReach: false) == .hold)
         #expect(follow.item.name == "Menu.pdf")
+    }
+
+    /*
+     * The children route leaves trashed rows out: listing a folder again must not take its trashed file for
+     * gone, or the Trash (which lists from these rows) loses it.
+     */
+    @Test func aTrashedSiblingSurvivesItsFolderListedAgain() async throws {
+        let drive = try await drive()
+        let siblingId = UUID().uuidString.lowercased()
+        let sibling = try row(siblingId, parent: folderId, kind: "file", parentKey: drive.folderKey, key: try randomBytes(length: 32),
+                              name: "Old draft.md", trashed: "2026-10-30T08:00:00Z")
+        try await drive.vault.open(sibling)
+        DriveStub.list(folderId, Listing(folder: drive.folder, ancestors: [drive.root], children: [drive.file], nextCursor: nil))
+        _ = try await drive.vault.listChildren(of: folderId)
+        #expect(await drive.vault.item(siblingId)?.node.trashedAt != nil)
+        #expect(await drive.vault.standing(of: NodeRef(workspaceId: workspace, nodeId: siblingId)) == .held)
+    }
+
+    /* A share's file gone, under the same id as one of the own drive's files: only the share's row goes. */
+    @Test func theSameIdInAnotherWorkspaceIsUntouched() async throws {
+        let share = try await share(fileId: fileId)
+        var follow = InfoFollow(try #require(await share.vault.standing(of: share.file.ref).liveRow))
+        share.list([share.sub])
+        #expect(follow.update(await share.vault.recheck(follow.item), outOfReach: false) == .close)
+        #expect(await share.vault.standing(of: NodeRef(workspaceId: workspace, nodeId: fileId)) == .live(try #require(await share.vault.item(fileId))))
+        #expect(await share.vault.item(fileId)?.node.workspaceId == workspace)
     }
 
     /* Android's rule, case by case (ui/Adaptive.kt `infoLookup`): the clients close Info on the same events. */
@@ -203,6 +244,10 @@ struct InfoFollowTests {
         #expect(InfoLookup.decide(live: false, held: false, removed: false, outOfReach: false, seen: true) == .hold)
         #expect(InfoLookup.decide(live: false, held: false, removed: false, outOfReach: false, seen: false) == .find)
     }
+}
+
+extension RowStanding {
+    var liveRow: Opened? { if case .live(let row) = self { row } else { nil } }
 }
 
 actor Box {
@@ -222,6 +267,11 @@ final class DriveStub: URLProtocol {
     static func list(_ folderId: String, _ listing: Listing) {
         let data = try? JSONEncoder().encode(listing)
         lock.withLock { listings[folderId.lowercased()] = data }
+    }
+
+    /* No answer for this folder any more: its listing fails as an unreachable server would. */
+    static func unlist(_ folderId: String) {
+        _ = lock.withLock { listings.removeValue(forKey: folderId.lowercased()) }
     }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
