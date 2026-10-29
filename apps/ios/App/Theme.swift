@@ -361,9 +361,15 @@ private struct ScreenChrome<Actions: View>: ViewModifier {
     let back: (() -> Void)?
     let actions: () -> Actions
     @State private var collapsed = false
+    @State private var width: CGFloat = 0
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     func body(content: Self.Content) -> some View {
         content
+            // Where the window is wider than a list reads well (iPhone Duo's inner display on its side, an
+            // iPad), the rows keep a readable column in the middle rather than stretching edge to edge.
+            .contentMargins(.horizontal, ReadableColumn.margin(forWidth: width, regularHeight: verticalSizeClass == .regular), for: .scrollContent)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .toolbar(.hidden, for: .navigationBar)
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 geometry.contentOffset.y + geometry.contentInsets.top > 56
@@ -390,6 +396,20 @@ private struct ScreenChrome<Actions: View>: ViewModifier {
                     .transition(.opacity)
                 }
             }
+    }
+}
+
+/* How wide a list or a settings page gets before it stops growing and centres instead. */
+enum ReadableColumn {
+    static let width: CGFloat = 720
+
+    /*
+     * Each side's margin, the list's own 16 outside a centred column; nil (the system's own
+     * margins, as today) wherever the window is no wider than the column, and on any iPhone screen
+     * on its side (compact height), which stays as it is.
+     */
+    static func margin(forWidth available: CGFloat, regularHeight: Bool) -> CGFloat? {
+        regularHeight && available > width ? (available - width) / 2 + Alpine.Space.s4 : nil
     }
 }
 
