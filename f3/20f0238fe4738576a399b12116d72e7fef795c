@@ -1,0 +1,33 @@
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_9f632211fb1230 49
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_a2caa1022cda82 1094-1122
+apps/ios/App/NodeActions.swift
+  s_566b8e0c4467a4::t_c73c1794502a5c 83,129-131,531-545
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/InfoFollow.swift
+  s_566b8e0c4467a4::t_1b24914f6fcfbb 1-30,32-36,40-41,43,47-56
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Catalogue.swift
+  s_566b8e0c4467a4::t_6dd094e3516040 168
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_566b8e0c4467a4::t_76e5e06e5ffc92 242,275,279-280,290-293,362,852
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_566b8e0c4467a4::t_7fdf61509f91da 91-96,476,506,521,526-553
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/InfoFollowTests.swift
+  s_566b8e0c4467a4::t_9f1463f9d05d5d 2,7-12,14-59,62-68,71-78,81-85,88-95,98-104,107-113,116-120,122-156
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f320f0238fe4738576a399b12116d72e7fef795c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
