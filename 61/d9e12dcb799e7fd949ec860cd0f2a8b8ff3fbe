@@ -1,0 +1,28 @@
+apps/ios/App/MainView.swift
+  s_566b8e0c4467a4::t_2efcc1305b5845 17,26,28-29,80,228,234-237,239,241
+apps/ios/App/NodeActions.swift
+  s_566b8e0c4467a4::t_4e9d3a3144e2b6 108,114-116,120-128
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/RoomBeside.swift
+  s_566b8e0c4467a4::t_e202f97ac0aa70 4-9,12-13,15-44
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RoomBesideTests.swift
+  s_566b8e0c4467a4::t_c85dc206b27a8a 38-40,45-47,54-55,63-64
+  s_566b8e0c4467a4::t_de9d398396207e 6-8,11-12,15-18,21-23,26-37,41-44,48-53,58-62
+apps/ios/App/TabSidebar.swift
+  s_566b8e0c4467a4::t_5a7d23921b9858 1-59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "61d9e12dcb799e7fd949ec860cd0f2a8b8ff3fbe",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
