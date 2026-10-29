@@ -8,6 +8,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -263,7 +273,9 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
         ItemSheet.TAGS -> ItemTagsSheet(model, state, listOf(item), dismiss)
         ItemSheet.SHARE -> ShareSheet(model, state, item, dismiss)
         ItemSheet.SEND -> SendCopy(model, state, listOf(item), dismiss)
-        ItemSheet.INFO -> InfoSheet(model, state, item, onShare = { sheet = ItemSheet.SHARE }, onTags = { sheet = ItemSheet.TAGS }, dismiss = dismiss)
+        // Main shows Info: beside the list when the window has room, otherwise as this same sheet.
+        ItemSheet.INFO -> LocalInfo.current?.let { host -> LaunchedEffect(item.id) { host.open(item); dismiss() } }
+            ?: InfoSheet(model, state, item, onShare = { sheet = ItemSheet.SHARE }, onTags = { sheet = ItemSheet.TAGS }, dismiss = dismiss)
         ItemSheet.REPORT -> ReportSheet(item, model.reportsGoTo(state), dismiss) { category, reason, email -> model.report(item, category, reason, email) }
     }
 }
@@ -583,6 +595,36 @@ private fun VersionRow(item: Opened, title: String, detail: String?, faded: Bool
 /* Info: what it is, and who can open it and its tags as ways in, not dead text. */
 @Composable
 fun InfoSheet(model: DriveViewModel, state: DriveState, item: Opened, onShare: () -> Unit, onTags: () -> Unit, dismiss: () -> Unit) {
+    Sheet(onDismissRequest = dismiss, full = true) { InfoBody(model, state, item, onShare, onTags) }
+}
+
+/*
+ * Info beside the list, on a window with room for two panes (DESIGN.md's details panel): the
+ * sheet's contents under a title and Close, on a surface card that keeps clear of the status bar.
+ */
+@Composable
+fun InfoPane(model: DriveViewModel, state: DriveState, item: Opened, onShare: () -> Unit, onTags: () -> Unit, onClose: () -> Unit) {
+    val alpine = Alpine.colors
+    val shape = RoundedCornerShape(com.hushos.tokens.AlpineRadius.Card)
+    Column(
+        Modifier.fillMaxSize()
+            .windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout).only(WindowInsetsSides.Top + WindowInsetsSides.End))
+            .padding(top = AlpineSpace.S2, end = AlpineSpace.S3, bottom = AlpineSpace.S3)
+            .then(if (alpine.high) Modifier.border(1.dp, alpine.divider, shape) else Modifier.raised(shape))
+            .background(alpine.surface, shape).clip(shape),
+    ) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = AlpineSpace.S4, end = AlpineSpace.S1), verticalAlignment = Alignment.CenterVertically) {
+            Text("Info", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f).semantics { heading() })
+            IconButton(onClick = onClose) { Icon(Icons.Outlined.Close, "Close Info") }
+        }
+        // Rows paint themselves in Material's surface: the card's own colour here, as inside a sheet.
+        MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(surface = alpine.surface)) { InfoBody(model, state, item, onShare, onTags) }
+    }
+}
+
+/* What Info says, in the sheet and in the pane alike. */
+@Composable
+private fun InfoBody(model: DriveViewModel, state: DriveState, item: Opened, onShare: () -> Unit, onTags: () -> Unit) {
     val alpine = Alpine.colors
     LaunchedEffect(item.id) { model.thumbnail(item) }
     val thumbnail = state.thumbnails[item.id]
@@ -590,7 +632,7 @@ fun InfoSheet(model: DriveViewModel, state: DriveState, item: Opened, onShare: (
     val mine = ownerOf(model, state, item) == Owner.ME
     val created = item.node.createdAt?.let { runCatching { whenText(Instant.parse(it).toEpochMilli()) }.getOrNull() }
     val folder = item.node.parentId?.let { parent -> if (parent == state.rootId) "Files" else model.item(parent)?.name }
-    Sheet(onDismissRequest = dismiss, full = true) {
+    run {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S6)) {
             Column(Modifier.fillMaxWidth().padding(bottom = AlpineSpace.S4), horizontalAlignment = Alignment.CenterHorizontally) {
                 Mark(item, bitmap, box = if (bitmap != null) 120.dp else 88.dp)

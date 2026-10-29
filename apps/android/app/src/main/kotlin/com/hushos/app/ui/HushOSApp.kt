@@ -1,5 +1,30 @@
 package com.hushos.app.ui
 
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.WideNavigationRail
+import androidx.compose.material3.WideNavigationRailDefaults
+import androidx.compose.material3.WideNavigationRailItem
+import androidx.compose.material3.WideNavigationRailItemDefaults
+import androidx.compose.material3.WideNavigationRailValue
+import androidx.compose.material3.rememberWideNavigationRailState
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.layout.AnimatedPane
+import androidx.compose.material3.adaptive.layout.PaneAdaptedValue
+import androidx.compose.material3.adaptive.layout.SupportingPaneScaffold
+import androidx.compose.material3.adaptive.layout.SupportingPaneScaffoldRole
+import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldValue
+import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective
+import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
+import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldPredictiveBackHandler
+import androidx.compose.material3.adaptive.navigation.rememberSupportingPaneScaffoldNavigator
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffoldLayout
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.remember
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.draw.clip
@@ -55,8 +80,6 @@ import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.Surface
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -93,12 +116,12 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
     val state by model.state.collectAsStateWithLifecycle()
     // Account recovery, signed in or out: its own screens until the new phrase, which is saved signed in.
     model.recovery?.let { flow ->
-        if (flow.step != DriveViewModel.RecoveryStep.NEW_PHRASE) { RecoverScreen(model, state); return }
-        if (state.gate == Gate.SIGNED_IN) { PhraseScreen(model, fresh = true) { model.leaveRecovery() }; return }
+        if (flow.step != DriveViewModel.RecoveryStep.NEW_PHRASE) { FormColumn { RecoverScreen(model, state) }; return }
+        if (state.gate == Gate.SIGNED_IN) { FormColumn { PhraseScreen(model, fresh = true) { model.leaveRecovery() } }; return }
     }
     when (state.gate) {
         Gate.CHECKING -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingIndicator() }
-        Gate.SIGNED_OUT -> if (state.accountDeleted) AccountDeletedScreen(onDone = model::clearSignedOut) else SignInScreen(model, state)
+        Gate.SIGNED_OUT -> FormColumn { if (state.accountDeleted) AccountDeletedScreen(onDone = model::clearSignedOut) else SignInScreen(model, state) }
         Gate.SIGNED_IN -> {
             // While the app is on screen the lists follow the server, as the web's feed does; in the background nothing polls.
             val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
@@ -136,8 +159,15 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
     }
 }
 
+/* Signed out and in recovery, a form's column: phone-width fields and buttons, centred on a wide window. */
+@Composable
+private fun FormColumn(content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxSize().readableWidth(Frame.Form)) { content() }
+}
+
 private enum class Tab(val label: String) { HOME("Home"), FILES("Files"), SHARED("Shared"), ACCOUNT("Account") }
 
+@OptIn(ExperimentalMaterial3AdaptiveApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun Main(model: DriveViewModel, state: DriveState) {
     val alpine = Alpine.colors
@@ -185,50 +215,85 @@ private fun Main(model: DriveViewModel, state: DriveState) {
     // The bars at the foot, measured, so the + button and the lists' ends rise over them.
     var footBars by remember { mutableStateOf(0.dp) }
     val density = androidx.compose.ui.platform.LocalDensity.current
+    // The window, its size class and posture: the bar, the rail or the wide rail; Info beside the list or as a sheet.
+    val adaptive = currentWindowAdaptiveInfo(supportLargeAndXLargeWidth = true)
+    val (widthDp, heightDp) = windowDp()
+    val directive = calculatePaneScaffoldDirective(adaptive)
+    val beside = directive.maxHorizontalPartitions > 1
+    // Info is a destination of its own: the item's id, kept by the navigator across a fold, an unfold or a resize.
+    val info = rememberSupportingPaneScaffoldNavigator<String>(scaffoldDirective = directive)
+    val infoId = info.currentDestination?.takeIf { it.pane == SupportingPaneScaffoldRole.Supporting }?.contentKey
+    // The tab Info was opened in (another tab closes it) and the sheet it led to (Share, Tags), kept the same way.
+    var infoTab by rememberSaveable { mutableStateOf(tab) }
+    var infoSheet by rememberSaveable { mutableStateOf<ItemSheet?>(null) }
+    val tabletop = adaptive.windowPosture.isTabletop
+    val nav = navKind(widthDp, heightDp, tabletop, infoBeside = beside && infoId != null)
+    val frame = AppFrame(nav, beside, tabletopSheetMax(heightDp, horizontalHingeBottomDp(adaptive, density.density), tabletop))
+    fun closeInfo() = scope.launch {
+        infoSheet = null
+        while (info.currentDestination?.pane == SupportingPaneScaffoldRole.Supporting && info.canNavigateBack(BackNavigationBehavior.PopLatest)) {
+            info.navigateBack(BackNavigationBehavior.PopLatest)
+        }
+    }
+    val infoHost = remember(info) {
+        object : InfoHost {
+            override fun open(item: com.hushos.app.data.Opened) {
+                scope.launch {
+                    // One Info at a time: another item replaces it, so Back closes Info rather than stepping through items.
+                    if (info.currentDestination?.pane == SupportingPaneScaffoldRole.Supporting) info.navigateBack(BackNavigationBehavior.PopLatest)
+                    infoTab = tab
+                    info.navigateTo(SupportingPaneScaffoldRole.Supporting, item.id)
+                }
+            }
+        }
+    }
+    LaunchedEffect(tab) { if (infoId != null && infoTab != tab) closeInfo() }
+    // Found again after the system restarted the app; gone (trashed, unshared): Info closes.
+    val infoItem = infoId?.takeIf { infoTab == tab }?.let { id ->
+        val found by androidx.compose.runtime.produceState(model.item(id), id) { if (value == null) value = model.find(id) ?: run { closeInfo(); null } }
+        model.item(id) ?: found
+    }
+    val searching = tab == Tab.HOME && home == "search"
+    // Search takes the whole screen on a phone, as Material's search view does; a rail stays beside it.
+    val suiteType = when {
+        nav == NavKind.BAR && searching -> NavigationSuiteType.None
+        nav == NavKind.BAR -> NavigationSuiteType.NavigationBar
+        else -> NavigationSuiteType.WideNavigationRailCollapsed
+    }
+    val railState = rememberWideNavigationRailState(if (nav == NavKind.WIDE_RAIL) WideNavigationRailValue.Expanded else WideNavigationRailValue.Collapsed)
+    LaunchedEffect(nav) { if (nav == NavKind.WIDE_RAIL) railState.expand() else railState.collapse() }
+    val select = { entry: Tab -> if (tab == entry && entry == Tab.HOME) home = "home"; tab = entry }
     CompositionLocalProvider(
         LocalNotice provides { state.notice?.let { NoticeBar(it, model, Modifier.padding(12.dp)) } },
         LocalFootBars provides footBars,
+        LocalFrame provides frame,
+    ) {
+    NavigationSuiteScaffoldLayout(
+        navigationSuiteType = suiteType,
+        navigationSuite = {
+            when (suiteType) {
+                NavigationSuiteType.NavigationBar -> TabBar(tab, select)
+                NavigationSuiteType.WideNavigationRailCollapsed -> TabRail(tab, railState, select)
+                else -> {}
+            }
+        },
     ) {
     Scaffold(
         containerColor = alpine.ground,
-        bottomBar = {
-            // Search takes the whole screen, as Material's search view does.
-            if (!(tab == Tab.HOME && home == "search")) Column {
-            // High contrast has no shadows or tonal steps, so a rule marks where the list ends.
-            if (alpine.high) androidx.compose.material3.HorizontalDivider(color = alpine.divider)
-            NavigationBar(containerColor = alpine.surface) {
-                for (entry in Tab.entries) {
-                    val on = tab == entry
-                    NavigationBarItem(
-                        selected = on,
-                        onClick = { if (on && entry == Tab.HOME) home = "home"; tab = entry },
-                        icon = {
-                            // Selected is a filled icon in the tint pill with an ink label, never the tint alone.
-                            Icon(
-                                when (entry) {
-                                    Tab.HOME -> if (on) Icons.Filled.Home else Icons.Outlined.Home
-                                    Tab.FILES -> if (on) Icons.Filled.Folder else Icons.Outlined.Folder
-                                    Tab.SHARED -> if (on) Icons.Filled.Group else Icons.Outlined.Group
-                                    Tab.ACCOUNT -> if (on) Icons.Filled.Person else Icons.Outlined.Person
-                                },
-                                contentDescription = null,
-                            )
-                        },
-                        label = { Text(entry.label) },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = alpine.onTint, indicatorColor = alpine.tint, selectedTextColor = alpine.ink,
-                            unselectedIconColor = alpine.inkMuted, unselectedTextColor = alpine.inkMuted,
-                        ),
-                    )
-                }
-            }
-            }
-        },
+        // The bar pays the navigation bar's inset; beside a rail the content pays it here, once, for every screen.
+        contentWindowInsets = WindowInsets.navigationBars.only(WindowInsetsSides.Bottom),
+        modifier = Modifier.consumeWindowInsets(
+            when (suiteType) {
+                NavigationSuiteType.NavigationBar -> WindowInsets.navigationBars.only(WindowInsetsSides.Bottom)
+                NavigationSuiteType.WideNavigationRailCollapsed -> WideNavigationRailDefaults.windowInsets.only(WindowInsetsSides.Start)
+                else -> WindowInsets(0)
+            },
+        ),
         snackbarHost = {
             // At the foot, just above the tabs; the + button rises over them (LocalFootBars). On Files they
-            // sit over the paste bar, which belongs to the folder.
+            // sit over the paste bar, which belongs to the folder. A snackbar's width on a wide window.
             val lift = if (tab == Tab.FILES && state.clipboard != null) 80.dp else 0.dp
-            Column(Modifier.padding(bottom = lift).onSizeChanged { footBars = with(density) { it.height.toDp() } }) {
+            Column(Modifier.widthIn(max = SnackbarMax).padding(bottom = lift).onSizeChanged { footBars = with(density) { it.height.toDp() } }) {
                 state.notice?.let { notice ->
                     NoticeBar(notice, model, Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = if (state.transfers.isEmpty() && state.queued.isEmpty()) 4.dp else 0.dp))
                 }
@@ -237,13 +302,47 @@ private fun Main(model: DriveViewModel, state: DriveState) {
             }
         },
     ) { padding ->
-        Box(Modifier.padding(bottom = padding.calculateBottomPadding())) {
-            when (tab) {
-                Tab.HOME -> HomeScreen(model, state, home, go = { home = it })
-                Tab.FILES -> BrowseScreen(model, state, takesLinks = true)
-                Tab.SHARED -> SharedScreen(model, state)
-                Tab.ACCOUNT -> AccountScreen(model, state)
-            }
+        // One layout for every window, so a fold or an unfold finds each screen's saved state where it left it:
+        // the list, and Info beside it only while there is room for two panes.
+        val value = if (beside && infoItem != null) ThreePaneScaffoldValue(PaneAdaptedValue.Expanded, PaneAdaptedValue.Expanded, PaneAdaptedValue.Hidden)
+            else ThreePaneScaffoldValue(PaneAdaptedValue.Expanded, PaneAdaptedValue.Hidden, PaneAdaptedValue.Hidden)
+        SupportingPaneScaffold(
+            directive = directive,
+            value = value,
+            modifier = Modifier.padding(bottom = padding.calculateBottomPadding()),
+            mainPane = {
+                AnimatedPane {
+                    CompositionLocalProvider(LocalInfo provides infoHost) {
+                        Box(Modifier.fillMaxSize().readableWidth()) {
+                            when (tab) {
+                                Tab.HOME -> HomeScreen(model, state, home, go = { home = it })
+                                Tab.FILES -> BrowseScreen(model, state, takesLinks = true)
+                                Tab.SHARED -> SharedScreen(model, state)
+                                Tab.ACCOUNT -> AccountScreen(model, state)
+                            }
+                        }
+                    }
+                }
+            },
+            supportingPane = {
+                AnimatedPane(Modifier.preferredWidth(Frame.Info)) {
+                    infoItem?.let { item ->
+                        InfoPane(model, state, item, onShare = { infoSheet = ItemSheet.SHARE }, onTags = { infoSheet = ItemSheet.TAGS }, onClose = { closeInfo(); model.refreshAccess() })
+                    }
+                }
+            },
+        )
+    }
+    }
+    // Back closes Info first, beside the list; as a sheet, the sheet takes Back itself.
+    ThreePaneScaffoldPredictiveBackHandler(info, BackNavigationBehavior.PopLatest)
+    // Info as a sheet on a window without room beside the list (and the sheets Info leads to, either way).
+    infoItem?.let { item ->
+        CompositionLocalProvider(LocalInfo provides null) {
+            val sheet = infoSheet
+            // On a phone, closing Share or Tags closes Info too, as it always has; beside the list, Info stays.
+            if (sheet != null) ItemActions(model, state, item, open = sheet) { infoSheet = null; if (!beside) closeInfo(); model.refreshAccess() }
+            else if (!beside) InfoSheet(model, state, item, onShare = { infoSheet = ItemSheet.SHARE }, onTags = { infoSheet = ItemSheet.TAGS }, dismiss = { closeInfo(); model.refreshAccess() })
         }
     }
     if (transfersOpen) TransferSheet(model, state.queued + state.transfers, state.unreachable, makeRoom = { transfersOpen = false; makingRoom = true }) { transfersOpen = false }
@@ -254,6 +353,74 @@ private fun Main(model: DriveViewModel, state: DriveState) {
     LaunchedEffect(Unit) { settled = true }
     if (settled && model.showingOwnWords) OwnWordsSheet(model, state, model::closeOwnWords)
     BackgroundSheet(active = state.queued.any { !it.done })
+    }
+}
+
+/* A snackbar's widest, as Material draws them on a large window; a phone's is its width. */
+private val SnackbarMax = 600.dp
+
+/* The icon for a tab, filled while it is the one open. */
+private fun tabIcon(entry: Tab, on: Boolean) = when (entry) {
+    Tab.HOME -> if (on) Icons.Filled.Home else Icons.Outlined.Home
+    Tab.FILES -> if (on) Icons.Filled.Folder else Icons.Outlined.Folder
+    Tab.SHARED -> if (on) Icons.Filled.Group else Icons.Outlined.Group
+    Tab.ACCOUNT -> if (on) Icons.Filled.Person else Icons.Outlined.Person
+}
+
+/* The bottom bar, on phones and any window too short or too narrow for a rail. */
+@Composable
+private fun TabBar(tab: Tab, select: (Tab) -> Unit) {
+    val alpine = Alpine.colors
+    Column {
+        // High contrast has no shadows or tonal steps, so a rule marks where the list ends.
+        if (alpine.high) androidx.compose.material3.HorizontalDivider(color = alpine.divider)
+        NavigationBar(containerColor = alpine.surface) {
+            for (entry in Tab.entries) {
+                val on = tab == entry
+                NavigationBarItem(
+                    selected = on,
+                    onClick = { select(entry) },
+                    // Selected is a filled icon in the tint pill with an ink label, never the tint alone.
+                    icon = { Icon(tabIcon(entry, on), contentDescription = null) },
+                    label = { Text(entry.label) },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = alpine.onTint, indicatorColor = alpine.tint, selectedTextColor = alpine.ink,
+                        unselectedIconColor = alpine.inkMuted, unselectedTextColor = alpine.inkMuted,
+                    ),
+                )
+            }
+        }
+    }
+}
+
+/*
+ * The rail, on the ground like the web's sidebar, with the same tabs in the same order and the bar's
+ * selected look. Icons over labels while collapsed; labels beside them once there is room.
+ */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun TabRail(tab: Tab, state: androidx.compose.material3.WideNavigationRailState, select: (Tab) -> Unit) {
+    val alpine = Alpine.colors
+    val expanded = state.targetValue == WideNavigationRailValue.Expanded
+    Row {
+        WideNavigationRail(state = state, colors = WideNavigationRailDefaults.colors(containerColor = alpine.ground, contentColor = alpine.ink)) {
+            for (entry in Tab.entries) {
+                val on = tab == entry
+                WideNavigationRailItem(
+                    selected = on,
+                    onClick = { select(entry) },
+                    icon = { Icon(tabIcon(entry, on), contentDescription = null) },
+                    label = { Text(entry.label) },
+                    railExpanded = expanded,
+                    colors = WideNavigationRailItemDefaults.colors(
+                        selectedIconColor = alpine.onTint, selectedTextColorTopIconPosition = alpine.ink, selectedTextColorStartIconPosition = alpine.ink,
+                        selectedIndicatorColor = alpine.tint, unselectedIconColor = alpine.inkMuted, unselectedTextColor = alpine.inkMuted,
+                    ),
+                )
+            }
+        }
+        // High contrast has no tonal steps: a rule marks where the rail ends, as one marks the bar's edge.
+        if (alpine.high) androidx.compose.material3.VerticalDivider(color = alpine.divider)
     }
 }
 

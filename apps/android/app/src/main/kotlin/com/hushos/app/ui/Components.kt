@@ -273,10 +273,13 @@ val LocalFootBars = androidx.compose.runtime.compositionLocalOf { 0.dp }
 fun Sheet(onDismissRequest: () -> Unit, full: Boolean = false, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
     val alpine = Alpine.colors
     // `full`: a sheet with its own header and long content opens at full height, not half way.
-    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = full)
+    // Standing half open on a horizontal hinge, the sheet keeps below the fold and opens there at once.
+    val belowFold = LocalFrame.current.sheetMaxDp
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = full || belowFold != null)
     androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismissRequest, sheetState = sheetState, containerColor = alpine.surface) {
         val notice = LocalNotice.current
-        Box {
+        // The drag handle sits above this content, inside the sheet: it stays below the fold too.
+        Box(if (belowFold != null) Modifier.heightIn(max = (belowFold - SheetHandle).coerceAtLeast(0f).dp) else Modifier) {
             MaterialTheme(colorScheme = MaterialTheme.colorScheme.copy(surface = alpine.surface)) {
                 Column { content() }
             }
@@ -284,6 +287,9 @@ fun Sheet(onDismissRequest: () -> Unit, full: Boolean = false, content: @Composa
         }
     }
 }
+
+/* The drag handle's share of a sheet's height: Material's 4dp handle in its 22dp padding top and bottom. */
+private const val SheetHandle = 48f
 
 /*
  * The one header every destination and folder uses: the title on the left and

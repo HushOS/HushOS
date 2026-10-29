@@ -127,6 +127,14 @@ dependencies {
     implementation(libs.androidx.compose.foundation)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons)
+    // Foldables and large screens: the bar, rail or wide rail by window size, Info beside the list, and the fold's posture.
+    implementation(libs.androidx.compose.material3.navigation.suite)
+    implementation(libs.androidx.compose.material3.adaptive)
+    implementation(libs.androidx.compose.material3.adaptive.layout)
+    implementation(libs.androidx.compose.material3.adaptive.navigation)
+    implementation(libs.androidx.window)
+    // Dialog and sheet state kept in memory across a fold or a resize, never written to the saved-state bundle.
+    implementation(libs.androidx.compose.runtime.retain)
     implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.documentfile)
     implementation(libs.kotlinx.coroutines.android)

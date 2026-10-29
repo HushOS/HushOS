@@ -319,7 +319,8 @@ private fun planInk(state: DriveState) = plan(state).let { plan ->
 private fun AccountPage(title: String, onBack: (() -> Unit)?, actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {}, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
     val alpine = Alpine.colors
     Scaffold(contentWindowInsets = WindowInsets(0), containerColor = alpine.ground, topBar = { DestinationBar(title, onBack = onBack, actions = actions) }) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S8)) {
+        // A settings page is a form: on a wide window its fields and buttons keep a phone's width.
+        Column(Modifier.padding(padding).fillMaxSize().readableWidth(Frame.Form).verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S8)) {
             content()
         }
     }
