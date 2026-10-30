@@ -410,7 +410,8 @@ struct ShareItemSheet: View {
                 case .added(let added):
                     pin = added
                     Task { await store.refreshSigners() }
-                case .already(let known):
+                case .already(let known, let moved):
+                    if moved { Task { await store.refreshSigners() } }
                     pin = known
                 case .changed(let change):
                     interrupted = .new(email: email, role: role)

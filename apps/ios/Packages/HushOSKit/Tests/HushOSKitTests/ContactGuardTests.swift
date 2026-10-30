@@ -706,6 +706,21 @@ extension OnFakeDrive {
             #expect(try phone.guardStore.entry(maya) == nil)
         }
 
+        @Test func addingSomeoneAlreadyThereSaysWhenTheAddItselfMovedTrust() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            var settings = Settings()
+            settings.setPin(pinnedBeforeTheRelease(try pinned(maya, identity.keys, name: "Maya Lind")))
+            try server.replace(try reread(settings), root: root)
+            // Already a contact, but the add made the legacy pin first-seen and remembered her: what is drawn is judged again.
+            guard case .already(_, let moved) = try await phone.vault.addContact(email: "maya@example.com") else { Issue.record("not already"); return }
+            #expect(moved)
+            guard case .already(_, let again) = try await phone.vault.addContact(email: "maya@example.com") else { Issue.record("not already"); return }
+            #expect(!again)
+        }
+
         @Test func aPinOverHerKeysWithAFingerprintOverOthersBecomesFirstSeenAndActsGoOn() async throws {
             defer { done() }
             let identity = try makeIdentity(maya)

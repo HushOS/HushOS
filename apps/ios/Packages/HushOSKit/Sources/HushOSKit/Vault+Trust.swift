@@ -38,9 +38,12 @@ public struct AccountChangedError: Error, LocalizedError, Equatable, WordedError
     public var errorDescription: String? { "\(change.firstName)’s account changed." }
 }
 
-/* What Add someone came to (6.2). */
+/*
+ * What Add someone came to (6.2). `already` says whether the add itself moved whom this phone trusts (a legacy pin made
+ * first-seen, a succession followed, a first guard entry), so what is drawn is judged again, as after a new contact.
+ */
 public enum Added: Sendable, Equatable {
-    case added(ContactPin), already(ContactPin), changed(AccountChange)
+    case added(ContactPin), already(ContactPin, trustChanged: Bool), changed(AccountChange)
 }
 
 /* Where this phone stands with one person, given the keys the server serves for them now. */
@@ -386,14 +389,19 @@ extension Vault {
             throw ContactError.message("This isn’t the account that wrote it. Check the address, then try again.")
         }
         guard contact.upgraded else { throw ContactError.notUpgraded(contact.displayName) }
-        return try await withGuardTurn { try await decidedAgain { try await addDecided(contact, firstSeen: firstSeen) } }
+        // Every guard write and settings save forgets the signers (moves this generation): one during the add is a change
+        // in trust, even for someone already there.
+        let generation = signersGeneration
+        let added = try await withGuardTurn { try await decidedAgain { try await addDecided(contact, firstSeen: firstSeen) } }
+        if case .already(let pin, _) = added { return .already(pin, trustChanged: signersGeneration != generation) }
+        return added
     }
 
     private func addDecided(_ contact: Contact, firstSeen: String) async throws -> Added {
         switch try await stand(contact, act: true, follow: true) {
         case .ok(let pin, _, _):
             clearChange(contact.userId)
-            return .already(pin)
+            return .already(pin, trustChanged: false)
         case .notUpgraded:
             throw ContactError.notUpgraded(contact.displayName)
         case .succession(let pin), .changed(.some(let pin), _, _):
