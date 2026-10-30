@@ -223,6 +223,18 @@ class ContactTrustTest {
     }
 
     @Test
+    fun aPinWithItsKeysButAFingerprintOverOthersIsMadeFirstSeenNotKeptToFailEveryAct() {
+        // Valid keys, a non-empty fingerprint that isn't theirs (an edited or older format): it vouches for nothing.
+        val invalid = grace().pin(verified = false, firstSeen = null).copy(fingerprint = "0".repeat(64))
+        server.editSettings { it.pin(invalid) }
+        assertEquals(PinTrust.INVALID, stored()!!.trust)
+        assertFalse(vault.lookup(email).changed)
+        assertEquals(PinTrust.SEEN, stored()!!.trust)
+        assertEquals(grace().commitment, keyCommitment(guardEntry()!!.keys))
+        assertTrue(vault.addContact(email) is Added.Already)
+    }
+
+    @Test
     fun aReSealPassThatCouldNotFindAnItemKeepsThemQueuedAndOnlyADeletionLetsThemGo() {
         vault.addContact(email)
         val seals = ShareSeals.of(context)

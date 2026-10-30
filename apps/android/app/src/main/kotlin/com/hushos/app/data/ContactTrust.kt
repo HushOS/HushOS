@@ -105,7 +105,9 @@ fun ShareView.granterContact(): Contact = Contact(granterId, granterName, grante
  */
 internal fun Settings.setPin(target: ContactPin, ifOver: ContactPin?, verify: Boolean = false) {
     val current = pinOf(target.userId)
-    if (current != null && ContactPin.sameKeys(current, target) && (!verify || (current.verified && current.trustedVia == null))) {
+    // A pin over the same keys that vouches for nothing (a fingerprint over other keys) is never kept: it is what the act
+    // replaces, and kept, every later guard write over it would be refused.
+    if (current != null && current.held && ContactPin.sameKeys(current, target) && (!verify || (current.verified && current.trustedVia == null))) {
         forgetRemoval(target.userId)
         return
     }
