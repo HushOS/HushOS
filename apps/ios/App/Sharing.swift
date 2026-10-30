@@ -181,7 +181,7 @@ struct ShareItemSheet: View {
                         .padding(.vertical, Alpine.Space.s2).alpineRow()
                     }
                     ForEach(links) { link in
-                        LinkCard(item: item, link: link, url: urls[link.id], several: links.count > 1) { await load() }
+                        LinkCard(item: item, link: link, url: urls[link.id], several: links.count > 1) { await load(people: false) }
                             .alpineRow()
                     }
                 } header: {
@@ -206,7 +206,7 @@ struct ShareItemSheet: View {
             .onChange(of: step) { _, now in if now == nil { flowDone() } }
             .sheet(item: $person) { share in
                 PersonAccessSheet(item: item, share: share, pin: pins.first { $0.userId.lowercased() == share.grantee.id.lowercased() },
-                                  changed: changed.contains(share.grantee.id.lowercased())) { await load() }
+                                  changed: changed.contains(share.grantee.id.lowercased())) { await load(people: false) }
                     .environment(store)
             }
             .task { await load() }
@@ -324,18 +324,20 @@ struct ShareItemSheet: View {
         Task { await load() }
     }
 
-    private func load() async {
+    /* `people`: look the people on it up again (opening, Review); a reload after this sheet's own share or role change doesn't. */
+    private func load(people: Bool = true) async {
         do {
             // Not `store.reload`: forgetting the item drops it from the catalogue until the next build.
             shares = try await store.vault.shares(of: item)
             pins = try await store.vault.contacts()
-            // Met here too (2.4): who on this item has an account that changed, from the keys served now.
-            var moved: Set<String> = []
-            for share in shares {
-                guard let pin = pins.first(where: { $0.userId.lowercased() == share.grantee.id.lowercased() }) else { continue }
-                if (try? await store.vault.shareeChanged(pin)) == true { moved.insert(pin.userId.lowercased()) }
+            if people {
+                // Met here too (2.4): who on this item has an account that changed, from the keys served now (kept a
+                // minute by the vault, a few at a time). A lookup that fails is said, never read as "nothing changed".
+                let onIt = shares.compactMap { share in pins.first { $0.userId.lowercased() == share.grantee.id.lowercased() } }
+                let (moved, failure) = await Self.changedPeople(onIt, vault: store.vault)
+                changed = moved
+                if let failure { throw failure }
             }
-            changed = moved
             links = try await store.vault.links(for: item).sorted { $0.createdAt < $1.createdAt }
             var found: [String: URL] = [:]
             for link in links { if let url = try? await store.vault.linkURL(link, for: item) { found[link.id] = url } }
@@ -348,6 +350,30 @@ struct ShareItemSheet: View {
         await store.refreshSharing()
     }
 
+    /* Which of `pins` have an account that changed, three lookups at a time; the first failure, if any. */
+    private static func changedPeople(_ pins: [ContactPin], vault: Vault) async -> (Set<String>, Error?) {
+        var moved: Set<String> = []
+        var failure: Error?
+        await withTaskGroup(of: (String, Result<Bool, Error>).self) { group in
+            var queue = pins[...]
+            func start(_ pin: ContactPin) {
+                group.addTask {
+                    do { return (pin.userId.lowercased(), .success(try await vault.shareeChanged(pin))) } catch { return (pin.userId.lowercased(), .failure(error)) }
+                }
+            }
+            for _ in 0..<3 { if let pin = queue.popFirst() { start(pin) } }
+            for await (id, result) in group {
+                switch result {
+                case .success(true): moved.insert(id)
+                case .success(false): break
+                case .failure(let error): failure = failure ?? error
+                }
+                if let pin = queue.popFirst() { start(pin) }
+            }
+        }
+        return (moved, failure)
+    }
+
     private func share(with pin: ContactPin) {
         sharing = true
         error = ""
@@ -358,7 +384,8 @@ struct ShareItemSheet: View {
                 store.notify("\(pin.name.isEmpty ? pin.email : pin.name) \(role == "editor" ? "can edit" : "can view") “\(item.name)” now")
                 chosen = nil
                 self.role = "viewer"
-                await load()
+                // This sheet's own share: the person was just checked by it, so nobody is looked up again.
+                await load(people: false)
             } catch let changed as AccountChangedError {
                 // Waits for Review, in the sheet's place; runs again once it settled.
                 interrupted = .share(pin, role: role)
@@ -394,7 +421,8 @@ struct ShareItemSheet: View {
                 store.notify("Shared with \(pin.firstName)")
                 query = ""
                 self.role = "viewer"
-                await load()
+                // This sheet's own share: the person was just checked by it, so nobody is looked up again.
+                await load(people: false)
             } catch let changed as AccountChangedError {
                 interrupted = .new(email: email, role: role)
                 step = .changed(changed.change)

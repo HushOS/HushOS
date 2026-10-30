@@ -525,6 +525,52 @@ extension OnFakeDrive {
             #expect(opened == nodeKey)
         }
 
+        @Test func theShareSheetsLookupIsKeptForAMinuteAndForgottenOnContinue() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let phone = await phone(server)
+            guard case .added(let pin) = try await phone.vault.addContact(email: "maya@example.com") else { Issue.record("not added"); return }
+            let before = server.lookups
+            #expect(try await !phone.vault.shareeChanged(pin))
+            #expect(try await !phone.vault.shareeChanged(pin))
+            // One lookup for two loads of the sheet within the minute: the account's sixty a minute stay for Add and Share.
+            #expect(server.lookups == before + 1)
+            // Her keys change: the kept lookup still says nothing changed (it is display only, never what is sealed to)...
+            _ = try startOver(server)
+            #expect(try await !phone.vault.shareeChanged(pin))
+            // ...until the share itself, which looks up afresh, meets the change, and Continue settles it and forgets the kept one.
+            await #expect(throws: AccountChangedError.self) { _ = try await phone.vault.trustGrantee(try contact(server), follow: true) }
+            _ = try await phone.vault.continueWith(AccountChange(contactId: maya, name: "Maya Lind", email: "maya@example.com"))
+            let afterContinue = server.lookups
+            #expect(try await !phone.vault.shareeChanged(pin))
+            #expect(server.lookups == afterContinue + 1)
+            ResealTo.remove([maya])
+        }
+
+        @Test func oneMountingPassReadsTheSettingsOnceAndNeverReusesAVerdictForOtherKeys() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            let reads = server.settingsReads
+            let pass = MountPass()
+            // Three shares from Maya, under the keys she was added with: one settings read, one verdict.
+            for _ in 0..<3 {
+                let opened = try await phone.vault.trustGranter(try granter(server), explicit: false, pass: pass)
+                #expect(opened.signingPublicKey == (try base64urlDecode(value: identity.envelope.signingPublicKey)))
+            }
+            #expect(server.settingsReads == reads + 1)
+            // A fourth share "from" her under other keys, in the same pass: judged on its own, and it is the change.
+            _ = try startOver(server)
+            await #expect(throws: GranterTrust.self) { _ = try await phone.vault.trustGranter(try granter(server), explicit: false, pass: pass) }
+            // Without a pass, each share reads the settings.
+            let unpassed = server.settingsReads
+            server.people["maya@example.com"]?.identity = identity.envelope
+            for _ in 0..<2 { _ = try await phone.vault.trustGranter(try granter(server), explicit: false) }
+            #expect(server.settingsReads == unpassed + 2)
+        }
+
         @Test func aGuardWriteThatFailsStopsTheActAndTheNextOneSettlesIt() async throws {
             defer { done() }
             let server = server(maya: try makeIdentity(maya).envelope)
@@ -783,6 +829,9 @@ final class ContactServer: @unchecked Sendable {
     var onSettingsPut: (() -> Void)?
     /* What `/shares/mine` lists, and the envelopes put back by share id. */
     var sharesMine: [[String: Any]] = []
+    /* Requests counted: contact lookups and settings reads. */
+    var lookups = 0
+    var settingsReads = 0
     var resealed: [String: String] = [:]
     private let lock = NSLock()
 
@@ -833,6 +882,7 @@ final class ContactServer: @unchecked Sendable {
         case ("GET", "/api/auth/identity"): return (200, ["identity": Auth.json(identity)])
         case ("GET", "/api/auth/identity/history"): return (200, ["identities": []])
         case ("GET", "/api/auth/settings"):
+            settingsReads += 1
             return (200, ["settings": settings as Any, "settingsKey": settingsKey as Any, "settingsVersion": settingsVersion])
         case ("PUT", "/api/auth/settings-key"):
             guard settingsKey == nil else { return (409, ["message": "A settings key is already stored."]) }
@@ -855,6 +905,7 @@ final class ContactServer: @unchecked Sendable {
         case ("GET", "/api/drive/shares/mine"):
             return (200, ["shares": sharesMine, "links": []])
         case ("POST", "/api/auth/contacts/lookup"):
+            lookups += 1
             guard let email = json["email"] as? String, let person = people[email] else { return (404, ["message": "No HushOS account uses that email."]) }
             let served = person.identity
             return (200, ["contact": [

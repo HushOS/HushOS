@@ -267,8 +267,13 @@ extension Vault {
      * looks a succession up, only on the person's act, so the server cannot learn whom this phone
      * pins by watching it look people up. In the guard's turn.
      */
-    func stand(_ contact: Contact, act: Bool, follow: Bool) async throws -> Standing {
-        let settings = try await loadSettings()
+    func stand(_ contact: Contact, act: Bool, follow: Bool, pass: MountPass? = nil) async throws -> Standing {
+        // A mounting pass reads the settings once for all its shares, and again only after something saved them.
+        let settings: Settings
+        if let read = pass?.settings { settings = read } else {
+            settings = try await loadSettings()
+            pass?.settings = settings
+        }
         let id = contact.userId
         var pin = settings.pin(of: id)
         var (entry, kept) = try guardFor(id, pin: pin, at: settings.version)
@@ -293,6 +298,7 @@ extension Vault {
             if !act { return .ok(pin: upgraded, entry: entry, followed: false) }
             let before = current
             (current, entry) = try await commitTrust(id, entry: entry, target: upgraded) { try $0.setPin(upgraded, ifOver: before) }
+            pass?.settings = nil
             pin = current
             trust = .seen
         }
@@ -329,6 +335,7 @@ extension Vault {
             }
             try settings.setPinOnce(again)
         }
+        pass?.settings = nil
         return .ok(pin: current, entry: entry, followed: true)
     }
 
@@ -458,6 +465,7 @@ extension Vault {
             return try await commitTrust(contact.userId, entry: entry, target: target) { try $0.setPin(target, ifOver: before) }.pin
         }
         clearChange(contact.userId)
+        forgetLookups(of: contact.userId)
         return pin
     }
 
@@ -489,6 +497,7 @@ extension Vault {
             return try await commitTrust(contact.userId, entry: entry, target: wanted) { try $0.setPin(wanted, ifOver: before, verify: true) }.pin
         }
         clearChange(contact.userId)
+        forgetLookups(of: contact.userId)
         // Shares to them still in an older suite (or waiting for new keys) are sealed again to the keys the pin holds.
         Task { _ = try? await self.upgradeShares() }
         return pin
@@ -502,6 +511,7 @@ extension Vault {
     public func remove(_ contactId: String) async throws {
         try await updateSettings { $0.removeContact(contactId, at: ISO8601DateFormatter().string(from: Date())) }
         clearChange(contactId)
+        forgetLookups(of: contactId)
         forgetSigners()
     }
 
@@ -535,12 +545,33 @@ extension Vault {
 
     /* The changed-account check behind a share sheet's row: looks them up; nothing is written. */
     public func shareeChanged(_ pin: ContactPin) async throws -> Bool {
-        let contact = try await Auth.lookupContact(email: pin.email, as: session)
+        let contact = try await cachedLookup(pin.email)
         guard contact.userId.lowercased() == pin.userId.lowercased() else { return true }
         let standing = try await withGuardTurn { try await stand(contact, act: false, follow: false) }
         guard case .changed = standing else { return false }
         note(AccountChange(contactId: pin.userId, name: pin.name, email: pin.email))
         return true
+    }
+
+    /*
+     * A contact looked up for display (the share sheet's rows), kept for a minute: the server allows
+     * an account sixty lookups a minute, and Add and Share need theirs. Never what anything is sealed
+     * to or opened with (those look up afresh); forgotten for a person on Continue, They match and
+     * removal, and with the vault at sign-out.
+     */
+    func cachedLookup(_ email: String) async throws -> Contact {
+        let key = email.lowercased()
+        if let held = lookedUp[key], Date().timeIntervalSince(held.at) < Self.lookupKept { return held.contact }
+        let contact = try await Auth.lookupContact(email: email, as: session)
+        lookedUp[key] = (contact, Date())
+        return contact
+    }
+
+    static let lookupKept: TimeInterval = 60
+
+    func forgetLookups(of contactId: String) {
+        let id = contactId.lowercased()
+        lookedUp = lookedUp.filter { $0.value.contact.userId.lowercased() != id }
     }
 
     /*
@@ -551,13 +582,30 @@ extension Vault {
      * following a signed succession, and adding back someone this account removed or this phone
      * acted on before (its guard holds them, their pin gone), so a removal sticks.
      */
-    func trustGranter(_ granter: SharedWithMeView.Granter, explicit: Bool) async throws -> PinnedGranter {
+    func trustGranter(_ granter: SharedWithMeView.Granter, explicit: Bool, pass: MountPass? = nil) async throws -> PinnedGranter {
+        // One verdict per granter and keys within a pass: the same person's other shares under the same keys
+        // are judged alike, and other keys (a change mid-list) never take a verdict made over these.
+        let key = MountPass.key(granter, explicit: explicit)
+        if let held = pass?.verdicts[key] { return try held.get() }
+        let verdict: Result<PinnedGranter, Error>
+        do { verdict = .success(try await judgeGranter(granter, explicit: explicit, pass: pass)) } catch { verdict = .failure(error) }
+        pass?.verdicts[key] = verdict
+        return try verdict.get()
+    }
+
+    private func judgeGranter(_ granter: SharedWithMeView.Granter, explicit: Bool, pass: MountPass?) async throws -> PinnedGranter {
         let contact = Contact(granter: granter)
         let first = contact.firstName
         let removedWords = "You removed \(first) from your contacts. Open this to add them again."
         return try await withGuardTurn {
             try await decidedAgain {
-                var standing = try await stand(contact, act: true, follow: explicit)
+                var standing: Standing
+                do {
+                    standing = try await stand(contact, act: true, follow: explicit, pass: pass)
+                } catch {
+                    pass?.settings = nil
+                    throw error
+                }
                 if case .new(let entry, let removed) = standing, !explicit, removed || entry != nil {
                     throw GranterTrust.waiting(removed ? removedWords : "Open this to add \(first) to your contacts.")
                 }
@@ -567,6 +615,8 @@ extension Vault {
                     let fresh = try contact.pin(verified: false, firstSeen: "shared-with-me")
                     do {
                         // Listing never undoes a removal: one recorded on any attempt of this save stops the add.
+                        // Saved (or refused against settings newer than the pass read): the next share reads them again.
+                        defer { pass?.settings = nil }
                         let (pin, entry) = try await commitTrust(contact.userId, entry: entry, target: fresh) { settings in
                             if !explicit, settings.removed(contact.userId) { throw GranterTrust.waiting(removedWords) }
                             try settings.setPin(fresh, ifOver: nil)
@@ -687,5 +737,21 @@ extension Settings {
         }
         guard ContactPin.sameKeys(current, expected) else { throw ContactError.moved }
         try setPinOnce(target)
+    }
+}
+
+/*
+ * One pass over what was shared with this account (`mountShares`): the settings read once and
+ * reused until something this pass did saved them, and one verdict per granter and the keys their
+ * share came with.
+ */
+// Only ever read and written on the vault's actor (a test hands one in and reads nothing back).
+final class MountPass: @unchecked Sendable {
+    var settings: Settings?
+    var verdicts: [String: Result<PinnedGranter, Error>] = [:]
+
+    static func key(_ granter: SharedWithMeView.Granter, explicit: Bool) -> String {
+        [granter.id.lowercased(), granter.keyVersion.map(String.init) ?? "-", granter.encryptionPublicKey, granter.signingPublicKey ?? "-",
+         granter.mlDsaPublicKey ?? "-", granter.kemPublicKey ?? "-", granter.keysSignature ?? "-", explicit ? "open" : "list"].joined(separator: "|")
     }
 }

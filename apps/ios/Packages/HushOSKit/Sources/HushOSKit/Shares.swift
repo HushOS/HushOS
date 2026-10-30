@@ -108,6 +108,8 @@ extension Vault {
         if shares.isEmpty { return [] }
         let own = try await loadWorkspace().workspaceId
         let identities = try await allIdentities()
+        // The settings read once for the whole list, and one verdict per granter and keys (MountPass).
+        let pass = MountPass()
         var mounts: [ShareMount] = []
         for share in shares {
             do {
@@ -118,7 +120,7 @@ extension Vault {
                 )
                 let granter: PinnedGranter
                 do {
-                    granter = try await trustGranter(share.granter, explicit: false)
+                    granter = try await trustGranter(share.granter, explicit: false, pass: pass)
                 } catch GuardError.unreadable {
                     throw GranterTrust.unchecked
                 }

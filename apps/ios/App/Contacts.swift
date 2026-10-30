@@ -140,6 +140,7 @@ struct CheckContactView: View {
     @State private var failure: String?
     @State private var stage = Stage.words
     @State private var removing = false
+    @Environment(\.sizeSheet) private var sizeSheet
     @State private var saving = false
     @State private var error = ""
 
@@ -185,8 +186,7 @@ struct CheckContactView: View {
                     Section {
                         VStack(spacing: Alpine.Space.s2) {
                             if stage == .mismatch {
-                                // As the changed-account notice lays them out on a phone: full width and stacked, Done on top.
-                                Button(action: done) { Text("Done").frame(maxWidth: .infinity) }.buttonStyle(PrimaryCapsuleStyle())
+                                // Done is the bar's; Remove is the one thing left to do here, never the blue button.
                                 if found.pinned != nil {
                                     Button { removing = true } label: { Text("Remove \(first) from contacts").frame(maxWidth: .infinity) }
                                         .buttonStyle(SecondaryCapsuleStyle()).disabled(saving)
@@ -208,7 +208,9 @@ struct CheckContactView: View {
         .navigationTitle("Check it’s \(first)")
         .navigationBarTitleDisplayMode(.inline)
         // On a mismatch Done is the screen's own blue button.
-        .toolbar { if stage == .words { ToolbarItem(placement: .confirmationAction) { Button("Done", action: done) } } }
+        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done", action: done) } }
+        // A sheet of its own shrinks to the short mismatch, and grows back for the words.
+        .onChange(of: stage) { _, now in sizeSheet(now == .mismatch ? .short : .tall) }
         // Asked once, as Contacts asks (6.5); Cancel comes back to the check.
         .alert("Remove \(first)?", isPresented: $removing) {
             Button("Cancel", role: .cancel) {}
@@ -316,7 +318,9 @@ struct AccountChangedView: View {
                 Section {
                     VStack(spacing: Alpine.Space.s2) {
                         if !found.changed {
-                            Button(action: done) { Text("Done").frame(maxWidth: .infinity) }.buttonStyle(PrimaryCapsuleStyle())
+                            // Nothing changed after all (another device followed a signed succession): what waited may run,
+                            // and whatever showed the change looks again.
+                            Button { resolved(); done() } label: { Text("Done").frame(maxWidth: .infinity) }.buttonStyle(PrimaryCapsuleStyle())
                         } else if found.wasVerified {
                             checkButton(found, primary: true)
                             continueButton(found, primary: false)
@@ -388,10 +392,10 @@ struct AccountChangedView: View {
 struct TechnicalDetails<Content: View>: View {
     @ViewBuilder let content: () -> Content
     @State private var open = false
-    @Environment(\.growSheet) private var growSheet
+    @Environment(\.sizeSheet) private var sizeSheet
 
     var body: some View {
-        DisclosureGroup(isExpanded: $open.onSet { if $0 { growSheet() } }) {
+        DisclosureGroup(isExpanded: $open.onSet { if $0 { sizeSheet(.tall) } }) {
             VStack(alignment: .leading, spacing: Alpine.Space.s2) { content() }
                 .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -453,7 +457,7 @@ private struct ContactSheet: View {
                 if case .check = now { detent = .large }
             }, done: done)
         }
-        .environment(\.growSheet, { detent = .large })
+        .environment(\.sizeSheet, { size in detent = size == .tall || typeSize.isAccessibilitySize ? .large : Self.short })
         .presentationDetents([Self.short, .large], selection: $detent)
         .onAppear {
             if case .check = step { return }
@@ -462,15 +466,17 @@ private struct ContactSheet: View {
     }
 }
 
-private struct GrowSheetKey: EnvironmentKey {
-    static let defaultValue: @MainActor () -> Void = {}
+enum SheetSize { case short, tall }
+
+private struct SizeSheetKey: EnvironmentKey {
+    static let defaultValue: @MainActor (SheetSize) -> Void = { _ in }
 }
 
 extension EnvironmentValues {
-    /* A sheet that opened part way up grows to its full height (Technical details opened). */
-    var growSheet: @MainActor () -> Void {
-        get { self[GrowSheetKey.self] }
-        set { self[GrowSheetKey.self] = newValue }
+    /* A contact sheet of its own sized to what it shows: full height for the words and Technical details, part way for the rest. */
+    var sizeSheet: @MainActor (SheetSize) -> Void {
+        get { self[SizeSheetKey.self] }
+        set { self[SizeSheetKey.self] = newValue }
     }
 }
 

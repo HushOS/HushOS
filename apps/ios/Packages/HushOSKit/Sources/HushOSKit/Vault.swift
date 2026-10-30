@@ -118,6 +118,8 @@ public actor Vault {
     /* The guard's turn (`withGuardTurn`): whether an act holds it, and who waits for it, in order. */
     var guardBusy = false
     var guardWaiting: [CheckedContinuation<Void, Never>] = []
+    /* Contacts looked up for display, by lowercased email, with when (`cachedLookup`). */
+    var lookedUp: [String: (contact: Contact, at: Date)] = [:]
     /* People found changed this session (`accountChanges`), by lowercased id. */
     var noticedChanges: [String: AccountChange] = [:]
     /* The pins as the last settings read had them (see `knownPins`). */
