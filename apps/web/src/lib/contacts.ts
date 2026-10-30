@@ -1303,10 +1303,14 @@ export async function lookupContact(
  * words. Someone already added is said so; a change from the keys this device
  * holds for them (a contact removed and added again over other keys included)
  * is the notice instead. `writer`, from a mark: the account that wrote an
- * item, which the address must be.
+ * item, which the address must be. `trustChanged` on someone already added:
+ * the add itself moved whom this device trusts (a legacy pin made first-seen,
+ * a succession followed, a first guard entry), so what is drawn is judged
+ * again, as after a new contact.
  */
 export type Added =
-    | { outcome: 'added' | 'already'; pin: Pin }
+    | { outcome: 'added'; pin: Pin }
+    | { outcome: 'already'; pin: Pin; trustChanged: boolean }
     | { outcome: 'changed'; change: AccountChange };
 export async function addContact(
     queryClient: QueryClient,
@@ -1320,9 +1324,15 @@ export async function addContact(
     if (writer !== undefined && contact.userId.toLowerCase() !== writer.toLowerCase())
         throw new Error('This isn’t the account that wrote it. Check the address, then try again.');
     if (!(await keysHold(contact.userId, contact))) throw new Error(notUpgradedWords(contact.name));
-    return withGuardLock(userId, () =>
+    // Every guard write moves this revision: one during the add is a change in trust, even for
+    // someone already there.
+    const before = guardRevision();
+    const added = await withGuardLock(userId, () =>
         decidedAgain(() => addDecided(queryClient, userId, contact, firstSeen)),
     );
+    return added.outcome === 'already'
+        ? { ...added, trustChanged: guardRevision() !== before }
+        : added;
 }
 
 /*
@@ -1346,7 +1356,8 @@ async function addDecided(
     firstSeen: 'added' | 'family' = 'added',
 ): Promise<Added> {
     const standing = await stand(userId, contact.userId, contact, { act: true, follow: true });
-    if (standing.kind === 'ok') return { outcome: 'already', pin: standing.pin };
+    if (standing.kind === 'ok')
+        return { outcome: 'already', pin: standing.pin, trustChanged: false };
     if (standing.kind === 'not-upgraded') throw new Error(notUpgradedWords(contact.name));
     if (standing.kind !== 'new')
         return {

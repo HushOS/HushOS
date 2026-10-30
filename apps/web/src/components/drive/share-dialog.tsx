@@ -60,7 +60,7 @@ import {
     type Pin,
 } from '@/lib/contacts';
 import { familyWord, pinOf, vouchLine } from '@/lib/family-pin';
-import { afterTrustChanged } from '@/lib/integrity';
+import { afterContactAdded } from '@/lib/integrity';
 import {
     displayName,
     driveClient,
@@ -271,8 +271,10 @@ function ShareForm({
             await driveClient.share(current, await granteeKeys(userId, pin), as);
             await refresh();
             await queryClient.invalidateQueries({ queryKey: driveKeys.mine });
-            // What they wrote now reads as theirs.
-            if (added.outcome === 'added') afterTrustChanged(queryClient);
+            // What they wrote now reads as theirs (and, for someone already there whose pin the add
+            // moved, what was shared with them is sealed to the keys it holds now).
+            if (added.outcome === 'added' || added.trustChanged)
+                afterContactAdded(queryClient, pin);
             cue('success');
             toast.add({ type: 'success', title: `Shared with ${firstName(pin.name)}` });
             setRole('viewer');

@@ -277,6 +277,31 @@ describe('adding someone and sharing with them', () => {
     });
 });
 
+describe('adding someone already there', () => {
+    test('says when the add itself moved trust, so what is drawn is judged again', async () => {
+        const w = await world();
+        // A pin from before post-quantum identities: adding them makes it first-seen and remembers them.
+        const legacy = {
+            userId: MAYA,
+            email: MAYA_EMAIL,
+            name: 'Maya Lindqvist',
+            pinnedAt: '2026-01-01T00:00:00.000Z',
+            encryptionPublicKey: w.maya.encryptionPublicKey,
+            signingPublicKey: w.maya.signingPublicKey,
+            fingerprint: 'words-from-before',
+        };
+        await w.replace({ version: 2, contacts: { [MAYA]: legacy } } as never);
+        const first = await addContact(query, ME, MAYA_EMAIL);
+        expect(first).toMatchObject({ outcome: 'already', trustChanged: true });
+        expect(await pinTrust((await w.stored()).contacts[MAYA]!)).toBe('seen');
+        // Adding again moves nothing.
+        expect(await addContact(query, ME, MAYA_EMAIL)).toMatchObject({
+            outcome: 'already',
+            trustChanged: false,
+        });
+    });
+});
+
 describe('a rotation with no room to save a migration', () => {
     test('seals to a legacy pin’s own keys without saving or remembering anything; other keys stay a verdict', async () => {
         const w = await world();

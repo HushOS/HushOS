@@ -3,8 +3,7 @@ import { useId, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { addContact, type AccountChange, type Pin as ContactPin } from '@/lib/contacts';
-import { driveKeys } from '@/lib/drive';
-import { afterTrustChanged } from '@/lib/integrity';
+import { afterContactAdded } from '@/lib/integrity';
 import { cue } from '@/lib/sounds';
 
 /*
@@ -54,6 +53,8 @@ export function AddSomeone({
                 return;
             }
             if (added.outcome === 'already') {
+                // Already there, but the add may have moved trust: judged again, as after a new contact.
+                if (added.trustChanged) afterContactAdded(queryClient, added.pin);
                 if (writer && onAlready) {
                     onAlready(added.pin);
                     return;
@@ -65,8 +66,7 @@ export function AddSomeone({
                 return;
             }
             // What they wrote now reads as theirs, and what they shared opens.
-            afterTrustChanged(queryClient);
-            void queryClient.invalidateQueries({ queryKey: driveKeys.shared });
+            afterContactAdded(queryClient, added.pin);
             cue('success');
             onAdded(added.pin);
         } catch (cause) {
