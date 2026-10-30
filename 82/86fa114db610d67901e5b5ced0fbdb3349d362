@@ -1,0 +1,16 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  h_f7ba60a6997566 563-569
+apps/android/app/src/test/kotlin/com/hushos/app/data/ContactTrustTest.kt
+  h_f7ba60a6997566 225-243
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8286fa114db610d67901e5b5ced0fbdb3349d362",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
