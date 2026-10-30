@@ -1,0 +1,29 @@
+apps/ios/App/Contacts.swift
+  s_566b8e0c4467a4::t_a3a91776b71680 226-230,370-374
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Contacts.swift
+  s_566b8e0c4467a4::t_cbe0e466d780f7 98-102
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Identity.swift
+  s_566b8e0c4467a4::t_69febf344c7740 264-265,267
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Rotation.swift
+  s_566b8e0c4467a4::t_294dceeb1608e9 256-261
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Trust.swift
+  s_566b8e0c4467a4::t_5ee5dd425f35d3 85-94,409-410,413
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ContactGuardTests.swift
+  s_566b8e0c4467a4::t_d2960ce69f4df4 574-613,720-722
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d883cd3c6abd44fb941a7d3cc3dd2dca4ab0c2d3",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
