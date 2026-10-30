@@ -139,7 +139,6 @@ struct ShareItemSheet: View {
                         .accessibilityHint("Shows who can open “\(folder.name)”")
                     }
                     ForEach(shares) { share in
-                        let first = firstName(share.grantee.name.isEmpty ? share.grantee.email : share.grantee.name)
                         let change = changed.contains(share.grantee.id.lowercased())
                         // Always their sheet: Stop sharing never waits on Review (only a new role does), as on the web.
                         Button { person = share } label: {
@@ -148,10 +147,10 @@ struct ShareItemSheet: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(share.grantee.name.isEmpty ? share.grantee.email : share.grantee.name).foregroundStyle(Alpine.ink).lineLimit(1)
                                     if change {
-                                        // Their account changed (6.3): said on the row, and their role waits for Review. One line: the
-                                        // sentence gives way, "· Review" never starts a line of its own.
+                                        // Their account changed (6.3): said on the row in Contacts' words (the name is the row's title),
+                                        // and their role waits for Review. One line; "· Review" never starts a line of its own.
                                         HStack(spacing: 0) {
-                                            Text("\(first)’s account changed").lineLimit(1).truncationMode(.tail)
+                                            Text("Account changed").lineLimit(1).truncationMode(.tail)
                                             Text(" · ") + Text("Review").foregroundStyle(Alpine.primary).fontWeight(.semibold)
                                         }
                                         .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
@@ -710,7 +709,8 @@ private struct PersonAccessSheet: View {
                 Text("They can’t open “\(item.name)” in HushOS any more. Copies they already downloaded stay with them. You can share it again later.")
             }
         }
-        .presentationDetents([.medium, .large])
+        // Taller while their account changed, so Stop sharing (which never waits on Review) is in view without scrolling.
+        .presentationDetents(changed ? [.fraction(0.72), .large] : [.medium, .large])
     }
 
     private func role(_ value: String, _ label: String, _ detail: String) -> some View {

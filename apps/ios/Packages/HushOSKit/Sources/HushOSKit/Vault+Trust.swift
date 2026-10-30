@@ -152,6 +152,9 @@ extension Vault {
     /* Tests: this vault's guard, in a folder of the test's own. */
     func adopt(guard store: ContactGuardStore) { guardStore = store }
 
+    /* Tests: what runs right after each guard commit (a stop there, as a crash would). */
+    func adopt(afterGuardCommit hook: (@Sendable () throws -> Void)?) { afterGuardCommit = hook }
+
     /*
      * The account's trust-changing acts and the reads that judge from the guard, one at a time in
      * this process (the web's Web Lock): a Continue never interleaves with an add for one person.
@@ -193,6 +196,7 @@ extension Vault {
             throw GuardError.unsaved
         }
         forgetSigners()
+        try afterGuardCommit?()
         return entry
     }
 
@@ -208,11 +212,11 @@ extension Vault {
         let revision = entry?.revision ?? 0
         if pending.revision == revision {
             if let pin, pin.commitment == pending.target, let next = try? guardEntryNext(previous: entry, pin: pin.keys) {
-                let finished = try commitGuard(contactId, next, over: revision)
                 // An act whose save landed but whose app stopped before it went on (a Continue, They match over new keys):
-                // what was shared with them still holds the old keys, so its re-seal is queued here too.
+                // what was shared with them still holds the old keys. Queued before the commit that drops the pending
+                // record, so no stop between the two loses it; queued twice is only a re-seal done again.
                 if pin.resealShares == true { ResealTo.add(contactId) }
-                return (finished, nil)
+                return (try commitGuard(contactId, next, over: revision), nil)
             }
             if let base = pending.base, at <= base { return (entry, pending) }
         }
@@ -241,6 +245,10 @@ extension Vault {
         -> (pin: ContactPin, entry: GuardEntry) {
         guard let keys = target.commitment else { throw ContactError.message("These keys can’t be remembered.") }
         let revision = entry?.revision ?? 0
+        // An act that leaves what was shared with them on older keys (Continue, a check over new keys, a followed
+        // succession) queues the re-seal before anything is saved: a stop after the save or the guard's commit
+        // never leaves it owed and unqueued. One that never lands only re-seals to the keys the pin still holds.
+        if target.resealShares == true { ResealTo.add(contactId) }
         let saved = try await updateSettings(change) { base in
             do {
                 // The store as of now: the save just made (or opened) the settings key the guard is sealed under.
@@ -321,7 +329,6 @@ extension Vault {
             }
             try settings.setPinOnce(again)
         }
-        ResealTo.add(id)
         return .ok(pin: current, entry: entry, followed: true)
     }
 
@@ -451,7 +458,6 @@ extension Vault {
             return try await commitTrust(contact.userId, entry: entry, target: target) { try $0.setPin(target, ifOver: before) }.pin
         }
         clearChange(contact.userId)
-        ResealTo.add(contact.userId)
         return pin
     }
 
@@ -483,7 +489,6 @@ extension Vault {
             return try await commitTrust(contact.userId, entry: entry, target: wanted) { try $0.setPin(wanted, ifOver: before, verify: true) }.pin
         }
         clearChange(contact.userId)
-        if pin.resealShares == true { ResealTo.add(contact.userId) }
         // Shares to them still in an older suite (or waiting for new keys) are sealed again to the keys the pin holds.
         Task { _ = try? await self.upgradeShares() }
         return pin

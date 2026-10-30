@@ -333,8 +333,9 @@ struct AccountChangedView: View {
         .alpineGrouped()
         .navigationTitle("\(name)’s account changed")
         .navigationBarTitleDisplayMode(.inline)
-        // In a sheet of its own (Shared, a mark), the platform's way out; pushed, Back is.
-        .toolbar { if presented { ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: done) } } }
+        // In a sheet of its own (Shared, a mark), Done at the trailing edge as the app's other sheets have it, the
+        // title centred between; pushed, Back is the way out.
+        .toolbar { if presented { ToolbarItem(placement: .confirmationAction) { Button("Done", action: done) } } }
         .task { await look() }
     }
 

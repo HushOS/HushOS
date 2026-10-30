@@ -150,7 +150,12 @@ struct Settings {
     mutating func setPinOnce(_ pin: ContactPin) throws {
         var next = self
         var contacts = next.rawContacts
-        for key in contacts.keys where key != pin.userId && key.lowercased() == pin.userId.lowercased() { contacts[key] = nil }
+        // A pin another client stored under the id in other letters moves to the served id first, whole: the
+        // fields this version doesn't know (another client's, a later version's) go with it, and only then are
+        // the known ones written over.
+        let others = contacts.keys.filter { $0 != pin.userId && $0.lowercased() == pin.userId.lowercased() }.sorted()
+        if contacts[pin.userId] == nil, let other = others.first { contacts[pin.userId] = contacts[other] }
+        for key in others { contacts[key] = nil }
         next.document["contacts"] = contacts
         next.setPin(pin)
         next.forgetRemoval(pin.userId)

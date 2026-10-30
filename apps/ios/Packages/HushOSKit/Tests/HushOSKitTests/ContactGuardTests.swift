@@ -464,6 +464,67 @@ extension OnFakeDrive {
             #expect(!ResealTo.contains(maya))
         }
 
+        struct Stopped: Error {}
+
+        @Test func aStopRightAfterContinuesGuardCommitStillLeavesItsResealQueued() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let folder = guardFolder()
+            let phone = await phone(server, folder: folder)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            let workspace = UUID().uuidString.lowercased()
+            let nodeId = UUID().uuidString.lowercased()
+            var document = try server.document(root: root)
+            document["sharing"] = ["shares": [nodeId: [maya]], "links": [String: Any]()]
+            try server.replace(document, root: root)
+            let node = try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: [
+                "id": nodeId, "workspaceId": workspace, "kind": "file", "keyEpoch": 3, "parentKeyEpoch": 1, "keyEnvelope": "k",
+                "metadataVersion": 1, "metadataEnvelope": "m",
+            ]))
+            let nodeKey = try randomBytes(length: 32)
+            let freshRoot = try randomBytes(length: 32)
+            let fresh = try identityCreate(userId: maya, accountKey: freshRoot, keyVersion: 1)
+            server.people["maya@example.com"]?.identity = fresh
+            ResealTo.remove([maya])
+            defer { ResealTo.remove([maya]) }
+            // Continue's save lands and the guard commits (the pending record goes), and the process stops right there.
+            await phone.vault.adopt(afterGuardCommit: { throw Stopped() })
+            await #expect(throws: Stopped.self) {
+                _ = try await phone.vault.continueWith(AccountChange(contactId: maya, name: "Maya Lind", email: "maya@example.com"))
+            }
+            // Nothing is left for a later read to settle: the guard and the settings agree, and no pending record names her.
+            let settled = await phone.vault.contactGuard
+            #expect(try settled.pending(maya) == nil && (try settled.entry(maya))?.signingPublicKey == fresh.signingPublicKey)
+            // So the re-seal must already be queued, or what was shared with her stays on her old keys for good.
+            #expect(ResealTo.contains(maya))
+            server.sharesMine = [[
+                "id": "share-1", "role": "viewer", "keyEpoch": 3, "createdAt": "2026-10-30T00:00:00Z", "suite": 4,
+                "grantee": ["id": maya, "name": "Maya Lind", "email": "maya@example.com"],
+                "node": try JSONSerialization.jsonObject(with: JSONEncoder().encode(node)),
+                "granteeIdentity": [
+                    "keyVersion": fresh.keyVersion, "identityVersion": Int(fresh.version), "encryptionPublicKey": fresh.encryptionPublicKey,
+                    "signingPublicKey": fresh.signingPublicKey, "mlDsaPublicKey": fresh.mlDsa!.publicKey, "kemPublicKey": fresh.kem!.publicKey,
+                    "keysSignature": fresh.keysSignature!,
+                ],
+            ]]
+            // The next process's upgrade pass seals that share again, to her new keys.
+            let restarted = await self.phone(server, folder: folder)
+            _ = try await restarted.vault.adopt(node, nodeKey: nodeKey, metadata: NodeMetadata(name: "plan.md", mime: nil, size: 3, modified: nil, attributes: [:]),
+                                                in: workspace)
+            let outcome = try await restarted.vault.upgradeShares()
+            #expect(outcome.rotated == 1)
+            let resealed = try #require(server.resealed["share-1"])
+            let ownKeys = try identityOpen(userId: me, accountKey: root, envelope: own)
+            let opened = try shareOpen(
+                envelope: try base64urlDecode(value: resealed),
+                granter: HybridPublicKey(signingPublicKey: try base64urlDecode(value: ownKeys.signingPublicKey),
+                                         mlDsaPublicKey: try base64urlDecode(value: ownKeys.mlDsaPublicKey!)),
+                grantee: try identityOpen(userId: maya, accountKey: freshRoot, envelope: fresh),
+                ctx: ShareContext(workspaceId: workspace, nodeId: nodeId, keyEpoch: 3, granteeUserId: maya, granterUserId: me)
+            )
+            #expect(opened == nodeKey)
+        }
+
         @Test func aGuardWriteThatFailsStopsTheActAndTheNextOneSettlesIt() async throws {
             defer { done() }
             let server = server(maya: try makeIdentity(maya).envelope)
@@ -638,6 +699,33 @@ struct ContactSettingsTests {
         // Writing a removed person's pin forgets their removal, and only theirs.
         try settings.setPinOnce(ContactPin(userId: "BO", email: "bo@example.com", name: "Bo", keys: cy.keys, pinnedAt: "2026-10-30T02:00:00Z", firstSeen: "added"))
         #expect(!settings.removed("bo") && settings.removed("dee"))
+    }
+
+    @Test func aPinStoredUnderTheIdInOtherLettersKeepsEveryFieldWhenWrittenUnderTheServedId() throws {
+        let stored = """
+        {"version":2,"contacts":{"ANA-ID":{"userId":"ANA-ID","email":"ana@example.com","name":"Ana","encryptionPublicKey":"e",\
+        "signingPublicKey":"s","fingerprint":"","pinnedAt":"2026-10-27T00:00:00.000Z","kemPublicKeyHash":"k","mlDsaPublicKeyHash":"m",\
+        "keyVersion":1,"firstSeen":"shared-with-me","replacementSeen":"2026-10-20","trustedViaFamily":"Acme","future":{"x":[1,"\\u00e9"]}}}}
+        """
+        var settings = try Settings(json: stored, version: 3)
+        let before = try #require((try JSONSerialization.jsonObject(with: Data(stored.utf8)) as? [String: Any])?["contacts"] as? [String: Any])["ANA-ID"]
+            as? [String: Any]
+        let pin = ContactPin(userId: "ana-id", email: "ana@example.com", name: "Ana", keys: PinKeys(keyVersion: 2, encryptionPublicKey: "e2",
+                             signingPublicKey: "s2", mlDsaPublicKeyHash: "m2", kemPublicKeyHash: "k2", fingerprint: ""),
+                             pinnedAt: "2026-10-30T00:00:00Z", firstSeen: nil)
+        try settings.setPinOnce(pin)
+        let contacts = try #require(try reread(settings)["contacts"] as? [String: Any])
+        // One pin, under the served id; the old key is gone.
+        #expect(Array(contacts.keys) == ["ana-id"])
+        let after = try #require(contacts["ana-id"] as? [String: Any])
+        // Every field this version doesn't write, byte for byte.
+        for key in ["firstSeen", "replacementSeen", "trustedViaFamily", "future"] {
+            let was = try JSONSerialization.data(withJSONObject: [key: before?[key] ?? NSNull()], options: [.sortedKeys])
+            let now = try JSONSerialization.data(withJSONObject: [key: after[key] ?? NSNull()], options: [.sortedKeys])
+            #expect(was == now, "\(key) was lost or changed")
+        }
+        // And the known ones are the new pin's.
+        #expect(after["signingPublicKey"] as? String == "s2" && after["userId"] as? String == "ana-id")
     }
 
     @Test func removalsAreForgottenOldestFirstAndAFullDocumentRefusesAPin() throws {
