@@ -49,7 +49,7 @@ export function AccessCell({
                             name={person.name}
                             seed={person.id}
                             size={22}
-                            className="ring-2 ring-card"
+                            className="ring-2 ring-panel"
                         />
                     ))}
                 </span>

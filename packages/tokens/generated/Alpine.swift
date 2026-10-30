@@ -3,20 +3,21 @@
 import SwiftUI
 import UIKit
 
-/// Alpine colours. Each resolves to light, dark or their high-contrast twins from the trait collection.
+/// Alpine colours. Each resolves to light, dark or their high-contrast twins from the trait collection;
+/// a few lift in the dark inside a sheet, popover or menu (`userInterfaceLevel == .elevated`).
 public enum Alpine {
     /// Sheets, cards, list groups, inputs.
-    public static let surface = Color(alpineLight: 0xFFFFFFFF, dark: 0xFF17181C, lightHigh: 0xFFFFFFFF, darkHigh: 0xFF0A0A0B)
+    public static let surface = Color(alpineLight: 0xFFFFFFFF, dark: 0xFF1C1C1E, lightHigh: 0xFFFFFFFF, darkHigh: 0xFF0A0A0B, darkElevated: 0xFF2C2C2E)
     /// Screen background behind surfaces.
-    public static let ground = Color(alpineLight: 0xFFF3F4F8, dark: 0xFF0F1013, lightHigh: 0xFFF2F4F9, darkHigh: 0xFF000000)
+    public static let ground = Color(alpineLight: 0xFFF3F4F8, dark: 0xFF000000, lightHigh: 0xFFF2F4F9, darkHigh: 0xFF000000, darkElevated: 0xFF1C1C1E)
     /// Text and icons.
     public static let ink = Color(alpineLight: 0xFF17203A, dark: 0xFFECEDF1, lightHigh: 0xFF070B18, darkHigh: 0xFFFFFFFF)
     /// Metadata and labels. Never for anything clickable.
     public static let inkMuted = Color(alpineLight: 0xFF5A6380, dark: 0xFF9A9EA9, lightHigh: 0xFF2E3650, darkHigh: 0xFFD6D8DE)
     /// Hairlines and dividers.
-    public static let rule = Color(alpineLight: 0xFFE2E5EE, dark: 0xFF2A2C33, lightHigh: 0xFF5F6886, darkHigh: 0xFF8F939D)
+    public static let rule = Color(alpineLight: 0xFFE2E5EE, dark: 0xFF38383A, lightHigh: 0xFF5F6886, darkHigh: 0xFF8F939D)
     /// Input and outline-button borders; 3:1 against the surface so edges stay visible.
-    public static let field = Color(alpineLight: 0xFF7A8299, dark: 0xFF70737D, lightHigh: 0xFF1B2238, darkHigh: 0xFFD6D8DE)
+    public static let field = Color(alpineLight: 0xFF7A8299, dark: 0xFF777A84, lightHigh: 0xFF1B2238, darkHigh: 0xFFD6D8DE)
     /// Hush blue, the one brand colour: primary buttons, links, active navigation, tint.
     public static let primary = Color(alpineLight: 0xFF2C428E, dark: 0xFFAAB8F4, lightHigh: 0xFF1A2C6B, darkHigh: 0xFFC9D3FF)
     /// Primary while pressed.
@@ -24,7 +25,7 @@ public enum Alpine {
     /// Text and icons on primary.
     public static let onPrimary = Color(alpineLight: 0xFFFFFFFF, dark: 0xFF121833, lightHigh: 0xFFFFFFFF, darkHigh: 0xFF05081A)
     /// Selection, hover, active navigation background, soft chips. Never the only sign of a state: selected rows add a check; navigation and segmented controls use a solid fill or a bold label.
-    public static let tint = Color(alpineLight: 0xFFDCE3F7, dark: 0xFF232A44, lightHigh: 0xFFDCE2F5, darkHigh: 0xFF1F2849)
+    public static let tint = Color(alpineLight: 0xFFDCE3F7, dark: 0xFF262E4A, lightHigh: 0xFFDCE2F5, darkHigh: 0xFF1F2849, darkElevated: 0xFF2B3352)
     /// Text on tint.
     public static let onTint = Color(alpineLight: 0xFF2C428E, dark: 0xFFC0CBF8, lightHigh: 0xFF122057, darkHigh: 0xFFE6EBFF)
     /// Folder glyph, back sheet.
@@ -96,10 +97,11 @@ public enum Alpine {
 }
 
 extension Color {
-    init(alpineLight light: UInt32, dark: UInt32, lightHigh: UInt32, darkHigh: UInt32) {
+    init(alpineLight light: UInt32, dark: UInt32, lightHigh: UInt32, darkHigh: UInt32, darkElevated: UInt32? = nil) {
         self.init(uiColor: UIColor { traits in
             let high = traits.accessibilityContrast == .high
-            let value = traits.userInterfaceStyle == .dark ? (high ? darkHigh : dark) : (high ? lightHigh : light)
+            let lifted = traits.userInterfaceLevel == .elevated ? darkElevated : nil
+            let value = traits.userInterfaceStyle == .dark ? (high ? darkHigh : lifted ?? dark) : (high ? lightHigh : light)
             return UIColor(
                 red: CGFloat((value >> 16) & 0xFF) / 255,
                 green: CGFloat((value >> 8) & 0xFF) / 255,
