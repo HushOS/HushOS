@@ -107,6 +107,8 @@ struct MainView: View {
                 }
                 .sheet(isPresented: $makingRoom) { StorageFullSheet(rows: rows(store)).environment(store).environment(model) }
                 .sheet(item: $invitation) { link in InvitationSheet(link: link).environment(store).environment(model) }
+                // A mark's check, for every mark not inside Info or the viewer (rows, lists, search).
+                .contactHost(.root, store: store)
                 .fileViewer(Binding(get: { store.deepFile }, set: { store.deepFile = $0 }), among: store.deepSiblings, store: store)
                 // Notices sit above the tab bar, and above the transfers bar while it shows.
                 .onChange(of: rows(store).isEmpty, initial: true) { _, empty in NoticeCenter.shared.bottom = empty ? 76 : 124 }

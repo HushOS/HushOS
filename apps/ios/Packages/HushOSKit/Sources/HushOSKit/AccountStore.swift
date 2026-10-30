@@ -22,23 +22,27 @@ public struct AccountStore: Sendable {
     let forgetStores: @Sendable () -> Void
     /* What this process raised of the rollback marks: the process's own in the app, a store's own in a test. */
     let marksFloor: MarkFloor
+    /* Moved by every wipe: a guard write begun before it keeps nothing (the process's own in the app, a store's own in a test). */
+    let guardGeneration: GuardGeneration
 
     /* Under the group container: kept files, the queue's copies, Save to HushOS's staged copies, the
      * lists of kept files, the last folder, recent searches and the last email (`Unbacked.state`), the
-     * node-to-parent index, the families' records, and the rollback marks (sealed, and the plaintext
+     * node-to-parent index, the families' records, the contact guard, and the rollback marks (sealed, and the plaintext
      * files earlier versions kept across sign-outs): a phone signed back in trusts the server as a new
      * device does, the cost the web accepted too (docs/integrity-design.md, "Rollback marks"). */
     static let accountFiles = [
-        "offline", "transfers", "share-staging", "state", "local/files-parents.json", "local/groups", "local/marks",
+        "offline", "transfers", "share-staging", "state", "local/files-parents.json", "local/groups", "local/marks", "local/guard",
         "local/settings-marks.json", "local/settings-marks.json.lock", "local/identity-marks.json", "local/identity-marks.json.lock",
     ]
 
     private var ownerFile: URL { root.appendingPathComponent("local/account-owner") }
 
-    init(root: URL, temporary: URL, marksFloor: MarkFloor = MarkFloor(), forgetStores: @escaping @Sendable () -> Void = {}) {
+    init(root: URL, temporary: URL, marksFloor: MarkFloor = MarkFloor(), guardGeneration: GuardGeneration = GuardGeneration(),
+         forgetStores: @escaping @Sendable () -> Void = {}) {
         self.root = root
         self.temporary = temporary
         self.marksFloor = marksFloor
+        self.guardGeneration = guardGeneration
         self.forgetStores = forgetStores
     }
 
@@ -105,6 +109,9 @@ public struct AccountStore: Sendable {
         let files = FileManager.default
         // Under the marks' lock, so a raise from before the sign-out can't write them back after.
         RollbackMarkStore(folder: root.appendingPathComponent("local/marks", isDirectory: true), floor: marksFloor).deleteAll()
+        // The contact guard too, under its own lock, so an act's write that waited through the sign-out writes nothing back.
+        ContactGuardStore(folder: root.appendingPathComponent("local/guard", isDirectory: true), owner: AccountOwner(userId: "", origin: ""),
+                          generation: guardGeneration).deleteAll()
         for name in Self.accountFiles { try? files.removeItem(at: root.appendingPathComponent(name)) }
         for item in (try? files.contentsOfDirectory(at: temporary, includingPropertiesForKeys: nil)) ?? [] {
             try? files.removeItem(at: item)
@@ -125,7 +132,7 @@ public struct AccountStore: Sendable {
     public static var shared: AccountStore {
         let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedKeychain.accessGroup)
             ?? FileManager.default.temporaryDirectory.appendingPathComponent("group", isDirectory: true)
-        return AccountStore(root: group, temporary: FileManager.default.temporaryDirectory, marksFloor: .process) {
+        return AccountStore(root: group, temporary: FileManager.default.temporaryDirectory, marksFloor: .process, guardGeneration: .process) {
             Offline.forgetAll()
             Places.forget()
             // Emptied and vacuumed, so ids and sealed rows don't linger in free pages or the WAL.

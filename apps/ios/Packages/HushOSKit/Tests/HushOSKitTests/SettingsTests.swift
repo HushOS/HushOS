@@ -29,7 +29,7 @@ struct SettingsDocumentTests {
         settings.setPin(renamed)
         settings.setPin(ContactPin(userId: "bo", email: "bo@example.com", name: "Bo", encryptionPublicKey: "e2", signingPublicKey: "s2",
                                    fingerprint: "f2", pinnedAt: "2026-10-02T00:00:00Z", kemPublicKeyHash: nil))
-        settings.removePin("bo")
+        settings.removeContact("bo", at: "2026-10-30T00:00:00Z")
         settings.ledger.addLink("link-2", node: "node-b")
 
         let document = try reread(settings)

@@ -10,35 +10,29 @@ public struct ShareMount: Sendable, Identifiable {
     public var id: String { share.id }
 }
 
-/* Why a received share stays shut until the person acts in Contacts, or the granter does. */
+/*
+ * Why a received share waits (docs/optional-verification.md 6.4), said calmly on its row: for the
+ * person's Open (someone they removed, or whose signed succession this phone hasn't followed), for
+ * Review (an account that changed), for Try again (the guard couldn't be read), for the granter
+ * (someone who can't be added yet, or a share sealed with keys they since replaced).
+ */
 public enum GranterTrust: Error, LocalizedError, Sendable, Equatable {
-    case unverified(name: String), changed(name: String)
-    /* Pinned before the post-quantum release (or edited): as good as not checked until words are compared again. */
-    case recheck(name: String)
-    /*
-     * Signed with keys the granter has since replaced (the pin followed their succession): an
-     * earlier key vouches for nothing any more, so it waits for the granter to seal it again.
-     */
+    /* Open adds them back, or follows them: the words say which. */
+    case waiting(String)
+    /* "Maya’s account changed": Review. */
+    case changed(AccountChange)
+    /* Nothing the person can do here yet (they need to sign in once more, contacts are full). */
+    case unverified(String)
+    /* This phone's guard couldn't be read: never first use. */
+    case unchecked
+    /* Signed with keys the granter has since replaced: it waits for the granter to seal it again. */
     case reseal(name: String)
-    /* Not checked yet (or not in a way that counts), as opposed to checked once and changed since. */
-    public var unverified: Bool {
-        switch self {
-        case .unverified, .recheck: true
-        case .changed, .reseal: false
-        }
-    }
-    /* The person can do something about it here: check the granter, or check again after a change. */
-    public var actionable: Bool { self != .reseal(name: name) }
-    public var name: String {
-        switch self {
-        case .unverified(let name), .changed(let name), .recheck(let name), .reseal(let name): name
-        }
-    }
+
     public var errorDescription: String? {
         switch self {
-        case .unverified(let name): return "Add \(name) in Contacts and check their words to open what they shared."
-        case .recheck(let name): return "\(name)’s keys were upgraded. Compare words with them again in Contacts. Shares from them open once you’ve both compared words."
-        case .changed(let name): return "\(name)’s key has changed since you added them. Check again in Contacts before opening what they shared."
+        case .waiting(let words), .unverified(let words): return words
+        case .changed(let change): return "\(change.firstName)’s account changed. Review to open this."
+        case .unchecked: return GuardWords.unreadable
         case .reseal(let name): return "Ask \(name) to share it again."
         }
     }
@@ -53,33 +47,6 @@ public struct PinnedGranter: Sendable, Equatable {
     /* The pin followed a succession: a share that fails under the current key likely awaits the granter's re-seal. */
     public let replacedKeys: Bool
     public let name: String
-}
-
-extension ContactPin {
-    /*
-     * The keys to open a share from this granter with (`granterKeysOf` in trust.ts): the pinned
-     * Ed25519 key, and the served ML-DSA key only if its digest is the pin's, and only when the
-     * server serves the pinned keys. Taking the served keys of someone not pinned would let a
-     * server fake a share "from" anyone with a key of its own, so that is refused, and nothing is
-     * pinned or followed here: pinning follows a words check, and following a succession follows
-     * the person asking.
-     */
-    public static func granter(_ granter: SharedWithMeView.Granter, pins: [String: ContactPin]) throws -> PinnedGranter {
-        let name = granter.name.isEmpty ? granter.email : granter.name
-        guard let pin = pins[granter.id] else { throw GranterTrust.unverified(name: name) }
-        guard pin.verified else { throw GranterTrust.recheck(name: pin.displayName) }
-        let served = granter.served
-        switch pin.compare(served) {
-        case .same: break
-        case .recheck: throw GranterTrust.recheck(name: pin.displayName)
-        case .succession, .changed: throw GranterTrust.changed(name: pin.displayName)
-        }
-        guard let mlDsa = served.mlDsaPublicKey, let hash = pin.mlDsaPublicKeyHash, digestOf(mlDsa) == hash else {
-            throw GranterTrust.changed(name: pin.displayName)
-        }
-        return PinnedGranter(signingPublicKey: try base64urlDecode(value: pin.signingPublicKey), mlDsaPublicKey: try base64urlDecode(value: mlDsa),
-                             replacedKeys: !(pin.previousSigningKeys ?? []).isEmpty, name: pin.displayName)
-    }
 }
 
 /*
@@ -141,7 +108,8 @@ extension Vault {
         if shares.isEmpty { return [] }
         let own = try await loadWorkspace().workspaceId
         let identities = try await allIdentities()
-        let pins = try await loadSettings().contacts
+        // The settings read once for the whole list, and one verdict per granter and keys (MountPass).
+        let pass = MountPass()
         var mounts: [ShareMount] = []
         for share in shares {
             do {
@@ -150,7 +118,12 @@ extension Vault {
                     workspaceId: share.workspaceId, nodeId: share.node.id, keyEpoch: UInt64(share.keyEpoch),
                     granteeUserId: session.userId, granterUserId: share.granter.id
                 )
-                let granter = try ContactPin.granter(share.granter, pins: pins)
+                let granter: PinnedGranter
+                do {
+                    granter = try await trustGranter(share.granter, explicit: false, pass: pass)
+                } catch GuardError.unreadable {
+                    throw GranterTrust.unchecked
+                }
                 let key: Data
                 do {
                     key = try ShareOpener.open(try base64urlDecode(value: share.shareEnvelope), ctx: ctx, granter: granter, identities: identities)
@@ -171,5 +144,18 @@ extension Vault {
             }
         }
         return mounts
+    }
+
+    /*
+     * Open on a row that waits (6.4): the person's own act, so someone removed is added back (the
+     * removal forgotten) and a signed succession is followed; then everything they shared opens on
+     * the next listing. A change met on the way throws `GranterTrust.changed`.
+     */
+    public func openWaiting(_ granter: SharedWithMeView.Granter) async throws {
+        do {
+            _ = try await trustGranter(granter, explicit: true)
+        } catch GuardError.unreadable {
+            throw GranterTrust.unchecked
+        }
     }
 }

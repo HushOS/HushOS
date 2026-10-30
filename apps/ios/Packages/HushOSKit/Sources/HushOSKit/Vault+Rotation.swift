@@ -155,6 +155,7 @@ extension Vault {
         if item.isFolder { _ = try await listChildren(of: rootId) } else if let parent = item.node.parentId { _ = try await listChildren(of: parent) }
         // The identity, the pins and the ledger are only needed for shares and links: a subtree with none never asks for them.
         var sharing: (keys: IdentityKeys, pins: [String: ContactPin], ledger: SharingLedger)?
+        var granteeKeys: [String: (publicKey: Data, kem: Data)] = [:]
         var epochs: [String: UInt64] = opened.values(in: ws).mapValues { $0.node.keyEpoch }
         var previous: [String: (epoch: UInt64, key: Data)] = [:]
         var outcome = RotationOutcome()
@@ -250,8 +251,15 @@ extension Vault {
                     guard let (keys, pins, _) = sharing else { continue }
                     let sealing: (publicKey: Data, kem: Data)
                     do {
-                        guard let pin = pins[share.granteeUserId] else { throw ContactError.unpinned }
-                        sealing = try pin.sealKeys(share.grantee.served)
+                        guard let pin = pins[share.granteeUserId] ?? pins.first(where: { $0.key.lowercased() == share.granteeUserId.lowercased() })?.value
+                        else { throw ContactError.unpinned }
+                        // As this phone's guard allows (2.8): a changed account is left out until Continue or a check. Kept per
+                        // person and served keys, so a later batch serving other keys for them is judged again, never sealed to the old.
+                        let grantee = Contact(userId: share.granteeUserId, served: share.grantee, name: pin.name, email: pin.email)
+                        if let known = granteeKeys[grantee.trustKey] { sealing = known } else {
+                            sealing = try await trustGrantee(grantee, follow: false)
+                            granteeKeys[grantee.trustKey] = sealing
+                        }
                     } catch {
                         let reason = ErrorWords.say(error, otherwise: "Their keys couldn’t be checked.") ?? "Their keys couldn’t be checked."
                         if !outcome.skipped.contains(reason) { outcome.skipped.append(reason) }

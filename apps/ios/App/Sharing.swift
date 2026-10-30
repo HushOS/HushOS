@@ -7,8 +7,10 @@ import UIKit
  * "Who can open this?" (DESIGN.md, Components; the web's share dialog
  * for the behaviour): a field to add someone first, the people next, the links last.
  * Tapping a person shows what they can do and a labelled red way to stop; stopping and
- * turning a link off ask once and say afterwards what happened. Someone new is added
- * by their email and checked (their twelve words) without leaving the sheet.
+ * turning a link off ask once and say afterwards what happened. Someone new is added by
+ * their email and shared with in one step, with the role chosen beside the field
+ * (docs/optional-verification.md 6.3); an account that changed waits for Review, which
+ * takes the sheet's place, and what it stopped runs again once Review settled it.
  */
 struct ShareItemSheet: View {
     @Environment(DriveStore.self) private var store
@@ -25,9 +27,19 @@ struct ShareItemSheet: View {
     @State private var chosen: ContactPin?
     @State private var role = "viewer"
     @State private var sharing = false
-    @State private var adding: String?
     @State private var person: ShareView?
     @State private var making = false
+    /* Review or Check it's Maya, in the sheet's place; the act a changed account stopped, and whether Review settled it. */
+    @State private var step: ContactStep?
+    @State private var interrupted: Interrupted?
+    @State private var settled = false
+    /* People on this item whose account changed (2.4): their row says so, and their role waits. */
+    @State private var changed: Set<String> = []
+
+    enum Interrupted: Equatable {
+        case share(ContactPin, role: String)
+        case new(email: String, role: String)
+    }
 
     private var sharedIds: Set<String> { Set(shares.map(\.grantee.id)) }
 
@@ -127,12 +139,25 @@ struct ShareItemSheet: View {
                         .accessibilityHint("Shows who can open “\(folder.name)”")
                     }
                     ForEach(shares) { share in
+                        let change = changed.contains(share.grantee.id.lowercased())
+                        // Always their sheet: Stop sharing never waits on Review (only a new role does), as on the web.
                         Button { person = share } label: {
                             HStack(spacing: Alpine.Space.s3) {
                                 PersonAvatar(name: share.grantee.name, seed: share.grantee.id)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(share.grantee.name.isEmpty ? share.grantee.email : share.grantee.name).foregroundStyle(Alpine.ink).lineLimit(1)
-                                    Text(share.grantee.email).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
+                                    if change {
+                                        // Their account changed (6.3): said on the row in Contacts' words (the name is the row's title),
+                                        // and their role waits for Review. One line; "· Review" never starts a line of its own.
+                                        HStack(spacing: 0) {
+                                            Text("Account changed").lineLimit(1).truncationMode(.tail)
+                                            Text(" · ") + Text("Review").foregroundStyle(Alpine.primary).fontWeight(.semibold)
+                                        }
+                                        .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                                        .lineLimit(1)
+                                    } else {
+                                        Text(share.grantee.email).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
+                                    }
                                 }
                                 Spacer(minLength: 0)
                                 Text(share.role == "editor" ? "Can edit" : "Can view").font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
@@ -156,7 +181,7 @@ struct ShareItemSheet: View {
                         .padding(.vertical, Alpine.Space.s2).alpineRow()
                     }
                     ForEach(links) { link in
-                        LinkCard(item: item, link: link, url: urls[link.id], several: links.count > 1) { await load() }
+                        LinkCard(item: item, link: link, url: urls[link.id], several: links.count > 1) { await load(people: false) }
                             .alpineRow()
                     }
                 } header: {
@@ -177,18 +202,12 @@ struct ShareItemSheet: View {
             .navigationSubtitle(Text(item.name))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .navigationDestination(item: $adding) { email in
-                CheckContactView(email: email, intro: "Then you can share “\(item.name)” with them.") { pin in
-                    adding = nil
-                    query = ""
-                    pins.append(pin)
-                    chosen = pin
-                    store.notify("\(pin.name.isEmpty ? pin.email : pin.name) added to Contacts")
-                }
-                .environment(store)
-            }
+            .contactSteps($step) { settled = true }
+            .onChange(of: step) { _, now in if now == nil { flowDone() } }
             .sheet(item: $person) { share in
-                PersonAccessSheet(item: item, share: share, pinned: pins.contains { $0.userId == share.grantee.id }) { await load() }
+                PersonAccessSheet(item: item, share: share, pin: pins.first { $0.userId.lowercased() == share.grantee.id.lowercased() },
+                                  changed: changed.contains(share.grantee.id.lowercased()),
+                                  settledChange: { changed.remove(share.grantee.id.lowercased()) }) { await load(people: false) }
                     .environment(store)
             }
             .task { await load() }
@@ -210,26 +229,18 @@ struct ShareItemSheet: View {
                     Text(chosen.email).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                Menu {
-                    Picker("What \(chosen.name) can do", selection: $role) {
-                        Text("Can view").tag("viewer")
-                        Text("Can edit").tag("editor")
-                    }
-                } label: {
-                    HStack(spacing: 4) { Text(role == "editor" ? "Can edit" : "Can view"); Image(systemName: "chevron.up.chevron.down").font(.caption) }
-                        .font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
-                }
                 Button { self.chosen = nil } label: { Image(systemName: "xmark").foregroundStyle(Alpine.inkMuted).frame(width: 32, height: 32) }
                     .buttonStyle(.plain).accessibilityLabel("Choose someone else")
             }
             .frame(minHeight: Theme.row).itemRow()
+            roleLine
         } else {
             HStack(spacing: Alpine.Space.s2) {
                 Image(systemName: "person.badge.plus").foregroundStyle(Alpine.inkMuted)
                 TextField("Add a name or email", text: $query)
                     .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.emailAddress)
                     .foregroundStyle(Alpine.ink)
-                    .onSubmit { if let typedEmail { adding = typedEmail } else if matches.count == 1 { chosen = matches[0] } }
+                    .onSubmit { if let typedEmail { shareWithNew(typedEmail) } else if matches.count == 1 { chosen = matches[0] } }
             }
             .padding(.horizontal, Alpine.Space.s4).frame(minHeight: Theme.control)
             .background(Alpine.surface, in: Capsule())
@@ -237,7 +248,20 @@ struct ShareItemSheet: View {
             .overlay(Capsule().strokeBorder(Alpine.field.opacity(0.35), lineWidth: 1))
             .highContrastEdge(Capsule())
             .bareRow(top: 0, bottom: Alpine.Space.s1)
+            roleLine
             if !query.trimmingCharacters(in: .whitespaces).isEmpty || pins.isEmpty {
+                // Someone not in Contacts by their full email: the list's first row, added and shared with in one step (6.3).
+                if let typedEmail {
+                    Button { shareWithNew(typedEmail) } label: {
+                        HStack(spacing: Alpine.Space.s3) {
+                            Image(systemName: "person.badge.plus").font(.system(size: 14, weight: .semibold)).foregroundStyle(Alpine.primary)
+                                .frame(width: 32, height: 32).background(Alpine.tint, in: Circle())
+                            Text(sharing ? "Sharing…" : "Share with \(typedEmail)").foregroundStyle(Alpine.ink).lineLimit(1)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).disabled(sharing).alpineRow()
+                }
                 ForEach(matches.prefix(6)) { pin in
                     Button { chosen = pin; query = "" } label: {
                         HStack(spacing: Alpine.Space.s3) {
@@ -251,14 +275,42 @@ struct ShareItemSheet: View {
                     }
                     .buttonStyle(.plain).alpineRow()
                 }
-                if let typedEmail {
-                    Button { adding = typedEmail } label: { Label("Add \(typedEmail)", systemImage: "plus").foregroundStyle(Alpine.primary) }
-                        .alpineRow()
-                } else if matches.isEmpty {
+                if typedEmail == nil && matches.isEmpty {
                     Text(pins.isEmpty ? "Type their email to share with someone new." : "No one by that name yet. Type their full email to add them.")
                         .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).alpineRow()
                 }
             }
+        }
+    }
+
+    /*
+     * What they can do, chosen before anything is shared (6.3): on a phone a line of its own under
+     * the field, so "Add a name or email" is never cut off.
+     */
+    private var roleLine: some View {
+        HStack {
+            Text("What they can do").foregroundStyle(Alpine.inkMuted)
+            Spacer()
+            Picker("What they can do", selection: $role) {
+                Text("Can view").tag("viewer")
+                Text("Can edit").tag("editor")
+            }
+            .pickerStyle(.menu).tint(Alpine.primary).labelsHidden()
+        }
+        .font(Theme.Text.callout)
+        .bareRow(top: 0, bottom: 0)
+    }
+
+    /* Review settled the change: what it stopped runs again, with the keys looked up afresh. */
+    private func flowDone() {
+        let act = settled ? interrupted : nil
+        settled = false
+        interrupted = nil
+        Task { await load() }
+        switch act {
+        case .share(let pin, let role)?: self.role = role; share(with: pin)
+        case .new(let email, let role)?: self.role = role; shareWithNew(email)
+        case nil: break
         }
     }
 
@@ -273,11 +325,20 @@ struct ShareItemSheet: View {
         Task { await load() }
     }
 
-    private func load() async {
+    /* `people`: look the people on it up again (opening, Review); a reload after this sheet's own share or role change doesn't. */
+    private func load(people: Bool = true) async {
         do {
             // Not `store.reload`: forgetting the item drops it from the catalogue until the next build.
             shares = try await store.vault.shares(of: item)
             pins = try await store.vault.contacts()
+            if people {
+                // Met here too (2.4): who on this item has an account that changed, from the keys served now (kept a
+                // minute by the vault, a few at a time). A lookup that fails is said, never read as "nothing changed".
+                let onIt = shares.compactMap { share in pins.first { $0.userId.lowercased() == share.grantee.id.lowercased() } }
+                let (moved, failure) = await Self.changedPeople(onIt, vault: store.vault)
+                changed = moved
+                if let failure { throw failure }
+            }
             links = try await store.vault.links(for: item).sorted { $0.createdAt < $1.createdAt }
             var found: [String: URL] = [:]
             for link in links { if let url = try? await store.vault.linkURL(link, for: item) { found[link.id] = url } }
@@ -290,16 +351,82 @@ struct ShareItemSheet: View {
         await store.refreshSharing()
     }
 
+    /* Which of `pins` have an account that changed, three lookups at a time; the first failure, if any. */
+    private static func changedPeople(_ pins: [ContactPin], vault: Vault) async -> (Set<String>, Error?) {
+        var moved: Set<String> = []
+        var failure: Error?
+        await withTaskGroup(of: (String, Result<Bool, Error>).self) { group in
+            var queue = pins[...]
+            func start(_ pin: ContactPin) {
+                group.addTask {
+                    do { return (pin.userId.lowercased(), .success(try await vault.shareeChanged(pin))) } catch { return (pin.userId.lowercased(), .failure(error)) }
+                }
+            }
+            for _ in 0..<3 { if let pin = queue.popFirst() { start(pin) } }
+            for await (id, result) in group {
+                switch result {
+                case .success(true): moved.insert(id)
+                case .success(false): break
+                case .failure(let error): failure = failure ?? error
+                }
+                if let pin = queue.popFirst() { start(pin) }
+            }
+        }
+        return (moved, failure)
+    }
+
     private func share(with pin: ContactPin) {
         sharing = true
         error = ""
+        let role = role
         Task {
             do {
                 _ = try await store.vault.share(item, with: pin, role: role)
                 store.notify("\(pin.name.isEmpty ? pin.email : pin.name) \(role == "editor" ? "can edit" : "can view") “\(item.name)” now")
                 chosen = nil
-                role = "viewer"
-                await load()
+                self.role = "viewer"
+                // This sheet's own share: the person was just checked by it, so nobody is looked up again.
+                await load(people: false)
+            } catch let changed as AccountChangedError {
+                // Waits for Review, in the sheet's place; runs again once it settled.
+                interrupted = .share(pin, role: role)
+                step = .changed(changed.change)
+            } catch {
+                if let words = ErrorWords.say(error) { self.error = words }
+            }
+            sharing = false
+        }
+    }
+
+    /* Someone new by their email (6.3): added as Add someone adds them, and shared with, in one step. */
+    private func shareWithNew(_ email: String) {
+        sharing = true
+        error = ""
+        let role = role
+        Task {
+            do {
+                let pin: ContactPin
+                switch try await store.vault.addContact(email: email) {
+                case .added(let added):
+                    pin = added
+                    Task { await store.refreshSigners() }
+                case .already(let known):
+                    pin = known
+                case .changed(let change):
+                    interrupted = .new(email: email, role: role)
+                    step = .changed(change)
+                    sharing = false
+                    return
+                }
+                _ = try await store.vault.share(item, with: pin, role: role)
+                store.notify("Shared with \(pin.firstName)")
+                query = ""
+                self.role = "viewer"
+                // This sheet's own share: the person was just checked by it, so nobody is looked up again.
+                await load(people: false)
+            } catch let changed as AccountChangedError {
+                interrupted = .new(email: email, role: role)
+                step = .changed(changed.change)
             } catch {
                 if let words = ErrorWords.say(error) { self.error = words }
             }
@@ -532,18 +659,29 @@ struct LinkOptionsSheet: View {
     }
 }
 
-/* What tapping a person shows: the two roles with what they mean, and stopping as a labelled red button. */
+/*
+ * What tapping a person shows: the two roles with what they mean, Check it's Maya, and stopping
+ * as a labelled red button, last (6.3).
+ */
 private struct PersonAccessSheet: View {
     @Environment(DriveStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     let item: Opened
     let share: ShareView
-    let pinned: Bool
-    let changed: () async -> Void
+    /* Their pin, when they are in Contacts: what a new role is sealed to. */
+    let pin: ContactPin?
+    /* Their account changed: the role waits for Review; stopping never does. */
+    @State var changed: Bool
+    /* Review settled their change here: the row behind this sheet stops saying so. */
+    var settledChange: () -> Void = {}
+    let reload: () async -> Void
     @State private var stopping = false
     @State private var busy = false
+    @State private var step: ContactStep?
+    @State private var waiting: String?
+    @State private var settled = false
 
-    private var first: String { (share.grantee.name.isEmpty ? share.grantee.email : share.grantee.name).split(separator: " ").first.map(String.init) ?? "them" }
+    private var first: String { firstName(share.grantee.name.isEmpty ? share.grantee.email : share.grantee.name) }
 
     var body: some View {
         NavigationStack {
@@ -551,10 +689,27 @@ private struct PersonAccessSheet: View {
                 Section {
                     role("viewer", "Can view", "Open and download")
                     role("editor", "Can edit", item.isFolder ? "Add, rename and delete inside" : "Open, download and replace")
-                } header: {
-                    Text("Can open").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
                 } footer: {
-                    if !pinned { Text("Add \(first) to Contacts to change what they can do.").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted) }
+                    if pin == nil { Text("Add \(first) to Contacts to change what they can do.").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted) }
+                }
+                if changed {
+                    Section {
+                        Button { step = .changed(AccountChange(contactId: share.grantee.id, name: share.grantee.name, email: share.grantee.email)) } label: {
+                            HStack {
+                                Text("\(first)’s account changed").foregroundStyle(Alpine.ink).lineLimit(1)
+                                Spacer(minLength: Alpine.Space.s2)
+                                Text("Review").fontWeight(.semibold).foregroundStyle(Alpine.primary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain).alpineRow()
+                    }
+                }
+                if pin != nil {
+                    Section {
+                        Button("Check it’s \(first)") { step = .check(email: share.grantee.email, name: share.grantee.name) }
+                            .foregroundStyle(Alpine.primary).alpineRow()
+                    }
                 }
                 Section {
                     Button { stopping = true } label: {
@@ -570,6 +725,15 @@ private struct PersonAccessSheet: View {
             .navigationSubtitle(Text(share.grantee.email))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Back") { dismiss() } } }
+            .contactSteps($step) { settled = true }
+            .onChange(of: step) { _, now in
+                // Review settled the change: the role may change again, and one it stopped runs again.
+                guard now == nil, settled else { return }
+                settled = false
+                changed = false
+                settledChange()
+                if let value = waiting { waiting = nil; change(to: value) } else { Task { await reload() } }
+            }
             .alert("Stop sharing with \(first)?", isPresented: $stopping) {
                 Button("Cancel", role: .cancel) {}
                 Button("Stop sharing", role: .destructive) { stop() }
@@ -577,7 +741,8 @@ private struct PersonAccessSheet: View {
                 Text("They can’t open “\(item.name)” in HushOS any more. Copies they already downloaded stay with them. You can share it again later.")
             }
         }
-        .presentationDetents([.medium])
+        // Taller while their account changed, so Stop sharing (which never waits on Review) is in view without scrolling.
+        .presentationDetents(changed ? [.fraction(0.72), .large] : [.medium, .large])
     }
 
     private func role(_ value: String, _ label: String, _ detail: String) -> some View {
@@ -592,7 +757,7 @@ private struct PersonAccessSheet: View {
             }
             .contentShape(Rectangle())
         }
-        .disabled(busy || (!pinned && share.role != value))
+        .disabled(busy || ((pin == nil || changed) && share.role != value))
         .accessibilityAddTraits(share.role == value ? .isSelected : [])
         .alpineRow()
     }
@@ -603,11 +768,14 @@ private struct PersonAccessSheet: View {
         busy = true
         Task {
             do {
-                guard let pin = try await store.vault.contacts().first(where: { $0.userId == share.grantee.id }) else { return }
+                guard let pin = try await store.vault.contacts().first(where: { $0.userId.lowercased() == share.grantee.id.lowercased() }) else { return }
                 _ = try await store.vault.share(item, with: pin, role: value)
                 store.notify("\(first) \(value == "editor" ? "can edit" : "can view") “\(item.name)” now")
-                await changed()
+                await reload()
                 dismiss()
+            } catch let change as AccountChangedError {
+                waiting = value
+                step = .changed(change.change)
             } catch {
                 if let words = ErrorWords.say(error, otherwise: "Try again.") { store.notify("Couldn’t change what they can do. " + words) }
             }
@@ -624,7 +792,7 @@ private struct PersonAccessSheet: View {
             } catch {
                 if let words = ErrorWords.say(error, otherwise: "Try again.") { store.notify("Couldn’t stop sharing. " + words) }
             }
-            await changed()
+            await reload()
             busy = false
             dismiss()
         }
@@ -701,180 +869,23 @@ struct FingerprintWordsView: View {
 }
 
 /*
- * Adding someone: their email, then their twelve words to compare on a call or in
- * person. They match adds them; a changed account is a warning to accept, never
- * applied quietly; someone whose keys aren't upgraded (or whose keys statement
- * doesn't hold) has no words to compare yet.
- */
-struct CheckContactView: View {
-    @Environment(DriveStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
-    @State var email: String
-    var intro: String = "Then you can share with them. You’ll check it’s them first."
-    let added: (ContactPin) -> Void
-    @State private var found: Lookup?
-    @State private var looking = false
-    @State private var adding = false
-    @State private var mismatch = false
-    @State private var error = ""
-    @State private var following = false
-    /* "Check again" found no succession their pinned keys signed: the change stands. */
-    @State private var unfollowed = false
-
-    private var first: String { found.map { ($0.contact.name.isEmpty ? $0.contact.email : $0.contact.name).split(separator: " ").first.map(String.init) ?? "them" } ?? "them" }
-    /* Words can only be compared over an upgraded identity whose keys statement holds. */
-    private var notUpgraded: Bool { found.map { !$0.upgraded } ?? false }
-
-    var body: some View {
-        List {
-            if let found {
-                Section {
-                    HStack(spacing: Alpine.Space.s3) {
-                        PersonAvatar(name: found.contact.name, seed: found.contact.userId, size: 44)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(found.contact.name.isEmpty ? found.contact.email : found.contact.name).font(Theme.Text.headline).foregroundStyle(Alpine.ink)
-                            Text(found.contact.email).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
-                        }
-                    }
-                    .alpineRow()
-                }
-                Section {
-                    if found.followed || (found.pinned.map(ReplacedKeysSeen.notice) == true && !found.changed && !found.recheck) {
-                        Text("\(first) replaced their sharing keys; the change is signed by their previous keys. To be sure it was them, ask \(first) to open Contacts in HushOS, choose Your twelve words, and read them to you.")
-                            .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
-                    } else if notUpgraded {
-                        Text("\(first) hasn’t signed in since HushOS upgraded its keys. You can compare words once they have.")
-                            .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
-                    } else if found.recheck && !found.changed {
-                        Text("You added \(first) before the twelve words covered all of their keys. Ask \(first) to open Contacts in HushOS, choose Your twelve words, and read them to you, on a call or in person. Until you do, nothing is shared with \(first) and what they share with you stays shut.")
-                            .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
-                    } else if found.changed {
-                        Label("\(first)’s account has changed since you added them. That can be a new phone or a reset, or someone pretending. Check it’s them before you accept.", systemImage: "exclamationmark.shield")
-                            .font(Theme.Text.callout).foregroundStyle(Alpine.danger).listRowBackground(Alpine.dangerSoft)
-                        // Only when asked: following asks the server for their succession chain.
-                        if found.canFollow && !unfollowed {
-                            Button { checkAgain() } label: { Text(following ? "Checking…" : "Check again") }
-                                .disabled(following).alpineRow()
-                        } else if unfollowed {
-                            Text("Their new keys aren’t signed by the keys you checked. Compare their words before you accept.")
-                                .font(Theme.Text.footnote).foregroundStyle(Alpine.danger).alpineRow()
-                        }
-                    } else {
-                        Text("Ask \(first) to open Contacts in HushOS, choose Your twelve words, and read them to you, on a call or in person. If they match these, it’s really them.")
-                            .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
-                    }
-                    if let fingerprint = found.contact.fingerprint {
-                        FingerprintWordsView(fingerprint: fingerprint).padding(.vertical, Alpine.Space.s2).alpineRow()
-                    }
-                    if mismatch {
-                        Text("Don’t share with this account. Check the email address with \(first), then try again.")
-                            .font(Theme.Text.footnote).foregroundStyle(Alpine.danger).alpineRow()
-                    }
-                }
-                if !error.isEmpty { Text(error).foregroundStyle(Alpine.danger).alpineRow() }
-                Section {
-                    if found.pinned != nil && !found.changed && !found.recheck && found.pinned.map(ReplacedKeysSeen.notice) != true {
-                        Button { if let pinned = found.pinned { added(pinned) } } label: { Text("Already in Contacts").frame(maxWidth: .infinity) }
-                            .buttonStyle(PrimaryCapsuleStyle())
-                    } else {
-                        VStack(spacing: Alpine.Space.s2) {
-                            Button { add() } label: {
-                                Label(adding ? "Adding…" : found.changed ? "Accept change" : "They match", systemImage: "checkmark.shield").frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(PrimaryCapsuleStyle())
-                            .disabled(adding || notUpgraded || mismatch)
-                            Button { if mismatch { dismiss() } else { mismatch = true } } label: { Text(mismatch ? "Back" : "They don’t match").frame(maxWidth: .infinity) }
-                                .buttonStyle(SecondaryCapsuleStyle())
-                        }
-                    }
-                }
-                .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
-            } else {
-                Section {
-                    TextField("them@example.com", text: $email)
-                        .keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .onSubmit(lookUp).alpineRow()
-                } header: {
-                    Text(intro).textCase(nil)
-                } footer: {
-                    Text(error.isEmpty ? "The email they use for HushOS." : error).foregroundStyle(error.isEmpty ? Alpine.inkMuted : Alpine.danger)
-                }
-                Section {
-                    Button { lookUp() } label: { Text(looking ? "Looking up…" : "Look up").frame(maxWidth: .infinity) }
-                        .buttonStyle(PrimaryCapsuleStyle()).disabled(looking || email.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-                .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
-            }
-        }
-        .listStyle(.insetGrouped)
-        .alpineGrouped()
-        .navigationTitle("Add someone")
-        .navigationBarTitleDisplayMode(.inline)
-        .task { if !email.isEmpty, found == nil { lookUp() } }
-    }
-
-    private func lookUp() {
-        looking = true
-        error = ""
-        Task {
-            do { found = try await store.vault.lookup(email: email.trimmingCharacters(in: .whitespaces)) } catch {
-                if let words = ErrorWords.say(error, otherwise: "Check the address and try again.") { self.error = words }
-            }
-            looking = false
-        }
-    }
-
-    /* Follows their succession from the pinned keys, when one their pinned keys signed leads to the keys served now. */
-    private func checkAgain() {
-        guard let current = found else { return }
-        following = true
-        error = ""
-        Task {
-            do {
-                let next = try await store.vault.checkAgain(current)
-                found = next
-                if next.changed { unfollowed = true } else { Task { await store.refreshSigners() } }
-            } catch {
-                if let words = ErrorWords.say(error, otherwise: "Couldn’t check again. Try again.") { self.error = words }
-            }
-            following = false
-        }
-    }
-
-    private func add() {
-        guard let found else { return }
-        adding = true
-        Task {
-            do {
-                try await store.vault.pin(found.contact)
-                guard let pin = try await store.vault.contacts().first(where: { $0.userId == found.contact.userId }) else { throw ContactError.unpinned }
-                added(pin)
-            } catch let error as ContactError {
-                self.error = error.errorDescription ?? "They weren’t saved. Try again."
-            } catch {
-                self.error = "They weren’t saved. Try again."
-            }
-            adding = false
-        }
-    }
-}
-
-/*
- * Contacts: Add someone and Your twelve words first, so neither is buried
- * under a long list, then your contacts (Find someone from eight of them), checking
- * it's them and removing someone.
+ * Contacts (docs/optional-verification.md 6.5): Add someone and Your twelve words first, so
+ * neither is buried under a long list, then everyone added (Find someone from eight of them),
+ * each with Verified or Not verified, an account that changed with Review, and Check it's Maya
+ * (Check again once verified) and Remove in its menu.
  */
 struct PeopleView: View {
     @Environment(AppModel.self) private var model
     @Environment(DriveStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var pins: [ContactPin] = []
+    /* Where each stands on this phone, by lowercased id; nil until read, and when the guard couldn't be. */
+    @State private var standings: [String: (verified: Bool, changed: Bool)]?
+    @State private var standingsError: String?
     @State private var loaded = false
     @State private var error: String?
-    @State private var checking: ContactPin?
-    @State private var rechecking: ContactPin?
+    @State private var step: ContactStep?
     @State private var removing: ContactPin?
-    @State private var adding = false
     @State private var showingWords = false
     @State private var query = ""
 
@@ -891,10 +902,10 @@ struct PeopleView: View {
         NavigationStack {
             List {
                 Section {
-                    Button { adding = true } label: { Label("Add someone", systemImage: "person.badge.plus").foregroundStyle(Alpine.primary) }.alpineRow()
+                    Button { step = .add(writer: nil) } label: { Label("Add someone", systemImage: "person.badge.plus").foregroundStyle(Alpine.primary) }.alpineRow()
                     Button { showingWords = true } label: { Label("Your twelve words", systemImage: "person.text.rectangle").foregroundStyle(Alpine.primary) }.alpineRow()
                 } header: {
-                    Text("People you can share with. Check it’s them before you share anything sensitive.").font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
+                    Text("People you share with. Add someone by the email they use for HushOS.").font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
                 }
                 Section {
                     if loaded && pins.isEmpty {
@@ -905,52 +916,18 @@ struct PeopleView: View {
                         .padding(.vertical, Alpine.Space.s2).alpineRow()
                     }
                     if let error { Text(error).foregroundStyle(Alpine.danger).alpineRow() }
-                    // Quiet: a succession their old keys signed is no alarm, but comparing the words again is still the surest check.
-                    ForEach(pins.filter(ReplacedKeysSeen.notice)) { pin in
+                    // What this phone remembers couldn't be read: nobody is shown as verified, and acts wait.
+                    if let standingsError {
                         VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                            Text("\(firstName(pin)) replaced their sharing keys; the change is signed by their previous keys.")
-                                .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).fixedSize(horizontal: false, vertical: true)
-                            Button("Compare words again") { rechecking = pin }
-                                .font(Theme.Text.footnote.weight(.semibold)).foregroundStyle(Alpine.primary).buttonStyle(.borderless)
+                            Text(standingsError).font(Theme.Text.callout).foregroundStyle(Alpine.ink)
+                            Button("Try again") { Task { await load() } }.font(Theme.Text.callout.weight(.semibold)).buttonStyle(.borderless)
                         }
-                        .padding(.vertical, Alpine.Space.s2)
-                        .alpineRow()
+                        .padding(.vertical, Alpine.Space.s2).alpineRow()
                     }
                     if let result, shown.isEmpty {
                         Text(result).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).padding(.vertical, Alpine.Space.s2).alpineRow()
                     }
-                    ForEach(shown) { pin in
-                        Menu {
-                            // A pin that vouches for nothing has no words worth reading back: look them up and compare afresh.
-                            if ReplacedKeysSeen.notice(pin) {
-                                // Followed along their succession: the words are new, so they are compared against a fresh lookup.
-                                Button("Compare words again", systemImage: "checkmark.shield") { rechecking = pin }
-                            } else {
-                                Button("Check it’s them", systemImage: "checkmark.shield") { if pin.verified { checking = pin } else { rechecking = pin } }
-                            }
-                            Divider()
-                            Button("Remove", systemImage: "person.badge.minus", role: .destructive) { removing = pin }.tint(Alpine.danger)
-                        } label: {
-                            HStack(spacing: Alpine.Space.s3) {
-                                PersonAvatar(name: pin.name, seed: pin.userId)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(pin.name.isEmpty ? pin.email : pin.name).foregroundStyle(Alpine.ink).lineLimit(1)
-                                    Text(pin.email).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
-                                }
-                                Spacer(minLength: 0)
-                                if !pin.verified {
-                                    Text("Check words again").font(Theme.Text.footnote).foregroundStyle(Alpine.danger)
-                                } else if ReplacedKeysSeen.notice(pin) {
-                                    Text("New keys").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
-                                } else if let added = parseDate(pin.pinnedAt) {
-                                    Text("Added \(changedLabel(added) ?? "")").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
-                                }
-                            }
-                            .frame(minHeight: Theme.row).contentShape(Rectangle())
-                        }
-                        .accessibilityLabel("More for \(pin.name)")
-                        .itemRow()
-                    }
+                    ForEach(shown) { pin in row(pin) }
                 }
             }
             .listStyle(.insetGrouped)
@@ -967,32 +944,17 @@ struct PeopleView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .sheet(isPresented: $showingWords) { OwnWordsSheet().environment(store) }
-            .navigationDestination(isPresented: $adding) {
-                CheckContactView(email: "") { pin in
-                    adding = false
-                    store.notify("\(pin.name.isEmpty ? pin.email : pin.name) added")
-                    Task { await load(); await store.refreshSigners() }
-                }
-                .environment(store)
-            }
-            .sheet(item: $checking) { pin in CheckItsThemSheet(pin: pin) }
-            .navigationDestination(item: $rechecking) { pin in
-                CheckContactView(email: pin.email, intro: "Check it’s them again before you share with them or open what they share.") { pin in
-                    rechecking = nil
-                    store.notify("\(pin.name.isEmpty ? pin.email : pin.name) checked")
-                    Task { await load(); await store.refreshSigners() }
-                }
-                .environment(store)
-            }
-            .alert(removing.map { "Remove \(firstName($0))?" } ?? "", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
+            .contactSteps($step)
+            .onChange(of: step) { _, now in if now == nil { Task { await load() } } }
+            .alert(removing.map { "Remove \($0.firstName)?" } ?? "", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } })) {
                 Button("Cancel", role: .cancel) { removing = nil }
                 Button("Remove", role: .destructive) {
                     guard let pin = removing else { return }
                     removing = nil
                     Task {
                         do {
-                            try await store.vault.unpin(pin)
-                            store.notify("\(firstName(pin)) removed")
+                            try await store.vault.remove(pin.userId)
+                            store.notify("\(pin.firstName) removed")
                             await store.refreshSigners()
                         } catch {
                             if let words = ErrorWords.say(error, otherwise: "Try again.") { store.notify("Couldn’t remove them. " + words) }
@@ -1001,15 +963,44 @@ struct PeopleView: View {
                     }
                 }
             } message: {
-                if let removing { Text("\(firstName(removing)) keeps access to anything you’ve already shared. If you add them again, you’ll check it’s them again.") }
+                if let removing { Text("\(removing.firstName) keeps access to anything you’ve already shared.") }
             }
             .task { await load() }
         }
         .onChange(of: sessionOver, initial: true) { _, over in if over { dismiss() } }
     }
 
-    private func firstName(_ pin: ContactPin) -> String {
-        (pin.name.isEmpty ? pin.email : pin.name).split(separator: " ").first.map(String.init) ?? pin.email
+    private func row(_ pin: ContactPin) -> some View {
+        let standing = standings?[pin.userId.lowercased()]
+        let changed = standing?.changed == true
+        let change = AccountChange(contactId: pin.userId, name: pin.name, email: pin.email)
+        return Menu {
+            if changed {
+                Button("Review", systemImage: "person.crop.circle.badge.exclamationmark") { step = .changed(change) }
+            }
+            Button(standing?.verified == true ? "Check again" : "Check it’s \(pin.firstName)", systemImage: "checkmark.shield") {
+                step = .check(email: pin.email, name: pin.name)
+            }
+            Divider()
+            Button("Remove", systemImage: "person.badge.minus", role: .destructive) { removing = pin }.tint(Alpine.danger)
+        } label: {
+            HStack(spacing: Alpine.Space.s3) {
+                PersonAvatar(name: pin.name, seed: pin.userId)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(pin.name.isEmpty ? pin.email : pin.name).foregroundStyle(Alpine.ink).lineLimit(1)
+                    if changed {
+                        Text("Account changed · \(Text("Review").foregroundStyle(Alpine.primary).fontWeight(.semibold))").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                    } else {
+                        Text(pin.email).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+                if let standing, !standing.changed { VerifiedLabel(verified: standing.verified) }
+            }
+            .frame(minHeight: Theme.row).contentShape(Rectangle())
+        }
+        .accessibilityLabel("More for \(pin.name)")
+        .itemRow()
     }
 
     private func load() async {
@@ -1020,6 +1011,16 @@ struct PeopleView: View {
             // A session that ended is the store's to say (it closes People); anything else is said here.
             if endsSession(error) { store.report(error); return }
             if let words = ErrorWords.say(error, otherwise: "Try again.") { self.error = "This list couldn’t be opened. " + words }
+        }
+        do {
+            var found = try await store.vault.contactStandings()
+            // A change met this session (sharing, a share they made) is said too, until Continue or a check.
+            for change in await store.vault.accountChanges().values { found[change.id] = (false, true) }
+            standings = found
+            standingsError = nil
+        } catch {
+            standings = nil
+            standingsError = ErrorWords.say(error, otherwise: GuardWords.unreadable)
         }
         loaded = true
     }
@@ -1074,7 +1075,7 @@ struct OwnWordsSheet: View {
                         ProgressView().accessibilityLabel("Opening your words").alpineRow()
                     }
                 } header: {
-                    Text("When someone adds you, they’ll ask you to read these. They’re the same on all your devices.")
+                    Text("When someone checks it’s you, read these to them. They’re the same on all your devices.")
                         .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
                 }
             }
@@ -1095,36 +1096,6 @@ struct OwnWordsSheet: View {
             }
         }
         .onChange(of: signedIn) { _, now in if now == nil || now != account { dismiss() } }
-    }
-}
-
-/* Comparing a contact's twelve words again, from what was kept when they were added. */
-private struct CheckItsThemSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    let pin: ContactPin
-
-    private var first: String { (pin.name.isEmpty ? pin.email : pin.name).split(separator: " ").first.map(String.init) ?? "them" }
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    FingerprintWordsView(fingerprint: pin.fingerprint).padding(.vertical, Alpine.Space.s2).alpineRow()
-                } header: {
-                    Text("Ask \(first) to open Contacts in HushOS, choose Your twelve words, and read them to you, on a call or in person. If they match these, it’s really them.")
-                        .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
-                } footer: {
-                    Text("If they don’t match, don’t share anything new with them. Remove them, and add them again once they’ve signed in.")
-                        .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
-                }
-            }
-            .listStyle(.insetGrouped)
-            .alpineGrouped()
-            .navigationTitle("Check it’s \(first)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-        }
-        .presentationDetents([.medium, .large])
     }
 }
 

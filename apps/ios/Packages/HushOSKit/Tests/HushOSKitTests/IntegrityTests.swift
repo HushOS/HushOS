@@ -168,12 +168,16 @@ struct IntegrityDecisionTests {
     @Test func aStrippedSignatureReadsLikeAnyOtherUnconfirmedRecord() {
         // A server stripping a signature must not get a milder warning than a stranger's signature.
         let unsigned = Provenance.unsigned.explanation
-        #expect(unsigned == "HushOS can’t confirm who wrote this.")
-        #expect(Provenance.unknownSigner(signerId: maya).explanation.hasPrefix(unsigned.dropLast()))
+        // The calm words of docs/optional-verification.md 6.12, the same for both.
+        #expect(unsigned == "HushOS can’t tell who wrote this.")
+        #expect(Provenance.unknownSigner(signerId: maya).explanation == unsigned)
         #expect(!Provenance.unknownSigner(signerId: maya).explanation.contains(maya))
         #expect(Provenance.resealed(.you).explanation == "Re-locked by you; HushOS couldn’t confirm who wrote it before.")
         #expect(Provenance.retiredKey(.contact("Maya")).explanation == "Signed with keys Maya has since replaced.")
-        #expect(Provenance.unchecked.explanation == "HushOS couldn’t check who wrote this. Try again later.")
+        #expect(Provenance.unchecked.explanation == "HushOS couldn’t check this right now.")
+        // Never an accusation: no "Don't trust this item" for a signature that doesn't hold, and a key conflict is said calmly.
+        #expect(Provenance.badSignature(.contact("Maya Lind")).explanation == "HushOS couldn’t confirm this was written by Maya.")
+        #expect(Provenance.keyConflict(.contact("Maya Lind")).explanation == "Maya’s account looks different here than in your contacts.")
     }
 }
 
