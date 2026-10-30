@@ -61,8 +61,13 @@ fun planReseal(nodeId: String, shares: List<JSONObject>, links: List<JSONObject>
         try {
             val (publicKey, kem) = sealTo(granteeId, ServedIdentity.from(share.getJSONObject("grantee")))
             sealed.add(ResealShare(share.getString("id"), granteeId, publicKey, kem))
-        } catch (refused: Refused) {
-            skipped.add(refused.message ?: "Someone lost access.")
+        } catch (verdict: Exception) {
+            // Left out, the server revokes their share: only a verdict on them may do that (their account changed, they're
+            // no longer in Contacts, they can't be sealed to). Anything else (the guard couldn't be read or written, the
+            // pin moved meanwhile, settings refused, no network) stops the whole rotation before anything is sent, and
+            // the next attempt (PendingRotations) tries again.
+            if (verdict !is AccountChanged && verdict !is ContactProblem && verdict !is SharingRefused) throw verdict
+            skipped.add(verdict.message ?: "Someone lost access.")
         }
     }
     return ResealPlan(sealed, links.filter { ledger.hasLink(it.getString("id"), nodeId) }, skipped)

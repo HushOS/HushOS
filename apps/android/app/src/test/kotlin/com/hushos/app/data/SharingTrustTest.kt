@@ -141,6 +141,18 @@ class SharingTrustTest {
     }
 
     @Test
+    fun aRotationAbortsOnAnythingButAVerdictSoNobodyLosesAccessToAFullDiskOrADroppedConnection() {
+        val ledger = SharingLedger(mapOf(nodeId to setOf(userId)), emptyMap())
+        // Leaving someone out of the batch makes the server revoke their share: only a verdict on them may do that.
+        for (failure in listOf(GuardUnsaved(), GuardUnreadable(), GuardRaced(), ContactMoved(), SettingsRolledBack(), Unreachable())) {
+            val thrown = assertThrows(Exception::class.java) {
+                planReseal(nodeId, listOf(row("share-1", userId)), emptyList(), ledger) { _, _ -> throw failure }
+            }
+            assertEquals(failure.javaClass, thrown.javaClass)
+        }
+    }
+
+    @Test
     fun aLinkFromAnOlderDerivationIsRefused() {
         assertThrows(OldLink::class.java) { LinkKdf.check(1, supported = 2) }
         assertThrows(OldLink::class.java) { LinkKdf.check(null, supported = 2) }
