@@ -16,6 +16,7 @@ import java.nio.file.Files
 class AccountStoreTest {
     private lateinit var files: File
     private lateinit var cache: File
+    private lateinit var noBackup: File
     private var storesForgotten = 0
     private lateinit var store: AccountStore
 
@@ -28,12 +29,18 @@ class AccountStoreTest {
         File(files, "offline/node-e/version-4/Payslip March.pdf"),
         File(files, "queue/job-1/Holiday.jpg"),
         File(files, "files-parents.json"),
+        // The names of queued transfers, kept out of WorkManager's database.
+        File(files, JobNames.FILE),
+        File(files, JobNames.STAGED),
         File(cache, "opened/node-a/version-1/Tax return.pdf"),
         File(cache, "files/node-b/version-2"),
         File(cache, "thumbnails/node-c"),
         File(cache, "links/node-d/version-3/Shared.pdf"),
         File(cache, "staged/123/Upload.bin"),
         File(cache, "kit/hushos-recovery-kit.txt"),
+        // The rollback marks, sealed, and the plaintext ones an earlier version kept across sign-outs.
+        File(noBackup, "marks/dm3BIs9g8rvG3OeM5lsOQA.json"),
+        File(noBackup, "settings-seen.json"),
     )
 
     @Before
@@ -41,8 +48,9 @@ class AccountStoreTest {
         val root = Files.createTempDirectory("account-store").toFile()
         files = File(root, "files")
         cache = File(root, "cache")
+        noBackup = File(root, "no_backup")
         storesForgotten = 0
-        store = AccountStore(files, cache) { storesForgotten++ }
+        store = AccountStore(files, cache, noBackup) { storesForgotten++ }
     }
 
     /* Alice's files, written after her sign-in; only what happens afterwards is counted. */
@@ -99,6 +107,21 @@ class AccountStoreTest {
         // Then someone else signs in: Alice's data goes.
         store.claim("bob")
         for (file in aliceFiles) assertFalse(file.exists())
+    }
+
+    /* Marks the store really kept (sealed, under a settings key) are gone after sign-out: the next sign-in reads none. */
+    @Test
+    fun signingOutLeavesNoRollbackMark() {
+        val user = "6b1a3f0e-2c4d-4e5f-8a9b-0c1d2e3f4a5b"
+        val keys: MarksKeys = { _, _ -> MarksKey(ByteArray(32) { 7 }, com.hushos.core.SettingsKeyEnvelope("n", "c")) }
+        store.claim(user)
+        SettingsMark(File(noBackup, SettingsMark.FOLDER), keys).recordIdentity(user, 3uL, 2u)
+        SettingsMark.forgetRaised()
+        assertEquals(3uL, SettingsMark(File(noBackup, SettingsMark.FOLDER), keys).read(user).identity)
+        store.wipe()
+        assertTrue("a mark survived sign-out", noBackup.walkTopDown().none { it.isFile })
+        SettingsMark.forgetRaised()
+        SettingsMark(File(noBackup, SettingsMark.FOLDER), keys).checkIdentity(user, 1uL, 1u)
     }
 
     @Test

@@ -60,6 +60,7 @@ export const GROUP_OPERATIONS = [
     'groupStoreOpen',
     'groupPreviousRoot',
     'groupForeignListings',
+    'groupGuardKept',
 ] as const;
 
 /*
@@ -149,3 +150,22 @@ export const GUARD_CONFLICT =
  */
 export const GUARD_AHEAD =
     'This device already checked a later member list for this family. Sync it first, then remove it.';
+
+/*
+ * The worker's refusal to give the role that holds the family's key (managing
+ * the family) to keys this account never checked: its own verified pin of
+ * them, over the very keys their entry names (docs/optional-verification.md
+ * 3.6). The family page asks for the check before it gets here.
+ */
+export const CHECK_MANAGER_FIRST =
+    'Check it’s them first. Managers are checked before they get the role.';
+
+/*
+ * A write into a family, or under its folders' keys, while the family guard
+ * an acceptance handed back is not stored on this device
+ * (docs/optional-verification.md 2.8): nothing is written under that
+ * acceptance until it is (groupGuardKept), reading goes on. The same words
+ * as a guard write that failed.
+ */
+export const GUARD_NOT_KEPT =
+    'HushOS couldn’t save this on this device. Free up some space, then try again.';

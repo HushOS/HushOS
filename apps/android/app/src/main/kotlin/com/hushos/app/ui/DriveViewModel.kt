@@ -14,6 +14,7 @@ import com.hushos.app.BuildConfig
 import com.hushos.app.data.rethrowIfCancelled
 import com.hushos.app.data.Auth
 import com.hushos.app.data.catalogueAll
+import com.hushos.app.data.saveFromLink
 import com.hushos.app.data.BillingSummary
 import com.hushos.app.data.StorageAllowance
 import com.hushos.app.data.NotAuthenticated
@@ -307,16 +308,21 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                 lastInfos = infos
                 val inUse = infos.mapNotNull { info -> info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:")?.let { File(it).parent } }.toSet()
                 val records = com.hushos.app.data.FailedTransfers.of(context)
+                val jobNames = com.hushos.app.data.JobNames.of(context)
+                // A job's name is the app's (JobNames), or a tag of an older version's job.
+                val names = withContext(Dispatchers.IO) { jobNames.all() }
+                val nameOf = { info: androidx.work.WorkInfo -> names[info.id.toString()] ?: info.tags.firstOrNull { it.startsWith("name:") }?.removePrefix("name:") ?: "File" }
                 // Failures from before the app kept its own record go on it now, while WorkManager still has them.
                 withContext(Dispatchers.IO) {
                     infos.filter { it.state == androidx.work.WorkInfo.State.FAILED && it.id !in hidden && !records.has(it.id.toString()) }.forEach { info ->
                         val tag = { prefix: String -> info.tags.firstOrNull { it.startsWith(prefix) }?.removePrefix(prefix) }
                         val out = info.outputData
-                        records.record(com.hushos.app.data.FailedTransfer(info.id.toString(), tag("kind:") ?: "upload", tag("name:") ?: "File",
+                        records.record(com.hushos.app.data.FailedTransfer(info.id.toString(), tag("kind:") ?: "upload", nameOf(info),
                             out.getString("message") ?: "The transfer failed.", System.currentTimeMillis(), out.getString("file") ?: tag("file:"), out.getString("mime"),
                             out.getString("folder"), out.getString("replacing"), tag("node:"), "folder" in info.tags, out.getString("share")))
                     }
                     com.hushos.app.data.TransferQueue.sweep(context, inUse)
+                    jobNames.retain(infos.map { it.id.toString() }.toSet())
                 }
                 // Failed rows come from the app's own record, which outlives WorkManager's; its FAILED jobs are not shown twice.
                 val failedRows = withContext(Dispatchers.IO) { records.all() }.map { failed ->
@@ -335,7 +341,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                     val finished = info.state.isFinished
                     val failed = info.state == androidx.work.WorkInfo.State.FAILED
                     TransferItem(
-                        id = info.id.toString(), kind = tag("kind:") ?: "upload", name = tag("name:") ?: "File",
+                        id = info.id.toString(), kind = tag("kind:") ?: "upload", name = nameOf(info),
                         fraction = if (info.state == androidx.work.WorkInfo.State.SUCCEEDED) 1f else info.progress.getFloat("fraction", 0f),
                         done = finished, failed = failed,
                         waiting = info.state == androidx.work.WorkInfo.State.ENQUEUED || info.state == androidx.work.WorkInfo.State.BLOCKED,
@@ -349,7 +355,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update { it.copy(queued = items) }
                 val newlyLanded = infos.filter { it.state == androidx.work.WorkInfo.State.SUCCEEDED && landed.add(it.id) }
                 // A kept folder whose share stopped: its job removed the copies; the app says so.
-                newlyLanded.mapNotNull { it.outputData.getString("unshared") }.forEach { name ->
+                newlyLanded.filter { it.outputData.getBoolean("unshared", false) || it.outputData.getString("unshared") != null }.map(nameOf).forEach { name ->
                     notifyUntilRead("“$name” is no longer shared with you, so it was removed from this phone.")
                 }
                 // Its own coroutine: the next queue update must not cancel the refresh halfway.
@@ -1521,29 +1527,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         val ticket = begin("copy", item.name)
         var reason: String? = null
         notify("Saving a copy of “${item.name}”. It shows up in Files as it copies.")
-        val ok = write(root, { reason = it }) { vault -> copyFromLink(vault, link, item, root, freeName(item.name, taken)) }
+        val ok = write(root, { reason = it }) { vault -> vault.saveFromLink(link, item, root, freeName(item.name, taken)) }
         finish(ticket, failed = !ok, message = reason)
-    }
-
-    /*
-     * A visitor sees no signatures, so everything saved from a link, every folder the save creates included, is signed
-     * with the saved statements: no mark, and Info says who saved it and that the original can't be confirmed.
-     */
-    private fun copyFromLink(vault: Vault, link: com.hushos.app.data.LinkVault, item: Opened, parent: String, name: String) {
-        if (item.isFolder) {
-            val made = vault.createFolder(parent, name, com.hushos.app.data.Prior.FROM_LINK, item.metadata.attributes)
-            for (child in link.children(item.id)) copyFromLink(vault, link, child, made.id, child.name)
-            return
-        }
-        val directory = File(context.cacheDir, "copy-" + java.util.UUID.randomUUID())
-        try {
-            val file = File(directory, name)
-            link.download(item, file)
-            vault.upload(file, name, item.metadata.mime, parent, null, vault.makeThumbnail(file, item.metadata.mime), com.hushos.app.data.Prior.FROM_LINK,
-                item.metadata.attributes)
-        } finally {
-            directory.deleteRecursively()
-        }
     }
 
     /* A link's password and end date; the address stays the same. */
@@ -1967,6 +1952,28 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     /* The opened item for an id, when this session knows it (the catalogue opens the whole drive). */
     fun item(id: String): Opened? = vault?.item(id)
+
+    /* `item`, only while it is live (not trashed, nor inside a trashed folder); null when gone or not yet loaded. */
+    fun liveItem(id: String, workspaceId: String? = null): Opened? = vault?.liveItem(id, workspaceId)
+
+    /* Whether the rows on this device include `id`, live or trashed. */
+    fun holds(id: String, workspaceId: String? = null): Boolean = vault?.holds(id, workspaceId) == true
+
+    /* This account's own workspace, once the drive is open. */
+    fun ownWorkspace(): String? = vault?.ownWorkspaceId
+
+    /* Whether the server said this workspace's node `id` is gone since this device last held it. */
+    fun removed(workspaceId: String, id: String): Boolean = vault?.removed(workspaceId, id) == true
+
+    /*
+     * Whether a row of `workspaceId` can no longer be reached: not this account's own workspace, and not among the
+     * shares the server listed last. Unknown (shares not listed yet, the drive not open): false.
+     */
+    fun outOfReach(workspaceId: String): Boolean {
+        val own = vault?.ownWorkspaceId ?: return false
+        val shares = state.value.shares ?: return false
+        return workspaceId != own && shares.none { it.share.workspaceId == workspaceId }
+    }
 
     /* A kept folder off the phone (from one of its files, or On this phone): everything that came with it goes. */
     fun forgetKeptFolder(id: String) = viewModelScope.launch {

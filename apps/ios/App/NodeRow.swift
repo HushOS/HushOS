@@ -390,3 +390,27 @@ extension FolderGlyph {
         )
     }
 }
+
+extension View {
+    /*
+     * A node's 56pt row: tinted when picked, and while its Info is open beside the list, as the web
+     * tints the selected row its details describe (by workspace and id: a share's node can carry the
+     * same id as one of this account's own).
+     */
+    func itemRow(selected: Bool = false, item: Opened) -> some View {
+        modifier(NodeItemRow(selected: selected, item: item))
+    }
+}
+
+private struct NodeItemRow: ViewModifier {
+    @Environment(DriveStore.self) private var store
+    @Environment(\.roomBeside) private var room
+    let selected: Bool
+    let item: Opened
+
+    func body(content: Self.Content) -> some View {
+        let shown = store.infoBeside?.item
+        let showingInfo = room && shown?.id == item.id && shown?.node.workspaceId == item.node.workspaceId
+        return content.itemRow(selected: selected || showingInfo)
+    }
+}

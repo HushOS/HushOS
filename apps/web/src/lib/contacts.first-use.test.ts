@@ -303,6 +303,35 @@ describe('a change with no signed chain', () => {
         await expect(trustGrantee(ME, MAYA, before)).rejects.toBeInstanceOf(AccountChangedError);
     });
 
+    test('a check of their own words over a pin taken on a family’s word makes it this person’s own', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        await pinContact(query, ME, await lookupContact(query, ME, MAYA_EMAIL));
+        // As Trust as family left a pin before 3.7: her very keys, on a family's word.
+        const loaded = await contacts.readSettingsForWrite(ME);
+        await contacts.compareAndSetSettings(ME, loaded.version, {
+            ...loaded.settings,
+            contacts: {
+                ...loaded.settings.contacts,
+                [MAYA]: {
+                    ...loaded.settings.contacts[MAYA]!,
+                    trustedVia: 'f0f0f0f0-0000-4000-8000-00000000000f',
+                    trustedViaFamily: 'Lindqvist',
+                } as never,
+            },
+        });
+        expect((await w.stored()).contacts[MAYA]).toMatchObject({ trustedVia: expect.any(String) });
+        // They match: the family's word goes, and the check is hers.
+        await pinContact(query, ME, await lookupContact(query, ME, MAYA_EMAIL));
+        const pin = (await w.stored()).contacts[MAYA]! as {
+            trustedVia?: unknown;
+            trustedViaFamily?: unknown;
+        };
+        expect(pin.trustedVia ?? null).toBeNull();
+        expect(pin.trustedViaFamily).toBeUndefined();
+        expect(await pinTrust(pin as never)).toBe('verified');
+    });
+
     test('a verified contact’s change needs Continue or a check, and Continue drops the verified state', async () => {
         const w = await world();
         await addContact(query, ME, MAYA_EMAIL);

@@ -185,7 +185,7 @@ function WithMe() {
         try {
             const root = (await queryClient.fetchQuery(folderQueryOptions(rootId))).folder;
             await saveCopy(queryClient, [node], root, 'drive');
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: `Saving “${node.name}” to your files`,
@@ -523,7 +523,7 @@ function ByMe() {
             if (target.kind === 'share') await driveClient.revokeShare(node, target.share.id);
             else await driveClient.revokeLink(node, target.link.id);
             await queryClient.invalidateQueries({ queryKey: driveKeys.mine });
-            cue('droplet');
+            cue('close');
             toast.add(
                 target.kind === 'share'
                     ? {

@@ -23,13 +23,13 @@
         "@hushos/db": "workspace:*",
         "@hushos/emails": "workspace:*",
         "@hushos/env": "workspace:*",
-        "zustand": "5.0.15"
+        "zustand": "5.0.16"
     },
     "devDependencies": {
         "@hushos/config": "workspace:*",
         "@types/bun": "1.4.4",
-        "fake-indexeddb": "6.2.5",
+        "fake-indexeddb": "6.2.6",
         "typescript": "7.0.2",
-        "vitest": "^5.0.0"
+        "vitest": "^5.0.5"
     }
 }

@@ -73,6 +73,12 @@ final class DriveStore {
     var route: AppLink?
     /* A file a link asked to open in the viewer, and the files beside it. */
     var deepFile: Opened?
+    /*
+     * Info shown beside the tabs where the window has room (RoomBeside: iPhone Duo's inner display on
+     * its side, an iPad): the shell draws it, so it stays open across tabs, pushes and folding (as a
+     * sheet once there is no room). It follows the item as the lists change (`InfoFollow`).
+     */
+    var infoBeside: InfoFollow?
     var deepSiblings: [Opened] = []
     /* What others shared with this account, opened: the Shared tab and the folder picker read it. */
     /*
@@ -676,6 +682,16 @@ final class DriveStore {
             let children = try await vault.children(of: id)
             folders[id] = children
             folderProblems[id] = nil
+            // A received share's item missing from its folder listed afresh closes Info (there is no feed for
+            // their drive); the vault keeps its row, so nothing a close decides changes what it holds.
+            if var follow = infoBeside, isReceived(follow.item) {
+                // Read only: the vault's row as it is now, so a move made here (adopted there before this
+                // refresh of the folder it left) is followed, and only its current folder's listing counts.
+                if case .live(let row) = await vault.standing(of: follow.item.ref) { follow.adopt(row) }
+                if infoBeside?.item.ref == follow.item.ref {
+                    if follow.missing(from: id, children: children) { infoBeside = nil } else if infoBeside != follow { infoBeside = follow }
+                }
+            }
             for child in children { names[child.id] = child.name }
             await judgeFamilyItems(children)
         } catch {
@@ -1085,6 +1101,41 @@ final class DriveStore {
         FilesDomain.signal(folderId: item.node.parentId)
     }
 
+    /*
+     * Info beside the list, checked against the vault's rows (never the lists' caches, where a trashed
+     * folder's files linger with no trashedAt of their own): shown as the server has it now, closed on a
+     * removal the server confirmed or a share no longer listed, kept as it was while its row is only
+     * being read again (InfoFollow, the same rule as Android's).
+     */
+    func followInfo() async {
+        guard var follow = infoBeside else { return }
+        let item = follow.item
+        let standing = await vault.standing(of: item.ref)
+        let step = follow.update(standing, outOfReach: outOfReach(item))
+        // Another item opened, or Info closed, while the vault answered.
+        guard infoBeside?.item.id == item.id else { return }
+        switch step {
+        case .close: infoBeside = nil
+        case .show: if infoBeside != follow { infoBeside = follow }
+        case .hold: break
+        case .find: if let found = await lookUp(item.id), infoBeside?.item.id == item.id { infoBeside = InfoFollow(found) }
+        }
+    }
+
+    /* In someone else's drive that this account reaches through a share: neither its own nor a family's. */
+    private func isReceived(_ item: Opened) -> Bool {
+        guard let own = myWorkspace else { return false }
+        return item.node.workspaceId.lowercased() != own.lowercased() && !isFamily(item)
+    }
+
+    /* In a workspace that is neither this account's, a family's, nor among the shares just listed (unshared, revoked). */
+    private func outOfReach(_ item: Opened) -> Bool {
+        let workspace = item.node.workspaceId.lowercased()
+        guard let own = myWorkspace, workspace != own.lowercased(), !isFamily(item) else { return false }
+        guard mountsLoaded, mountsError == nil else { return false }
+        return !mounts.contains { $0.share.workspaceId.lowercased() == workspace }
+    }
+
     /* The item as the server has it now: the folder listed again, the row picked out. */
     func reload(_ item: Opened) async throws -> Opened? {
         await vault.forget(item.id)
@@ -1187,6 +1238,9 @@ final class DriveStore {
             settle: { [weak self] folders in Task { await self?.settle(folders) } }
         ))
         busy = false
+        // The lists let go of the rows first (`drop`), the vault marks them gone after: Info looks again only now,
+        // so it never settles on what it read in between and waits on a sync that may not come.
+        await followInfo()
         reportFailures(result.failed.map(\.error), single: items.count == 1)
     }
 
@@ -1391,6 +1445,7 @@ final class DriveStore {
 
     func purge(_ item: Opened) async {
         _ = await onTrashRow(item) { try await vault.purge(item.id) }
+        await followInfo()
     }
 
     /*

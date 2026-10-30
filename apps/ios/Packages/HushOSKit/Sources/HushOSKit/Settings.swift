@@ -259,7 +259,33 @@ extension Vault {
         if let settingsKey { return settingsKey }
         let key = try settingsKeyOpen(userId: session.userId, accountKey: try unlockAccount(), envelope: envelope)
         settingsKey = key
+        settingsKeyEnvelope = envelope
         return key
+    }
+
+    /*
+     * The settings key the rollback marks are sealed under (RollbackMarks): the envelope kept
+     * beside them when it opens under the account key (it does until a master-key rotation), else
+     * the one this process opened, else the server's (`served` when the caller has just read it).
+     * With `create`, an account with none gets one; without, nil.
+     */
+    func marksKey(kept: SettingsKeyEnvelope?, create: Bool, served: SettingsKeyEnvelope? = nil) async throws -> MarksKey? {
+        if let kept, let key = try? settingsKeyOpen(userId: session.userId, accountKey: try unlockAccount(), envelope: kept) {
+            return MarksKey(key: key, envelope: kept)
+        }
+        if let settingsKey, let settingsKeyEnvelope { return MarksKey(key: settingsKey, envelope: settingsKeyEnvelope) }
+        var stored = served
+        if stored == nil { stored = try await Auth.settings(as: session).key }
+        if let stored { return MarksKey(key: try openSettingsKey(stored), envelope: settingsKeyEnvelope ?? stored) }
+        guard create else { return nil }
+        let key = try await ensureSettingsKey(nil)
+        guard let settingsKeyEnvelope else { return nil }
+        return MarksKey(key: key, envelope: settingsKeyEnvelope)
+    }
+
+    /* The marks' key, asked of this vault (`served`: the settings key envelope just read, if any). */
+    func marksKeys(served: SettingsKeyEnvelope? = nil) -> MarksKeys {
+        { kept, create in try await self.marksKey(kept: kept, create: create, served: served) }
     }
 
     /*
@@ -270,11 +296,13 @@ extension Vault {
         if let stored { return try openSettingsKey(stored) }
         let made = try settingsKeyCreate(userId: session.userId, accountKey: try unlockAccount())
         do {
-            try await Auth.putSettingsKey(made.envelope)
+            // Under this vault's own session: a key is stored once and for good, so never into another account.
+            try await Auth.putSettingsKey(made.envelope, as: session)
             settingsKey = made.key
+            settingsKeyEnvelope = made.envelope
             return made.key
         } catch AuthError.conflict {
-            guard let raced = try await Auth.settings().key else { throw AuthError.message("Your settings key couldn’t be read. Try again.") }
+            guard let raced = try await Auth.settings(as: session).key else { throw AuthError.message("Your settings key couldn’t be read. Try again.") }
             return try openSettingsKey(raced)
         }
     }
@@ -286,10 +314,12 @@ extension Vault {
      * reproduces): it reads as empty settings, and the next save starts afresh at version 2.
      */
     func loadSettings() async throws -> Settings {
-        let marks = SettingsMarks.shared
-        let reply = try await Auth.settings()
-        // The stored sequence decides, document or not: below the mark is a rollback, a version 1 row included.
-        try marks.check(userId: session.userId, served: reply.version)
+        let marks = RollbackMarkStore.shared(session: session.token)
+        let reply = try await Auth.settings(as: session)
+        let document = reply.envelope?.version == 2
+        // The stored sequence decides, document or not: below the mark is a rollback, a version 1 row included;
+        // and once a version 2 document was seen here, anything else is.
+        try SettingsMarks.check(try await marks.read(userId: session.userId, keys: marksKeys(served: reply.key)), served: reply.version, document: document)
         var settings: Settings
         if let envelope = reply.envelope {
             guard envelope.settingsVersion == reply.version else { throw ContactError.message("Your settings didn’t add up. Try again later.") }
@@ -306,7 +336,10 @@ extension Vault {
         }
         settings.keyEnvelope = reply.key
         settings.served = reply.envelope
-        marks.record(userId: session.userId, version: reply.version)
+        // Taken only with its mark kept: a later visit could not tell an older copy from it otherwise. Checked
+        // again against what the write found, for a newer sequence another read recorded meanwhile.
+        let kept = try await marks.raise(userId: session.userId, to: RollbackMarks(settings: reply.version, settingsDocument: document, identity: 0, identityVersion: 0), keys: marksKeys(served: reply.key))
+        try SettingsMarks.check(kept, served: reply.version, document: document)
         lastPins = settings.contacts
         // The area ledger takes the families' marks from every settings read, as the web's worker does.
         try? useForFamilies(settings)
@@ -328,9 +361,9 @@ extension Vault {
             // Named by the stored sequence (a version 1 row's too) and sealed one above it, where the server stores it.
             let sealed = try settingsSeal(userId: session.userId, settingsKey: settingsKey, settingsVersion: settings.version + 1, json: try settings.json())
             do {
-                let stored = try await Auth.putSettings(expectedVersion: settings.version, envelope: sealed)
+                let stored = try await Auth.putSettings(expectedVersion: settings.version, envelope: sealed, as: session)
                 guard stored == sealed.settingsVersion else { throw ContactError.message("Your settings couldn’t be saved. Try again later.") }
-                SettingsMarks.shared.record(userId: session.userId, version: stored)
+                try await RollbackMarkStore.shared(session: session.token).raise(userId: session.userId, to: RollbackMarks(settings: stored, settingsDocument: true, identity: 0, identityVersion: 0), keys: marksKeys())
                 settings.version = stored
                 settings.envelopeVersion = sealed.version
                 settings.served = sealed

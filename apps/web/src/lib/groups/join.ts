@@ -1,152 +1,48 @@
-import type { CryptoResults, JoinMark, RosterFork, ServedChain } from '@hushos/crypto';
-import { HOLDS_UNREADABLE, NOT_SHOWN } from '@hushos/crypto/join-session';
+import type { RosterFork, ServedChain } from '@hushos/crypto';
 import type { GroupContext } from './context';
 import {
     afterAccept,
     fetchServed,
     forgetInWorker,
+    heldGuard,
+    keepGuard,
     syncGroup,
     syncLocked,
     type SyncResult,
 } from './sync';
 
 /*
- * Joining a family (docs/groups-design.md 2.4 and 3.2): the newcomer's side,
- * and the join code both screens show. **The only module that may pass
- * `joining` to groupAccept** (F1; join-only.test.ts fails on any other). The
- * rules are the crypto worker's (session-groups.ts and join-session.ts, the
- * twins of the Rust core's join.rs, which the phones run): this module only
- * fetches, stores and says what happened.
+ * Joining a family (docs/optional-verification.md 3.2 and 3.3): the
+ * newcomer's side. **The only module that may pass `joining` to groupAccept**
+ * (F1; join-only.test.ts fails on any other). The rules are the crypto
+ * worker's (session-groups.ts, the twin of the Rust core's join.rs, which the
+ * phones run): this module only fetches, stores and says what happened.
  *
- * 1. The newcomer reads their twelve words to the admin, who checks them and
- *    lets them in (the admin's dialog). Nothing happens on this device.
- * 2. joinStatus, once route 2 says active: the code of the roster that let
- *    this account in, worked out over what route 5 serves (groupJoinPreview),
- *    with two positions the worker drew for this showing, anew each time
- *    unless a wrong pair holds them. The page hides those two words. Nothing
- *    is kept, marked or committed, and the positions never leave this device.
- * 3. confirmJoin, "They match": the person typed the two hidden words as the
- *    admin read them. The worker (groupJoinCheck) works the code out again
- *    over what route 5 serves now: another code keeps nothing and is the new
- *    one to compare. Then the typed words against the code at the positions
- *    it issued. The family's first wrong pair is said calmly ('wrong-words')
- *    and holds that code's positions; any later wrong pair for the family is
- *    the alarm ('mismatch'), whatever code is showing. A code's positions are
- *    drawn when it is first shown and stay until a match. What a wrong pair
- *    leaves comes back from the worker sealed (`holds`) and is kept in
- *    IndexedDB beside the joins record, and handed back on every showing, so
- *    a reload or a lock asks the same two words and keeps the alarm.
- *    On a match the worker seals the joins record (only it writes the joins
- *    store), which is kept before acceptance; groupAccept takes the family
- *    with it, once, and only while the served chain still gives the code.
- *    Then the device record, the folders and the settings pin are written;
- *    the joins record goes.
+ * 1. Invite, accept: the newcomer waits. Nothing happens on this device until
+ *    route 2 says they were let in.
+ * 2. On the next look, the newcomer's device joins on first use: the worker
+ *    verifies what route 5 serves from version 1, against every mark this
+ *    device and account hold (a rejoin's settings pin, the family guard that
+ *    a `not-member` answer never clears); with none at all, over the served
+ *    version 1 keys, only while this account's entry is active at the head
+ *    and only with settings that opened here. Nothing is committed: the
+ *    worker seals a version 4 joins record of the head's pin, kept here
+ *    before anything else.
+ * 3. groupAccept with that record (`joining`) commits, holding its pin as one
+ *    more mark, so a reload in between finishes against the same history
+ *    rather than taking first use again over whatever is served then. Then
+ *    the family guard, the device record, the folders and the settings pin
+ *    are written, in that order, and the joins record goes.
  *
- * The two typed words are what makes the admin's screen necessary: the
- * server decides when route 2 says active, and could show a code over a
- * family it made up the moment it does; comparing alone could then be done
- * by a person who never waited for the admin. Typing two words only the
- * admin's screen shows cannot: guessing them is 22 bits, at positions the
- * server does not know. A wrong pair is said as one of the two being wrong,
- * never which, so the words never fall one at a time. That holds against
- * finishing alone; against a server grinding a made-up family whose code
- * matches the admin's in the words a person who compares nothing would skip,
- * the ten compared words are the defence, only as good as the comparing.
- *
- * "They don't match" keeps nothing either; the page says what to do. The
- * joins record exists only between "They match" and the end of the join, so
- * a reload in between finishes it without asking again, and only while the
- * served chain still gives the code that was compared.
+ * From then on the pin, the cache and the guard are marks: a fork, a
+ * rollback, another family key at a pinned version or a removal withheld past
+ * them are caught as for any member. Checking each other later (3.4) is the
+ * family check, from the members list. A version 3 joins record (a join code
+ * compared on the release before this one, mid-join) still finishes as it
+ * would have; one that no longer holds goes, and the join is a first use.
  */
 
-/* The two hidden words as the person typed them, in the order of the issued positions. */
-export type HiddenWords = readonly string[];
-
-/*
- * The worker's sealed escalation for a family, kept in IndexedDB beside the
- * joins record (store.ts, `holds`). Saving it can fail (storage refused): the
- * worker still holds it for the page. It is deleted only when a check hands
- * back none, or when the worker says it does not open here.
- */
-async function keptHolds(ctx: GroupContext, groupId: string) {
-    return (await ctx.store.holds(ctx.userId, groupId))?.envelope ?? null;
-}
-async function keepHolds(ctx: GroupContext, groupId: string, holds: string | null) {
-    try {
-        if (holds) await ctx.store.putHolds({ userId: ctx.userId, groupId, envelope: holds });
-        else await ctx.store.deleteHolds(ctx.userId, groupId);
-    } catch (error) {
-        // Storage refused: held for as long as the worker. A delete that failed leaves an older
-        // escalation behind, which only ever holds more when restored: said, not thrown.
-        console.error(
-            holds
-                ? 'The join check could not be saved on this device.'
-                : 'An old join check could not be cleared from this device.',
-            error,
-        );
-    }
-}
-
-/*
- * The worker session each family's escalation was restored into, by account
- * and family: the kept escalation goes in once per unlock (and per page load),
- * on the first preview, before anything is shown; never after a showing
- * exists, which a restore could replace.
- */
-const restoredIn = new Map<string, number>();
-const unreadableHolds = (error: unknown) =>
-    error instanceof Error && error.message === HOLDS_UNREADABLE;
-
-/*
- * The code this device shows, over `served`, against every mark it and the
- * account hold (a rejoin's settings pin decides the history; the code adds
- * to it). A record from before a master-key rotation is no mark any more: it
- * goes, and the code is worked out without it.
- */
-async function preview(
-    ctx: GroupContext,
-    groupId: string,
-    served: ServedChain,
-): Promise<Exclude<CryptoResults['groupJoinPreview'], { status: 'record-unreadable' }>> {
-    await ctx.settings.read();
-    const at = `${ctx.userId}/${groupId}`;
-    // Restored already in this page's worker session (unless a lock started another): none.
-    let restore = !restoredIn.has(at);
-    for (;;) {
-        const record = (await ctx.store.chain(ctx.userId, groupId))?.envelope ?? null;
-        let result;
-        try {
-            result = await ctx.rpc('groupJoinPreview', {
-                userId: ctx.userId,
-                groupId,
-                served,
-                record,
-                holds: restore ? await keptHolds(ctx, groupId) : null,
-            });
-        } catch (error) {
-            // Sealed under an earlier account root, or not this account's: it holds nothing here.
-            if (!unreadableHolds(error)) throw error;
-            await ctx.store.deleteHolds(ctx.userId, groupId);
-            continue;
-        }
-        if (result.status === 'record-unreadable') {
-            await ctx.store.deleteChain(ctx.userId, groupId);
-            continue;
-        }
-        if (result.status !== 'code') return result;
-        // A showing from another worker session than the one restored into: a lock and an unlock
-        // happened, so the kept escalation goes in now, and this showing (never displayed) is
-        // replaced by the one after the restore.
-        if (!restore && restoredIn.get(at) !== result.session) {
-            restore = true;
-            continue;
-        }
-        restoredIn.set(at, result.session);
-        return result;
-    }
-}
-
-/* Acceptance with the joins record a match sealed, beside every mark this device and account hold. */
+/* Acceptance with the joins record the worker sealed, beside every mark this device and account hold. */
 async function acceptJoining(
     ctx: GroupContext,
     groupId: string,
@@ -154,6 +50,7 @@ async function acceptJoining(
     joinsRecord: string,
 ) {
     await ctx.settings.read();
+    const began = ctx.session?.();
     for (;;) {
         const record = (await ctx.store.chain(ctx.userId, groupId))?.envelope ?? null;
         const result = await ctx.rpc('groupAccept', {
@@ -164,8 +61,9 @@ async function acceptJoining(
             // The joins record's own check time is the pin's (the worker takes it from there).
             checkedAt: ctx.now().toISOString(),
             joining: { joinsRecord },
+            guard: await heldGuard(ctx, groupId),
         });
-        if (result.status !== 'record-unreadable') return result;
+        if (result.status !== 'record-unreadable') return { result, began };
         await ctx.store.deleteChain(ctx.userId, groupId);
     }
 }
@@ -179,60 +77,13 @@ export type JoinOutcome =
     | { status: 'joined'; sync: Extract<SyncResult, { status: 'accepted' }> }
     /* Not let in yet: route 2 is polled until the state is active. */
     | { status: 'waiting' }
-    /*
-     * The code to compare with the admin's screen, with the two positions
-     * (0 to 11) the page hides for this showing. `changed`: a code compared
-     * earlier is not the one the served chain gives now (the member list
-     * changed, or the server is showing something else), and nothing was kept.
-     */
-    | {
-          status: 'compare';
-          mark: JoinMark;
-          hidden: [number, number];
-          /* The worker session the code was shown in: confirmJoin passes it back. */
-          session: number;
-          changed?: boolean;
-      }
-    /*
-     * The typed words are not the code's, the first time for this family:
-     * most likely one misheard or mistyped, said calmly and never which.
-     * Nothing was kept, and the positions are held for this code.
-     */
-    | { status: 'wrong-words' }
-    /*
-     * A wrong pair again for this family, for this code or any other: no
-     * longer said as a typo. HushOS may be showing a different member list;
-     * nothing was kept.
-     */
-    | { status: 'mismatch' }
-    /* This person's own marks disagree with what is served (a rejoin onto another history): the hard warning. */
+    /* This person's own marks disagree with what is served: the hard warning. */
     | { status: 'fork'; fork: RosterFork };
-
-const comparing = (
-    shown: { rosterVersion: number; code: string[]; hidden: [number, number]; session: number },
-    changed = false,
-): JoinOutcome => ({
-    status: 'compare',
-    mark: { rosterVersion: shown.rosterVersion, code: shown.code },
-    hidden: [shown.hidden[0], shown.hidden[1]],
-    session: shown.session,
-    ...(changed ? { changed: true } : {}),
-});
-
-/* One showing of the code over what route 5 serves now. */
-async function show(ctx: GroupContext, groupId: string, served: ServedChain): Promise<JoinOutcome> {
-    const shown = await preview(ctx, groupId, served);
-    if (shown.status === 'fork') return shown;
-    // Active on route 2 but not on the member list it serves yet: still waiting.
-    if (shown.status === 'not-admitted') return { status: 'waiting' };
-    return comparing(shown);
-}
 
 /*
  * Where this device's join stands, for the page to resume at: waiting to be
- * let in, the code to compare, a join "They match" began and a reload cut
- * short (finished here), or `member` when this device already holds the
- * family. Nothing is kept unless a joins record says the code was compared.
+ * let in, joined now (on first use, or a join a reload cut short, finished
+ * here), or `member` when this device already holds the family.
  */
 export async function joinStatus(
     ctx: GroupContext,
@@ -240,11 +91,10 @@ export async function joinStatus(
 ): Promise<JoinOutcome | { status: 'member' }> {
     if (!(await admitted(ctx, groupId))) return { status: 'waiting' };
     const joinsRecord = (await ctx.store.join(ctx.userId, groupId))?.envelope ?? null;
-    // Kept only after the typed words matched: a reload finishes from it.
+    // Kept before acceptance: a reload finishes from it.
     if (joinsRecord) return completeJoin(ctx, groupId, joinsRecord);
     if (await ctx.store.chain(ctx.userId, groupId)) return { status: 'member' };
-    const { served } = await fetchServed(ctx, groupId, 0);
-    return show(ctx, groupId, served);
+    return joinOnFirstUse(ctx, groupId);
 }
 
 /*
@@ -253,7 +103,10 @@ export async function joinStatus(
  * joins record goes. Null when there is no record, or it did not open.
  */
 async function finishedBefore(ctx: GroupContext, groupId: string): Promise<JoinOutcome | null> {
-    if (!(await ctx.store.chain(ctx.userId, groupId))) return null;
+    if (!(await ctx.store.chain(ctx.userId, groupId))) {
+        await letGoOfUnkept(ctx, groupId);
+        return null;
+    }
     const synced = await syncLocked(ctx, groupId, { flush: false });
     if (synced.status === 'accepted') {
         await ctx.store.deleteJoin(ctx.userId, groupId);
@@ -261,24 +114,26 @@ async function finishedBefore(ctx: GroupContext, groupId: string): Promise<JoinO
     }
     if (synced.status === 'fork') return synced;
     if (synced.status !== 'unchecked') return { status: 'waiting' };
-    // A record that did not open and no pin: the join goes on from the code.
+    // A record that did not open and no pin: the join goes on.
     return null;
 }
 
 /*
- * "They match": `shown` is the showing the page displayed (the code and the
- * two positions it hid) and the person compared, `typed` the two hidden words
- * they typed as the admin read them. A showing the worker does not hold (never
- * shown, from before a lock, or replaced) is refused before anything is
- * verified: the code is shown again, to compare again.
+ * A join this session committed but couldn't keep on the device: its guard
+ * wasn't stored, and nor was the one letting go of it handed back (acceptJoin),
+ * so the worker still holds the chain as a floor, and the joins record as
+ * used. With no device record, nothing else of the family is the worker's to
+ * hold, so it lets go now, storing the guard it hands back first (2.8). Then
+ * the join runs again from a clean session. While the guard still can't be
+ * stored, that error is the answer and nothing is retried.
  */
-export async function confirmJoin(
-    ctx: GroupContext,
-    groupId: string,
-    shown: { mark: JoinMark; hidden: readonly number[]; session: number },
-    typed: HiddenWords,
-): Promise<JoinOutcome> {
-    if (!(await admitted(ctx, groupId))) return { status: 'waiting' };
+async function letGoOfUnkept(ctx: GroupContext, groupId: string) {
+    if (!(await forgetInWorker(ctx, groupId)))
+        throw new Error('The family could not be checked. Try again.');
+}
+
+/* The first-use join (groupJoinFirstUse), then its commit. */
+async function joinOnFirstUse(ctx: GroupContext, groupId: string): Promise<JoinOutcome> {
     await ctx.settings.read();
     return ctx.lock(groupId, async (): Promise<JoinOutcome> => {
         const before = await finishedBefore(ctx, groupId);
@@ -286,58 +141,38 @@ export async function confirmJoin(
         const { served } = await fetchServed(ctx, groupId, 0);
         for (;;) {
             const record = (await ctx.store.chain(ctx.userId, groupId))?.envelope ?? null;
-            let checked;
-            try {
-                checked = await ctx.rpc('groupJoinCheck', {
-                    userId: ctx.userId,
-                    groupId,
-                    served,
-                    record,
-                    mark: { rosterVersion: shown.mark.rosterVersion, code: [...shown.mark.code] },
-                    hidden: [shown.hidden[0]!, shown.hidden[1]!],
-                    session: shown.session,
-                    typed: [...typed],
-                    now: ctx.now().toISOString(),
-                });
-            } catch (error) {
-                // Shown before a lock, or replaced: nothing was checked, so the code again.
-                if (!(error instanceof Error) || error.message !== NOT_SHOWN) throw error;
-                return show(ctx, groupId, served);
-            }
-            switch (checked.status) {
+            const joined = await ctx.rpc('groupJoinFirstUse', {
+                userId: ctx.userId,
+                groupId,
+                served,
+                record,
+                guard: await heldGuard(ctx, groupId),
+                now: ctx.now().toISOString(),
+            });
+            switch (joined.status) {
                 case 'record-unreadable':
                     await ctx.store.deleteChain(ctx.userId, groupId);
                     continue;
-                case 'incomplete':
-                    throw new Error('Type the two hidden words of the join code.');
-                case 'wrong-words':
-                case 'mismatch':
-                    await keepHolds(ctx, groupId, checked.holds);
-                    return { status: checked.status };
-                case 'changed':
-                    // Not the code that was compared: it vouches for nothing here, and never waits on.
-                    await ctx.store.deleteJoin(ctx.userId, groupId);
-                    return comparing(checked, true);
                 case 'not-admitted':
+                    // Active on route 2 but not on the member list it serves yet: still waiting.
                     return { status: 'waiting' };
                 case 'fork':
-                    return checked;
-                case 'matched':
-                    await keepHolds(ctx, groupId, checked.holds);
+                    return { status: 'fork', fork: joined.fork };
+                case 'first-use':
                     // Kept before acceptance: a reload between the two finishes from here.
                     await ctx.store.putJoin({
                         userId: ctx.userId,
                         groupId,
-                        envelope: checked.joinsRecord,
+                        envelope: joined.joinsRecord,
                     });
-                    // The same served chain the code was just worked out over.
-                    return acceptJoin(ctx, groupId, served, checked.joinsRecord);
+                    // The same served chain the record was just sealed over.
+                    return acceptJoin(ctx, groupId, served, joined.joinsRecord);
             }
         }
     });
 }
 
-/* A reload finishing a join "They match" began: from the joins record, while the served chain gives its code. */
+/* A reload finishing a join: from the joins record, against what route 5 serves now. */
 async function completeJoin(
     ctx: GroupContext,
     groupId: string,
@@ -348,7 +183,7 @@ async function completeJoin(
         const before = await finishedBefore(ctx, groupId);
         if (before) return before;
         const { served } = await fetchServed(ctx, groupId, 0);
-        return acceptJoin(ctx, groupId, served, joinsRecord);
+        return acceptJoin(ctx, groupId, served, joinsRecord, { orFirstUse: true });
     });
 }
 
@@ -357,17 +192,18 @@ async function acceptJoin(
     groupId: string,
     served: ServedChain,
     joinsRecord: string,
+    options: { orFirstUse?: boolean } = {},
 ): Promise<JoinOutcome> {
-    const result = await acceptJoining(ctx, groupId, served, joinsRecord);
+    const { result, began } = await acceptJoining(ctx, groupId, served, joinsRecord);
     switch (result.status) {
         case 'join-unreadable':
-            // Sealed under an earlier account root, or an earlier version's (the family's words
-            // compared, no comparison of the code): it goes, and the code is compared.
-            await ctx.store.deleteJoin(ctx.userId, groupId);
-            return show(ctx, groupId, served);
         case 'changed':
+            // Sealed under an earlier account root, or an earlier release's join code that no longer
+            // holds: it vouches for nothing here, and goes. A join from a kept record starts over
+            // on first use; one sealed just now is the worker's to explain.
             await ctx.store.deleteJoin(ctx.userId, groupId);
-            return comparing(result, true);
+            if (options.orFirstUse) return joinOnFirstUseLocked(ctx, groupId, served);
+            throw new Error('The family could not be checked. Try again.');
         case 'not-admitted':
             return { status: 'waiting' };
         case 'fork':
@@ -377,6 +213,9 @@ async function acceptJoin(
     }
     try {
         if (!result.record) throw new Error('The family could not be checked. Try again.');
+        // The guard before the record (docs/optional-verification.md 2.8): a crash between the
+        // two leaves the guard above the record, never below it.
+        await keepGuard(ctx, groupId, result.guard, began);
         await ctx.store.putChain({
             userId: ctx.userId,
             groupId,
@@ -397,16 +236,42 @@ async function acceptJoin(
     return { status: 'joined', sync };
 }
 
+/* The first-use join over `served`, for a caller already holding the family's lock. */
+async function joinOnFirstUseLocked(
+    ctx: GroupContext,
+    groupId: string,
+    served: ServedChain,
+): Promise<JoinOutcome> {
+    const joined = await ctx.rpc('groupJoinFirstUse', {
+        userId: ctx.userId,
+        groupId,
+        served,
+        record: (await ctx.store.chain(ctx.userId, groupId))?.envelope ?? null,
+        guard: await heldGuard(ctx, groupId),
+        now: ctx.now().toISOString(),
+    });
+    if (joined.status === 'not-admitted') return { status: 'waiting' };
+    if (joined.status === 'fork') return { status: 'fork', fork: joined.fork };
+    if (joined.status === 'record-unreadable') {
+        await ctx.store.deleteChain(ctx.userId, groupId);
+        throw new Error('This device’s saved check of the family could not be opened. Try again.');
+    }
+    await ctx.store.putJoin({ userId: ctx.userId, groupId, envelope: joined.joinsRecord });
+    return acceptJoin(ctx, groupId, served, joined.joinsRecord);
+}
+
 /* The worker's sentences for a committed chain that is missing, or does not have them yet. */
 const NOT_SYNCED = /Check the family’s member list first|not in the family’s member list yet/;
 
 /*
- * The admin's side: the join code to read to `userId`, over this device's
- * committed chain, for the roster that let them in (the one the newcomer's
- * screen works out too). A committed chain that does not have them yet (the
- * sync after "Let them in" did not finish) is synced once first. `pinMatches`
- * says whether their entry on that roster is the keys of this account's
- * contact pin of them, from the settings the worker opened (null: none).
+ * The older-app path (docs/optional-verification.md 3.4 "Older apps", 6.10):
+ * the join code an iOS 0.10.0 phone compares, worked out over this device's
+ * committed chain for the roster that let `userId` in. Strictly one way:
+ * nothing is saved on this device from it (no pin, no check record, no
+ * Verified label), since 0.10.0 matches that code before checking its own
+ * entry, so its match proves nothing about the keys there. A committed chain
+ * that does not have them yet (the sync after "Let them in" did not finish)
+ * is synced once first.
  */
 export async function memberJoinCode(ctx: GroupContext, groupId: string, userId: string) {
     const code = async () => {
@@ -421,7 +286,7 @@ export async function memberJoinCode(ctx: GroupContext, groupId: string, userId:
         if (!(error instanceof Error) || !NOT_SYNCED.test(error.message)) throw error;
         const synced = await syncGroup(ctx, groupId);
         if (synced.status === 'fork')
-            throw new Error('This family’s member list was shown differently to you.');
+            throw new Error('This family looks different on this device. Try again later.');
         return code();
     }
 }

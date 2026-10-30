@@ -468,9 +468,15 @@ struct VersionsSheet: View {
 /* Plain facts in the same order on every client, then who can open and tags, each a way in. */
 struct InfoSheet: View {
     @Environment(DriveStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.dismiss) private var dismissSheet
     let item: Opened
+    /* Set when Info sits beside the list (an inspector), which `dismiss` would not close. */
+    var close: (() -> Void)? = nil
     var open: (NodeAction) -> Void = { _ in }
+
+    private func dismiss() {
+        if let close { close() } else { dismissSheet() }
+    }
 
     var body: some View {
         NavigationStack {

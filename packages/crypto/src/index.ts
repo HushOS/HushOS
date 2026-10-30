@@ -38,6 +38,8 @@ export type {
     GroupStaged,
     GroupView,
     GroupWriter,
+    PairCode,
+    PairMatch,
     RosterCallBody,
     RotatedDocumentWire,
     RotationWire,

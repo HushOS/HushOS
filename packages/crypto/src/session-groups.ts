@@ -1,6 +1,8 @@
 import { OLDER_CHAIN, type AreaLedger } from './area-ledger';
 import {
+    CHECK_MANAGER_FIRST,
     FAMILY_FORGOTTEN,
+    GUARD_NOT_KEPT,
     GUARD_AHEAD,
     GUARD_CONFLICT,
     NOT_THIS_ACCOUNT,
@@ -119,6 +121,7 @@ import { decode, encode } from './keys';
 import {
     checkGroupPin,
     checkTime,
+    entryCommitment,
     guardAfter,
     keyCommitment,
     pinVerified,
@@ -363,19 +366,37 @@ export type AreaRotationInput = {
 export type GroupStageOp =
     /*
      * The newcomer's contact pin is the one in the settings this worker last
-     * opened (settingsOpen), never the caller's: only keys whose words this
-     * account checked are let in (the core's admit_body).
+     * opened (settingsOpen), never the caller's: a verified or a first-seen
+     * pin of the served keys, never a family's word (newRosterEntry,
+     * docs/optional-verification.md 3.2). `members` only over a verified pin:
+     * a manager is checked before they get the family's key (3.6).
      */
     | { kind: 'admit'; userId: string; served: ServedIdentity; roles: GroupRole[] }
     /* `endsLapsed`: the lapsed plans (ids) the person pays for that the remover confirmed end. */
     | { kind: 'remove'; userId: string; rotations: AreaRotationInput[]; endsLapsed?: string[] }
     | { kind: 'markLeft'; userIds: string[]; rotations: AreaRotationInput[] }
+    /*
+     * Giving `members` to someone without it needs a verified contact pin of
+     * them, no family's word, over the very keys of their entry now (3.6).
+     */
     | { kind: 'roles'; userId: string; roles: GroupRole[] }
     | {
           kind: 'foldIn';
           members: { userId: string; served: ServedIdentity; links: SuccessionLink[] }[];
           /* The account's earlier identities, for one's own fold-in signed with the keys the old entry names. */
           history?: IdentityEnvelope[];
+          /*
+           * Members whose served keys no signed chain reaches, whom a manager let
+           * back in with Continue (docs/optional-verification.md 3.3, 3.6, 6.9):
+           * their entry is made from this account's contact pin of the served
+           * keys (first-seen or verified, never a family's word), every family
+           * folder is rotated in the same roster, and a manager among them keeps
+           * `members` only over a verified pin, so the family's key is never
+           * sealed to keys nobody checked.
+           */
+          continued?: string[];
+          /* With `continued`: every live family folder's rotation (removal's rule, 3.3). */
+          rotations?: AreaRotationInput[];
       }
     | { kind: 'area'; name: string }
     | { kind: 'rotate'; rotation: AreaRotationInput }
@@ -481,7 +502,11 @@ export type GroupRequests = {
          * never taken on first use again, nor replayed below what this device
          * accepted; 'unreadable' when the guard's store could not be read,
          * which refuses the acceptance (GUARD_UNREADABLE: never first use, and
-         * nothing taken on it).
+         * nothing taken on it). A caller that passes it (null for none) keeps a
+         * guard: from the commit, every write into the family (Drive writes in
+         * its folders, staging, grants, seals, self-grants, repairs) is refused
+         * with GUARD_NOT_KEPT until groupGuardKept says the guard handed back
+         * is stored.
          */
         guard?: GroupPin | 'unreadable' | null;
         /*
@@ -714,6 +739,13 @@ export type GroupRequests = {
      * `foreignListings`); this only says so, for the family's page.
      */
     groupForeignListings: { groupId: string };
+    /*
+     * The app stored the family guard an acceptance handed back (2.8):
+     * `guard` is what its store holds now. Writes into the family go on again
+     * once that covers the guard owed, or is past it; anything else keeps them
+     * waiting.
+     */
+    groupGuardKept: { groupId: string; guard: GroupPin };
 };
 
 export type GroupStaged = {
@@ -916,6 +948,8 @@ export type GroupResults = {
         | { status: 'cannot' };
     /* `openedBy`: the family that opened the folder here, or null for the account's own workspace. */
     groupForeignListings: { listings: { workspaceId: string; openedBy: string | null }[] };
+    /* Whether writes into the family go on again. */
+    groupGuardKept: { kept: boolean };
 };
 
 /* Every group operation is listed in GROUP_OPERATIONS (protocol.ts), and nothing else is. */
@@ -1396,6 +1430,7 @@ const ORGANIZER_FIRST = 'Make someone else the organizer first.';
 /* The core's NOT_MANAGER, NOT_CHECKED, UNCHANGED and SELF_TAKE. */
 const NOT_MANAGER = 'Only someone who manages the family can change its members.';
 const NOT_CHECKED = 'Check their words first.';
+const ADMIT_AS_MEMBER = 'Let them in first. Roles are given afterwards.';
 const UNCHANGED = 'That doesn’t change their roles.';
 const SELF_TAKE = 'Ask another manager to take this role from you.';
 /*
@@ -1728,6 +1763,12 @@ export function createGroupSession(host: GroupHost) {
      * (area-ledger.ts), from what this session tells it.
      */
     const ledger = host.ledger;
+    /* The guard each family's last acceptance handed back, until the app says it is stored (ledger.owe). */
+    const guardsOwed = new Map<string, GroupPin>();
+    /* Refused while a guard is owed: nothing is written under that acceptance until it is stored (2.8). */
+    function requireGuardKept(groupId: string) {
+        if (ledger.owes(uuid(groupId, 'group id'))) throw new CryptoError(GUARD_NOT_KEPT);
+    }
     /* The settings this worker last opened (settings-marks.ts): the only settings marks taken, and the only contact pins read. */
     let settingsPins: SettingsMarks | null = null;
     /* The session's succession verification cache (groupWriterTrust's `verified`). */
@@ -1829,6 +1870,7 @@ export function createGroupSession(host: GroupHost) {
         return true;
     }
     function forgetGroup(groupId: string) {
+        guardsOwed.delete(groupId);
         // An acceptance begun before this commits nothing (stillTheFamily).
         forgets.set(groupId, (forgets.get(groupId) ?? 0) + 1);
         for (const [slot, seed] of seeds)
@@ -1846,6 +1888,7 @@ export function createGroupSession(host: GroupHost) {
         usedJoins.delete(groupId);
     }
     function forget() {
+        guardsOwed.clear();
         for (const groupId of new Set([...chains.keys(), ...opened.keys()])) forgetGroup(groupId);
         for (const seed of seeds.values()) seed.fill(0);
         seeds.clear();
@@ -2632,6 +2675,11 @@ export function createGroupSession(host: GroupHost) {
             )
                 dropped.push(outboxId);
         for (const outboxId of dropped) dropStaged(outboxId);
+        // A caller that keeps a family guard (it passes `guard`, null for none, as the apps do)
+        // owes it from the commit on, before any await: no write lands under this chain until the
+        // guard is stored, and one never worked out (a throw below) keeps writes waiting.
+        const keepsGuard = input.guard !== undefined;
+        if (keepsGuard) ledger.owe(groupId);
         commit(chain);
         const pin = await pinAfter(marking, chain, checkedAt);
         // The family guard moves on with every acceptance, never down (docs/optional-verification.md
@@ -2652,6 +2700,12 @@ export function createGroupSession(host: GroupHost) {
         // The guard was a mark, so a chain that disagrees with it was the fork above, and one
         // short of it refused; nothing is ever written over it or below it.
         const guard = next === 'conflict' || next === 'ahead' ? null : next;
+        // Nothing new to store (the held guard covers this chain): writes go on. Otherwise they
+        // wait for groupGuardKept.
+        if (guard === null) {
+            guardsOwed.delete(groupId);
+            ledger.kept(groupId);
+        } else if (keepsGuard) guardsOwed.set(groupId, guard);
         const unlocked = host.unlocked();
         try {
             return {
@@ -3024,9 +3078,10 @@ export function createGroupSession(host: GroupHost) {
                 fromGrant = true;
             }
             if (!key) throw new CryptoError(NOT_CHECKED_KEYS);
-            // The server takes a self-grant only at the area's current version.
+            // The server takes a self-grant only at the area's current version, and none is made
+            // while the family's guard is not stored (2.8): the key still opens for reading.
             const selfGrantToStore =
-                fromGrant && version === latest && served === latest
+                fromGrant && version === latest && served === latest && !ledger.owes(groupId)
                     ? await grantAreaKey(
                           key,
                           root,
@@ -3154,6 +3209,7 @@ export function createGroupSession(host: GroupHost) {
     }
 
     async function stage(input: GroupRequests['groupStage']): Promise<GroupResults['groupStage']> {
+        requireGuardKept(input.groupId);
         const chain = committed(input.groupId);
         const groupId = chain.groupId;
         const { op } = input;
@@ -3187,18 +3243,21 @@ export function createGroupSession(host: GroupHost) {
         let admits: { userId: string; keys: string } | null = null;
         const needsCheck: string[] = [];
         const folded: string[] = [];
+        /* Members let back in on a Continue (foldIn's `continued`): every family folder rotates. */
+        const refolded: string[] = [];
         switch (op.kind) {
             case 'admit': {
                 if (activeWith(entryOf(op.userId)))
                     throw new CryptoError('This person is in the family already.');
                 const pin = contactPin(op.userId);
                 if (!pin) throw new CryptoError(NOT_CHECKED);
-                // newRosterEntry builds from a first-seen pin too (design 3.3), but letting someone
-                // in over one waits for the manager rule beside it (3.6, the web's PR 4): until
-                // then an admission still takes a words check alone, so no role is ever handed to
-                // keys nobody checked.
-                if (!(await pinVerified(pin)))
-                    throw new CryptoError('These are not the keys whose words were checked.');
+                // Let in over a first-seen pin as over a verified one (docs/optional-verification.md
+                // 3.2; newRosterEntry refuses anything else, a family's word included), and always
+                // as a plain member: the roles an invitation carries are the server's word, so none
+                // is ever signed in on admission. A role is a role change afterwards, by a manager
+                // who chose it, under the manager rule (3.6). The core's admit_body follows with the
+                // phones' release (PR 5).
+                if (op.roles.length > 0) throw new CryptoError(ADMIT_AS_MEMBER);
                 const entry = await newRosterEntry(pin, op.served, {
                     roles: op.roles,
                     rosterVersion: next,
@@ -3243,24 +3302,58 @@ export function createGroupSession(host: GroupHost) {
                     )
                 )
                     throw new CryptoError(ORGANIZER_FIRST);
+                // The manager rule (docs/optional-verification.md 3.6): `members` is given only to
+                // keys this account checked, its own verified pin of them (never a family's word)
+                // over the very keys their entry names now. A check made before their account
+                // changed, and a Continue since, leaves a first-seen pin: no role on it.
+                if (op.roles.includes('members') && !before.roles.includes('members')) {
+                    const pin = contactPin(op.userId);
+                    if (
+                        !pin ||
+                        (pin.trustedVia !== undefined && pin.trustedVia !== null) ||
+                        !(await pinVerified(pin)) ||
+                        (await keyCommitment(pin)) !== (await entryCommitment(before))
+                    )
+                        throw new CryptoError(CHECK_MANAGER_FIRST);
+                }
                 put({ ...before, roles: [...op.roles] });
                 break;
             }
-            case 'foldIn':
+            case 'foldIn': {
+                const continued = new Set((op.continued ?? []).map((id) => id.toLowerCase()));
+                rotations = op.rotations ?? [];
                 for (const member of op.members) {
-                    const result = await foldInEntry(
-                        active(member.userId),
-                        member.served,
-                        member.links,
-                        next,
-                    );
+                    const entry = active(member.userId);
+                    const result = await foldInEntry(entry, member.served, member.links, next);
                     if (result.changed) {
                         put(result.entry);
                         folded.push(member.userId);
+                    } else if (result.needsCheck && continued.has(entry.userId)) {
+                        // Continue on an account change no signed chain explains (3.3): the entry
+                        // from this account's own pin of the served keys, which Continue (or a
+                        // check) wrote, and the role that holds the family's key only over a
+                        // verified pin (3.6): sealed to their new keys after a check, never before.
+                        const pin = contactPin(entry.userId);
+                        if (!pin) throw new CryptoError(NOT_CHECKED);
+                        const verified = await pinVerified(pin);
+                        // A manager among several let back in at once loses the role the same way:
+                        // the server takes that on POST rosters for an entry with new keys.
+                        const roles = entry.roles.filter((role) => verified || role !== 'members');
+                        put(
+                            await newRosterEntry(pin, member.served, {
+                                roles,
+                                rosterVersion: next,
+                            }),
+                        );
+                        folded.push(member.userId);
+                        refolded.push(entry.userId);
                     } else if (result.needsCheck) needsCheck.push(member.userId);
                 }
                 if (folded.length === 0) return { outboxId: null, needsCheck };
+                // Only a Continue rotates: a fold-in along signed chains alone carries none.
+                if (refolded.length === 0) rotations = [];
                 break;
+            }
             case 'area': {
                 const area = await newId('workspace', groupId);
                 newArea = { workspaceId: area.id, idSeed: area.seed, name: op.name };
@@ -3274,9 +3367,17 @@ export function createGroupSession(host: GroupHost) {
                     throw new CryptoError('This folder is not on the family’s member list.');
                 break;
         }
-        // A family's removal rotates every area, and only what is named is rotated.
+        // A family's removal rotates every area, and so does a Continue on an account change no
+        // signed chain explains (the keys left behind may be in someone else's hands, 3.3); only
+        // what is named is rotated.
         const toRotate =
-            op.kind === 'rotate' ? [op.rotation.workspaceId] : areasToRotate(chain, members);
+            op.kind === 'rotate'
+                ? [op.rotation.workspaceId]
+                : refolded.length > 0 && chain.kind === 'family'
+                  ? Object.keys(chain.areaKeys)
+                        .filter((workspaceId) => !chain.retiredAreas.includes(workspaceId))
+                        .sort()
+                  : areasToRotate(chain, members);
         const named = rotations.map((rotation) => rotation.workspaceId).sort();
         if (named.join() !== [...toRotate].sort().join() || new Set(named).size !== named.length)
             throw new CryptoError('Every family folder must get new keys in this change.');
@@ -3547,6 +3648,7 @@ export function createGroupSession(host: GroupHost) {
     async function restage(
         input: GroupRequests['groupRestage'],
     ): Promise<GroupResults['groupRestage']> {
+        requireGuardKept(input.groupId);
         const chain = committed(input.groupId);
         const groupId = chain.groupId;
         const { userId, root } = host.unlocked();
@@ -3631,6 +3733,7 @@ export function createGroupSession(host: GroupHost) {
     async function grantsOwed(
         input: GroupRequests['groupGrants'],
     ): Promise<GroupResults['groupGrants']> {
+        requireGuardKept(input.groupId);
         const chain = committed(input.groupId);
         // Folder and person ids lowercase (the core's grants_body), each owed grant once.
         const seen = new Set<string>();
@@ -3671,6 +3774,7 @@ export function createGroupSession(host: GroupHost) {
     async function reseal(
         input: GroupRequests['groupReseal'],
     ): Promise<GroupResults['groupReseal']> {
+        requireGuardKept(input.groupId);
         const chain = committed(input.groupId);
         const seed = seeds.get(seedSlot(chain.groupId, chain.groupKeyVersion));
         if (!seed) throw new CryptoError(NO_SEED);
@@ -3929,6 +4033,7 @@ export function createGroupSession(host: GroupHost) {
     async function previousRoot(
         input: GroupRequests['groupPreviousRoot'],
     ): Promise<GroupResults['groupPreviousRoot']> {
+        requireGuardKept(input.groupId);
         const chain = committed(input.groupId);
         const workspaceId = uuid(input.workspaceId, 'workspace id');
         const { root } = input;
@@ -4063,6 +4168,22 @@ export function createGroupSession(host: GroupHost) {
                 return storeOpen(message.input);
             case 'groupPreviousRoot':
                 return previousRoot(message.input);
+            case 'groupGuardKept': {
+                const groupId = uuid(message.input.groupId, 'group id');
+                const owed = guardsOwed.get(groupId);
+                // Owed with no guard worked out (an acceptance that threw after its commit): only the
+                // next acceptance says what to store.
+                if (!owed) return { kept: !ledger.owes(groupId) };
+                const after = guardAfter(
+                    groupId,
+                    checkGroupPin(groupId, message.input.guard),
+                    owed,
+                );
+                if (after !== null && after !== 'ahead') return { kept: false };
+                guardsOwed.delete(groupId);
+                ledger.kept(groupId);
+                return { kept: true };
+            }
             case 'groupForeignListings': {
                 const groupId = uuid(message.input.groupId, 'group id');
                 return {

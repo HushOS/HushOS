@@ -3,7 +3,8 @@ import type { CreateGroupBody, SettingsEnvelope } from '@hushos/crypto';
 import { digest } from '@hushos/crypto/signatures';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { GroupsApi } from './groups/api';
-import type { GroupContext } from './groups/context';
+import { createMemoryFamilyGuard } from './contact-guard';
+import { familyGuardOf, type GroupContext } from './groups/context';
 import { createFamily } from './groups/outbox';
 import { createMemoryGroupStore } from './groups/store';
 import { account, bytes } from './groups/worker-testkit';
@@ -134,6 +135,7 @@ describe('families on an account whose settings did not open here', () => {
                 read: () => readSettingsForFamilies(USER),
                 write: (version, settings) => compareAndSetSettings(USER, version, settings),
             },
+            guard: familyGuardOf(() => createMemoryFamilyGuard(), USER),
             lock: (_groupId, work) => work(),
             sleep: async () => {},
             now: () => new Date('2026-10-17T12:00:00.000Z'),

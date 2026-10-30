@@ -37,7 +37,15 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         super.init()
     }
 
-    func invalidate() {}
+    /*
+     * Called as the system lets this instance go, a sign-out's removal of the location included.
+     * Signed out (no session left), this process's temporary folder goes: Files' decrypted
+     * downloads not moved into place and the record of whose they are, which nothing else can
+     * reach (the app can't open this extension's container).
+     */
+    func invalidate() {
+        if SharedKeychain.session == nil { TemporaryCopies.claim(nil) }
+    }
 
     static func translate(_ error: Error) -> Error {
         // An error's text can carry decrypted names and paths: only its type is public.

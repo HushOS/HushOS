@@ -48,7 +48,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-10-26';
+export const updated = '2026-10-28';
 
 export const sections: RoadmapSection[] = [
     {
@@ -164,7 +164,7 @@ export const sections: RoadmapSection[] = [
                 status: 'now',
                 area: 'Families',
                 title: 'Family plans',
-                body: 'One storage pool for the whole family, covering everyone’s own files and the family folders, for up to 20 people, with each newcomer checked with their twelve words before they join. Built on the web, shared pool included; it switches on at hushos.com once the last billing checks are done.',
+                body: 'One storage pool for the whole family, covering everyone’s own files and the family folders, for up to 20 people, with anyone in the family able to check the others with twelve words. Built on the web, shared pool included; it switches on at hushos.com once the last billing checks are done.',
             },
             {
                 id: 'phone-apps',

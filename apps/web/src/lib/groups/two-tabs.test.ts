@@ -3,7 +3,8 @@ import type { CreateGroupBody, RosterCallBody } from '@hushos/crypto';
 import { digest } from '@hushos/crypto/signatures';
 import { describe, expect, test } from 'vitest';
 import { GroupApiError, type GroupsApi } from './api';
-import type { GroupContext } from './context';
+import { createMemoryFamilyGuard } from '@/lib/contact-guard';
+import { familyGuardOf, type GroupContext } from './context';
 import { createFamily, resumeOutbox, stageChange } from './outbox';
 import { createMemoryGroupStore } from './store';
 import { syncGroup } from './sync';
@@ -116,6 +117,8 @@ async function family() {
         }),
         putSelfGrant: async () => ({ ok: true }),
     } as unknown as GroupsApi;
+    // One browser: the tabs share the family guard, as they share IndexedDB.
+    const guard = createMemoryFamilyGuard();
     const tab = async (): Promise<GroupContext> => {
         const device = await alice.device();
         return {
@@ -124,6 +127,7 @@ async function family() {
             rpc: device.call as GroupContext['rpc'],
             store,
             settings: device.settings,
+            guard: familyGuardOf(() => guard, ALICE),
             lock: (_groupId, work) => work(),
             sleep: async () => {},
             now: () => new Date('2026-10-16T12:00:00.000Z'),

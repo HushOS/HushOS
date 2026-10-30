@@ -121,3 +121,19 @@ export function rosterBodyLimit(
         resealed * ROTATION_DOCUMENTS_BODY_BYTES
     );
 }
+
+/*
+ * The family-write protocol (docs/optional-verification.md 7.3): the rules a
+ * client follows when it changes a family, as a number it sends on every
+ * request in GROUP_WRITE_HEADER. The routes that let people in, change roles
+ * or seal family keys refuse a web client below the server's own number with
+ * 426, so a tab still running code from before a change to those rules (a
+ * newcomer let in over words, no manager rule) can't change a family, however
+ * the deploy was versioned; every other route serves it. A web client that
+ * sends none is from before the number existed: 1. Bumped only when the rules
+ * change, so open tabs are refused family changes only then.
+ *
+ * 2: newcomers let in over a first-seen pin, the manager rule, Continue.
+ */
+export const GROUP_WRITE_HEADER = 'HushOS-Group-Write';
+export const GROUP_WRITE_PROTOCOL = 2;

@@ -1,6 +1,6 @@
 import { bytesOf, digestOf, integer, uuid } from './canonical';
 import { CryptoError } from './errors';
-import { fingerprint, hexBytes, keyDigest, publicKeyBytes } from './fingerprint';
+import { digestHex, fingerprint, hexBytes, keyDigest, publicKeyBytes } from './fingerprint';
 import type { Settings } from './contacts';
 
 /*
@@ -72,6 +72,35 @@ export async function keyCommitment(pin: Omit<PinKeys, 'fingerprint'>) {
     } catch {
         return null;
     }
+}
+
+/*
+ * The key commitment of the four keys a family roster entry names (its
+ * lattice keys by their base64url digests), so a pin and an entry compare as
+ * two pins do; null for an entry whose digests are malformed.
+ */
+export async function entryCommitment(entry: {
+    keyVersion?: number | null;
+    encryptionPublicKey: string;
+    signingPublicKey: string;
+    mlDsaPublicKeyDigest: string;
+    kemPublicKeyDigest: string;
+}) {
+    let mlDsaPublicKeyHash: string;
+    let kemPublicKeyHash: string;
+    try {
+        mlDsaPublicKeyHash = digestHex(entry.mlDsaPublicKeyDigest);
+        kemPublicKeyHash = digestHex(entry.kemPublicKeyDigest);
+    } catch {
+        return null;
+    }
+    return keyCommitment({
+        keyVersion: entry.keyVersion ?? null,
+        encryptionPublicKey: entry.encryptionPublicKey,
+        signingPublicKey: entry.signingPublicKey,
+        mlDsaPublicKeyHash,
+        kemPublicKeyHash,
+    });
 }
 
 /*

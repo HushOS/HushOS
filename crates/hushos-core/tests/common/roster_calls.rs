@@ -277,9 +277,9 @@ pub fn call_specs() -> Vec<Value> {
         json!({ "name": "admit-member", "op": { "kind": "admit", "who": 4, "roles": [] },
             "expected": { "route": { "kind": "admit", "userId": u(4) }, "rosterVersion": 8, "groupKeyVersion": 1,
                 "changed": [changed(4, &[])], "keySeal": null, "seals": [], "grants": grants(4) } }),
+        // Never with a role: an invitation's roles are the server's word (ADMIT_AS_MEMBER).
         json!({ "name": "admit-manager", "op": { "kind": "admit", "who": 5, "roles": ["members"] },
-            "expected": { "route": { "kind": "admit", "userId": u(5) }, "rosterVersion": 8, "groupKeyVersion": 1,
-                "changed": [changed(5, &["members"])], "keySeal": u(5), "seals": [], "grants": grants(5) } }),
+            "refused": "Let them in first. Roles are given afterwards." }),
         json!({ "name": "grant-members", "op": { "kind": "grant", "who": 2 },
             "expected": { "route": { "kind": "member", "userId": u(2) }, "rosterVersion": 8, "groupKeyVersion": 1,
                 "changed": [changed(2, &["members"])], "keySeal": u(2), "seals": [], "grants": [] } }),

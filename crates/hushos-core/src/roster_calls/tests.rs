@@ -455,13 +455,16 @@ fn an_admission_grants_exactly_each_live_folder_at_its_key_and_is_a_roster_every
 }
 
 #[test]
-fn an_admission_with_members_carries_the_current_group_key_sealed_to_the_newcomer() {
+fn an_admission_never_carries_a_role_whatever_the_invitation_says() {
     let f = family();
     let ledger = f.ledger(true, true);
-    let body = body_of(&staged(f.admit(&ledger, 5, vec![GroupRole::Members])).unwrap());
-    let after = after_body(&f, &body);
-    assert_eq!(body["keySeal"]["holderUserId"], json!(f.p[4].user_id));
-    assert_eq!(open_seal(&f, &after, &body["keySeal"], 5).unwrap(), group_seed_at(1));
+    // Every role an invitation can carry, over a checked pin: refused before anything is signed.
+    for role in [GroupRole::Members, GroupRole::Billing, GroupRole::Guardian] {
+        assert_eq!(message(f.admit(&ledger, 5, vec![role])), ADMIT_AS_MEMBER);
+    }
+    // As a plain member it goes, with no group key sealed to them.
+    let body = body_of(&staged(f.admit(&ledger, 5, vec![])).unwrap());
+    assert_eq!(body["keySeal"], Value::Null);
 }
 
 #[test]

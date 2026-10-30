@@ -17,7 +17,7 @@ services:
             retries: 10
 
     garage:
-        image: dxflrs/garage:v2.3.0
+        image: dxflrs/garage:v2.5.0
         restart: unless-stopped
         environment:
             GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?Run bun run setup first}
@@ -127,6 +127,7 @@ services:
             STORAGE_FORCE_PATH_STYLE: ${STORAGE_FORCE_PATH_STYLE:-true}
             DRIVE_MAX_FILE_BYTES: ${DRIVE_MAX_FILE_BYTES:-34359738368}
             DRIVE_CLIENT_MINIMUMS: ${DRIVE_CLIENT_MINIMUMS:-}
+            GROUP_WRITE_CLIENT_MINIMUMS: ${GROUP_WRITE_CLIENT_MINIMUMS:-}
             GROUPS_ENABLED: ${GROUPS_ENABLED:-true}
             GROUP_SEAT_LIMIT_DEFAULT: ${GROUP_SEAT_LIMIT_DEFAULT:-6}
             GROUP_AREA_QUOTA_BYTES: ${GROUP_AREA_QUOTA_BYTES:-10737418240}

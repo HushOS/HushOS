@@ -362,10 +362,6 @@ struct FamilyPage: View {
 
     var body: some View {
         List {
-            Section {} header: {
-                ScreenHeader(title: joining ? "Join \(name)" : name, back: { dismiss() })
-                    .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
-            }
             if joining {
                 // Accepted but not let in, or let in with nothing on this phone or account checking the family yet:
                 // the join screen is where that goes on (the web's family page redirects to it too).
@@ -385,7 +381,7 @@ struct FamilyPage: View {
         .listStyle(.insetGrouped)
         .alpineGrouped()
         .listSectionSpacing(Alpine.Space.s4)
-        .screenChrome(title: joining ? "Join \(name)" : name, back: { dismiss() })
+        .screenChrome(title: joining ? "Join \(name)" : name)
         .refreshable { await store.refreshFamilies(force: true) }
         .task {
             if store.familyList == nil { await store.refreshFamilies() } else if let summary { await store.refreshFamily(summary) }

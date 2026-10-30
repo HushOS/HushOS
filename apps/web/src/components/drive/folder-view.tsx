@@ -49,7 +49,7 @@ import { ShareDialog } from '@/components/drive/share-dialog';
 import { TagDialog } from '@/components/drive/tag-dialog';
 import { TagStamps } from '@/components/drive/tag-stamp';
 import { UnverifiedMark } from '@/components/drive/unverified-mark';
-import { keyLabel } from '@/components/drive/shortcuts';
+import { isTyping, keyLabel } from '@/components/drive/shortcuts';
 import { AddMenu } from '@/components/drive/add-menu';
 import { UploadInputs, useDropZone, type UploadPicker } from '@/components/drive/upload-controls';
 import { VersionsDialog } from '@/components/drive/versions-dialog';
@@ -371,7 +371,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         try {
             const root = (await queryClient.fetchQuery(folderQueryOptions(drive.rootId))).folder;
             const made = await saveCopy(queryClient, nodes, root, 'drive');
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 // The same words as the Shared page: no keys, just where it lands.
@@ -458,7 +458,7 @@ export function FolderView({ folderId }: { folderId: string }) {
             went = result.gone;
             // Everything picked is in the trash, itself or inside a folder that went.
             if (went.length === nodes.length) {
-                cue('droplet');
+                cue('close');
                 const id = toast.add({
                     type: 'success',
                     title:
@@ -525,6 +525,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         'Enter',
         (event) => {
             if (!(event.target instanceof Element)) return;
+            if (isTyping(event.target)) return;
             const control = event.target.closest('a, button');
             const id = control?.matches('[data-row-name], [data-row-thumb]')
                 ? control.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId
@@ -537,7 +538,7 @@ export function FolderView({ folderId }: { folderId: string }) {
             if (control) return;
             if (selection.length === 1) open(selection[0]!);
         },
-        { enabled, preventDefault: false },
+        { enabled, preventDefault: false, ignoreInputs: false },
     );
     useHotkey('ArrowDown', () => moveFocus(1), { enabled });
     useHotkey('ArrowUp', () => moveFocus(-1), { enabled });
@@ -664,7 +665,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         try {
             if (copy) {
                 moved = await copyInto(queryClient, nodes, destination);
-                cue('droplet');
+                cue('close');
                 toast.add({
                     type: 'success',
                     title:
@@ -681,7 +682,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                 moved++;
             }
             const origin = folder;
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title:
@@ -747,7 +748,7 @@ export function FolderView({ folderId }: { folderId: string }) {
             destination.parentId === null ? displayName(destination) : `“${destination.name}”`;
         try {
             await clientFor(node.workspaceId).move(node, destination);
-            cue('droplet');
+            cue('close');
             toast.add({ type: 'success', title: `“${node.name}” moved to ${where}` });
         } catch (error) {
             cue('error');

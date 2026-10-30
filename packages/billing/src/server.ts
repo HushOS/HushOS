@@ -701,7 +701,11 @@ export async function reconcileCustomer(userId: string) {
     const products = await getCatalogue();
     const subscriptions: billingRepository.SubscriptionSnapshot[] = [];
     for (const subscription of state?.active_subscriptions ?? []) {
-        const entry = snapshot(subscription, products);
+        // @polar-sh/sdk 1.0.2 types this `status` with the license keys' `Status` ("granted" |
+        // "disabled"), a generator name clash fixed upstream but unreleased; the API sends
+        // "active" | "trialing", and the SDK passes the value through without parsing it.
+        const status = subscription.status as unknown as models.Subscription['status'];
+        const entry = snapshot({ ...subscription, status }, products);
         if (entry) subscriptions.push(entry);
     }
     const seen = new Set(subscriptions.map((subscription) => subscription.id));

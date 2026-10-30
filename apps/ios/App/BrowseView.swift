@@ -9,12 +9,18 @@ struct BrowseView: View {
     @Environment(DriveStore.self) private var store
     @State private var rootId: String?
     @State private var path: [Opened] = []
+    /*
+     * The top folder has finished appearing (Appeared.swift). A link waits for that and then pushes its
+     * folders the way a tap does, so a folder opened from a link looks exactly like one opened by hand.
+     */
+    @State private var shown = false
 
     var body: some View {
         NavigationStack(path: $path) {
             Group {
                 if let rootId {
                     FolderView(folderId: rootId, title: "Files", isRoot: true)
+                        .onFinishedAppearing { shown = true }
                 } else {
                     ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity).background(Alpine.ground)
                 }
@@ -22,20 +28,28 @@ struct BrowseView: View {
         }
         .task { rootId = await store.loadRoot() }
         .onChange(of: store.route, initial: true) { _, link in
-            guard let link else { return }
-            switch link {
-            case .files(let folder, let preview):
-                store.route = nil
-                Task { await open(folder: folder, preview: preview) }
-            case .node(let id):
-                store.route = nil
-                Task {
-                    guard let item = await store.lookUp(id) else { return gone() }
-                    if item.isFolder { await open(folder: item.id, preview: nil) } else { await open(folder: item.node.parentId, preview: item.id) }
-                }
-            default:
-                break
-            }
+            guard shown, let link else { return }
+            Task { await route(link) }
+        }
+        // A link that came before the top folder was on screen.
+        .onChange(of: shown) { _, now in
+            guard now, let link = store.route else { return }
+            Task { await route(link) }
+        }
+    }
+
+    /* A link's folder or file: the folders down to it, and a file opened in the viewer over them. */
+    private func route(_ link: AppLink) async {
+        switch link {
+        case .files(let folder, let preview):
+            store.route = nil
+            await open(folder: folder, preview: preview)
+        case .node(let id):
+            store.route = nil
+            guard let item = await store.lookUp(id) else { return gone() }
+            if item.isFolder { await open(folder: item.id, preview: nil) } else { await open(folder: item.node.parentId, preview: item.id) }
+        default:
+            break
         }
     }
 
@@ -149,8 +163,6 @@ struct FolderView: View {
         return selection.isEmpty ? "Select items" : "\(selection.count) selected"
     }
 
-    /* Back in front of the title in a pushed folder; none at the top, or while selecting (Done ends it). */
-    private var back: (() -> Void)? { isRoot || selecting ? nil : { dismiss() } }
 
     var body: some View {
         Group {
@@ -169,7 +181,9 @@ struct FolderView: View {
                     Section {
                         content
                     } header: {
-                        header.listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: Alpine.Space.s3, trailing: 0))
+                        // Only with something in it, so the first row starts at the list's own first-section margin,
+                        // as on Home, Shared and Account.
+                        if headerShown { header.listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: Alpine.Space.s3, trailing: 0)) }
                     }
                 }
                 .listStyle(.insetGrouped)
@@ -178,7 +192,12 @@ struct FolderView: View {
             }
         }
         .alpineGrouped()
-        .screenChrome(title: headerTitle, back: back) { headerActions }
+        .screenChrome(title: headerTitle, root: isRoot) { headerActions }
+        // "Search in Lisbon 2026": this folder and the ones inside it, in the system's field under the bar as in
+        // Apple's Files. The top level searches from the search tab.
+        .folderSearch(isRoot ? nil : title, text: $query, focused: $searchFocused)
+        // While selecting, Done ends it; Back would leave with a selection made.
+        .navigationBarBackButtonHidden(selecting)
         .toolbar(selecting ? .hidden : .automatic, for: .tabBar)
         .navigationDestination(for: Opened.self) { folder in
             FolderView(folderId: folder.id, title: folder.name)
@@ -241,6 +260,10 @@ struct FolderView: View {
             if store.folders[folderId] == nil { await store.refresh(folder: folderId) }
             if store.tags.tags.isEmpty { await store.refreshTags() }
             loaded = true
+            #if DEBUG
+            // Evidence runs: -HushOSInfo <id> or -HushOSShare <id> opens that row's Info or Share (DebugStart).
+            if let item = DebugStart.item(in: store.folders[folderId] ?? []) { action = item }
+            #endif
         }
         // Back in the foreground, a family folder checks its family again (at most once a minute).
         .onChange(of: scenePhase) { _, phase in
@@ -254,12 +277,15 @@ struct FolderView: View {
         }
     }
 
+    /* Whether `header` has anything to show (it is the offline line, who can open the folder and the tag filter). */
+    private var headerShown: Bool {
+        store.offline || (!searching && (banner != nil || store.receivedSentence(for: folderId) != nil)) || store.tags.tags.contains { $0.id == tagFilter }
+    }
+
     /* The title and its actions, then search, offline, who can open it and the tag filter: the same over rows and tiles. */
     private var header: some View {
         VStack(alignment: .leading, spacing: Alpine.Space.s3) {
-            ScreenHeader(title: headerTitle, back: back) { headerActions }
             if store.offline { OfflineCapsule() }
-            if !isRoot, !selecting, store.folders[folderId] != nil { searchField }
             if let banner, !searching {
                 AccessBanner(text: banner.text, link: banner.link) {
                     if let folder = store.known(banner.folder) { action = .share(folder) }
@@ -395,33 +421,15 @@ struct FolderView: View {
         } else if item.isFolder {
             NavigationLink(value: item) { NodeRow(item: item, location: searching ? store.location(of: item) : nil) }
                 .nodeActions(item, action: $action, store: store, select: { startSelecting(item) })
-                .itemRow()
+                .itemRow(item: item)
         } else {
             // Offline, a file that isn't on this phone won't open: it dims.
             let away = store.offline && !Offline.isKept(item.id)
             Button { open(item) } label: { NodeRow(item: item, location: searching ? store.location(of: item) : nil).opacity(away ? 0.5 : 1) }
                 .buttonStyle(.plain)
                 .nodeActions(item, action: $action, store: store, select: { startSelecting(item) })
-                .itemRow()
+                .itemRow(item: item)
         }
-    }
-
-    /* "Search in Lisbon 2026": this folder and the ones inside it. The top level searches from the search tab. */
-    private var searchField: some View {
-        HStack(spacing: Alpine.Space.s2) {
-            Image(systemName: "magnifyingglass").foregroundStyle(Alpine.inkMuted)
-            TextField("Search in \(title)", text: $query)
-                .focused($searchFocused)
-                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                .foregroundStyle(Alpine.ink)
-            if !query.isEmpty {
-                Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Alpine.inkMuted) }
-                    .buttonStyle(.plain).accessibilityLabel("Clear search")
-            }
-        }
-        .padding(.horizontal, 14).frame(height: Theme.control)
-        .background(Alpine.ink.opacity(0.06), in: Capsule())
-        .highContrastEdge(Capsule())
     }
 
     /* Select all and Done while selecting; otherwise Add and More. */
@@ -430,10 +438,8 @@ struct FolderView: View {
             let all = !children.isEmpty && selection.count == children.count
             Button { selection = all ? [] : Set(children.map(\.id)) } label: { HeaderWord(text: all ? "Deselect all" : "Select all") }
                 .disabled(trashingSelection)
-                .buttonStyle(.plain)
             Button { endSelecting() } label: { HeaderWord(text: "Done") }
                 .disabled(trashingSelection)
-                .buttonStyle(.plain)
         } else {
             // A folder you can only view takes nothing new.
             if !readOnly, store.known(folderId).map({ store.role(of: $0) != .viewer }) ?? true {
@@ -738,6 +744,18 @@ enum SortKey: String, CaseIterable {
                 before = x < y
             }
             return ascending ? before : !before
+        }
+    }
+}
+
+extension View {
+    /* The system's search field under the bar, always showing, as Apple's Files has it; none where `title` is nil. */
+    @ViewBuilder func folderSearch(_ title: String?, text: Binding<String>, focused: FocusState<Bool>.Binding) -> some View {
+        if let title {
+            searchable(text: text, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search in \(title)")
+                .searchFocused(focused)
+        } else {
+            self
         }
     }
 }

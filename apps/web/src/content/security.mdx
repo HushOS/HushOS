@@ -500,6 +500,8 @@ An operator opens a report under their own identity. Which operators a report is
 
 Families, on servers that offer them: HushOS’s server knows the family’s name, who is in it and what each person can do, who invited and let in whom, the email addresses invitations went to, and how many family folders there are with their sizes, padded as every file’s is. It can’t open family folders.
 
+Joining a family takes no words. When a manager lets someone in, the manager’s device writes the keys HushOS gives it for them into the family’s member list, and the newcomer’s device takes the family as HushOS first shows it, then holds on to it: from then on, a different member list, an older one, or another family key is noticed and the family is paused there, never used. Until two members check each other, whoever runs the server could hand a manager keys of its own for a newcomer, or show a newcomer a family it made up, and read what goes into those family folders. Checking takes twelve words, any time, from Check it’s them beside their name on the family page: when the words match, both devices see the same family and each has the other’s real keys; when they don’t, nothing is saved. A check is best made with the person who made the family. Nobody is given the role of managing the family, or of organizer, until whoever gives it has checked it’s them, since managers can let people in and change the family.
+
 </Section>
 
 <Section id="where" title={contents.where}>
@@ -538,6 +540,7 @@ Every page carries a Content Security Policy: scripts run only from the app’s 
 - Replacing your account key can’t erase old locked copies, or take back private identity keys someone already pulled out of an older key bundle.
 - The server sees what’s listed above: your email, padded sizes, times, who wrote each change and how your folders nest. Padding hides a file’s exact size, not roughly how big it is.
 - For people you never compared words with, whoever runs the server could put its own keys in front of theirs the first time your device sees them, and then read what you share with them. Comparing twelve words, at any time, rules that out from then on.
+- In a family nobody checked, whoever runs the server could plant its own keys for a newcomer, or show a newcomer a family it made up, and read what goes into those family folders. Two members checking each other rules that out from then on, not for what was added before.
 - Items written before HushOS signed changes, and anything re-locked without a signature your device could verify, show as Unverified until someone writes them again.
 - Whoever runs the server chooses which operator keys a report is sealed to, so they can open anything reported to them.
 - Replacing sharing keys with stolen keys would look like a real replacement to the people you share with, and their devices follow it. Comparing twelve words again, from Check it’s them, shows the new keys’ words.

@@ -75,6 +75,10 @@ struct RootView: View {
         }
         // Notices go in their own window, above any sheet that is open.
         .onAppear { NoticeWindow.install() }
+        #if DEBUG
+        // -HushOSForceRegular: iPhone Duo's inner display size and traits on any simulator (InnerDisplayHarness).
+        .background { if InnerDisplayHarness.enabled { InnerDisplayHarnessHook() } }
+        #endif
     }
 }
 

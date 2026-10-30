@@ -99,7 +99,7 @@ export function CheckContactStep({
             await removeContact(queryClient, userId, contactId);
             // What they wrote no longer reads as theirs.
             afterTrustChanged(queryClient);
-            cue('droplet');
+            cue('close');
             toast.add({ type: 'success', title: `${name} removed` });
             onDone();
         } catch (cause) {

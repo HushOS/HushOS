@@ -3,8 +3,8 @@ import HushOSCore
 
 extension Auth {
     /* The account's earlier identities, oldest first, still sealed under the account key. */
-    static func identityHistory() async throws -> [IdentityEnvelope] {
-        let reply = try await call("/api/auth/identity/history")
+    static func identityHistory(as owner: SharedKeychain.Session? = nil) async throws -> [IdentityEnvelope] {
+        let reply = try await call("/api/auth/identity/history", as: owner)
         return (reply["identities"] as? [[String: Any]] ?? []).map { identityEnvelope(from: $0) }
     }
 
@@ -13,17 +13,17 @@ extension Auth {
      * keys statement) and returns what the server stored; 409 (`AuthError.conflict`) when
      * another device upgraded first.
      */
-    static func upgradeIdentity(_ identity: IdentityEnvelope) async throws -> IdentityEnvelope {
-        let reply = try await call("/api/auth/identity/upgrade", method: "POST", body: ["identity": json(identity)])
+    static func upgradeIdentity(_ identity: IdentityEnvelope, as owner: SharedKeychain.Session? = nil) async throws -> IdentityEnvelope {
+        let reply = try await call("/api/auth/identity/upgrade", method: "POST", body: ["identity": json(identity)], as: owner)
         guard let stored = reply["identity"] as? [String: Any] else { throw AuthError.message("HushOS returned no identity.") }
         return identityEnvelope(from: stored)
     }
 
     /* Installs a successor identity the current signing key vouched for; 409 when another device moved first. */
-    static func succeedIdentity(_ succession: IdentitySuccession) async throws {
+    static func succeedIdentity(_ succession: IdentitySuccession, as owner: SharedKeychain.Session? = nil) async throws {
         _ = try await call("/api/auth/identity/succession", method: "POST", body: [
             "identity": json(succession.identity), "signature": succession.signature,
-        ])
+        ], as: owner)
     }
 
     /*
@@ -31,8 +31,8 @@ extension Auth {
      * the whole chain: asking from the pinned version would tell the server which version this
      * person pinned. The checker finds where the pin's keys join it.
      */
-    static func succession(of userId: String) async throws -> [SuccessionLink] {
-        let reply = try await call("/api/auth/contacts/\(userId.lowercased())/succession?from=1")
+    static func succession(of userId: String, as owner: SharedKeychain.Session? = nil) async throws -> [SuccessionLink] {
+        let reply = try await call("/api/auth/contacts/\(userId.lowercased())/succession?from=1", as: owner)
         return (reply["links"] as? [[String: Any]] ?? []).map { link in
             SuccessionLink(
                 oldKeyVersion: (link["oldKeyVersion"] as? NSNumber)?.uint64Value ?? 0,
@@ -86,16 +86,16 @@ extension Vault {
             if let earlierIdentities { return [current] + earlierIdentities }
             let accountKey = try unlockAccount()
             var earlier: [IdentityKeys] = []
-            for envelope in try await Auth.identityHistory() {
+            for envelope in try await Auth.identityHistory(as: session) {
                 // Opening proves each is this account's own (sealed under its root, its keys matching), not one the server added.
                 earlier.append(try identityOpen(userId: session.userId, accountKey: accountKey, envelope: envelope))
             }
+            // A settings mark an earlier version kept under any of these keys becomes the account's, so a
+            // device that saw version 7 before a succession still refuses 6 (identityKeys covers the current key).
+            try await RollbackMarkStore.shared(session: session.token).adopt(userId: session.userId, encryptionPublicKeys: earlier.map(\.encryptionPublicKey), keys: marksKeys())
             guard generation == identityGeneration else { continue }
             earlier.sort { $0.keyVersion > $1.keyVersion }
             earlierIdentities = earlier
-            // A settings mark an earlier version kept under any of these keys becomes the account's, so a
-            // device that saw version 7 before a succession still refuses 6 (identityKeys covers the current key).
-            SettingsMarks.shared.adopt(userId: session.userId, encryptionPublicKeys: earlier.map(\.encryptionPublicKey))
             return [current] + earlier
         }
     }
@@ -110,7 +110,7 @@ extension Vault {
      */
     private func signingSeed() async throws -> Data {
         if identity != nil, identityCheckedAt.map({ Date().timeIntervalSince($0) > 300 }) ?? true,
-           let served = try? await Auth.identity() {
+           let served = try? await Auth.identity(as: session) {
             identityCheckedAt = Date()
             if identityEnvelope.map({ !served.servesSameIdentity(as: $0) }) ?? true { forgetIdentity() }
         }
@@ -118,7 +118,7 @@ extension Vault {
             return try await identityKeys().signingSeed
         } catch let error as DriveAPIError {
             throw error
-        } catch AuthError.message(let text) where text == IdentityMarks.downgraded {
+        } catch AuthError.message(let text) where [IdentityMarks.downgraded, MarksWords.unreadable, MarksWords.unsaved].contains(text) {
             throw DriveAPIError.server(400, text)
         } catch {
             // Without the identity the server would refuse the write; say so rather than send it unsigned.
@@ -197,7 +197,7 @@ extension Vault {
         try await ensureSettingsKeyed()
         // Opened (and upgraded to version 2, which a succession needs) before the served one is read back.
         let opened = try await identityKeys()
-        let current = try await Auth.identity()
+        let current = try await Auth.identity(as: session)
         // Signed over exactly the identity opened: all four keys, the key version and the identity version.
         guard opened.encryptionPublicKey == current.encryptionPublicKey, opened.signingPublicKey == current.signingPublicKey,
               opened.mlDsaPublicKey == current.mlDsa?.publicKey, opened.kemPublicKey == current.kem?.publicKey,
@@ -206,7 +206,7 @@ extension Vault {
             throw AuthError.message("Your keys changed on another device. Try again.")
         }
         let succession = try identitySucceed(userId: session.userId, accountKey: try unlockAccount(), current: current)
-        try await Auth.succeedIdentity(succession)
+        try await Auth.succeedIdentity(succession, as: session)
         // From here the keys are replaced: what is left is re-sealing, which the next Drive open finishes if this one can't.
         ResealPending.set(for: succession.identity.signingPublicKey)
         forgetIdentity()
@@ -254,7 +254,7 @@ extension Vault {
                     served = known
                 } else {
                     // An older server serves no grantee identity here: look them up, once.
-                    let contact = try await Auth.lookupContact(email: pin.email)
+                    let contact = try await Auth.lookupContact(email: pin.email, as: session)
                     guard contact.userId == pin.userId else { throw ContactError.changed }
                     served = contact.served
                     looked[grantee] = served

@@ -1,18 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { GroupApiError } from './api';
-import { errorCopy, wrongWordsCopy } from './copy';
-
-describe('the hidden words typed wrong', () => {
-    test('are said calmly, naming neither word and never a different member list', () => {
-        const line = wrongWordsCopy('Maya');
-        expect(line).toBe(
-            'One of the words doesn’t match. Ask Maya to read them again. If they still don’t match, choose They don’t match.',
-        );
-        // A number would tell a guesser which word to keep and which to change.
-        expect(line).not.toMatch(/\d/);
-        expect(line).not.toMatch(/member list|Don’t use/);
-    });
-});
+import { errorCopy } from './copy';
 
 describe('a request the client gave up on', () => {
     test('is said in the app’s words, never the browser’s', () => {

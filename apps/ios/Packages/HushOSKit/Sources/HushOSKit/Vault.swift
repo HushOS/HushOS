@@ -88,6 +88,12 @@ public actor Vault {
     /* By workspace and node (see NodeTable): a received share's key never answers for one of the account's own nodes. */
     var nodeKeys = NodeTable<Data>()
     var opened = NodeTable<Opened>()
+    /*
+     * Rows the server confirmed gone (trashed from here, a feed tombstone, a purge), by workspace and
+     * node: `remove`, never `forget`, which only drops a row to be read again. Info beside the list
+     * closes on these (RowStanding); a row opened again (a restore, a sync) is no longer gone.
+     */
+    var removedRows = Set<NodeRef>()
     /* The identity in use, and the earlier ones (newest first) that shares sealed before a succession still need; see Vault+Identity. */
     var identity: IdentityKeys?
     var earlierIdentities: [IdentityKeys]?
@@ -101,6 +107,8 @@ public actor Vault {
     var identityGeneration: UInt64 = 0
     /* The settings key, opened under the account key (see Settings). */
     var settingsKey: Data?
+    /* The envelope `settingsKey` came out of, as the server keeps it: kept beside the rollback marks. */
+    var settingsKeyEnvelope: SettingsKeyEnvelope?
     /* The pins as the last settings read had them (see `knownPins`). */
     var lastPins: [String: ContactPin] = [:]
     /* Whose signatures this person can check, built from the identities and the verified pins (see Integrity); a load that fails is not kept. */
@@ -345,29 +353,38 @@ public actor Vault {
     }
 
     private func openIdentity(generation: UInt64) async throws -> IdentityKeys {
-        let marks = IdentityMarks.shared
+        let marks = RollbackMarkStore.shared(session: session.token)
         let accountKey = try unlockAccount()
-        var envelope = try await Auth.identity()
-        try marks.check(userId: session.userId, keyVersion: envelope.keyVersion, identityVersion: envelope.version)
+        var envelope = try await Auth.identity(as: session)
+        let seen = try await marks.read(userId: session.userId, keys: marksKeys())
+        try IdentityMarks.check(seen, keyVersion: envelope.keyVersion, identityVersion: envelope.version)
         var keys = try identityOpen(userId: session.userId, accountKey: accountKey, envelope: envelope)
         if keys.identityVersion == 1 {
             let upgraded = try identityUpgrade(userId: session.userId, accountKey: accountKey, envelope: envelope)
             do {
-                envelope = try await Auth.upgradeIdentity(upgraded)
+                envelope = try await Auth.upgradeIdentity(upgraded, as: session)
             } catch AuthError.conflict {
                 // Another device upgraded first: open the identity it stored, never a second ML-DSA key.
-                envelope = try await Auth.identity()
+                envelope = try await Auth.identity(as: session)
             }
             keys = try identityOpen(userId: session.userId, accountKey: accountKey, envelope: envelope)
         }
         guard keys.identityVersion >= 2, keys.mlDsaPublicKey != nil, keys.kemPublicKey != nil else {
             throw AuthError.message("Your keys couldn’t be upgraded. Try again.")
         }
-        // The stored identity must still be the one this device has used: same keys, version not lowered.
-        try marks.check(userId: session.userId, keyVersion: keys.keyVersion, identityVersion: keys.identityVersion)
-        marks.record(userId: session.userId, keyVersion: keys.keyVersion, identityVersion: keys.identityVersion)
-        // A settings mark an earlier version kept under this identity's key becomes the account's.
-        SettingsMarks.shared.adopt(userId: session.userId, encryptionPublicKeys: [keys.encryptionPublicKey])
+        // The stored identity must still be the one this device has used: same keys, version not lowered. Read
+        // again, since the upgrade waited on the server while another process could raise a mark.
+        try IdentityMarks.check(try await marks.read(userId: session.userId, keys: marksKeys()), keyVersion: keys.keyVersion, identityVersion: keys.identityVersion)
+        // Kept before the identity is: one whose mark could not be kept is not taken. A settings mark an
+        // earlier version kept under this identity's key becomes the account's in the same write.
+        let kept = try await marks.raise(
+            userId: session.userId,
+            to: RollbackMarks(settings: 0, settingsDocument: false, identity: keys.keyVersion, identityVersion: UInt64(keys.identityVersion)),
+            encryptionPublicKeys: [keys.encryptionPublicKey],
+            keys: marksKeys()
+        )
+        // And against what the write found, for a mark raised between that read and this write.
+        try IdentityMarks.check(kept, keyVersion: keys.keyVersion, identityVersion: keys.identityVersion)
         // Replaced while this opened: the caller opens again rather than cache what this read.
         guard generation == identityGeneration else { return keys }
         identity = keys
@@ -395,7 +412,7 @@ public actor Vault {
 
     /* The 24 words again, for someone who holds the account key and wants to check their copy. */
     public func recoveryPhrase() async throws -> String {
-        let (envelope, _) = try await Auth.recoveryKey()
+        let (envelope, _) = try await Auth.recoveryKey(as: session)
         return try HushOSCore.recoveryPhrase(userId: session.userId, accountKey: try unlockAccount(), envelope: envelope)
     }
 
@@ -456,6 +473,7 @@ public actor Vault {
         )
         let result = Opened(node: node, metadata: metadata, nodeKey: key)
         opened[node.ref] = result
+        removedRows.remove(node.ref)
         return result
     }
 
@@ -485,6 +503,7 @@ public actor Vault {
         nodeKeys[node.ref] = key
         let result = Opened(node: node, metadata: metadata, nodeKey: key)
         opened[node.ref] = result
+        removedRows.remove(node.ref)
         if let parent = node.parentId { rememberParent(node.id, parent: parent) }
         /*
          * A write the server answered (a move, a copy, a new folder) is filed in the catalogue
@@ -499,8 +518,46 @@ public actor Vault {
         return result
     }
 
+    /* Drops a row to be read again: no verdict on whether it still exists. */
     public func forget(_ id: String) {
         opened.remove(id: id)
+    }
+
+    /*
+     * Drops a row the server confirmed gone, and marks it so (`removedRows`): exactly that workspace's row,
+     * never another workspace's row under the same id (a share's node id is the server's to pick).
+     */
+    func remove(_ ref: NodeRef) {
+        removedRows.insert(ref)
+        opened[ref] = nil
+    }
+
+    /* `remove` by id: in `workspaceId` when known, else the workspace this process holds the id in (its own first). */
+    func remove(_ id: String, in workspaceId: String? = nil) {
+        guard let ref = workspaceId.map({ NodeRef(workspaceId: $0, nodeId: id) }) ?? opened.ref(for: id)
+                ?? workspace.map({ NodeRef(workspaceId: $0.workspaceId, nodeId: id) }) else { return }
+        remove(ref)
+    }
+
+    /*
+     * Where a row stands now, for Info beside the list (InfoFollow): live with its current record;
+     * held but not live (trashed, or a trashed folder above it in its own workspace); removed (it, or
+     * a folder above it, confirmed gone); or absent (dropped to be read again, or never opened here).
+     */
+    public func standing(of ref: NodeRef) -> RowStanding {
+        if removedRows.contains(ref) { return .removed }
+        guard let row = opened[ref] else { return .absent }
+        var cursor = row
+        for _ in 0 ..< 256 {
+            if cursor.node.trashedAt != nil { return .held }
+            guard let parentId = cursor.node.parentId else { break }
+            let parent = NodeRef(workspaceId: ref.workspaceId, nodeId: parentId)
+            if removedRows.contains(parent) { return .removed }
+            // A folder above that this process doesn't hold (above a share's root, or being read again): no verdict.
+            guard let next = opened[parent] else { break }
+            cursor = next
+        }
+        return .live(row)
     }
 
     /* Fetches a folder's listing, opening every key along the way; all pages. */

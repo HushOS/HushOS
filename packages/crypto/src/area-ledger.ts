@@ -6,7 +6,13 @@ import { CryptoError } from './errors';
 import { checkId } from './ids';
 import { decode } from './keys';
 import { generateKey, openNodeKey, openPreviousRootKey, wrapNodeKey } from './drive';
-import { KEY_CHANGE_PENDING, NOT_CARRIED, OLDER_CHAIN, SPLIT_CHAIN } from './protocol';
+import {
+    GUARD_NOT_KEPT,
+    KEY_CHANGE_PENDING,
+    NOT_CARRIED,
+    OLDER_CHAIN,
+    SPLIT_CHAIN,
+} from './protocol';
 
 /*
  * The crypto worker's Drive keys and the family write rules that hold them
@@ -178,6 +184,19 @@ export function createAreaLedger() {
      */
     const blocked = new Map<string, AreaBlock>();
     /*
+     * Families whose guard an acceptance handed back and this device has not
+     * stored yet (docs/optional-verification.md 2.8): from the commit on,
+     * nothing is written into their folders until the app says it is stored.
+     * The chain stays committed (it is the floor, never given up), reading
+     * goes on.
+     */
+    const guardOwed = new Set<string>();
+    /* Refused for a family folder whose family owes its guard: every key handed out to write checks it. */
+    function requireGuardKept(workspaceId: string) {
+        if (openedBy(workspaceId).some((groupId) => guardOwed.has(groupId)))
+            throw new CryptoError(GUARD_NOT_KEPT);
+    }
+    /*
      * The area key version each area's root was last opened under, by a real
      * open of its envelope in a listing (rootSeen): the area is written only
      * while that is its write version. Nothing a caller says sets it, and an
@@ -323,6 +342,7 @@ export function createAreaLedger() {
      * Every Drive write in the session calls it.
      */
     function requireWritable(workspaceId: string) {
+        requireGuardKept(workspaceId);
         const version = writeVersion(workspaceId);
         if (version !== null && !workspaceKeys.get(workspaceId)?.keys.get(version))
             throw new CryptoError(KEYS_CHANGED);
@@ -423,8 +443,19 @@ export function createAreaLedger() {
             if (key.startsWith(`${groupId}/`)) areaWrite.delete(key);
         chains.delete(groupId);
     }
+    /* Writes into the family wait for its guard to be stored (owe), or go on again (kept). */
+    function owe(groupId: string) {
+        guardOwed.add(groupId);
+    }
+    function kept(groupId: string) {
+        guardOwed.delete(groupId);
+    }
+    function owes(groupId: string) {
+        return guardOwed.has(groupId);
+    }
     /* A family the person no longer reads: the keys of the areas it opened, and all it knew of them. */
     function forgetGroup(groupId: string) {
+        guardOwed.delete(groupId);
         for (const workspaceId of opened.get(groupId)?.keys() ?? []) dropWorkspace(workspaceId);
         for (const map of [areaWrite, blocked, rootSeenAt, rootIds])
             for (const key of map.keys()) if (key.startsWith(`${groupId}/`)) map.delete(key);
@@ -434,6 +465,7 @@ export function createAreaLedger() {
     }
     /* Every family: what forgetting every group drops. */
     function forgetAllGroups() {
+        guardOwed.clear();
         for (const groupId of new Set([...chains.keys(), ...opened.keys(), ...floors.keys()]))
             forgetGroup(groupId);
     }
@@ -646,6 +678,7 @@ export function createAreaLedger() {
      */
     function writableNodeKey(workspaceId: string, nodeId: string) {
         if (heldBack(workspaceId)) throw new CryptoError(NO_CHAIN);
+        requireGuardKept(workspaceId);
         const node = nodeKey(workspaceId, nodeId);
         if (node && isArea(workspaceId) && !rootedAtWriteVersion(workspaceId, nodeId))
             throw new CryptoError(KEY_CHANGE_PENDING);
@@ -664,6 +697,7 @@ export function createAreaLedger() {
      * area cannot be written), else the newest this session opened.
      */
     function writeVersionOf(workspaceId: string) {
+        requireGuardKept(workspaceId);
         const workspace = workspaceKeys.get(workspaceId);
         if (!workspace) throw new CryptoError('Open Drive again to continue.');
         const version = writeVersion(workspaceId) ?? workspace.current;
@@ -680,6 +714,7 @@ export function createAreaLedger() {
      * rotation is taking away.
      */
     function wrapKeyFor(workspaceId: string, parentId: string, parentKeyEpoch: number) {
+        requireGuardKept(workspaceId);
         if (parentId === workspaceId) {
             // A family folder has one root, made and re-keyed only with its roster (groupCreate,
             // groupStage): nothing in Drive wraps a key directly under its area key.
@@ -1121,6 +1156,9 @@ export function createAreaLedger() {
         writeVersion,
         unwritable,
         requireWritable,
+        owe,
+        kept,
+        owes,
         rootSeen,
         commit,
         checkCommit,

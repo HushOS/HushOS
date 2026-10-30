@@ -50,6 +50,7 @@ jobs:
               with:
                   bun-version: 1.4.4
             - run: bun install --frozen-lockfile
+              timeout-minutes: 5
             - uses: Swatinem/rust-cache@v2
               if: matrix.engine == 'rust'
               with:
@@ -64,7 +65,7 @@ jobs:
                   cargo install cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }} --locked
                   cargo fetch --locked
             # Jazzer.js instruments only on Node (under Bun it would fuzz blind).
-            - uses: actions/setup-node@v5
+            - uses: actions/setup-node@v7
               if: matrix.engine == 'js'
               with:
                   node-version: 24
@@ -72,7 +73,7 @@ jobs:
               run: bun run fuzz ${{ matrix.engine }} all --time 30
             - name: Keep crash inputs
               if: failure()
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@v7
               with:
                   name: fuzz-crashes-${{ matrix.engine }}-${{ github.run_attempt }}
                   path: |
@@ -93,7 +94,8 @@ jobs:
               with:
                   bun-version: 1.4.4
             - run: bun install --frozen-lockfile
-            - uses: actions/setup-node@v5
+              timeout-minutes: 5
+            - uses: actions/setup-node@v7
               with:
                   node-version: 24
             - uses: Swatinem/rust-cache@v2
@@ -104,7 +106,7 @@ jobs:
                   FUZZ_DIFF_RUNS: 300
             - name: Keep diverging inputs
               if: failure()
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@v7
               with:
                   name: fuzz-divergences-${{ github.run_attempt }}
                   path: packages/crypto/fuzz/artifacts
@@ -143,6 +145,7 @@ jobs:
               with:
                   bun-version: 1.4.4
             - run: bun install --frozen-lockfile
+              timeout-minutes: 5
             - uses: Swatinem/rust-cache@v2
               with:
                   workspaces: crates/hushos-core/fuzz -> target
@@ -152,7 +155,7 @@ jobs:
                   rustup toolchain install
                   cargo install cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }} --locked
                   cargo fetch --locked
-            - uses: actions/setup-node@v5
+            - uses: actions/setup-node@v7
               with:
                   node-version: 24
             # A dispatch's seconds, read as a number and held to 60..1200 (the job's timeout fits two).
@@ -167,7 +170,7 @@ jobs:
                   [ "$seconds" -gt 1200 ] && seconds=1200
                   echo "SECONDS_PER_TARGET=$seconds" >> "$GITHUB_ENV"
             - name: Restore the corpora
-              uses: actions/cache/restore@v4
+              uses: actions/cache/restore@v6
               with:
                   path: |
                       crates/hushos-core/fuzz/corpus/${{ matrix.target }}
@@ -196,7 +199,7 @@ jobs:
               run: bun run fuzz all ${{ matrix.target }} --merge
             - name: Save the corpora
               if: always()
-              uses: actions/cache/save@v4
+              uses: actions/cache/save@v6
               with:
                   path: |
                       crates/hushos-core/fuzz/corpus/${{ matrix.target }}
@@ -204,7 +207,7 @@ jobs:
                   key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
             - name: Keep crash and diverging inputs
               if: steps.rust.outcome == 'failure' || steps.js.outcome == 'failure' || steps.differential.outcome == 'failure'
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@v7
               with:
                   name: fuzz-findings-${{ matrix.target }}-${{ github.run_attempt }}
                   path: |

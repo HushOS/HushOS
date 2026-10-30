@@ -4,7 +4,7 @@
 # family folders (docs/families-shared-pool.md). Rewrite the storage lines for that model, then
 # move this file up one directory to publish.
 title: Family plans
-description: Up to 20 people share family folders, end-to-end encrypted, and each keeps their own private space. How joining works, what happens when someone leaves, what it costs, and what is not built yet.
+description: Up to 20 people share family folders, end-to-end encrypted, and each keeps their own private space. How joining and checking each other work, what happens when someone leaves, what it costs, and what is not built yet.
 date: 2026-10-19
 author: HushOS
 cover: FAMILY
@@ -25,19 +25,21 @@ One person organizes the family. They can let others manage it too: invite peopl
 
 ## Joining
 
-You invite someone by email. They sign in, or make an account, and accept. Then the two of you check each other, in person or on a call. Not in a message sent through HushOS.
+You invite someone by email. They sign in, or make an account, and accept. Then someone who manages the family lets them in, with one click on the family's page. Nobody reads anything out, on either side.
 
-First, the newcomer reads the twelve words on their join screen and the person letting them in compares them. That is the same check as when you share with someone: it proves the keys HushOS shows for them are really theirs.
+When they are let in, the manager's device writes the keys HushOS gives it for the newcomer into the family's signed member list, and the newcomer's device takes the family as HushOS first shows it. From then on it holds on to that: every later member list has to follow on from it, signed by someone who manages the family, and anything else is noticed and paused, never used.
 
-Then both screens show a join code. The person letting them in reads all twelve words. The newcomer's screen hides two of them, so the newcomer compares the other ten and types the two they could not see.
+## Checking each other
 
-**Why the join code.** A new member's device has to learn who is in the family and which keys are whose. It learns that from a signed member list, which the server stores and hands out. A dishonest server could hand a newcomer a different list, with an extra member whose keys it holds, and the newcomer's device would lock family files for them too. The join code is worked out from the member list each screen was given, so matching words mean both of you see the same list. The newcomer's device then pins those first keys, and every later version of the list has to follow on from them, signed by someone who manages the family.
+Any two members can check each other whenever they like. Each opens the family, chooses Check it's Maya beside the other's name, and the two of you compare twelve words, in person or on a call. Not in a message sent through HushOS.
 
-The two hidden words make sure the check really happens. Ten words can be skimmed and agreed to without listening. Two words that only the other person's screen shows cannot be typed without hearing them. The newcomer's device picks which two at random and never tells the server.
+**What a check adds.** A new member's device learns who is in the family and which keys are whose from a member list the server stores and hands out. Until someone checks, a dishonest server could have handed the person letting a newcomer in keys of its own for them, or shown the newcomer a family it made up, and read what goes into those family folders. The twelve words are worked out from the member list that let the later of you in, and from both your accounts, so matching words mean you both see the same family and each of you has the other's real keys. If they do not match, nothing is saved, and the screen says what to do next.
 
-If the words do not match, the newcomer's device keeps nothing, and HushOS says not to use the family until the two of you have sorted it out.
+A check is best made with the person who made the family: two newcomers who check only each other learn that they see the same family, not that it is the real one.
 
-The join code protects a family from the server. It does not protect a family from the people who manage it: they decide who is in it.
+**Who is checked first.** Managers can let people in and change the family, so nobody is made a manager, or the organizer, until whoever gives them the role has checked it's them. Someone invited to manage the family joins as a member and gets the role once they are checked.
+
+Checking protects a family from the server. It does not protect a family from the people who manage it: they decide who is in it.
 
 ## When someone leaves
 

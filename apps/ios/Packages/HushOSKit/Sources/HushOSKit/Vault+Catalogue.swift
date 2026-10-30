@@ -165,7 +165,7 @@ extension Vault {
             case "tombstone":
                 guard let id = change.nodeId else { continue }
                 if let parent = own(id)?.node.parentId ?? parents[id] { catalogueChildren[parent]?.remove(id); touched.insert(parent) }
-                forget(id)
+                remove(id, in: workspaceId)
                 touched.insert(id)
             default: continue
             }

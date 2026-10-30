@@ -348,7 +348,7 @@ export function TrashView({
         // One refresh for the whole batch, in the background: the rows have already gone.
         void invalidateFolders(queryClient);
         const all = gone.length === total;
-        cue(all ? 'droplet' : 'error');
+        cue(all ? 'close' : 'error');
         toast.add({
             type: all ? 'success' : 'error',
             title: !all
@@ -375,7 +375,7 @@ export function TrashView({
             await emptyTrashAll(queryClient, userId, (purged) =>
                 setEmptying({ gone: Math.min(purged, total), total }),
             );
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: 'Trash emptied',
@@ -433,7 +433,7 @@ export function TrashView({
         try {
             await driveClient.purge(item.node);
             drop(item.node.id);
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: `Deleted “${item.node.name}” forever`,

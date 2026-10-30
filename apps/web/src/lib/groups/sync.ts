@@ -1,4 +1,4 @@
-import type { CryptoResults, GroupView, RosterFork, ServedChain } from '@hushos/crypto';
+import type { CryptoResults, GroupPin, GroupView, RosterFork, ServedChain } from '@hushos/crypto';
 import { SPLIT_CHAIN } from '@hushos/crypto/protocol';
 import {
     acceptFromRecord,
@@ -13,6 +13,12 @@ import {
     type ServedRosterPage,
     type SpaceList,
 } from './api';
+import {
+    GuardConflictError,
+    GuardRacedError,
+    GuardUnreadableError,
+    GuardUnsavedError,
+} from '@/lib/contact-guard';
 import type { GroupContext, GroupNotice } from './context';
 import { flushOutbox } from './outbox';
 import { settlePin, type OpenedArea } from './pins';
@@ -206,6 +212,56 @@ type Accepted = Extract<CryptoResults['groupAccept'], { status: 'accepted' }>;
 type Fork = Extract<CryptoResults['groupAccept'], { status: 'fork' }>;
 
 /*
+ * This device's family guard for the worker (docs/optional-verification.md
+ * 2.8): what it holds, or 'unreadable' when its store could not be read, which
+ * the worker refuses (never first use, and nothing taken on it). Read afresh
+ * for every call, so a guard another tab stored meanwhile is a mark here too.
+ */
+export async function heldGuard(
+    ctx: GroupContext,
+    groupId: string,
+): Promise<GroupPin | 'unreadable' | null> {
+    try {
+        return await ctx.guard.read(groupId);
+    } catch {
+        return 'unreadable';
+    }
+}
+
+/*
+ * The guard an acceptance hands back, stored (merged, never lower) before
+ * anything else of it is: the device record, the settings pin, a seal, a grant
+ * or an admission. A write that fails stops all of those (the sync reports it,
+ * and the next acceptance hands the same guard back to store); one from
+ * another history is refused, and so is the acceptance's result.
+ */
+export async function keepGuard(
+    ctx: GroupContext,
+    groupId: string,
+    guard: GroupPin | null,
+    began = ctx.session?.(),
+    /* A wipe's guard: stored, with no writes to release (the family is being let go of). */
+    { release = true }: { release?: boolean } = {},
+) {
+    if (!guard) return;
+    let stored: GroupPin;
+    try {
+        stored = await ctx.guard.keep(groupId, guard);
+    } catch (error) {
+        if (error instanceof GuardConflictError || error instanceof GuardRacedError) throw error;
+        throw new GuardUnsavedError(error);
+    }
+    // A lock while it was stored: that session's chain is gone, so nothing more is written on it.
+    if (began !== undefined && ctx.session?.() !== began)
+        throw new Error('Unlock your account first.');
+    // The worker keeps every write into the family waiting from the commit until it hears the
+    // guard is stored, and only for a stored guard that covers the one it handed back.
+    if (!release) return;
+    const { kept } = await ctx.rpc('groupGuardKept', { groupId, guard: stored });
+    if (!kept) throw new GuardUnsavedError();
+}
+
+/*
  * One acceptance of what route 5 serves after this device's record (from
  * version 1 without one), with the settings read first so the worker holds
  * their pin as a mark. A chain that does not continue the record is fetched
@@ -250,6 +306,7 @@ async function acceptOnce(
     options: { creating?: string | null; owner?: string | null },
 ): Promise<Accepted | Fork | { status: 'record-unreadable' }> {
     await ctx.settings.read();
+    const began = ctx.session?.();
     const row = await ctx.store.chain(ctx.userId, groupId);
     const accept = async (after: number, withoutCache: boolean, retried: boolean) => {
         const { served } = await fetchServed(ctx, groupId, after);
@@ -260,6 +317,8 @@ async function acceptOnce(
             record: row?.envelope ?? null,
             checkedAt: ctx.now().toISOString(),
             creating: options.creating ? { stagedEnvelope: options.creating } : null,
+            // The family guard is a mark like the record's pin: a `not-member` wipe never clears it.
+            guard: await heldGuard(ctx, groupId),
             ...(withoutCache ? { withoutCache } : {}),
             // A refusal the ladder retries keeps the family committed (and its folders readable).
             ...(retried ? { retried } : {}),
@@ -288,6 +347,9 @@ async function acceptOnce(
         await ctx.store.deleteChain(ctx.userId, groupId);
         return result;
     }
+    // The guard first (2.8): a crash after it leaves the guard at or above the record, never below,
+    // and nothing is written under this acceptance until it is stored.
+    if (result.status === 'accepted') await keepGuard(ctx, groupId, result.guard, began);
     if (result.status === 'accepted' && result.record) {
         // Records reach disk in commit order: putChain never writes over a record at a later
         // roster version (a background acceptance finishing after the foreground's), and the
@@ -410,46 +472,58 @@ export async function afterAccept(
     groupId: string,
     accepted: Accepted,
     notices: GroupNotice[] = [],
+    options: { created?: boolean } = {},
 ): Promise<Extract<SyncResult, { status: 'accepted' }> | Fork> {
     const areas = accepted.record ? await openAreas(ctx, groupId, accepted.view) : [];
     if (accepted.record) ctx.rotations?.opened?.(groupId, areas);
     const opened = areas.flatMap((area) => (area.opened ? [area.opened.pinArea] : []));
     let view = accepted.view;
-    const settled = await settlePin(ctx, groupId, accepted, {
-        opened,
-        reaccept: async () => {
-            const again = await acceptServed(ctx, groupId);
-            if (again.status === 'record-unreadable')
-                throw new Error('This device’s saved check of the family could not be opened.');
-            if (again.status === 'accepted') view = again.view;
-            return again;
+    const settled = await settlePin(
+        ctx,
+        groupId,
+        { ...accepted, created: options.created },
+        {
+            opened,
+            reaccept: async () => {
+                const again = await acceptServed(ctx, groupId);
+                if (again.status === 'record-unreadable')
+                    throw new Error('This device’s saved check of the family could not be opened.');
+                if (again.status === 'accepted') view = again.view;
+                return again;
+            },
         },
-    });
+    );
     if (settled.status === 'fork') return settled;
     return { status: 'accepted', view, areas, pinSaved: true, notices };
 }
 
 /*
- * The worker lets go of a family (docs/optional-verification.md 2.8): it drops
- * nothing while the guard it hands back is not stored, and the caller deletes
- * nothing of the family unless this says the worker forgot it. No family guard
- * is kept on the web yet: PR 4 stores the guard handed back (merged into the
- * stored one, never lower, under the account's lock) between the two calls;
- * until then it is handed straight back, as no store could hold it. A held
- * guard that disagrees with what the worker accepted is refused
- * (GUARD_CONFLICT, thrown), and so is one past it (GUARD_AHEAD: the guard
- * cannot show the worker's floor is on its history, so the family is synced up
- * to it first): nothing of the family is deleted. The guard handed straight
- * back is the floor's own, so this never meets GUARD_AHEAD until PR 4 keeps
- * one; that store must accept up to a guard ahead before wiping, or fail closed.
+ * The worker lets go of a family (docs/optional-verification.md 2.8), store
+ * before delete: it drops nothing while the guard this device holds does not
+ * cover the highest chain the session accepted, and hands that guard back
+ * instead; it is stored here (merged, never lower, under the account's lock)
+ * and the worker asked again with what is stored then. The caller deletes
+ * nothing of the family unless this says the worker forgot it. A guard that
+ * cannot be stored throws (the wipe waits, and the family says it couldn't
+ * save on this device); one that could not be read over a floor throws too,
+ * and the floor's guard waits for the entry to read again. A held guard that
+ * disagrees with the worker's floor (GUARD_CONFLICT) or is past it
+ * (GUARD_AHEAD) is the worker's refusal, thrown: nothing of the family goes.
  */
 export async function forgetInWorker(ctx: GroupContext, groupId: string): Promise<boolean> {
     const checkedAt = new Date().toISOString();
-    const first = await ctx.rpc('groupForget', { groupId, checkedAt });
-    if (first.guard === null) return true;
-    const again = await ctx.rpc('groupForget', { groupId, guard: first.guard, checkedAt });
-    // An acceptance committed in between: the wipe waits for the next answer.
-    return again.guard === null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+        const answer = await ctx.rpc('groupForget', {
+            groupId,
+            guard: await heldGuard(ctx, groupId),
+            checkedAt,
+        });
+        if (answer.guard === null) return true;
+        if (answer.unreadable) throw new GuardUnreadableError();
+        await keepGuard(ctx, groupId, answer.guard, undefined, { release: false });
+    }
+    // An acceptance committed in between, every time: the wipe waits for the next answer.
+    return false;
 }
 
 /*
@@ -499,8 +573,13 @@ export async function syncLocked(
             const row = await ctx.store.chain(ctx.userId, groupId);
             const { settings } = await ctx.settings.read();
             const pinned = settings.groups?.[groupId] ?? null;
-            const creating = row || pinned ? null : (options.creating ?? null);
-            if (!row && !pinned && !creating) return { status: 'unchecked', notices };
+            // A creation interrupted after its guard was stored and before its record (2.8): the
+            // guard marks the family now, so it is accepted against that, as after a join's crash
+            // at the same point, and the seed vouches for nothing more. (An unreadable guard
+            // counts as a mark too: the worker answers it, never the seed.)
+            const guarded = options.creating ? (await heldGuard(ctx, groupId)) !== null : false;
+            const creating = row || pinned || guarded ? null : (options.creating ?? null);
+            if (!row && !pinned && !creating && !guarded) return { status: 'unchecked', notices };
             const accepted = await acceptServed(ctx, groupId, { creating, owner: options.owner });
             if (accepted.status === 'record-unreadable') {
                 // Deleted: once more without it, against the settings pin (or unchecked).
@@ -508,7 +587,10 @@ export async function syncLocked(
                 continue;
             }
             if (accepted.status === 'fork') return accepted;
-            return await afterAccept(ctx, groupId, accepted, notices);
+            // The creator's own entry (`owner`) finishing: its seed vouched for the family.
+            return await afterAccept(ctx, groupId, accepted, notices, {
+                created: Boolean(options.owner),
+            });
         }
         throw new Error('This device’s saved check of the family could not be opened.');
     } catch (error) {

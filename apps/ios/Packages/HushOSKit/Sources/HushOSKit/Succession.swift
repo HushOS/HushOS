@@ -201,7 +201,7 @@ extension Vault {
         case .recheck, .changed: return .changed
         case .succession: break
         }
-        let links = try await Auth.succession(of: pin.userId)
+        let links = try await Auth.succession(of: pin.userId, as: session)
         let decision = pin.follow(served, links: links)
         guard case .followed(let next) = decision else { return decision }
         try await updateSettings { settings in

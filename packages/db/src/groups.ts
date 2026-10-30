@@ -103,8 +103,16 @@ export type SignedStatementInput = {
     signerSignature: Buffer;
 };
 
-/* A roster entry the roster changed (`sinceVersion` is its version), as parsed. */
-export type EntryChange = { userId: string; status: 'active' | 'left'; roles: GroupRole[] };
+/*
+ * A roster entry the roster changed (`sinceVersion` is its version), as parsed;
+ * `rekeyed` when the roster before listed them with other keys.
+ */
+export type EntryChange = {
+    userId: string;
+    status: 'active' | 'left';
+    roles: GroupRole[];
+    rekeyed?: boolean;
+};
 
 /*
  * Brands only @hushos/groups mints: after the crypto core accepted the
@@ -1803,7 +1811,22 @@ async function applyRoster(
         } else if (change.status === 'active') {
             if (member?.state !== 'active') membersChanged('entry-not-member');
             if (!sameRoles(member!.roles, change.roles)) {
-                if (route.kind !== 'member' || change.userId !== target) invalid('role-change');
+                /*
+                 * Roles change on the member route, for its target, with one exception: a
+                 * Continue on account changes (docs/optional-verification.md 6.9) lets several
+                 * members back in on one roster, with new keys, and a manager among them loses
+                 * `members` until checked (3.6). So an entry re-keyed on this roster may lose
+                 * `members`, and only that, on POST rosters.
+                 */
+                const continued =
+                    route.kind === 'roster' &&
+                    change.rekeyed === true &&
+                    sameRoles(
+                        member!.roles.filter((role) => role !== 'members'),
+                        change.roles,
+                    );
+                if (!continued && (route.kind !== 'member' || change.userId !== target))
+                    invalid('role-change');
                 await tx
                     .update(groupMemberships)
                     .set({ roles: change.roles, updatedAt: now })
