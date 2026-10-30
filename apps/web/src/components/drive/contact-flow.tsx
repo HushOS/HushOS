@@ -82,6 +82,10 @@ export function ContactFlow({
                                 });
                             else onDone();
                         }}
+                        // Already in Contacts (added since the mark was drawn): the check the mark offered.
+                        onAlready={(pin) =>
+                            setStep({ kind: 'check', person: { email: pin.email, name: pin.name } })
+                        }
                         onChanged={(change) => setStep({ kind: 'changed', change })}
                     />
                 </>
