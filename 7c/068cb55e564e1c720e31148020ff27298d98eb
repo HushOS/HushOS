@@ -1,0 +1,23 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Succession.swift
+  s_566b8e0c4467a4::t_f62cc1777c1cdc 196-212,215-220,223-226,230-240,243-247
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Identity.swift
+  s_566b8e0c4467a4::t_0e0bea0ad4a61d 231-232,234,246,295-296
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ContactGuardTests.swift
+  s_566b8e0c4467a4::t_3898e28ba5cbfe 685-725
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7c068cb55e564e1c720e31148020ff27298d98eb",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
