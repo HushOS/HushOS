@@ -46,6 +46,7 @@ import {
 } from './api';
 import { MAX_FOLDER_BATCH, ROOT_NAME } from './protocol';
 import {
+    GranteeRefusedError,
     signatureFormFor,
     type NodeIntegrity,
     type RecordIntegrity,
@@ -277,7 +278,8 @@ export type DriveClientOptions = {
      * Decides which keys a share is sealed to when the server, not the person,
      * names the grantee: on rotation and when re-sealing older shares. Returns
      * the pinned X25519 key and the KEM key the pin vouches for, or null for
-     * none; throws to refuse a served key that differs from the pin.
+     * none; throws GranteeRefusedError to refuse the person (a served key that
+     * differs from the pin, nobody pinned), anything else when it couldn't check.
      */
     trustGrantee?: (granteeUserId: string, served: ServedIdentity) => Promise<TrustedGrantee>;
     /*
@@ -1741,6 +1743,9 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                                     // A share either refuses keeps its old envelope, which the
                                     // rotation leaves unopenable: closed, never re-sealed to someone
                                     // the person did not share with or a key they did not vouch for.
+                                    // Only a verdict on the grantee leaves them out (the server then
+                                    // revokes their share); any other failure stops the rotation
+                                    // before this batch is sent, and its retry takes over.
                                     if (!ledger.shares[n.id]?.includes(share.granteeUserId))
                                         return null;
                                     if (!options.trustGrantee) return null;
@@ -1750,8 +1755,9 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                                             share.granteeUserId,
                                             share.grantee,
                                         );
-                                    } catch {
-                                        return null;
+                                    } catch (error) {
+                                        if (error instanceof GranteeRefusedError) return null;
+                                        throw error;
                                     }
                                     return {
                                         id: share.id,

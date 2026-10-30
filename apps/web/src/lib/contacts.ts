@@ -21,6 +21,7 @@ import type { ServedIdentity } from '@hushos/drive/api';
 import type { SharingLedger, TrustedGranter, TrustedGrantee } from '@hushos/drive/client';
 import {
     comparePin,
+    GranteeRefusedError,
     granterKeysOf,
     keysPassedThrough,
     pinAfterSuccession,
@@ -669,7 +670,8 @@ function sealOlderGuard(userId: string) {
  * paused until the person continues or checks (2.4). Said calmly wherever it
  * is met, as the same notice (components/drive/account-changed.tsx).
  */
-export class AccountChangedError extends Error {
+/* A verdict on the person (GranteeRefusedError): a rotation leaves them out, an act shows the notice. */
+export class AccountChangedError extends GranteeRefusedError {
     override name = 'AccountChangedError';
     constructor(
         readonly contactId: string,
@@ -1661,10 +1663,13 @@ export async function trustGrantee(
     return withGuardLock(userId, async () => {
         const standing = await stand(userId, granteeUserId, served, { act: true, follow });
         if (standing.kind === 'new' || (standing.kind === 'changed' && standing.pin === null))
-            throw new Error('This person is not in your contacts. Add them before sharing.');
-        if (standing.kind === 'not-upgraded') throw new Error(notUpgradedWords(standing.pin.name));
+            throw new GranteeRefusedError(
+                'This person is not in your contacts. Add them before sharing.',
+            );
+        if (standing.kind === 'not-upgraded')
+            throw new GranteeRefusedError(notUpgradedWords(standing.pin.name));
         if (standing.kind === 'succession')
-            throw new Error(
+            throw new GranteeRefusedError(
                 `${firstNameOf(standing.pin.name)} updated their account. Share with them again to follow it.`,
             );
         if (standing.kind === 'changed') {
@@ -1674,7 +1679,8 @@ export async function trustGrantee(
         }
         // comparePin said `same` (or the pin followed to them): the served ML-KEM key is the one
         // the version 3 pin's digest names.
-        if (!served.kemPublicKey) throw new Error(notUpgradedWords(standing.pin.name));
+        if (!served.kemPublicKey)
+            throw new GranteeRefusedError(notUpgradedWords(standing.pin.name));
         return {
             encryptionPublicKey: standing.pin.encryptionPublicKey,
             kemPublicKey: served.kemPublicKey,
