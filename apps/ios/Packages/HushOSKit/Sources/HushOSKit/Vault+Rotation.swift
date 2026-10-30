@@ -137,6 +137,20 @@ extension DriveAPI {
 
 extension Vault {
     /*
+     * Whether a grantee is left out of a rotation for `error`: only a verdict on them (their account changed, they're
+     * not in Contacts, they can't be sealed to, a succession not followed), never a failure that says nothing about
+     * them, which a later attempt may not meet.
+     */
+    static func leavesOut(_ error: Error) -> Bool {
+        if error is AccountChangedError { return true }
+        guard let contact = error as? ContactError else { return false }
+        switch contact {
+        case .unpinned, .changed, .notUpgraded, .notFollowed: return true
+        case .moved, .message: return false
+        }
+    }
+
+    /*
      * Rotates the subtree under `item`. Shares the pins no longer vouch for are left out and
      * named in the outcome, so the person sees who lost access, rather than sealing to X25519
      * alone or to a key nobody checked.
@@ -260,7 +274,10 @@ extension Vault {
                             sealing = try await trustGrantee(grantee, follow: false)
                             granteeKeys[grantee.trustKey] = sealing
                         }
-                    } catch {
+                    } catch where Self.leavesOut(error) {
+                        // Left out, the server revokes their share: only a verdict on the person may do that. Anything else (the
+                        // guard couldn't be read or written, the pin moved meanwhile, no network) stops the rotation before this
+                        // batch is sent, and it is tried again.
                         let reason = ErrorWords.say(error, otherwise: "Their keys couldn’t be checked.") ?? "Their keys couldn’t be checked."
                         if !outcome.skipped.contains(reason) { outcome.skipped.append(reason) }
                         continue

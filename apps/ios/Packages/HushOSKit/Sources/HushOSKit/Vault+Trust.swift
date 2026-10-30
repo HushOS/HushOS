@@ -545,7 +545,7 @@ extension Vault {
             case .notUpgraded(let pin):
                 throw ContactError.notUpgraded(pin.displayName)
             case .succession(let pin):
-                throw ContactError.message("\(pin.firstName) updated their account. Share with them again to follow it.")
+                throw ContactError.notFollowed("\(pin.firstName) updated their account. Share with them again to follow it.")
             case .changed(.some(let pin), _, _):
                 throw AccountChangedError(change: note(AccountChange(contactId: pin.userId, name: pin.name, email: pin.email)))
             case .ok(let pin, _, _):

@@ -611,6 +611,59 @@ extension OnFakeDrive {
             #expect(outcome.rotated == 1 && outcome.skipped.contains("Maya’s account changed."))
         }
 
+        @Test func aRotationThatCannotReadTheGuardStopsBeforeSendingAndLeavesNobodyOut() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let phone = await phone(server)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            // A file shared with Maya, in the owner's own drive.
+            let workspace = UUID().uuidString.lowercased()
+            let nodeId = UUID().uuidString.lowercased()
+            let workspaceKey = try randomBytes(length: 32)
+            await phone.vault.adopt(workspace: WorkspaceView(workspaceId: workspace, changeSeq: nil, grant: nil, root: nil), key: workspaceKey)
+            let nodeKey = try randomBytes(length: 32)
+            let metadata = NodeMetadata(name: "plan.md", mime: nil, size: 3, modified: nil, attributes: [:])
+            let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace, nodeId: nodeId, metadataVersion: 1), nodeKey: nodeKey, metadata: metadata)
+            let node: [String: Any] = ["id": nodeId, "workspaceId": workspace, "kind": "file", "keyEpoch": 1, "parentKeyEpoch": 1, "keyEnvelope": "k",
+                                       "metadataVersion": 1, "metadataEnvelope": base64urlEncode(bytes: sealed)]
+            let item = try await phone.vault.adopt(try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: node)),
+                                                   nodeKey: nodeKey, metadata: metadata, in: workspace)
+            var document = try server.document(root: root)
+            document["sharing"] = ["shares": [nodeId: [maya]], "links": [String: Any]()]
+            try server.replace(document, root: root)
+            let served = try #require(server.people["maya@example.com"]).identity
+            nonisolated(unsafe) var sent: [[String: Any]] = []
+            server.routes = { method, path, body in
+                switch (method, path) {
+                case ("POST", "/api/drive/nodes/\(nodeId)/rotation"):
+                    return (200, ["rotation": ["nodeId": nodeId, "targetEpoch": 2]])
+                case ("GET", "/api/drive/nodes/\(nodeId)/rotation/work"):
+                    var entry = node
+                    entry["depth"] = 0
+                    entry["versions"] = [Any]()
+                    entry["links"] = [Any]()
+                    entry["shares"] = [["id": "share-1", "granteeUserId": self.maya, "grantee": [
+                        "keyVersion": served.keyVersion, "identityVersion": Int(served.version), "encryptionPublicKey": served.encryptionPublicKey,
+                        "signingPublicKey": served.signingPublicKey, "mlDsaPublicKey": served.mlDsa!.publicKey, "kemPublicKey": served.kem!.publicKey,
+                        "keysSignature": served.keysSignature!,
+                    ]]]
+                    let done = !sent.isEmpty
+                    return (200, ["rotation": ["nodeId": nodeId, "targetEpoch": 2], "nodes": done ? [] : [entry], "nextCursor": NSNull(), "done": done])
+                case ("POST", "/api/drive/nodes/\(nodeId)/rotation/nodes"):
+                    sent += body["nodes"] as? [[String: Any]] ?? []
+                    return (200, ["results": [["id": nodeId, "status": "ok"]]])
+                default:
+                    return nil
+                }
+            }
+            // Whom to trust loaded before the disk went bad; then the guard can't be read.
+            await phone.vault.adopt(signers: try TrustedSigners(userId: me, identities: [try identityOpen(userId: me, accountKey: root, envelope: own)], pins: []))
+            try Data("damaged".utf8).write(to: phone.guardStore.file)
+            // Left out, Maya's share would be revoked by the server: the rotation stops instead, having sent nothing.
+            await #expect(throws: GuardError.unreadable) { _ = try await phone.vault.rotate(item) }
+            #expect(sent.isEmpty)
+        }
+
         @Test func aGuardWriteThatFailsStopsTheActAndTheNextOneSettlesIt() async throws {
             defer { done() }
             let server = server(maya: try makeIdentity(maya).envelope)
@@ -876,6 +929,8 @@ final class ContactServer: @unchecked Sendable {
     var lookups = 0
     var settingsReads = 0
     var resealed: [String: String] = [:]
+    /* Any other route a test answers itself (a rotation's), by method, path and JSON body; nil passes it on. */
+    var routes: ((String, String, [String: Any]) -> (Int, [String: Any])?)?
     private let lock = NSLock()
 
     init(me: String, identity: IdentityEnvelope) {
@@ -965,6 +1020,7 @@ final class ContactServer: @unchecked Sendable {
                 let id = path.split(separator: "/")[3]
                 return (200, ["links": links[String(id)] ?? []])
             }
+            if let answered = routes?(request.httpMethod ?? "GET", path, json) { return answered }
             return (404, ["message": "Not here."])
         }
     }

@@ -116,6 +116,8 @@ public enum ContactError: Error, LocalizedError, Equatable {
     case notUpgraded(String)
     /* Another device (or process) moved this person's pin between the read an act was decided over and its save. */
     case moved
+    /* Their keys moved on by a succession nobody followed here yet: sharing with them again (the person's act) follows it. */
+    case notFollowed(String)
     public var errorDescription: String? {
         switch self {
         case .unpinned: return "This person is not in your contacts. Add them before sharing."
@@ -124,7 +126,7 @@ public enum ContactError: Error, LocalizedError, Equatable {
             let first = name.split(separator: " ").first.map(String.init) ?? name
             return "\(first) needs to sign in to HushOS once more before you can share with them."
         case .moved: return GuardWords.moved
-        case .message(let text): return text
+        case .message(let text), .notFollowed(let text): return text
         }
     }
 }
