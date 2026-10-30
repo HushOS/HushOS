@@ -489,11 +489,15 @@ private fun PersonSheet(model: DriveViewModel, item: Opened, share: OwnedShare, 
     }
     step?.let { shown ->
         ContactStepSheet(model, shown, resolved = { settled = true }) {
-            step = null
+            // The role a changed account stopped belongs to this Review only: dismissed unsettled, it is dropped, so a
+            // later, separate Check it's Maya never grants it.
+            val role = if (settled) waiting else null
+            val wasSettled = settled
+            step = null; settled = false; waiting = null
             // Review settled the change: the role may change again, and one it stopped runs again.
-            if (settled) {
-                settled = false; waitingChange = false; settledChange()
-                waiting?.let { role -> waiting = null; changeRole(role) }
+            if (wasSettled) {
+                waitingChange = false; settledChange()
+                role?.let { changeRole(it) }
             }
         }
         return
