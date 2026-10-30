@@ -415,4 +415,29 @@ class ContactTrustTest {
         assertThrows(Exception::class.java) { vault.rotate(vault.item(file)!!) }
         assertTrue(vault.listChildren(folder).any { it.id == file })
     }
+
+    /*
+     * Batch 1 (the folder) lands; batch 2 (its file, still wrapped under the folder's old key) is lost on the way.
+     * The retry finishes from what the server holds, and every node opens.
+     */
+    @Test
+    fun aRotationStoppedAfterABatchLandedFinishesOnRetryAndEveryNodeOpens() {
+        val folder = server.folder(server.root, "Plans")
+        val file = server.file(folder, "plan.md", ByteArray(64) { 1 })
+        vault.listChildren(server.root)
+        vault.listChildren(folder)
+        server.rotationBatch = 1
+        server.failRotationSends = setOf(2)
+        assertThrows(Exception::class.java) { vault.rotate(vault.item(folder)!!) }
+        assertTrue(server.node(folder).keyEpoch > server.node(file).keyEpoch)
+        // Meanwhile the folder still lists the file it hasn't reached.
+        assertEquals(listOf("plan.md"), vault.listChildren(folder).map { it.name })
+        // Retried from what the vault offers now, as the next Drive open does.
+        vault.rotate(vault.item(folder) ?: vault.resolve(folder))
+        assertEquals(server.node(folder).keyEpoch, server.node(file).keyEpoch)
+        assertEquals(listOf("plan.md"), vault.listChildren(folder).map { it.name })
+        assertEquals("Plans", vault.resolve(folder).name)
+        // Finished: no previous key is kept for anything under it.
+        assertTrue(vault.rotatedKeys.isEmpty())
+    }
 }

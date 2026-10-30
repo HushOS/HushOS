@@ -141,6 +141,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
     internal val catalogueChildren = ConcurrentHashMap<String, MutableSet<String>>()
     /* Node keys and rows by (workspace, node): a share's keys never answer for this account's own nodes (NodeCache). */
     internal val nodes = NodeCache { workspace?.workspaceId }
+    /*
+     * Nodes a rotation on this device re-keyed whose subtree it hasn't finished, by workspace and node: the epoch the
+     * server applied, and the key before it, which children the walk hasn't reached are still wrapped under. Kept from
+     * the moment the server applies a batch until that rotation ends, so a retry (or a listing meanwhile) opens what is left.
+     */
+    internal val rotatedKeys = java.util.concurrent.ConcurrentHashMap<Pair<String, String>, RotatedKey>()
     /* The identity in use and the earlier ones, opened once and kept until forgotten (see OpenedIdentities). */
     private val ownIdentities = OpenedIdentities(
         open = {
@@ -960,6 +966,10 @@ class Vault(internal val context: Context, val api: DriveApi) {
         if (parentId == node.workspaceId) {
             if (node.workspaceId != workspace?.workspaceId) throw ApiError(500, "This folder isn’t in your drive.")
             return workspaceKey ?: throw ApiError(500, "Workspace not opened")
+        }
+        // A rotation here re-keyed the parent and hasn't reached this child: it is still wrapped under the previous key.
+        rotatedKeys[node.workspaceId to parentId]?.let { kept ->
+            if (kept.epoch != node.parentKeyEpoch && kept.previousEpoch == node.parentKeyEpoch) return kept.previousKey
         }
         return nodes.key(node.workspaceId, parentId) ?: throw ApiError(500, "Open the containing folder first.")
     }

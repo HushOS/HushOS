@@ -102,6 +102,9 @@ internal fun Vault.granteeSealer(pins: Settings): (String, ServedIdentity) -> Pa
  * it stops before starting and is tried again later (PendingRotations), never
  * marking everything re-sealed for a network blip.
  */
+/* A node a rotation on this device re-keyed: its applied epoch, and the key its unreached children are wrapped under. */
+internal class RotatedKey(val root: String, val epoch: ULong, val previousEpoch: ULong, val previousKey: ByteArray)
+
 internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): RotationResult {
     val ws = item.node.workspaceId
     val rootId = item.id
@@ -118,6 +121,16 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
     val epochs = HashMap<String, ULong>().apply { nodes.rowsIn(ws).forEach { put(it.id, it.node.keyEpoch) } }
     val seals = ShareSeals.of(context)
     val previous = HashMap<String, Pair<ULong, ByteArray>>()
+    // What an earlier run of this rotation already had applied: those nodes are at their new epoch, and the keys before
+    // it still open what that run didn't reach (their rows were dropped to be read again).
+    for ((at, kept) in rotatedKeys.entries.toList()) {
+        if (at.first != ws) continue
+        // A row read since at another epoch (another device went on) is what holds: the kept key is stale.
+        val row = nodes.row(ws, at.second)
+        if (row != null && row.node.keyEpoch != kept.epoch) { rotatedKeys.remove(at); continue }
+        epochs[at.second] = kept.epoch
+        previous[at.second] = kept.previousEpoch to kept.previousKey
+    }
     var done = 0
     var cursor: String? = null
     var idle = 0
@@ -143,7 +156,7 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
         work.nodes.forEach { checkSuite(it.node.envelopeSuite) }
         val inBatch = work.nodes.map { it.node.id }.toSet()
         for (parentId in work.nodes.mapNotNull { it.node.parentId }.toSet()) {
-            if (parentId !in inBatch && nodes.row(ws, parentId) == null) {
+            if (parentId !in inBatch && nodes.row(ws, parentId) == null && parentId !in epochs) {
                 runCatching { listChildren(parentId) }
                 nodes.row(ws, parentId)?.let { epochs[parentId] = it.node.keyEpoch }
             }
@@ -258,6 +271,17 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
                 applied = kept.size
                 // A node the server refused (or left out) keeps the key it holds there.
                 unstage(staged.keys.filter { it !in kept })
+                // What the server applied is committed here at once, so a later batch that stops has only its own nodes to
+                // undo: their rows (still at the old epoch) are read again, and a re-keyed node's previous key is kept for
+                // the children the walk hasn't reached, past this run if it stops.
+                for (id in staged.keys) {
+                    if (id !in kept) continue
+                    val epoch = epochs[id]
+                    val prior = previous[id]
+                    if (epoch != null && prior != null && prior.first != epoch) rotatedKeys[ws to id] = RotatedKey(rootId, epoch, prior.first, prior.second)
+                    nodes.forget(ws, id)
+                }
+                if (kept.isNotEmpty()) catalogueState = CatalogueState.IDLE
                 for ((id, outcome) in outcomes) if (outcome == "ok") sealedIn[id]?.let { seals.record(it) }
             }
         } catch (stopped: Exception) {
@@ -280,6 +304,8 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
     }
     // Envelopes changed under every folder: what this device listed is stale.
     nodes.forgetRows()
+    // Every node is under the new keys now: no child is left wrapped under a previous one.
+    rotatedKeys.entries.removeIf { (at, kept) -> at.first == ws && kept.root == rootId }
     return RotationResult(done, skipped.toList())
 }
 

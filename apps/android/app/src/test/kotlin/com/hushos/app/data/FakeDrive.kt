@@ -101,6 +101,11 @@ class FakeDrive : AutoCloseable {
     var onNextSettingsGet: (() -> Unit)? = null
     /* Rotation batches are refused with a 500, as a dropped send would leave them (nothing applied). */
     var failRotationSend = false
+    /* At most this many nodes per batch of rotation work (null: all at once), as the server sizes them. */
+    var rotationBatch: Int? = null
+    /* The rotation sends (counted from 1) refused with a 500, as a dropped connection leaves them. */
+    var failRotationSends: Set<Int> = emptySet()
+    private var rotationSends = 0
 
     /* `id` goes to the Trash, as the server keeps it: its parent's listing leaves it out, the trash listing has it. */
     fun trash(id: String) = synchronized(lock) { node(id).trashedAt = "2026-10-30T00:00:00Z"; bump(node(id)) }
@@ -312,7 +317,7 @@ class FakeDrive : AutoCloseable {
 
     private class Upload(val ws: String, val body: JSONObject, val parts: HashMap<Int, ByteArray> = HashMap())
     private val uploads = HashMap<String, Upload>()
-    private class Rotation(val ws: String, val target: Long, val applied: HashSet<String> = HashSet())
+    private class Rotation(val ws: String, val target: Long, val applied: HashSet<String> = HashSet(), var finished: Boolean = false)
     private val rotations = HashMap<String, Rotation>()
 
     private fun answer(exchange: HttpExchange) {
@@ -496,7 +501,8 @@ class FakeDrive : AutoCloseable {
                 ok(JSONObject().put("node", node.json()))
             }
             post && at("drive", "nodes", "*", "rotation") -> {
-                val rotation = Rotation(body.getString("workspaceId"), nextEpoch++)
+                // A rotation still running is resumed, as the server keeps its target and what it applied.
+                val rotation = rotations[segments[2]]?.takeIf { !it.finished } ?: Rotation(body.getString("workspaceId"), nextEpoch++)
                 rotations[segments[2]] = rotation
                 ok(JSONObject().put("rotation", JSONObject().put("targetEpoch", rotation.target)))
             }
@@ -508,17 +514,19 @@ class FakeDrive : AutoCloseable {
                 val queue = ArrayDeque(listOf(node(segments[2])))
                 while (queue.isNotEmpty()) queue.removeFirst().also { order.add(it); queue.addAll(children(it.id)) }
                 val todo = order.filter { it.id !in rotation.applied }
-                val work = todo.map { node ->
+                if (todo.isEmpty()) rotation.finished = true
+                val batch = rotationBatch?.let { todo.take(it) } ?: todo
+                val work = batch.map { node ->
                     node.json().put("versions", JSONArray(listOfNotNull(node.version).map { v ->
                         JSONObject().put("id", v.id).put("objectId", v.objectId).put("contentSuite", v.suite.toInt()).put("contentKeyEnvelope", v.contentKeyEnvelope)
                             .put("plaintextSize", JSONObject.NULL).put("signer", JSONObject().put("id", v.signer)).put("signature", v.signature)
                     })).put("shares", JSONArray(rotationShares[node.id].orEmpty())).put("links", JSONArray())
                 }
                 ok(JSONObject().put("rotation", JSONObject().put("targetEpoch", rotation.target)).put("nodes", JSONArray(work))
-                    .put("nextCursor", JSONObject.NULL).put("done", todo.isEmpty()))
+                    .put("nextCursor", if (batch.size < todo.size) "more" else JSONObject.NULL).put("done", todo.isEmpty()))
             }
             post && at("drive", "nodes", "*", "rotation", "nodes") -> {
-                if (failRotationSend) return 500 to JSONObject().put("message", "The connection dropped")
+                if (failRotationSend || ++rotationSends in failRotationSends) return 500 to JSONObject().put("message", "The connection dropped")
                 val rotation = rotations.getValue(segments[2])
                 val wires = body.getJSONArray("nodes")
                 val results = JSONArray()
