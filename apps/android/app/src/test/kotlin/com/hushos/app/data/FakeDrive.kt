@@ -97,6 +97,8 @@ class FakeDrive : AutoCloseable {
     val rotationShares = HashMap<String, MutableList<JSONObject>>()
     /* Settings reads fail (a 500) once a rotation's work has been listed: a check mid-batch that can't run. */
     var failSettingsOnceWorkListed = false
+    /* Runs once, as the next settings read is answered (another process acting right after it). */
+    var onNextSettingsGet: (() -> Unit)? = null
     private var workListed = false
 
     class Version(
@@ -378,7 +380,9 @@ class FakeDrive : AutoCloseable {
             get && at("auth", "identity", "history") -> ok(JSONObject().put("identities", JSONArray()))
             get && at("auth", "settings") -> {
                 if (failSettingsOnceWorkListed && workListed) return 500 to JSONObject().put("message", "Settings are unavailable")
-                ok(settingsJson())
+                val answer = settingsJson()
+                onNextSettingsGet?.let { hook -> onNextSettingsGet = null; hook() }
+                ok(answer)
             }
             method == "PUT" && at("auth", "settings-key") -> {
                 if (settingsKey != null) return conflict("A settings key is already stored")

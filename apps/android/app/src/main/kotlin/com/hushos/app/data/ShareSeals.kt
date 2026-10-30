@@ -46,6 +46,13 @@ class ShareSeals(private val file: File) {
         get() = synchronized(LOCK) { read().optLong("pending", 0L).takeIf { it >= 1 }?.toULong() }
         set(value) = synchronized(LOCK) { val json = read(); if (value == null) json.remove("pending") else json.put("pending", value.toLong()); write(json) }
 
+    /* Clears the waiting replacement only when it is at most `upTo` (the identity a pass sealed with), under the lock. */
+    fun clearPending(upTo: ULong) = synchronized(LOCK) {
+        val json = read()
+        val waiting = json.optLong("pending", 0L).takeIf { it >= 1 }?.toULong() ?: return@synchronized
+        if (waiting <= upTo) { json.remove("pending"); write(json) }
+    }
+
     /* When the last full pass finished, in epoch milliseconds. */
     var lastPass: Long
         get() = synchronized(LOCK) { read().optLong("lastPass", 0L) }

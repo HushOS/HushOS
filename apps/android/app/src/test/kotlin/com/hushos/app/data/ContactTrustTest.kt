@@ -345,4 +345,24 @@ class ContactTrustTest {
         assertTrue(server.node(folder).keyEpoch > epoch && server.node(file).keyEpoch > epoch)
         assertEquals("plan.md", server.record(file).name)
     }
+
+    @Test
+    fun aReSealPassJudgesARequestOnlyAgainstSettingsAtLeastAsNewAsIt() {
+        val seals = ShareSeals.of(context)
+        // A Continue lands right after the pass read the settings: its request must not be judged against them.
+        server.onNextSettingsGet = { seals.queue(server.grace.id) }
+        vault.resealLedgerShares()
+        assertTrue(server.grace.id.lowercase() in seals.queued)
+    }
+
+    @Test
+    fun aReSealPassNeverClearsAKeyReplacementThatStartedWhileItRan() {
+        val seals = ShareSeals.of(context)
+        assertNull(seals.pending)
+        // This account replaces its keys while a pass that read the older ones runs.
+        server.onNextSettingsGet = { seals.pending = 5uL }
+        vault.resealLedgerShares()
+        assertEquals(5uL, seals.pending)
+    }
+
 }

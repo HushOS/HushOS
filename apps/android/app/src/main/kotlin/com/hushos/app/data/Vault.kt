@@ -552,11 +552,13 @@ class Vault(internal val context: Context, val api: DriveApi) {
      */
     internal fun resealLedgerShares(progress: (done: Int, total: Int) -> Unit = { _, _ -> }): RotationResult {
         val seals = ShareSeals.of(context)
+        // People whose new keys were accepted or followed: everything shared with them is sealed again, whatever the record says.
+        // Read before the settings, so every request this pass may acknowledge is judged against settings at least as new as
+        // itself (a Continue queues before its save): one that lands after this read is never consumed by an older view.
+        val queued = seals.queued
         val settings = loadSettings()
         val ledger = settings.ledger
         val keys = identityKeys()
-        // People whose new keys were accepted or followed: everything shared with them is sealed again, whatever the record says.
-        val queued = seals.queued
         val skipped = LinkedHashSet<String>()
         val served = HashMap<String, Contact?>()
         val sealTo = granteeSealer(settings)
@@ -613,7 +615,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
         // Everyone queued whose shares were all sealed again (or who has none left) is let go; the rest stay for the next pass.
         seals.unqueue(queued.filterKeys { it !in failedFor })
         if (failed > 0) skipped.add("Some shares couldn’t be sealed again under your current keys. They’re tried again the next time you open HushOS.")
-        else { seals.pending = null; seals.lastPass = System.currentTimeMillis() }
+        else {
+            // Only a key replacement this pass sealed for (its identity or an older one): one begun while it ran waits for its own.
+            seals.clearPending(upTo = keys.keyVersion)
+            seals.lastPass = System.currentTimeMillis()
+        }
         return RotationResult(done, skipped.toList())
     }
 
