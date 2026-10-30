@@ -1,0 +1,20 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/NodeCache.kt
+  h_f7ba60a6997566 56-60
+apps/android/app/src/main/kotlin/com/hushos/app/data/Rotation.kt
+  h_f7ba60a6997566 154-167,170,172-268
+apps/android/app/src/test/kotlin/com/hushos/app/data/ContactTrustTest.kt
+  h_f7ba60a6997566 323-347
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  h_f7ba60a6997566 97-100,379-382,493,503
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dade2dcd30afa47f21a9ca9c6ec73d4efe7c4d25",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
