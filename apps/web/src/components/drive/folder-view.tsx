@@ -993,7 +993,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                     )}
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                    <fieldset className="m-0 flex min-w-0 items-center rounded-md border border-input bg-card p-0.5">
+                    <fieldset className="m-0 flex min-w-0 items-center rounded-md border border-input bg-panel p-0.5">
                         <legend className="sr-only">View</legend>
                         {(
                             [

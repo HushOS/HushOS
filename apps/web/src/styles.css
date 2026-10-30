@@ -98,6 +98,7 @@
     --color-background: var(--background);
     --color-foreground: var(--foreground);
     --color-card: var(--card);
+    --color-panel: var(--panel);
     --color-card-foreground: var(--card-foreground);
     --color-popover: var(--popover);
     --color-popover-foreground: var(--popover-foreground);
@@ -166,6 +167,8 @@
     --foreground: var(--ink);
 
     --card: var(--surface);
+    /* The app's page panel, which the list and its header sit on: the surface in the light, the ground in the dark. */
+    --panel: var(--surface);
     --card-foreground: var(--ink);
     --popover: var(--surface);
     --popover-foreground: var(--ink);
@@ -270,15 +273,19 @@
 }
 
 /*
- * In the dark, the ground is darker than the panel, so a hover or a quiet fill
- * drawn in it reads as pressed in. There, muted is a lift from the panel instead.
+ * In the dark the app's panel is the black ground, as Apple's Files app is, and only its
+ * hairline edge marks it on a desk; cards, menus and dialogs stay the surface above it.
+ * A hover or a quiet fill drawn in the ground would vanish there, so muted is a lift
+ * from the surface instead, which reads as raised on the black and on a card alike.
  */
 @media (prefers-color-scheme: dark) {
     :root:not(.light) {
+        --panel: var(--ground);
         --muted: color-mix(in oklab, var(--ink) 7%, var(--surface));
     }
 }
 :root.dark {
+    --panel: var(--ground);
     --muted: color-mix(in oklab, var(--ink) 7%, var(--surface));
 }
 
