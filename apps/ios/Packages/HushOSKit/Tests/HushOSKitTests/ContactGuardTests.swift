@@ -684,6 +684,93 @@ extension OnFakeDrive {
             #expect(sent.nodes.isEmpty)
         }
 
+        @Test func aRotationStoppedMidBatchLeavesEveryKeyAsItWasAndARetryRotatesTheWholeBatch() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let phone = await phone(server)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            // A folder and a file in it, one batch: the folder is sealed first, then the file's share to Maya is checked.
+            let workspace = UUID().uuidString.lowercased()
+            let workspaceKey = try randomBytes(length: 32)
+            await phone.vault.adopt(workspace: WorkspaceView(workspaceId: workspace, changeSeq: nil, grant: nil, root: nil), key: workspaceKey)
+            let folderId = UUID().uuidString.lowercased()
+            let fileId = UUID().uuidString.lowercased()
+            let folderKey = try randomBytes(length: 32)
+            let fileKey = try randomBytes(length: 32)
+            func node(_ id: String, parent: String?, kind: String, key: Data, name: String) throws -> (wire: [String: Any], metadata: NodeMetadata) {
+                let metadata = NodeMetadata(name: name, mime: nil, size: 3, modified: nil, attributes: [:])
+                let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
+                let wrapped = try nodeWrap(ctx: NodeKeyContext(workspaceId: workspace, nodeId: id, parentId: parent ?? workspace, parentKeyEpoch: 1, keyEpoch: 1),
+                                           parentKey: parent == nil ? workspaceKey : folderKey, nodeKey: key)
+                var wire: [String: Any] = ["id": id, "workspaceId": workspace, "kind": kind, "keyEpoch": 1, "parentKeyEpoch": 1,
+                                           "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataVersion": 1,
+                                           "metadataEnvelope": base64urlEncode(bytes: sealed)]
+                if let parent { wire["parentId"] = parent }
+                return (wire, metadata)
+            }
+            let folder = try node(folderId, parent: nil, kind: "folder", key: folderKey, name: "Plans")
+            let file = try node(fileId, parent: folderId, kind: "file", key: fileKey, name: "plan.md")
+            let folderItem = try await phone.vault.adopt(try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: folder.wire)),
+                                                         nodeKey: folderKey, metadata: folder.metadata, in: workspace)
+            _ = try await phone.vault.adopt(try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: file.wire)),
+                                            nodeKey: fileKey, metadata: file.metadata, in: workspace)
+            var document = try server.document(root: root)
+            var sharing = document["sharing"] as? [String: Any] ?? [:]
+            sharing["shares"] = [fileId: [maya]]
+            sharing["links"] = sharing["links"] ?? [String: Any]()
+            document["sharing"] = sharing
+            try server.replace(document, root: root)
+            let served = try #require(server.people["maya@example.com"]).identity
+            let sent = Sent()
+            let maya = self.maya
+            server.routes = { method, path, body in
+                switch (method, path) {
+                case ("POST", "/api/drive/nodes/\(folderId)/rotation"):
+                    return (200, ["rotation": ["nodeId": folderId, "targetEpoch": 2]])
+                case ("GET", "/api/drive/nodes/\(folderId)/children"):
+                    // As the server still holds them: nothing of an unsent batch reaches it.
+                    return (200, ["folder": folder.wire, "ancestors": [Any](), "children": [file.wire], "nextCursor": NSNull()])
+                case ("GET", "/api/drive/nodes/\(folderId)/rotation/work"):
+                    var first = folder.wire
+                    first["depth"] = 0
+                    first["versions"] = [Any]()
+                    first["links"] = [Any]()
+                    first["shares"] = [Any]()
+                    var second = file.wire
+                    second["depth"] = 1
+                    second["versions"] = [Any]()
+                    second["links"] = [Any]()
+                    second["shares"] = [["id": "share-1", "granteeUserId": maya, "grantee": [
+                        "keyVersion": served.keyVersion, "identityVersion": Int(served.version), "encryptionPublicKey": served.encryptionPublicKey,
+                        "signingPublicKey": served.signingPublicKey, "mlDsaPublicKey": served.mlDsa!.publicKey, "kemPublicKey": served.kem!.publicKey,
+                        "keysSignature": served.keysSignature!,
+                    ]]]
+                    let done = !sent.nodes.isEmpty
+                    return (200, ["rotation": ["nodeId": folderId, "targetEpoch": 2], "nodes": done ? [] : [first, second], "nextCursor": NSNull(), "done": done])
+                case ("POST", "/api/drive/nodes/\(folderId)/rotation/nodes"):
+                    let nodes = body["nodes"] as? [[String: Any]] ?? []
+                    sent.nodes += nodes
+                    return (200, ["results": nodes.map { ["id": $0["id"] as? String ?? "", "status": "ok"] }])
+                default:
+                    return nil
+                }
+            }
+            await phone.vault.adopt(signers: try TrustedSigners(userId: me, identities: [try identityOpen(userId: me, accountKey: root, envelope: own)], pins: []))
+            // The file's grantee check fails for no verdict on Maya (the guard can't be read), after the folder was sealed.
+            let guardBytes = try Data(contentsOf: phone.guardStore.file)
+            try Data("damaged".utf8).write(to: phone.guardStore.file)
+            await #expect(throws: GuardError.unreadable) { _ = try await phone.vault.rotate(folderItem) }
+            #expect(sent.nodes.isEmpty)
+            // Nothing was sent, so nothing changed: the folder still opens under the key the server still holds.
+            #expect(await phone.vault.nodeKey(of: folderItem) == folderKey)
+            // The disk is readable again: a retry walks both again from the keys the server holds, and rotates both.
+            try guardBytes.write(to: phone.guardStore.file)
+            let outcome = try await phone.vault.rotate(folderItem)
+            #expect(outcome.rotated == 2)
+            #expect(Set(sent.nodes.compactMap { $0["id"] as? String }) == [folderId, fileId])
+            #expect(sealedShares(sent) == ["share-1"])
+        }
+
         @Test func aRotationSealsToALegacyPinsOwnKeysWhenTheSettingsHaveNoRoomToSaveItsMigration() async throws {
             defer { done() }
             let identity = try makeIdentity(maya)

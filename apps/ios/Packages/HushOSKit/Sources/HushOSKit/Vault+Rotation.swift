@@ -200,6 +200,25 @@ extension Vault {
                 if let known = opened[ref(parentId)] { epochs[parentId] = known.node.keyEpoch }
             }
             var batch: [[String: Any]] = []
+            // What each node of this batch held before it was given a key here: a key becomes the node's own only once the
+            // server applied the batch. Whatever stops it (a grantee check that isn't a verdict, a failure while sealing, a
+            // dropped send) or refuses a node, those nodes get their old keys back, so the vault is as it was and a retry
+            // walks them again from the keys the server holds (the web drops a stopped batch's keys the same way).
+            var staged: [String: (key: Data?, epoch: UInt64?, previous: (epoch: UInt64, key: Data)?)] = [:]
+            func stage(_ id: String) {
+                if staged[id] == nil { staged[id] = (nodeKeys[ref(id)], epochs[id], previous[id]) }
+            }
+            func unstage(_ ids: some Sequence<String>) {
+                for id in ids {
+                    guard let held = staged[id] else { continue }
+                    nodeKeys[ref(id)] = held.key
+                    epochs[id] = held.epoch
+                    previous[id] = held.previous
+                }
+            }
+            var sending = false
+            var applied = 0
+            do {
             for entry in work.nodes {
                 let node = entry.node
                 // Work for another workspace is not this subtree's.
@@ -226,6 +245,7 @@ extension Vault {
                     )
                     wire["keyEnvelope"] = base64urlEncode(bytes: envelope)
                     wire["rotated"] = NSNull()
+                    stage(node.id)
                     nodeKeys[ref(node.id)] = old
                     epochs[node.id] = node.keyEpoch
                     batch.append(wire)
@@ -314,15 +334,26 @@ extension Vault {
                 wire["rotated"] = ["metadataEnvelope": base64urlEncode(bytes: metadataEnvelope), "metadataSignature": metadataSignature,
                                    "versions": versions, "shares": shares, "links": links, "unsealableLinks": unsealable]
                 // From here the node's key is the fresh one; the old one stays reachable for its unrotated children.
+                stage(node.id)
                 previous[node.id] = (node.keyEpoch, old)
                 nodeKeys[ref(node.id)] = fresh
                 epochs[node.id] = target
                 batch.append(wire)
             }
-            var applied = 0
             if !batch.isEmpty {
+                sending = true
                 let results = try await api.rotateNodes(workspaceId: ws, nodeId: rootId, nodes: batch)
-                applied = results.filter { $0.status == "ok" || $0.status == "already" }.count
+                let kept = Set(results.filter { $0.status == "ok" || $0.status == "already" }.map(\.id))
+                applied = kept.count
+                // A node the server refused (or left out) keeps the key it holds there.
+                unstage(staged.keys.filter { !kept.contains($0) })
+            }
+            } catch {
+                unstage(staged.keys)
+                // A send whose answer never came may have landed: those nodes are read from the server again, under
+                // whichever keys it holds, rather than trusted from what this vault opened before.
+                if sending { for id in staged.keys { opened[ref(id)] = nil } }
+                throw error
             }
             outcome.rotated += applied
             progress(outcome.rotated)
