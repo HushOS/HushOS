@@ -271,7 +271,7 @@ extension Vault {
                         // person and served keys, so a later batch serving other keys for them is judged again, never sealed to the old.
                         let grantee = Contact(userId: share.granteeUserId, served: share.grantee, name: pin.name, email: pin.email)
                         if let known = granteeKeys[grantee.trustKey] { sealing = known } else {
-                            sealing = try await trustGrantee(grantee, follow: false)
+                            sealing = try await trustGrantee(grantee, follow: false, sealUnsaved: true)
                             granteeKeys[grantee.trustKey] = sealing
                         }
                     } catch where Self.leavesOut(error) {

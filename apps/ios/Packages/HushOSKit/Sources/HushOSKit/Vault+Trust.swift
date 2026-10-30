@@ -277,7 +277,7 @@ extension Vault {
      * looks a succession up, only on the person's act, so the server cannot learn whom this phone
      * pins by watching it look people up. In the guard's turn.
      */
-    func stand(_ contact: Contact, act: Bool, follow: Bool, pass: MountPass? = nil) async throws -> Standing {
+    func stand(_ contact: Contact, act: Bool, follow: Bool, pass: MountPass? = nil, sealUnsaved: Bool = false) async throws -> Standing {
         // A mounting pass reads the settings once for all its shares, and again only after something saved them.
         let settings: Settings
         if let read = pass?.settings { settings = read } else {
@@ -307,7 +307,15 @@ extension Vault {
             }
             if !act { return .ok(pin: upgraded, entry: entry, followed: false) }
             let before = current
-            (current, entry) = try await commitTrust(id, entry: entry, target: upgraded) { try $0.setPin(upgraded, ifOver: before) }
+            do {
+                (current, entry) = try await commitTrust(id, entry: entry, target: upgraded) { try $0.setPin(upgraded, ifOver: before) }
+            } catch ContactError.message(let words) where words == Settings.contactsFull && sealUnsaved {
+                // A rotation that can't save the migration for room seals to the keys the legacy pin already holds, as
+                // before first-seen pins existed, saving and remembering nothing: no new trust. Left out, the server would
+                // revoke them for the owner's full settings; stopped, the rotation would never finish.
+                guard let served = contact.commitment, upgraded.commitment == served else { throw ContactError.message(words) }
+                return .ok(pin: upgraded, entry: entry, followed: false)
+            }
             pass?.settings = nil
             pin = current
             trust = .seen
@@ -536,9 +544,9 @@ extension Vault {
      * served keys must be the pinned ones, the pin must agree with this phone's guard, and a legacy
      * pin becomes first-seen first. Anything else shares nothing.
      */
-    func trustGrantee(_ contact: Contact, follow: Bool) async throws -> (publicKey: Data, kem: Data) {
+    func trustGrantee(_ contact: Contact, follow: Bool, sealUnsaved: Bool = false) async throws -> (publicKey: Data, kem: Data) {
         try await withGuardTurn {
-            let standing = try await stand(contact, act: true, follow: follow)
+            let standing = try await stand(contact, act: true, follow: follow, sealUnsaved: sealUnsaved)
             switch standing {
             case .new, .changed(nil, _, _):
                 throw ContactError.unpinned

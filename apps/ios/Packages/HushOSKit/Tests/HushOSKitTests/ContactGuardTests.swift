@@ -611,16 +611,17 @@ extension OnFakeDrive {
             #expect(outcome.rotated == 1 && outcome.skipped.contains("Maya’s account changed."))
         }
 
-        @Test func aRotationThatCannotReadTheGuardStopsBeforeSendingAndLeavesNobodyOut() async throws {
-            defer { done() }
-            let server = server(maya: try makeIdentity(maya).envelope)
-            let phone = await phone(server)
-            _ = try await phone.vault.addContact(email: "maya@example.com")
-            // A file shared with Maya, in the owner's own drive.
+        /* What a rotation's batches sent, as the server took them. */
+        final class Sent: @unchecked Sendable { var nodes: [[String: Any]] = [] }
+
+        /*
+         * A file shared with Maya in the owner's own drive (its ledger holds the share), and a server that rotates it and
+         * records each batch. Whom to trust is loaded already, so the rotation starts whatever the guard says.
+         */
+        func sharedFile(_ phone: Phone, _ server: ContactServer) async throws -> (item: Opened, sent: Sent) {
             let workspace = UUID().uuidString.lowercased()
             let nodeId = UUID().uuidString.lowercased()
-            let workspaceKey = try randomBytes(length: 32)
-            await phone.vault.adopt(workspace: WorkspaceView(workspaceId: workspace, changeSeq: nil, grant: nil, root: nil), key: workspaceKey)
+            await phone.vault.adopt(workspace: WorkspaceView(workspaceId: workspace, changeSeq: nil, grant: nil, root: nil), key: try randomBytes(length: 32))
             let nodeKey = try randomBytes(length: 32)
             let metadata = NodeMetadata(name: "plan.md", mime: nil, size: 3, modified: nil, attributes: [:])
             let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace, nodeId: nodeId, metadataVersion: 1), nodeKey: nodeKey, metadata: metadata)
@@ -629,10 +630,16 @@ extension OnFakeDrive {
             let item = try await phone.vault.adopt(try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: node)),
                                                    nodeKey: nodeKey, metadata: metadata, in: workspace)
             var document = try server.document(root: root)
-            document["sharing"] = ["shares": [nodeId: [maya]], "links": [String: Any]()]
+            var sharing = document["sharing"] as? [String: Any] ?? [:]
+            sharing["shares"] = [nodeId: [maya]]
+            sharing["links"] = sharing["links"] ?? [String: Any]()
+            document["sharing"] = sharing
+            document["version"] = document["version"] ?? 2
+            document["contacts"] = document["contacts"] ?? [String: Any]()
             try server.replace(document, root: root)
             let served = try #require(server.people["maya@example.com"]).identity
-            nonisolated(unsafe) var sent: [[String: Any]] = []
+            let sent = Sent()
+            let maya = self.maya
             server.routes = { method, path, body in
                 switch (method, path) {
                 case ("POST", "/api/drive/nodes/\(nodeId)/rotation"):
@@ -642,26 +649,61 @@ extension OnFakeDrive {
                     entry["depth"] = 0
                     entry["versions"] = [Any]()
                     entry["links"] = [Any]()
-                    entry["shares"] = [["id": "share-1", "granteeUserId": self.maya, "grantee": [
+                    entry["shares"] = [["id": "share-1", "granteeUserId": maya, "grantee": [
                         "keyVersion": served.keyVersion, "identityVersion": Int(served.version), "encryptionPublicKey": served.encryptionPublicKey,
                         "signingPublicKey": served.signingPublicKey, "mlDsaPublicKey": served.mlDsa!.publicKey, "kemPublicKey": served.kem!.publicKey,
                         "keysSignature": served.keysSignature!,
                     ]]]
-                    let done = !sent.isEmpty
+                    let done = !sent.nodes.isEmpty
                     return (200, ["rotation": ["nodeId": nodeId, "targetEpoch": 2], "nodes": done ? [] : [entry], "nextCursor": NSNull(), "done": done])
                 case ("POST", "/api/drive/nodes/\(nodeId)/rotation/nodes"):
-                    sent += body["nodes"] as? [[String: Any]] ?? []
+                    sent.nodes += body["nodes"] as? [[String: Any]] ?? []
                     return (200, ["results": [["id": nodeId, "status": "ok"]]])
                 default:
                     return nil
                 }
             }
-            // Whom to trust loaded before the disk went bad; then the guard can't be read.
             await phone.vault.adopt(signers: try TrustedSigners(userId: me, identities: [try identityOpen(userId: me, accountKey: root, envelope: own)], pins: []))
+            return (item, sent)
+        }
+
+        /* The share ids a rotation's batches sealed again. */
+        func sealedShares(_ sent: Sent) -> [String] {
+            sent.nodes.flatMap { (($0["rotated"] as? [String: Any])?["shares"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String } }
+        }
+
+        @Test func aRotationThatCannotReadTheGuardStopsBeforeSendingAndLeavesNobodyOut() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let phone = await phone(server)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            let (item, sent) = try await sharedFile(phone, server)
             try Data("damaged".utf8).write(to: phone.guardStore.file)
             // Left out, Maya's share would be revoked by the server: the rotation stops instead, having sent nothing.
             await #expect(throws: GuardError.unreadable) { _ = try await phone.vault.rotate(item) }
-            #expect(sent.isEmpty)
+            #expect(sent.nodes.isEmpty)
+        }
+
+        @Test func aRotationSealsToALegacyPinsOwnKeysWhenTheSettingsHaveNoRoomToSaveItsMigration() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            let (item, sent) = try await sharedFile(phone, server)
+            // Room for her legacy pin, none for it made first-seen (its ML-DSA digest more).
+            var legacy = pinnedBeforeTheRelease(try pinned(maya, identity.keys, name: "Maya Lind"))
+            legacy.fingerprint = ""
+            var settings = Settings()
+            settings.document = try server.document(root: root)
+            settings.setPin(legacy)
+            settings.document["padding"] = String(repeating: "x", count: Settings.maxBytes - (try settings.bytes()) - 40)
+            try server.replace(try reread(settings), root: root)
+            // Neither left out (revoked for the owner's full settings) nor stopped for good: sealed to the keys she has.
+            let outcome = try await phone.vault.rotate(item)
+            #expect(sealedShares(sent) == ["share-1"] && outcome.skipped.isEmpty)
+            // Nothing saved and nothing remembered: no new trust.
+            #expect(try storedPin(server)?["mlDsaPublicKeyHash"] == nil)
+            #expect(try phone.guardStore.entry(maya) == nil)
         }
 
         @Test func aPinOverHerKeysWithAFingerprintOverOthersBecomesFirstSeenAndActsGoOn() async throws {
