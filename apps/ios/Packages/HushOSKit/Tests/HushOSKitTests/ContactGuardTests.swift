@@ -831,6 +831,39 @@ extension OnFakeDrive {
             #expect(listed.contains(fileId))
         }
 
+        @Test func aPassKeepsSomeoneQueuedWhoseSharedItemIsInTheTrash() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let phone = await phone(server)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            let workspace = UUID().uuidString.lowercased()
+            await phone.vault.adopt(workspace: WorkspaceView(workspaceId: workspace, changeSeq: nil, grant: nil, root: nil), key: try randomBytes(length: 32))
+            let nodeId = UUID().uuidString.lowercased()
+            var document = try server.document(root: root)
+            document["sharing"] = ["shares": [nodeId: [maya]], "links": [String: Any]()]
+            try server.replace(document, root: root)
+            // In the Trash: the server's list of shares leaves it out, as it would a deleted item; the Trash has it.
+            server.sharesMine = []
+            server.routes = { method, path, _ in
+                guard method == "GET", path == "/api/drive/workspaces/\(workspace)/trash" else { return nil }
+                return (200, ["items": [["node": ["id": nodeId, "workspaceId": workspace, "kind": "file", "keyEpoch": 3, "parentKeyEpoch": 1,
+                                                  "keyEnvelope": "k", "metadataVersion": 1, "metadataEnvelope": "m"],
+                                         "ancestors": [Any](), "parentTrashed": false]], "nextCursor": NSNull()])
+            }
+            ResealTo.remove(ResealTo.all)
+            defer { ResealTo.remove(ResealTo.all) }
+            ResealTo.add(maya)
+            _ = try await phone.vault.upgradeShares()
+            // Restored, it would still hold her old keys: she stays owed.
+            #expect(ResealTo.contains(maya))
+            // Deleted for good (in neither list), she is let go.
+            server.routes = { method, path, _ in
+                method == "GET" && path == "/api/drive/workspaces/\(workspace)/trash" ? (200, ["items": [Any](), "nextCursor": NSNull()]) : nil
+            }
+            _ = try await phone.vault.upgradeShares()
+            #expect(!ResealTo.contains(maya))
+        }
+
         @Test func sharingWithSomeoneWhosePinTheCheckMovedSaysTrustMoved() async throws {
             defer { done() }
             let identity = try makeIdentity(maya)

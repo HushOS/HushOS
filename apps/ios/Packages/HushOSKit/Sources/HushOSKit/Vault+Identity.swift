@@ -231,7 +231,7 @@ extension Vault {
         // The re-seals asked for so far: only these are acknowledged at the end, never one asked for while this pass ran.
         let requested = ResealTo.requests
         let reply = try await api.performPublic(try api.requestPublic("/shares/mine"), as: SharedByMeResponse.self)
-        if reply.shares.isEmpty { ResealPending.clear(); ResealTo.acknowledge(requested); return outcome }
+        if reply.shares.isEmpty && requested.isEmpty { ResealPending.clear(); return outcome }
         let settings = try await loadSettings()
         let ledger = settings.ledger
         let keys = try await identityKeys()
@@ -292,10 +292,39 @@ extension Vault {
         }
         // Done, or nothing of theirs left to seal: either way they leave the queue.
         let held = Set(reply.shares.filter { ledger.holdsShare(node: $0.node.id, grantee: $0.grantee.id) }.map { $0.grantee.id.lowercased() })
-        let done = resealedTo.subtracting(failedFor).union(Set(requested.keys).subtracting(held))
+        let unheld = await withNothingInTheTrash(Set(requested.keys).subtracting(held), ledger: ledger)
+        let done = resealedTo.subtracting(failedFor).union(unheld)
         ResealTo.acknowledge(requested.filter { done.contains($0.key) })
         if !unfinished { ResealPending.clear() }
         return outcome
+    }
+
+    /*
+     * Of the people queued with nothing served to seal, those with nothing of theirs in the Trash
+     * either: /shares/mine leaves a trashed item out as it does a deleted one, but restored it would
+     * still hold their old keys, so they stay queued until it is restored (and sealed) or deleted
+     * for good. When the Trash can't be read, everyone the ledger still names stays queued.
+     */
+    func withNothingInTheTrash(_ people: Set<String>, ledger: SharingLedger) async -> Set<String> {
+        let named = ledger.shares.filter { !$0.value.isEmpty && !Set($0.value.map { $0.lowercased() }).isDisjoint(with: people) }
+        guard !named.isEmpty else { return people }
+        guard let trashed = try? await trashedIds() else {
+            return people.subtracting(named.values.flatMap { $0.map { $0.lowercased() } })
+        }
+        return people.subtracting(named.filter { trashed.contains($0.key.lowercased()) }.values.flatMap { $0.map { $0.lowercased() } })
+    }
+
+    /* The ids of this drive's items in the Trash, as the server lists them (a folder's listing leaves them out). */
+    func trashedIds() async throws -> Set<String> {
+        let workspaceId = try await loadWorkspace().workspaceId
+        var ids: Set<String> = []
+        var after: String?
+        repeat {
+            let page = try await api.trashListing(workspaceId: workspaceId, after: after)
+            ids.formUnion(page.items.map { $0.node.id.lowercased() })
+            after = page.nextCursor
+        } while after != nil
+        return ids
     }
 }
 
