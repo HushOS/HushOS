@@ -78,7 +78,38 @@ class FakeDrive : AutoCloseable {
     }
 
     val me = person(userId, accountKey)
-    val grace = person(UUID.randomUUID().toString(), randomBytes(32u))
+    /* Grace's identity as the server serves it now: `startOverGrace` replaces it with no signed chain. */
+    var grace = person(UUID.randomUUID().toString(), randomBytes(32u))
+        private set
+
+    /* Grace starts her account over (docs/devices-design.md 3): new keys the old ones never signed. */
+    fun startOverGrace() = synchronized(lock) { grace = person(grace.id, randomBytes(32u)); owners[graceWorkspace] = grace }
+
+    /* `lookup` answers for Grace's address; `lookups` counts them, `failLookups` makes each one a 500. */
+    var lookups = 0
+    var failLookups = false
+    /* The next settings save lands and its answer is lost (a 500), as a dropped connection would leave it. */
+    var loseNextSettingsAnswer = false
+    /* Runs as each settings save lands (another process acting meanwhile, say). */
+    var onSettingsPut: (() -> Unit)? = null
+    /* Shares the account made (createShare), and the shares a rotation's work lists per node. */
+    val sharesMade = ArrayList<JSONObject>()
+    val rotationShares = HashMap<String, MutableList<JSONObject>>()
+    /* Settings reads fail (a 500) once a rotation's work has been listed: a check mid-batch that can't run. */
+    var failSettingsOnceWorkListed = false
+    /* Runs once, as the next settings read is answered (another process acting right after it). */
+    var onNextSettingsGet: (() -> Unit)? = null
+    /* Rotation batches are refused with a 500, as a dropped send would leave them (nothing applied). */
+    var failRotationSend = false
+    /* At most this many nodes per batch of rotation work (null: all at once), as the server sizes them. */
+    var rotationBatch: Int? = null
+    /* The rotation sends (counted from 1) refused with a 500, as a dropped connection leaves them. */
+    var failRotationSends: Set<Int> = emptySet()
+    private var rotationSends = 0
+
+    /* `id` goes to the Trash, as the server keeps it: its parent's listing leaves it out, the trash listing has it. */
+    fun trash(id: String) = synchronized(lock) { node(id).trashedAt = "2026-10-30T00:00:00Z"; bump(node(id)) }
+    private var workListed = false
 
     class Version(
         val id: String, val objectId: String, var contentKeyEnvelope: String, val suite: UInt, val chunkCount: Long, val contentNonce: String,
@@ -92,12 +123,12 @@ class FakeDrive : AutoCloseable {
     class Node(
         val id: String, val workspaceId: String, val parentId: String?, val kind: String, var keyEpoch: Long, var parentKeyEpoch: Long,
         var keyEnvelope: String, var metadataVersion: Long, var metadataEnvelope: String, var signer: String, var signature: String,
-        var version: Version? = null, var changeSeq: Int = 1,
+        var version: Version? = null, var changeSeq: Int = 1, var trashedAt: String? = null,
     ) {
         fun json(): JSONObject = JSONObject().put("id", id).put("workspaceId", workspaceId).put("parentId", parentId ?: JSONObject.NULL).put("kind", kind)
             .put("keyEpoch", keyEpoch).put("parentKeyEpoch", parentKeyEpoch).put("keyEnvelope", keyEnvelope)
             .put("metadataVersion", metadataVersion).put("metadataEnvelope", metadataEnvelope).put("currentVersion", version?.json() ?: JSONObject.NULL)
-            .put("trashedAt", JSONObject.NULL).put("createdAt", "2026-10-01T00:00:00Z").put("updatedAt", "2026-10-01T00:00:00Z")
+            .put("trashedAt", trashedAt ?: JSONObject.NULL).put("createdAt", "2026-10-01T00:00:00Z").put("updatedAt", "2026-10-01T00:00:00Z")
             .put("changeSeq", changeSeq).put("envelopeSuite", ENVELOPE_SUITE)
             .put("metadataSigner", JSONObject().put("id", signer)).put("metadataSignature", signature)
     }
@@ -205,15 +236,43 @@ class FakeDrive : AutoCloseable {
 
     // Shares, links and settings.
 
-    private data class Share(val id: String, val node: String, val envelope: String, val keyEpoch: Long)
+    private data class Share(val id: String, val node: String, val envelope: String, val keyEpoch: Long, val granter: Person? = null)
     private val shares = ArrayList<Share>()
     /* Grace shares `nodeId` (in her drive) with the account, sealed to its identity in suite 4. */
-    fun shareWithMe(nodeId: String) = synchronized(lock) {
+    fun shareWithMe(nodeId: String, servedAs: Person? = null) = synchronized(lock) {
         val node = node(nodeId)
         val kem = base64urlDecode(me.keys.kemPublicKey!!)
         val envelope = shareSeal(ShareContext(node.workspaceId, nodeId, node.keyEpoch.toULong(), userId, grace.id), keyOf(nodeId), grace.keys,
             base64urlDecode(me.keys.encryptionPublicKey), kem)
-        shares.add(Share(UUID.randomUUID().toString(), nodeId, base64urlEncode(envelope), node.keyEpoch))
+        // `servedAs`: the granter's identity this one row is listed with (a server serving other keys mid-list).
+        shares.add(Share(UUID.randomUUID().toString(), nodeId, base64urlEncode(envelope), node.keyEpoch, servedAs))
+    }
+
+    /* Another account the server can name: an identity of its own under Grace's id, as a server swapping her keys would serve. */
+    fun impostorOfGrace(): Person = person(grace.id, randomBytes(32u))
+
+    /*
+     * The settings as another device (or a server replaying a copy) leaves them: opened, changed by `change`, and sealed one
+     * version up under the account's settings key, as any save is.
+     */
+    fun editSettings(change: (Settings) -> Unit) = synchronized(lock) {
+        val key = settingsKey?.let { settingsKeyOpen(userId, accountKey, SettingsKeyEnvelope(it.getString("nonce"), it.getString("ciphertext"))) }
+            ?: settingsKeyCreate(userId, accountKey).also { settingsKey = JSONObject().put("nonce", it.envelope.nonce).put("ciphertext", it.envelope.ciphertext) }.key
+        val current = settingsDocument?.let {
+            openSettingsText(userId, key, SettingsEnvelope(it.getInt("version").toUInt(), it.getLong("settingsVersion").toULong(), it.getString("nonce"), it.getString("ciphertext")))
+        } ?: Settings.empty(settingsVersion.toULong())
+        change(current)
+        val sealed = settingsSeal(userId, key, (settingsVersion + 1).toULong(), current.text())
+        settingsDocument = JSONObject().put("version", sealed.version.toInt()).put("settingsVersion", sealed.settingsVersion.toLong())
+            .put("nonce", sealed.nonce).put("ciphertext", sealed.ciphertext)
+        settingsVersion = sealed.settingsVersion.toLong()
+    }
+
+    /* The settings as the server holds them now, opened as another device would. */
+    fun settings(): Settings = synchronized(lock) {
+        val key = settingsKeyOpen(userId, accountKey, SettingsKeyEnvelope(settingsKey!!.getString("nonce"), settingsKey!!.getString("ciphertext")))
+        val doc = settingsDocument!!
+        openSettingsText(userId, key, SettingsEnvelope(doc.getInt("version").toUInt(), doc.getLong("settingsVersion").toULong(), doc.getString("nonce"), doc.getString("ciphertext")))
     }
 
     /* The settings document and its key, as the server keeps them: the key stored once, the document compare-and-set. */
@@ -258,7 +317,7 @@ class FakeDrive : AutoCloseable {
 
     private class Upload(val ws: String, val body: JSONObject, val parts: HashMap<Int, ByteArray> = HashMap())
     private val uploads = HashMap<String, Upload>()
-    private class Rotation(val ws: String, val target: Long, val applied: HashSet<String> = HashSet())
+    private class Rotation(val ws: String, val target: Long, val applied: HashSet<String> = HashSet(), var finished: Boolean = false)
     private val rotations = HashMap<String, Rotation>()
 
     private fun answer(exchange: HttpExchange) {
@@ -315,7 +374,7 @@ class FakeDrive : AutoCloseable {
     private fun ok(json: JSONObject) = 200 to json
     private fun conflict(message: String) = 409 to JSONObject().put("message", message).put("code", "conflict")
     private fun listing(folder: Node) = JSONObject().put("folder", folder.json()).put("ancestors", JSONArray())
-        .put("children", JSONArray(children(folder.id).map { it.json() })).put("nextCursor", JSONObject.NULL)
+        .put("children", JSONArray(children(folder.id).filter { it.trashedAt == null }.map { it.json() })).put("nextCursor", JSONObject.NULL)
     private fun objectUrl(objectId: String) = "$origin/store/objects/$objectId"
     private fun versionById(id: String): Pair<Node, Version>? = nodes.values.firstNotNullOfOrNull { n -> n.version?.takeIf { it.id == id }?.let { n to it } }
     private fun bump(node: Node) { node.changeSeq = changeSeq++ }
@@ -329,7 +388,12 @@ class FakeDrive : AutoCloseable {
             // The account's own routes (Auth.call).
             get && at("auth", "identity") -> ok(JSONObject().put("identity", Auth.json(me.envelope)))
             get && at("auth", "identity", "history") -> ok(JSONObject().put("identities", JSONArray()))
-            get && at("auth", "settings") -> ok(settingsJson())
+            get && at("auth", "settings") -> {
+                if (failSettingsOnceWorkListed && workListed) return 500 to JSONObject().put("message", "Settings are unavailable")
+                val answer = settingsJson()
+                onNextSettingsGet?.let { hook -> onNextSettingsGet = null; hook() }
+                ok(answer)
+            }
             method == "PUT" && at("auth", "settings-key") -> {
                 if (settingsKey != null) return conflict("A settings key is already stored")
                 settingsKey = JSONObject().put("nonce", body.getString("nonce")).put("ciphertext", body.getString("ciphertext"))
@@ -340,8 +404,27 @@ class FakeDrive : AutoCloseable {
                 settingsVersion++
                 settingsDocument = JSONObject().put("version", body.getInt("version")).put("settingsVersion", settingsVersion)
                     .put("nonce", body.getString("nonce")).put("ciphertext", body.getString("ciphertext"))
+                onSettingsPut?.invoke()
+                if (loseNextSettingsAnswer) { loseNextSettingsAnswer = false; return 500 to JSONObject().put("message", "The answer was lost") }
                 ok(JSONObject().put("settingsVersion", settingsVersion))
             }
+            post && at("auth", "contacts", "lookup") -> {
+                lookups++
+                if (failLookups) return 500 to JSONObject().put("message", "Lookups are down")
+                if (!body.getString("email").equals("grace@example.org", ignoreCase = true)) return 404 to JSONObject().put("message", "No HushOS account uses that email.")
+                ok(JSONObject().put("contact", grace.served.toJson().put("userId", grace.id).put("name", "Grace Hopper").put("email", "grace@example.org")))
+            }
+            get && at("auth", "contacts", "*", "succession") -> ok(JSONObject().put("links", JSONArray()))
+            post && at("drive", "nodes", "*", "shares") -> {
+                val share = JSONObject().put("id", UUID.randomUUID().toString()).put("role", body.getString("role")).put("keyEpoch", body.getLong("keyEpoch"))
+                    .put("createdAt", "2026-10-30T00:00:00Z").put("suite", 4)
+                    .put("grantee", JSONObject().put("id", body.getString("granteeUserId")).put("name", "Grace Hopper").put("email", "grace@example.org"))
+                sharesMade.add(share)
+                ok(JSONObject().put("share", share))
+            }
+            get && at("drive", "workspaces", "*", "trash") -> ok(JSONObject().put("items", JSONArray(nodes.values.filter { it.trashedAt != null }.map { node ->
+                JSONObject().put("node", node.json()).put("ancestors", JSONArray()).put("parentTrashed", false)
+            })).put("nextCursor", JSONObject.NULL))
 
             get && at("drive", "workspace") -> ok(JSONObject().put("workspaceId", workspace).put("changeSeq", changeSeq).put("grant", grant).put("root", node(root).json()))
             get && at("drive", "nodes", "*", "children") -> {
@@ -418,27 +501,32 @@ class FakeDrive : AutoCloseable {
                 ok(JSONObject().put("node", node.json()))
             }
             post && at("drive", "nodes", "*", "rotation") -> {
-                val rotation = Rotation(body.getString("workspaceId"), nextEpoch++)
+                // A rotation still running is resumed, as the server keeps its target and what it applied.
+                val rotation = rotations[segments[2]]?.takeIf { !it.finished } ?: Rotation(body.getString("workspaceId"), nextEpoch++)
                 rotations[segments[2]] = rotation
                 ok(JSONObject().put("rotation", JSONObject().put("targetEpoch", rotation.target)))
             }
             get && at("drive", "nodes", "*", "rotation", "work") -> {
                 val rotation = rotations.getValue(segments[2])
+                workListed = true
                 // Parents first: the subtree breadth first, less what was applied.
                 val order = ArrayList<Node>()
                 val queue = ArrayDeque(listOf(node(segments[2])))
                 while (queue.isNotEmpty()) queue.removeFirst().also { order.add(it); queue.addAll(children(it.id)) }
                 val todo = order.filter { it.id !in rotation.applied }
-                val work = todo.map { node ->
+                if (todo.isEmpty()) rotation.finished = true
+                val batch = rotationBatch?.let { todo.take(it) } ?: todo
+                val work = batch.map { node ->
                     node.json().put("versions", JSONArray(listOfNotNull(node.version).map { v ->
                         JSONObject().put("id", v.id).put("objectId", v.objectId).put("contentSuite", v.suite.toInt()).put("contentKeyEnvelope", v.contentKeyEnvelope)
                             .put("plaintextSize", JSONObject.NULL).put("signer", JSONObject().put("id", v.signer)).put("signature", v.signature)
-                    })).put("shares", JSONArray()).put("links", JSONArray())
+                    })).put("shares", JSONArray(rotationShares[node.id].orEmpty())).put("links", JSONArray())
                 }
                 ok(JSONObject().put("rotation", JSONObject().put("targetEpoch", rotation.target)).put("nodes", JSONArray(work))
-                    .put("nextCursor", JSONObject.NULL).put("done", todo.isEmpty()))
+                    .put("nextCursor", if (batch.size < todo.size) "more" else JSONObject.NULL).put("done", todo.isEmpty()))
             }
             post && at("drive", "nodes", "*", "rotation", "nodes") -> {
+                if (failRotationSend || ++rotationSends in failRotationSends) return 500 to JSONObject().put("message", "The connection dropped")
                 val rotation = rotations.getValue(segments[2])
                 val wires = body.getJSONArray("nodes")
                 val results = JSONArray()
@@ -467,7 +555,7 @@ class FakeDrive : AutoCloseable {
             get && at("drive", "shares") -> ok(JSONObject().put("shares", JSONArray(shares.map { share ->
                 JSONObject().put("id", share.id).put("workspaceId", node(share.node).workspaceId).put("role", "editor").put("createdAt", "2026-10-01T00:00:00Z")
                     .put("keyEpoch", share.keyEpoch).put("shareEnvelope", share.envelope)
-                    .put("granter", grace.served.toJson().put("id", grace.id).put("name", "Grace").put("email", "grace@example.org"))
+                    .put("granter", (share.granter ?: grace).served.toJson().put("id", grace.id).put("name", "Grace").put("email", "grace@example.org"))
                     .put("node", node(share.node).json())
             })))
 

@@ -18,6 +18,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.hushos.core.PinComparison
 import java.io.File
 
 /*
@@ -72,69 +73,26 @@ class SharingTrustTest {
     }
 
     @Test
-    fun aVersionThreePinSealsOnlyToTheMlKemKeyItsDigestNames() {
-        assertTrue(verified.verified)
-        assertEquals(keyDigest(base64urlDecode(served.mlDsaPublicKey!!)), verified.mlDsaPublicKeyHash)
-        assertArrayEquals(base64urlDecode(kem), granteeKem(verified, served))
-        // Beside the pinned X25519 and Ed25519 keys: another ML-KEM key, another ML-DSA key, or none (the version 1 form).
-        for (swapped in listOf(served.copy(kemPublicKey = flipped(kem)), served.copy(mlDsaPublicKey = flipped(served.mlDsaPublicKey!!)),
-            served.copy(mlDsaPublicKey = null, identityVersion = 1, keysSignature = null), served.copy(kemPublicKey = null))) {
-            val refused = assertThrows(SharingRefused::class.java) { granteeKem(verified, swapped) }
-            assertEquals("Ada’s keys have changed since you checked them. Check it’s them in Contacts.", refused.message)
-        }
-    }
-
-    @Test
-    fun aPinThatVouchesForNothingIsRefusedForSharing() {
-        for (pin in listOf(preRelease, staleFingerprint)) {
-            val refused = assertThrows(SharingRefused::class.java) { granteeKem(pin, served) }
-            assertEquals("Check Ada’s words again in Contacts: this pin was made before the words covered all their keys.", refused.message)
-        }
-    }
-
-    @Test
     fun whatAPinSaysAboutServedKeys() {
-        assertEquals(PinComparison.SAME, comparePin(verified, served))
+        assertEquals(PinComparison.SAME, verified.compare(served))
         // The person upgraded (same classical keys) and was pinned before: words again, nothing trusted until then.
-        assertEquals(PinComparison.RECHECK, comparePin(preRelease, served))
-        assertEquals(PinComparison.RECHECK, comparePin(preRelease, served.copy(mlDsaPublicKey = null, identityVersion = 1)))
+        assertEquals(PinComparison.RECHECK, preRelease.compare(served))
+        assertEquals(PinComparison.RECHECK, preRelease.compare(served.copy(mlDsaPublicKey = null, identityVersion = 1)))
         val newer = TestPins.served(base64urlEncode(ByteArray(32) { 5 }), base64urlEncode(ByteArray(32) { 6 }), 3uL)
-        assertEquals(PinComparison.SUCCESSION, comparePin(verified, newer))
+        assertEquals(PinComparison.SUCCESSION, verified.compare(newer))
         // Only a version 3 pin passes trust on, and only to version 2 keys at a higher key version.
-        assertEquals(PinComparison.CHANGED, comparePin(preRelease, newer))
-        assertEquals(PinComparison.CHANGED, comparePin(verified, newer.copy(mlDsaPublicKey = null)))
-        assertEquals(PinComparison.CHANGED, comparePin(verified, newer.copy(keyVersion = 2uL)))
-    }
-
-    @Test
-    fun aPinThatVouchesForNothingKeepsTheirSharesShut() {
-        for (pin in listOf(preRelease, staleFingerprint))
-            assertThrows(GranterTrust.Recheck::class.java) { granterKey(userId, "Ada", served, mapOf(userId to pin)) }
-        val granter = granterKey(userId, "Ada", served, mapOf(userId to verified))
-        assertEquals(sig, base64urlEncode(granter.signingPublicKey))
-        // Other keys at the pinned version are a change no succession explains.
-        val atTwo = mapOf(userId to verified.copy(keyVersion = 2uL))
-        assertThrows(GranterTrust.Changed::class.java) { granterKey(userId, "Ada", served.copy(encryptionPublicKey = base64urlEncode(ByteArray(32) { 3 })), atTwo) }
-        assertThrows(GranterTrust.Changed::class.java) { granterKey(userId, "Ada", served.copy(signingPublicKey = base64urlEncode(ByteArray(32) { 4 })), atTwo) }
-        // At a newer version they may be a succession, followed only once the person checks again: shut until then.
-        assertThrows(GranterTrust.Replaced::class.java) { granterKey(userId, "Ada", served.copy(keyVersion = 3uL, signingPublicKey = base64urlEncode(ByteArray(32) { 4 })), atTwo) }
-    }
-
-    @Test
-    fun aPinFromBeforeTheReleaseServedOtherKeysIsTheChangedKeyWarningNotAnUpgrade() {
-        // Only the same X25519 and Ed25519 keys under a pin that vouches for nothing is "keys were upgraded".
-        for (pin in listOf(preRelease, staleFingerprint)) {
-            val pins = mapOf(userId to pin)
-            for (other in listOf(served.copy(encryptionPublicKey = flipped(enc)), served.copy(signingPublicKey = flipped(sig)),
-                served.copy(keyVersion = 3uL, signingPublicKey = flipped(sig))))
-                assertThrows(GranterTrust.Changed::class.java) { granterKey(userId, "Ada", other, pins) }
-        }
+        assertEquals(PinComparison.CHANGED, preRelease.compare(newer))
+        assertEquals(PinComparison.CHANGED, verified.compare(newer.copy(mlDsaPublicKey = null)))
+        assertEquals(PinComparison.CHANGED, verified.compare(newer.copy(keyVersion = 2uL)))
     }
 
     private fun row(id: String, grantee: String, identity: ServedIdentity = served) =
         JSONObject().put("id", id).put("granteeUserId", grantee).put("grantee", identity.toJson())
 
     private fun link(id: String) = JSONObject().put("id", id).put("hasPassword", false).put("secretEnvelope", JSONObject.NULL)
+
+    /* As Vault.granteeSealer seals to someone whose served keys are the ones their pin holds. */
+    private val sealTo = { _: String, identity: ServedIdentity -> base64urlDecode(identity.encryptionPublicKey) to base64urlDecode(identity.kemPublicKey!!) }
 
     @Test
     fun aRotationResealsOnlyWhatTheLedgerHoldsInSuiteFour() {
@@ -145,7 +103,7 @@ class SharingTrustTest {
             // The server adds a share to someone pinned but never shared with, and lists three links.
             listOf(row("share-1", userId), row("share-2", stranger)),
             listOf(link("link-1"), link("link-2"), link("link-3")),
-            ledger, mapOf(userId to verified, stranger to verified.copy(userId = stranger)),
+            ledger, sealTo,
         )
         assertEquals(listOf("share-1"), plan.shares.map { it.id })
         assertEquals(listOf("link-1"), plan.links.map { it.getString("id") })
@@ -172,20 +130,25 @@ class SharingTrustTest {
     }
 
     @Test
-    fun aRotationSaysWhoItLeftOutInsteadOfSealingClassic() {
+    fun aRotationSaysWhoItLeftOutInsteadOfSealingThem() {
         val ledger = SharingLedger(mapOf(nodeId to setOf(userId)), emptyMap())
-        val changed = "Ada’s keys have changed since you checked them. Check it’s them in Contacts."
-        val cases = listOf(
-            Triple(verified, served.copy(kemPublicKey = null), changed),
-            Triple(verified, served.copy(kemPublicKey = flipped(kem)), changed),
-            Triple(verified, served.copy(mlDsaPublicKey = null, identityVersion = 1, keysSignature = null), changed),
-            Triple(staleFingerprint, served, "Check Ada’s words again in Contacts: this pin was made before the words covered all their keys."),
-            Triple(preRelease, served, "Check Ada’s words again in Contacts: this pin was made before the words covered all their keys."),
-        )
-        for ((pin, identity, reason) in cases) {
-            val plan = planReseal(nodeId, listOf(row("share-1", userId, identity)), emptyList(), ledger, mapOf(userId to pin))
+        // Whatever the sealer refuses (a changed account, someone no longer in Contacts) is left out and said, never sealed.
+        for (refusal in listOf(AccountChanged(AccountChange(userId, "Ada", "ada@example.org")), SharingRefused("Someone no longer in Contacts lost access."))) {
+            val plan = planReseal(nodeId, listOf(row("share-1", userId)), emptyList(), ledger) { _, _ -> throw refusal }
             assertTrue(plan.shares.isEmpty())
-            assertEquals(listOf(reason), plan.skipped)
+            assertEquals(listOf(refusal.message), plan.skipped)
+        }
+    }
+
+    @Test
+    fun aRotationAbortsOnAnythingButAVerdictSoNobodyLosesAccessToAFullDiskOrADroppedConnection() {
+        val ledger = SharingLedger(mapOf(nodeId to setOf(userId)), emptyMap())
+        // Leaving someone out of the batch makes the server revoke their share: only a verdict on them may do that.
+        for (failure in listOf(GuardUnsaved(), GuardUnreadable(), GuardRaced(), ContactMoved(), SettingsRolledBack(), Unreachable(), ContactProblem(Settings.CONTACTS_FULL))) {
+            val thrown = assertThrows(Exception::class.java) {
+                planReseal(nodeId, listOf(row("share-1", userId)), emptyList(), ledger) { _, _ -> throw failure }
+            }
+            assertEquals(failure.javaClass, thrown.javaClass)
         }
     }
 

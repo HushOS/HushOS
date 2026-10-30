@@ -108,6 +108,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.withStyle
+import com.hushos.app.data.AccountChange
+import com.hushos.app.data.AccountChanged
+import com.hushos.app.data.Added
+import com.hushos.app.data.ContactStanding
+import com.hushos.app.data.GuardWords
+import com.hushos.app.data.Problems
 import com.hushos.app.data.ContactPin
 import com.hushos.app.data.Fingerprint
 import com.hushos.app.data.LinkKdf
@@ -164,16 +171,20 @@ fun PersonAvatar(name: String, seed: String, size: Dp = 40.dp) {
 }
 
 /*
- * Who can open this?: the people an item is shared with, each with what they can
- * do, people who have it through a folder above, and its links. Sharing seals the
- * item's key to a contact's checked key, so only contacts can be chosen; someone
- * new is looked up by email and checked right here first.
+ * Who can open this?: the people an item is shared with, each with what they can do, people who have it through a
+ * folder above, and its links. Someone new is added by their email and shared with in one step, with the role chosen
+ * on its own line under the field (docs/optional-verification.md 6.3); an account that changed waits for Review, which
+ * takes the sheet's place, and what it stopped runs again once Review settled it. Stopping a share never waits on Review.
  */
+private sealed interface Interrupted {
+    data class Share(val pin: ContactPin, val role: String) : Interrupted
+    data class New(val email: String, val role: String) : Interrupted
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ShareSheet(model: DriveViewModel, state: DriveState, start: Opened, dismiss: () -> Unit) {
     val alpine = Alpine.colors
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     // The sheet can move up to the folder someone has access through.
     var target by retain { mutableStateOf(start) }
@@ -188,26 +199,91 @@ fun ShareSheet(model: DriveViewModel, state: DriveState, start: Opened, dismiss:
     var error by remember { mutableStateOf<String?>(null) }
     var person by retain { mutableStateOf<OwnedShare?>(null) }
     var inherited by retain { mutableStateOf<Triple<String, String, Opened>?>(null) }
-    var checking by retain { mutableStateOf<String?>(null) }
-    suspend fun load() {
+    // Review or Check it's Maya, in the sheet's place; the act a changed account stopped, and whether Review settled it.
+    var step by retain { mutableStateOf<ContactStep?>(null) }
+    var interrupted by retain { mutableStateOf<Interrupted?>(null) }
+    var settled by retain { mutableStateOf(false) }
+    // People on this item whose account changed (2.4): their row says so, and their role waits.
+    var changed by retain { mutableStateOf<Set<String>>(emptySet()) }
+    /* `people`: look the people on it up again (opening, Review); a reload after this sheet's own share or role change doesn't. */
+    suspend fun load(people: Boolean = true) {
         val current = model.item(target.id) ?: target
         shares = model.shares(current) ?: emptyList()
         pins = model.contacts() ?: emptyList()
+        if (people) {
+            // Met here too (2.4): who on this item has an account that changed, from the keys served now (kept a minute
+            // by the vault, three at a time). A lookup that fails is said, never read as "nothing changed".
+            val onIt = shares.orEmpty().mapNotNull { share -> pins.firstOrNull { it.userId.equals(share.granteeId, ignoreCase = true) } }
+            val (moved, failure) = model.shareeChanges(onIt)
+            changed = moved
+            failure?.let { error = Problems.say(it, GuardWords.UNREADABLE) }
+        }
         links = model.links(current) ?: emptyList()
     }
     LaunchedEffect(target.id) { load() }
-    if (checking != null) {
-        CheckThemSheet(model, email = checking!!, pinned = null, dismiss = { checking = null }) { pin ->
-            checking = null; query = ""; chosen = pin; scope.launch { pins = model.contacts() ?: pins }
-            model.notify("${pin.name.ifEmpty { pin.email }} added to Contacts")
+    fun share(pin: ContactPin, asRole: String) {
+        pending = "share"; error = null
+        scope.launch {
+            val current = model.item(target.id) ?: target
+            model.share(current, pin, asRole)
+                .onSuccess {
+                    model.notify("“${current.name}” shared with ${pin.displayName}")
+                    chosen = null; role = "viewer"
+                    // This sheet's own share: the person was just checked by it, so nobody is looked up again.
+                    load(people = false); model.refreshAccess()
+                }
+                .onFailure { failure ->
+                    if (failure is AccountChanged) { interrupted = Interrupted.Share(pin, asRole); step = ContactStep.Changed(failure.change) }
+                    else error = Problems.say(failure, "Couldn’t share. Check your connection and try again.")
+                }
+            pending = null
+        }
+    }
+    /* Someone new by their email (6.3): added as Add someone adds them, and shared with, in one step. */
+    fun shareWithNew(email: String, asRole: String) {
+        pending = "share"; error = null
+        scope.launch {
+            val current = model.item(target.id) ?: target
+            val added = model.addContact(email).getOrElse { failure ->
+                error = Problems.say(failure, "Check the address and try again."); pending = null; return@launch
+            }
+            val pin = when (added) {
+                is Added.New -> added.pin
+                is Added.Already -> added.pin
+                is Added.Changed -> { interrupted = Interrupted.New(email, asRole); step = ContactStep.Changed(added.change); pending = null; return@launch }
+            }
+            model.share(current, pin, asRole)
+                .onSuccess {
+                    model.notify("Shared with ${pin.firstName}")
+                    query = ""; role = "viewer"
+                    load(people = false); model.refreshAccess()
+                }
+                .onFailure { failure ->
+                    if (failure is AccountChanged) { interrupted = Interrupted.New(email, asRole); step = ContactStep.Changed(failure.change) }
+                    else error = Problems.say(failure, "Couldn’t share. Check your connection and try again.")
+                }
+            pending = null
+        }
+    }
+    step?.let { shown ->
+        ContactStepSheet(model, shown, resolved = { settled = true }) {
+            // Review settled the change: what it stopped runs again, with the keys looked up afresh.
+            val act = if (settled) interrupted else null
+            step = null; settled = false; interrupted = null
+            scope.launch { load() }
+            when (act) {
+                is Interrupted.Share -> share(act.pin, act.role)
+                is Interrupted.New -> shareWithNew(act.email, act.role)
+                null -> Unit
+            }
         }
         return
     }
     val me = state.user
-    val already = shares.orEmpty().map { it.granteeId }.toSet()
+    val already = shares.orEmpty().map { it.granteeId.lowercase() }.toSet()
     val typed = query.trim()
     val isEmail = Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$").matches(typed)
-    val matches = pins.filter { it.userId !in already && (typed.isEmpty() || "${it.name} ${it.email}".contains(typed, ignoreCase = true)) }
+    val matches = pins.filter { it.userId.lowercase() !in already && (typed.isEmpty() || "${it.name} ${it.email}".contains(typed, ignoreCase = true)) }
     val known = pins.any { it.email.equals(typed, ignoreCase = true) }
     Sheet(onDismissRequest = dismiss, full = true) {
         Column(Modifier.fillMaxWidth().heightIn(min = 560.dp).verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S6)) {
@@ -216,17 +292,22 @@ fun ShareSheet(model: DriveViewModel, state: DriveState, start: Opened, dismiss:
             if (picked == null) {
                 OutlinedTextField(
                     value = query, onValueChange = { query = it; error = null }, singleLine = true,
-                    label = { Text("Name or email") }, leadingIcon = { Icon(Icons.Outlined.PersonAdd, null) },
+                    label = { Text("Add a name or email") }, leadingIcon = { Icon(Icons.Outlined.PersonAdd, null) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                     modifier = Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S6),
                 )
-                // Contacts as you type; someone new by their full email, checked before they are added.
+                RoleLine(role) { role = it }
+                // Contacts as you type; someone new by their full email, added and shared with in one step: the list's first row.
                 if (typed.isNotEmpty() || pins.isEmpty()) Column(Modifier.padding(top = AlpineSpace.S1)) {
-                    // A pin that vouches for nothing goes to the words check first: sharing to it is refused until then.
-                    for (pin in matches.take(5)) PersonRow(pin.name.ifEmpty { pin.email }, if (pin.verified) pin.email else "${pin.email} · Check their words again", pin.userId) {
-                        if (pin.verified) { chosen = pin; query = "" } else checking = pin.email
+                    if (isEmail && !known) Row(
+                        Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(enabled = pending == null) { shareWithNew(typed, role) }.padding(horizontal = AlpineSpace.S4),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.size(40.dp).background(alpine.tint, CircleShape), contentAlignment = Alignment.Center) { Icon(Icons.Outlined.PersonAdd, null, tint = alpine.primary, modifier = Modifier.size(20.dp)) }
+                        Text(if (pending == "share") "Sharing…" else "Share with $typed", style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f).padding(start = AlpineSpace.S4))
                     }
-                    if (isEmail && !known) SheetRow("Add “$typed”", Icons.Outlined.PersonAdd) { checking = typed }
+                    for (pin in matches.take(5)) PersonRow(pin.displayName, pin.email, pin.userId) { chosen = pin; query = "" }
                     if (matches.isEmpty() && !(isEmail && !known)) Text(
                         when {
                             pins.isEmpty() && typed.isEmpty() -> "Type their email to share with someone new."
@@ -239,32 +320,18 @@ fun ShareSheet(model: DriveViewModel, state: DriveState, start: Opened, dismiss:
             } else {
                 Column(Modifier.padding(horizontal = AlpineSpace.S4).fillMaxWidth().border(1.dp, alpine.rule, RoundedCornerShape(AlpineRadius.Card)).padding(AlpineSpace.S3)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        PersonAvatar(picked.name.ifEmpty { picked.email }, picked.userId)
+                        PersonAvatar(picked.displayName, picked.userId)
                         Column(Modifier.weight(1f).padding(horizontal = AlpineSpace.S3)) {
-                            Text(picked.name.ifEmpty { picked.email }, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(picked.displayName, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(picked.email, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         IconButton(onClick = { chosen = null }) { Icon(Icons.Outlined.Close, "Choose someone else") }
                     }
-                    Row(Modifier.padding(top = AlpineSpace.S2), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
-                        AlpineChip("Can view", selected = role == "viewer", onClick = { role = "viewer" })
-                        AlpineChip("Can edit", selected = role == "editor", onClick = { role = "editor" })
-                        Spacer(Modifier.weight(1f))
-                        Button(enabled = pending == null, onClick = {
-                            pending = "share"; error = null
-                            scope.launch {
-                                val current = model.item(target.id) ?: target
-                                model.share(current, picked, role)
-                                    .onSuccess {
-                                        model.notify("“${current.name}” shared with ${picked.name.ifEmpty { picked.email }}")
-                                        chosen = null; role = "viewer"; load(); model.refreshAccess()
-                                    }
-                                    .onFailure { error = com.hushos.app.data.Problems.say(it, "Couldn’t share. Check your connection and try again.") }
-                                pending = null
-                            }
-                        }) { Text(if (pending == "share") "Sharing…" else "Share") }
+                    Row(Modifier.fillMaxWidth().padding(top = AlpineSpace.S2), horizontalArrangement = Arrangement.End) {
+                        Button(enabled = pending == null, onClick = { share(picked, role) }) { Text(if (pending == "share") "Sharing…" else "Share") }
                     }
                 }
+                RoleLine(role) { role = it }
             }
             error?.let { Text(it, color = alpine.danger, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2)) }
 
@@ -279,7 +346,9 @@ fun ShareSheet(model: DriveViewModel, state: DriveState, start: Opened, dismiss:
             }
             if (shares == null) Box(Modifier.fillMaxWidth().padding(AlpineSpace.S4), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp)) }
             for (share in shares.orEmpty()) {
-                PersonRow(share.granteeName.ifEmpty { share.granteeEmail }, share.granteeEmail, share.granteeId, trailing = if (share.role == "editor") "Can edit" else "Can view") { person = share }
+                // Always their sheet: Stop sharing never waits on Review (only a new role does), as on the web.
+                PersonRow(share.granteeName.ifEmpty { share.granteeEmail }, share.granteeEmail, share.granteeId, trailing = if (share.role == "editor") "Can edit" else "Can view",
+                    changed = share.granteeId.lowercase() in changed) { person = share }
             }
             // People (and links) that have it through a folder above: said once, pointing to that folder.
             state.access?.let { access -> sharedAbove(model, access, item) }?.let { (folder, who) ->
@@ -305,8 +374,10 @@ fun ShareSheet(model: DriveViewModel, state: DriveState, start: Opened, dismiss:
         }
     }
     person?.let { share ->
-        PersonSheet(model, item, share, pins.firstOrNull { it.userId == share.granteeId }, dismiss = { person = null }) {
-            person = null; scope.launch { load(); model.refreshAccess() }
+        val id = share.granteeId.lowercase()
+        PersonSheet(model, item, share, pins.firstOrNull { it.userId.equals(share.granteeId, ignoreCase = true) }, changed = id in changed,
+            settledChange = { changed = changed - id }, dismiss = { person = null }) {
+            person = null; scope.launch { load(people = false); model.refreshAccess() }
         }
     }
     inherited?.let { (name, seed, folder) ->
@@ -320,6 +391,20 @@ fun ShareSheet(model: DriveViewModel, state: DriveState, start: Opened, dismiss:
                 androidx.compose.material3.FilledTonalButton(onClick = { inherited = null; target = folder }, modifier = Modifier.fillMaxWidth()) { Text("Open “${folder.name}”") }
             }
         }
+    }
+}
+
+/*
+ * What they can do, chosen before anything is shared (6.3): on a phone a line of its own under the field, so "Add a
+ * name or email" is never cut off.
+ */
+@Composable
+private fun RoleLine(role: String, choose: (String) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+        Text("What they can do", style = MaterialTheme.typography.bodyMedium, color = Alpine.colors.inkMuted, modifier = Modifier.weight(1f))
+        AlpineChip("Can view", selected = role == "viewer", onClick = { choose("viewer") })
+        AlpineChip("Can edit", selected = role == "editor", onClick = { choose("editor") })
     }
 }
 
@@ -340,14 +425,15 @@ private fun ShareHeader(model: DriveViewModel, state: DriveState, item: Opened) 
 }
 
 @Composable
-private fun PersonRow(name: String, detail: String, seed: String, trailing: String? = null, onClick: () -> Unit) {
+private fun PersonRow(name: String, detail: String, seed: String, trailing: String? = null, changed: Boolean = false, end: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
     val alpine = Alpine.colors
     Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).clickable(onClick = onClick).padding(horizontal = AlpineSpace.S4), verticalAlignment = Alignment.CenterVertically) {
         PersonAvatar(name, seed)
         Column(Modifier.weight(1f).padding(start = AlpineSpace.S4, top = 6.dp, bottom = 6.dp)) {
             Text(name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(detail, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (changed) AccountChangedLine() else Text(detail, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        end?.invoke()
         trailing?.let {
             Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
             Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = alpine.inkMuted)
@@ -356,19 +442,70 @@ private fun PersonRow(name: String, detail: String, seed: String, trailing: Stri
 }
 
 /*
- * Someone's access: what they can do as a choice, and Stop sharing as a labelled
- * red button that asks once. A new role is the same share sealed again with it.
+ * A row whose account changed (6.3, 6.5): "Account changed · Review" in Contacts' words (the name is the row's title),
+ * never cut short: it wraps rather than truncates, and "· Review" never starts a line of its own.
  */
 @Composable
-private fun PersonSheet(model: DriveViewModel, item: Opened, share: OwnedShare, pin: ContactPin?, dismiss: () -> Unit, changed: () -> Unit) {
+private fun AccountChangedLine() {
+    val alpine = Alpine.colors
+    Text(
+        androidx.compose.ui.text.buildAnnotatedString {
+            append("Account changed\u00A0·\u00A0")
+            withStyle(androidx.compose.ui.text.SpanStyle(color = alpine.primary, fontWeight = FontWeight.SemiBold)) { append("Review") }
+        },
+        style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted,
+    )
+}
+
+/*
+ * Someone's access: what they can do as a choice, Check it's Maya, and Stop sharing as a labelled red button that asks
+ * once, last (6.3). A new role is the same share sealed again with it; while their account changed it waits for Review,
+ * which takes this sheet's place. Stopping never waits.
+ */
+@Composable
+private fun PersonSheet(model: DriveViewModel, item: Opened, share: OwnedShare, pin: ContactPin?, changed: Boolean, settledChange: () -> Unit, dismiss: () -> Unit, reload: () -> Unit) {
     val alpine = Alpine.colors
     val scope = rememberCoroutineScope()
     val name = share.granteeName.ifEmpty { share.granteeEmail }
     val first = firstName(share.granteeName, share.granteeEmail)
     var stopping by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
-    Sheet(onDismissRequest = dismiss) {
-        Column(Modifier.fillMaxWidth().padding(bottom = AlpineSpace.S6)) {
+    var waitingChange by remember { mutableStateOf(changed) }
+    var step by retain { mutableStateOf<ContactStep?>(null) }
+    var waiting by retain { mutableStateOf<String?>(null) }
+    var settled by retain { mutableStateOf(false) }
+    fun changeRole(role: String) {
+        val current = pin ?: return
+        busy = true
+        scope.launch {
+            model.share(item, current, role).onSuccess {
+                model.notify("$first ${if (role == "editor") "can edit" else "can view"} “${item.name}” now"); reload()
+            }.onFailure { failure ->
+                if (failure is AccountChanged) { waiting = role; step = ContactStep.Changed(failure.change) }
+                else model.notify("Couldn’t change what they can do. ${Problems.say(failure, "Check your connection and try again.")}")
+            }
+            busy = false
+        }
+    }
+    step?.let { shown ->
+        ContactStepSheet(model, shown, resolved = { settled = true }) {
+            // The role a changed account stopped belongs to this Review only: dismissed unsettled, it is dropped, so a
+            // later, separate Check it's Maya never grants it.
+            val role = if (settled) waiting else null
+            val wasSettled = settled
+            step = null; settled = false; waiting = null
+            // Review settled the change: the role may change again, and one it stopped runs again.
+            if (wasSettled) {
+                waitingChange = false; settledChange()
+                role?.let { changeRole(it) }
+            }
+        }
+        return
+    }
+    // Opened whole, never half way: with an account changed (Review, Check it's Maya) Stop sharing, which never waits on
+    // Review, would otherwise start below the fold.
+    Sheet(onDismissRequest = dismiss, full = true) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S6)) {
             Row(Modifier.padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S4), verticalAlignment = Alignment.CenterVertically) {
                 PersonAvatar(name, share.granteeId, 48.dp)
                 Column(Modifier.padding(start = AlpineSpace.S4)) {
@@ -377,18 +514,11 @@ private fun PersonSheet(model: DriveViewModel, item: Opened, share: OwnedShare, 
                 }
             }
             for ((role, label, detail) in listOf(Triple("viewer", "Can view", "Open and download"), Triple("editor", "Can edit", "Add, rename and delete inside"))) {
-                // A new role needs their checked key; someone removed from your people keeps theirs until shared again.
-                val enabled = !busy && (pin != null || role == share.role)
+                // A new role needs their key as this phone holds it: someone removed keeps theirs, someone changed waits for Review.
+                val enabled = !busy && ((pin != null && !waitingChange) || role == share.role)
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = 56.dp).selectable(selected = share.role == role, enabled = enabled, role = Role.RadioButton) {
-                        if (role == share.role || pin == null) return@selectable
-                        busy = true
-                        scope.launch {
-                            model.share(item, pin, role).onSuccess {
-                                model.notify("$first ${if (role == "editor") "can edit" else "can view"} “${item.name}” now"); changed()
-                            }.onFailure { model.notify("Couldn’t change what they can do. ${com.hushos.app.data.Problems.say(it, "Check your connection and try again.")}") }
-                            busy = false
-                        }
+                        if (role != share.role) changeRole(role)
                     }.padding(horizontal = AlpineSpace.S4),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -401,6 +531,15 @@ private fun PersonSheet(model: DriveViewModel, item: Opened, share: OwnedShare, 
             }
             if (pin == null) Text("$first isn’t in your people any more, so what they can do can’t change. Add them again to change it.",
                 style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2))
+            if (waitingChange) Row(
+                Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable { step = ContactStep.Changed(AccountChange(share.granteeId, share.granteeName, share.granteeEmail)) }
+                    .padding(horizontal = AlpineSpace.S6),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("$first’s account changed", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                Text("Review", style = MaterialTheme.typography.bodyLarge, color = alpine.primary, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(start = AlpineSpace.S2))
+            }
+            if (pin != null) SheetRow("Check it’s $first", Icons.Outlined.VerifiedUser, action = true) { step = ContactStep.Check(share.granteeEmail, share.granteeName) }
             OutlinedButton(
                 enabled = !busy, onClick = { stopping = true },
                 border = androidx.compose.foundation.BorderStroke(1.dp, alpine.danger), colors = ButtonDefaults.outlinedButtonColors(contentColor = alpine.danger),
@@ -417,7 +556,7 @@ private fun PersonSheet(model: DriveViewModel, item: Opened, share: OwnedShare, 
             scope.launch {
                 if (model.revokeShare(share, item)) model.notify("$name can’t open “${item.name}” any more")
                 else model.notify("Couldn’t stop sharing. Check your connection and try again.")
-                busy = false; changed()
+                busy = false; reload()
             }
         }) { Text("Stop sharing", color = alpine.danger) } },
         dismissButton = { TextButton(onClick = { stopping = false }) { Text("Cancel") } },
@@ -643,76 +782,6 @@ private fun qrBitmap(text: String, size: Int): Bitmap {
 }
 
 /*
- * Check it's them: the twelve words HushOS draws from their key, to compare with
- * what they read out from their own phone or browser. Nobody is added (or kept,
- * after their account changed) until "They match".
- */
-@Composable
-fun CheckThemSheet(model: DriveViewModel, email: String, pinned: ContactPin?, dismiss: () -> Unit, added: (ContactPin) -> Unit) {
-    val alpine = Alpine.colors
-    val scope = rememberCoroutineScope()
-    var found by remember { mutableStateOf<Lookup?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var mismatch by remember { mutableStateOf(false) }
-    var adding by remember { mutableStateOf(false) }
-    LaunchedEffect(email) { model.lookup(email).onSuccess { found = it }.onFailure { error = com.hushos.app.data.Problems.say(it, "Check the address and try again.") } }
-    Sheet(onDismissRequest = dismiss, full = true) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S6),
-            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
-            val lookup = found
-            if (lookup == null) {
-                if (error == null) Box(Modifier.padding(AlpineSpace.S8)) { CircularProgressIndicator() }
-                else {
-                    Text("Couldn’t find $email", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
-                    Text(error!!, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center)
-                    TextButton(onClick = dismiss) { Text("Back") }
-                }
-                return@Column
-            }
-            val contact = lookup.contact
-            val first = firstName(contact.name, contact.email)
-            // Words can only be compared over an upgraded identity whose keys statement holds.
-            val notUpgraded = !lookup.upgraded
-            PersonAvatar(contact.name.ifEmpty { contact.email }, contact.userId, 72.dp)
-            Text("Check it’s $first", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
-            Text(contact.email, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
-            Text(
-                when {
-                    lookup.changed -> "$first’s account has changed since you added them on ${runCatching { whenText(Instant.parse(lookup.pinned!!.pinnedAt).toEpochMilli()) }.getOrNull() ?: "an earlier day"}. That can be a new phone or a reset, or someone pretending. Check it’s them before you accept."
-                    lookup.followed || (lookup.pinned?.verified == true && lookup.pinned.keysReplacedAt != null) -> "$first replaced their sharing keys; the change is signed by their previous keys. To be sure it was them, ask $first to open Contacts in HushOS, choose Your twelve words, and read them to you."
-                    notUpgraded -> "$first hasn’t signed in since HushOS upgraded its keys. You can compare words once they have."
-                    lookup.recheck -> "You added $first before the twelve words covered all of their keys. Ask $first to open Contacts in HushOS, choose Your twelve words, and read them to you, on a call or in person. Until you do, nothing is shared with $first and what they share with you stays shut."
-                    else -> "Ask $first to open Contacts in HushOS, choose Your twelve words, and read them to you, on a call or in person. If they match these, it’s really them."
-                },
-                style = MaterialTheme.typography.bodyMedium, color = if (lookup.changed) alpine.danger else alpine.inkMuted, textAlign = TextAlign.Center,
-            )
-            contact.fingerprint?.let { FingerprintWords(it) }
-            if (mismatch) Text("Don’t share with this account. Check the email address with $first, then try again.", style = MaterialTheme.typography.bodyMedium, color = alpine.danger, textAlign = TextAlign.Center)
-            error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.danger, textAlign = TextAlign.Center) }
-            Button(
-                enabled = !adding && !notUpgraded && !mismatch,
-                onClick = {
-                    adding = true; error = null
-                    scope.launch {
-                        if (model.pin(contact) { error = it }) model.contacts()?.firstOrNull { it.userId == contact.userId }?.let(added) ?: run { error = "They weren’t saved. Try again." }
-                        else if (error == null) error = "They weren’t saved. Try again."
-                        adding = false
-                    }
-                },
-                colors = if (lookup.changed) ButtonDefaults.buttonColors(containerColor = alpine.danger) else ButtonDefaults.buttonColors(),
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-            ) {
-                Icon(Icons.Outlined.VerifiedUser, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.size(AlpineSpace.S2))
-                Text(if (adding) "Adding…" else if (lookup.changed) "Accept change" else "They match")
-            }
-            OutlinedButton(enabled = !adding, onClick = { if (mismatch) dismiss() else mismatch = true }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
-                Text(if (mismatch) "Back" else "They don’t match")
-            }
-        }
-    }
-}
-
-/*
  * Twelve words, numbered, in two columns, one at the largest font sizes: an eight-letter word never shares a third of
  * the width with two others, and a word is never cut short (no line limit; a word wider than its cell wraps).
  */
@@ -778,7 +847,7 @@ fun OwnWordsSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit)
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S6),
             verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
             Text("Your twelve words", style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
-            Text("When someone adds you, they’ll ask you to read these. They’re the same on all your devices.",
+            Text("When someone checks it’s you, read these to them. They’re the same on all your devices.",
                 style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
             val shown = words
             when {
@@ -793,9 +862,9 @@ fun OwnWordsSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit)
 }
 
 /*
- * Contacts: someone new by email and Your twelve words first, then everyone
- * this account added, by name (Find someone from eight of them), with a way to check
- * each is really them or remove them (asked first).
+ * Contacts (docs/optional-verification.md 6.5): Add someone and Your twelve words first, so neither is buried under a
+ * long list, then everyone added, by name (Find someone from eight of them), each with Verified or Not verified, an
+ * account that changed with Review, and Check it's Maya (Check again once verified) and Remove in its menu.
  */
 @Composable
 fun PeopleSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit) {
@@ -803,19 +872,23 @@ fun PeopleSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit) {
     val keyboard = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
     var pins by remember { mutableStateOf<List<ContactPin>?>(null) }
-    var email by rememberSaveable { mutableStateOf("") }
+    // Where each stands on this phone, by lowercased id; null until read, and when the guard couldn't be.
+    var standings by remember { mutableStateOf<Map<String, ContactStanding>?>(null) }
+    var standingsError by remember { mutableStateOf<String?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
-    var checking by retain { mutableStateOf<Pair<String, ContactPin?>?>(null) }
+    var step by retain { mutableStateOf<ContactStep?>(null) }
     var open by retain { mutableStateOf<ContactPin?>(null) }
     var removing by retain { mutableStateOf<ContactPin?>(null) }
     // By name, as iOS and the web list them (accents count, case doesn't), not newest first.
     val byName = remember { java.text.Collator.getInstance().apply { strength = java.text.Collator.SECONDARY } }
-    suspend fun load() { pins = (model.contacts() ?: emptyList()).sortedWith(compareBy(byName) { it.name }) }
+    suspend fun load() {
+        pins = (model.contacts() ?: emptyList()).sortedWith(compareBy(byName) { it.name })
+        model.contactStandings().onSuccess { standings = it; standingsError = null }
+            .onFailure { standings = null; standingsError = Problems.say(it, GuardWords.UNREADABLE) }
+    }
     LaunchedEffect(Unit) { load() }
-    checking?.let { (address, pinned) ->
-        CheckThemSheet(model, address, pinned, dismiss = { checking = null }) { pin ->
-            checking = null; email = ""; model.notify("${pin.name.ifEmpty { pin.email }} checked and added"); scope.launch { load() }
-        }
+    step?.let { shown ->
+        ContactStepSheet(model, shown) { step = null; scope.launch { load() } }
         return
     }
     Sheet(onDismissRequest = dismiss, full = true) {
@@ -824,23 +897,17 @@ fun PeopleSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit) {
                 IconButton(onClick = dismiss) { Icon(Icons.Outlined.Close, "Close") }
                 Text("Contacts", style = MaterialTheme.typography.titleLarge)
             }
-            Text("Everyone you’ve shared with or added. Check it’s them before you share anything sensitive.",
+            Text("People you share with. Add someone by the email they use for HushOS.",
                 style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2))
-            Row(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S6), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(value = email, onValueChange = { email = it }, singleLine = true, label = { Text("Add someone by email") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email), modifier = Modifier.weight(1f))
-                androidx.compose.material3.FilledTonalButton(enabled = email.contains("@"), onClick = { checking = email.trim() to null }, modifier = Modifier.padding(start = AlpineSpace.S2)) { Text("Add") }
-            }
+            SheetRow("Add someone", Icons.Outlined.PersonAdd, action = true) { step = ContactStep.Add() }
             // Right under adding someone, above the list, so it is never buried however many people there are.
             SheetRow("Your twelve words", Icons.Outlined.Badge, action = true) { model.openOwnWords() }
             val list = pins
-            // Someone whose keys changed by a succession their old keys signed: followed, said quietly, with the way to be sure.
-            for (pin in list.orEmpty().filter { it.verified && it.keysReplacedAt != null }) {
-                val name = pin.name.ifEmpty { pin.email }
-                Column(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S1).background(alpine.fill, RoundedCornerShape(12.dp))
-                    .padding(start = AlpineSpace.S4, end = AlpineSpace.S2, top = AlpineSpace.S3, bottom = AlpineSpace.S1)) {
-                    Text("$name replaced their sharing keys; the change is signed by their previous keys.", style = MaterialTheme.typography.bodyMedium)
-                    TextButton(onClick = { checking = pin.email to pin }) { Text("Compare words again") }
+            // What this phone remembers couldn't be read: nobody is shown as verified, and acts wait.
+            standingsError?.let { words ->
+                Column(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2)) {
+                    Text(words, style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = { scope.launch { load() } }) { Text("Try again") }
                 }
             }
             val shown = list?.let { PeopleFilter.shown(it, query) }
@@ -880,38 +947,46 @@ fun PeopleSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit) {
                 Text("Add someone by their email, or add them while you share.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
             }
             for (pin in shown.orEmpty()) {
-                val checked = runCatching { whenText(Instant.parse(pin.pinnedAt).toEpochMilli()) }.getOrNull()
-                // A pin that vouches for nothing (from before both keys were checked) says so: sharing and their shares wait for a new check.
-                val detail = if (pin.verified) listOfNotNull(pin.email, checked?.let { "Checked $it" }).joinToString(" · ") else "${pin.email} · Check their words again"
-                PersonRow(pin.name.ifEmpty { pin.email }, detail, pin.userId) { if (pin.verified) open = pin else checking = pin.email to pin }
+                val standing = standings?.get(pin.userId.lowercase())
+                PersonRow(pin.displayName, pin.email, pin.userId, changed = standing?.changed == true,
+                    end = { if (standing != null && !standing.changed) VerifiedLabel(standing.verified, Modifier.padding(start = AlpineSpace.S2)) }) { open = pin }
             }
         }
     }
     open?.let { pin ->
+        val standing = standings?.get(pin.userId.lowercase())
         Sheet(onDismissRequest = { open = null }) {
             Column(Modifier.fillMaxWidth().padding(bottom = AlpineSpace.S6)) {
                 Row(Modifier.padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S3), verticalAlignment = Alignment.CenterVertically) {
-                    PersonAvatar(pin.name.ifEmpty { pin.email }, pin.userId, 48.dp)
+                    PersonAvatar(pin.displayName, pin.userId, 48.dp)
                     Column(Modifier.padding(start = AlpineSpace.S4)) {
-                        Text(pin.name.ifEmpty { pin.email }, style = MaterialTheme.typography.titleMedium)
+                        Text(pin.displayName, style = MaterialTheme.typography.titleMedium)
                         Text(pin.email, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
                     }
                 }
                 HorizontalDivider(color = alpine.divider)
-                SheetRow("Check it’s them", Icons.Outlined.VerifiedUser) { open = null; checking = pin.email to pin }
+                if (standing?.changed == true) SheetRow("Review", Icons.Outlined.ErrorOutline) {
+                    open = null; step = ContactStep.Changed(AccountChange(pin.userId, pin.name, pin.email))
+                }
+                SheetRow(if (standing?.verified == true) "Check again" else "Check it’s ${pin.firstName}", Icons.Outlined.VerifiedUser) {
+                    open = null; step = ContactStep.Check(pin.email, pin.name)
+                }
                 SheetRow("Remove", Icons.Outlined.PersonRemove, danger = true) { open = null; removing = pin }
             }
         }
     }
     removing?.let { pin ->
-        val name = pin.name.ifEmpty { pin.email }
+        val first = pin.firstName
         AlertDialog(
             onDismissRequest = { removing = null },
-            title = { Text("Remove $name?") },
-            text = { Text("$name keeps access to anything you’ve already shared. If you add them again, you’ll be asked to check it’s them.") },
+            title = { Text("Remove $first?") },
+            text = { Text("$first keeps access to anything you’ve already shared.") },
             confirmButton = { TextButton(onClick = {
                 removing = null
-                scope.launch { if (model.unpin(pin)) { model.notify("$name removed"); load() } else model.notify("Couldn’t remove $name. Check your connection and try again.") }
+                scope.launch {
+                    model.removeContact(pin.userId).onSuccess { model.notify("$first removed"); load() }
+                        .onFailure { model.notify("Couldn’t remove them. ${Problems.say(it, "Try again.")}") }
+                }
             }) { Text("Remove", color = alpine.danger) } },
             dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } },
         )

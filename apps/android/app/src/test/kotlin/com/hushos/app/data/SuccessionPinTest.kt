@@ -14,6 +14,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.hushos.core.PinComparison
 
 /*
  * When a pinned contact's served keys change, the pin follows only a version 2 succession chain the pinned keys
@@ -50,7 +51,7 @@ class SuccessionPinTest {
         assertEquals(now, next.keysReplacedAt)
         // Shares to them still hold the old keys: every client is told to seal them again.
         assertTrue(next.resealShares)
-        assertEquals(PinComparison.SAME, comparePin(next, served))
+        assertEquals(PinComparison.SAME, next.compare(served))
     }
 
     @Test
@@ -84,7 +85,7 @@ class SuccessionPinTest {
 
     @Test
     fun aPinFromBeforeSuccessionsFindsTheChainByItsKeys() {
-        assertEquals(PinComparison.SUCCESSION, comparePin(pinned.copy(keyVersion = null), served))
+        assertEquals(PinComparison.SUCCESSION, pinned.copy(keyVersion = null).compare(served))
         assertEquals(link.newSigningPublicKey, followSuccession(pinned.copy(keyVersion = null), served, listOf(link), now)?.signingPublicKey)
     }
 
@@ -92,7 +93,7 @@ class SuccessionPinTest {
     fun aPinFromBeforeTheReleaseFollowsNothing() {
         // Its words never covered the ML-DSA key: a chain from its classical keys alone passes no trust on.
         val preRelease = TestPins.preRelease(pinned)
-        assertEquals(PinComparison.CHANGED, comparePin(preRelease, served))
+        assertEquals(PinComparison.CHANGED, preRelease.compare(served))
         assertNull(followSuccession(preRelease, served, listOf(link), now))
     }
 
@@ -140,15 +141,23 @@ class SuccessionPinTest {
     }
 
     @Test
-    fun onlyAVerifiedPinAtAnOlderVersionAsksForAChain() {
-        // Words never checked over its keys: nothing to follow from; they are checked again instead.
-        val unchecked = pinned.copy(fingerprint = "")
-        assertEquals(PinComparison.CHANGED, comparePin(unchecked, served))
+    fun aFirstSeenPinFollowsAChainAndStaysFirstSeenWhileOneThatVouchesForNothingFollowsNone() {
+        // First seen, nobody checked: a chain its keys signed is followed, and the pin stays first-seen, never verified.
+        val seen = pinned.copy(fingerprint = "", firstSeen = "shared-with-me")
+        assertEquals(PinComparison.SUCCESSION, seen.compare(served))
+        val next = followSuccession(seen, served, listOf(link), now)!!
+        assertEquals(com.hushos.core.PinTrust.SEEN, next.trust)
+        assertEquals("shared-with-me", next.firstSeen)
+        assertEquals(PinComparison.SAME, next.compare(served))
+        assertEquals(com.hushos.core.PinTrust.VERIFIED, followSuccession(pinned, served, listOf(link), now)!!.trust)
+        // A fingerprint over other keys vouches for nothing: nothing to follow from.
+        val unchecked = pinned.copy(fingerprint = pinned.fingerprint.reversed())
+        assertEquals(PinComparison.CHANGED, unchecked.compare(served))
         assertNull(followSuccession(unchecked, served, listOf(link), now))
         // Other keys served at the pinned version or below are a change no succession explains.
-        assertEquals(PinComparison.CHANGED, comparePin(pinned.copy(keyVersion = 3uL), served))
+        assertEquals(PinComparison.CHANGED, pinned.copy(keyVersion = 3uL).compare(served))
         // The same keys served again (a master-key rotation may raise the version) need nothing.
-        assertEquals(PinComparison.SAME, comparePin(pinned, old.copy(keyVersion = 4uL)))
+        assertEquals(PinComparison.SAME, pinned.compare(old.copy(keyVersion = 4uL)))
     }
 
     @Test

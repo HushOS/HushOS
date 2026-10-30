@@ -100,4 +100,63 @@ class SettingsTest {
         settings.removeLink("link-7")
         assertFalse(roundTrip(settings).ledger.hasLink("link-7", "node-7"))
     }
+
+    /* A first-seen pin of real-shaped keys (fingerprint ""), as Add someone writes it. */
+    private fun firstSeen(id: String) = TestPins.verified(id, "grace@example.org", "Grace", com.hushos.core.base64urlEncode(ByteArray(32) { 1 }),
+        com.hushos.core.base64urlEncode(ByteArray(32) { 2 })).copy(fingerprint = "", firstSeen = "added")
+
+    @Test
+    fun writingAPinUnderTheServedIdMovesAnotherClientsDifferentlyCasedPinWholeAndKeepsEveryFieldItDoesNotKnow() {
+        // Written by the web and a later client: a pin under the id in capitals, with fields this version never reads, and
+        // the family and role fields at the top.
+        val settings = Settings.parse("""
+            {"version":2,"familyChecks":{"g-1":"x"},"familyChecksSince":"2026-10-20","pendingRoles":{"g-1":{"u":"members"}},
+             "resealOwnShares":true,"replacementSeen":{"a":1},"trustedViaFamily":{"b":2},"later":"kept",
+             "contacts":{"GRACE-ID":{"userId":"GRACE-ID","email":"grace@example.org","name":"Grace","encryptionPublicKey":"old","signingPublicKey":"old",
+               "fingerprint":"","pinnedAt":"2026-10-01T00:00:00Z","firstSeen":"shared-with-me","familyChecks":{"g-1":"y"},"note":"kept"}}}
+        """.trimIndent(), 7uL)
+        settings.setPinOnce(firstSeen("grace-id").copy(firstSeen = null))
+        val saved = JSONObject(roundTrip(settings).text())
+        val contacts = saved.getJSONObject("contacts")
+        assertEquals(listOf("grace-id"), contacts.keys().asSequence().toList())
+        val pin = contacts.getJSONObject("grace-id")
+        assertEquals("shared-with-me", pin.getString("firstSeen"))
+        assertEquals("y", pin.getJSONObject("familyChecks").getString("g-1"))
+        assertEquals("kept", pin.getString("note"))
+        assertEquals(com.hushos.core.base64urlEncode(ByteArray(32) { 1 }), pin.getString("encryptionPublicKey"))
+        for (field in listOf("familyChecks", "familyChecksSince", "pendingRoles", "resealOwnShares", "replacementSeen", "trustedViaFamily", "later"))
+            assertTrue(field, saved.has(field))
+    }
+
+    @Test
+    fun aRemovalIsRecordedForgottenWhenTheyAreAddedAgainAndTheOldestGoFirstWhenRoomRunsOut() {
+        val settings = Settings.empty(3uL)
+        settings.setPinOnce(firstSeen("u-1"))
+        settings.removeContact("U-1", "2026-10-02T00:00:00Z")
+        assertTrue(settings.removed("u-1"))
+        assertEquals(null, settings.pinOf("u-1"))
+        settings.setPinOnce(firstSeen("u-1"))
+        assertFalse(settings.removed("u-1"))
+        // Room for everything but the removals: they go oldest first, one at a time, and a pin still fits.
+        for (i in 0 until 600) settings.removeContact("gone-$i", "2026-09-%02dT00:00:00Z".format(1 + i % 28) + i)
+        settings.json.put("padding", "x".repeat(Settings.MAX_BYTES - settings.bytes() + 2_000))
+        settings.setPinOnce(firstSeen("u-2"))
+        assertTrue(settings.bytes() <= Settings.MAX_BYTES)
+        val kept = settings.removals
+        assertTrue(kept.isNotEmpty() && kept.size < 600)
+        // Only the oldest went: every one kept is later than (or as late as) any forgotten.
+        val forgotten = (0 until 600).map { "gone-$it" }.filter { id -> kept.none { it.first == id } }
+        val newestForgotten = forgotten.maxOf { id -> "2026-09-%02dT00:00:00Z".format(1 + id.removePrefix("gone-").toInt() % 28) + id.removePrefix("gone-") }
+        assertTrue(kept.all { it.second >= newestForgotten })
+    }
+
+    @Test
+    fun aDocumentFullWithoutAnyRemovalRefusesTheNewPinInTheWebsWordsAndChangesNothing() {
+        val settings = Settings.empty(3uL)
+        settings.json.put("padding", "x".repeat(Settings.MAX_BYTES - settings.bytes() - 100))
+        val before = settings.text()
+        val refused = org.junit.Assert.assertThrows(ContactProblem::class.java) { settings.setPinOnce(firstSeen("u-1")) }
+        assertEquals("Your contacts are full. Remove someone you no longer share with.", refused.message)
+        assertEquals(before, settings.text())
+    }
 }

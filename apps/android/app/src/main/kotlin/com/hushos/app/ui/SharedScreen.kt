@@ -27,7 +27,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.Flag
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.LibraryAdd
 import androidx.compose.material.icons.outlined.DownloadForOffline
@@ -105,6 +107,9 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
     var mine by remember { mutableStateOf<List<SharedByMe>?>(null) }
     var mineFailed by remember { mutableStateOf(false) }
     var received by retain { mutableStateOf<Vault.ShareMount?>(null) }
+    // Review on a waiting row (6.7), and the row whose Open is running.
+    var review by retain { mutableStateOf<ContactStep?>(null) }
+    var waitingOpen by remember { mutableStateOf<String?>(null) }
     var reporting by retain { mutableStateOf<Vault.ShareMount?>(null) }
     var outgoing by retain { mutableStateOf<Outgoing?>(null) }
     var stopping by retain { mutableStateOf<Outgoing?>(null) }
@@ -193,7 +198,26 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
                                 EmptyState("Nothing shared with you yet", "When someone shares a folder or file with you, it shows up here.", modifier = Modifier.padding(top = 64.dp))
                             }
                         }
-                        items(shares.orEmpty(), key = { it.share.id }) { mount -> ReceivedRow(model, state, mount, onOpen = { mount.root?.let { open(it) } }, onMore = { received = mount }, onPeople = { people = true }) }
+                        items(shares.orEmpty(), key = { it.share.id }) { mount ->
+                            ReceivedRow(model, state, mount, onOpen = { mount.root?.let { open(it) } }, onMore = { received = mount },
+                                opening = waitingOpen, onWaiting = { act ->
+                                    when (act) {
+                                        is GranterTrust.Changed -> review = ContactStep.Changed(act.change)
+                                        is GranterTrust.Unchecked -> model.refreshShares()
+                                        else -> {
+                                            // The person's own Open: adds them back or follows them, then everything they shared mounts.
+                                            waitingOpen = mount.share.id
+                                            scope.launch {
+                                                model.openWaiting(mount.share).onFailure { failure ->
+                                                    if (failure is GranterTrust.Changed) review = ContactStep.Changed(failure.change)
+                                                    else model.notify("Couldn’t open this. ${com.hushos.app.data.Problems.say(failure, "Try again.")}")
+                                                }
+                                                waitingOpen = null
+                                            }
+                                        }
+                                    }
+                                })
+                        }
                     } else {
                         val rows = mine
                         val withPeople = rows.orEmpty().filter { it.share != null }.groupBy { it.node.id }
@@ -225,6 +249,8 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
             }
         }
     }
+    // Review on a row whose granter's account changed (6.7): Continue or a check, then Shared mounts again.
+    review?.let { step -> ContactStepSheet(model, step, resolved = { model.refreshShares() }) { review = null } }
     received?.let { mount ->
         val root = mount.root
         val from = first(mount.share.granterName, mount.share.granterEmail)
@@ -323,24 +349,29 @@ private fun whoOf(row: Outgoing): String {
 /* Something someone shared with this account: its mark, its name, who and what you can do. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ReceivedRow(model: DriveViewModel, state: DriveState, mount: Vault.ShareMount, onOpen: () -> Unit, onMore: () -> Unit, onPeople: () -> Unit) {
+private fun ReceivedRow(model: DriveViewModel, state: DriveState, mount: Vault.ShareMount, onOpen: () -> Unit, onMore: () -> Unit, opening: String?, onWaiting: (GranterTrust) -> Unit) {
     val alpine = Alpine.colors
     val root = mount.root
     val from = first(mount.share.granterName, mount.share.granterEmail)
     val trust = mount.trust
     if (root == null && trust != null) {
-        // Shut until the granter is checked in Contacts: the server's word for their key is not enough.
-        // A pin that vouches for nothing waits for a words check, like someone not added yet.
-        // Only keys that changed without a signed succession are a warning; replaced keys and a share waiting for its re-seal are a step to take.
-        val unverified = trust !is GranterTrust.Changed
-        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onPeople).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(36.dp).background(if (unverified) alpine.tint else alpine.dangerSoft, CircleShape), contentAlignment = Alignment.Center) {
-                Icon(if (unverified) Icons.Outlined.Group else Icons.Outlined.WarningAmber, null, tint = if (unverified) alpine.inkMuted else alpine.danger, modifier = Modifier.size(20.dp))
+        // Waiting on the person, said calmly (docs/optional-verification.md 6.4): Open (which adds or follows them), Review
+        // (an account that changed), Try again (a check that couldn't run), or nothing they can do yet.
+        val action = when (trust) {
+            is GranterTrust.Waiting -> if (opening == mount.share.id) "Opening…" else "Open"
+            is GranterTrust.Changed -> "Review"
+            is GranterTrust.Unchecked -> "Try again"
+            is GranterTrust.Unverified, is GranterTrust.Reshare -> null
+        }
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(36.dp).background(alpine.tint, CircleShape), contentAlignment = Alignment.Center) {
+                Icon(if (mount.share.node.isFolder) Icons.Outlined.Folder else Icons.AutoMirrored.Outlined.InsertDriveFile, null, tint = alpine.inkMuted, modifier = Modifier.size(20.dp))
             }
             Column(Modifier.weight(1f).padding(start = AlpineSpace.S4)) {
                 Text("Shared by $from", style = MaterialTheme.typography.bodyLarge)
-                Text(trust.message.orEmpty(), style = MaterialTheme.typography.bodyMedium, color = if (unverified) alpine.inkMuted else alpine.danger)
+                Text(trust.message.orEmpty(), style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
             }
+            action?.let { TextButton(enabled = opening == null, onClick = { onWaiting(trust) }) { Text(it) } }
         }
         return
     }

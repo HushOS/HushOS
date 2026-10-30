@@ -6,7 +6,7 @@ import java.io.File
 /*
  * Everything this phone holds for one account: decrypted files kept on the phone,
  * files opened or fetched for the Files app, decrypted thumbnails, the parents index,
- * the transfer queue's copies, the tree mirror, recent searches. It belongs to the
+ * the transfer queue's copies, the tree mirror, recent searches, the contact guard. It belongs to the
  * account that signed in, recorded by user id, and goes on sign-out, on account
  * deletion, and before a different account signs in, so nothing of one account ever
  * shows to the next (Home, On this phone, search, the Files app).
@@ -45,6 +45,9 @@ class AccountStore(private val files: File, private val cache: File, private val
         // The rollback marks, sealed, and the plaintext file earlier versions kept across sign-outs: a phone signed back
         // in trusts the server as a new device does, the cost the web accepted too (docs/integrity-design.md).
         SettingsMark.deleteAll(noBackup)
+        // The contact guard too, under its own lock, so an act's write that waited through the sign-out writes nothing back:
+        // signed back in, this phone trusts the settings' contacts as a new device does (docs/optional-verification.md 2.8).
+        ContactGuard.deleteAll(noBackup)
         // Sign-out and removal: no recovery waits any more. Another account signing in keeps only its own (claim).
         RecoveryWords.keepOnlyFor(keepRecoveryFor)
         // The cache is all account data (opened files, links, the Files app's copies and
