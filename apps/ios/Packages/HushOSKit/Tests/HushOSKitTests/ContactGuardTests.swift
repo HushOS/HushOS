@@ -771,6 +771,66 @@ extension OnFakeDrive {
             #expect(sealedShares(sent) == ["share-1"])
         }
 
+        @Test func aRotationWhoseSendFailsStillListsTheFileInItsFolder() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let phone = await phone(server)
+            let workspace = UUID().uuidString.lowercased()
+            let workspaceKey = try randomBytes(length: 32)
+            await phone.vault.adopt(workspace: WorkspaceView(workspaceId: workspace, changeSeq: nil, grant: nil, root: nil), key: workspaceKey)
+            let folderId = UUID().uuidString.lowercased()
+            let fileId = UUID().uuidString.lowercased()
+            let folderKey = try randomBytes(length: 32)
+            let fileKey = try randomBytes(length: 32)
+            func node(_ id: String, parent: String?, kind: String, key: Data, name: String) throws -> (wire: [String: Any], metadata: NodeMetadata) {
+                let metadata = NodeMetadata(name: name, mime: nil, size: 3, modified: nil, attributes: [:])
+                let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
+                let wrapped = try nodeWrap(ctx: NodeKeyContext(workspaceId: workspace, nodeId: id, parentId: parent ?? workspace, parentKeyEpoch: 1, keyEpoch: 1),
+                                           parentKey: parent == nil ? workspaceKey : folderKey, nodeKey: key)
+                var wire: [String: Any] = ["id": id, "workspaceId": workspace, "kind": kind, "keyEpoch": 1, "parentKeyEpoch": 1,
+                                           "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataVersion": 1,
+                                           "metadataEnvelope": base64urlEncode(bytes: sealed)]
+                if let parent { wire["parentId"] = parent }
+                return (wire, metadata)
+            }
+            let folder = try node(folderId, parent: nil, kind: "folder", key: folderKey, name: "Plans")
+            let file = try node(fileId, parent: folderId, kind: "file", key: fileKey, name: "plan.md")
+            _ = try await phone.vault.adopt(try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: folder.wire)),
+                                            nodeKey: folderKey, metadata: folder.metadata, in: workspace)
+            let fileItem = try await phone.vault.adopt(try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: file.wire)),
+                                                       nodeKey: fileKey, metadata: file.metadata, in: workspace)
+            server.routes = { method, path, _ in
+                switch (method, path) {
+                case ("POST", "/api/drive/nodes/\(fileId)/rotation"):
+                    return (200, ["rotation": ["nodeId": fileId, "targetEpoch": 2]])
+                case ("GET", "/api/drive/nodes/\(fileId)/rotation/work"):
+                    var entry = file.wire
+                    entry["depth"] = 0
+                    entry["versions"] = [Any]()
+                    entry["links"] = [Any]()
+                    entry["shares"] = [Any]()
+                    return (200, ["rotation": ["nodeId": fileId, "targetEpoch": 2], "nodes": [entry], "nextCursor": NSNull(), "done": false])
+                case ("POST", "/api/drive/nodes/\(fileId)/rotation/nodes"):
+                    // The connection drops on the way: nothing is known to have landed.
+                    return (500, ["message": "The connection dropped."])
+                case ("GET", "/api/drive/nodes/\(folderId)/children"):
+                    return (200, ["folder": folder.wire, "ancestors": [Any](), "children": [file.wire], "nextCursor": NSNull()])
+                default:
+                    return nil
+                }
+            }
+            await phone.vault.adopt(signers: try TrustedSigners(userId: me, identities: [try identityOpen(userId: me, accountKey: root, envelope: own)], pins: []))
+            // The catalogue answers for the folder, as after a build.
+            await phone.vault.markCatalogueReady()
+            await #expect(throws: (any Error).self) { _ = try await phone.vault.rotate(fileItem) }
+            // The folder still lists the file, from the catalogue or (when it can't answer) from the server.
+            let listed: [String]
+            if let cached = await phone.vault.catalogueChildren(of: folderId) { listed = cached.map(\.id) } else {
+                listed = try await phone.vault.listChildren(of: folderId).children.map(\.id)
+            }
+            #expect(listed.contains(fileId))
+        }
+
         @Test func sharingWithSomeoneWhosePinTheCheckMovedSaysTrustMoved() async throws {
             defer { done() }
             let identity = try makeIdentity(maya)

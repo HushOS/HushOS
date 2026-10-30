@@ -352,7 +352,12 @@ extension Vault {
                 unstage(staged.keys)
                 // A send whose answer never came may have landed: those nodes are read from the server again, under
                 // whichever keys it holds, rather than trusted from what this vault opened before.
-                if sending { for id in staged.keys { opened[ref(id)] = nil } }
+                // The catalogue answers from those rows too: it stops answering until a sync builds it again,
+                // so a folder lists from the server instead of without them.
+                if sending {
+                    for id in staged.keys { opened[ref(id)] = nil }
+                    catalogueState = .idle
+                }
                 throw error
             }
             outcome.rotated += applied
