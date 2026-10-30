@@ -498,7 +498,9 @@ private fun PersonSheet(model: DriveViewModel, item: Opened, share: OwnedShare, 
         }
         return
     }
-    Sheet(onDismissRequest = dismiss) {
+    // Opened whole, never half way: with an account changed (Review, Check it's Maya) Stop sharing, which never waits on
+    // Review, would otherwise start below the fold.
+    Sheet(onDismissRequest = dismiss, full = true) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S6)) {
             Row(Modifier.padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S4), verticalAlignment = Alignment.CenterVertically) {
                 PersonAvatar(name, share.granteeId, 48.dp)
