@@ -117,7 +117,7 @@ struct MovePicker: View {
                             }
                         }
                     } header: {
-                        Text("Shared with you").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+                        SectionTitle("Shared with you")
                     }
                 }
                 if at == store.rootId, !store.writableFamilyRoots.isEmpty {
@@ -127,7 +127,7 @@ struct MovePicker: View {
                                 .buttonStyle(.plain).itemRow()
                         }
                     } header: {
-                        Text("Family folders").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+                        SectionTitle("Family folders")
                     }
                 }
             }
@@ -325,7 +325,7 @@ struct VersionsSheet: View {
                     Section {
                         versionRow(current, note: size(current))
                     } header: {
-                        Text("Current version").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+                        SectionTitle("Current version")
                     }
                 }
                 if loaded {
@@ -348,7 +348,7 @@ struct VersionsSheet: View {
                             .itemRow()
                         }
                     } header: {
-                        Text(earlier.count > 1 ? "Earlier versions" : "Earlier version").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+                        SectionTitle(earlier.count > 1 ? "Earlier versions" : "Earlier version")
                     } footer: {
                         if !earlier.isEmpty { Text(Self.retention).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted) }
                     }

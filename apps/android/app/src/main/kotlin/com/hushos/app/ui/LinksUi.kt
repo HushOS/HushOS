@@ -436,7 +436,7 @@ private fun LinksSection(model: DriveViewModel, item: Opened, links: List<Pair<L
     val scope = rememberCoroutineScope()
     var making by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().padding(start = AlpineSpace.S4, end = AlpineSpace.S4, top = AlpineSpace.S4), verticalAlignment = Alignment.CenterVertically) {
-        Text("Links", style = MaterialTheme.typography.titleSmall, color = alpine.primary, modifier = Modifier.weight(1f))
+        Text("Links", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = alpine.ink, modifier = Modifier.weight(1f).semantics { heading() })
         OutlinedButton(enabled = !making && links != null, onClick = {
             making = true
             scope.launch {
@@ -600,7 +600,7 @@ private fun LinkOptionsSheet(model: DriveViewModel, item: Opened, link: LinkView
                 placeholder = if (link.hasPassword) "Keep the current password" else null,
                 modifier = Modifier.padding(horizontal = AlpineSpace.S6),
             )
-            Subheader("Ends")
+            FieldLabel("Ends", Modifier.padding(start = AlpineSpace.S4, end = AlpineSpace.S4, top = AlpineSpace.S4, bottom = AlpineSpace.S2))
             FlowRow(Modifier.padding(horizontal = AlpineSpace.S4), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
                 for ((value, label) in choices) AlpineChip(label, selected = ends == value, onClick = { ends = value })
             }

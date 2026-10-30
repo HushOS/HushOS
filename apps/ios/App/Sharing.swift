@@ -467,17 +467,17 @@ struct LinkOptionsSheet: View {
                         .disabled(removePassword).alpineRow()
                     if link.hasPassword { Toggle("Remove the password", isOn: $removePassword).alpineRow() }
                 } header: {
-                    Text("Password")
+                    FieldLabel("Password")
                 } footer: {
                     Text(shortPassword ? "At least 8 characters." : "At least 8 characters. Whoever opens the link types it on their device. It never reaches us.")
                         .foregroundStyle(shortPassword ? Alpine.danger : Alpine.inkMuted)
                 }
-                Section("Ends") {
+                Section {
                     if let current = parseDate(link.expiresAt) {
                         choice("keep", current.formatted(.dateTime.day().month(.wide).locale(.dayMonth)))
                     }
                     ForEach(Self.expiries, id: \.value) { option in choice(option.value, option.label) }
-                }
+                } header: { FieldLabel("Ends") }
                 if !error.isEmpty { Section { Text(error).foregroundStyle(Alpine.danger).alpineRow() } }
                 Section {
                     Button("Turn off link", role: .destructive) { dismiss(); turnOff() }.alpineRow()
@@ -552,7 +552,7 @@ private struct PersonAccessSheet: View {
                     role("viewer", "Can view", "Open and download")
                     role("editor", "Can edit", item.isFolder ? "Add, rename and delete inside" : "Open, download and replace")
                 } header: {
-                    Text("Can open").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+                    FieldLabel("Can open")
                 } footer: {
                     if !pinned { Text("Add \(first) to Contacts to change what they can do.").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted) }
                 }

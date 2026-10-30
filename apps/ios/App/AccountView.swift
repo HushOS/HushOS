@@ -51,7 +51,7 @@ struct AccountView: View {
                     }
                     .alpineRow()
                 } header: {
-                    sectionLabel("Plan and storage")
+                    SectionTitle("Plan and storage")
                 }
                 FamiliesSection()
                 Section {
@@ -64,7 +64,7 @@ struct AccountView: View {
                     Button { showingPeople = true } label: { row("person.2", "Contacts", "Check it’s them before you share anything sensitive", chevron: true) }.alpineRow()
                     Button { showingWords = true } label: { row("person.text.rectangle", "Your twelve words", "Read these to someone checking it’s you", chevron: true) }.alpineRow()
                 } header: {
-                    sectionLabel("Sign-in and recovery")
+                    SectionTitle("Sign-in and recovery")
                 }
                 Section {
                     NavigationLink { AdvancedView().environment(store).environment(model) } label: {
@@ -78,7 +78,7 @@ struct AccountView: View {
                     Button { open(Auth.privacyURL(origin: model.origin)) } label: { row("hand.raised", "Privacy policy", nil, external: true) }.alpineRow()
                     Button { open(Auth.termsURL(origin: model.origin)) } label: { row("doc.text", "Terms", nil, external: true) }.alpineRow()
                 } header: {
-                    sectionLabel("About")
+                    SectionTitle("About")
                 }
                 Section {
                     Button("Sign out", role: .destructive) { signingOut = true }.foregroundStyle(Alpine.danger).alpineRow()
@@ -192,9 +192,6 @@ struct AccountView: View {
         return size > 0 ? "\(count) · \(formatBytes(Int64(size))) · removed after 30 days" : "\(count) · removed after 30 days"
     }
 
-    private func sectionLabel(_ text: String) -> some View {
-        Text(text).font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
-    }
 
     private func open(_ url: URL?) { if let url { PolicyLinks.present(url) } }
 
@@ -373,7 +370,7 @@ struct PlansView: View {
                     .alpineRow()
                 }
             } header: {
-                Text("Your plan").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+                SectionTitle("Your plan")
             } footer: {
                 // Said, never linked: the app holds no way to where plans are paid for (App Review 3.1.3(f)).
                 if let lapsed = plan.lapsed { Text("\(lapsed.room) Nothing is deleted, and uploads pause while you’re over it.") }
@@ -588,7 +585,7 @@ struct AdvancedView: View {
                 }
                 .alpineRow()
             } header: {
-                Text("About this account").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+                SectionTitle("About this account")
             } footer: {
                 Text("Support may ask for your account ID.")
             }
@@ -1053,9 +1050,9 @@ struct DeleteAccountSheet: View {
                 }
                 if !error.isEmpty { Section { Text(error).foregroundStyle(Alpine.danger).alpineRow() } }
                 Section { PasswordField(label: "Password", text: $password, content: nil).alpineRow() }
-                Section("Type DELETE to confirm") {
+                Section {
                     TextField("DELETE", text: $phrase).font(.body.monospaced()).textInputAutocapitalization(.characters).autocorrectionDisabled().alpineRow()
-                }
+                } header: { FieldLabel("Type DELETE to confirm") }
                 Section {
                     Button { submit() } label: {
                         // Off, it fades to the same quiet fill as every other button, never a washed-out red.
@@ -1171,7 +1168,7 @@ struct CheckWordsView: View {
                         Text("That isn’t word \(question.position). Look at your kit again.").font(Theme.Text.footnote).foregroundStyle(Alpine.danger).alpineRow()
                     }
                 } header: {
-                    Text("Word \(question.position)").font(Theme.Text.label).foregroundStyle(Alpine.ink)
+                    FieldLabel("Word \(question.position)")
                 }
             }
             Section {

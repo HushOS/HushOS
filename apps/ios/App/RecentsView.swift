@@ -675,7 +675,7 @@ struct OnThisPhoneView: View {
                             .itemRow()
                         }
                     } header: {
-                        Text("Folders").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted).textCase(nil)
+                        SectionTitle("Folders")
                     }
                 }
                 if !entries.isEmpty {
@@ -699,7 +699,7 @@ struct OnThisPhoneView: View {
                             .itemRow()
                     }
                 } header: {
-                    if !keptFolders.isEmpty { Text("Files").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted).textCase(nil) }
+                    if !keptFolders.isEmpty { SectionTitle("Files") }
                 } footer: {
                     Text("These open without a connection. When one changes somewhere else, the copy here updates. Touch and hold to remove one.")
                         .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)

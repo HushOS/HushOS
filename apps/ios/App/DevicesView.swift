@@ -34,7 +34,7 @@ struct DevicesView: View {
                     Section {
                         row(current)
                     } header: {
-                        label(UIDevice.current.userInterfaceIdiom == .pad ? "This iPad" : "This iPhone")
+                        SectionTitle(UIDevice.current.userInterfaceIdiom == .pad ? "This iPad" : "This iPhone")
                     }
                 }
                 Section {
@@ -48,7 +48,7 @@ struct DevicesView: View {
                             }
                     }
                 } header: {
-                    label("Other devices")
+                    SectionTitle("Other devices")
                 }
                 if !others.isEmpty {
                     Section {
@@ -92,9 +92,6 @@ struct DevicesView: View {
         }
     }
 
-    private func label(_ text: String) -> some View {
-        Text(text).font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
-    }
 
     private func row(_ device: AccountDevice) -> some View {
         HStack(spacing: Alpine.Space.s3) {

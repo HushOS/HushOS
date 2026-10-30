@@ -475,7 +475,7 @@ private fun isBelow(model: DriveViewModel, item: Opened, folder: String): Boolea
 private fun SortMenu(expanded: Boolean, dismiss: () -> Unit, view: String, sortKey: String, ascending: Boolean, tags: List<com.hushos.app.data.Tag>, tagFilter: String?, onView: (String) -> Unit, onSort: (String) -> Unit, onTag: (String) -> Unit) {
     val alpine = Alpine.colors
     DropdownMenu(expanded = expanded, onDismissRequest = dismiss, shape = RoundedCornerShape(16.dp), containerColor = alpine.menu, modifier = Modifier.width(264.dp)) {
-        Text("View", style = MaterialTheme.typography.titleSmall, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2))
+        Text("View", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2))
         for ((key, label) in listOf("list" to "List", "grid" to "Grid")) {
             val on = key == view
             DropdownMenuItem(
@@ -486,7 +486,7 @@ private fun SortMenu(expanded: Boolean, dismiss: () -> Unit, view: String, sortK
             )
         }
         HorizontalDivider(Modifier.padding(vertical = AlpineSpace.S2), color = alpine.divider)
-        Text("Sort by", style = MaterialTheme.typography.titleSmall, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2))
+        Text("Sort by", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2))
         for (key in listOf("name", "modified", "size")) {
             val on = key == sortKey
             DropdownMenuItem(
@@ -503,7 +503,7 @@ private fun SortMenu(expanded: Boolean, dismiss: () -> Unit, view: String, sortK
             )
         }
         HorizontalDivider(Modifier.padding(vertical = AlpineSpace.S2), color = alpine.divider)
-        Text("Show only", style = MaterialTheme.typography.titleSmall, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2))
+        Text("Show only", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2))
         if (tags.isEmpty()) Text("No tags in this folder", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2))
         else FlowRow(Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S1), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
             for (tag in tags) AlpineChip(tag.name, selected = tag.id == tagFilter, onClick = { onTag(tag.id) }, leading = { TagDot(tag.colour) })

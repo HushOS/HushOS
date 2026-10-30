@@ -158,6 +158,7 @@ fun AccountScreen(model: DriveViewModel, state: DriveState) {
                     TextButton(onClick = { editingName = true }) { Text("Edit") }
                 }
             }
+            Subheader("Plan and storage")
             PlanCard(state) { page = Page.PLAN }
             Subheader("Sign-in and recovery")
             AccountRow("Change password", "The password you sign in with", Icons.Outlined.Password) { page = Page.PASSWORD }
@@ -282,7 +283,6 @@ private fun PlanCard(state: DriveState, onClick: () -> Unit) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Plan and storage", style = MaterialTheme.typography.labelLarge, color = alpine.inkMuted)
                 Text(plan(state).name, style = MaterialTheme.typography.titleMedium)
             }
             Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = alpine.inkMuted)
@@ -349,7 +349,6 @@ private fun PlanScreen(model: DriveViewModel, state: DriveState, onBack: () -> U
         if (state.unreachable) OfflineCapsule()
         val shape = RoundedCornerShape(AlpineRadius.Card)
         Column(Modifier.padding(AlpineSpace.S4).fillMaxWidth().background(alpine.surface, shape).then(if (alpine.high) Modifier.border(1.dp, alpine.edge, shape) else Modifier).padding(AlpineSpace.S4)) {
-            Text("Your plan", style = MaterialTheme.typography.labelLarge, color = alpine.inkMuted)
             Text(plan(state).name, style = MaterialTheme.typography.titleLarge)
             // The plan's name and storage only: no way to the web's billing page (Google Play's
             // payments policy; Apple's 3.1.3(f)). The renewal date is account information; while
@@ -631,7 +630,7 @@ private fun CheckWordsScreen(phrase: String, onBack: () -> Unit, onDone: () -> U
         Column(Modifier.padding(horizontal = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S4)) {
             Text("Pick the missing words from your kit.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
             for (at in positions) Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
-                Text("Word ${at + 1}", style = MaterialTheme.typography.titleSmall)
+                FieldLabel("Word ${at + 1}")
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
                     for (word in options[at].orEmpty()) AlpineChip(word, selected = picked[at] == word, onClick = { picked = picked + (at to word) })
                 }

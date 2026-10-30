@@ -56,6 +56,7 @@ import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -164,15 +165,24 @@ fun TagDot(colour: String, size: Dp = 8.dp, dark: Boolean = false) {
     Box(Modifier.size(size).background(shown, CircleShape))
 }
 
-/* A section label over a list, in the primary colour, as Material lists head their groups. */
+/*
+ * A section's heading over a list: titleLarge bold in ink, as Home heads its sections. Never a
+ * small coloured or muted kicker (DESIGN.md, No eyebrows).
+ */
 @Composable
 fun Subheader(text: String, compact: Boolean = false, action: (@Composable RowScope.() -> Unit)? = null) {
-    // Compact: the label alone with a little room, for Home's stacked sections.
-    val size = if (compact) Modifier.padding(top = AlpineSpace.S1, bottom = AlpineSpace.S1) else Modifier.height(48.dp)
+    // Compact: the heading alone with a little room, for Home's stacked sections.
+    val size = if (compact) Modifier.padding(top = AlpineSpace.S1, bottom = AlpineSpace.S1) else Modifier.padding(top = AlpineSpace.S4).heightIn(min = 48.dp)
     Row(Modifier.fillMaxWidth().then(size).padding(start = AlpineSpace.S4, end = AlpineSpace.S1), verticalAlignment = Alignment.CenterVertically) {
-        Text(text, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f))
+        Text(text, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Alpine.colors.ink, modifier = Modifier.weight(1f).semantics { heading() })
         action?.invoke(this)
     }
+}
+
+/* A field's name over the field: titleSmall in ink, sentence case. */
+@Composable
+fun FieldLabel(text: String, modifier: Modifier = Modifier) {
+    Text(text, style = MaterialTheme.typography.titleSmall, color = Alpine.colors.ink, modifier = modifier)
 }
 
 /* Kept from today's line, restyled as a quiet strip in the list rather than a bar across the top. */
