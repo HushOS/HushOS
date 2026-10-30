@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.11.0](https://github.com/HushOS/HushOS/compare/v0.10.0...v0.11.0) (2026-10-30)
+
+
+### Features
+
+* **android:** adapt the app to foldables and large screens ([#234](https://github.com/HushOS/HushOS/issues/234)) ([fc04537](https://github.com/HushOS/HushOS/commit/fc0453701c4f261aa40a614727cc48124fb86c8d))
+* **crypto:** accept a family on first use and check it later ([#207](https://github.com/HushOS/HushOS/issues/207)) ([d57831a](https://github.com/HushOS/HushOS/commit/d57831a70c0eeb27bff4030c77f02c96f9d8180a))
+* **crypto:** keep a first-seen pin for people nobody has checked ([#206](https://github.com/HushOS/HushOS/issues/206)) ([d78682b](https://github.com/HushOS/HushOS/commit/d78682b317054dc5d87c8ad2de514837ddc0708d))
+* **crypto:** keep a node's attributes when a client re-saves it ([#226](https://github.com/HushOS/HushOS/issues/226)) ([d389f2a](https://github.com/HushOS/HushOS/commit/d389f2aa474a6ecff7190e15c105b86f1ba3e68d))
+* **ios:** adapt the app to iPhone Duo's inner and outer displays ([#233](https://github.com/HushOS/HushOS/issues/233)) ([f42366b](https://github.com/HushOS/HushOS/commit/f42366bae0ed81b2fbc6c43c607ab0cfb17a0633))
+* **ios:** share with someone as soon as they're added ([#239](https://github.com/HushOS/HushOS/issues/239)) ([89b21b8](https://github.com/HushOS/HushOS/commit/89b21b886303b3d05fa963f9d8f216cf909a58f4))
+* **ios:** tint the row whose Info is open beside the list ([#235](https://github.com/HushOS/HushOS/issues/235)) ([2512e89](https://github.com/HushOS/HushOS/commit/2512e89eabb7b36338a6550d999d3048b38cf4d7))
+* **tokens:** make the dark ground true black ([#236](https://github.com/HushOS/HushOS/issues/236)) ([9be67b7](https://github.com/HushOS/HushOS/commit/9be67b7e59464a0c08d8512e1f2644e1f965ae7f))
+* **web:** add a dev-only component playground with live controls ([#219](https://github.com/HushOS/HushOS/issues/219)) ([3ab0404](https://github.com/HushOS/HushOS/commit/3ab0404e53ba52835fed85396681544e611eb2d6))
+* **web:** let people into a family without comparing words ([#231](https://github.com/HushOS/HushOS/issues/231)) ([745fd28](https://github.com/HushOS/HushOS/commit/745fd289c3e15933659dce4ee5e4e1f5e86e3a90))
+* **web:** share with someone as soon as they're added ([#222](https://github.com/HushOS/HushOS/issues/222)) ([c4dff12](https://github.com/HushOS/HushOS/commit/c4dff12150807181aa5865c81674aef455dfe48a))
+
+
+### Bug fixes
+
+* **android:** drop "once approved" from the release notes' Google Play line ([#195](https://github.com/HushOS/HushOS/issues/195)) ([2fcd8c9](https://github.com/HushOS/HushOS/commit/2fcd8c927b603799a452b2524eeacb0e296deab1))
+* **billing:** end a family's unpaid plan before a new one is bought ([#188](https://github.com/HushOS/HushOS/issues/188)) ([deb9b12](https://github.com/HushOS/HushOS/commit/deb9b12ff221d8f0aa0cc9dcda1f9928fb6e4b50))
+* **billing:** keep the newest Polar reading when reconciles overlap ([#205](https://github.com/HushOS/HushOS/issues/205)) ([efa5e47](https://github.com/HushOS/HushOS/commit/efa5e4724601d31ae7d966fd342a5af3c0827e9f))
+* **billing:** revoke a deleted family's plan that Polar bills again ([#189](https://github.com/HushOS/HushOS/issues/189)) ([41cfde5](https://github.com/HushOS/HushOS/commit/41cfde5eb17146caa7b480fcb441d804189d3e2e))
+* **crypto:** give every ledger a generation no other ledger holds ([#197](https://github.com/HushOS/HushOS/issues/197)) ([a1cc098](https://github.com/HushOS/HushOS/commit/a1cc0982af998ce481cbd73978280eba5a6187b6))
+* **ios:** name HushOSKit's ServedContactKeys in the tests that also import the core ([#227](https://github.com/HushOS/HushOS/issues/227)) ([81234be](https://github.com/HushOS/HushOS/commit/81234be44bf8d062817b606d2a6b1a87a6658251))
+* **mobile:** leave no rollback marks on a phone after sign-out ([#229](https://github.com/HushOS/HushOS/issues/229)) ([c144e03](https://github.com/HushOS/HushOS/commit/c144e033e182e3e1077fcfd99f8a2530a523ed68))
+* never revoke a share because a check failed for another reason ([#240](https://github.com/HushOS/HushOS/issues/240)) ([3e9518f](https://github.com/HushOS/HushOS/commit/3e9518f78ebff28ba96fcf6bc75176f93dd0f5eb))
+* **web:** draw outline buttons as outlines on the black panel ([#237](https://github.com/HushOS/HushOS/issues/237)) ([7546002](https://github.com/HushOS/HushOS/commit/754600263e01a179364dffcbfd08922d6d515fab))
+* **web:** draw the keyboard focus outline again ([#213](https://github.com/HushOS/HushOS/issues/213)) ([fdaa9d3](https://github.com/HushOS/HushOS/commit/fdaa9d3db49481108185fdaaae88ea651081cd86))
+* **web:** keep the Markdown preview inside the screen on phones ([#218](https://github.com/HushOS/HushOS/issues/218)) ([6c08297](https://github.com/HushOS/HushOS/commit/6c0829789173e5b9e425f97ff0d0c2e866631104))
+* **web:** keep the sign-up code behind "Have a code?" ([#209](https://github.com/HushOS/HushOS/issues/209)) ([e350a94](https://github.com/HushOS/HushOS/commit/e350a944641c090a6f9a4f32bd24b0a12b9086cb))
+* **web:** keep toasts at the bottom, in front of the transfers panel ([#223](https://github.com/HushOS/HushOS/issues/223)) ([ec001ee](https://github.com/HushOS/HushOS/commit/ec001ee2feaf25f320c9889858581cff55f7a017))
+* **web:** leave nothing of an account in the browser after sign-out ([#224](https://github.com/HushOS/HushOS/issues/224)) ([aea2985](https://github.com/HushOS/HushOS/commit/aea298561db8c29509a2028e6d0e0af10c31a768))
+* **web:** name the family plan once, and colour members' plan notices ([#220](https://github.com/HushOS/HushOS/issues/220)) ([6abe10d](https://github.com/HushOS/HushOS/commit/6abe10d3c5c3b260dbb69961e0424df57952fc8d))
+* **web:** one section pattern on the family page; rename, cancel and resume a family plan; one Trash list ([#202](https://github.com/HushOS/HushOS/issues/202)) ([6ed4a73](https://github.com/HushOS/HushOS/commit/6ed4a73bd1b49635604158daaed510a31d2864cb))
+* **web:** open a re-check on the words, not the email form ([#217](https://github.com/HushOS/HushOS/issues/217)) ([76ed743](https://github.com/HushOS/HushOS/commit/76ed743f1826c02ba15939a5be0e399c464f26bb))
+* **web:** raise the chosen segment out of a soft groove so the switch reads ([#221](https://github.com/HushOS/HushOS/issues/221)) ([502f1ec](https://github.com/HushOS/HushOS/commit/502f1ec2b28be1071f67565dfa35e59299d879aa))
+
 ## [0.10.0](https://github.com/HushOS/HushOS/compare/v0.9.0...v0.10.0) (2026-10-26)
 
 
