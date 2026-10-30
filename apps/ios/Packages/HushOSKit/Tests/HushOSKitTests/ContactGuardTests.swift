@@ -1,0 +1,694 @@
+import Foundation
+import HushOSCore
+import Testing
+@testable import HushOSKit
+
+/* A guard in a folder of the test's own, which a test can make refuse writes, as a full disk would. */
+final class GuardSwitch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var on = true
+    var writable: Bool {
+        get { lock.withLock { on } }
+        set { lock.withLock { on = newValue } }
+    }
+}
+
+func guardStore(_ folder: URL, _ owner: AccountOwner, generation: GuardGeneration = GuardGeneration(), writes: GuardSwitch = GuardSwitch()) -> ContactGuardStore {
+    ContactGuardStore(folder: folder, owner: owner, generation: generation) { writes.writable }
+}
+
+func guardFolder() -> URL {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("guard-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url
+}
+
+/* A first-seen pin's keys for an identity, as the guard remembers them. */
+func firstSeen(_ envelope: IdentityEnvelope) throws -> PinKeys {
+    try pinOfServed(served: try #require(servedOf(envelope).full), verified: false)
+}
+
+/*
+ * The guard's store on its own: what one phone keeps per account and person, across the app and
+ * its extensions, apart from the settings.
+ */
+struct ContactGuardStoreTests {
+    let owner = AccountOwner(userId: "me", origin: "https://one.test")
+
+    @Test func aSignOutLeavesNoGuardAndAWriteAfterItWritesNothing() throws {
+        let root = guardFolder()
+        let writes = GuardSwitch()
+        let store = guardStore(root.appendingPathComponent("local/guard", isDirectory: true), owner, writes: writes)
+        let maya = try makeIdentity("maya")
+        try store.commit("maya", try guardEntryNext(previous: nil, pin: try firstSeen(maya.envelope)), over: 0)
+        #expect(try store.entry("maya") != nil)
+        AccountStore(root: root, temporary: guardFolder()).wipe()
+        // Nothing of whom this account shared with stays: the next sign-in starts as a new device.
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("local/guard").path))
+        #expect(try store.entries().isEmpty)
+        // A write still on its way when the session went is refused, and leaves nothing behind.
+        writes.writable = false
+        #expect(throws: GuardError.unsaved) { try store.commit("maya", try guardEntryNext(previous: nil, pin: try firstSeen(maya.envelope)), over: 0) }
+        #expect(!FileManager.default.fileExists(atPath: store.file.path))
+    }
+
+    @Test func aRecordThatDoesNotReadIsUnreadableNeverNothing() throws {
+        let store = guardStore(guardFolder(), owner)
+        let maya = try makeIdentity("maya")
+        try store.commit("maya", try guardEntryNext(previous: nil, pin: try firstSeen(maya.envelope)), over: 0)
+        // Damaged bytes: never read as "no entry", which would be first use for everyone.
+        try Data("{not json".utf8).write(to: store.file)
+        #expect(throws: GuardError.unreadable) { _ = try store.entry("maya") }
+        #expect(throws: GuardError.unreadable) { _ = try store.entry("someone-else") }
+        // An entry edited to keys that make no commitment (a digest cut short) is no entry to judge by either.
+        var record = ContactGuardStore.Record()
+        let entry = try guardEntryNext(previous: nil, pin: try firstSeen(maya.envelope))
+        record.entries["maya"] = StoredGuardEntry(GuardEntry(revision: 1, keyVersion: 1, encryptionPublicKey: entry.encryptionPublicKey,
+                                                             signingPublicKey: entry.signingPublicKey, mlDsaPublicKeyHash: "00",
+                                                             kemPublicKeyHash: entry.kemPublicKeyHash, previousSigningKeys: [], verified: false))
+        try JSONEncoder().encode(record).write(to: store.file)
+        #expect(throws: GuardError.unreadable) { _ = try store.entries() }
+        // And nothing is written over a record that doesn't read.
+        #expect(throws: GuardError.unreadable) { try store.dropPending("maya") }
+    }
+
+    @Test func aCommitOverARevisionAnotherProcessMovedIsRefused() throws {
+        let folder = guardFolder()
+        // The app and the Files extension: two stores, one file.
+        let app = guardStore(folder, owner)
+        let files = guardStore(folder, owner)
+        let first = try makeIdentity("maya")
+        let second = try makeIdentity("maya")
+        let read = try files.entry("maya")
+        try app.commit("maya", try guardEntryNext(previous: nil, pin: try firstSeen(first.envelope)), over: 0)
+        // The extension decided over what it read before the app wrote: its late write never lands over the newer entry.
+        #expect(throws: GuardError.raced) {
+            try files.commit("maya", try guardEntryNext(previous: read, pin: try firstSeen(second.envelope)), over: read?.revision ?? 0)
+        }
+        #expect(try app.entry("maya")?.signingPublicKey == first.envelope.signingPublicKey)
+    }
+
+    @Test func eightWritersAtOnceLoseNoRevision() async throws {
+        let folder = guardFolder()
+        let maya = try makeIdentity("maya")
+        let keys = try firstSeen(maya.envelope)
+        let owner = owner
+        // Each writer reads, moves the entry one revision on and retries when another got there first.
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for _ in 0..<8 {
+                group.addTask {
+                    let store = guardStore(folder, owner)
+                    while true {
+                        let held = try store.entry("maya")
+                        do {
+                            try store.commit("maya", try guardEntryNext(previous: held, pin: keys), over: held?.revision ?? 0)
+                            return
+                        } catch GuardError.raced {
+                            continue
+                        }
+                    }
+                }
+            }
+            try await group.waitForAll()
+        }
+        #expect(try guardStore(folder, owner).entry("maya")?.revision == 8)
+    }
+
+    @Test func twoAccountsWithOneUserIdOnTwoServersKeepSeparateGuards() throws {
+        let folder = guardFolder()
+        let production = guardStore(folder, AccountOwner(userId: "me", origin: "https://hushos.com"))
+        let staging = guardStore(folder, AccountOwner(userId: "me", origin: "https://staging.hushos.com"))
+        let maya = try makeIdentity("maya")
+        try production.commit("maya", try guardEntryNext(previous: nil, pin: try firstSeen(maya.envelope)), over: 0)
+        // A staging copy of the database reuses the id: what production's account acted on is no mark for it.
+        #expect(try staging.entry("maya") == nil)
+        #expect(production.file != staging.file)
+        // And the file names neither the account nor the server.
+        #expect(!production.file.lastPathComponent.contains("me") && !production.file.lastPathComponent.contains("hushos"))
+    }
+}
+
+extension OnFakeDrive {
+    /*
+     * Contacts without comparing words (docs/optional-verification.md 2): first-seen pins, the
+     * guard's commit, changes that pause one person until Continue or a check, removals that
+     * stick, and settings replaced by a newer copy, against a stub of the server's routes.
+     */
+    @Suite struct ContactTrustTests {
+        let me = UUID().uuidString.lowercased()
+        let maya = UUID().uuidString.lowercased()
+        let root: Data
+        let own: IdentityEnvelope
+
+        init() throws {
+            root = try randomBytes(length: 32)
+            own = try identityCreate(userId: me, accountKey: root, keyVersion: 1)
+        }
+
+        struct Phone {
+            let vault: Vault
+            let guardStore: ContactGuardStore
+            let writes: GuardSwitch
+        }
+
+        /* A phone signed in as `me`: its own guard (or another process's view of the same one). */
+        func phone(_ server: ContactServer, folder: URL = guardFolder()) async -> Phone {
+            let session = SharedKeychain.Session(origin: "https://contacts.test", token: "t-\(me)", userId: me)
+            ContactServer.current = server
+            Auth.testSession = session
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [ContactServerProtocol.self]
+            Auth.testTransport = configuration
+            let vault = Vault(api: DriveAPI(session: session, configuration: configuration), session: session)
+            await vault.adopt(accountKey: root)
+            let writes = GuardSwitch()
+            let store = guardStore(folder, AccountOwner(session), writes: writes)
+            await vault.adopt(guard: store)
+            return Phone(vault: vault, guardStore: store, writes: writes)
+        }
+
+        func server(maya identity: IdentityEnvelope) -> ContactServer {
+            let server = ContactServer(me: me, identity: own)
+            server.people["maya@example.com"] = (maya, "Maya Lind", identity)
+            return server
+        }
+
+        func done() { Auth.testSession = nil; Auth.testTransport = nil; ContactServer.current = nil }
+
+        func contact(_ server: ContactServer) throws -> Contact {
+            let found = try #require(server.people["maya@example.com"])
+            let envelope = found.identity
+            return Contact(userId: maya, name: found.name, email: "maya@example.com", keyVersion: envelope.keyVersion, identityVersion: Int(envelope.version),
+                           encryptionPublicKey: envelope.encryptionPublicKey, signingPublicKey: envelope.signingPublicKey,
+                           mlDsaPublicKey: envelope.mlDsa?.publicKey, kemPublicKey: envelope.kem?.publicKey, keysSignature: envelope.keysSignature,
+                           upgraded: keysHold(userId: maya, servedOf(envelope), identityVersion: Int(envelope.version), keysSignature: envelope.keysSignature),
+                           fingerprint: nil)
+        }
+
+        func granter(_ server: ContactServer) throws -> SharedWithMeView.Granter {
+            let envelope = try #require(server.people["maya@example.com"]).identity
+            var granter = SharedWithMeView.Granter(id: maya, name: "Maya Lind", email: "maya@example.com", encryptionPublicKey: envelope.encryptionPublicKey)
+            granter.signingPublicKey = envelope.signingPublicKey
+            granter.keyVersion = envelope.keyVersion
+            granter.identityVersion = Int(envelope.version)
+            granter.mlDsaPublicKey = envelope.mlDsa?.publicKey
+            granter.kemPublicKey = envelope.kem?.publicKey
+            granter.keysSignature = envelope.keysSignature
+            return granter
+        }
+
+        /* Maya starts over on the server with keys her old ones never signed. */
+        func startOver(_ server: ContactServer) throws -> IdentityEnvelope {
+            let fresh = try identityCreate(userId: maya, accountKey: try randomBytes(length: 32), keyVersion: 1)
+            server.people["maya@example.com"]?.identity = fresh
+            return fresh
+        }
+
+        func storedPin(_ server: ContactServer) throws -> [String: Any]? {
+            (try server.document(root: root)["contacts"] as? [String: Any])?[maya] as? [String: Any]
+        }
+
+        @Test func addingSomeoneWritesAFirstSeenPinOfTheServedKeysAndNoWords() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            let added = try await phone.vault.addContact(email: "maya@example.com")
+            guard case .added(let pin) = added else { Issue.record("not added: \(added)"); return }
+            // First-seen: the four keys served now, an empty fingerprint (never verified by any client), no words.
+            #expect(pin.trust == .seen && !pin.verified)
+            #expect(pin.commitment == (try contact(server)).commitment)
+            let stored = try #require(try storedPin(server))
+            #expect(stored["fingerprint"] as? String == "" && stored["firstSeen"] as? String == "added")
+            // The guard holds the same keys, and the act left nothing pending.
+            let entry = try #require(try phone.guardStore.entry(maya))
+            #expect(keyCommitment(pin: entry.keys) == pin.commitment && entry.revision == 1 && !entry.verified)
+            #expect(try phone.guardStore.pending(maya) == nil)
+            // Adding again over the same keys says so and writes nothing.
+            let puts = server.puts
+            guard case .already = try await phone.vault.addContact(email: "maya@example.com") else { Issue.record("added twice"); return }
+            #expect(server.puts == puts)
+        }
+
+        @Test func aShareSealsOnlyToThePinnedKeysAndAChangeSharesNothingUntilContinue() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            let sealing = try await phone.vault.trustGrantee(try contact(server), follow: true)
+            #expect(sealing.publicKey == (try base64urlDecode(value: identity.envelope.encryptionPublicKey)))
+            #expect(sealing.kem == (try base64urlDecode(value: identity.envelope.kem!.publicKey)))
+            // Keys her old ones never signed: paused, as the one notice, and nothing sealed to them.
+            let fresh = try startOver(server)
+            await #expect(throws: AccountChangedError.self) { _ = try await phone.vault.trustGrantee(try contact(server), follow: true) }
+            #expect(await phone.vault.accountChanges()[maya] != nil)
+            #expect(try await phone.vault.contactStandings()[maya]?.verified == false)
+            // Continue: the new keys, first-seen, the old signing key kept as hers, and her shares queued to be sealed again.
+            let pin = try await phone.vault.continueWith(AccountChange(contactId: maya, name: "Maya Lind", email: "maya@example.com"))
+            #expect(pin.trust == .seen && pin.signingPublicKey == fresh.signingPublicKey)
+            #expect(pin.previousSigningKeys == [identity.envelope.signingPublicKey] && pin.resealShares == true)
+            #expect(ResealTo.contains(maya))
+            #expect(await phone.vault.accountChanges()[maya] == nil)
+            let after = try await phone.vault.trustGrantee(try contact(server), follow: true)
+            #expect(after.publicKey == (try base64urlDecode(value: fresh.encryptionPublicKey)))
+            #expect(try phone.guardStore.entry(maya)?.signingPublicKey == fresh.signingPublicKey)
+            ResealTo.remove([maya])
+        }
+
+        @Test func aVerifiedContactsChangeLeadsWithACheckAndContinueDropsVerified() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let phone = await phone(server)
+            let found = try await phone.vault.lookup(email: "maya@example.com")
+            let checked = try await phone.vault.theyMatch(found)
+            #expect(checked.trust == .verified)
+            #expect(try phone.guardStore.entry(maya)?.verified == true)
+            #expect(try await phone.vault.contactStandings()[maya]?.verified == true)
+            _ = try startOver(server)
+            let changed = try await phone.vault.lookup(email: "maya@example.com")
+            #expect(changed.changed && changed.wasVerified && !changed.verified)
+            #expect(changed.heldFingerprint == checked.commitment)
+            let pin = try await phone.vault.continueWith(AccountChange(contactId: maya, name: "Maya Lind", email: "maya@example.com"))
+            // Verified was over the old keys; the new ones are first-seen until a check.
+            #expect(pin.trust == .seen)
+            #expect(try await phone.vault.contactStandings()[maya]?.verified == false)
+            ResealTo.remove([maya])
+        }
+
+        @Test func settingsReplacedByANewerCopyAreAChangeNeverFirstUse() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            // The server serves other keys for Maya and a newer settings copy pinning them first-seen, as a fresh device would save.
+            let planted = try startOver(server)
+            var document = try server.document(root: root)
+            var contacts = document["contacts"] as? [String: Any] ?? [:]
+            var pin = contacts[maya] as? [String: Any] ?? [:]
+            let keys = try firstSeen(planted)
+            pin["encryptionPublicKey"] = keys.encryptionPublicKey
+            pin["signingPublicKey"] = keys.signingPublicKey
+            pin["mlDsaPublicKeyHash"] = keys.mlDsaPublicKeyHash
+            pin["kemPublicKeyHash"] = keys.kemPublicKeyHash
+            // Even a previous-keys list naming what this phone holds stands in for no chain.
+            pin["previousSigningKeys"] = [identity.envelope.signingPublicKey]
+            contacts[maya] = pin
+            document["contacts"] = contacts
+            try server.replace(document, root: root)
+            await #expect(throws: AccountChangedError.self) { _ = try await phone.vault.trustGrantee(try contact(server), follow: true) }
+            #expect(try await phone.vault.contactStandings()[maya]?.changed == true)
+            // Nor does a copy that drops her: a share from her (under the keys this phone holds) waits for the person's Open
+            // instead of being pinned on its own, and one under the planted keys is the notice.
+            document["contacts"] = [String: Any]()
+            try server.replace(document, root: root)
+            await #expect(throws: GranterTrust.self) { _ = try await phone.vault.trustGranter(try granter(server), explicit: false) }
+            server.people["maya@example.com"]?.identity = identity.envelope
+            try server.replace(document, root: root)
+            await #expect(throws: GranterTrust.waiting("Open this to add Maya to your contacts.")) {
+                _ = try await phone.vault.trustGranter(try granter(server), explicit: false)
+            }
+            #expect(try storedPin(server) == nil)
+            // Who wrote what judges by the guard's keys, not the settings': a record under the planted keys is nobody's.
+            let pins = try await phone.vault.effectivePins()
+            #expect(pins.isEmpty)
+        }
+
+        @Test func aLostSettingsAnswerIsFinishedByThePendingRecordAndNothingElse() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let folder = guardFolder()
+            let phone = await phone(server, folder: folder)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            let fresh = try startOver(server)
+            // Continue's save lands on the server, and its answer is lost.
+            server.loseNextSettingsAnswer = true
+            await #expect(throws: (any Error).self) {
+                _ = try await phone.vault.continueWith(AccountChange(contactId: maya, name: "Maya Lind", email: "maya@example.com"))
+            }
+            let pending = try #require(try phone.guardStore.pending(maya))
+            #expect(pending.target == (try contact(server)).commitment && pending.revision == 1)
+            // Without the pending record, the same settings would be a change: here it finishes silently.
+            let restarted = await self.phone(server, folder: folder)
+            let sealing = try await restarted.vault.trustGrantee(try contact(server), follow: true)
+            #expect(sealing.publicKey == (try base64urlDecode(value: fresh.encryptionPublicKey)))
+            #expect(try restarted.guardStore.entry(maya)?.revision == 2 && (try restarted.guardStore.pending(maya)) == nil)
+            ResealTo.remove([maya])
+        }
+
+        @Test func withoutAPendingRecordAMovedPinIsAChange() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let folder = guardFolder()
+            let phone = await phone(server, folder: folder)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            _ = try startOver(server)
+            server.loseNextSettingsAnswer = true
+            _ = try? await phone.vault.continueWith(AccountChange(contactId: maya, name: "Maya Lind", email: "maya@example.com"))
+            try phone.guardStore.dropPending(maya)
+            await #expect(throws: AccountChangedError.self) { _ = try await phone.vault.trustGrantee(try contact(server), follow: true) }
+            #expect(try phone.guardStore.entry(maya)?.revision == 1)
+        }
+
+        @Test func aGuardWriteThatFailsStopsTheActAndTheNextOneSettlesIt() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let phone = await phone(server)
+            // The disk refuses the guard's write right after the settings saved.
+            server.onSettingsPut = { phone.writes.writable = false }
+            await #expect(throws: GuardError.unsaved) { _ = try await phone.vault.addContact(email: "maya@example.com") }
+            #expect(try storedPin(server) != nil)
+            // Nothing is shared on the strength of an act that wasn't recorded.
+            await #expect(throws: GuardError.unsaved) { _ = try await phone.vault.trustGrantee(try contact(server), follow: true) }
+            server.onSettingsPut = nil
+            phone.writes.writable = true
+            // Space again: the pending record names exactly the pin the settings hold, and the act finishes.
+            _ = try await phone.vault.trustGrantee(try contact(server), follow: true)
+            #expect(try phone.guardStore.entry(maya) != nil && (try phone.guardStore.pending(maya)) == nil)
+        }
+
+        @Test func anUnreadableGuardPausesEveryoneAndPinsNobody() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let phone = await phone(server)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            try Data("damaged".utf8).write(to: phone.guardStore.file)
+            await #expect(throws: GuardError.unreadable) { _ = try await phone.vault.trustGrantee(try contact(server), follow: true) }
+            await #expect(throws: GuardError.unreadable) { _ = try await phone.vault.contactStandings() }
+            await #expect(throws: GuardError.unreadable) { _ = try await phone.vault.trustGranter(try granter(server), explicit: true) }
+            // Someone new is no first use while the guard can't be read.
+            server.people["sam@example.com"] = ("sam", "Sam", try makeIdentity("sam").envelope)
+            let before = server.puts
+            await #expect(throws: GuardError.unreadable) { _ = try await phone.vault.addContact(email: "sam@example.com") }
+            #expect(server.puts == before)
+        }
+
+        @Test func aShareFromSomeoneNeverAddedPinsTheKeysItCameWithAndOtherKeysPause() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            let opened = try await phone.vault.trustGranter(try granter(server), explicit: false)
+            #expect(opened.signingPublicKey == (try base64urlDecode(value: identity.envelope.signingPublicKey)))
+            let stored = try #require(try storedPin(server))
+            #expect(stored["firstSeen"] as? String == "shared-with-me" && stored["fingerprint"] as? String == "")
+            // A second share "from" Maya under keys of the server's: the notice, never a second first use.
+            _ = try startOver(server)
+            await #expect(throws: GranterTrust.self) { _ = try await phone.vault.trustGranter(try granter(server), explicit: false) }
+            #expect(await phone.vault.accountChanges()[maya] != nil)
+        }
+
+        @Test func aRemovedContactsShareWaitsForOpenWhichAddsThemBack() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let phone = await phone(server)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            try await phone.vault.remove(maya)
+            #expect((try server.document(root: root)["removedContacts"] as? [String: Any])?[maya] != nil)
+            #expect(try storedPin(server) == nil)
+            // Listing what she shared never adds her back on its own, on this phone or one with no guard for her.
+            await #expect(throws: GranterTrust.waiting("You removed Maya from your contacts. Open this to add them again.")) {
+                _ = try await phone.vault.trustGranter(try granter(server), explicit: false)
+            }
+            let fresh = await self.phone(server)
+            await #expect(throws: GranterTrust.waiting("You removed Maya from your contacts. Open this to add them again.")) {
+                _ = try await fresh.vault.trustGranter(try granter(server), explicit: false)
+            }
+            #expect(try storedPin(server) == nil)
+            // Open is the person's act: she is added back and the removal forgotten.
+            try await phone.vault.openWaiting(try granter(server))
+            #expect(try storedPin(server) != nil)
+            #expect((try server.document(root: root)["removedContacts"] as? [String: Any])?[maya] == nil)
+        }
+
+        @Test func aLegacyPinBecomesFirstSeenOnlyUnderAStatementItsOwnKeySigned() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            let legacy = pinnedBeforeTheRelease(try pinned(maya, identity.keys, name: "Maya Lind"))
+            var settings = Settings()
+            settings.setPin(legacy)
+            // A statement signed by another key beside Maya's classical keys: left legacy, nothing shared.
+            var forged = identity.envelope
+            forged.keysSignature = try makeIdentity(maya).envelope.keysSignature
+            server.people["maya@example.com"]?.identity = forged
+            try server.replace(try reread(settings), root: root)
+            await #expect(throws: ContactError.self) { _ = try await phone.vault.trustGrantee(try contact(server), follow: true) }
+            #expect(try storedPin(server)?["mlDsaPublicKeyHash"] == nil)
+            // Her own statement: first-seen over the served keys, never verified.
+            server.people["maya@example.com"]?.identity = identity.envelope
+            _ = try await phone.vault.trustGrantee(try contact(server), follow: true)
+            let upgraded = try #require(try storedPin(server))
+            #expect(upgraded["fingerprint"] as? String == "" && upgraded["mlDsaPublicKeyHash"] as? String != nil)
+        }
+
+        @Test func aSuccessionSignedByFirstSeenKeysIsFollowedAndStaysFirstSeen() async throws {
+            defer { done() }
+            let mayaRoot = try randomBytes(length: 32)
+            let first = try identityCreate(userId: maya, accountKey: mayaRoot, keyVersion: 1)
+            let server = server(maya: first)
+            let phone = await phone(server)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            let succession = try identitySucceed(userId: maya, accountKey: mayaRoot, current: first)
+            server.people["maya@example.com"]?.identity = succession.identity
+            server.links[maya] = [ContactServer.link(from: first, to: succession)]
+            let found = try await phone.vault.lookup(email: "maya@example.com")
+            #expect(found.followed && !found.changed)
+            let pin = try #require(found.pinned)
+            #expect(pin.trust == .seen && pin.signingPublicKey == succession.identity.signingPublicKey)
+            #expect(pin.previousSigningKeys?.contains(first.signingPublicKey) == true)
+            // A chain the first-seen keys never signed (another account's link served as hers) is not followed.
+            let otherRoot = try randomBytes(length: 32)
+            let other = try identityCreate(userId: maya, accountKey: otherRoot, keyVersion: 2)
+            let forged = try identitySucceed(userId: maya, accountKey: otherRoot, current: other)
+            server.people["maya@example.com"]?.identity = forged.identity
+            server.links[maya] = [ContactServer.link(from: other, to: forged)]
+            #expect(try await phone.vault.lookup(email: "maya@example.com").changed)
+            ResealTo.remove([maya])
+        }
+
+        @Test func firstSeenWritersReadAsSeenAndADisagreeingPinVouchesForNothing() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            let pins = try await phone.vault.effectivePins()
+            let signers = try TrustedSigners(userId: me, identities: [], pins: pins)
+            let keys = try #require(signers.trusted(Signer(id: maya)))
+            let signing = try base64urlDecode(value: identity.envelope.signingPublicKey)
+            #expect(keys.seen && keys.current == signing)
+            #expect(signers.provenance(.seen, signer: Signer(id: maya)) == nil)
+        }
+    }
+}
+
+/* Settings saves keep what other clients wrote, and removals count against the room (2.7). */
+struct ContactSettingsTests {
+    /* As the web and a later version write it: fields this version doesn't know, inside pins too. */
+    let written = """
+    {"version":2,"contacts":{"ana":{"userId":"ana","email":"ana@example.com","name":"Ana","encryptionPublicKey":"e","signingPublicKey":"s",\
+    "fingerprint":"","pinnedAt":"2026-10-27T00:00:00.000Z","kemPublicKeyHash":"k","mlDsaPublicKeyHash":"m","keyVersion":1,"firstSeen":"shared-with-me",\
+    "replacementSeen":"2026-10-20","trustedViaFamily":"Acme"}},"removedContacts":{"bo":"2026-10-28T10:00:00.000Z"},\
+    "familyChecks":{"g1":{"rosterVersion":3,"with":"ana","code":["a","b"],"checkedAt":"2026-10-28T00:00:00.000Z"}},\
+    "familyChecksSince":"2026-10-27T00:00:00.000Z","pendingRoles":{"g1":{"cy":"members"}},"resealOwnShares":true,\
+    "groups":{"future":{"x":1.5,"y":"\\u00e9"}},"sharing":{"shares":{},"links":{},"stopping":{"n":["bo"]}}}
+    """
+
+    func field(_ json: String, _ key: String) throws -> Data {
+        let object = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        return try JSONSerialization.data(withJSONObject: [key: object[key] ?? NSNull()], options: [.sortedKeys, .withoutEscapingSlashes])
+    }
+
+    @Test func savesKeepEveryFieldOtherClientsWroteByteForByte() throws {
+        var settings = try Settings(json: written, version: 7)
+        let cy = ContactPin(userId: "cy", email: "cy@example.com", name: "Cy", keys: PinKeys(keyVersion: 1, encryptionPublicKey: "x", signingPublicKey: "y",
+                                                                                         mlDsaPublicKeyHash: "a", kemPublicKeyHash: "b", fingerprint: ""),
+                            pinnedAt: "2026-10-30T00:00:00Z", firstSeen: "added")
+        try settings.setPinOnce(cy)
+        settings.removeContact("dee", at: "2026-10-30T01:00:00.000Z")
+        settings.ledger.addShare(node: "node-a", grantee: "cy")
+        let saved = try settings.json()
+        for key in ["familyChecks", "familyChecksSince", "pendingRoles", "resealOwnShares", "groups"] {
+            #expect(try field(saved, key) == (try field(written, key)), "\(key) changed")
+        }
+        // Inside Ana's pin, untouched: firstSeen and the web's own fields.
+        let ana = try #require(((try JSONSerialization.jsonObject(with: Data(saved.utf8)) as? [String: Any])?["contacts"] as? [String: Any])?["ana"] as? [String: Any])
+        #expect(ana["firstSeen"] as? String == "shared-with-me" && ana["replacementSeen"] as? String == "2026-10-20" && ana["trustedViaFamily"] as? String == "Acme")
+        #expect(ana["fingerprint"] as? String == "")
+        // Bo's removal stays beside Dee's; the ledger's own extra field too.
+        #expect(settings.removed("bo") && settings.removed("dee"))
+        #expect(((try JSONSerialization.jsonObject(with: Data(saved.utf8)) as? [String: Any])?["sharing"] as? [String: Any])?["stopping"] != nil)
+        // Writing a removed person's pin forgets their removal, and only theirs.
+        try settings.setPinOnce(ContactPin(userId: "BO", email: "bo@example.com", name: "Bo", keys: cy.keys, pinnedAt: "2026-10-30T02:00:00Z", firstSeen: "added"))
+        #expect(!settings.removed("bo") && settings.removed("dee"))
+    }
+
+    @Test func removalsAreForgottenOldestFirstAndAFullDocumentRefusesAPin() throws {
+        var settings = Settings()
+        let filler = String(repeating: "f", count: 600)
+        var count = 0
+        // Pins up to just under the cap.
+        while try settings.bytes() < Settings.maxBytes - 2_000 {
+            settings.setPin(ContactPin(userId: "p\(count)", email: "p\(count)@example.com", name: filler, encryptionPublicKey: "e", signingPublicKey: "s",
+                                       fingerprint: "", pinnedAt: "2026-10-01T00:00:00Z", kemPublicKeyHash: nil))
+            count += 1
+        }
+        for index in 0..<40 { settings.removeContact("gone-\(index)", at: String(format: "2026-10-%02dT00:00:00Z", index % 28 + 1) + "\(index)") }
+        #expect(try settings.bytes() <= Settings.maxBytes)
+        let oldest = settings.removals.first!.id
+        let newest = settings.removals.last!.id
+        let pin = ContactPin(userId: "new", email: "new@example.com", name: filler + filler, encryptionPublicKey: "e", signingPublicKey: "s",
+                             fingerprint: "", pinnedAt: "2026-10-30T00:00:00Z", kemPublicKeyHash: nil)
+        try settings.setPinOnce(pin)
+        // Room was made by forgetting the oldest removals, never the newest, and never a pin.
+        #expect(!settings.removed(oldest) && settings.removed(newest))
+        #expect(settings.contacts.count == count + 1)
+        // Full with no removal left to forget: refused, and the document as it was.
+        settings.document["removedContacts"] = nil
+        let before = try settings.json()
+        var big = pin
+        big = ContactPin(userId: "huge", email: "h@example.com", name: String(repeating: "h", count: Settings.maxBytes), encryptionPublicKey: "e",
+                         signingPublicKey: "s", fingerprint: "", pinnedAt: "2026-10-30T00:00:00Z", kemPublicKeyHash: nil)
+        #expect(throws: ContactError.message(Settings.contactsFull)) { try settings.setPinOnce(big) }
+        #expect(try settings.json() == before)
+    }
+}
+
+func reread(_ settings: Settings) throws -> [String: Any] {
+    try JSONSerialization.jsonObject(with: Data(try settings.json().utf8)) as? [String: Any] ?? [:]
+}
+
+/*
+ * The server's account routes a contact act uses: the own identity and its history, the settings
+ * (compare-and-set on the stored sequence) and their key, contact lookup and succession links.
+ */
+final class ContactServer: @unchecked Sendable {
+    nonisolated(unsafe) static var current: ContactServer?
+    let me: String
+    var identity: IdentityEnvelope
+    /* By email: the account id, name and identity served. */
+    var people: [String: (userId: String, name: String, identity: IdentityEnvelope)] = [:]
+    var links: [String: [[String: Any]]] = [:]
+    var settingsKey: [String: Any]?
+    var settings: [String: Any]?
+    var settingsVersion: UInt64 = 0
+    var puts = 0
+    /* The next settings save is stored and its answer lost. */
+    var loseNextSettingsAnswer = false
+    var onSettingsPut: (() -> Void)?
+    private let lock = NSLock()
+
+    init(me: String, identity: IdentityEnvelope) {
+        self.me = me
+        self.identity = identity
+    }
+
+    static func link(from old: IdentityEnvelope, to next: IdentitySuccession) -> [String: Any] {
+        ["oldKeyVersion": old.keyVersion, "newKeyVersion": next.identity.keyVersion, "oldEncryptionPublicKey": old.encryptionPublicKey,
+         "oldSigningPublicKey": old.signingPublicKey, "oldMlDsaPublicKey": old.mlDsa?.publicKey ?? "",
+         "newEncryptionPublicKey": next.identity.encryptionPublicKey, "newSigningPublicKey": next.identity.signingPublicKey,
+         "newMlDsaPublicKey": next.identity.mlDsa?.publicKey ?? "", "newKemPublicKey": next.identity.kem?.publicKey ?? "", "signature": next.signature]
+    }
+
+    private func key(root: Data) throws -> Data {
+        let stored = try #require(settingsKey)
+        return try settingsKeyOpen(userId: me, accountKey: root, envelope: Auth.settingsKeyEnvelope(from: stored))
+    }
+
+    /* The settings as stored, opened as a device of the account would. */
+    func document(root: Data) throws -> [String: Any] {
+        guard let settings else { return [:] }
+        let envelope = SettingsEnvelope(version: 2, settingsVersion: settingsVersion, nonce: settings["nonce"] as? String ?? "",
+                                        ciphertext: settings["ciphertext"] as? String ?? "")
+        let json = try #require(try settingsOpen(userId: me, settingsKey: try key(root: root), envelope: envelope))
+        return try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] ?? [:]
+    }
+
+    /* Another device's (or the server's replay of an older) copy, stored at the next sequence. */
+    func replace(_ document: [String: Any], root: Data) throws {
+        if settingsKey == nil {
+            let made = try settingsKeyCreate(userId: me, accountKey: root)
+            settingsKey = Auth.json(made.envelope)
+        }
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]), as: UTF8.self)
+        let sealed = try settingsSeal(userId: me, settingsKey: try key(root: root), settingsVersion: settingsVersion + 1, json: json)
+        settings = ["version": sealed.version, "settingsVersion": sealed.settingsVersion, "nonce": sealed.nonce, "ciphertext": sealed.ciphertext]
+        settingsVersion = sealed.settingsVersion
+    }
+
+    func answer(_ request: URLRequest, body: Data?) -> (Int, [String: Any]) {
+        lock.lock()
+        defer { lock.unlock() }
+        let path = request.url?.path ?? ""
+        let json = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        switch (request.httpMethod ?? "GET", path) {
+        case ("GET", "/api/auth/identity"): return (200, ["identity": Auth.json(identity)])
+        case ("GET", "/api/auth/identity/history"): return (200, ["identities": []])
+        case ("GET", "/api/auth/settings"):
+            return (200, ["settings": settings as Any, "settingsKey": settingsKey as Any, "settingsVersion": settingsVersion])
+        case ("PUT", "/api/auth/settings-key"):
+            guard settingsKey == nil else { return (409, ["message": "A settings key is already stored."]) }
+            settingsKey = json
+            return (200, [:])
+        case ("PUT", "/api/auth/settings"):
+            guard (json["expectedVersion"] as? NSNumber)?.uint64Value == settingsVersion else {
+                return (409, ["message": "Your settings changed on another device."])
+            }
+            settingsVersion += 1
+            settings = ["version": json["version"] as Any, "settingsVersion": settingsVersion, "nonce": json["nonce"] as Any,
+                        "ciphertext": json["ciphertext"] as Any]
+            puts += 1
+            onSettingsPut?()
+            if loseNextSettingsAnswer {
+                loseNextSettingsAnswer = false
+                return (500, ["message": "No answer."])
+            }
+            return (200, ["settingsVersion": settingsVersion])
+        case ("POST", "/api/auth/contacts/lookup"):
+            guard let email = json["email"] as? String, let person = people[email] else { return (404, ["message": "No HushOS account uses that email."]) }
+            let served = person.identity
+            return (200, ["contact": [
+                "userId": person.userId, "name": person.name, "email": email, "keyVersion": served.keyVersion, "identityVersion": Int(served.version),
+                "encryptionPublicKey": served.encryptionPublicKey, "signingPublicKey": served.signingPublicKey,
+                "mlDsaPublicKey": served.mlDsa?.publicKey as Any, "kemPublicKey": served.kem?.publicKey as Any, "keysSignature": served.keysSignature as Any,
+            ]])
+        default:
+            if path.hasPrefix("/api/auth/contacts/"), path.hasSuffix("/succession") {
+                let id = path.split(separator: "/")[3]
+                return (200, ["links": links[String(id)] ?? []])
+            }
+            return (404, ["message": "Not here."])
+        }
+    }
+}
+
+final class ContactServerProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        var body = request.httpBody
+        if body == nil, let stream = request.httpBodyStream {
+            stream.open()
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let read = stream.read(&buffer, maxLength: buffer.count)
+                if read <= 0 { break }
+                data.append(buffer, count: read)
+            }
+            stream.close()
+            body = data
+        }
+        let (status, json) = ContactServer.current?.answer(request, body: body) ?? (500, ["message": "No server"])
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: (try? JSONSerialization.data(withJSONObject: json)) ?? Data())
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}

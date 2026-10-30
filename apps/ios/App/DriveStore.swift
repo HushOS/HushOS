@@ -545,6 +545,11 @@ final class DriveStore {
         trust.provenance(of: version, in: item.node)
     }
 
+    /* Who added it, first seen and not verified (6.4, 6.12): no mark, "Added by" with "Not verified" in Info and the viewer. */
+    func seenBy(of item: Opened) -> (name: String, id: String)? {
+        isFamily(item) ? nil : trust.seenBy(of: item.node)
+    }
+
     /* Saved from a link: no mark, and this line in Info and the viewer. */
     func savedCopy(of item: Opened) -> SavedCopy? {
         trust.savedCopy(of: item.node)

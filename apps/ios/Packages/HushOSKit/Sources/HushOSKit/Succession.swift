@@ -30,21 +30,6 @@ public struct ServedContactKeys: Sendable, Equatable {
     }
 }
 
-/*
- * What a pin says about the keys the server serves for that person now
- * (docs/identity-pq-design.md 2, `comparePin` in packages/drive/src/trust.ts):
- * - same: a version 3 pin, the served X25519 and Ed25519 keys are the pinned ones, and the
- *   served ML-DSA and ML-KEM keys match its digests;
- * - recheck: a pin that vouches for nothing (from before the release) over the same X25519
- *   and Ed25519 keys: they upgraded, and only comparing words again trusts them;
- * - succession: other keys at a higher key version, from a version 3 pin, so a signed chain may explain it;
- * - changed: anything else, including no ML-DSA key, or an ML-DSA or ML-KEM key that differs
- *   beside the pinned classical keys.
- */
-public enum PinComparison: Sendable, Equatable {
-    case same, recheck, succession, changed
-}
-
 /* The decision for one pin against the served keys. */
 public enum PinFollow: Sendable, Equatable {
     /* The served keys are the pinned ones. */
@@ -61,18 +46,30 @@ func digestOf(_ publicKey: String?) -> String? {
     return keyDigest(publicKey: bytes)
 }
 
+extension ServedContactKeys {
+    /* As the core compares them; no key version reads as 0, which never makes a succession. */
+    var core: HushOSCore.ServedContactKeys {
+        HushOSCore.ServedContactKeys(keyVersion: keyVersion ?? 0, encryptionPublicKey: encryptionPublicKey, signingPublicKey: signingPublicKey,
+                                     mlDsaPublicKey: mlDsaPublicKey, kemPublicKey: kemPublicKey)
+    }
+
+    /* The four keys in full, as a pin is made of them; nil for an identity that has not upgraded. */
+    var full: ServedKeys? {
+        guard let mlDsaPublicKey, let kemPublicKey else { return nil }
+        return ServedKeys(keyVersion: keyVersion ?? 0, encryptionPublicKey: encryptionPublicKey, signingPublicKey: signingPublicKey,
+                          mlDsaPublicKey: mlDsaPublicKey, kemPublicKey: kemPublicKey)
+    }
+}
+
 extension ContactPin {
+    /*
+     * What this pin says about the keys served now: the core's `compare_pin` (packages/drive's
+     * `comparePin`). Same for a verified or first-seen pin whose four keys are served; recheck for a
+     * legacy pin over the same classical keys; succession from a verified or first-seen pin to keys
+     * at a higher version; changed otherwise.
+     */
     public func compare(_ served: ServedContactKeys) -> PinComparison {
-        let sameKeys = served.encryptionPublicKey == encryptionPublicKey && served.signingPublicKey == signingPublicKey
-        if sameKeys {
-            guard verified else { return .recheck }
-            guard let mlDsa = digestOf(served.mlDsaPublicKey), let kem = digestOf(served.kemPublicKey) else { return .changed }
-            return mlDsa == mlDsaPublicKeyHash && kem == kemPublicKeyHash ? .same : .changed
-        }
-        // A succession is always to a version 2 identity, and only a version 3 pin passes trust on.
-        guard served.mlDsaPublicKey != nil, served.kemPublicKey != nil, let version = served.keyVersion else { return .changed }
-        // A pin with no version: the chain is then looked for from 1.
-        return version > (keyVersion ?? 1) && verified ? .succession : .changed
+        comparePin(pin: keys, served: served.core)
     }
 
     /* Whether asking the server for a chain is worth it: a version 3 pin, and a newer identity served. */
@@ -120,6 +117,9 @@ extension ContactPin {
             links: links
         )
         guard valid, var next = try? ContactPin.of(served, userId: userId, email: email, name: name, pinnedAt: pinnedAt) else { return .changed }
+        // A followed first-seen pin stays first-seen: the chain carries the pin's standing, never a check nobody made.
+        if trust != .verified { next.fingerprint = "" }
+        next.firstSeen = firstSeen
         let start = chainStart(links)
         if start == nil {
             // The core verified a chain this client finds no start for: the two start rules disagree. Followed all the same, keeping the pinned key.
@@ -183,34 +183,6 @@ extension SharedWithMeView.Granter {
     var served: ServedContactKeys {
         ServedContactKeys(keyVersion: keyVersion, encryptionPublicKey: encryptionPublicKey, signingPublicKey: signingPublicKey ?? "",
                           mlDsaPublicKey: mlDsaPublicKey, kemPublicKey: kemPublicKey)
-    }
-}
-
-extension Vault {
-    /*
-     * "Check again": the person asked to follow a pinned contact to the keys served now. Only
-     * then is the server asked for the chain, and always for the whole of it, so lookups never
-     * say which contacts are pinned or at which version. A chain that holds moves the pin
-     * (saved over the pin it was decided from, unless another device moved that meanwhile) and
-     * queues what was shared with them to be sealed again to the new keys; anything else
-     * leaves the pin as it was and the changed-key warning stands.
-     */
-    public func checkAgain(_ pin: ContactPin, served: ServedContactKeys) async throws -> PinFollow {
-        switch pin.compare(served) {
-        case .same: return .same
-        case .recheck, .changed: return .changed
-        case .succession: break
-        }
-        let links = try await Auth.succession(of: pin.userId, as: session)
-        let decision = pin.follow(served, links: links)
-        guard case .followed(let next) = decision else { return decision }
-        try await updateSettings { settings in
-            guard let stored = settings.contacts[pin.userId], stored.encryptionPublicKey == pin.encryptionPublicKey,
-                  stored.signingPublicKey == pin.signingPublicKey else { return }
-            settings.setPin(next)
-        }
-        ResealTo.add(next.userId)
-        return decision
     }
 }
 

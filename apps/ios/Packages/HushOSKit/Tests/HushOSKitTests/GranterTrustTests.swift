@@ -4,10 +4,9 @@ import Testing
 @testable import HushOSKit
 
 /*
- * A received share opens only under keys the person checked. Taking the server's word for
- * the granter's keys would let a server fake a share "from" anyone, sealed with keys of its
- * own; and since a share is signed with both Ed25519 and ML-DSA, the served ML-DSA key is
- * used only when its digest is the version 3 pin's.
+ * A received share opens under the pinned Ed25519 key and the served ML-DSA key only when its
+ * digest is the pin's (`granterKeysOf` in trust.ts): a share is signed with both, and taking the
+ * server's word for either would let it fake a share "from" a contact with a key of its own.
  */
 struct GranterTrustTests {
     let ana = "user-ana"
@@ -19,60 +18,28 @@ struct GranterTrustTests {
         other = try makeIdentity(ana)
     }
 
-    /* The granter as the server serves them on a received share. */
-    func granter(_ keys: HushOSKit.ServedContactKeys) -> SharedWithMeView.Granter {
-        var granter = SharedWithMeView.Granter(id: ana, name: "Ana Lima", email: "ana@example.com", encryptionPublicKey: keys.encryptionPublicKey)
-        granter.signingPublicKey = keys.signingPublicKey
-        granter.keyVersion = keys.keyVersion
-        granter.identityVersion = keys.mlDsaPublicKey == nil ? 1 : 2
-        granter.mlDsaPublicKey = keys.mlDsaPublicKey
-        granter.kemPublicKey = keys.kemPublicKey
-        return granter
-    }
-
-    func pins(_ pin: ContactPin) -> [String: ContactPin] { [ana: pin] }
-
-    @Test func aGranterNobodyPinnedIsRefusedAndNotPinned() {
-        #expect(throws: GranterTrust.unverified(name: "Ana Lima")) { try ContactPin.granter(granter(servedOf(identity.envelope)), pins: [:]) }
-    }
-
-    @Test func aMatchingVersionThreePinOpensWithThePinnedEd25519AndTheServedMlDsaKey() throws {
-        let pin = try pinned(ana, identity.keys, name: "Ana Lima")
-        let opened = try ContactPin.granter(granter(servedOf(identity.envelope)), pins: pins(pin))
-        #expect(opened.signingPublicKey == (try base64urlDecode(value: identity.keys.signingPublicKey)))
-        #expect(opened.mlDsaPublicKey == (try base64urlDecode(value: identity.keys.mlDsaPublicKey!)))
-        #expect(!opened.replacedKeys)
-    }
-
-    @Test func aPinFromBeforeTheReleaseOpensNothingUntilWordsAreComparedAgain() throws {
-        // The same X25519 and Ed25519 keys and their upgraded identity: still "check words again", never opened.
-        let old = pinnedBeforeTheRelease(try pinned(ana, identity.keys, name: "Ana Lima"))
-        #expect(throws: GranterTrust.recheck(name: "Ana Lima")) { try ContactPin.granter(granter(servedOf(identity.envelope)), pins: pins(old)) }
-        // Nor when the server serves the version 1 form beside those keys.
-        #expect(throws: GranterTrust.recheck(name: "Ana Lima")) {
-            try ContactPin.granter(granter(servedOf(identity.envelope, mlDsa: false)), pins: pins(old))
+    @Test func aMatchingPinOpensWithThePinnedEd25519AndTheServedMlDsaKey() throws {
+        for pin in [try pinned(ana, identity.keys, name: "Ana Lima"), try firstSeenPin()] {
+            let opened = try #require(pin.granterKeys(servedOf(identity.envelope)))
+            #expect(opened.signingPublicKey == (try base64urlDecode(value: identity.keys.signingPublicKey)))
+            #expect(opened.mlDsaPublicKey == (try base64urlDecode(value: identity.keys.mlDsaPublicKey!)))
+            #expect(!opened.replacedKeys)
         }
-        #expect(GranterTrust.recheck(name: "Ana Lima").unverified)
     }
 
-    @Test func anMlDsaKeyOtherThanThePinnedOneBesideTheSameClassicalKeysIsAChange() throws {
-        let pin = try pinned(ana, identity.keys, name: "Ana Lima")
+    func firstSeenPin() throws -> ContactPin {
+        ContactPin(userId: ana, email: "ana@example.com", name: "Ana Lima", keys: try firstSeen(identity.envelope), pinnedAt: "2026-10-01T00:00:00Z",
+                   firstSeen: "added")
+    }
+
+    @Test func anMlDsaKeyOtherThanThePinnedOneOpensNothing() throws {
+        let pin = try firstSeenPin()
         let swapped = HushOSKit.ServedContactKeys(keyVersion: 1, encryptionPublicKey: identity.keys.encryptionPublicKey, signingPublicKey: identity.keys.signingPublicKey,
-                                        mlDsaPublicKey: other.keys.mlDsaPublicKey, kemPublicKey: identity.keys.kemPublicKey)
-        #expect(throws: GranterTrust.changed(name: "Ana Lima")) { try ContactPin.granter(granter(swapped), pins: pins(pin)) }
-        // No ML-DSA key at all (the version 1 form served again): a change, not a pass.
-        #expect(throws: GranterTrust.changed(name: "Ana Lima")) {
-            try ContactPin.granter(granter(servedOf(identity.envelope, mlDsa: false)), pins: pins(pin))
-        }
-    }
-
-    @Test func otherKeysServedAreAChangeNotFollowedQuietly() throws {
-        let pin = try pinned(ana, identity.keys, name: "Ana Lima")
-        // Someone else's keys under Ana's name, at a higher version: nothing is followed until the person checks again.
-        var newer = servedOf(other.envelope)
-        newer = HushOSKit.ServedContactKeys(keyVersion: 2, encryptionPublicKey: newer.encryptionPublicKey, signingPublicKey: newer.signingPublicKey,
-                                  mlDsaPublicKey: newer.mlDsaPublicKey, kemPublicKey: newer.kemPublicKey)
-        #expect(throws: GranterTrust.changed(name: "Ana Lima")) { try ContactPin.granter(granter(newer), pins: pins(pin)) }
+                                                  mlDsaPublicKey: other.keys.mlDsaPublicKey, kemPublicKey: identity.keys.kemPublicKey)
+        #expect(pin.granterKeys(swapped) == nil)
+        // No ML-DSA key at all (the version 1 form served again): nothing, not a pass.
+        #expect(pin.granterKeys(servedOf(identity.envelope, mlDsa: false)) == nil)
+        #expect(pinnedBeforeTheRelease(try pinned(ana, identity.keys)).granterKeys(servedOf(identity.envelope)) == nil)
     }
 }
 
@@ -134,15 +101,22 @@ struct PinTrustTests {
                                   mlDsa: other.keys.mlDsaPublicKey, kem: other.keys.kemPublicKey)) == .changed)
     }
 
-    @Test func nothingIsSealedExceptToTheKeysTheVersionThreePinNames() throws {
-        let good = try pin()
-        let sealing = try good.sealKeys(keys())
-        #expect(sealing.publicKey == (try base64urlDecode(value: identity.keys.encryptionPublicKey)))
-        #expect(sealing.kem == (try base64urlDecode(value: identity.keys.kemPublicKey!)))
-        #expect(throws: ContactError.recheck("Ana")) { try pinnedBeforeTheRelease(good).sealKeys(keys()) }
-        #expect(throws: ContactError.changed) { try good.sealKeys(keys(kem: other.keys.kemPublicKey)) }
-        #expect(throws: ContactError.changed) { try good.sealKeys(keys(kem: .some(nil))) }
-        #expect(throws: ContactError.changed) { try good.sealKeys(keys(encryption: other.keys.encryptionPublicKey)) }
+    @Test func aFirstSeenPinIsHeldButNeverVerifiedAndComparesLikeAVerifiedOne() throws {
+        let seen = ContactPin(userId: ana, email: "ana@example.com", name: "Ana", keys: try firstSeen(identity.envelope), pinnedAt: "2026-10-01T00:00:00Z",
+                              firstSeen: "added")
+        #expect(seen.trust == .seen && !seen.verified)
+        #expect(seen.compare(keys()) == .same)
+        #expect(seen.compare(keys(kem: other.keys.kemPublicKey)) == .changed)
+        #expect(seen.compare(keys(mlDsa: other.keys.mlDsaPublicKey)) == .changed)
+        // Its empty fingerprint replaced by the words over other keys: not verified, and not first-seen either.
+        var forged = seen
+        forged.fingerprint = try pin().fingerprint
+        forged.mlDsaPublicKeyHash = keyDigest(publicKey: try base64urlDecode(value: other.keys.mlDsaPublicKey!))
+        #expect(forged.trust == .invalid && !forged.verified)
+        // Two first-seen pins of different keys are never the same keys, though both fingerprints are "".
+        let another = ContactPin(userId: ana, email: "ana@example.com", name: "Ana", keys: try firstSeen(other.envelope), pinnedAt: "2026-10-01T00:00:00Z",
+                                 firstSeen: "added")
+        #expect(!ContactPin.sameKeys(seen, another))
     }
 
     @Test func comparingWordsPinsTheSameWordsTheirOwnDeviceShows() throws {

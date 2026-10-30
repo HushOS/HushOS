@@ -22,8 +22,10 @@ struct SharedView: View {
     /* Shared has finished appearing: a link may push onto its stack. */
     @State private var onScreen = false
     @State private var showingPeople = false
-    /* A granter whose keys changed since they were pinned: checked again from a fresh lookup, which can follow their succession. */
-    @State private var checkingAgain: CheckTarget?
+    /* Review on a row whose granter's account changed (6.7), in a sheet of its own. */
+    @State private var step: ContactStep?
+    /* The row whose Open is running. */
+    @State private var opening: String?
     @State private var action: NodeAction?
     @State private var viewing: Opened?
     @State private var stopping: SharedByMe?
@@ -70,16 +72,7 @@ struct SharedView: View {
             .navigationTitle("Shared")
             .screenChrome(title: "Shared", root: true) { peopleButton }
             .sheet(isPresented: $showingPeople) { PeopleView().environment(store) }
-            .sheet(item: $checkingAgain) { target in
-                NavigationStack {
-                    CheckContactView(email: target.email, intro: "Check it’s them again before you open what they share.") { _ in
-                        checkingAgain = nil
-                        Task { await store.refreshMounts() }
-                    }
-                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { checkingAgain = nil } } }
-                }
-                .environment(store)
-            }
+            .contactSheet($step, store: store) { Task { await store.refreshMounts() } }
             .navigationDestination(for: Opened.self) { folder in FolderView(folderId: folder.id, title: folder.name) }
             .navigationDestination(item: $openingLink) { url in LinkBrowserView(url: url) }
             .nodeActionSheets(action: $action, store: store)
@@ -224,28 +217,28 @@ struct SharedView: View {
             }
             .itemRow(item: root)
         } else if let trust = mount.trust {
-            // Shut until the granter is checked in Contacts (the server's word for their key is not enough),
-            // checked again after their keys changed, or, signed with keys they replaced, sealed again by them.
-            let unverified = trust.unverified
-            Button {
-                switch trust {
-                case .changed: checkingAgain = CheckTarget(id: mount.share.granter.id, email: mount.share.granter.email)
-                case .reseal: break
-                default: showingPeople = true
-                }
-            } label: {
-                HStack(spacing: Alpine.Space.s3) {
-                    Image(systemName: unverified ? "person.badge.shield.checkmark" : "exclamationmark.triangle")
-                        .foregroundStyle(unverified ? Alpine.inkMuted : Alpine.danger)
-                        .frame(width: Theme.mark, height: Theme.mark).background(unverified ? Alpine.ink.opacity(0.07) : Alpine.dangerSoft, in: Circle())
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Shared by \(granter(mount))").foregroundStyle(Alpine.ink)
-                        Text(trust.errorDescription ?? "").font(Theme.Text.footnote).foregroundStyle(unverified ? Alpine.inkMuted : Alpine.danger)
+            // Waiting on the person, said calmly (docs/optional-verification.md 6.4): Open (which adds or follows them),
+            // Review (an account that changed), Try again (a check that couldn't run), or nothing they can do yet.
+            HStack(spacing: Alpine.Space.s3) {
+                Image(systemName: mount.share.node.kind == "folder" ? "folder" : "doc").foregroundStyle(Alpine.inkMuted)
+                    .frame(width: Theme.mark, height: Theme.mark).background(Alpine.ink.opacity(0.07), in: Circle())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Shared by \(granter(mount))").foregroundStyle(Alpine.ink)
+                    Text(trust.errorDescription ?? "").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).fixedSize(horizontal: false, vertical: true)
+                    switch trust {
+                    case .waiting:
+                        Button(opening == mount.id ? "Opening…" : "Open") { open(mount) }.disabled(opening != nil)
+                            .font(Theme.Text.footnote.weight(.semibold)).buttonStyle(.borderless)
+                    case .changed(let change):
+                        Button("Review") { step = .changed(change) }.font(Theme.Text.footnote.weight(.semibold)).buttonStyle(.borderless)
+                    case .unchecked:
+                        Button("Try again") { Task { await store.refreshMounts() } }.font(Theme.Text.footnote.weight(.semibold)).buttonStyle(.borderless)
+                    case .unverified, .reseal:
+                        EmptyView()
                     }
                 }
-                .frame(minHeight: Theme.row).contentShape(Rectangle())
             }
-            .buttonStyle(.plain).disabled(!trust.actionable).itemRow()
+            .frame(minHeight: Theme.row).itemRow()
         } else {
             HStack(spacing: Alpine.Space.s3) {
                 Image(systemName: "exclamationmark.triangle").foregroundStyle(Alpine.danger)
@@ -257,6 +250,22 @@ struct SharedView: View {
                 }
             }
             .frame(minHeight: Theme.row).itemRow()
+        }
+    }
+
+    /* Open on a row that waits: the person's own act, which adds them back or follows them, then everything they shared opens. */
+    private func open(_ mount: ShareMount) {
+        opening = mount.id
+        Task {
+            do {
+                try await store.vault.openWaiting(mount.share.granter)
+            } catch GranterTrust.changed(let change) {
+                step = .changed(change)
+            } catch {
+                if let words = ErrorWords.say(error, otherwise: "Try again.") { store.notify("Couldn’t open this. " + words) }
+            }
+            await store.refreshMounts()
+            opening = nil
         }
     }
 

@@ -473,6 +473,8 @@ struct InfoSheet: View {
     /* Set when Info sits beside the list (an inspector), which `dismiss` would not close. */
     var close: (() -> Void)? = nil
     var open: (NodeAction) -> Void = { _ in }
+    /* Check it's Maya from the Added by line, in Info's place. */
+    @State private var step: ContactStep?
 
     private func dismiss() {
         if let close { close() } else { dismissSheet() }
@@ -509,6 +511,8 @@ struct InfoSheet: View {
                     // Said as the rows and the web's details say it: "Today, 11:17 AM", "Yesterday", "6 Oct".
                     if let changed = changedLabel(item.modified) { fact("Changed", changed) }
                     if let created = changedLabel(parseDate(item.node.createdAt)) { fact("Added", created) }
+                    // Written by someone this person's devices first saw and nobody checked (6.4): no mark, and the way to check.
+                    if let seen = store.seenBy(of: item) { addedBy(seen) }
                     // A family folder's item: who wrote it and who vouched, as the web's Info says (details-panel.tsx).
                     if let verdict = store.familyVerdict(of: item) {
                         if verdict.mark != nil, let changed = verdict.changedBy { sentence(changed.label, value: changed.words, chevron: false).alpineRow() }
@@ -547,6 +551,7 @@ struct InfoSheet: View {
             .navigationTitle("Info")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .contactSteps($step) { Task { await store.refreshSigners() } }
             .task { store.thumbnail(for: item) }
         }
     }
@@ -605,6 +610,28 @@ struct InfoSheet: View {
             .padding(.vertical, Alpine.Space.s1)
             .contentShape(Rectangle())
         }
+    }
+
+    private func addedBy(_ seen: (name: String, id: String)) -> some View {
+        let pin = store.pins[seen.id.lowercased()]
+        return HStack(alignment: .firstTextBaseline) {
+            Text("Added by").foregroundStyle(Alpine.ink)
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(seen.name).foregroundStyle(Alpine.inkMuted)
+                HStack(spacing: 4) {
+                    Text("Not verified")
+                    if let pin, !pin.email.isEmpty {
+                        Text("·")
+                        Button("Check it’s \(firstName(seen.name))") { step = .check(email: pin.email, name: pin.name) }
+                            .fontWeight(.semibold).buttonStyle(.borderless)
+                    }
+                }
+                .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+            }
+        }
+        .padding(.vertical, Alpine.Space.s1)
+        .alpineRow()
     }
 
     private func fact(_ label: String, _ value: String) -> some View {

@@ -65,28 +65,29 @@ public enum Provenance: Sendable, Equatable, Hashable {
     /* The words for the explanation, as every client says them. */
     public var explanation: String {
         switch self {
+        // docs/optional-verification.md 6.12: calm, and only for what can't be confirmed.
         case .badSignature(.you):
-            "The signature doesn’t match your keys. Don’t trust this item."
+            "HushOS couldn’t confirm this was written by you."
         case .badSignature(.contact(let name)):
-            "The signature doesn’t match \(name)’s keys. Don’t trust this item."
+            "HushOS couldn’t confirm this was written by \(name.split(separator: " ").first.map(String.init) ?? name)."
         case .badSignature(.unchecked):
-            "The signature doesn’t match the writer’s keys. Don’t trust this item."
+            "HushOS couldn’t confirm who wrote this."
         case .retiredKey(.you):
             "Signed with keys you have since replaced."
         case .retiredKey(let writer):
             "Signed with keys \(writer.phrase) has since replaced."
         case .unknownSigner:
-            "HushOS can’t confirm who wrote this. It was added or last changed by someone you haven’t checked."
+            "HushOS can’t tell who wrote this."
         case .resealed(let writer):
             "Re-locked by \(writer.phrase); HushOS couldn’t confirm who wrote it before."
         case .unsigned:
-            "HushOS can’t confirm who wrote this."
+            "HushOS can’t tell who wrote this."
         case .unchecked:
             Self.couldNotCheck
         case .keyConflict(.contact(let name)):
-            "\(name)’s keys don’t match the ones you checked. Check it’s them again."
+            "\(name.split(separator: " ").first.map(String.init) ?? name)’s account looks different here than in your contacts."
         case .keyConflict:
-            "Its writer’s keys don’t match the ones you checked. Check it’s them again."
+            "Its writer’s account looks different here than in your contacts."
         case .formerMember(let writer, let family):
             "Written by \(writer.phrase), who has left \(family)."
         case .family(let mark):
@@ -94,7 +95,7 @@ public enum Provenance: Sendable, Equatable, Hashable {
         }
     }
 
-    public static let couldNotCheck = "HushOS couldn’t check who wrote this. Try again later."
+    public static let couldNotCheck = "HushOS couldn’t check this right now."
 
     /* The more serious of two verdicts; nil (verified) yields to anything. */
     static func worst(_ a: Provenance?, _ b: Provenance?) -> Provenance? {
@@ -133,6 +134,8 @@ public struct TrustedSigners: Sendable, Equatable {
     struct Keys: Sendable, Equatable {
         var current: Data
         var retired: [Data]
+        /* A first-seen pin's: its records read `seen`, never verified. */
+        var seen = false
     }
 
     /* Account id (lowercase) to its current signing key and the ones it replaced. */
@@ -149,8 +152,11 @@ public struct TrustedSigners: Sendable, Equatable {
      * that should count doesn't read.
      */
     public init(userId: String, identities: [IdentityKeys], pins: some Sequence<ContactPin>) throws {
-        for pin in pins where pin.verified && pin.userId.lowercased() != userId.lowercased() {
-            try trust(pin.userId, current: pin.signingPublicKey, retired: pin.previousSigningKeys ?? [], as: .contact(pin.displayName))
+        for pin in pins where pin.userId.lowercased() != userId.lowercased() {
+            // Verified pins verify; first-seen ones read `seen` (no mark, "Not verified" in Info); anything else vouches for nobody.
+            let trust = pin.trust
+            guard trust == .verified || trust == .seen else { continue }
+            try self.trust(pin.userId, current: pin.signingPublicKey, retired: pin.previousSigningKeys ?? [], as: .contact(pin.displayName), seen: trust == .seen)
         }
         if let current = identities.first {
             try trust(userId, current: current.signingPublicKey, retired: identities.dropFirst().map(\.signingPublicKey), as: .you)
@@ -158,7 +164,7 @@ public struct TrustedSigners: Sendable, Equatable {
     }
 
     /* Trusts `current` (base64url, 32 bytes) for `userId`, and `retired` as keys it replaced. */
-    public mutating func trust(_ userId: String, current: String, retired: [String] = [], as writer: Writer) throws {
+    public mutating func trust(_ userId: String, current: String, retired: [String] = [], as writer: Writer, seen: Bool = false) throws {
         func key(_ value: String) throws -> Data {
             guard let bytes = try? base64urlDecode(value: value), bytes.count == 32 else { throw SignersError.unreadableKey }
             return bytes
@@ -170,13 +176,13 @@ public struct TrustedSigners: Sendable, Equatable {
             if bytes != now && !earlier.contains(bytes) { earlier.append(bytes) }
         }
         let id = userId.lowercased()
-        keys[id] = Keys(current: now, retired: earlier)
+        keys[id] = Keys(current: now, retired: earlier, seen: seen)
         writers[id] = writer
     }
 
     func trusted(_ signer: Signer?) -> TrustedKeys? {
         guard let signer, let keys = keys[signer.id.lowercased()] else { return nil }
-        return TrustedKeys(current: keys.current, retired: keys.retired)
+        return TrustedKeys(current: keys.current, retired: keys.retired, seen: keys.seen)
     }
 
     /* How a verdict names the account the server says signed: only from this person's own pins. */
@@ -223,9 +229,9 @@ public struct TrustedSigners: Sendable, Equatable {
 
     func provenance(_ integrity: Integrity, signer: Signer?) -> Provenance? {
         switch integrity {
-        case .verified: nil
-        // Stop-gap (docs/optional-verification.md PR 1): a first-seen writer (`seen`) reads as one nobody checked until PR 5/6 design its own UI; this app never asks for `seen` yet.
-        case .unknownSigner, .seen: .unknownSigner(signerId: signer?.id)
+        // A first-seen writer's records carry no mark: nothing is wrong, nobody checked (Info says "Not verified").
+        case .verified, .seen: nil
+        case .unknownSigner: .unknownSigner(signerId: signer?.id)
         case .badSignature: .badSignature(writer(signer))
         case .unsigned: .unsigned
         case .resealed: .resealed(writer(signer))
@@ -265,6 +271,21 @@ public struct TrustedSigners: Sendable, Equatable {
         let metadata = provenance(metadata(of: node), signer: node.metadataSigner)
         guard !node.isFolder, let current = node.currentVersion else { return metadata }
         return Provenance.worst(metadata, provenance(version(current, of: node), signer: current.signer))
+    }
+
+    /*
+     * Who added an item whose writer this person's devices first saw and nobody checked (2.6):
+     * nil when a mark speaks instead, when every record verified, or when nobody can be named.
+     * The content's writer first: who added what is there now.
+     */
+    public func seenBy(of node: NodeView) -> (name: String, id: String)? {
+        guard provenance(of: node) == nil else { return nil }
+        var records: [(Integrity, Signer?)] = [(metadata(of: node), node.metadataSigner)]
+        if !node.isFolder, let current = node.currentVersion { records.append((version(current, of: node), current.signer)) }
+        for (integrity, signer) in records.reversed() where integrity == .seen {
+            if let signer, case .contact(let name) = writer(signer) { return (name, signer.id) }
+        }
+        return nil
     }
 
     /* An earlier (or the current) version in the versions list: its own signature, beside the node's metadata. */
@@ -340,6 +361,9 @@ extension TrustState {
         case .loaded(let signers): signers.provenance(of: version, in: node)
         }
     }
+
+    /* Who added it, first seen and not verified, for Info and the viewer; nil until whom to trust loaded. */
+    public func seenBy(of node: NodeView) -> (name: String, id: String)? { signers?.seenBy(of: node) }
 
     /* Saved from a link, for Info and the viewer; nil until whom to trust loaded, and when it failed (that shows "Couldn't check"). */
     public func savedCopy(of node: NodeView) -> SavedCopy? { signers?.savedCopy(of: node) }

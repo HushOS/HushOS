@@ -121,6 +121,9 @@ struct FileViewer: View {
                 // Saved from a link: where it came from, in the subtitle's place and colour.
                 Text(saved.line).font(.caption).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
+            } else if version == nil, let seen = store.seenBy(of: current) {
+                // Written by someone first seen and not checked: no mark, said in the subtitle's place (Info has the way to check).
+                Text("Added by \(seen.name) · Not verified").font(.caption).foregroundStyle(Alpine.inkMuted).lineLimit(1)
             } else {
                 Text(subtitle).font(.caption).foregroundStyle(Alpine.inkMuted).lineLimit(1)
             }

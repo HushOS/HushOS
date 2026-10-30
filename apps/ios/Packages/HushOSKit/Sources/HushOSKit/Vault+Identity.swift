@@ -166,7 +166,8 @@ extension Vault {
         while true {
             if let trustedSigners { return trustedSigners }
             let generation = signersGeneration
-            let trusted = try TrustedSigners(userId: session.userId, identities: try await allIdentities(), pins: try await loadSettings().contacts.values)
+            // Every pin as this phone's guard allows (2.8): read under the guard's turn, acts left pending settled first.
+            let trusted = try TrustedSigners(userId: session.userId, identities: try await allIdentities(), pins: try await effectivePins())
             // Forgotten while it loaded (a succession, a pin saved): built from what that replaced, so built again.
             guard generation == signersGeneration else { continue }
             trustedSigners = trusted
@@ -231,10 +232,10 @@ extension Vault {
         if reply.shares.isEmpty { ResealPending.clear(); ResealTo.remove(ResealTo.all); return outcome }
         let settings = try await loadSettings()
         let ledger = settings.ledger
-        let pins = settings.contacts
         let keys = try await identityKeys()
         let pending = ResealPending.isSet(for: keys.signingPublicKey)
-        var looked: [String: ServedContactKeys] = [:]
+        var looked: [String: Contact] = [:]
+        var sealed: [String: (publicKey: Data, kem: Data)] = [:]
         var unfinished = false
         var resealedTo: Set<String> = []
         var failedFor: Set<String> = []
@@ -242,25 +243,28 @@ extension Vault {
             let grantee = share.grantee.id.lowercased()
             let followed = ResealTo.contains(grantee)
             guard pending || share.suite != 4 || followed else { continue }
-            guard let pin = pins[share.grantee.id] else {
+            guard let pin = settings.pin(of: share.grantee.id) else {
                 outcome.note(ContactError.unpinned)
                 continue
             }
             do {
-                let served: ServedContactKeys
+                let contact: Contact
                 if let identity = share.granteeIdentity {
-                    served = identity.served
+                    contact = Contact(userId: share.grantee.id, served: identity, name: pin.name, email: pin.email)
                 } else if let known = looked[grantee] {
-                    served = known
+                    contact = known
                 } else {
                     // An older server serves no grantee identity here: look them up, once.
-                    let contact = try await Auth.lookupContact(email: pin.email, as: session)
-                    guard contact.userId == pin.userId else { throw ContactError.changed }
-                    served = contact.served
-                    looked[grantee] = served
+                    contact = try await Auth.lookupContact(email: pin.email, as: session)
+                    guard contact.userId.lowercased() == pin.userId.lowercased() else { throw ContactError.changed }
+                    looked[grantee] = contact
                 }
-                // Checked before anything is opened: only keys the version 3 pin vouches for are sealed to.
-                let sealing = try pin.sealKeys(served)
+                // Checked before anything is opened: only keys the pin holds, agreeing with this phone's guard, are sealed to.
+                let sealing: (publicKey: Data, kem: Data)
+                if let known = sealed[grantee] { sealing = known } else {
+                    sealing = try await trustGrantee(contact, follow: false)
+                    sealed[grantee] = sealing
+                }
                 guard let item = await openAnywhere(share.node), let nodeKey = nodeKey(of: item) else {
                     throw DriveAPIError.notFound("A shared item couldn’t be opened to seal it again.")
                 }
@@ -271,6 +275,10 @@ extension Vault {
                 if followed { resealedTo.insert(grantee) }
             } catch let error as ContactError {
                 // The pin doesn't vouch for the keys served: no amount of retrying changes that until the person acts.
+                outcome.note(error)
+                failedFor.insert(grantee)
+            } catch let error as AccountChangedError {
+                // Paused for them until Continue or a check (2.4): nothing is sealed to keys nobody accepted.
                 outcome.note(error)
                 failedFor.insert(grantee)
             } catch {

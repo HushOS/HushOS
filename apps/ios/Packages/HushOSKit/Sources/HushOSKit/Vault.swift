@@ -109,6 +109,13 @@ public actor Vault {
     var settingsKey: Data?
     /* The envelope `settingsKey` came out of, as the server keeps it: kept beside the rollback marks. */
     var settingsKeyEnvelope: SettingsKeyEnvelope?
+    /* The contact guard (ContactGuard.swift): the app group's for this session, or a test's own. */
+    var guardStore: ContactGuardStore?
+    /* The guard's turn (`withGuardTurn`): whether an act holds it, and who waits for it, in order. */
+    var guardBusy = false
+    var guardWaiting: [CheckedContinuation<Void, Never>] = []
+    /* People found changed this session (`accountChanges`), by lowercased id. */
+    var noticedChanges: [String: AccountChange] = [:]
     /* The pins as the last settings read had them (see `knownPins`). */
     var lastPins: [String: ContactPin] = [:]
     /* Whose signatures this person can check, built from the identities and the verified pins (see Integrity); a load that fails is not kept. */

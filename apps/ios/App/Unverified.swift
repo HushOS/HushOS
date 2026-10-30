@@ -2,14 +2,13 @@ import HushOSKit
 import SwiftUI
 
 /*
- * The Unverified mark (docs/integrity-design.md, "Reading"): an item whose writer this
- * person can't tie to someone they checked. A caution, not a lock: the item still opens.
- * Small and in the warning colour (danger for a signature that doesn't hold), with the
- * reason a tap away, and the way out where there is one.
+ * The Unverified mark (docs/integrity-design.md, "Reading"; docs/optional-verification.md 6.12):
+ * an item whose writer can't be confirmed. A first-seen writer's records carry none. A caution,
+ * not a lock: the item still opens. Small and in the warning colour, with the reason a tap away
+ * in calm words, and the way out where there is one.
  */
 extension Provenance {
     var colour: Color {
-        if case .badSignature = self { return Alpine.danger }
         if case .family(let mark) = self, mark.danger { return Alpine.danger }
         return Alpine.warning
     }
@@ -25,8 +24,7 @@ extension Provenance {
     var title: String {
         if self == .unchecked { return "Couldn’t check" }
         if case .family(let mark) = self { return mark.label }
-        // A key conflict is worse than Unverified and says so, as the web's mark does.
-        if case .keyConflict = self { return "Keys don’t match" }
+        // Keys that look different are said calmly in the mark's own words (6.12), under the same label as anything else.
         return "Unverified"
     }
 }
@@ -39,6 +37,9 @@ extension Provenance {
 struct CheckTarget: Identifiable, Hashable {
     let id: String
     let email: String
+    var name = ""
+    /* In Contacts already: checked by their address. Anyone else is found first. */
+    var pinned = false
 }
 
 extension DriveStore {
@@ -51,11 +52,10 @@ extension DriveStore {
         }
         guard let signerId = signer else { return nil }
         let id = signerId.lowercased()
-        if let mount = mounts.first(where: { $0.share.granter.id.lowercased() == id }), !mount.share.granter.email.isEmpty {
-            return CheckTarget(id: id, email: mount.share.granter.email)
-        }
-        if let pin = pins[id], !pin.email.isEmpty { return CheckTarget(id: id, email: pin.email) }
-        return nil
+        if let pin = pins[id], !pin.email.isEmpty { return CheckTarget(id: id, email: pin.email, name: pin.name, pinned: true) }
+        // Someone nobody pinned: Check who wrote this asks for their email, and only the writer's account is taken.
+        guard case .unknownSigner = provenance else { return nil }
+        return CheckTarget(id: id, email: "")
     }
 }
 
@@ -77,7 +77,7 @@ struct UnverifiedMark: View {
     /* A whole row's worth (Info), rather than the compact mark on a line. */
     var row = false
     @State private var explaining = false
-    @State private var checking: CheckTarget?
+    @State private var step: ContactStep?
 
     var body: some View {
         Button { explaining = true } label: { label }
@@ -87,24 +87,15 @@ struct UnverifiedMark: View {
             .popover(isPresented: $explaining) {
                 UnverifiedExplanation(provenance: provenance, target: store.checkTarget(for: provenance)) { target in
                     explaining = false
-                    checking = target
+                    // Someone nobody can name is found by their email first (Add someone), then checked.
+                    step = target.pinned ? .check(email: target.email, name: target.name) : .add(writer: target.id)
                 } retry: {
                     explaining = false
                     Task { await store.refreshSigners() }
                 }
                 .presentationCompactAdaptation(.popover)
             }
-            .sheet(item: $checking) { target in
-                NavigationStack {
-                    CheckContactView(email: target.email, intro: "Check it’s them before you trust what they add or change.") { pin in
-                        checking = nil
-                        store.notify("\(pin.name.isEmpty ? pin.email : pin.name) checked")
-                        Task { await store.refreshSigners() }
-                    }
-                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { checking = nil } } }
-                }
-                .environment(store)
-            }
+            .contactSheet($step, store: store) { Task { await store.refreshSigners() } }
     }
 
     @ViewBuilder private var label: some View {
@@ -145,7 +136,7 @@ struct UnverifiedExplanation: View {
                 Button { retry() } label: { Text("Try again").frame(maxWidth: .infinity) }
                     .buttonStyle(PrimaryCapsuleStyle())
             } else if let target {
-                Button { check(target) } label: { Text("Check their words").frame(maxWidth: .infinity) }
+                Button { check(target) } label: { Text(target.pinned ? "Check it’s \(firstName(target.name))" : "Check who wrote this").frame(maxWidth: .infinity) }
                     .buttonStyle(PrimaryCapsuleStyle())
             }
         }

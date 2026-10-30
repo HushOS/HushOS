@@ -130,15 +130,86 @@ struct Settings {
         if pin.resealShares == true { raw["resealShares"] = true }
         // Known here: a words check (no origin) clears a group's; a followed pin carries it on.
         if let via = pin.trustedVia { raw["trustedVia"] = via } else { raw.removeValue(forKey: "trustedVia") }
+        if let firstSeen = pin.firstSeen { raw["firstSeen"] = firstSeen }
         contacts[pin.userId] = raw
         document["contacts"] = contacts
     }
 
-    mutating func removePin(_ userId: String) {
-        var contacts = rawContacts
-        contacts[userId] = nil
-        document["contacts"] = contacts
+    /* The pin of `userId`, under its id in any letters (the web's pinOf). */
+    func pin(of userId: String) -> ContactPin? {
+        let id = userId.lowercased()
+        let all = contacts
+        return all[userId] ?? all.first(where: { $0.key.lowercased() == id })?.value
     }
+
+    /*
+     * `pin` written for its person, under the served id (a pin stored under the id in other letters
+     * goes), their removal forgotten (they are a contact again), and removals forgotten oldest first
+     * for room; refused with `contactsFull` when the document would not seal even without any.
+     */
+    mutating func setPinOnce(_ pin: ContactPin) throws {
+        var next = self
+        var contacts = next.rawContacts
+        for key in contacts.keys where key != pin.userId && key.lowercased() == pin.userId.lowercased() { contacts[key] = nil }
+        next.document["contacts"] = contacts
+        next.setPin(pin)
+        next.forgetRemoval(pin.userId)
+        next.fit()
+        guard try next.bytes() <= Self.maxBytes else { throw ContactError.message(Self.contactsFull) }
+        self = next
+    }
+
+    /* The pin removed and the removal recorded (docs/optional-verification.md 2.8): nothing adds them back on its own. */
+    mutating func removeContact(_ userId: String, at: String) {
+        let id = userId.lowercased()
+        var contacts = rawContacts
+        for key in contacts.keys where key.lowercased() == id { contacts[key] = nil }
+        document["contacts"] = contacts
+        var removed = removals.filter { $0.id != id }
+        removed.append((id, at))
+        document["removedContacts"] = Dictionary(removed.map { ($0.id, $0.at) }, uniquingKeysWith: { a, _ in a })
+        fit()
+    }
+
+    /* What a sealed document may hold (the core refuses more), and what adding someone says past it (2.7). */
+    static let maxBytes = 64 * 1024
+    public static let contactsFull = "Your contacts are full. Remove someone you no longer share with."
+
+    /*
+     * The removals the document records (`removedContacts`), oldest first; anything malformed is
+     * left out, so an odd value from another client never stops a save.
+     */
+    var removals: [(id: String, at: String)] {
+        guard let removed = document["removedContacts"] as? [String: Any] else { return [] }
+        return removed.compactMap { key, value in (value as? String).map { (key.lowercased(), $0) } }
+            .sorted { $0.at < $1.at || ($0.at == $1.at && $0.id < $1.id) }
+    }
+
+    /* Whether this account removed `userId` and has not added them back. */
+    func removed(_ userId: String) -> Bool { removals.contains { $0.id == userId.lowercased() } }
+
+    mutating func forgetRemoval(_ userId: String) {
+        guard document["removedContacts"] != nil else { return }
+        let kept = removals.filter { $0.id != userId.lowercased() }
+        if kept.isEmpty { document["removedContacts"] = nil } else {
+            document["removedContacts"] = Dictionary(kept.map { ($0.id, $0.at) }, uniquingKeysWith: { a, _ in a })
+        }
+    }
+
+    /*
+     * Removals count against the room a document has (2.7): the oldest are forgotten first, one at
+     * a time, until it seals. A document too large without any is left for the caller to refuse.
+     */
+    mutating func fit() {
+        var removed = removals
+        while !removed.isEmpty, ((try? bytes()) ?? 0) > Self.maxBytes {
+            removed.removeFirst()
+            document["removedContacts"] = removed.isEmpty ? nil : Dictionary(removed.map { ($0.id, $0.at) }, uniquingKeysWith: { a, _ in a })
+        }
+    }
+
+    /* The sealed document's size, as the core measures it. */
+    func bytes() throws -> Int { try json().utf8.count }
 
     var ledger: SharingLedger {
         get {
@@ -236,20 +307,28 @@ extension ContactPin {
 
     var displayName: String { name.isEmpty ? email : name }
 
-    /*
-     * The keys a share to this person is sealed to, given what the server serves for them: the
-     * pinned X25519 key and the served ML-KEM key, only when the comparison is `same` (so the
-     * ML-KEM and ML-DSA keys are the ones the version 3 pin's digests name). Never X25519 alone.
-     */
-    func sealKeys(_ served: ServedContactKeys) throws -> (publicKey: Data, kem: Data) {
-        guard verified else { throw ContactError.recheck(displayName) }
-        switch compare(served) {
-        case .same: break
-        case .recheck: throw ContactError.recheck(displayName)
-        case .succession, .changed: throw ContactError.changed
-        }
-        guard let kemPublicKey = served.kemPublicKey, let kem = try? base64urlDecode(value: kemPublicKey) else { throw ContactError.changed }
-        return (try base64urlDecode(value: encryptionPublicKey), kem)
+    /* The first word of the name, as every sentence about them says it ("Maya’s account changed"). */
+    public var firstName: String { displayName.split(separator: " ").first.map(String.init) ?? displayName }
+
+    /* The key fields every pin rule reads (the core's `PinKeys`). */
+    var keys: PinKeys {
+        PinKeys(keyVersion: keyVersion, encryptionPublicKey: encryptionPublicKey, signingPublicKey: signingPublicKey,
+                mlDsaPublicKeyHash: mlDsaPublicKeyHash, kemPublicKeyHash: kemPublicKeyHash, fingerprint: fingerprint)
+    }
+
+    /* Verified (a words check), seen (first-seen: the keys first met, nobody checked), legacy or invalid: the core's one rule. */
+    public var trust: PinTrust { pinTrust(pin: keys) }
+
+    /* The key commitment over its four keys (never `fingerprint`, which every first-seen pin holds as ""); nil when malformed. */
+    var commitment: String? { keyCommitment(pin: keys) }
+
+    /* Whether two pins hold the same keys: by key commitment, or for pins without one, by every key field. */
+    static func sameKeys(_ a: ContactPin?, _ b: ContactPin?) -> Bool {
+        guard let a, let b else { return a == nil && b == nil }
+        let (left, right) = (a.commitment, b.commitment)
+        if left != nil || right != nil { return left == right }
+        return a.encryptionPublicKey == b.encryptionPublicKey && a.signingPublicKey == b.signingPublicKey
+            && a.mlDsaPublicKeyHash == b.mlDsaPublicKeyHash && a.kemPublicKeyHash == b.kemPublicKeyHash
     }
 }
 
@@ -352,12 +431,16 @@ extension Vault {
      * meanwhile makes the server refuse the stale base: read again and apply the change again.
      */
     @discardableResult
-    func updateSettings(_ change: (inout Settings) throws -> Void) async throws -> Settings {
+    func updateSettings(_ change: (inout Settings) throws -> Void, beforeSend: ((_ base: UInt64) throws -> Void)? = nil) async throws -> Settings {
         var attempt = 0
         while true {
             var settings = try await loadSettings()
             try change(&settings)
+            // Removals count against the room the document has: the oldest go first (docs/optional-verification.md 2.7).
+            settings.fit()
             let settingsKey = try await ensureSettingsKey(settings.keyEnvelope)
+            // Each attempt names the sequence it lands over (a contact act's pending record), before it is sent.
+            try beforeSend?(settings.version)
             // Named by the stored sequence (a version 1 row's too) and sealed one above it, where the server stores it.
             let sealed = try settingsSeal(userId: session.userId, settingsKey: settingsKey, settingsVersion: settings.version + 1, json: try settings.json())
             do {
