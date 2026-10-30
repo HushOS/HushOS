@@ -16,8 +16,10 @@ const buttonVariants = cva(
                     'border-primary bg-primary text-primary-foreground hover:border-primary-hover hover:bg-primary-hover focus-visible:outline-primary-foreground',
                 secondary:
                     'border-ink bg-ink text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--ink),var(--background)_12%)] focus-visible:outline-secondary-foreground',
+                // In the dark the fill is see-through, so on the black panel an outline button is an outline, not a grey tile;
+                // in dialogs and cards it shows their surface, as before. Light keeps the white fill.
                 outline:
-                    'border-input bg-card text-foreground hover:bg-muted focus-visible:outline-ring aria-expanded:bg-muted',
+                    'border-input bg-card text-foreground hover:bg-muted focus-visible:outline-ring aria-expanded:bg-muted dark:bg-transparent dark:hover:bg-muted dark:aria-expanded:bg-muted',
                 ghost: 'border-transparent bg-transparent text-foreground hover:bg-muted focus-visible:outline-ring aria-expanded:bg-muted',
                 row: 'w-full justify-between border-transparent bg-transparent text-foreground hover:bg-muted focus-visible:outline-ring aria-expanded:bg-muted [&>svg]:text-primary',
                 destructive:
