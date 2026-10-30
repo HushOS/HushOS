@@ -1,0 +1,25 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_5d7c505bddeed3 126-129,487,491-493,495,503
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_ba451baf57ed32 1246
+apps/android/app/src/test/kotlin/com/hushos/app/data/ContactTrustTest.kt
+  s_566b8e0c4467a4::t_6ba3a52acb9798 7,295-309
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_566b8e0c4467a4::t_6a8473fe31bb47 93-94,394-400
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d5c7517f8a18bb3801b2f321fdef2aa2ab1415d8",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
