@@ -2,8 +2,12 @@ package com.hushos.app.data
 
 import com.hushos.core.HybridPublicKey
 import com.hushos.core.IdentityKeys
+import com.hushos.core.PinComparison
+import com.hushos.core.PinKeys
+import com.hushos.core.PinTrust
 import com.hushos.core.PinnedKeys
 import com.hushos.core.PublicIdentity
+import com.hushos.core.ServedContactKeys
 import com.hushos.core.ServedKeys
 import com.hushos.core.SettingsEnvelope
 import com.hushos.core.ShareContext
@@ -11,13 +15,16 @@ import com.hushos.core.SuccessionLink
 import com.hushos.core.base64urlDecode
 import com.hushos.core.identityFingerprintOfKeys
 import com.hushos.core.identityVerifyKeys
+import com.hushos.core.keyCommitment
 import com.hushos.core.keyDigest
-import com.hushos.core.pinVerified
+import com.hushos.core.pinOfServed
+import com.hushos.core.pinTrust
 import com.hushos.core.settingsOpen
 import com.hushos.core.shareOpen
 import com.hushos.core.successionChainVerify
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.Instant
 
 /*
  * Someone's public identity as the server serves it (contact lookups, a share's granter, shared-by-me grantees,
@@ -47,6 +54,16 @@ data class ServedIdentity(
         val kem = kemPublicKey ?: return false
         val signature = keysSignature ?: return false
         return runCatching { identityVerifyKeys(userId, PublicIdentity(version, encryptionPublicKey, signingPublicKey, mlDsa, kem, signature)) }.getOrDefault(false)
+    }
+
+    /* As the core compares them; no key version reads as 0, which never makes a succession. */
+    val core: ServedContactKeys get() = ServedContactKeys(keyVersion ?: 0uL, encryptionPublicKey, signingPublicKey, mlDsaPublicKey, kemPublicKey)
+
+    /* The four keys in full, as a pin is made of them; null for an identity that has not upgraded. */
+    val full: ServedKeys? get() {
+        val mlDsa = mlDsaPublicKey ?: return null
+        val kem = kemPublicKey ?: return null
+        return ServedKeys(keyVersion ?: 0uL, encryptionPublicKey, signingPublicKey, mlDsa, kem)
     }
 
     /* As the API serves it, for code that takes the wire shape (planReseal). */
@@ -86,7 +103,30 @@ data class Contact(val userId: String, val name: String, val email: String, val 
                 base64urlDecode(served.mlDsaPublicKey!!), base64urlDecode(served.kemPublicKey!!))
         }.getOrNull()
     }
+
+    val displayName: String get() = name.ifEmpty { email }
+    val firstName: String get() = firstNameOf(displayName)
+
+    /*
+     * Everything a verdict on this person is judged by: a verdict kept for one pass (mounting received shares, a
+     * rotation, the re-seal pass) is reused only for exactly these keys, never for other keys served for the same
+     * person later in the pass.
+     */
+    val trustKey: String get() = listOf(userId.lowercase(), served.keyVersion?.toString() ?: "-", served.identityVersion.toString(),
+        served.encryptionPublicKey, served.signingPublicKey, served.mlDsaPublicKey ?: "-", served.kemPublicKey ?: "-", served.keysSignature ?: "-").joinToString("|")
+
+    /* The key commitment of the served keys, or null for an identity that can't be pinned. */
+    val commitment: String? get() = served.full?.let { runCatching { keyCommitment(pinOfServed(it, false)) }.getOrNull() }
+
+    /* A pin of the served keys (`verified` only after They match): only for an upgraded identity whose keys statement held. */
+    fun pin(verified: Boolean, firstSeen: String?, at: String = Instant.now().toString()): ContactPin {
+        val full = served.full?.takeIf { upgraded } ?: throw ContactProblem.notUpgraded(displayName)
+        return ContactPin.of(userId, email, name, pinOfServed(full, verified), at, firstSeen)
+    }
 }
+
+/* The first word of a name, as every sentence about someone says it ("Maya’s account changed"). */
+fun firstNameOf(name: String): String = name.trim().split(Regex("\\s+")).firstOrNull { it.isNotEmpty() } ?: name
 
 /*
  * What a pin keeps of a contact, as the settings document stores it. A version 3 pin (docs/identity-pq-design.md 2)
@@ -114,15 +154,35 @@ data class ContactPin(
      * verdicts ask the successor's consent of links from such a pin, and no member is admitted from one.
      */
     val trustedVia: String? = null,
+    /* Where this person was first met ("added", "shared-with-me", "family"): informational, read by no rule. */
+    val firstSeen: String? = null,
 ) {
-    /*
-     * Whether the words were compared over all four keys: a version 3 pin whose stored fingerprint is the version 3 one
-     * over its X25519 and Ed25519 keys and the two digests. A pin from before the release (no ML-DSA digest), or one
-     * whose fingerprint is not the current one over the pinned keys, vouches for nothing.
-     */
-    val verified: Boolean by lazy { pinVerified(encryptionPublicKey, signingPublicKey, mlDsaPublicKeyHash, kemPublicKeyHash, fingerprint) }
+    /* The key fields every pin rule reads (the core's PinKeys). */
+    val keys: PinKeys get() = PinKeys(keyVersion, encryptionPublicKey, signingPublicKey, mlDsaPublicKeyHash, kemPublicKeyHash, fingerprint)
+
+    /* Verified (a words check), seen (first-seen: the keys first met, nobody checked), legacy or invalid: the core's one rule. */
+    val trust: PinTrust by lazy { pinTrust(keys) }
+
+    /* Whether the words were compared over all four keys (`pin_verified`): first-seen and legacy pins are not. */
+    val verified: Boolean get() = trust == PinTrust.VERIFIED
+
+    /* Verified or first-seen: a pin the guard remembers and a share may be sealed to. */
+    val held: Boolean get() = trust == PinTrust.VERIFIED || trust == PinTrust.SEEN
+
+    /* The key commitment over its four keys (never `fingerprint`, which every first-seen pin holds as ""); null when malformed. */
+    val commitment: String? by lazy { runCatching { keyCommitment(keys) }.getOrNull() }
+
+    /* What this pin says about the keys served now: the core's `compare_pin`. */
+    fun compare(served: ServedIdentity): PinComparison = com.hushos.core.comparePin(keys, served.core)
+
+    /* This pin over other keys: every other field kept. */
+    fun replacing(keys: PinKeys, pinnedAt: String = this.pinnedAt, name: String = this.name, email: String = this.email): ContactPin =
+        copy(email = email, name = name, encryptionPublicKey = keys.encryptionPublicKey, signingPublicKey = keys.signingPublicKey,
+            fingerprint = keys.fingerprint, pinnedAt = pinnedAt, kemPublicKeyHash = keys.kemPublicKeyHash, mlDsaPublicKeyHash = keys.mlDsaPublicKeyHash,
+            keyVersion = keys.keyVersion)
 
     val displayName: String get() = name.ifEmpty { email }
+    val firstName: String get() = firstNameOf(displayName)
 
     /* Writes the pin's fields into `json`, leaving any field another client added as it was. */
     fun writeInto(json: JSONObject): JSONObject {
@@ -136,6 +196,8 @@ data class ContactPin(
         if (resealShares) json.put("resealShares", true)
         // Known here: a words check (no origin) clears a group's; a followed pin carries it on.
         if (trustedVia == null) json.remove("trustedVia") else json.put("trustedVia", trustedVia)
+        // Informational, and only ever written: another client's stays as it was.
+        if (firstSeen != null) json.put("firstSeen", firstSeen)
         return json
     }
 
@@ -151,7 +213,23 @@ data class ContactPin(
             json.optBoolean("resealShares", false),
             // An empty origin stays empty, for the core to refuse, never read as a words check.
             if (!json.has("trustedVia") || json.isNull("trustedVia")) null else json.optString("trustedVia"),
+            if (!json.has("firstSeen") || json.isNull("firstSeen")) null else json.optString("firstSeen"),
         )
+
+        /* A pin of `keys` for a person, with nothing else carried over. */
+        fun of(userId: String, email: String, name: String, keys: PinKeys, pinnedAt: String, firstSeen: String?) = ContactPin(
+            userId, email, name, keys.encryptionPublicKey, keys.signingPublicKey, keys.fingerprint, pinnedAt, keys.kemPublicKeyHash,
+            keys.mlDsaPublicKeyHash, keys.keyVersion, firstSeen = firstSeen,
+        )
+
+        /* Whether two pins hold the same keys: by key commitment, or for pins without one, by every key field. */
+        fun sameKeys(a: ContactPin?, b: ContactPin?): Boolean {
+            if (a == null || b == null) return a == null && b == null
+            val (left, right) = a.commitment to b.commitment
+            if (left != null || right != null) return left == right
+            return a.encryptionPublicKey == b.encryptionPublicKey && a.signingPublicKey == b.signingPublicKey &&
+                a.mlDsaPublicKeyHash == b.mlDsaPublicKeyHash && a.kemPublicKeyHash == b.kemPublicKeyHash
+        }
 
         /*
          * The version 3 pin of keys whose words were just compared: their X25519 and Ed25519 keys, the digests of their
@@ -182,47 +260,30 @@ data class OwnedShare(val id: String, val role: String, val keyEpoch: ULong, val
 }
 
 
-/*
- * The lookup's verdict against the pin: `changed` when the served keys differ from it and no signed chain explains it,
- * `recheck` when the pin itself vouches for nothing over keys that did not change ("Check words again"), `followed`
- * when the keys changed by a succession the old keys signed and the pin now holds the new ones. `upgraded` says whether
- * words can be compared at all (see Contact.upgraded).
- */
-data class Lookup(val contact: Contact, val pinned: ContactPin?, val changed: Boolean, val recheck: Boolean = false, val followed: Boolean = false) {
+/* Where this phone stands with someone looked up by email: for Check it's Maya and the changed-account notice. */
+data class Lookup(
+    val contact: Contact,
+    /* The pin held for this person, after any succession it followed just now. */
+    val pinned: ContactPin?,
+    /* The served keys are not the ones this phone holds and no signed chain explains it: the notice, never a silent update. */
+    val changed: Boolean,
+    /* The pin is verified and agrees with this phone: "Verified", and Check again. */
+    val verified: Boolean = false,
+    /* For a change: whether this phone had them checked, so the notice leads with a check. */
+    val wasVerified: Boolean = false,
+    /* For a change: the key commitment of the keys this phone held, for Technical details. */
+    val heldFingerprint: String? = null,
+    /* The pin followed their signed succession to the keys looked up just now. */
+    val followed: Boolean = false,
+    /* The lookup itself saved or remembered something: whom signatures count for moved, so what is drawn is judged again. */
+    val trustChanged: Boolean = false,
+) {
+    /* Words can be compared, and a pin made, only over an upgraded identity whose keys statement holds. */
     val upgraded: Boolean get() = contact.upgraded
 }
 
 /* SHA-256 (hex) of a base64url public key, or null when it does not decode. */
 private fun digestOf(publicKey: String): String? = runCatching { keyDigest(base64urlDecode(publicKey)) }.getOrNull()
-
-/*
- * What a pin says about the keys the server serves for that person now (docs/identity-pq-design.md 2), as
- * packages/drive's comparePin:
- * - SAME: a version 3 pin, the served X25519 and Ed25519 keys are the pinned ones, and the served ML-DSA and ML-KEM
- *   keys match its digests;
- * - RECHECK: a pin from before the release (or one whose words never covered its keys) over the same X25519 and
- *   Ed25519 keys: only comparing words again trusts them; until then, nothing is trusted;
- * - SUCCESSION: other keys at a higher key version, which a signed chain from a version 3 pin may explain;
- * - CHANGED: anything else, including a served identity with no ML-DSA key, or one whose ML-DSA or ML-KEM key
- *   differs, beside the pinned classical keys.
- */
-enum class PinComparison { SAME, RECHECK, SUCCESSION, CHANGED }
-
-fun comparePin(pin: ContactPin, served: ServedIdentity): PinComparison {
-    val sameKeys = pin.encryptionPublicKey == served.encryptionPublicKey && pin.signingPublicKey == served.signingPublicKey
-    if (sameKeys) {
-        if (!pin.verified) return PinComparison.RECHECK
-        val mlDsa = served.mlDsaPublicKey ?: return PinComparison.CHANGED
-        val kem = served.kemPublicKey ?: return PinComparison.CHANGED
-        return if (digestOf(mlDsa) == pin.mlDsaPublicKeyHash && digestOf(kem) == pin.kemPublicKeyHash) PinComparison.SAME else PinComparison.CHANGED
-    }
-    // A succession is always to a version 2 identity, and only a version 3 pin passes trust on.
-    if (served.mlDsaPublicKey == null || served.kemPublicKey == null) return PinComparison.CHANGED
-    val version = served.keyVersion ?: return PinComparison.CHANGED
-    // A pin with no version: the chain is then looked for from 1.
-    if (version > (pin.keyVersion ?: 1uL) && pin.verified) return PinComparison.SUCCESSION
-    return PinComparison.CHANGED
-}
 
 /*
  * The key version a chain is asked for from: always the first, so the request says nothing of the version a pin is
@@ -240,7 +301,7 @@ const val CHAIN_FROM: ULong = 1uL
  * old keys.
  */
 fun followSuccession(pin: ContactPin, served: ServedIdentity, links: List<SuccessionLink>, now: String): ContactPin? {
-    if (comparePin(pin, served) != PinComparison.SUCCESSION) return null
+    if (pin.compare(served) != PinComparison.SUCCESSION) return null
     val mlDsaHash = pin.mlDsaPublicKeyHash ?: return null
     val version = served.keyVersion ?: return null
     val mlDsa = served.mlDsaPublicKey ?: return null
@@ -250,7 +311,9 @@ fun followSuccession(pin: ContactPin, served: ServedIdentity, links: List<Succes
             ServedKeys(version, served.encryptionPublicKey, served.signingPublicKey, mlDsa, kem), links)
     }.getOrDefault(false)
     if (!holds) return null
-    val next = ContactPin.ofServed(pin.userId, pin.email, pin.name, served, pin.pinnedAt) ?: return null
+    // A followed first-seen pin stays first-seen: the chain carries the pin's standing, never a check nobody made.
+    val keys = runCatching { pinOfServed(ServedKeys(version, served.encryptionPublicKey, served.signingPublicKey, mlDsa, kem), pin.verified) }.getOrNull() ?: return null
+    val next = pin.replacing(keys)
     val start = chainStart(pin, links)
     // The core verified a chain this client finds no start for: the two start rules disagree. Followed all the same,
     // keeping the pinned key. No keys or addresses in the line; JVM tests have no Log, hence runCatching.
@@ -320,6 +383,82 @@ class Settings(val json: JSONObject, val version: ULong) {
         all.put(pin.userId, pin.writeInto(all.optJSONObject(pin.userId) ?: JSONObject()))
     }
 
+    /* The pin of `userId`, under its id in any letters (the web's pinOf). */
+    fun pinOf(userId: String): ContactPin? {
+        val all = contacts
+        return all[userId] ?: all.entries.firstOrNull { it.key.equals(userId, ignoreCase = true) }?.value
+    }
+
+    /*
+     * `pin` written for its person, under the served id, their removal forgotten (they are a contact again), and
+     * removals forgotten oldest first for room; refused with CONTACTS_FULL, changing nothing, when the document would not
+     * seal even without any. A pin another client stored under the id in other letters moves to the served id first,
+     * whole: the fields this version doesn't know (another client's, a later version's) go with it, and only then are
+     * the known ones written over.
+     */
+    fun setPinOnce(pin: ContactPin) {
+        val before = json.toString()
+        val all = contactsJson()
+        val others = all.keys().asSequence().filter { it != pin.userId && it.equals(pin.userId, ignoreCase = true) }.sorted().toList()
+        if (!all.has(pin.userId)) others.firstOrNull()?.let { all.put(pin.userId, all.getJSONObject(it)) }
+        for (key in others) all.remove(key)
+        pin(pin)
+        forgetRemoval(pin.userId)
+        fit()
+        if (bytes() > MAX_BYTES) {
+            // Nothing of the attempt stays: the document is as it was read.
+            val restored = JSONObject(before)
+            for (key in json.keys().asSequence().toList()) json.remove(key)
+            for (key in restored.keys()) json.put(key, restored.get(key))
+            throw ContactProblem(CONTACTS_FULL)
+        }
+    }
+
+    /* The pin removed and the removal recorded (docs/optional-verification.md 2.8): nothing adds them back on its own. */
+    fun removeContact(userId: String, at: String) {
+        val all = contactsJson()
+        for (key in all.keys().asSequence().toList()) if (key.equals(userId, ignoreCase = true)) all.remove(key)
+        val kept = removals.filter { it.first != userId.lowercase() } + (userId.lowercase() to at)
+        json.put("removedContacts", JSONObject().also { r -> kept.forEach { (id, time) -> r.put(id, time) } })
+        fit()
+    }
+
+    /*
+     * The removals the document records (`removedContacts`), oldest first; anything malformed is left out, so an odd
+     * value from another client never stops a save.
+     */
+    val removals: List<Pair<String, String>> get() {
+        val removed = json.optJSONObject("removedContacts") ?: return emptyList()
+        return removed.keys().asSequence().mapNotNull { key -> (removed.opt(key) as? String)?.let { key.lowercase() to it } }
+            .sortedWith(compareBy<Pair<String, String>> { it.second }.thenBy { it.first }).toList()
+    }
+
+    /* Whether this account removed `userId` and has not added them back. */
+    fun removed(userId: String): Boolean = removals.any { it.first == userId.lowercase() }
+
+    fun forgetRemoval(userId: String) {
+        val removed = json.optJSONObject("removedContacts") ?: return
+        for (key in removed.keys().asSequence().toList()) if (key.equals(userId, ignoreCase = true)) removed.remove(key)
+        if (removed.length() == 0) json.remove("removedContacts")
+    }
+
+    /*
+     * Removals count against the room a document has (2.7): the oldest are forgotten first, one at a time, until it
+     * seals. A document too large without any is left for the caller to refuse.
+     */
+    fun fit() {
+        val removed = json.optJSONObject("removedContacts") ?: return
+        val order = removals.map { it.first }.toMutableList()
+        while (order.isNotEmpty() && bytes() > MAX_BYTES) {
+            val oldest = order.removeAt(0)
+            for (key in removed.keys().asSequence().toList()) if (key.lowercase() == oldest) removed.remove(key)
+            if (removed.length() == 0) json.remove("removedContacts")
+        }
+    }
+
+    /* The sealed document's size, as the core measures it. */
+    fun bytes(): Int = text().toByteArray(Charsets.UTF_8).size
+
     fun unpin(userId: String) { contactsJson().remove(userId) }
 
     val ledger: SharingLedger get() {
@@ -354,6 +493,10 @@ class Settings(val json: JSONObject, val version: ULong) {
     fun text(): String = json.put("version", 2).toString()
 
     companion object {
+        /* What a sealed document may hold (the core refuses more), and what adding someone says past it (2.7). */
+        const val MAX_BYTES = 64 * 1024
+        const val CONTACTS_FULL = "Your contacts are full. Remove someone you no longer share with."
+
         fun parse(text: String, version: ULong) = Settings(JSONObject(text), version)
         /* Version 2, the only document version written (docs/identity-pq-design.md 2): it may hold version 3 pins. */
         fun empty(version: ULong = 0uL) = Settings(JSONObject().put("version", 2).put("contacts", JSONObject()), version)
@@ -387,25 +530,45 @@ fun readServedSettings(userId: String, envelope: SettingsEnvelope?, sequence: UL
 fun openSettingsText(userId: String, settingsKey: ByteArray?, envelope: SettingsEnvelope): Settings =
     settingsOpen(userId, settingsKey, envelope)?.let { Settings.parse(it, envelope.settingsVersion) } ?: Settings.empty(envelope.settingsVersion)
 
-class ContactChanged : Exception("This contact's key changed since you pinned it. Check the fingerprint and pin it again.")
+/* Why a contact act stopped, in a sentence that says what to do. */
+class ContactProblem(message: String) : Refused("Nothing was shared", message) {
+    companion object {
+        fun notUpgraded(name: String) = ContactProblem("${firstNameOf(name)} needs to sign in to HushOS once more before you can share with them.")
+        fun unpinned() = ContactProblem("This person is not in your contacts. Add them before sharing.")
+        fun otherAccount() = ContactProblem("That address now belongs to a different account.")
+    }
+}
+
+/* Another device (or Vault) moved this person's pin between the read an act was decided over and its save. */
+class ContactMoved : Refused("Nothing was changed", GuardWords.MOVED)
+
+/* Someone whose keys changed with no chain from the keys this phone holds: paused until Continue or a check (2.4). */
+data class AccountChange(val contactId: String, val name: String, val email: String) {
+    val id: String get() = contactId.lowercase()
+    val firstName: String get() = firstNameOf(name.ifEmpty { email })
+}
+
+/* What a share, a re-seal or an open met: said as the one calm notice, "Maya’s account changed". */
+class AccountChanged(val change: AccountChange) : Refused("Nothing was shared", "${change.firstName}’s account changed.")
 
 /* Why sharing to a pinned person is refused: the sentence says what to do. */
 class SharingRefused(message: String) : Refused("Nothing was shared", message)
 
-/* Why a received share stays shut until the person acts in Contacts. */
+/*
+ * Why a received share waits (docs/optional-verification.md 6.4), said calmly on its row: for the person's Open
+ * (someone they removed, or whose signed succession this phone hasn't followed), for Review (an account that changed),
+ * for Try again (the guard couldn't be read), for the granter (someone who can't be added yet, or a share sealed with
+ * keys they since replaced).
+ */
 sealed class GranterTrust(message: String) : Exception(message) {
-    class Unverified(name: String) : GranterTrust("Add $name in Contacts and check their words to open what they shared.")
-    class Changed(name: String) : GranterTrust("$name’s keys have changed since you checked them. Check it’s them in Contacts before opening what they shared.")
-    /*
-     * Pinned, but the pin vouches for nothing: one made before the words covered all four keys (or one whose fingerprint
-     * isn't the current one). Shares from them open once both people have compared words again.
-     */
-    class Recheck(name: String) : GranterTrust("$name’s keys were upgraded. Compare words with them again in Contacts; shares from $name open once you’ve both done it.")
-    /*
-     * Other keys served at a newer version than the pin's: maybe a succession, but only checking says so (the server
-     * picks the version), and a pin follows only when the person checks them again, never on its own.
-     */
-    class Replaced(name: String) : GranterTrust("$name’s sharing keys changed since you checked them. Check them again in Contacts to open what they shared.")
+    /* Open adds them back, or follows them: the words say which. */
+    class Waiting(words: String) : GranterTrust(words)
+    /* "Maya’s account changed": Review. */
+    class Changed(val change: AccountChange) : GranterTrust("${change.firstName}’s account changed. Review to open this.")
+    /* Nothing the person can do here yet (they need to sign in once more, contacts are full). */
+    class Unverified(words: String) : GranterTrust(words)
+    /* This phone's guard couldn't be read: never first use. */
+    class Unchecked : GranterTrust(GuardWords.UNREADABLE)
     /* Sealed under keys the granter has since replaced, which vouch for nothing now: it waits for their re-seal. */
     class Reshare(name: String) : GranterTrust("$name replaced their sharing keys since sharing this. Ask $name to share it again.")
 }
@@ -428,28 +591,6 @@ class GranterKey(val keys: HybridPublicKey, val replacedKeys: Boolean) {
 }
 
 /*
- * The keys to open a share from this granter with: the pinned current Ed25519 key and the served ML-DSA key whose
- * digest the pin holds, and only when the pin is version 3 and the server serves the pinned keys
- * (docs/identity-pq-design.md 2 and 3). Keys the granter replaced open nothing: a share sealed under one waits for
- * their re-seal. Newer keys served than the pin's are not followed here; the person checks them again. Taking the
- * served keys of someone not pinned would let a server fake a share "from" anyone with keys of its own, so that is
- * refused, and nothing is pinned here.
- */
-fun granterKey(granterId: String, granterName: String, served: ServedIdentity, pins: Map<String, ContactPin>): GranterKey {
-    val pin = pins[granterId] ?: throw GranterTrust.Unverified(granterName)
-    when (comparePin(pin, served)) {
-        PinComparison.SAME -> Unit
-        PinComparison.RECHECK -> throw GranterTrust.Recheck(granterName)
-        PinComparison.SUCCESSION -> throw GranterTrust.Replaced(granterName)
-        // Other keys than the pinned ones, whatever the pin's version: the changed-key warning. Only the same keys under
-        // a pin that vouches for nothing is an upgrade (RECHECK).
-        PinComparison.CHANGED -> throw GranterTrust.Changed(granterName)
-    }
-    val keys = granterKeysOf(pin, served) ?: throw GranterTrust.Changed(granterName)
-    return GranterKey(keys, pin.previousSigningKeys.isNotEmpty())
-}
-
-/*
  * A received share's node key: the granter's keys against each of this account's identities, the current one first.
  * A share row does not say which identity it was sealed to, and after a succession shares sealed to earlier keys open
  * only with them. Suite 4 checks both halves of the granter's signature before anything is decapsulated, so a share
@@ -467,25 +608,6 @@ fun openShare(envelope: ByteArray, granter: GranterKey, granterName: String, ide
     }
     if (granter.replacedKeys) throw GranterTrust.Reshare(granterName)
     throw refusal ?: ShareRefused("This share could not be opened.")
-}
-
-/*
- * The ML-KEM key a share to `pin` is sealed to, checked against the pin before anything is sealed to them: on share,
- * on rotation, on the re-seal pass, never falling back to X25519 alone (packages/drive's trustGrantee). The pin must be
- * version 3 and the served keys the pinned ones, the ML-KEM key by its digest; anything else is refused with what to do.
- */
-fun granteeKem(pin: ContactPin, served: ServedIdentity): ByteArray {
-    val name = pin.displayName
-    if (!pin.verified) throw SharingRefused("Check $name’s words again in Contacts: this pin was made before the words covered all their keys.")
-    when (comparePin(pin, served)) {
-        PinComparison.SAME -> Unit
-        PinComparison.RECHECK -> throw SharingRefused("$name’s keys were upgraded. Compare words with them again in Contacts.")
-        PinComparison.SUCCESSION -> throw SharingRefused("$name’s sharing keys changed since you checked them. Check them again in Contacts.")
-        PinComparison.CHANGED -> throw SharingRefused("$name’s keys have changed since you checked them. Check it’s them in Contacts.")
-    }
-    // comparePin said SAME: the served ML-KEM key is the one the version 3 pin's digest names.
-    val kem = served.kemPublicKey ?: throw SharingRefused("$name hasn’t got post-quantum keys yet. They get them the next time they sign in.")
-    return base64urlDecode(kem)
 }
 
 fun settingsEnvelope(json: JSONObject) = SettingsEnvelope(

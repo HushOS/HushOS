@@ -27,9 +27,13 @@ class Trust private constructor(
     private val own: TrustedKeys,
     private val contacts: Map<String, TrustedKeys>,
     private val names: Map<String, String>,
-    /* Addresses of people pinned but not checked over both keys: where "Check their words" can start. */
-    private val unchecked: Map<String, String>,
+    /* People pinned whose pin vouches for nothing (legacy or malformed), by id: their address and name, where "Check it’s Maya" can start. */
+    private val unchecked: Map<String, Pair<String, String>>,
+    /* The address of each contact whose keys count, to check them by (Info's "Check it’s Maya"). */
+    private val emails: Map<String, String> = emptyMap(),
 ) {
+    fun emailOf(signerId: String): String? = emails[signerId.lowercase()]?.ifEmpty { null }
+
     fun keysFor(signerId: String?): TrustedKeys? = when {
         signerId == null -> null
         signerId.equals(userId, ignoreCase = true) -> own
@@ -40,36 +44,41 @@ class Trust private constructor(
     fun writer(signerId: String?): Writer = when {
         signerId == null -> Writer.Unknown(null)
         signerId.equals(userId, ignoreCase = true) -> Writer.You
-        else -> names[signerId.lowercase()]?.let { Writer.Contact(it) } ?: Writer.Unknown(unchecked[signerId.lowercase()])
+        else -> names[signerId.lowercase()]?.let { Writer.Contact(it) }
+            ?: unchecked[signerId.lowercase()]?.let { (email, name) -> Writer.Unknown(email, name) } ?: Writer.Unknown(null)
     }
 
     companion object {
         /*
          * `ownCurrent` is the signing key of the identity opened now; `ownEarlier` those of the identities it replaced.
-         * An unverified pin (no signing key, or a fingerprint that isn't the current one over its keys) vouches for
-         * nothing, and a pinned key that does not decode is left out rather than trusted in part.
+         * `pins` as this phone's guard allows them (Vault.effectivePins). A verified pin verifies; a first-seen one reads
+         * `Seen` (no mark, "Not verified" in Info); anything else vouches for nobody, and a pinned key that does not
+         * decode is left out rather than trusted in part.
          */
-        fun of(userId: String, ownCurrent: ByteArray, ownEarlier: List<ByteArray>, pins: Map<String, ContactPin>): Trust {
+        fun of(userId: String, ownCurrent: ByteArray, ownEarlier: List<ByteArray>, pins: Collection<ContactPin>): Trust {
             val contacts = HashMap<String, TrustedKeys>()
             val names = HashMap<String, String>()
-            val unchecked = HashMap<String, String>()
-            for (pin in pins.values) {
+            val unchecked = HashMap<String, Pair<String, String>>()
+            val emails = HashMap<String, String>()
+            for (pin in pins) {
                 val id = pin.userId.lowercase()
-                val current = if (pin.verified) runCatching { base64urlDecode(pin.signingPublicKey) }.getOrNull() else null
-                if (current == null) { if (pin.email.isNotEmpty()) unchecked[id] = pin.email; continue }
-                contacts[id] = TrustedKeys(current, pin.previousSigningKeys.mapNotNull { runCatching { base64urlDecode(it) }.getOrNull() })
+                if (id == userId.lowercase()) continue
+                val current = if (pin.held) runCatching { base64urlDecode(pin.signingPublicKey) }.getOrNull() else null
+                if (current == null) { if (pin.email.isNotEmpty()) unchecked[id] = pin.email to pin.name; continue }
+                contacts[id] = TrustedKeys(current, pin.previousSigningKeys.mapNotNull { runCatching { base64urlDecode(it) }.getOrNull() }, seen = !pin.verified)
                 names[id] = pin.displayName
+                emails[id] = pin.email
             }
-            return Trust(userId, TrustedKeys(ownCurrent, ownEarlier.filter { !it.contentEquals(ownCurrent) }), contacts, names, unchecked)
+            return Trust(userId, TrustedKeys(ownCurrent, ownEarlier.filter { !it.contentEquals(ownCurrent) }), contacts, names, unchecked, emails)
         }
     }
 }
 
-/* Who a record's writer is to this person. `Unknown.email` is set when there is someone to check (an unchecked pin, a share's granter). */
+/* Who a record's writer is to this person. `Unknown.email` is set when there is someone to check by address (a pin that vouches for nothing). */
 sealed interface Writer {
     data object You : Writer
     data class Contact(val name: String) : Writer
-    data class Unknown(val email: String?) : Writer
+    data class Unknown(val email: String?, val name: String = "") : Writer
 }
 
 /* Why a record is not verified, and who wrote it as this person can name them. Verified records have none. */
@@ -86,18 +95,22 @@ data class Unverified(val integrity: Integrity, val signerId: String?, val write
  */
 internal fun severity(integrity: Integrity) = when (integrity) {
     Integrity.VERIFIED -> 0
-    Integrity.SAVED_FROM_LINK -> 1
-    Integrity.RESEALED -> 2
-    Integrity.UNSIGNED -> 3
-    Integrity.RETIRED_KEY -> 4
-    // Stop-gap (docs/optional-verification.md PR 1): a first-seen writer (SEEN) reads as one nobody checked until PR 6 designs its own UI; this app never asks for SEEN yet.
-    Integrity.UNKNOWN_SIGNER, Integrity.SEEN -> 5
-    Integrity.UNCHECKED -> 6
-    Integrity.BAD_SIGNATURE -> 7
+    // Signed by someone first seen and not checked: no mark, but Info says who added it and that nobody checked.
+    Integrity.SEEN -> 1
+    Integrity.SAVED_FROM_LINK -> 2
+    Integrity.RESEALED -> 3
+    Integrity.UNSIGNED -> 4
+    Integrity.RETIRED_KEY -> 5
+    Integrity.UNKNOWN_SIGNER -> 6
+    Integrity.UNCHECKED -> 7
+    Integrity.BAD_SIGNATURE -> 8
 }
 
-/* What carries no mark: a record that verified, and one this person or a checked contact saved from a link. */
-private fun unmarked(integrity: Integrity) = integrity == Integrity.VERIFIED || integrity == Integrity.SAVED_FROM_LINK
+/*
+ * What carries no mark: a record that verified, one whose writer this person's devices first saw (nothing is wrong,
+ * nobody checked: docs/optional-verification.md 2.6), and one this person or a contact saved from a link.
+ */
+private fun unmarked(integrity: Integrity) = integrity == Integrity.VERIFIED || integrity == Integrity.SEEN || integrity == Integrity.SAVED_FROM_LINK
 
 /* Malformed base64 is no signature this device can check: verification fails on it as on any wrong one. */
 private fun signatureBytes(value: String?): ByteArray? = value?.let { runCatching { base64urlDecode(it) }.getOrDefault(ByteArray(0)) }
@@ -173,6 +186,24 @@ fun savedFromLinkOf(node: NodeView, trust: Trust?): Writer? {
     return if (worst.integrity == Integrity.SAVED_FROM_LINK) worst.writer else null
 }
 
+/*
+ * Who added an item whose writer this person's devices first saw and nobody checked (2.6, 6.4): the name and account
+ * id, for Info's "Added by" with "Not verified". Null when a mark speaks instead, when every record verified, or when
+ * nobody can be named. The content's writer first: who added what is there now.
+ */
+data class SeenBy(val name: String, val id: String, val email: String?)
+
+fun seenByOf(node: NodeView, trust: Trust?): SeenBy? {
+    trust ?: return null
+    if (!unmarked(worstOf(node, trust).integrity)) return null
+    val records = listOfNotNull(versionVerdict(node, trust)?.let { it to node.currentVersion?.signer?.id }, metadataVerdict(node, trust) to node.metadataSigner?.id)
+    for ((integrity, signer) in records) {
+        if (integrity != Integrity.SEEN || signer == null) continue
+        (trust.writer(signer) as? Writer.Contact)?.let { return SeenBy(it.name, signer, trust.emailOf(signer)) }
+    }
+    return null
+}
+
 /* Info's line for a copy saved from a link: who saved it, as this person can name them, and what that can't say. */
 fun savedFromLinkLine(writer: Writer): String = when (writer) {
     Writer.You -> "Saved from a link by you. HushOS can’t confirm who made the original."
@@ -181,21 +212,18 @@ fun savedFromLinkLine(writer: Writer): String = when (writer) {
     is Writer.Unknown -> "Saved from a link. HushOS can’t confirm who made the original."
 }
 
-private fun possessive(name: String) = if (name.endsWith("s")) "$name’" else "$name’s"
-
 /*
- * What the Unverified mark explains, per case. A stripped signature and an unknown writer read alike ("HushOS can't
- * confirm who wrote this"), so a server cannot pick the milder warning; only a writer this person checked is named.
+ * What the Unverified mark explains, per case, in calm words (docs/optional-verification.md 6.12). A stripped signature
+ * and an unknown writer read alike ("HushOS can't tell who wrote this"), so a server cannot pick the milder warning;
+ * only a writer this person's pins name is named.
  */
 fun Unverified.explanation(): String = when (integrity) {
-    Integrity.UNCHECKED -> "HushOS couldn’t check who wrote this. Try again later."
-    Integrity.UNSIGNED -> "HushOS can’t confirm who wrote this."
-    // Stop-gap (docs/optional-verification.md PR 1): a first-seen writer (SEEN) reads as one nobody checked until PR 6 designs its own UI; this app never asks for SEEN yet.
-    Integrity.UNKNOWN_SIGNER, Integrity.SEEN -> "HushOS can’t confirm who wrote this. It was added or last changed by someone you haven’t checked."
+    Integrity.UNCHECKED -> "HushOS couldn’t check this right now."
+    Integrity.UNSIGNED, Integrity.UNKNOWN_SIGNER -> "HushOS can’t tell who wrote this."
     Integrity.BAD_SIGNATURE -> when (val who = writer) {
-        Writer.You -> "The signature doesn’t match your keys. Don’t trust this item."
-        is Writer.Contact -> "The signature doesn’t match ${possessive(who.name)} keys. Don’t trust this item."
-        is Writer.Unknown -> "The signature doesn’t match the writer’s keys. Don’t trust this item."
+        Writer.You -> "HushOS couldn’t confirm this was written by you."
+        is Writer.Contact -> "HushOS couldn’t confirm this was written by ${firstNameOf(who.name)}."
+        is Writer.Unknown -> "HushOS couldn’t confirm who wrote this."
     }
     Integrity.RESEALED -> when (val who = writer) {
         Writer.You -> "Re-locked by you; HushOS couldn’t confirm who wrote it before."
@@ -207,12 +235,23 @@ fun Unverified.explanation(): String = when (integrity) {
         is Writer.Contact -> "Signed with keys ${who.name} has since replaced."
         is Writer.Unknown -> "Signed with keys its writer has since replaced."
     }
-    // Neither carries a mark, so neither is explained as one.
-    Integrity.VERIFIED, Integrity.SAVED_FROM_LINK -> ""
+    // None carries a mark, so none is explained as one.
+    Integrity.VERIFIED, Integrity.SEEN, Integrity.SAVED_FROM_LINK -> ""
 }
 
-/* Where "Check their words" makes sense: an unknown writer with an address to look up. */
-val Unverified.checkEmail: String? get() = if (integrity == Integrity.UNKNOWN_SIGNER || integrity == Integrity.SEEN) (writer as? Writer.Unknown)?.email else null
+/*
+ * Who a mark's way out checks (6.12): someone in Contacts whose pin vouches for nothing, by their address (Check it's
+ * Maya); someone nobody pinned, found by their email first (Check who wrote this), where only the writer's account is
+ * taken. Null when there is nobody to check.
+ */
+data class CheckTarget(val id: String, val email: String, val name: String, val pinned: Boolean)
+
+val Unverified.checkTarget: CheckTarget? get() {
+    if (integrity != Integrity.UNKNOWN_SIGNER) return null
+    val id = signerId ?: return null
+    val who = writer as? Writer.Unknown ?: return null
+    return if (who.email != null) CheckTarget(id, who.email, who.name, pinned = true) else CheckTarget(id, "", "", pinned = false)
+}
 
 /*
  * Whom this person trusts, as the screens hold it: not asked yet, loaded, or failed to load. Failed is never treated as
@@ -336,6 +375,9 @@ fun providerSummary(node: NodeView, state: TrustState): String? {
 fun savedLineOf(node: NodeView, state: TrustState): String? = (state as? TrustState.Ready)?.let { ready ->
     runCatching { savedFromLinkOf(node, ready.trust) }.getOrNull()?.let(::savedFromLinkLine)
 }
+
+/* Info's "Added by" under `state`: who added it, first seen and not verified; null until whom this person trusts loaded. */
+fun seenByOf(node: NodeView, state: TrustState): SeenBy? = (state as? TrustState.Ready)?.let { runCatching { seenByOf(node, it.trust) }.getOrNull() }
 
 /*
  * How a copy's records are signed, by where the copy came from (docs/integrity-design.md, "Saved copies, by where they

@@ -42,7 +42,7 @@ class SavedCopyTest {
     private val mayaPin = randomBytes(32u).let { enc ->
         TestPins.verified(maya, "maya@example.org", "Maya", base64urlEncode(enc), base64urlEncode(signingPublicKey(mayaSeed)))
     }
-    private fun trust() = Trust.of(me, myKey, emptyList(), mapOf(maya to mayaPin))
+    private fun trust() = Trust.of(me, myKey, emptyList(), listOf(mayaPin))
 
     /* A node as served: its metadata and version signed by `signer` with the given signatures. */
     private fun node(signer: String, metadataSignature: ByteArray, versionSigner: String = signer, versionSignature: ByteArray) = NodeView(

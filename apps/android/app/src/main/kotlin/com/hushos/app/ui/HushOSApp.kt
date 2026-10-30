@@ -385,6 +385,7 @@ private fun Main(model: DriveViewModel, state: DriveState) {
     var settled by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { settled = true }
     if (settled && model.showingOwnWords) OwnWordsSheet(model, state, model::closeOwnWords)
+    if (settled) MarkContactStep(model)
     BackgroundSheet(active = state.queued.any { !it.done })
     }
 }

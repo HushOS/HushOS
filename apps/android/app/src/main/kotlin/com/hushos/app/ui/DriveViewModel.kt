@@ -19,7 +19,19 @@ import com.hushos.app.data.BillingSummary
 import com.hushos.app.data.StorageAllowance
 import com.hushos.app.data.NotAuthenticated
 import com.hushos.app.data.Unreachable
-import com.hushos.app.data.Contact
+import com.hushos.app.data.AccountChange
+import com.hushos.app.data.Added
+import com.hushos.app.data.ContactStanding
+import com.hushos.app.data.ShareeChecks
+import com.hushos.app.data.addContact
+import com.hushos.app.data.accountChanges
+import com.hushos.app.data.contactStandings
+import com.hushos.app.data.continueWith
+import com.hushos.app.data.lookup
+import com.hushos.app.data.openWaiting
+import com.hushos.app.data.remove
+import com.hushos.app.data.shareeChanged
+import com.hushos.app.data.theyMatch
 import com.hushos.app.data.ContactPin
 import com.hushos.app.data.LinkView
 import com.hushos.app.data.Lookup
@@ -266,6 +278,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun signedIn(user: SessionUser) {
         showingOwnWords = false
+        contactStep = null
         // A session saved before the email was kept learns it now, so the Files app can name the account.
         if (user.email.isNotEmpty()) Shared.session(context)?.takeIf { it.email != user.email && it.userId == user.id }?.let {
             Shared.writeSession(context, it.copy(email = user.email))
@@ -421,6 +434,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     fun signOut() {
         showingOwnWords = false
+        contactStep = null
         // Queued transfers belong to the account signing out: stopped now; Auth.signOut removes
         // their copies with every other file of the account (AccountStore).
         androidx.work.WorkManager.getInstance(context).cancelAllWorkByTag(com.hushos.app.data.TransferQueue.TAG)
@@ -436,6 +450,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun sessionLost() {
         showingOwnWords = false
+        contactStep = null
         val ended = Shared.session(context)
         Shared.clearSession(context)
         vault = null
@@ -909,6 +924,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     internal var showingOwnWords by mutableStateOf(false)
         private set
 
+    /* A contact step a mark or Info started, shown by `Main` so it outlives the mark (ContactsUi.kt, MarkContactStep). */
+    internal var contactStep by mutableStateOf<ContactStep?>(null)
+
     fun openOwnWords() { showingOwnWords = true }
     fun closeOwnWords() { showingOwnWords = false }
 
@@ -1107,11 +1125,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         val version = node.currentVersion
         val key = listOf(node.workspaceId, node.id, node.metadataVersion, node.metadataSigner?.id, node.metadataSignature, node.metadataEnvelope.hashCode(),
             version?.id, version?.signer?.id, version?.signature).joinToString("|")
-        val found = integrity.getOrPut(key) { java.util.Optional.ofNullable(com.hushos.app.data.markOf(node, trust)) }.orElse(null) ?: return null
-        val writer = found.writer
-        if (writer !is com.hushos.app.data.Writer.Unknown || writer.email != null || found.signerId == null) return found
-        val granter = state.shares?.firstOrNull { it.share.granterId.equals(found.signerId, ignoreCase = true) }?.share?.granterEmail?.ifEmpty { null } ?: return found
-        return found.copy(writer = com.hushos.app.data.Writer.Unknown(granter))
+        return integrity.getOrPut(key) { java.util.Optional.ofNullable(com.hushos.app.data.markOf(node, trust)) }.orElse(null)
     }
 
     /* Started without a network, the account is known only by its id; once the server answers, its name and email fill in for the avatar. */
@@ -1170,11 +1184,62 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun contacts(): List<ContactPin>? = io { it.contacts() }
     /* `failure` hears why the words couldn’t be opened, for the sheet to say in place. */
     suspend fun ownFingerprint(failure: ((String) -> Unit)? = null): String? = io(failure) { it.currentOwnFingerprint() }
-    suspend fun lookup(email: String): Result<Lookup> = withContext(Dispatchers.IO) { runCatching { (vault ?: throw NotAuthenticated()).lookup(email) } }
-        .also { result -> if (result.getOrNull()?.followed == true) refreshTrust() }
-    /* Pins the contact whose words were just compared; `failure` hears why not (they haven't upgraded, say). */
-    suspend fun pin(contact: Contact, failure: ((String) -> Unit)? = null): Boolean = (io(failure) { it.pin(contact); true } ?: false).also { if (it) refreshTrust() }
-    suspend fun unpin(pin: ContactPin): Boolean = (io { it.unpin(pin); true } ?: false).also { if (it) refreshTrust() }
+    /*
+     * Contacts without comparing words (docs/optional-verification.md 2, 6; ContactTrust.kt). Each act runs off the main
+     * thread and comes back as a Result for the sheet to say in place; a lost session signs out.
+     */
+    private suspend fun <T> act(block: (Vault) -> T): Result<T> {
+        val vault = vault ?: return Result.failure(NotAuthenticated())
+        val result = withContext(Dispatchers.IO) { runCatching { block(vault) } }
+        result.exceptionOrNull()?.let { error ->
+            error.rethrowIfCancelled()
+            if (error is NotAuthenticated) sessionLost()
+            if (error is Unreachable) _state.update { it.copy(unreachable = true) }
+        }
+        return result
+    }
+
+    /*
+     * Whom signatures count for, or who may open what, moved (an add, Continue, They match, a removal, a lookup that
+     * followed someone or settled an act): rows are judged again, Shared with me mounts again, and what was shared with
+     * someone whose keys were accepted is sealed again.
+     */
+    fun trustMoved() = viewModelScope.launch {
+        refreshTrust()
+        if (state.value.shares != null) refreshShares()
+        resealIfDue()
+    }
+
+    /* Check it's Maya and the changed-account notice: where this phone stands with them now. */
+    suspend fun lookup(email: String): Result<Lookup> = act { it.lookup(email) }.onSuccess { if (it.trustChanged) trustMoved() }
+
+    /* Add someone (6.2): no words. `writer`, from a mark: the account that wrote the item. */
+    suspend fun addContact(email: String, writer: String? = null): Result<Added> = act { it.addContact(email, writer) }
+        .onSuccess { if (it is Added.New) trustMoved() }
+
+    suspend fun continueWith(change: AccountChange): Result<ContactPin> = act { it.continueWith(change) }.onSuccess { trustMoved() }
+
+    suspend fun theyMatch(found: Lookup): Result<ContactPin> = act { it.theyMatch(found) }.onSuccess { trustMoved() }
+
+    suspend fun removeContact(userId: String): Result<Unit> = act { it.remove(userId) }.onSuccess { trustMoved() }
+
+    /* Where everyone in Contacts stands on this phone, with the changes met this session; a guard that can't be read fails it. */
+    suspend fun contactStandings(): Result<Map<String, ContactStanding>> = act { vault ->
+        vault.contactStandings().toMutableMap().also { found -> vault.accountChanges().keys.forEach { found[it] = ContactStanding(false, true) } }
+    }
+
+    /* Which of `pins` (the people on an item) have an account that changed: a few lookups at a time, the first failure said. */
+    suspend fun shareeChanges(pins: List<ContactPin>): Pair<Set<String>, Throwable?> {
+        val vault = vault ?: return emptySet<String>() to NotAuthenticated()
+        return withContext(Dispatchers.IO) { ShareeChecks.changed(pins) { vault.shareeChanged(it) } }
+    }
+
+    /* Open on a Shared with me row that waits (6.4): adds them back or follows them, then everything they shared mounts. */
+    suspend fun openWaiting(share: ShareView): Result<Unit> = act { it.openWaiting(share) }.also { trustMoved() }
+
+    /* Info's "Added by" for an item whose writer was first seen and not checked; null otherwise. */
+    fun seenBy(item: Opened, state: DriveState): com.hushos.app.data.SeenBy? = com.hushos.app.data.seenByOf(item.node, state.trust)
+
     suspend fun shares(item: Opened): List<OwnedShare>? = io { it.shares(item) }
     suspend fun sharedByMe(): List<SharedByMe>? = io { it.sharedByMe() }
     suspend fun share(item: Opened, pin: ContactPin, role: String): Result<OwnedShare> = withContext(Dispatchers.IO) { runCatching { (vault ?: throw NotAuthenticated()).share(item, pin, role) } }

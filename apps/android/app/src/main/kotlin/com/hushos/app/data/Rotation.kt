@@ -46,29 +46,40 @@ class ResealShare(val id: String, val granteeUserId: String, val publicKey: Byte
 class ResealPlan(val shares: List<ResealShare>, val links: List<JSONObject>, val skipped: List<String>)
 
 /*
- * Which of a node's served shares and links are sealed again: the server's lists are only a claim,
- * so a share is re-sealed only when the ledger holds (node, grantee) and the pin vouches for the keys
- * served for them now, and a link only when the ledger maps it to this node. Anything else is left out
- * of the batch and the server revokes it. A person the ledger holds but whose keys fail the check is
- * named in `skipped`; never sealed to X25519 alone.
+ * Which of a node's served shares and links are sealed again: the server's lists are only a claim, so a share is
+ * re-sealed only when the ledger holds (node, grantee) and `sealTo` vouches for the keys served for them now (the pin,
+ * as this phone's guard allows it: Vault.trustGrantee), and a link only when the ledger maps it to this node. Anything
+ * else is left out of the batch and the server revokes it. A person the ledger holds but whose keys fail the check (a
+ * changed account waits for Continue) is named in `skipped`; never sealed to X25519 alone.
  */
-fun planReseal(nodeId: String, shares: List<JSONObject>, links: List<JSONObject>, ledger: SharingLedger, pins: Map<String, ContactPin>): ResealPlan {
+fun planReseal(nodeId: String, shares: List<JSONObject>, links: List<JSONObject>, ledger: SharingLedger, sealTo: (granteeId: String, served: ServedIdentity) -> Pair<ByteArray, ByteArray>): ResealPlan {
     val sealed = ArrayList<ResealShare>()
     val skipped = ArrayList<String>()
     for (share in shares) {
         val granteeId = share.getString("granteeUserId")
         if (!ledger.hasShare(nodeId, granteeId)) continue
-        val pin = pins[granteeId]
-        if (pin == null) { skipped.add("Someone no longer in Contacts lost access."); continue }
-        // Never followed here: newer keys wait for the person to check them again, then the next pass seals to them.
         try {
-            val kem = granteeKem(pin, ServedIdentity.from(share.getJSONObject("grantee")))
-            sealed.add(ResealShare(share.getString("id"), granteeId, base64urlDecode(pin.encryptionPublicKey), kem))
-        } catch (refused: SharingRefused) {
-            skipped.add(refused.message ?: "${pin.displayName} lost access.")
+            val (publicKey, kem) = sealTo(granteeId, ServedIdentity.from(share.getJSONObject("grantee")))
+            sealed.add(ResealShare(share.getString("id"), granteeId, publicKey, kem))
+        } catch (refused: Refused) {
+            skipped.add(refused.message ?: "Someone lost access.")
         }
     }
     return ResealPlan(sealed, links.filter { ledger.hasLink(it.getString("id"), nodeId) }, skipped)
+}
+
+/*
+ * The keys to seal to for a grantee the server names, as this phone's guard allows (Vault.trustGrantee): kept per
+ * person and the full identity served, so another batch serving other keys for them is judged again, never sealed to
+ * what was judged over these. Someone no longer in Contacts is left out.
+ */
+internal fun Vault.granteeSealer(pins: Settings): (String, ServedIdentity) -> Pair<ByteArray, ByteArray> {
+    val judged = HashMap<String, Pair<ByteArray, ByteArray>>()
+    return { granteeId, served ->
+        val pin = pins.pinOf(granteeId) ?: throw SharingRefused("Someone no longer in Contacts lost access.")
+        val grantee = Contact(granteeId, pin.name, pin.email, served)
+        judged[grantee.trustKey] ?: trustGrantee(grantee, follow = false).also { judged[grantee.trustKey] = it }
+    }
 }
 
 /*
@@ -94,8 +105,8 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
     val keys = identityKeys()
     // What may be sealed again: the owner's ledger and pins, never the server's list alone.
     val settings = loadSettings()
-    val pins = settings.contacts
     val ledger = settings.ledger
+    val sealTo = granteeSealer(settings)
     val skipped = LinkedHashSet<String>()
     val epochs = HashMap<String, ULong>().apply { nodes.rowsIn(ws).forEach { put(it.id, it.node.keyEpoch) } }
     val seals = ShareSeals.of(context)
@@ -171,7 +182,7 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
                 versions.put(JSONObject().put("id", version.getString("id")).put("contentKeyEnvelope", base64urlEncode(resealed))
                     .put("signature", signVersion(ws, node.id, ctx.versionId, ctx.objectId, suite, resealed, prior)))
             }
-            val plan = planReseal(node.id, entry.shares, entry.links, ledger, pins)
+            val plan = planReseal(node.id, entry.shares, entry.links, ledger, sealTo)
             skipped.addAll(plan.skipped)
             val shares = JSONArray()
             val sealedHere = HashMap<String, ShareSeals.Seal>()
@@ -179,7 +190,7 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
                 val ctx = ShareContext(ws, node.id, target, share.granteeUserId, api.session.userId)
                 shares.put(JSONObject().put("id", share.id).put("shareEnvelope", base64urlEncode(shareSeal(ctx, fresh, keys, share.publicKey, share.kemPublicKey))))
                 val served = entry.shares.firstOrNull { it.optString("id") == share.id }?.optJSONObject("grantee")?.let { ServedIdentity.from(it) }
-                sealedHere[share.id] = ShareSeals.Seal(keys.keyVersion, pins[share.granteeUserId]?.keyVersion ?: served?.keyVersion)
+                sealedHere[share.id] = ShareSeals.Seal(keys.keyVersion, served?.keyVersion)
             }
             sealedIn[node.id] = sealedHere
             val links = JSONArray()

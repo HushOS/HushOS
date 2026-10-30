@@ -51,6 +51,29 @@ class ShareSeals(private val file: File) {
         get() = synchronized(LOCK) { read().optLong("lastPass", 0L) }
         set(value) = synchronized(LOCK) { write(read().put("lastPass", value)) }
 
+    /*
+     * People whose keys this person accepted or followed while what was shared with them still holds the old keys (a
+     * Continue, They match over new keys, a followed succession, `resealShares`): the next pass seals everything shared
+     * with them again to the pin's keys, then lets them go. Queued before the save that owes it, so no stop between the
+     * two leaves it owed and unqueued; queued twice is only a re-seal done again.
+     */
+    fun queue(userId: String) = synchronized(LOCK) {
+        val json = read()
+        val to = json.optJSONArray("to") ?: org.json.JSONArray().also { json.put("to", it) }
+        if ((0 until to.length()).none { to.optString(it) == userId.lowercase() }) { to.put(userId.lowercase()); write(json) }
+    }
+
+    val queued: Set<String> get() = synchronized(LOCK) { read().optJSONArray("to")?.let { a -> (0 until a.length()).map { a.optString(it) }.toSet() }.orEmpty() }
+
+    fun unqueue(userIds: Collection<String>) = synchronized(LOCK) {
+        if (userIds.isEmpty()) return@synchronized
+        val json = read()
+        val gone = userIds.map { it.lowercase() }.toSet()
+        val kept = queued.filter { it !in gone }
+        if (kept.isEmpty()) json.remove("to") else json.put("to", org.json.JSONArray(kept))
+        write(json)
+    }
+
     companion object {
         private val LOCK = Any()
         const val FILE = "share-seals.json"

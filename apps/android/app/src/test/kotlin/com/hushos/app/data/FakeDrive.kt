@@ -78,7 +78,18 @@ class FakeDrive : AutoCloseable {
     }
 
     val me = person(userId, accountKey)
-    val grace = person(UUID.randomUUID().toString(), randomBytes(32u))
+    /* Grace's identity as the server serves it now: `startOverGrace` replaces it with no signed chain. */
+    var grace = person(UUID.randomUUID().toString(), randomBytes(32u))
+        private set
+
+    /* Grace starts her account over (docs/devices-design.md 3): new keys the old ones never signed. */
+    fun startOverGrace() = synchronized(lock) { grace = person(grace.id, randomBytes(32u)); owners[graceWorkspace] = grace }
+
+    /* `lookup` answers for Grace's address; `lookups` counts them, `failLookups` makes each one a 500. */
+    var lookups = 0
+    var failLookups = false
+    /* The next settings save lands and its answer is lost (a 500), as a dropped connection would leave it. */
+    var loseNextSettingsAnswer = false
 
     class Version(
         val id: String, val objectId: String, var contentKeyEnvelope: String, val suite: UInt, val chunkCount: Long, val contentNonce: String,
@@ -205,15 +216,43 @@ class FakeDrive : AutoCloseable {
 
     // Shares, links and settings.
 
-    private data class Share(val id: String, val node: String, val envelope: String, val keyEpoch: Long)
+    private data class Share(val id: String, val node: String, val envelope: String, val keyEpoch: Long, val granter: Person? = null)
     private val shares = ArrayList<Share>()
     /* Grace shares `nodeId` (in her drive) with the account, sealed to its identity in suite 4. */
-    fun shareWithMe(nodeId: String) = synchronized(lock) {
+    fun shareWithMe(nodeId: String, servedAs: Person? = null) = synchronized(lock) {
         val node = node(nodeId)
         val kem = base64urlDecode(me.keys.kemPublicKey!!)
         val envelope = shareSeal(ShareContext(node.workspaceId, nodeId, node.keyEpoch.toULong(), userId, grace.id), keyOf(nodeId), grace.keys,
             base64urlDecode(me.keys.encryptionPublicKey), kem)
-        shares.add(Share(UUID.randomUUID().toString(), nodeId, base64urlEncode(envelope), node.keyEpoch))
+        // `servedAs`: the granter's identity this one row is listed with (a server serving other keys mid-list).
+        shares.add(Share(UUID.randomUUID().toString(), nodeId, base64urlEncode(envelope), node.keyEpoch, servedAs))
+    }
+
+    /* Another account the server can name: an identity of its own under Grace's id, as a server swapping her keys would serve. */
+    fun impostorOfGrace(): Person = person(grace.id, randomBytes(32u))
+
+    /*
+     * The settings as another device (or a server replaying a copy) leaves them: opened, changed by `change`, and sealed one
+     * version up under the account's settings key, as any save is.
+     */
+    fun editSettings(change: (Settings) -> Unit) = synchronized(lock) {
+        val key = settingsKey?.let { settingsKeyOpen(userId, accountKey, SettingsKeyEnvelope(it.getString("nonce"), it.getString("ciphertext"))) }
+            ?: settingsKeyCreate(userId, accountKey).also { settingsKey = JSONObject().put("nonce", it.envelope.nonce).put("ciphertext", it.envelope.ciphertext) }.key
+        val current = settingsDocument?.let {
+            openSettingsText(userId, key, SettingsEnvelope(it.getInt("version").toUInt(), it.getLong("settingsVersion").toULong(), it.getString("nonce"), it.getString("ciphertext")))
+        } ?: Settings.empty(settingsVersion.toULong())
+        change(current)
+        val sealed = settingsSeal(userId, key, (settingsVersion + 1).toULong(), current.text())
+        settingsDocument = JSONObject().put("version", sealed.version.toInt()).put("settingsVersion", sealed.settingsVersion.toLong())
+            .put("nonce", sealed.nonce).put("ciphertext", sealed.ciphertext)
+        settingsVersion = sealed.settingsVersion.toLong()
+    }
+
+    /* The settings as the server holds them now, opened as another device would. */
+    fun settings(): Settings = synchronized(lock) {
+        val key = settingsKeyOpen(userId, accountKey, SettingsKeyEnvelope(settingsKey!!.getString("nonce"), settingsKey!!.getString("ciphertext")))
+        val doc = settingsDocument!!
+        openSettingsText(userId, key, SettingsEnvelope(doc.getInt("version").toUInt(), doc.getLong("settingsVersion").toULong(), doc.getString("nonce"), doc.getString("ciphertext")))
     }
 
     /* The settings document and its key, as the server keeps them: the key stored once, the document compare-and-set. */
@@ -340,8 +379,16 @@ class FakeDrive : AutoCloseable {
                 settingsVersion++
                 settingsDocument = JSONObject().put("version", body.getInt("version")).put("settingsVersion", settingsVersion)
                     .put("nonce", body.getString("nonce")).put("ciphertext", body.getString("ciphertext"))
+                if (loseNextSettingsAnswer) { loseNextSettingsAnswer = false; return 500 to JSONObject().put("message", "The answer was lost") }
                 ok(JSONObject().put("settingsVersion", settingsVersion))
             }
+            post && at("auth", "contacts", "lookup") -> {
+                lookups++
+                if (failLookups) return 500 to JSONObject().put("message", "Lookups are down")
+                if (!body.getString("email").equals("grace@example.org", ignoreCase = true)) return 404 to JSONObject().put("message", "No HushOS account uses that email.")
+                ok(JSONObject().put("contact", grace.served.toJson().put("userId", grace.id).put("name", "Grace Hopper").put("email", "grace@example.org")))
+            }
+            get && at("auth", "contacts", "*", "succession") -> ok(JSONObject().put("links", JSONArray()))
 
             get && at("drive", "workspace") -> ok(JSONObject().put("workspaceId", workspace).put("changeSeq", changeSeq).put("grant", grant).put("root", node(root).json()))
             get && at("drive", "nodes", "*", "children") -> {
@@ -467,7 +514,7 @@ class FakeDrive : AutoCloseable {
             get && at("drive", "shares") -> ok(JSONObject().put("shares", JSONArray(shares.map { share ->
                 JSONObject().put("id", share.id).put("workspaceId", node(share.node).workspaceId).put("role", "editor").put("createdAt", "2026-10-01T00:00:00Z")
                     .put("keyEpoch", share.keyEpoch).put("shareEnvelope", share.envelope)
-                    .put("granter", grace.served.toJson().put("id", grace.id).put("name", "Grace").put("email", "grace@example.org"))
+                    .put("granter", (share.granter ?: grace).served.toJson().put("id", grace.id).put("name", "Grace").put("email", "grace@example.org"))
                     .put("node", node(share.node).json())
             })))
 

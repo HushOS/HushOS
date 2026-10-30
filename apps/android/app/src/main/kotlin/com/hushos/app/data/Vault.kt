@@ -153,6 +153,16 @@ class Vault(internal val context: Context, val api: DriveApi) {
     private var settingsKey: ByteArray? = null
     /* The envelope `settingsKey` came out of, as the server keeps it: kept beside the rollback marks. */
     private var settingsKeyEnvelope: com.hushos.core.SettingsKeyEnvelope? = null
+    /* Lookups kept for display, people found changed, the trust generation, the tests' hooks (ContactTrust.kt). */
+    val memory = TrustMemory()
+
+    /*
+     * The contact guard (ContactGuard.kt), sealed under the settings key as the rollback marks find theirs: the envelope
+     * kept beside the record when it opens under the account key, else this process's, else the server's. None to be
+     * had (no account key, nothing served) leaves the guard unreadable, never empty.
+     */
+    internal val guard: ContactGuard
+        get() = memory.guard ?: ContactGuard.of(context, api.session) { kept -> marksKey(kept, create = false, served = null) }
     private val indexFile = File(context.filesDir, "files-parents.json")
     internal val parents: ConcurrentHashMap<String, String> = ConcurrentHashMap<String, String>().also { map ->
         runCatching {
@@ -253,7 +263,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
      */
     fun trust(): Trust {
         val all = identities(strict = true)
-        return Trust.of(api.session.userId, base64urlDecode(all[0].signingPublicKey), all.drop(1).map { base64urlDecode(it.signingPublicKey) }, loadSettings().contacts)
+        // Every pin as this phone's guard allows (2.8): read under the guard's turn, acts left pending settled first.
+        return Trust.of(api.session.userId, base64urlDecode(all[0].signingPublicKey), all.drop(1).map { base64urlDecode(it.signingPublicKey) }, effectivePins())
     }
 
     /* The trust set for a write that re-signs what it copies or rotates: without it nothing is locked again. */
@@ -422,13 +433,18 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * saving in between is a 409: read again and apply the change again, up to three tries. The JSON
      * is edited in place, so fields this app doesn't know (the web's, a later client's) survive.
      */
-    internal fun updateSettings(change: (Settings) -> Unit): Settings {
+    internal fun updateSettings(beforeSend: ((base: ULong) -> Unit)? = null, change: (Settings) -> Unit): Settings {
         val key = settingsKeyForSave()
         var attempt = 0
         while (true) {
             val settings = loadSettings()
             change(settings)
+            // Removals count against the room the document has: the oldest go first (docs/optional-verification.md 2.7).
+            settings.fit()
+            // Each attempt names the sequence it lands over (a contact act's pending record), before it is sent.
+            beforeSend?.invoke(settings.version)
             val next = settings.version + 1uL
+            memory.generation.incrementAndGet()
             try {
                 // Always version 2, under the settings key: a version 1 document is moved over by its first save here.
                 // Named over the stored sequence and sealed at one above it, the version the server stores it at.
@@ -456,87 +472,26 @@ class Vault(internal val context: Context, val api: DriveApi) {
      */
     fun currentOwnFingerprint(): String = ownFingerprint(ownIdentities.current(Auth.identity(context, api.session)))
 
-    /*
-     * A person by email, with what the pin says about them. "Check it's them": the one place a pinned contact's served keys are followed through their succession chain
-     * (docs/integrity-design.md, "Who sees whom"), because the person asked. Nothing else follows them on its own.
-     */
-    fun lookup(email: String): Lookup {
-        val contact = Auth.lookupContact(context, email, api.session)
-        val pinned = loadSettings().contacts[contact.userId] ?: return Lookup(contact, null, changed = false)
-        val comparison = comparePin(pinned, contact.served)
-        // New keys signed by the pinned ones: the pin follows them, and People says so rather than warning.
-        if (comparison == PinComparison.SUCCESSION) followPin(pinned, contact.served)?.let { return Lookup(contact, it, changed = false, followed = true) }
-        // A changed key, or a chain that does not hold: the words no longer vouch for the account.
-        val changed = comparison == PinComparison.CHANGED || comparison == PinComparison.SUCCESSION
-        // A pin from before the release (or never checked) over keys that did not change: "Check words again".
-        return Lookup(contact, pinned, changed, recheck = !changed && !pinned.verified)
-    }
-
-    /*
-     * Trusts the keys shown now: what the person does after comparing the words. Writes the version 3 pin of the served
-     * keys (both digests and the fingerprint over all four), and only for an upgraded identity whose keys statement
-     * holds: words are never compared over fewer keys. The earlier keys a succession vouched for stay only when the
-     * words were compared over the same keys again (the notice after a succession); a different key accepted by hand
-     * vouches for none of them. Shares to them may now be sealed in suite 4, so the re-seal pass runs next.
-     */
-    fun pin(contact: Contact) {
-        val fresh = ContactPin.ofServed(contact.userId, contact.email, contact.name, contact.served, Instant.now().toString())
-            ?.takeIf { contact.upgraded }
-            ?: throw AuthFailure("${contact.name.ifEmpty { contact.email }} needs to sign in to HushOS once more before you can compare words.")
-        updateSettings { settings ->
-            val before = settings.contacts[contact.userId]
-            val moved = before != null && (before.encryptionPublicKey != contact.encryptionPublicKey || before.signingPublicKey != contact.signingPublicKey)
-            settings.pin(fresh.copy(previousSigningKeys = if (before != null && !moved) before.previousSigningKeys else emptyList()))
-        }
-        ShareSeals.of(context).lastPass = 0L
-    }
-
-    /*
-     * A pinned contact whose served keys differ: their whole succession chain, checked link by link; the pin follows
-     * it and is saved when it holds. Null when it doesn't, or can't be asked: the changed-key warning stands. Only
-     * "Check it's them" calls this. A share to them sealed to the old keys is sealed again at the next pass.
-     */
-    private fun followPin(pin: ContactPin, served: ServedIdentity): ContactPin? {
-        if (comparePin(pin, served) != PinComparison.SUCCESSION) return null
-        val links = runCatching { Auth.succession(context, pin.userId, api.session) }.getOrNull() ?: return null
-        val next = followSuccession(pin, served, links, Instant.now().toString()) ?: return null
-        updateSettings { settings ->
-            // Another device may have followed (or re-pinned) first: only a pin still at the old keys is moved.
-            val now = settings.contacts[pin.userId]
-            if (now == null || (now.encryptionPublicKey == pin.encryptionPublicKey && now.signingPublicKey == pin.signingPublicKey)) settings.pin(next)
-        }
-        ShareSeals.of(context).lastPass = 0L
-        return next
-    }
-
-    fun unpin(pin: ContactPin) {
-        updateSettings { it.unpin(pin.userId) }
-    }
-
     fun shares(item: Opened): List<OwnedShare> = api.shares(item.id, item.node.workspaceId)
 
     /*
-     * Shares an item with a pinned contact: the pin must be version 3 (words compared over all four keys) and the
-     * served keys the pinned ones, the ML-KEM key by its digest (granteeKem). Only then is the node key sealed to them,
-     * in suite 4 (hybrid, signed with both halves of this account's identity), and the share goes in the ledger once
-     * the server took it.
+     * Shares an item with a contact: the served keys must be the ones the pin (verified or first-seen) holds and agree
+     * with this phone's guard (`trustGrantee`), then the node key is sealed to them in suite 4 (hybrid, signed with both
+     * halves of this account's identity), and the share goes in the ledger once the server took it. A changed account
+     * throws AccountChanged: nothing is shared.
      */
     fun share(item: Opened, pin: ContactPin, role: String): OwnedShare {
         val nodeKey = nodes.key(item) ?: throw ApiError(500, "Node not opened")
-        // The pin as the settings hold it now, not as the sheet last read it.
-        val current = loadSettings().contacts[pin.userId] ?: throw SharingRefused("Add ${pin.displayName} in Contacts before you share with them.")
-        val contact = Auth.lookupContact(context, current.email, api.session)
-        if (contact.userId != current.userId) throw ContactChanged()
-        // Other keys than the pinned ones are never followed here: replaced or changed, the person checks them again first.
-        val kem = granteeKem(current, contact.served)
+        val contact = Auth.lookupContact(context, pin.email, api.session)
+        if (!contact.userId.equals(pin.userId, ignoreCase = true)) throw ContactProblem.otherAccount()
+        val (publicKey, kem) = trustGrantee(contact, follow = true)
         val keys = identityKeys()
-        val ctx = ShareContext(item.node.workspaceId, item.id, item.node.keyEpoch, current.userId, api.session.userId)
-        // Suite 4: a fresh X25519 key and ML-KEM to the pinned keys, signed by this account's Ed25519 and ML-DSA keys.
-        val envelope = shareSeal(ctx, nodeKey, keys, base64urlDecode(current.encryptionPublicKey), kem)
-        val share = api.createShare(item.id, JSONObject().put("workspaceId", item.node.workspaceId).put("granteeUserId", current.userId).put("role", role)
+        val ctx = ShareContext(item.node.workspaceId, item.id, item.node.keyEpoch, contact.userId, api.session.userId)
+        val envelope = shareSeal(ctx, nodeKey, keys, publicKey, kem)
+        val share = api.createShare(item.id, JSONObject().put("workspaceId", item.node.workspaceId).put("granteeUserId", contact.userId).put("role", role)
             .put("keyEpoch", item.node.keyEpoch.toLong()).put("shareEnvelope", base64urlEncode(envelope)))
         ShareSeals.of(context).record(mapOf(share.id to ShareSeals.Seal(keys.keyVersion, contact.keyVersion)))
-        updateSettings { it.addShare(item.id, current.userId) }
+        updateSettings { it.addShare(item.id, contact.userId) }
         return share
     }
 
@@ -591,10 +546,13 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val seals = ShareSeals.of(context)
         val settings = loadSettings()
         val ledger = settings.ledger
-        val pins = settings.contacts
         val keys = identityKeys()
+        // People whose new keys were accepted or followed: everything shared with them is sealed again, whatever the record says.
+        val queued = seals.queued
         val skipped = LinkedHashSet<String>()
         val served = HashMap<String, Contact?>()
+        val sealTo = granteeSealer(settings)
+        val failedFor = HashSet<String>()
         val todo = ledger.shares.filterValues { it.isNotEmpty() }
         var done = 0
         var failed = 0
@@ -607,21 +565,25 @@ class Vault(internal val context: Context, val api: DriveApi) {
                 val nodeKey = nodes.key(item) ?: continue
                 val rows = api.shares(item.id, item.node.workspaceId).filter { it.granteeId in people }
                 val wire = rows.mapNotNull { share ->
-                    // Someone no longer pinned, or not found now, keeps the envelope they have.
-                    val pin = pins[share.granteeId] ?: return@mapNotNull null
-                    if (!needsReseal(share.suite, seals.get(share.id), keys.keyVersion, pin.keyVersion)) return@mapNotNull null
-                    // The post-quantum key to seal to is only in a lookup; keys other than the pin's are left out by the plan.
+                    // Someone no longer pinned keeps the envelope they have.
+                    val pin = settings.pinOf(share.granteeId) ?: return@mapNotNull null
+                    val owed = share.granteeId.lowercase() in queued
+                    if (!owed && !needsReseal(share.suite, seals.get(share.id), keys.keyVersion, pin.keyVersion)) return@mapNotNull null
+                    // The post-quantum key to seal to is only in a lookup; whether it may be sealed to is the guard's (sealTo).
                     val contact = served.getOrPut(share.granteeId) { runCatching { Auth.lookupContact(context, pin.email, api.session) }.getOrNull() }
-                    val grantee = contact?.takeIf { it.userId == share.granteeId } ?: return@mapNotNull null
+                    val grantee = contact?.takeIf { it.userId.equals(share.granteeId, ignoreCase = true) }
+                    if (grantee == null) { failedFor.add(share.granteeId.lowercase()); return@mapNotNull null }
                     JSONObject().put("id", share.id).put("granteeUserId", share.granteeId).put("grantee", grantee.served.toJson())
                 }
-                val plan = planReseal(item.id, wire, emptyList(), ledger, pins)
+                val plan = planReseal(item.id, wire, emptyList(), ledger, sealTo)
                 skipped.addAll(plan.skipped)
+                val sealedTo = plan.shares.map { it.granteeUserId.lowercase() }.toSet()
+                wire.forEach { share -> share.getString("granteeUserId").lowercase().let { if (it !in sealedTo) failedFor.add(it) } }
                 for (share in plan.shares) {
                     val ctx = ShareContext(item.node.workspaceId, item.id, item.node.keyEpoch, share.granteeUserId, api.session.userId)
                     api.resealShare(share.id, item.node.workspaceId, item.node.keyEpoch, base64urlEncode(shareSeal(ctx, nodeKey, keys, share.publicKey, share.kemPublicKey)))
                     // Sealed to the pinned keys, which are the ones served at this version.
-                    seals.record(mapOf(share.id to ShareSeals.Seal(keys.keyVersion, pins[share.granteeUserId]?.keyVersion ?: served[share.granteeUserId]?.keyVersion)))
+                    seals.record(mapOf(share.id to ShareSeals.Seal(keys.keyVersion, served[share.granteeUserId]?.keyVersion)))
                     done++
                 }
             } catch (error: Unreachable) {
@@ -630,11 +592,14 @@ class Vault(internal val context: Context, val api: DriveApi) {
                 throw error
             } catch (error: Exception) {
                 android.util.Log.w("HushOSShares", "sealing the shares of $nodeId again failed: ${error.javaClass.name}")
+                people.forEach { failedFor.add(it.lowercase()) }
                 failed++
             } finally {
                 progress(index + 1, todo.size)
             }
         }
+        // Everyone queued whose shares were all sealed again (or who has none left) is let go; the rest stay for the next pass.
+        seals.unqueue(queued.filter { it !in failedFor })
         if (failed > 0) skipped.add("Some shares couldn’t be sealed again under your current keys. They’re tried again the next time you open HushOS.")
         else { seals.pending = null; seals.lastPass = System.currentTimeMillis() }
         return RotationResult(done, skipped.toList())
@@ -643,7 +608,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     /* Whether the re-seal pass should run now: a key replacement is waiting to finish, or the last full pass is a day old. */
     fun resealDue(now: Long = System.currentTimeMillis()): Boolean {
         val seals = ShareSeals.of(context)
-        return seals.pending != null || now - seals.lastPass >= ShareSeals.PASS_INTERVAL_MS
+        return seals.pending != null || seals.queued.isNotEmpty() || now - seals.lastPass >= ShareSeals.PASS_INTERVAL_MS
     }
 
     /*
@@ -897,24 +862,33 @@ class Vault(internal val context: Context, val api: DriveApi) {
         if (shares.isEmpty()) return emptyList()
         val own = workspaceId
         val identities = identities()
-        // The pins as they are: a granter's newer keys are followed only when the person checks them again.
-        val pins = loadSettings().contacts
+        // The settings read once for the whole list, and one verdict per granter and the full identity served (MountPass).
+        // Read up front, so settings that can't be had (offline, rolled back, signed out) fail the listing as before.
+        val pass = MountPass().apply { settings = loadSettings() }
         return shares.map { share ->
             runCatching {
                 // Before any key is opened: a share into this account's own drive, or for a node of another workspace, is refused.
                 checkShare(share, own)
                 checkSuite(share.node.envelopeSuite)
                 val name = share.granterName.ifEmpty { share.granterEmail }
-                val granter = granterKey(share.granterId, name, share.granter, pins)
+                val granter = try {
+                    trustGranter(share, explicit = false, pass = pass)
+                } catch (_: GuardUnreadable) {
+                    throw GranterTrust.Unchecked()
+                }
                 val key = openShare(base64urlDecode(share.shareEnvelope), granter, name, identities,
                     ShareContext(share.workspaceId, share.node.id, share.keyEpoch, api.session.userId, share.granterId))
                 val metadata = metadataOpen(MetadataContext(share.node.workspaceId, share.node.id, share.node.metadataVersion), key, base64urlDecode(share.node.metadataEnvelope))
                 // Kept under the granter's workspace only (NodeCache.adoptShare). The root's parent is the granter's and
                 // opens nothing here: it stays out of the parents index, which a share naming one of this drive's ids would rewrite.
                 ShareMount(share, nodes.adoptShare(share, own, openedRow(share.node, metadata, key), key), null)
-            }.getOrElse { ShareMount(share, null, it.message ?: "This share could not be opened.", it as? GranterTrust, explained = it is Refused) }
+            }.getOrElse {
+                if (it is NotAuthenticated || it is Unreachable) throw it
+                ShareMount(share, null, it.message ?: "This share could not be opened.", it as? GranterTrust, explained = it is Refused)
+            }
         }
     }
+
     fun item(id: String): Opened? = nodes.find(id)
 
     /* The row while it is live: neither it nor a folder above it in the trash (NodeCache.live); in `workspaceId` when given. */
