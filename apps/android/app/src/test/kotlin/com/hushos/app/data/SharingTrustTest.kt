@@ -144,7 +144,7 @@ class SharingTrustTest {
     fun aRotationAbortsOnAnythingButAVerdictSoNobodyLosesAccessToAFullDiskOrADroppedConnection() {
         val ledger = SharingLedger(mapOf(nodeId to setOf(userId)), emptyMap())
         // Leaving someone out of the batch makes the server revoke their share: only a verdict on them may do that.
-        for (failure in listOf(GuardUnsaved(), GuardUnreadable(), GuardRaced(), ContactMoved(), SettingsRolledBack(), Unreachable())) {
+        for (failure in listOf(GuardUnsaved(), GuardUnreadable(), GuardRaced(), ContactMoved(), SettingsRolledBack(), Unreachable(), ContactProblem(Settings.CONTACTS_FULL))) {
             val thrown = assertThrows(Exception::class.java) {
                 planReseal(nodeId, listOf(row("share-1", userId)), emptyList(), ledger) { _, _ -> throw failure }
             }

@@ -66,7 +66,9 @@ fun planReseal(nodeId: String, shares: List<JSONObject>, links: List<JSONObject>
             // no longer in Contacts, they can't be sealed to). Anything else (the guard couldn't be read or written, the
             // pin moved meanwhile, settings refused, no network) stops the whole rotation before anything is sent, and
             // the next attempt (PendingRotations) tries again.
-            if (verdict !is AccountChanged && verdict !is ContactProblem && verdict !is SharingRefused) throw verdict
+            // Full settings are no verdict on anyone (the sealer seals a legacy pin's own keys unsaved instead).
+            val about = verdict is AccountChanged || verdict is SharingRefused || (verdict is ContactProblem && verdict.message != Settings.CONTACTS_FULL)
+            if (!about) throw verdict
             skipped.add(verdict.message ?: "Someone lost access.")
         }
     }
@@ -83,7 +85,7 @@ internal fun Vault.granteeSealer(pins: Settings): (String, ServedIdentity) -> Pa
     return { granteeId, served ->
         val pin = pins.pinOf(granteeId) ?: throw SharingRefused("Someone no longer in Contacts lost access.")
         val grantee = Contact(granteeId, pin.name, pin.email, served)
-        judged[grantee.trustKey] ?: trustGrantee(grantee, follow = false).also { judged[grantee.trustKey] = it }
+        judged[grantee.trustKey] ?: trustGrantee(grantee, follow = false, sealUnsaved = true).also { judged[grantee.trustKey] = it }
     }
 }
 

@@ -214,7 +214,7 @@ internal fun Vault.commitTrust(contactId: String, entry: GuardEntry?, target: Co
  * entry, a legacy pin made first-seen, a followed succession); `follow` looks a succession up, only on the person's act,
  * so the server cannot learn whom this phone pins by watching it look people up. In the guard's turn.
  */
-internal fun Vault.stand(contact: Contact, act: Boolean, follow: Boolean, pass: MountPass? = null): Standing {
+internal fun Vault.stand(contact: Contact, act: Boolean, follow: Boolean, pass: MountPass? = null, sealUnsaved: Boolean = false): Standing {
     // A mounting pass reads the settings once for all its shares, and again only after something saved them.
     val settings = pass?.settings ?: loadSettings().also { pass?.settings = it }
     val id = contact.userId
@@ -239,7 +239,16 @@ internal fun Vault.stand(contact: Contact, act: Boolean, follow: Boolean, pass: 
         }
         if (!act) return Standing.Ok(upgraded, entry, false)
         val before = current
-        val (saved, held) = commitTrust(id, entry, upgraded) { it.setPin(upgraded, ifOver = before) }
+        val (saved, held) = try {
+            commitTrust(id, entry, upgraded) { it.setPin(upgraded, ifOver = before) }
+        } catch (full: ContactProblem) {
+            // A rotation (`sealUnsaved`) that can't save the migration for room seals to the keys the legacy pin already
+            // holds, as before first-seen pins existed, saving and remembering nothing: no new trust. Left out, the server
+            // would revoke them for the owner's full settings; stopped, the rotation would never finish.
+            val served = contact.commitment
+            if (!sealUnsaved || full.message != Settings.CONTACTS_FULL || served == null || upgraded.commitment != served) throw full
+            return Standing.Ok(upgraded, entry, false)
+        }
         pass?.settings = null
         current = saved
         entry = held
@@ -429,8 +438,8 @@ fun Vault.remove(contactId: String) {
  * agree with this phone's guard, and a legacy pin becomes first-seen first. Anything else shares nothing; a changed
  * account throws AccountChanged.
  */
-fun Vault.trustGrantee(contact: Contact, follow: Boolean): Pair<ByteArray, ByteArray> = GuardTurn.run {
-    when (val standing = stand(contact, act = true, follow = follow)) {
+fun Vault.trustGrantee(contact: Contact, follow: Boolean, sealUnsaved: Boolean = false): Pair<ByteArray, ByteArray> = GuardTurn.run {
+    when (val standing = stand(contact, act = true, follow = follow, sealUnsaved = sealUnsaved)) {
         is Standing.New -> throw ContactProblem.unpinned()
         is Standing.Changed -> {
             val pin = standing.pin ?: throw ContactProblem.unpinned()

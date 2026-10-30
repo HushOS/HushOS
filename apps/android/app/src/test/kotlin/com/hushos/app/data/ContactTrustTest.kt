@@ -262,4 +262,20 @@ class ContactTrustTest {
         // And their keys are trusted for nothing.
         assertNull(vault.trust().keysFor(server.grace.id))
     }
+
+    @Test
+    fun aRotationSealsToALegacyPinsOwnKeysWhenTheSettingsHaveNoRoomToSaveItsMigration() {
+        val legacy = TestPins.preRelease(grace().pin(verified = false, firstSeen = null))
+        // Room for the legacy pin, none for it made first-seen (its ML-DSA digest more).
+        server.editSettings { it.pin(legacy); it.json.put("padding", "x".repeat(Settings.MAX_BYTES - it.bytes() - 40)) }
+        val sealTo = vault.granteeSealer(vault.loadSettings())
+        // Left out, the server would revoke her; stopped, the rotation would never finish: sealed to the keys she has.
+        val (publicKey, _) = sealTo(server.grace.id, server.grace.served)
+        assertEquals(grace().encryptionPublicKey, com.hushos.core.base64urlEncode(publicKey))
+        // Nothing saved and nothing remembered: no new trust.
+        assertEquals(PinTrust.LEGACY, stored()!!.trust)
+        assertNull(guardEntry())
+        // Other keys served for her stay a verdict.
+        assertThrows(AccountChanged::class.java) { sealTo(server.grace.id, server.impostorOfGrace().served) }
+    }
 }
