@@ -748,6 +748,8 @@ export async function revokeForDeletion(userId: string) {
     // A family plan they pay for that gives nothing (unpaid, incomplete, paused) is still on their
     // card: a resume or a retried payment would charge it after they're gone. Ended first.
     await endLapsedFamilyPlansFor(userId);
+    // Their open family checkout claims go with them.
+    await billingRepository.deleteGroupCheckoutsBy(userId);
     if (!(await billingRepository.getCustomer(userId))) return;
     try {
         let state: models.CustomerState | null = null;

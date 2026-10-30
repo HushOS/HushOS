@@ -585,7 +585,7 @@ describe('purging a dissolved family', () => {
                 ],
                 graceMs: 3 * 86_400_000,
             }),
-        ).toBe('applied');
+        ).toMatchObject({ outcome: 'applied', superseded: [] });
         // A member's personal plan ended when they were pooled, and its refund: by ids only.
         await db.insert(s.personalPlanEndings).values({
             subscriptionId: 'sub_personal',
@@ -656,7 +656,10 @@ describe('purging a dissolved family', () => {
                 graceMs: 3 * 86_400_000,
                 complete: false,
             });
-        expect(await apply(plan(null, 'active'))).toBe('applied');
+        expect(await apply(plan(null, 'active'))).toMatchObject({
+            outcome: 'applied',
+            superseded: [],
+        });
         await dissolvedAgo(family.groupId, DAYS + 1);
 
         // The folder goes on time; the group's row, which billing still writes, waits.
@@ -666,11 +669,17 @@ describe('purging a dissolved family', () => {
         expect(await outbox(family.shared.objectId)).not.toBeNull();
         // Any state the plan can still become active from keeps them too.
         for (const status of ['past_due', 'unpaid', 'incomplete', 'trialing']) {
-            expect(await apply(plan(null, status))).toBe('applied');
+            expect(await apply(plan(null, status))).toMatchObject({
+                outcome: 'applied',
+                superseded: [],
+            });
             expect([status, await purge()]).toEqual([status, NOTHING]);
         }
 
-        expect(await apply(plan(new Date(), 'canceled'))).toBe('applied');
+        expect(await apply(plan(new Date(), 'canceled'))).toMatchObject({
+            outcome: 'applied',
+            superseded: [],
+        });
         expect(await purge()).toEqual({ ...NOTHING, families: 1 });
         expect((await familyRows(family.groupId, [family.areaId])).groups).toBe(0);
     });
@@ -824,7 +833,7 @@ describe('a dissolved family during its retention', () => {
                 subscriptions: [],
                 graceMs: 3 * 86_400_000,
             }),
-        ).toBe('applied');
+        ).toMatchObject({ outcome: 'applied', superseded: [] });
         await dissolvedAgo(family.groupId, DAYS + 1);
         expect((await purge()).families).toBe(1);
         expect(
