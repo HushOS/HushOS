@@ -1,0 +1,599 @@
+.env.example
+  s_ec12ebe02de5ff::t_3994e0c6af1916 81-83
+.gitattributes
+  s_ec12ebe02de5ff::t_eca38ea29b45fe 2
+.github/workflows/ci.yml
+  s_ec12ebe02de5ff::t_7ea68fb9b281a2 133,179,190,210,215,267-268,284,318,344-345,361,390,421-422,443,474
+.github/workflows/fuzz.yml
+  s_ec12ebe02de5ff::t_0b4a3b0e8641a3 53,68,76,97-98,109,148,158,173,202,210
+CONTRIBUTING.md
+  s_ec12ebe02de5ff::t_b022e1f114a4c5 37-40
+Cargo.lock
+  s_ec12ebe02de5ff::t_956439c187ac0f 92,131,133,293,397,399,461,463,477,509,564,591,593,635,637,842,844,888,890,898,1002-1003,1121,1123,1213,1218,1220,1231,1233,1261,1263,1272,1274,1278,1313,1315,1335,1337,1340,1380,1382,1414,1416,1423,1425,1429,1440,1442,1455,1457,1464,1466,1473,1475,1485,1487,1491,1493,1500,1502,1506,1508,1522,1524,1548,1550,1560,1562,1573,1575,1590,1592,1602,1604,1615,1617,1712,1714,1721,1723,1732,1734
+DESIGN.md
+  s_ec12ebe02de5ff::t_da9decc84dcdc0 321,393,432,435-437,440-441,445-450,469,472,537-538
+apps/android/AGENTS.md
+  s_ec12ebe02de5ff::t_335a33df367cec 30,40,58,63-69
+apps/android/app/build.gradle.kts
+  s_ec12ebe02de5ff::t_6e79f6d125b460 130-137,156-157
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_ec12ebe02de5ff::t_241f3dfc914cad 17,45-47,59,61
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_ec12ebe02de5ff::t_7c2ccfc39905da 392-394,498-500,529-530,533-534,539-540,548-549,555-556,620-621,633,641-642,646,648
+apps/android/app/src/main/kotlin/com/hushos/app/data/Catalogue.kt
+  s_ec12ebe02de5ff::t_f7109957231b02 132
+apps/android/app/src/main/kotlin/com/hushos/app/data/Contacts.kt
+  s_ec12ebe02de5ff::t_344ab447fa5564 377-378,383
+apps/android/app/src/main/kotlin/com/hushos/app/data/JobNames.kt
+  s_ec12ebe02de5ff::t_c6604a5cc58aed 1-53
+apps/android/app/src/main/kotlin/com/hushos/app/data/Links.kt
+  s_ec12ebe02de5ff::t_94bef5c9344ac8 312-333
+apps/android/app/src/main/kotlin/com/hushos/app/data/NodeCache.kt
+  s_ec12ebe02de5ff::t_a6e5f7154501cf 17-22,35-51,60,63,68-75
+apps/android/app/src/main/kotlin/com/hushos/app/data/SettingsMark.kt
+  s_ec12ebe02de5ff::t_cc879e668fe2c8 4-6,8-9,17-64,66-68,70-115,120-122,124-175,184,186-188,191-197,204-207,210,213-217,219-267,272-275,277-279,281-283,285-296,298-304,306-310
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_ec12ebe02de5ff::t_00c28ea66b852d 124-132,136-138,147-155,158-159,246-248,252,256,261,313,341-342
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_ec12ebe02de5ff::t_d02f4a36bf47df 143-145,150,154-155,359,362-381,388,392-393,396,399,410-412,414,435,437,457,464,501,528,562,567,614,920-931,980-984,1202,1226,1231,1286
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_ec12ebe02de5ff::t_b7446b47d952c5 3,323-324,339,341,455-457,681,713
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Adaptive.kt
+  s_ec12ebe02de5ff::t_fab76770915309 1-168
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AddMenu.kt
+  s_ec12ebe02de5ff::t_f8ee5912077c42 3,79-80,82-84,277-279
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Components.kt
+  s_ec12ebe02de5ff::t_7dff77f37645ca 4,23-24,274,278-291,293-299,301-302
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DevicesScreen.kt
+  s_ec12ebe02de5ff::t_e09dadd5f62546 3,47-49,137
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_ec12ebe02de5ff::t_2199a6c2e7d0d7 17,311-314,320,325,344,358,1530,1956-1977
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_ec12ebe02de5ff::t_5ae9ae1911d656 3,207-209
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HomeScreen.kt
+  s_ec12ebe02de5ff::t_6590a6b7099a2b 3,262,333-335
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_ec12ebe02de5ff::t_d7883eee834cc7 3-27,119-120,124,162-167,170,218-297,301-302,304-310,313-324,327,329,338-378,392-459
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_ec12ebe02de5ff::t_3c43458071e0be 3,12-21,201-202,278-280,328,498-499,501,600-629,637,699,702
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_ec12ebe02de5ff::t_970a821abb05a7 3,179,185-186,189-191,551-552,554,808-810,942-945,1106-1107
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NodeRow.kt
+  s_ec12ebe02de5ff::t_7086b767041587 123-124,154,157
+apps/android/app/src/main/kotlin/com/hushos/app/ui/RecoverScreen.kt
+  s_ec12ebe02de5ff::t_48d76051dcce76 3,180-183,185-186
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Screens.kt
+  s_ec12ebe02de5ff::t_1d3739662e01b1 3,143,145-146,251-252,254
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SharedScreen.kt
+  s_ec12ebe02de5ff::t_2417c1721d6be0 3,101,107-112
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SignInScreen.kt
+  s_ec12ebe02de5ff::t_4d26b3b34c4dbb 3,63
+apps/android/app/src/test/kotlin/com/hushos/app/data/AccountStoreTest.kt
+  s_ec12ebe02de5ff::t_4448b22e6e4462 19,32-34,41-43,51,53,112-126
+apps/android/app/src/test/kotlin/com/hushos/app/data/FailedTransfersTest.kt
+  s_ec12ebe02de5ff::t_d8d85e7ba66beb 73
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_ec12ebe02de5ff::t_8d3227a765d3e3 1-490
+apps/android/app/src/test/kotlin/com/hushos/app/data/InfoShareListTest.kt
+  s_ec12ebe02de5ff::t_4415ccd52c12fc 1-134
+apps/android/app/src/test/kotlin/com/hushos/app/data/JobNamesTest.kt
+  s_ec12ebe02de5ff::t_a8b3d8b194e55f 1-50
+apps/android/app/src/test/kotlin/com/hushos/app/data/NodeCacheTest.kt
+  s_ec12ebe02de5ff::t_6db360bde76498 84-162,164
+apps/android/app/src/test/kotlin/com/hushos/app/data/OwnIdentityTest.kt
+  s_ec12ebe02de5ff::t_725487566f3df1 34
+apps/android/app/src/test/kotlin/com/hushos/app/data/RecoveryWordsTest.kt
+  s_ec12ebe02de5ff::t_f0641a0d1c817d 56
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsKeyTest.kt
+  s_ec12ebe02de5ff::t_964f18e6a5c5b8 60,80
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsMarkTest.kt
+  s_ec12ebe02de5ff::t_57f39454939cb8 3-6,10,14,17-21,26-36,40-43,48-99,102-105,107-113,116,118-132,135,137-144,147,149-155,159-166,171-200
+apps/android/app/src/test/kotlin/com/hushos/app/data/VaultAttributesTest.kt
+  s_ec12ebe02de5ff::t_7f4afc8afc9432 1-222
+apps/android/app/src/test/kotlin/com/hushos/app/ui/AdaptiveTest.kt
+  s_ec12ebe02de5ff::t_05f72c3be27b34 1-145
+apps/android/gradle/libs.versions.toml
+  s_ec12ebe02de5ff::t_9c302de9383a28 5,7-10,13-14,18-19,22-26,41-46,52
+apps/android/gradle/wrapper/gradle-wrapper.properties
+  s_ec12ebe02de5ff::t_9ca68a97d6f3d5 3,5-6
+apps/android/gradlew
+  s_ec12ebe02de5ff::t_ba8b4c0c4ca6ce 23,32,60
+apps/android/gradlew.bat
+  s_ec12ebe02de5ff::t_c662aa9f61c43e 22,26-54,75-79,81-82,90-94,96-97,104-107,109-112
+apps/ios/AGENTS.md
+  s_ec12ebe02de5ff::t_514f0df5cbef87 48-50,72,81,111,124
+apps/ios/App/AccountView.swift
+  s_ec12ebe02de5ff::t_633b2de6f158c1 28-35,40-44,94,107-110,119-122,141,143-152,155-157,385,605
+apps/ios/App/ActionSheets.swift
+  s_ec12ebe02de5ff::t_287c3f1ea7f63d 471,473-474,477-480
+apps/ios/App/AppModel.swift
+  s_ec12ebe02de5ff::t_e10bea7be7f6ba 310
+apps/ios/App/Appeared.swift
+  s_ec12ebe02de5ff::t_43bf16c49ac2b3 1-43
+apps/ios/App/BrowseView.swift
+  s_ec12ebe02de5ff::t_14e122b1851e70 12-16,23,31-52,184-186,195-200,263-266,280-284,424,431,750-761
+apps/ios/App/DevicesView.swift
+  s_ec12ebe02de5ff::t_df258caef98f38 66
+apps/ios/App/DriveStore.swift
+  s_ec12ebe02de5ff::t_e50f669664632d 76-81,685-694,1104-1138,1241-1243,1448
+apps/ios/App/Families.swift
+  s_ec12ebe02de5ff::t_55258e9263a2c4 384
+apps/ios/App/HushOSApp.swift
+  s_ec12ebe02de5ff::t_b88efee4f894a3 78-81
+apps/ios/App/InnerDisplayHarness.swift
+  s_ec12ebe02de5ff::t_b7ba02a1c278b0 1-82
+apps/ios/App/MainView.swift
+  s_ec12ebe02de5ff::t_c2bac5202b6f31 16-17,26-29,78-80,82-83,190-194,226-246
+apps/ios/App/NodeActions.swift
+  s_ec12ebe02de5ff::t_646c66a20a5df0 56-99,102-142,531-545
+apps/ios/App/NodeRow.swift
+  s_ec12ebe02de5ff::t_d51d284852055d 393-416
+apps/ios/App/Received.swift
+  s_ec12ebe02de5ff::t_34f9786ec6f858 22-23,37-57,61-63,71,93-96,120,225,487-496
+apps/ios/App/RecentsView.swift
+  s_ec12ebe02de5ff::t_4e6dab133b99df 80-82,88-90,104,184,221,228,260,383-385,715
+apps/ios/App/SearchView.swift
+  s_ec12ebe02de5ff::t_37e9cdd07255e2 89,117,125
+apps/ios/App/Sharing.swift
+  s_ec12ebe02de5ff::t_963798181ee29a 150-152
+apps/ios/App/SignInView.swift
+  s_ec12ebe02de5ff::t_471efe08b292f7 27-39,76-79
+apps/ios/App/TabSidebar.swift
+  s_ec12ebe02de5ff::t_0ecb045e42db4d 1-59
+apps/ios/App/Theme.swift
+  s_ec12ebe02de5ff::t_34048f4b32bf8d 48-54,109-138,267-278,281,286,290,295,301-302,304-305,308-309,315,317-318,322-337,340,345-347,349-355
+apps/ios/App/Viewer.swift
+  s_ec12ebe02de5ff::t_7f1fd04a59179d 37-75,96,99,113-123,125,128,159-164,166-167,169-172
+apps/ios/Files/FileProviderExtension.swift
+  s_ec12ebe02de5ff::t_1f6fd9cf9db31b 40-48
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Account.swift
+  s_ec12ebe02de5ff::t_af573f8458b96d 227-229,443-444
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AccountStore.swift
+  s_ec12ebe02de5ff::t_13d9d7a31570d9 23-24,28-34,38,41,74,98-102,104,106-108,116-118,128
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Auth.swift
+  s_ec12ebe02de5ff::t_b8f419b77a95da 142-146
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Contacts.swift
+  s_ec12ebe02de5ff::t_12415991484003 128,130,161-162,182,185,190-191,233,253,310
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyRecords.swift
+  s_ec12ebe02de5ff::t_1e0724cc5c87f5 32,36
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FileLock.swift
+  s_ec12ebe02de5ff::t_c4337ce4bfc593 1-97
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/InfoFollow.swift
+  s_ec12ebe02de5ff::t_7029b4b8899d7b 1-74
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/RollbackMarks.swift
+  s_ec12ebe02de5ff::t_cd411e3431854a 5-31,33-36,38-42,44-61,64-66,68-84,86-87,91-93,95-110,113-117,119-121,125-126,128-148,150-151,155-157,159-190,195-199,202-227,229-250,253-272,274-275,277-282,284-306,308,311-320,325-328,332-339,341-347,349-350,352-353,358-363,367-370,372,376-378,380-381,386-390,392,395-397
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/RoomBeside.swift
+  s_ec12ebe02de5ff::t_442117f2e3f3a5 1-46
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Settings.swift
+  s_ec12ebe02de5ff::t_609403a8120525 262,266-290,299-300,302,305,317-322,339-342,364,366
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Shares.swift
+  s_ec12ebe02de5ff::t_163f87a548f0e2 110-111
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Succession.swift
+  s_ec12ebe02de5ff::t_036ce5348b4a19 204
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Catalogue.swift
+  s_ec12ebe02de5ff::t_293dfcefad932d 168
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Families.swift
+  s_ec12ebe02de5ff::t_1c7a45d5a841ab 186
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Identity.swift
+  s_ec12ebe02de5ff::t_9ddbac051a1e1d 6-7,16-17,23,26,34-35,89,93-95,113,121,200,209,257
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_ec12ebe02de5ff::t_bb253275755a59 241,243,269-270,278,282-283,293-296,365,830,856
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_ec12ebe02de5ff::t_5bdbb34a6d866b 91-96,110-111,356,358-360,365,368,375-387,415,476,506,521,526-562
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/AccountStoreTests.swift
+  s_ec12ebe02de5ff::t_47e5608c0fd5e5 43-48,104-112
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyJoinTests.swift
+  s_ec12ebe02de5ff::t_e3e67025ce54f5 189-192,194,199-213,215-216,218-223
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/IdentityUpgradeTests.swift
+  s_ec12ebe02de5ff::t_0bc5875435c505 93-111,136-139,207-208,249-257
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/InfoFollowTests.swift
+  s_ec12ebe02de5ff::t_d955201367b678 1-345
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/IntegrityTests.swift
+  s_ec12ebe02de5ff::t_7e5eedc76a2eeb 6-8
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RoomBesideTests.swift
+  s_ec12ebe02de5ff::t_796173826c0896 1-66
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsTests.swift
+  s_ec12ebe02de5ff::t_87388fa5e2f296 121-135,138-141,144-161,164-217,219-224,226-238,241-243,248-249,255-258,260-261,263-269,271-272,275-299,302-424,427-446
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsUpgradeTests.swift
+  s_ec12ebe02de5ff::t_c9bc961215e7ab 41-61,72-73
+apps/web/Dockerfile
+  s_ec12ebe02de5ff::t_0c949e98382447 6-7
+apps/web/package.json
+  s_ec12ebe02de5ff::t_5313ae32d13500 20-22,41-42,44-46,48-49,51,53-54,62-69,74,77-79,82-84,91,95-100,102,106-107
+apps/web/src/components/account-devices.tsx
+  s_ec12ebe02de5ff::t_9dcd72114d5343 334
+apps/web/src/components/device-control.tsx
+  s_ec12ebe02de5ff::t_36c05335ad4241 39
+apps/web/src/components/drive/check-contact.tsx
+  s_ec12ebe02de5ff::t_3ed6ecf935b9a3 102
+apps/web/src/components/drive/command-palette.tsx
+  s_ec12ebe02de5ff::t_d69ee509165489 158
+apps/web/src/components/drive/folder-view.tsx
+  s_ec12ebe02de5ff::t_ff265a206f06fa 52,374,461,528,541,668,685,751
+apps/web/src/components/drive/home-view.tsx
+  s_ec12ebe02de5ff::t_741cafb1e1a0d1 40,297,362,375
+apps/web/src/components/drive/share-dialog.tsx
+  s_ec12ebe02de5ff::t_c28df2704418e0 327,355
+apps/web/src/components/drive/shortcuts.ts
+  s_ec12ebe02de5ff::t_1466a19cba6fd2 41-53
+apps/web/src/components/drive/storage-full-dialog.tsx
+  s_ec12ebe02de5ff::t_4ce0d668333410 122,152
+apps/web/src/components/drive/tag-view.tsx
+  s_ec12ebe02de5ff::t_7fc61b90858f44 119
+apps/web/src/components/drive/trash-view.tsx
+  s_ec12ebe02de5ff::t_973c5f5edbb767 351,378,436
+apps/web/src/components/drive/versions-dialog.tsx
+  s_ec12ebe02de5ff::t_1817e9d14faf03 148
+apps/web/src/components/families/delete-folder-dialog.tsx
+  s_ec12ebe02de5ff::t_73db7e2195a980 58
+apps/web/src/components/families/family-alerts.tsx
+  s_ec12ebe02de5ff::t_b2a99ad4697fdf 11,23,29-33,35-44,46-47,50-51
+apps/web/src/components/families/family-check.tsx
+  s_ec12ebe02de5ff::t_402440891d7d45 2-3,10,15-18,20,23-30,33-47,51-61,64-66,68-71,75-83,86-87,90-99,101-103,106-108,110-111,114,116,120,123-190,192-239,241-248,251-255,259-260,262-263,266-267,271-280,282-290
+apps/web/src/components/families/family-page.tsx
+  s_ec12ebe02de5ff::t_29462539366056 4,12-17,62-63,83-95,124-137,199,213-223,253-255,269-275,291-292,294-295,300,302-303,307-317,609
+apps/web/src/components/families/family-trash.tsx
+  s_ec12ebe02de5ff::t_c33500af85901f 156,229
+apps/web/src/components/families/invite-dialog.test.tsx
+  s_ec12ebe02de5ff::t_1bec6b96ac0df9 1-77
+apps/web/src/components/families/invite-dialog.tsx
+  s_ec12ebe02de5ff::t_41c5a71d1a81d1 5,16,22-27,45,60-66,73,95,131-151
+apps/web/src/components/families/members.test.tsx
+  s_ec12ebe02de5ff::t_a62be82bc9869e 1-776
+apps/web/src/components/families/members.tsx
+  s_ec12ebe02de5ff::t_8416b66cc8bae4 3-5,7,10,31-32,35-36,40,47-70,72-73,77-84,99-100,111-112,127-130,134-160,163-164,166-167,172,174,188-232,248,253,255-258,262,265,267-607,617-624,643,653-654,657-670,672-673,681,683-685,691-764,766-819,826,833-840,853,871-874,876-881,894-967,974,985-991,994-1016,1029,1034-1037,1041,1047-1077,1100-1199,1214-1341,1347,1426-1428
+apps/web/src/components/families/new-folder-dialog.tsx
+  s_ec12ebe02de5ff::t_5409cbd80d9eab 56
+apps/web/src/components/families/no-family.tsx
+  s_ec12ebe02de5ff::t_f78306186cd9dd 62-63,88
+apps/web/src/components/families/word-list.tsx
+  s_ec12ebe02de5ff::t_9ab47145fbfb82 2-3,14
+apps/web/src/components/site-header.tsx
+  s_ec12ebe02de5ff::t_7bcbe4943a13e9 300-301
+apps/web/src/components/storage-card.tsx
+  s_ec12ebe02de5ff::t_f98dc31d80c845 110
+apps/web/src/content/blog/drafts/family-plans.mdx
+  s_ec12ebe02de5ff::t_c18e309918fc90 7,28,30,32,34,36,38,40-42
+apps/web/src/content/roadmap.ts
+  s_ec12ebe02de5ff::t_658857a613d96f 51,167
+apps/web/src/content/security.mdx
+  s_ec12ebe02de5ff::t_fe4391ac4b37cd 503-504,543
+apps/web/src/lib/api-client.ts
+  s_ec12ebe02de5ff::t_cab81c9e57b622 3,11-15
+apps/web/src/lib/api.server.ts
+  s_ec12ebe02de5ff::t_594738845502a0 39,45,278-279,684-706,2524-2528,2546,2563,2644,2658,2672,2718-2722,2737,2766,2789,2803
+apps/web/src/lib/contact-guard.ts
+  s_ec12ebe02de5ff::t_b6243f86fa2d64 2,76-112,213-215,234-239,406-407,521-697
+apps/web/src/lib/contacts.families.test.ts
+  s_ec12ebe02de5ff::t_625459ea7188b8 6-7,138
+apps/web/src/lib/contacts.first-use.test.ts
+  s_ec12ebe02de5ff::t_e3d63dfffbc904 306-334
+apps/web/src/lib/contacts.ts
+  s_ec12ebe02de5ff::t_cbdbdce0a70a4e 39,45,51,579-589,1299-1300,1307,1329,1356,1410-1413,1416-1421,1432,1548,1569-1645,1948-1956
+apps/web/src/lib/device-data.ts
+  s_ec12ebe02de5ff::t_51eeb2ad8e33e6 64-66,148-150
+apps/web/src/lib/family-guard.test.ts
+  s_ec12ebe02de5ff::t_36251bb4521e2a 1-148
+apps/web/src/lib/family-pending.test.ts
+  s_ec12ebe02de5ff::t_a24c787b6070fb 1-133
+apps/web/src/lib/family-pending.ts
+  s_ec12ebe02de5ff::t_868f63acf16254 1,3,6-16,19-97,100-112,114-132,134-158,160-166,169-181,183-188,190-228
+apps/web/src/lib/family-pin.test.ts
+  s_ec12ebe02de5ff::t_92931613763eb1 3,6-10,34
+apps/web/src/lib/family-trust.test.ts
+  s_ec12ebe02de5ff::t_08da22f14c18e4 1-452
+apps/web/src/lib/family-trust.ts
+  s_ec12ebe02de5ff::t_2973ba56808197 1-269
+apps/web/src/lib/group-write-floor.test.ts
+  s_ec12ebe02de5ff::t_919b97d8a2cfd9 1-142
+apps/web/src/lib/group-write-floor.ts
+  s_ec12ebe02de5ff::t_02d89eadc1a9b7 1-64
+apps/web/src/lib/groups/client.ts
+  s_ec12ebe02de5ff::t_31b7f34cf7d8a4 2,4,29-34,56-57
+apps/web/src/lib/groups/context.ts
+  s_ec12ebe02de5ff::t_a059cfe4cac4c9 9,44,46-52,83-90,93-115,166-173
+apps/web/src/lib/groups/copy.test.ts
+  s_ec12ebe02de5ff::t_374149600b4a7a 3
+apps/web/src/lib/groups/copy.ts
+  s_ec12ebe02de5ff::t_cfc236f7210ad6 14-19,107,109
+apps/web/src/lib/groups/family-checks.test.ts
+  s_ec12ebe02de5ff::t_7e3a19dcee7b94 1-194
+apps/web/src/lib/groups/family-checks.ts
+  s_ec12ebe02de5ff::t_792b123072d2ec 1-91
+apps/web/src/lib/groups/join.test.ts
+  s_ec12ebe02de5ff::t_f07e45e7b8f67a 2-4,6-10,12,16-24,33-34,90-94,98-99,108-125,164-174,176-187,194-195,203-230,237,239,241-247,251-254,260-261,265,274-286,294-306,321-348,351-352,354-375,377,383-385,387-388,392-394,396,399,401-402,404-437,440,442-443,445-453,455-469,472,474,476-486,488-507,510,512-513,515-521,523-534,537,539-540,542-545,547-560,563,565-566,568-571,573-579,582,584-585,587-590,592-613,615-638,641,643-644,646-649,651-674,676-678,681,684-687,690-693,695-703,705-706,710-711,714,716-717,719-722,724-731,736,738-739,741,751-756,759-769,772,774-776,785-786
+apps/web/src/lib/groups/join.ts
+  s_ec12ebe02de5ff::t_1b01705c53ab39 1,7-8,15-19,21-35,37-42,45,53,64,66,80,85-86,94,97,106-109,117,122-128,130-136,144-152,157,160-161,166,168-169,175,186,195,197,201-203,205-206,216-218,239-262,267-274,289
+apps/web/src/lib/groups/outbox.test.ts
+  s_ec12ebe02de5ff::t_406cbad87611b6 326-328
+apps/web/src/lib/groups/outbox.ts
+  s_ec12ebe02de5ff::t_45778d931e027a 46-48,852
+apps/web/src/lib/groups/pins.ts
+  s_ec12ebe02de5ff::t_23823dd838d830 4,48-54,66,69-71,93-96,98-99
+apps/web/src/lib/groups/removal.test.ts
+  s_ec12ebe02de5ff::t_fae61f118cbb33 42,45-53,142-143,184,187,191
+apps/web/src/lib/groups/removal.ts
+  s_ec12ebe02de5ff::t_ba776a74745e5b 2,5,7,69,349-365,376-384,471-563
+apps/web/src/lib/groups/server-testkit.ts
+  s_ec12ebe02de5ff::t_f7964e90810e7c 12-14,16,64,71,93-98,184,187-219,247-252,304-319,330,355,374-375,520,532-538,543,551,553,563-586,590,602-603,613-620
+apps/web/src/lib/groups/sync.test.ts
+  s_ec12ebe02de5ff::t_bc9f2fadbfee91 4-5,241,258-307
+apps/web/src/lib/groups/sync.ts
+  s_ec12ebe02de5ff::t_613306b518dc2d 1,16-21,214-263,309,320-321,350-352,475,481-493,495,501-511,515-526,576-582,590-593
+apps/web/src/lib/groups/test-harness.ts
+  s_ec12ebe02de5ff::t_595d7f2fe5c987 4-10,12,217,337,344,381
+apps/web/src/lib/groups/two-tabs.test.ts
+  s_ec12ebe02de5ff::t_21ce7ded8bdc19 6-7,120-121,130
+apps/web/src/lib/groups/without-words.test.ts
+  s_ec12ebe02de5ff::t_cd6407a7521f52 1-460
+apps/web/src/lib/groups/writers.test.ts
+  s_ec12ebe02de5ff::t_f6fb1e77176a22 144-157
+apps/web/src/lib/groups/writers.ts
+  s_ec12ebe02de5ff::t_64fca2893325cf 2,41-43,50-56
+apps/web/src/lib/spaces.ts
+  s_ec12ebe02de5ff::t_7b9f549521bc0c 8-9,116-119
+apps/web/src/routes/_authenticated/app/_drive/contacts.tsx
+  s_ec12ebe02de5ff::t_b3db0abc4b304f 115
+apps/web/src/routes/_authenticated/app/_drive/families/$groupId/join.tsx
+  s_ec12ebe02de5ff::t_11ae56776149d3 4,10,20-22,31-35,68,156-169,174-175,178-183,205
+apps/web/src/routes/_authenticated/app/_drive/shared.tsx
+  s_ec12ebe02de5ff::t_84a55c0fea5f6a 188,526
+apps/web/src/routes/join/route.tsx
+  s_ec12ebe02de5ff::t_b3cde8b9d63987 49,276-278,280-282,317,320-324
+bun.lock
+  s_ec12ebe02de5ff::t_84247a5202ab70 10,13-16,18-19,26-28,47-48,50-52,54-55,57,59-60,68-75,80,83-85,88-90,97,101-106,108,112-113,124,129,131,142,148,155,176,187-188,194,196,203-204,209,214,216,223,225-226,230,232-237,246,252,268,271,273,275,287,293,300,306,325,345,347,349,351,353,355,357,359,361,363,365,367,369,371,373,375,377,379,381,383,385,387,389,427,429,433,435,437,439,441,443,503,549,551,553,555,557,559,561,563,565,567,569,571,573,575,577,579,581,583,585,587,589,591,593,595,597,599,631,633,635,637,639,641,643,645,647,649,651,653,657,659,661,663,665,667,669,671,673,691-692,695,697,699,701,703,705,707,709,711,713,715,717,719,721,723,725,727,729,731,733,735,737,739,741,743,745,747,749,751,753,755,757,759,761,763,765,767,769,771,773,775,777,779,781,783,785,819,821,913,915,917,919,921,923,925,929,935,937,939,945,979,981,983,985,987,989,991,993,995,997,999,1007,1011,1015,1017,1019,1023,1025,1027,1029,1033,1035,1037,1039,1045,1049,1051,1053,1057,1067,1069,1071,1073,1075,1077,1079,1111,1115,1117,1165,1167,1169,1215,1235,1245,1255,1265,1291,1301,1303,1333,1351,1353,1403,1413,1435,1483,1497,1541,1547,1601,1603,1609,1613,1657,1749,1751,1753,1757,1761,1773,1781,1793,1795,1797,1811,1815,1817,1819,1821,1839,1841,1843,1845,1877,1879,1881,1893,1923,1937,1947-1948,1953,1959,1967,1969,1975-1976,1997,1999,2031,2037,2039-2041,2045,2055,2065,2071,2081,2119,2131,2135,2137,2147,2153,2159,2183,2185,2209,2213-2222,2239-2242,2245-2247,2249,2273-2274,2279,2281,2283,2285,2287,2289,2319,2321,2323,2325,2327,2329,2331,2333,2335,2337,2339,2341,2343,2345,2347,2349,2351,2353,2355,2357,2359,2361,2363
+compose.dev.yaml
+  s_ec12ebe02de5ff::t_7f24796c0e5d1c 6
+compose.yaml
+  s_ec12ebe02de5ff::t_552fcf933d397b 20,130
+crates/hushos-core/Cargo.toml
+  s_ec12ebe02de5ff::t_a6f108fa04635e 26-27
+crates/hushos-core/fixtures/web-roster-calls.json
+  s_ec12ebe02de5ff::t_f491b2f47516fc 29,31,37,39,45,47,53,55,61,63,69,71,77,79,128,130,140,149,161-162,194,196,204,238,240,243,245-246,248,257,292,294,426,430,930-931,946-947,962-963,978-979,994-995,1009-1010,1024-1025,1041-1042,1058-1059,1070,1082-1083,1094-1095,1106-1107,1116-1117,1122-1123,1156-1157,1162-1163,1183-1184,1189-1190,1210-1211,1216-1217,1250-1251,1256-1257,1292-1293,1298-1299,1320-1321,1326-1327,1362-1363,1368-1369,1390-1391,1396-1397,1417-1418,1423-1424,1444-1445,1450-1451,1471-1472,1477-1478,1511-1512,1517-1518,1534-1535,1540-1541,1557-1558,1563-1564,1580-1581,1586-1587,1603-1604,1621-1622,1627-1628,1633-1634,1673-1674,1679-1680,1685-1686,1691-1692,1730-1731,1736-1737,1742-1743,1748-1749,1787-1788,1793-1794,1799-1800,1805-1806,1811-1812,1817-1818,1838-1839,1844-1845,1878-1879,1884-1885,1905-1906,1911-1912,1932-1933,1938-1939,1944-1945,1950-1951,1989-1990,1995-1996,2016-2017,2022-2023,2046-2047,2071-2073,2091-2093,2119-2121,2135-2137,2147-2149,2163-2165,2179-2181,2199-2201,2215-2217,2231-2233,2243-2245,2259-2261,2275-2277,2291-2293,2303-2305,2339-2341
+crates/hushos-core/fuzz/Cargo.lock
+  s_ec12ebe02de5ff::t_98b1761a9e9e83 75,77,114,116,260,262,324,326,340,351,383,438,487,489,664,666,702,704,712,794-795,956,961,963,995,997,1006,1008,1012,1063,1065,1068,1096,1098,1107,1109,1116,1118,1122,1139,1141,1145,1147,1206,1208,1215,1217,1226,1228
+crates/hushos-core/src/lib.rs
+  s_ec12ebe02de5ff::t_000e1ca12de752 40,70
+crates/hushos-core/src/rollback_marks.rs
+  s_ec12ebe02de5ff::t_704d6e67319f41 1-266
+crates/hushos-core/src/roster_calls.rs
+  s_ec12ebe02de5ff::t_3500039ad989c4 64-67,698-701,1096-1100,1107
+crates/hushos-core/src/roster_calls/tests.rs
+  s_ec12ebe02de5ff::t_96d3824041ccf4 458,461-467
+crates/hushos-core/tests/common/roster_calls.rs
+  s_ec12ebe02de5ff::t_6dc959f460a2fb 280,282
+docs/groups-mobile-plan.md
+  s_ec12ebe02de5ff::t_ebdb3689f241a9 168,170
+docs/integrity-design.md
+  s_ec12ebe02de5ff::t_9a16a78195bd43 224
+docs/optional-verification.md
+  s_ec12ebe02de5ff::t_e45ef42925301a 35,134,171,241,323,411,418-419,468,470,518
+docs/self-hosting.md
+  s_ec12ebe02de5ff::t_73f6befbde6ea3 673-674,704-706
+e2e/families.spec.ts
+  s_ec12ebe02de5ff::t_ce792c8b2e846c 1,29-33,36-43,46-47,184-192,212-218,220-222,224,226-229,232,234-239,242-249,324,326-331,333-339,341-348,354-358,378-379,389-390,395-397,400-401,406-407,411-458,790,803-804,813,816,818-819,995,1172-1488,1506,1517,1539,1546-1548,1550-1553,1557,1559,1561-1563,1568,1570-1572,2026,2128,2519,3050-3052,3059
+package.json
+  s_ec12ebe02de5ff::t_244767b5bdd98a 68,71-74,76-77
+packages/auth/package.json
+  s_ec12ebe02de5ff::t_431c5652dd865d 26,31,33
+packages/billing/package.json
+  s_ec12ebe02de5ff::t_110cb59cdccb09 23,29
+packages/billing/src/server.ts
+  s_ec12ebe02de5ff::t_c9fc10831b584f 704-708
+packages/config/package.json
+  s_ec12ebe02de5ff::t_3c59d8150afb44 15
+packages/crypto/package.json
+  s_ec12ebe02de5ff::t_fa40fb2e8113b2 59
+packages/crypto/src/__fixtures__/core-roster-calls.json
+  s_ec12ebe02de5ff::t_60bd257d756918 14,19-20,34,39-40,62,67-68,71,76-77,86,91-92,102,107-108,122,127-128,138,143-144,158,163-164,167,172-173,182,187-188,198,203-204,218,223-224,227,232-233,242,247-248,275,280-281,315,324,336,338,379,385-386,392,402,404,438,440,445,455-456,458-459,492,494,647,649,655,657,663,665,671,673,679,681,687,689,695,697,731,735,973,983,989,999,1005,1015,1021,1031,1037,1047,1053,1062,1068,1077,1084,1094,1101,1111,1118,1130,1135,1142,1147,1154,1159,1445-1446,1451-1452,1472-1473,1478-1479,1499-1500,1505-1506,1539-1540,1545-1546,1581-1582,1587-1588,1609-1610,1615-1616,1651-1652,1657-1658,1679-1680,1685-1686,1706-1707,1712-1713,1733-1734,1739-1740,1760-1761,1766-1767,1800-1801,1806-1807,1823-1824,1829-1830,1846-1847,1852-1853,1869-1870,1875-1876,1892-1893,1898-1899,1916-1917,1955-1956,1961-1962,1968-1969,2007-2008,2013-2014,2019-2020,2025-2026,2064-2065,2070-2071,2076-2077,2082-2083,2103-2104,2109-2110,2115-2116,2121-2122,2127-2128,2133-2134,2167-2168,2173-2174,2194-2195,2200-2201,2221-2222,2227-2228,2266-2267,2272-2273,2278-2279,2284-2285,2305-2306,2311-2312,2332-2333,2338-2339,2359-2360
+packages/crypto/src/area-ledger.ts
+  s_ec12ebe02de5ff::t_cf1572f064738d 9-15,186-198,345,446-455,458,468,681,700,717,1159-1161
+packages/crypto/src/contact-guard.ts
+  s_ec12ebe02de5ff::t_6fef597234e1f8 30-32,34
+packages/crypto/src/contacts.ts
+  s_ec12ebe02de5ff::t_fd09dd4300e88c 113-117,121-143
+packages/crypto/src/index.ts
+  s_ec12ebe02de5ff::t_1c40d8dc363420 41-42
+packages/crypto/src/pins.ts
+  s_ec12ebe02de5ff::t_81134633eb167e 3,77-105
+packages/crypto/src/protocol.ts
+  s_ec12ebe02de5ff::t_a4232bcc7b7630 63,153-171
+packages/crypto/src/roster-calls-testkit.ts
+  s_ec12ebe02de5ff::t_1e9e28753d0885 391-392,395
+packages/crypto/src/session-groups.ts
+  s_ec12ebe02de5ff::t_843f6d89b17603 3,5,124,369-372,378-381,388-399,505-509,742-748,951-952,1433,1766-1771,1873,1891,2678-2682,2703-2708,3081-3082,3084,3212,3246-3247,3254-3260,3305-3318,3322-3324,3326-3327,3331-3349,3353-3354,3356,3370-3372,3374-3380,3651,3736,3777,4036,4171-4186
+packages/crypto/src/session.groups.test.ts
+  s_ec12ebe02de5ff::t_cd137ff3cd785f 23,372,383-397,430-432,1027-1029,1124,1157,1170,1175,1180,1191,1227-1228,1235-1236,1238,1244-1246,2879-2913,3346-3348,3358,3379,3383,3406,4916-4919,5009,5019,5023,5025-5048
+packages/db/Dockerfile
+  s_ec12ebe02de5ff::t_5c1e23fc8c8ef7 6-7
+packages/db/drizzle/20260905145809_worried_barracuda/snapshot.json
+  s_ec12ebe02de5ff::t_ca0e531fed92d7 2-3,7-21,24,26-27,30-32,40,43-45,53,58-60,63
+packages/db/drizzle/20260907172825_slow_lifeguard/snapshot.json
+  s_ec12ebe02de5ff::t_db6810a52e6a2b 2-3,7-19,21-32,34-45,47-58,60-71,73-85,87-101,104-192,195-203,206-279,282-1607
+packages/db/drizzle/20260907182012_slim_beyonder/snapshot.json
+  s_ec12ebe02de5ff::t_34225a0e3ffea2 2-3,7-73,76-83,86-91,93-97,99-111,113-117,119-131,133-137,139-152,154-171,173-190,192-291,294-1223
+packages/db/drizzle/20260907182127_spooky_alex_power/snapshot.json
+  s_ec12ebe02de5ff::t_55db3eb4794bea 2-3,7-17,19,22-28,30-38,41-274
+packages/db/drizzle/20260907183015_public_demogoblin/snapshot.json
+  s_ec12ebe02de5ff::t_63158dee71964a 2-3,7-14,16,19-24,26,29-35,37-42,45-88
+packages/db/drizzle/20260908005640_supreme_siren/snapshot.json
+  s_ec12ebe02de5ff::t_ac58014b602e5f 2-3,7-20,22-34,36-48,50-53,55-59,62-66,69-73,75
+packages/db/drizzle/20260909171407_old_cardiac/snapshot.json
+  s_ec12ebe02de5ff::t_84008c4e9e6589 2-3,7-17,19,22-28,30-43,45-62,64-72,75-332
+packages/db/drizzle/20260909223154_colossal_darkhawk/snapshot.json
+  s_ec12ebe02de5ff::t_4c3dfe79f92b2a 2-3,7-15,17,20-24,26-29,31,34-39,41-45,47-51,54-94
+packages/db/drizzle/20260911025137_billing/snapshot.json
+  s_ec12ebe02de5ff::t_05fac415560cf0 2-3,7-17,19-31,33-44,46-57,59,62-67,69,72-77,79-83,85-98,100-117,119-136,138-155,157-165,168-845
+packages/db/drizzle/20260912144703_billing_currency/snapshot.json
+  s_ec12ebe02de5ff::t_8fd6fec6f8d2d8 2-3,7,9-14,16,19-24,26,29-62
+packages/db/drizzle/20260912224849_drive/snapshot.json
+  s_ec12ebe02de5ff::t_267f7ec48e097c 2-3,7-73,76-83,86-93,96-102,104-117,119-132,134-148,150-164,166-179,181-185,187-200,202-215,217-230,232-245,247-260,262-275,277-291,293-310,312-329,331-348,350-369,371-388,390-407,409-426,428-445,447-464,466-483,485-547,550-2527
+packages/db/drizzle/20260913145137_drive_ops/snapshot.json
+  s_ec12ebe02de5ff::t_58f0c2b65f590f 2-3,7-60,63-203
+packages/db/drizzle/20260913164406_settings_roles/snapshot.json
+  s_ec12ebe02de5ff::t_c089c0de4e8747 2-3,7-59,62-231
+packages/db/drizzle/20260913170034_drive_shares/snapshot.json
+  s_ec12ebe02de5ff::t_348d0ba5fdaf3b 2-3,7-17,19,22-28,30-44,46-59,61-75,77-94,96-113,115-132,134-142,145-554
+packages/db/drizzle/20260913180206_drive_links/snapshot.json
+  s_ec12ebe02de5ff::t_40f7e203f8f28f 2-3,7-18,20,23-29,31-93,96-442
+packages/db/drizzle/20260913193257_link_secret/snapshot.json
+  s_ec12ebe02de5ff::t_e774f801977b1d 2-3,7-37,40-64
+packages/db/drizzle/20260913201923_reports/snapshot.json
+  s_ec12ebe02de5ff::t_ea18851b84c898 2-3,7-58,61-68,71-78,81-247,250-1550
+packages/db/drizzle/20260913210340_report_thumbnails_requests/snapshot.json
+  s_ec12ebe02de5ff::t_60558bfc5417bd 2-3,7,9-167,170-480
+packages/db/drizzle/20260913215934_rotations/snapshot.json
+  s_ec12ebe02de5ff::t_82158d62fae9c2 2-3,7-119,122-351
+packages/db/drizzle/20260913220954_share_events/snapshot.json
+  s_ec12ebe02de5ff::t_4fece906d5917e 2-3,7-38,41-152
+packages/db/drizzle/20260914161739_growth/snapshot.json
+  s_ec12ebe02de5ff::t_883d6ae96d098a 2-3,7-76,79-351,354-1455
+packages/db/drizzle/20260914182125_thumbnails_in_object/snapshot.json
+  s_ec12ebe02de5ff::t_1487fa522bb9b4 2-3,7-22,24-36,39-51,54-241,243-244,247-248,251-252,255-256,259-260,263-264,267-268,271-272,275-276,279-280,283-284,287-291,294-298,301-305,308-312,314
+packages/db/drizzle/20260914231158_server_secrets/snapshot.json
+  s_ec12ebe02de5ff::t_3f27a4010e26bb 2-3,7-19,22-91
+packages/db/drizzle/20260915165300_hybrid_shares/snapshot.json
+  s_ec12ebe02de5ff::t_c7c70b630041a2 2-3,7-82,85-167
+packages/db/drizzle/20260915234814_hybrid_reports/snapshot.json
+  s_ec12ebe02de5ff::t_5437e47631ab53 2-3,7-18,21-29
+packages/db/drizzle/20260916014134_workspace_documents/snapshot.json
+  s_ec12ebe02de5ff::t_8102a5fc802bba 2-3,7-38,41-188
+packages/db/drizzle/20260916055412_tags_registry_resync/snapshot.json
+  s_ec12ebe02de5ff::t_4ef499688536ed 2-3,7-43,46-77
+packages/db/drizzle/20261011152024_drop_report_content_hash/snapshot.json
+  s_ec12ebe02de5ff::t_d8bca04c0a6fa5 2-3,7-43,45-46,49-53,55
+packages/db/drizzle/20261012132409_report_release/snapshot.json
+  s_ec12ebe02de5ff::t_b290af2a7aac18 2-3,7-33,36-63
+packages/db/drizzle/20261012132956_server_hash_key/snapshot.json
+  s_ec12ebe02de5ff::t_6c0d3c429a25d6 2-4,7-8
+packages/db/drizzle/20261012133230_admin_storage/snapshot.json
+  s_ec12ebe02de5ff::t_58e700eb44ca43 2-3,7-62,65-121
+packages/db/drizzle/20261012135331_envelope_versions/snapshot.json
+  s_ec12ebe02de5ff::t_3c2b622a220290 2-3,7,9-16,19-26,29-36,39-88
+packages/db/drizzle/20261012173635_content_suite_3/snapshot.json
+  s_ec12ebe02de5ff::t_c81ade21ed7a94 2-3,7-28,31-39
+packages/db/drizzle/20261012174046_writer_signatures/snapshot.json
+  s_ec12ebe02de5ff::t_922e84238e0af8 2-3,7,9-16,19-26,29-36,39-46,49-56,58-204,207-446
+packages/db/drizzle/20261012174906_share_suite_3/snapshot.json
+  s_ec12ebe02de5ff::t_00a95999caeda1 2-3,7-24,27-35
+packages/db/drizzle/20261012175109_identity_history/snapshot.json
+  s_ec12ebe02de5ff::t_2d41133191c54d 2-3,7-38,41-444
+packages/db/drizzle/20261012175419_settings_key/snapshot.json
+  s_ec12ebe02de5ff::t_cceec9310f2dc8 2-3,7-56,59-193
+packages/db/drizzle/20261013001717_share_feed_ancestors/snapshot.json
+  s_ec12ebe02de5ff::t_ddd99a0ad6f37f 2-3,7,9-14,16,19-36
+packages/db/drizzle/20261013010217_report_release/snapshot.json
+  s_ec12ebe02de5ff::t_97bee0948eb2aa 2-3,7-163,165-172,175-182,185-189,192-196,199-203,206-210,213-217,220-224,226
+packages/db/drizzle/20261014213244_pq_identity/snapshot.json
+  s_ec12ebe02de5ff::t_ad8455fefc44bd 2-3,7,9-16,19-26,29-36,39-46,49-278,281-488
+packages/db/drizzle/20261014231034_pq_identity_not_null/snapshot.json
+  s_ec12ebe02de5ff::t_4d04f7b5191960 2-3,7-61,63-67,70-74,76
+packages/db/drizzle/20261016013230_devices/snapshot.json
+  s_ec12ebe02de5ff::t_5ca966327503a1 2-3,7-205,208-725
+packages/db/drizzle/20261016032459_workspace_owners/snapshot.json
+  s_ec12ebe02de5ff::t_18aafffb374511 2-3,7,9-16,19-133,136-275
+packages/db/drizzle/20261016032529_succession_consent/snapshot.json
+  s_ec12ebe02de5ff::t_df2b7c7b2af0cd 2-3,7-37,40-67
+packages/db/drizzle/20261016081643_group_tables/snapshot.json
+  s_ec12ebe02de5ff::t_a3eeeea5877756 2-3,7-17,19-30,32-43,45-57,59-70,72-84,86-97,99-112,114-125,127-138,140-149,151-159,161-165,167-180,182-186,188-200,202-206,208-220,222-226,228-241,243-255,257-261,263-275,277-281,283-295,297-301,303-316,318-331,333-347,349-366,368-385,387-404,406-423,425-442,444-461,463-480,482-499,501-518,520-537,539-556,558-579,581-598,600-621,623-640,642-659,661-678,680-697,699-716,718-735,737-754,756-775,777-789,792-3440
+packages/db/drizzle/20261016164352_group_creation_digest/snapshot.json
+  s_ec12ebe02de5ff::t_e5016f1daf63a1 2-3,7,9-16,19-27,30-57
+packages/db/drizzle/20261017062152_rekeyed_origins/snapshot.json
+  s_ec12ebe02de5ff::t_9c1232276589c1 2-3,7,9-19,22-29,32-39,42-49,52-59,62-69,72-79,82-89,92-99,102-109,112-119,122-129,132-139,142-149,152-159,162-325,328-940
+packages/db/drizzle/20261017121401_group_billing/snapshot.json
+  s_ec12ebe02de5ff::t_fd3297a8b4bd04 2-3,7-162,165-882
+packages/db/drizzle/20261017153848_origin_drop_evidence/snapshot.json
+  s_ec12ebe02de5ff::t_5ff4473692aa1b 2-3,7-79,82-173
+packages/db/drizzle/20261017170455_group_area_deletion/snapshot.json
+  s_ec12ebe02de5ff::t_c714d8c55f02e4 2-3,7-60,63-192
+packages/db/drizzle/20261018020252_group_plan_tiers/snapshot.json
+  s_ec12ebe02de5ff::t_f621c7efaa1444 2-3,7,9-21,24-36,39-51,54-66,69-81,84-96,99-106,109-121,124-136,139-151,154-166,169-181,184-196,199-211,214-439
+packages/db/drizzle/20261018222928_one_family/snapshot.json
+  s_ec12ebe02de5ff::t_74905da7ecbf86 2-3,7-74,77-146
+packages/db/drizzle/20261018235021_invitation_email_index/snapshot.json
+  s_ec12ebe02de5ff::t_13408c0e60cec2 2-3,7-26,29-54
+packages/db/drizzle/20261019161551_personal_plan_endings/snapshot.json
+  s_ec12ebe02de5ff::t_af215f33dcae59 2-3,7-112,115-740
+packages/db/drizzle/20261019171449_refund_disputed/snapshot.json
+  s_ec12ebe02de5ff::t_22634bf2b396bb 2-3,7-22,25-33
+packages/db/drizzle/20261019181225_drive_moves/snapshot.json
+  s_ec12ebe02de5ff::t_b3a5c391a855f8 2-3,7,9-16,19-26,29-36,39-46,49-56,59-66,69-81,84-101,104-235
+packages/db/drizzle/20261020151204_group_billing_no_group_fk/snapshot.json
+  s_ec12ebe02de5ff::t_bd5fc65b704c35 2-3,7-39,41-42,45-46,48
+packages/db/drizzle/20261020192250_dissolve_cancels/snapshot.json
+  s_ec12ebe02de5ff::t_c12c84d1afd8ff 2-3,7,9-21,24-36,39-51,54-66,69-81,84-96,99-196
+packages/db/drizzle/20261020211129_dissolve_failing/snapshot.json
+  s_ec12ebe02de5ff::t_a6d06a66a0ed29 2-3,7,9-14,16-21,24-41
+packages/db/drizzle/20261020213416_change_seq_renumber/snapshot.json
+  s_ec12ebe02de5ff::t_70e1877dcfa2d0 2-3,7-8
+packages/db/drizzle/20261020214235_change_seq_unique/snapshot.json
+  s_ec12ebe02de5ff::t_25edb92738ed21 2-3,7-24,27-35
+packages/db/drizzle/20261021073123_personal_plan_lapsed/snapshot.json
+  s_ec12ebe02de5ff::t_3d288c69f4093f 2-3,7,9-16,19-27,30-54
+packages/db/drizzle/20261026094157_family_lapsed_revoke_refusal/snapshot.json
+  s_ec12ebe02de5ff::t_20754739dbd4a1 2-3,7,9-21,24-36,39-51,54-66,69-134
+packages/db/drizzle/20261026095529_family_orphan_paid_after/snapshot.json
+  s_ec12ebe02de5ff::t_6d975f49fc29a1 2-3,7,9-16,19-26,29-62
+packages/db/drizzle/20261026151404_reconcile_order/snapshot.json
+  s_ec12ebe02de5ff::t_d852f72c631e48 2-3,7,9-17,20-27,30-37,40-47,50-57,60-139
+packages/db/package.json
+  s_ec12ebe02de5ff::t_e9acaef3f23a46 34-35,41,43
+packages/db/src/auth.ts
+  s_ec12ebe02de5ff::t_9d16d2ddfbfb14 855
+packages/db/src/groups.test.ts
+  s_ec12ebe02de5ff::t_6e1871318d106a 849-911
+packages/db/src/groups.ts
+  s_ec12ebe02de5ff::t_fe63de1309b3ca 106-115,1814-1829
+packages/drive/package.json
+  s_ec12ebe02de5ff::t_7a0801dafffcdb 28-29,34,39,41
+packages/emails/package.json
+  s_ec12ebe02de5ff::t_45f995a2f59c2f 19,21-22,26,28-33
+packages/emails/src/rendered/family-plan-ending.ts
+  s_ec12ebe02de5ff::t_5a4c84f2132ed4 4,8
+packages/emails/src/rendered/group-invitation.ts
+  s_ec12ebe02de5ff::t_ffccbbf846709a 3-4
+packages/emails/src/rendered/security-notice.ts
+  s_ec12ebe02de5ff::t_2ade3f3c1faf8b 4,8,12,16
+packages/emails/src/rendered/share-notice.ts
+  s_ec12ebe02de5ff::t_8a7439d836d585 4,8
+packages/emails/src/rendered/verify-email.ts
+  s_ec12ebe02de5ff::t_3bac5cb7b2693f 4,8
+packages/emails/src/templates/group-invitation.tsx
+  s_ec12ebe02de5ff::t_4bca1841fed52c 182-183,185-187
+packages/env/package.json
+  s_ec12ebe02de5ff::t_eff2f11ea0144b 25,31
+packages/env/src/storage.ts
+  s_ec12ebe02de5ff::t_98ba6868c9c652 56-67
+packages/groups/package.json
+  s_ec12ebe02de5ff::t_6c0980dedb8c37 26,29,31,33
+packages/groups/src/protocol.ts
+  s_ec12ebe02de5ff::t_509962cd498847 124-139
+packages/groups/src/server.test.ts
+  s_ec12ebe02de5ff::t_2099fae78ecc34 413-455
+packages/groups/src/server.ts
+  s_ec12ebe02de5ff::t_3e4d5ce7bb5980 471-479
+packages/jobs/Dockerfile
+  s_ec12ebe02de5ff::t_e3a5ed50adbb76 6-7
+packages/jobs/package.json
+  s_ec12ebe02de5ff::t_2169dd2e82da3c 23,29
+packages/logging/package.json
+  s_ec12ebe02de5ff::t_c3ac81efe42c81 22,28
+packages/tokens/package.json
+  s_ec12ebe02de5ff::t_c770a2d6ddaf36 23
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9c0b3d2680dc62a9976099e10944c97679f3d796",
+  "prompts": {},
+  "sessions": {
+    "s_ec12ebe02de5ff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3f79b7e-f7a1-4c9c-9a58-b7059252bcae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
