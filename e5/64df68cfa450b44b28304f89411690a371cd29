@@ -1,0 +1,20 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/ContactTrust.kt
+  h_f7ba60a6997566 593-594,602-604
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ContactsUi.kt
+  h_f7ba60a6997566 105,136-154,157,171-175
+apps/android/app/src/test/kotlin/com/hushos/app/data/ContactTrustTest.kt
+  h_f7ba60a6997566 256-264
+apps/android/app/src/test/kotlin/com/hushos/app/ui/AfterAddTest.kt
+  h_f7ba60a6997566 1-35
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e564df68cfa450b44b28304f89411690a371cd29",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
