@@ -222,4 +222,23 @@ class ContactTrustTest {
         assertNotEquals(before + 2, server.lookups)
     }
 
+    @Test
+    fun aReSealPassThatCouldNotFindAnItemKeepsThemQueuedAndOnlyADeletionLetsThemGo() {
+        vault.addContact(email)
+        val seals = ShareSeals.of(context)
+        // A ledger item this device can't resolve right now (never listed here): not a deletion.
+        server.editSettings { it.addShare("0b8f2d1e-5c3a-4e7b-9a6d-2f1e0c9b8a7d", server.grace.id) }
+        seals.queue(server.grace.id)
+        vault.resealLedgerShares()
+        assertTrue(server.grace.id.lowercase() in seals.queued)
+        // The same item confirmed gone (its folder lists without it): done with.
+        val gone = server.folder(server.root, "Gone")
+        vault.listChildren(server.root)
+        server.editSettings { it.removeShare("0b8f2d1e-5c3a-4e7b-9a6d-2f1e0c9b8a7d", server.grace.id); it.addShare(gone, server.grace.id) }
+        server.drop(gone)
+        vault.forget(server.workspace, gone)
+        vault.resealLedgerShares()
+        assertFalse(server.grace.id.lowercase() in seals.queued)
+    }
+
 }

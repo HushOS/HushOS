@@ -560,9 +560,13 @@ class Vault(internal val context: Context, val api: DriveApi) {
         for ((index, entry) in todo.entries.withIndex()) {
             val (nodeId, people) = entry
             try {
-                // A node gone from the drive has nothing left to share; its ledger entry goes with its next revoke.
-                val item = runCatching { resolve(nodeId) }.getOrNull()?.takeIf { it.node.workspaceId == workspaceId && it.node.trashedAt == null } ?: continue
-                val nodeKey = nodes.key(item) ?: continue
+                // Only a node confirmed gone (its folder lists without it, or the server says so) has nothing left to share:
+                // its people are done with here. Anything else that stops this node (not found here yet, no network, a key
+                // not opened, a trashed item that may come back) keeps them queued, so the next pass seals it.
+                val item = try { resolve(nodeId) } catch (gone: NotFound) { continue }
+                if (item.node.workspaceId != workspaceId) continue
+                if (item.node.trashedAt != null) { people.forEach { failedFor.add(it.lowercase()) }; continue }
+                val nodeKey = nodes.key(item) ?: throw ApiError(500, "A shared item couldn’t be opened to seal it again.")
                 val rows = api.shares(item.id, item.node.workspaceId).filter { it.granteeId in people }
                 val wire = rows.mapNotNull { share ->
                     // Someone no longer pinned keeps the envelope they have.
