@@ -1723,10 +1723,11 @@ export async function granteeKeys(userId: string, pin: Pin) {
     const { contact } = await authClient.lookupContact(pin.email);
     if (contact.userId.toLowerCase() !== pin.userId.toLowerCase())
         throw new Error('That address now belongs to a different account.');
-    return {
-        userId: pin.userId,
-        ...(await trustGrantee(userId, pin.userId, contact, { follow: true })),
-    };
+    // Every guard write moves this revision: one during the check (a legacy pin made first-seen,
+    // a succession followed, a first guard entry) is a change in trust the caller refreshes for.
+    const before = guardRevision();
+    const keys = await trustGrantee(userId, pin.userId, contact, { follow: true });
+    return { userId: pin.userId, ...keys, trustChanged: guardRevision() !== before };
 }
 
 /*

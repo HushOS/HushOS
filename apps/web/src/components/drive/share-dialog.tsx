@@ -229,9 +229,12 @@ function ShareForm({
         try {
             // A fresh node and fresh keys, also when this runs again after Review.
             const current = await currentNode(queryClient, node);
-            await driveClient.share(current, await granteeKeys(userId, pin), as);
+            const keys = await granteeKeys(userId, pin);
+            await driveClient.share(current, keys, as);
             await refresh();
             await queryClient.invalidateQueries({ queryKey: driveKeys.mine });
+            // The check moved trust (a legacy pin made first-seen, a succession followed): judged again.
+            if (keys.trustChanged) afterContactAdded(queryClient, pin);
             cue('success');
             toast.add({
                 type: 'success',
@@ -268,12 +271,13 @@ function ShareForm({
             }
             const pin = added.pin;
             const current = await currentNode(queryClient, node);
-            await driveClient.share(current, await granteeKeys(userId, pin), as);
+            const keys = await granteeKeys(userId, pin);
+            await driveClient.share(current, keys, as);
             await refresh();
             await queryClient.invalidateQueries({ queryKey: driveKeys.mine });
             // What they wrote now reads as theirs (and, for someone already there whose pin the add
             // moved, what was shared with them is sealed to the keys it holds now).
-            if (added.outcome === 'added' || added.trustChanged)
+            if (added.outcome === 'added' || added.trustChanged || keys.trustChanged)
                 afterContactAdded(queryClient, pin);
             cue('success');
             toast.add({ type: 'success', title: `Shared with ${firstName(pin.name)}` });
@@ -301,8 +305,10 @@ function ShareForm({
         setPending(target.id);
         try {
             const current = await currentNode(queryClient, node);
-            await driveClient.share(current, await granteeKeys(userId, pin), next);
+            const keys = await granteeKeys(userId, pin);
+            await driveClient.share(current, keys, next);
             await refresh();
+            if (keys.trustChanged) afterContactAdded(queryClient, pin);
             cue('success', { volume: 0.4 });
             toast.add({
                 type: 'success',

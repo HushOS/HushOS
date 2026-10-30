@@ -302,6 +302,30 @@ describe('adding someone already there', () => {
     });
 });
 
+describe('sharing with someone already there', () => {
+    test('says when the share’s check moved trust, so what is drawn is judged again', async () => {
+        const w = await world();
+        const legacy = {
+            userId: MAYA,
+            email: MAYA_EMAIL,
+            name: 'Maya Lindqvist',
+            pinnedAt: '2026-01-01T00:00:00.000Z',
+            encryptionPublicKey: w.maya.encryptionPublicKey,
+            signingPublicKey: w.maya.signingPublicKey,
+            fingerprint: 'words-from-before',
+        };
+        await w.replace({ version: 2, contacts: { [MAYA]: legacy } } as never);
+        // The check makes the legacy pin first-seen and remembers her.
+        expect(await contacts.granteeKeys(ME, legacy as never)).toMatchObject({
+            trustChanged: true,
+        });
+        expect(await pinTrust((await w.stored()).contacts[MAYA]!)).toBe('seen');
+        // Sharing again moves nothing.
+        const pin = (await w.stored()).contacts[MAYA]!;
+        expect(await contacts.granteeKeys(ME, pin)).toMatchObject({ trustChanged: false });
+    });
+});
+
 describe('a rotation with no room to save a migration', () => {
     test('seals to a legacy pin’s own keys without saving or remembering anything; other keys stay a verdict', async () => {
         const w = await world();
