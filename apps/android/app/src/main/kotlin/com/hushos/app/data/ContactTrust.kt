@@ -590,7 +590,8 @@ fun Vault.contactStandings(): Map<String, ContactStanding> {
 }
 
 /*
- * Who may have written what Drive lists, beside this account: every pin, verified or first-seen, as the guard allows. A
+ * Who may have written what Drive lists, beside this account: every pin, verified or first-seen, as the guard allows (one
+ * that vouches for nothing for its name and address only, never its keys). A
  * pin that disagrees with the guard vouches for nothing, and the guard's keys stand in for it, never verified.
  */
 internal fun Vault.effectivePins(): List<ContactPin> {
@@ -598,7 +599,9 @@ internal fun Vault.effectivePins(): List<ContactPin> {
     return pins.values.mapNotNull { pin ->
         val entry = entries[pin.userId.lowercase()]
         when {
-            agreement(pin.userId, entry, pin) != GuardVerdict.CHANGED -> pin.takeIf { it.held }
+            // A pin that vouches for nothing (legacy, invalid) is kept for its name and address, so its writer's mark offers
+            // Check it's Maya; Trust.of never trusts its keys.
+            agreement(pin.userId, entry, pin) != GuardVerdict.CHANGED -> pin
             entry != null -> ContactPin.of(pin.userId, pin.email, pin.name, entry.keys, pin.pinnedAt, null).copy(previousSigningKeys = entry.previousSigningKeys)
             else -> null
         }

@@ -102,8 +102,7 @@ fun ContactStepSheet(model: DriveViewModel, start: ContactStep, resolved: () -> 
                     is ContactStep.Check -> CheckContact(model, shown.email, shown.name, resolved, done)
                     is ContactStep.Changed -> AccountChangedNotice(model, shown.change, check = { step = ContactStep.Check(shown.change.email, shown.change.name) }, resolved, done)
                     // Added, and done: no words. Only from a mark (Check who wrote this) do the words come next, as on the web.
-                    is ContactStep.Add -> AddSomeone(model, shown.writer, added = { pin -> if (shown.writer != null) step = ContactStep.Check(pin.email, pin.name) else done() },
-                        changed = { step = ContactStep.Changed(it) }, cancel = done)
+                    is ContactStep.Add -> AddSomeone(model, shown.writer, go = { step = it }, done = done, cancel = done)
                 }
             }
         }
@@ -134,9 +133,28 @@ private fun Choices(primary: String, onPrimary: () -> Unit, secondary: String?, 
     }
 }
 
+/* Where Add someone goes once the address is looked up. */
+internal sealed interface AfterAdd {
+    data class Next(val step: ContactStep) : AfterAdd
+    data object Done : AfterAdd
+    data class Hint(val text: String) : AfterAdd
+}
+
+/*
+ * Added, and done: no words. Only from a mark (Check who wrote this, `writer` set) do the words come next, as on the
+ * web, whether they were just added or already there. An account that changed is the notice instead.
+ */
+internal fun afterAdd(added: Added, writer: String?): AfterAdd = when (added) {
+    is Added.New -> if (writer != null) AfterAdd.Next(ContactStep.Check(added.pin.email, added.pin.name)) else AfterAdd.Done
+    // From a mark, someone already in Contacts (a pin that vouched for nothing, say) still goes on to the words it offered.
+    is Added.Already -> if (writer != null) AfterAdd.Next(ContactStep.Check(added.pin.email, added.pin.name))
+        else AfterAdd.Hint("${added.pin.firstName} is already in your contacts.")
+    is Added.Changed -> AfterAdd.Next(ContactStep.Changed(added.change))
+}
+
 /* Add someone (6.2): their email, Add, and they are a contact at once. No words, no second step. */
 @Composable
-private fun AddSomeone(model: DriveViewModel, writer: String?, added: (ContactPin) -> Unit, changed: (AccountChange) -> Unit, cancel: () -> Unit) {
+private fun AddSomeone(model: DriveViewModel, writer: String?, go: (ContactStep) -> Unit, done: () -> Unit, cancel: () -> Unit) {
     val scope = rememberCoroutineScope()
     var email by rememberSaveable { mutableStateOf("") }
     var adding by remember { mutableStateOf(false) }
@@ -150,10 +168,11 @@ private fun AddSomeone(model: DriveViewModel, writer: String?, added: (ContactPi
         hint = null
         scope.launch {
             model.addContact(address, writer).onSuccess { result ->
-                when (result) {
-                    is Added.New -> { model.notify("${result.pin.firstName} added"); added(result.pin) }
-                    is Added.Already -> hint = "${result.pin.firstName} is already in your contacts." to false
-                    is Added.Changed -> changed(result.change)
+                if (result is Added.New) model.notify("${result.pin.firstName} added")
+                when (val next = afterAdd(result, writer)) {
+                    is AfterAdd.Next -> go(next.step)
+                    AfterAdd.Done -> done()
+                    is AfterAdd.Hint -> hint = next.text to false
                 }
             }.onFailure { hint = Problems.say(it, "Check the address and try again.") to true }
             adding = false

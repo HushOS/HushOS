@@ -253,4 +253,13 @@ class ContactTrustTest {
         assertFalse(server.grace.id.lowercase() in seals.queued)
     }
 
+    @Test
+    fun aWriterWhosePinVouchesForNothingIsStillNamedSoTheirMarkOffersTheirCheck() {
+        val legacy = TestPins.preRelease(grace().pin(verified = false, firstSeen = null))
+        server.editSettings { it.pin(legacy) }
+        val writer = vault.trust().writer(server.grace.id)
+        assertEquals(Writer.Unknown(email, "Grace Hopper"), writer)
+        // And their keys are trusted for nothing.
+        assertNull(vault.trust().keysFor(server.grace.id))
+    }
 }
