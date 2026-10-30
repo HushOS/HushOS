@@ -1,0 +1,1 @@
+ALTER TABLE "affiliates" ADD COLUMN "pending_email" text;

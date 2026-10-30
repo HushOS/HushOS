@@ -8,6 +8,7 @@ import {
     sign,
 } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
+import { Pool } from 'pg';
 import { db } from '../src/client';
 import type { CreateLink, CreateShare } from '../src/drive';
 import {
@@ -65,6 +66,41 @@ export async function createTestAccount(input: { email?: string; quotaBytes?: bi
 
 export async function closeDatabase() {
     await db.$client.end();
+}
+
+/*
+ * A connection of its own, outside the app's pool: for holding a lock as
+ * another process would, and for seeing what waits on a lock. Close it with `end()`.
+ */
+export function lockObserver() {
+    // One connection, so a lock taken here is released on the same session.
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
+    return {
+        /* Holds the two-key advisory lock (space, hashtext(key)) until the returned release. */
+        async hold(space: number, key: string) {
+            await pool.query('select pg_advisory_lock($1::int, hashtext($2))', [space, key]);
+            return async () => {
+                await pool.query('select pg_advisory_unlock($1::int, hashtext($2))', [space, key]);
+            };
+        },
+        /* Whether another session's statement naming `table` waits on a lock in this database. */
+        async waitingOn(table: string) {
+            // Inside a transaction this connection holds open, the view would stay as first read.
+            await pool.query('select pg_stat_clear_snapshot()');
+            const result = await pool.query<{ waiting: number }>(
+                `select count(*)::int as waiting from pg_stat_activity
+                 where datname = current_database() and pid <> pg_backend_pid()
+                   and wait_event_type = 'Lock' and query like '%' || $1 || '%'`,
+                [table],
+            );
+            return result.rows[0]!.waiting > 0;
+        },
+        /* A statement on this connection, for a transaction the test holds open itself. */
+        async query(text: string, params: unknown[] = []) {
+            return (await pool.query(text, params)).rows;
+        },
+        end: () => pool.end(),
+    };
 }
 
 /* An Ed25519 key pair from a 32-byte seed, as libsodium's crypto_sign_seed_keypair makes it. */

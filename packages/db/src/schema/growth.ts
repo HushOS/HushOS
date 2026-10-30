@@ -42,6 +42,9 @@ export const affiliates = pgTable(
         id: uuid().defaultRandom().primaryKey(),
         // The creator's own account, when they have one: it shows their earnings in Drive.
         userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+        // An email the operator gave with no account behind it yet, normalised: the account
+        // registered with it is linked at sign-up, and this is cleared. Null once linked.
+        pendingEmail: text('pending_email'),
         name: text().notNull(),
         // The landing page: /go/<slug>. Lower-case letters, digits and dashes.
         slug: text().notNull().unique(),

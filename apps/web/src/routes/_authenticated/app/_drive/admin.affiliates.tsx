@@ -17,6 +17,13 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import {
+    Autocomplete,
+    AutocompleteContent,
+    AutocompleteInput,
+    AutocompleteItem,
+    AutocompleteList,
+} from '@/components/ui/autocomplete';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -34,10 +41,21 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/toast';
+import { adminAccountsQueryOptions } from '@/lib/admin';
+import {
+    type AffiliateDraft,
+    type DraftField,
+    draftFrom,
+    editPatch,
+    emptyDraft,
+    readDraft,
+} from '@/lib/affiliate-form';
 import { formatWhen } from '@/lib/drive';
 import { affiliatesQueryOptions, describeCommission, describeDiscount } from '@/lib/growth';
 import { growthApi } from '@/lib/growth-api';
+import { useDebouncedValue } from '@/lib/use-debounced-value';
 import { money } from '@/routes/_authenticated/app/_drive/referrals';
 
 /*
@@ -329,18 +347,6 @@ const DURATIONS: { value: AffiliateInput['duration']; label: string }[] = [
     { value: 'repeating', label: 'Some months' },
 ];
 
-const empty: AffiliateInput = {
-    name: '',
-    slug: '',
-    code: '',
-    percentOff: 20,
-    duration: 'forever',
-    durationMonths: 3,
-    commissionBps: 2000,
-    userEmail: '',
-    notes: '',
-};
-
 /*
  * Enrol a creator, or change one: the same fields either way, in a dialog. A
  * change to the code or the discount is made at the payment provider first.
@@ -357,35 +363,42 @@ function AffiliateDialog({
     onSaved: () => Promise<unknown>;
 }) {
     const id = useId();
-    const initial = (): AffiliateInput =>
-        affiliate
-            ? {
-                  name: affiliate.name,
-                  slug: affiliate.slug,
-                  code: affiliate.code,
-                  percentOff: affiliate.percentOff,
-                  duration: affiliate.duration,
-                  durationMonths: affiliate.durationMonths ?? 3,
-                  commissionBps: affiliate.commissionBps,
-                  // The account is shown by its id only; leaving the field empty keeps it, and a new email replaces it.
-                  userEmail: '',
-                  notes: affiliate.notes ?? '',
-              }
-            : empty;
-    const [form, setForm] = useState<AffiliateInput>(initial);
+    const initial = () => (affiliate ? draftFrom(affiliate) : emptyDraft);
+    const [form, setForm] = useState<AffiliateDraft>(initial);
+    // A field's error shows once it has been left, or once save was tried.
+    const [left, setLeft] = useState<ReadonlySet<DraftField>>(new Set());
+    const [tried, setTried] = useState(false);
     const [pending, setPending] = useState(false);
+    // Pending covers Unlink and Remove email too, so Save waits for them; its label is its own.
+    const [saving, setSaving] = useState(false);
     const [error, setError] = useState('');
+    // Every opening starts from the creator as saved, or from empty. The page opens the
+    // dialog through `open`, which never calls onOpenChange, so the reset is keyed to it.
+    const [wasOpen, setWasOpen] = useState(open);
+    if (open !== wasOpen) {
+        setWasOpen(open);
+        if (open) {
+            setForm(initial());
+            setLeft(new Set());
+            setTried(false);
+            setError('');
+        }
+    }
+    const reading = readDraft(form);
+    const fieldError = (field: DraftField) =>
+        tried || left.has(field) ? reading.errors[field] : undefined;
+    const leave = (field: DraftField) => setLeft((current) => new Set(current).add(field));
     async function submit(event: React.FormEvent) {
         event.preventDefault();
+        setTried(true);
+        if (!reading.ok) return;
+        const input = reading.input;
         setPending(true);
+        setSaving(true);
         setError('');
         try {
-            const input = toInput(form);
             if (affiliate) {
-                await growthApi.updateAffiliate(affiliate.id, {
-                    ...input,
-                    ...(input.userEmail ? { userEmail: input.userEmail } : {}),
-                });
+                await growthApi.updateAffiliate(affiliate.id, editPatch(input));
                 toast.add({ type: 'success', title: `${input.name} updated` });
             } else {
                 const created = await growthApi.createAffiliate(input);
@@ -401,19 +414,14 @@ function AffiliateDialog({
             setError(message(cause));
         } finally {
             setPending(false);
+            setSaving(false);
         }
     }
     return (
         <Dialog
             open={open}
             onOpenChange={(next) => {
-                if (pending) return;
-                // Every opening starts from the creator as saved, or from empty.
-                if (next) {
-                    setForm(initial());
-                    setError('');
-                }
-                onOpenChange(next);
+                if (!pending) onOpenChange(next);
             }}
         >
             <DialogContent className="sm:max-w-[560px]">
@@ -439,11 +447,12 @@ function AffiliateDialog({
                         id={id}
                         form={form}
                         onChange={setForm}
-                        accountPlaceholder={
-                            affiliate?.userId
-                                ? 'Linked. Another email changes it.'
-                                : 'Optional: shows their earnings in their Drive'
-                        }
+                        affiliate={affiliate}
+                        fieldError={fieldError}
+                        onLeave={leave}
+                        onSaved={onSaved}
+                        pending={pending}
+                        onPending={setPending}
                     />
                     {error && (
                         <p role="alert" className="text-[13px] text-destructive">
@@ -460,7 +469,7 @@ function AffiliateDialog({
                             Cancel
                         </Button>
                         <Button type="submit" disabled={pending}>
-                            {pending
+                            {saving
                                 ? affiliate
                                     ? 'Saving…'
                                     : 'Adding…'
@@ -475,53 +484,268 @@ function AffiliateDialog({
     );
 }
 
-/* What the server wants: trimmed optionals as null, and months only for a repeating discount. */
-function toInput(form: AffiliateInput): AffiliateInput {
-    return {
-        ...form,
-        userEmail: form.userEmail?.trim() || null,
-        notes: form.notes?.trim() || null,
-        durationMonths: form.duration === 'repeating' ? form.durationMonths : null,
-    };
-}
-
+/* A label above, the control, and one line below: the error when there is one, else the hint. */
 function Field({
     id,
     label,
     wide,
+    hint,
+    error,
+    action,
     children,
 }: {
     id: string;
     label: string;
     wide?: boolean;
+    hint?: string;
+    error?: string;
+    /* A quiet control at the end of the label's line. */
+    action?: React.ReactNode;
     children: React.ReactNode;
 }) {
     return (
         <div className={cn('flex min-w-0 flex-col gap-1.5', wide && 'sm:col-span-2')}>
-            <label htmlFor={id} className="text-[13px] font-semibold">
-                {label}
-            </label>
+            <div className="flex items-baseline justify-between gap-3">
+                <label htmlFor={id} className="text-[13px] font-semibold">
+                    {label}
+                </label>
+                {action}
+            </div>
             {children}
+            {error ? (
+                <p id={`${id}-note`} role="alert" className="text-[13px] text-destructive">
+                    {error}
+                </p>
+            ) : hint ? (
+                <p id={`${id}-note`} className="text-[13px] text-muted-foreground">
+                    {hint}
+                </p>
+            ) : null}
         </div>
     );
 }
 
-const small = 'text-[15px]';
+/* What a control under Field needs to point at its line, and to show it is wrong. */
+const described = (id: string, note: string | undefined) =>
+    note ? { 'aria-describedby': `${id}-note`, 'aria-invalid': true as const } : {};
+
+// 16px on phones (iOS zooms a smaller field on focus), 15px from sm.
+const small = 'sm:text-[15px]';
+
+/*
+ * Whether a slug or code typed here is another affiliate's, asked once the
+ * typing pauses. A convenience only: saving checks the same rule on the
+ * server, and that answer is the one that counts. An answer for anything but
+ * what the field holds now is never shown.
+ */
+function useHandleTaken(value: string, except: string | undefined) {
+    const typed = value.trim();
+    const settled = useDebouncedValue(typed, 300);
+    const current = settled === typed && typed.length > 0;
+    const check = useQuery({
+        queryKey: ['growth', 'affiliate-handle', settled.toLowerCase(), except ?? null],
+        queryFn: ({ signal }) => growthApi.affiliateHandle(settled, except, signal),
+        enabled: current,
+        staleTime: 5_000,
+        retry: false,
+    });
+    return current && check.data?.free === false;
+}
+
+const TAKEN = 'Taken by another affiliate';
+
+/* An account by name or email, or any email: one with no account yet is linked when that person signs up. */
+function AccountField({
+    id,
+    value,
+    onChange,
+    onBlur,
+    error,
+    placeholder,
+    action,
+}: {
+    id: string;
+    value: string;
+    onChange: (value: string) => void;
+    onBlur: () => void;
+    error?: string;
+    placeholder: string;
+    action?: React.ReactNode;
+}) {
+    const [open, setOpen] = useState(false);
+    const typed = value.trim();
+    const query = useDebouncedValue(typed, 300);
+    const search = useQuery({
+        ...adminAccountsQueryOptions({ q: query }),
+        enabled: open && query.length >= 2,
+    });
+    // Only the answer for what the field holds now: a list for an earlier search could be
+    // picked with Enter before the new one arrives, and fill in someone else's email.
+    const accounts =
+        typed.length >= 2 && query === typed && !search.isPlaceholderData
+            ? (search.data?.accounts.slice(0, 6) ?? [])
+            : [];
+    return (
+        <Field
+            id={id}
+            label="Their account"
+            wide
+            hint="An email with no account yet is linked when that person signs up."
+            error={error}
+            action={action}
+        >
+            <Autocomplete
+                items={accounts}
+                filter={null}
+                value={value}
+                onValueChange={(next) => onChange(next)}
+                itemToStringValue={(account) => account.email}
+                open={open && accounts.length > 0}
+                onOpenChange={setOpen}
+            >
+                <AutocompleteInput
+                    id={id}
+                    className={small}
+                    // Text, not email: the list's Home and End keys set the caret, which an
+                    // email input refuses with an error.
+                    type="text"
+                    inputMode="email"
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder={placeholder}
+                    onFocus={() => setOpen(true)}
+                    // Closed with the field: a search still on its way must not open the list
+                    // over whatever has focus now.
+                    onBlur={() => {
+                        setOpen(false);
+                        onBlur();
+                    }}
+                    // The line below is always there: the hint, or the error in its place.
+                    aria-describedby={`${id}-note`}
+                    aria-invalid={error ? true : undefined}
+                />
+                <AutocompleteContent aria-busy={search.isFetching || undefined}>
+                    <AutocompleteList>
+                        {(account: (typeof accounts)[number]) => (
+                            <AutocompleteItem key={account.id} value={account}>
+                                <span className="flex min-w-0 flex-col">
+                                    <span className="truncate font-semibold">{account.name}</span>
+                                    <span className="truncate text-[13px] text-muted-foreground">
+                                        {account.email}
+                                    </span>
+                                </span>
+                            </AutocompleteItem>
+                        )}
+                    </AutocompleteList>
+                </AutocompleteContent>
+            </Autocomplete>
+        </Field>
+    );
+}
+
+/*
+ * Takes the creator's account away, at once and apart from Save: "Unlink" for
+ * a linked account, after asking, since its email may not be at hand to link
+ * it again; "Remove email" for an email still waiting for its account, which is shown.
+ */
+function AccountUnlink({
+    affiliate,
+    onSaved,
+    pending: busy,
+    onPending: setBusy,
+}: {
+    affiliate: AffiliateView;
+    onSaved: () => Promise<unknown>;
+    /* The dialog's one pending state: Save and this never run at once. */
+    pending: boolean;
+    onPending: (pending: boolean) => void;
+}) {
+    const [asking, setAsking] = useState(false);
+    const linked = Boolean(affiliate.userId);
+    async function unlink() {
+        setBusy(true);
+        try {
+            await growthApi.updateAffiliate(affiliate.id, { userEmail: null });
+            await onSaved();
+            toast.add({
+                type: 'success',
+                title: linked ? 'Account unlinked' : 'Email removed',
+            });
+        } catch (error) {
+            toast.add({ type: 'error', title: 'That didn’t work', description: message(error) });
+        } finally {
+            setBusy(false);
+            setAsking(false);
+        }
+    }
+    return (
+        <>
+            <Button
+                type="button"
+                variant="link"
+                className="text-[13px] text-muted-foreground hover:text-foreground pointer-coarse:-my-3 pointer-coarse:py-3"
+                disabled={busy}
+                aria-label={
+                    linked ? 'Unlink their account' : `Remove email ${affiliate.pendingEmail}`
+                }
+                onClick={() => (linked ? setAsking(true) : void unlink())}
+            >
+                {linked ? 'Unlink' : 'Remove email'}
+            </Button>
+            <AlertDialog open={asking} onOpenChange={(next) => !busy && setAsking(next)}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Unlink their account?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            {affiliate.name} stops seeing their code and earnings in their Drive.
+                            You can link an account again by its email.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={busy}>Keep it</AlertDialogCancel>
+                        <AlertDialogAction
+                            variant="destructive"
+                            disabled={busy}
+                            onClick={() => void unlink()}
+                        >
+                            {busy ? 'Unlinking…' : 'Unlink'}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+        </>
+    );
+}
 
 /* Every field of a creator in a compact grid: one row on a wide screen, stacked on a phone. */
 function AffiliateFields({
     id,
     form,
     onChange,
-    accountPlaceholder = 'Optional',
+    affiliate,
+    fieldError,
+    onLeave,
+    onSaved,
+    pending,
+    onPending,
 }: {
     id: string;
-    form: AffiliateInput;
-    onChange: React.Dispatch<React.SetStateAction<AffiliateInput>>;
-    accountPlaceholder?: string;
+    form: AffiliateDraft;
+    onChange: React.Dispatch<React.SetStateAction<AffiliateDraft>>;
+    affiliate?: AffiliateView;
+    fieldError: (field: DraftField) => string | undefined;
+    onLeave: (field: DraftField) => void;
+    onSaved: () => Promise<unknown>;
+    pending: boolean;
+    onPending: (pending: boolean) => void;
 }) {
-    const set = <K extends keyof AffiliateInput>(key: K, value: AffiliateInput[K]) =>
+    const set = <K extends keyof AffiliateDraft>(key: K, value: AffiliateDraft[K]) =>
         onChange((current) => ({ ...current, [key]: value }));
+    const slugTaken = useHandleTaken(form.slug, affiliate?.id);
+    const codeTaken = useHandleTaken(form.code, affiliate?.id);
+    const percentError = fieldError('percentOff');
+    const commissionError = fieldError('commission');
+    const monthsError = fieldError('durationMonths');
     return (
         <div className="grid gap-4 sm:grid-cols-2">
             <Field id={`${id}-name`} label="Name" wide>
@@ -535,7 +759,7 @@ function AffiliateFields({
                     maxLength={100}
                 />
             </Field>
-            <Field id={`${id}-slug`} label="Page slug">
+            <Field id={`${id}-slug`} label="Page slug" error={slugTaken ? TAKEN : undefined}>
                 <Input
                     id={`${id}-slug`}
                     className={cn(small, 'font-mono')}
@@ -544,10 +768,13 @@ function AffiliateFields({
                     placeholder="ada"
                     required
                     maxLength={40}
+                    autoCapitalize="none"
+                    spellCheck={false}
                     pattern="[A-Za-z0-9-]+"
+                    {...described(`${id}-slug`, slugTaken ? TAKEN : undefined)}
                 />
             </Field>
-            <Field id={`${id}-code`} label="Code">
+            <Field id={`${id}-code`} label="Code" error={codeTaken ? TAKEN : undefined}>
                 <Input
                     id={`${id}-code`}
                     className={cn(small, 'font-mono uppercase')}
@@ -557,37 +784,39 @@ function AffiliateFields({
                     required
                     minLength={3}
                     maxLength={32}
+                    autoCapitalize="characters"
+                    spellCheck={false}
                     pattern="[A-Za-z0-9]+"
+                    {...described(`${id}-code`, codeTaken ? TAKEN : undefined)}
                 />
             </Field>
-            <Field id={`${id}-percent`} label="Percent off">
+            <Field id={`${id}-percent`} label="Percent off" error={percentError}>
                 <Input
                     id={`${id}-percent`}
                     className={cn(small, 'tabular-nums')}
-                    type="number"
-                    min={1}
-                    max={100}
+                    inputMode="numeric"
+                    autoComplete="off"
                     value={form.percentOff}
-                    onChange={(event) => set('percentOff', Number(event.target.value))}
+                    onChange={(event) => set('percentOff', event.target.value)}
+                    onBlur={() => onLeave('percentOff')}
                     required
+                    {...described(`${id}-percent`, percentError)}
                 />
             </Field>
-            <Field id={`${id}-commission`} label="Commission %">
+            <Field id={`${id}-commission`} label="Commission %" error={commissionError}>
                 <Input
                     id={`${id}-commission`}
                     className={cn(small, 'tabular-nums')}
-                    type="number"
-                    min={0}
-                    max={100}
-                    step={0.25}
-                    value={form.commissionBps / 100}
-                    onChange={(event) =>
-                        set('commissionBps', Math.round(Number(event.target.value) * 100))
-                    }
+                    inputMode="decimal"
+                    autoComplete="off"
+                    value={form.commission}
+                    onChange={(event) => set('commission', event.target.value)}
+                    onBlur={() => onLeave('commission')}
                     required
+                    {...described(`${id}-commission`, commissionError)}
                 />
             </Field>
-            <Field id={`${id}-duration`} label="Discount lasts" wide>
+            <Field id={`${id}-duration`} label="Discount lasts" wide error={monthsError}>
                 <div className="flex gap-1">
                     <Select
                         value={form.duration}
@@ -614,30 +843,46 @@ function AffiliateFields({
                         <Input
                             aria-label="Months"
                             className={cn(small, 'w-20 tabular-nums')}
-                            type="number"
-                            min={1}
-                            max={36}
-                            value={form.durationMonths ?? 3}
-                            onChange={(event) => set('durationMonths', Number(event.target.value))}
+                            inputMode="numeric"
+                            autoComplete="off"
+                            value={form.durationMonths}
+                            onChange={(event) => set('durationMonths', event.target.value)}
+                            onBlur={() => onLeave('durationMonths')}
+                            {...described(`${id}-duration`, monthsError)}
                         />
                     )}
                 </div>
             </Field>
-            <Field id={`${id}-email`} label="Their account" wide>
-                <Input
-                    id={`${id}-email`}
-                    className={small}
-                    type="email"
-                    value={form.userEmail ?? ''}
-                    onChange={(event) => set('userEmail', event.target.value)}
-                    placeholder={accountPlaceholder}
-                />
-            </Field>
+            <AccountField
+                id={`${id}-email`}
+                value={form.userEmail}
+                onChange={(value) => set('userEmail', value)}
+                onBlur={() => onLeave('userEmail')}
+                error={fieldError('userEmail')}
+                placeholder={
+                    affiliate?.pendingEmail
+                        ? `Waiting for ${affiliate.pendingEmail} to sign up`
+                        : affiliate?.userId
+                          ? 'Linked. Another email changes it.'
+                          : 'Optional: name or email'
+                }
+                action={
+                    affiliate && (affiliate.userId || affiliate.pendingEmail) ? (
+                        <AccountUnlink
+                            affiliate={affiliate}
+                            onSaved={onSaved}
+                            pending={pending}
+                            onPending={onPending}
+                        />
+                    ) : undefined
+                }
+            />
             <Field id={`${id}-notes`} label="Notes" wide>
-                <Input
+                <Textarea
                     id={`${id}-notes`}
-                    className={small}
-                    value={form.notes ?? ''}
+                    className={cn(small, 'min-h-0 resize-y')}
+                    rows={3}
+                    value={form.notes}
                     onChange={(event) => set('notes', event.target.value)}
                     placeholder="How to pay them, agreed terms"
                     maxLength={2000}

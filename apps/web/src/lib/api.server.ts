@@ -246,6 +246,11 @@ function requestAddress(request: Request) {
     return clientAddress(request, useRequest().ip);
 }
 
+/* A creator's email as the operator typed it, held to the sign-up rule so a pending one can match. */
+function affiliateEmail(email: string | null | undefined) {
+    return email?.trim() ? auth.normalizeEmail(email) : null;
+}
+
 function requestCountry(request: Request) {
     const header = appEnv.TRUSTED_COUNTRY_HEADER;
     return header ? request.headers.get(header) : null;
@@ -1163,6 +1168,22 @@ export const apiApp = new Elysia({ prefix: '/api' })
         await auth.requireAdmin(sessionToken);
         return growth.listAffiliates();
     })
+    // Whether a slug or code is free, as the admin form types it. A convenience only:
+    // create and update check the same rule again, and their answer is the one that counts.
+    .get(
+        '/billing/affiliates/handle',
+        {
+            query: t.Object({
+                value: t.String({ minLength: 1, maxLength: 64 }),
+                except: t.Optional(uuidSchema),
+            }),
+        },
+        async ({ sessionToken, query, set }) => {
+            set.headers['Cache-Control'] = 'no-store';
+            await auth.requireAdmin(sessionToken);
+            return { free: await growth.isHandleFree(query.value, query.except) };
+        },
+    )
     .post(
         '/billing/affiliates',
         {
@@ -1185,7 +1206,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
         async ({ request, sessionToken, body }) => {
             guardAuthMutation(request);
             await auth.requireAdmin(sessionToken);
-            return growth.createAffiliate(body);
+            return growth.createAffiliate({ ...body, userEmail: affiliateEmail(body.userEmail) });
         },
     )
     .patch(
@@ -1210,7 +1231,12 @@ export const apiApp = new Elysia({ prefix: '/api' })
         async ({ request, sessionToken, params, body }) => {
             guardAuthMutation(request);
             await auth.requireAdmin(sessionToken);
-            return growth.updateAffiliate(params.id, body);
+            return growth.updateAffiliate(params.id, {
+                ...body,
+                ...(body.userEmail !== undefined
+                    ? { userEmail: affiliateEmail(body.userEmail) }
+                    : {}),
+            });
         },
     )
     .delete(
