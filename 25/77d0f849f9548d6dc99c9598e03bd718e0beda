@@ -1,0 +1,51 @@
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_3a9c8829280692 18
+apps/ios/App/HushOS-Simulator.entitlements
+  s_566b8e0c4467a4::t_44794303a9d6aa 14,18
+apps/ios/App/HushOS.entitlements
+  s_566b8e0c4467a4::t_bc125a0af1007d 12,16
+apps/ios/App/Info.plist
+  s_566b8e0c4467a4::t_2e51ddf66605b7 38-39
+apps/ios/Files/HushOSFiles.entitlements
+  s_566b8e0c4467a4::t_4c0f3e7c3db6ed 7,11
+apps/ios/Files/Info.plist
+  s_566b8e0c4467a4::t_b6e6cdde17d060 23-24
+apps/ios/FilesUI/HushOSFilesUI.entitlements
+  s_566b8e0c4467a4::t_8c32e29bfb896e 7,11
+apps/ios/FilesUI/Info.plist
+  s_566b8e0c4467a4::t_9f25bf9e2a54a7 23-24
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Keychain.swift
+  s_566b8e0c4467a4::t_3323328b5b2cc6 12-20
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Offline.swift
+  s_566b8e0c4467a4::t_0f1cfcfb95ba61 140
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/AccountStoreTests.swift
+  s_566b8e0c4467a4::t_74253aba7e9ef5 127
+apps/ios/Project.xcconfig
+  s_566b8e0c4467a4::t_76fb96e799a23a 1-6
+apps/ios/Share/HushOSShare.entitlements
+  s_566b8e0c4467a4::t_68c78c3fc5fcf2 7,11
+apps/ios/Share/Info.plist
+  s_566b8e0c4467a4::t_2ca86294e9c526 23-24
+apps/ios/Widgets/Info.plist
+  s_566b8e0c4467a4::t_c1a875bde51f5d 23-24
+apps/ios/project.yml
+  s_566b8e0c4467a4::t_47c447b896f6e8 26-29,69,137-138,145,173-174,181,211,238-239,246
+docs/release/signing.md
+  s_566b8e0c4467a4::t_8195369d65c268 22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2577d0f849f9548d6dc99c9598e03bd718e0beda",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
