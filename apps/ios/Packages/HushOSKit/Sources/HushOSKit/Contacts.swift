@@ -78,6 +78,15 @@ public struct ShareView: Codable, Sendable, Identifiable, Hashable {
 }
 
 struct SharesListResponse: Codable, Sendable { let shares: [ShareView] }
+
+/*
+ * A share made, and whether checking whom it is sealed to moved whom this phone trusts (a legacy pin made first-seen, a
+ * succession followed, a first guard entry), so what is drawn is judged again.
+ */
+public struct SharedWith: Sendable {
+    public let share: ShareView
+    public let trustChanged: Bool
+}
 struct ShareCreated: Codable, Sendable { let share: ShareView }
 
 /* Where this phone stands with someone looked up by email: for Check it's Maya and the changed-account notice. */
@@ -274,13 +283,18 @@ extension Vault {
      * sealed to them in suite 4, signed with both of this identity's signing keys, and the share
      * joins the ledger. A changed account throws `AccountChangedError`: nothing is shared.
      */
-    public func share(_ item: Opened, with pin: ContactPin, role: String) async throws -> ShareView {
+    @discardableResult
+    public func share(_ item: Opened, with pin: ContactPin, role: String) async throws -> SharedWith {
         // Sharing is hidden in family folders (design 3.4): the server's list of shares there is no one's ledger.
         try refuseFamilyWrite(item.node.workspaceId)
         guard let nodeKey = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
         let contact = try await Auth.lookupContact(email: pin.email, as: session)
         guard contact.userId.lowercased() == pin.userId.lowercased() else { throw ContactError.changed }
+        // Every guard write and settings save forgets the signers (moves this generation): one during the check (a legacy
+        // pin made first-seen, a succession followed, a first guard entry) is a change in trust the caller refreshes for.
+        let generation = signersGeneration
         let sealing = try await trustGrantee(contact, follow: true)
+        let trustChanged = signersGeneration != generation
         let keys = try await identityKeys()
         let ctx = ShareContext(workspaceId: item.node.workspaceId, nodeId: item.id, keyEpoch: item.node.keyEpoch, granteeUserId: contact.userId, granterUserId: session.userId)
         let envelope = try shareSeal(ctx: ctx, nodeKey: nodeKey, granter: keys, granteePublicKey: sealing.publicKey, granteeKemPublicKey: sealing.kem)
@@ -289,7 +303,7 @@ extension Vault {
             "shareEnvelope": base64urlEncode(bytes: envelope),
         ])
         try await updateSettings { $0.ledger.addShare(node: item.id, grantee: contact.userId) }
-        return share
+        return SharedWith(share: share, trustChanged: trustChanged)
     }
 
     /* Out of the ledger first, so the rotation that follows never seals to them again. */

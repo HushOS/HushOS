@@ -771,6 +771,34 @@ extension OnFakeDrive {
             #expect(sealedShares(sent) == ["share-1"])
         }
 
+        @Test func sharingWithSomeoneWhosePinTheCheckMovedSaysTrustMoved() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            var settings = Settings()
+            // Her address as the server knows it (maya@example.com), so the share can look her up.
+            settings.setPin(pinnedBeforeTheRelease(try pinned(maya, identity.keys, name: "Maya")))
+            try server.replace(try reread(settings), root: root)
+            let (item, _) = try await sharedFile(phone, server)
+            let rotation = server.routes
+            server.routes = { method, path, body in
+                if method == "POST", path == "/api/drive/nodes/\(item.id)/shares" {
+                    return (200, ["share": ["id": UUID().uuidString, "role": body["role"] as? String ?? "viewer", "keyEpoch": 1,
+                                            "createdAt": "2026-10-30T00:00:00Z", "suite": 4,
+                                            "grantee": ["id": body["granteeUserId"] as? String ?? "", "name": "Maya Lind", "email": "maya@example.com"]]])
+                }
+                return rotation?(method, path, body)
+            }
+            let legacy = try #require(try await phone.vault.contacts().first)
+            // The share's check makes the legacy pin first-seen and remembers her: what is drawn is judged again.
+            #expect(try await phone.vault.share(item, with: legacy, role: "viewer").trustChanged)
+            #expect(try storedPin(server)?["mlDsaPublicKeyHash"] as? String != nil)
+            // Sharing again moves nothing about whom this phone trusts.
+            let pin = try #require(try await phone.vault.contacts().first)
+            #expect(try await !phone.vault.share(item, with: pin, role: "editor").trustChanged)
+        }
+
         @Test func aRotationSealsToALegacyPinsOwnKeysWhenTheSettingsHaveNoRoomToSaveItsMigration() async throws {
             defer { done() }
             let identity = try makeIdentity(maya)

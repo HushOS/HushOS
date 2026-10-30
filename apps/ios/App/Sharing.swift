@@ -381,7 +381,9 @@ struct ShareItemSheet: View {
         let role = role
         Task {
             do {
-                _ = try await store.vault.share(item, with: pin, role: role)
+                let shared = try await store.vault.share(item, with: pin, role: role)
+                // The check moved trust (a legacy pin made first-seen, a succession followed): judged again.
+                if shared.trustChanged { Task { await store.refreshSigners(); await store.refreshMounts() } }
                 store.notify("\(pin.name.isEmpty ? pin.email : pin.name) \(role == "editor" ? "can edit" : "can view") “\(item.name)” now")
                 chosen = nil
                 self.role = "viewer"
@@ -419,7 +421,9 @@ struct ShareItemSheet: View {
                     sharing = false
                     return
                 }
-                _ = try await store.vault.share(item, with: pin, role: role)
+                let shared = try await store.vault.share(item, with: pin, role: role)
+                // The check moved trust (a legacy pin made first-seen, a succession followed): judged again.
+                if shared.trustChanged { Task { await store.refreshSigners(); await store.refreshMounts() } }
                 store.notify("Shared with \(pin.firstName)")
                 query = ""
                 self.role = "viewer"
@@ -770,7 +774,8 @@ private struct PersonAccessSheet: View {
         Task {
             do {
                 guard let pin = try await store.vault.contacts().first(where: { $0.userId.lowercased() == share.grantee.id.lowercased() }) else { return }
-                _ = try await store.vault.share(item, with: pin, role: value)
+                let shared = try await store.vault.share(item, with: pin, role: value)
+                if shared.trustChanged { Task { await store.refreshSigners(); await store.refreshMounts() } }
                 store.notify("\(first) \(value == "editor" ? "can edit" : "can view") “\(item.name)” now")
                 await reload()
                 dismiss()
