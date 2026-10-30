@@ -99,6 +99,9 @@ class FakeDrive : AutoCloseable {
     var failSettingsOnceWorkListed = false
     /* Runs once, as the next settings read is answered (another process acting right after it). */
     var onNextSettingsGet: (() -> Unit)? = null
+
+    /* `id` goes to the Trash, as the server keeps it: its parent's listing leaves it out, the trash listing has it. */
+    fun trash(id: String) = synchronized(lock) { node(id).trashedAt = "2026-10-30T00:00:00Z"; bump(node(id)) }
     private var workListed = false
 
     class Version(
@@ -113,12 +116,12 @@ class FakeDrive : AutoCloseable {
     class Node(
         val id: String, val workspaceId: String, val parentId: String?, val kind: String, var keyEpoch: Long, var parentKeyEpoch: Long,
         var keyEnvelope: String, var metadataVersion: Long, var metadataEnvelope: String, var signer: String, var signature: String,
-        var version: Version? = null, var changeSeq: Int = 1,
+        var version: Version? = null, var changeSeq: Int = 1, var trashedAt: String? = null,
     ) {
         fun json(): JSONObject = JSONObject().put("id", id).put("workspaceId", workspaceId).put("parentId", parentId ?: JSONObject.NULL).put("kind", kind)
             .put("keyEpoch", keyEpoch).put("parentKeyEpoch", parentKeyEpoch).put("keyEnvelope", keyEnvelope)
             .put("metadataVersion", metadataVersion).put("metadataEnvelope", metadataEnvelope).put("currentVersion", version?.json() ?: JSONObject.NULL)
-            .put("trashedAt", JSONObject.NULL).put("createdAt", "2026-10-01T00:00:00Z").put("updatedAt", "2026-10-01T00:00:00Z")
+            .put("trashedAt", trashedAt ?: JSONObject.NULL).put("createdAt", "2026-10-01T00:00:00Z").put("updatedAt", "2026-10-01T00:00:00Z")
             .put("changeSeq", changeSeq).put("envelopeSuite", ENVELOPE_SUITE)
             .put("metadataSigner", JSONObject().put("id", signer)).put("metadataSignature", signature)
     }
@@ -364,7 +367,7 @@ class FakeDrive : AutoCloseable {
     private fun ok(json: JSONObject) = 200 to json
     private fun conflict(message: String) = 409 to JSONObject().put("message", message).put("code", "conflict")
     private fun listing(folder: Node) = JSONObject().put("folder", folder.json()).put("ancestors", JSONArray())
-        .put("children", JSONArray(children(folder.id).map { it.json() })).put("nextCursor", JSONObject.NULL)
+        .put("children", JSONArray(children(folder.id).filter { it.trashedAt == null }.map { it.json() })).put("nextCursor", JSONObject.NULL)
     private fun objectUrl(objectId: String) = "$origin/store/objects/$objectId"
     private fun versionById(id: String): Pair<Node, Version>? = nodes.values.firstNotNullOfOrNull { n -> n.version?.takeIf { it.id == id }?.let { n to it } }
     private fun bump(node: Node) { node.changeSeq = changeSeq++ }
@@ -412,6 +415,9 @@ class FakeDrive : AutoCloseable {
                 sharesMade.add(share)
                 ok(JSONObject().put("share", share))
             }
+            get && at("drive", "workspaces", "*", "trash") -> ok(JSONObject().put("items", JSONArray(nodes.values.filter { it.trashedAt != null }.map { node ->
+                JSONObject().put("node", node.json()).put("ancestors", JSONArray()).put("parentTrashed", false)
+            })).put("nextCursor", JSONObject.NULL))
 
             get && at("drive", "workspace") -> ok(JSONObject().put("workspaceId", workspace).put("changeSeq", changeSeq).put("grant", grant).put("root", node(root).json()))
             get && at("drive", "nodes", "*", "children") -> {

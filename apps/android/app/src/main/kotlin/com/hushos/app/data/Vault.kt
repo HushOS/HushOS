@@ -559,6 +559,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val settings = loadSettings()
         val ledger = settings.ledger
         val keys = identityKeys()
+        // What is in the Trash, asked once and only when a ledger item can't be found: a trashed item is left out of its
+        // folder's listing exactly as a deleted one is, but restored it would still hold the old keys.
+        val trashed by lazy { trashedIds() }
         val skipped = LinkedHashSet<String>()
         val served = HashMap<String, Contact?>()
         val sealTo = granteeSealer(settings)
@@ -573,7 +576,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
                 // Only a node confirmed gone (its folder lists without it, or the server says so) has nothing left to share:
                 // its people are done with here. Anything else that stops this node (not found here yet, no network, a key
                 // not opened, a trashed item that may come back) keeps them queued, so the next pass seals it.
-                val item = try { resolve(nodeId) } catch (gone: NotFound) { continue }
+                val item = try {
+                    resolve(nodeId)
+                } catch (gone: NotFound) {
+                    if (nodeId in trashed) people.forEach { failedFor.add(it.lowercase()) }
+                    continue
+                }
                 if (item.node.workspaceId != workspaceId) continue
                 if (item.node.trashedAt != null) { people.forEach { failedFor.add(it.lowercase()) }; continue }
                 val nodeKey = nodes.key(item) ?: throw ApiError(500, "A shared item couldn’t be opened to seal it again.")
@@ -623,6 +631,18 @@ class Vault(internal val context: Context, val api: DriveApi) {
         return RotationResult(done, skipped.toList())
     }
 
+    /* The ids of this drive's items in the Trash, as the server lists them (a parent's listing leaves them out). */
+    internal fun trashedIds(): Set<String> {
+        val ids = HashSet<String>()
+        var after: String? = null
+        do {
+            val page = api.trashListing(workspaceId, after)
+            page.items.forEach { ids.add(it.node.id) }
+            after = page.nextCursor
+        } while (after != null)
+        return ids
+    }
+
     /* Whether the re-seal pass should run now: a key replacement is waiting to finish, or the last full pass is a day old. */
     fun resealDue(now: Long = System.currentTimeMillis()): Boolean {
         val seals = ShareSeals.of(context)
@@ -648,7 +668,14 @@ class Vault(internal val context: Context, val api: DriveApi) {
         var finished = 0
         for ((ws, nodeId) in pending.all()) {
             if (ws != workspaceId) { pending.remove(ws, nodeId); continue }
-            val item = try { resolve(nodeId) } catch (error: NotFound) { pending.remove(ws, nodeId); continue }
+            val item = try {
+                resolve(nodeId)
+            } catch (error: NotFound) {
+                // In the Trash it is left out of its folder's listing as a deleted item is; restored, it would still open
+                // with the keys the stopped share had, so the rotation stays owed. Only a deletion lets it go.
+                if (nodeId !in trashedIds()) pending.remove(ws, nodeId)
+                continue
+            }
             rotate(item)
             finished++
         }

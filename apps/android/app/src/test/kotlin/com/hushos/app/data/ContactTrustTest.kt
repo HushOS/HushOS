@@ -356,6 +356,24 @@ class ContactTrustTest {
     }
 
     @Test
+    fun aReSealPassKeepsSomeoneQueuedWhoseItemIsInTheTrashNotDeleted() {
+        vault.addContact(email)
+        val folder = server.folder(server.root, "Plans")
+        val file = server.file(folder, "plan.md", ByteArray(64) { 1 })
+        vault.listChildren(server.root)
+        vault.listChildren(folder)
+        server.editSettings { it.addShare(file, server.grace.id) }
+        val seals = ShareSeals.of(context)
+        seals.queue(server.grace.id)
+        // In the Trash, and this device holds no row for it: its folder lists without it, as for a deleted item.
+        server.trash(file)
+        vault.forget(server.workspace, file)
+        vault.resealLedgerShares()
+        // Restored, it would still hold the old keys: she stays owed.
+        assertTrue(server.grace.id.lowercase() in seals.queued)
+    }
+
+    @Test
     fun aReSealPassNeverClearsAKeyReplacementThatStartedWhileItRan() {
         val seals = ShareSeals.of(context)
         assertNull(seals.pending)
@@ -363,6 +381,25 @@ class ContactTrustTest {
         server.onNextSettingsGet = { seals.pending = 5uL }
         vault.resealLedgerShares()
         assertEquals(5uL, seals.pending)
+    }
+
+    @Test
+    fun aRotationLeftForLaterOfAnItemInTheTrashIsKeptNotDropped() {
+        val folder = server.folder(server.root, "Plans")
+        val file = server.file(folder, "plan.md", ByteArray(64) { 1 })
+        vault.listChildren(server.root)
+        vault.listChildren(folder)
+        val pending = PendingRotations.of(context)
+        pending.add(server.workspace, file)
+        server.trash(file)
+        vault.forget(server.workspace, file)
+        vault.finishRotations()
+        // Restored, it would still open with keys the stopped share had: the rotation stays owed.
+        assertTrue((server.workspace to file) in pending.all())
+        // Deleted for good, it is let go.
+        server.drop(file)
+        vault.finishRotations()
+        assertFalse((server.workspace to file) in pending.all())
     }
 
 }
