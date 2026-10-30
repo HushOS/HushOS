@@ -2000,12 +2000,21 @@ export async function contactPins(userId: string) {
     return (await cachedSettings(userId)).settings.contacts;
 }
 
+/*
+ * The keys each owed re-seal was asked for when a pass last read it (resealPending), by account
+ * and lowercased contact id: a pass acknowledges only that request (resealedTo), never one a
+ * Continue or a check made since over other keys, which it never sealed to.
+ */
+const resealRead = new Map<string, Map<string, string | null>>();
+
 /* Grantees whose pin followed a succession: what was shared with them waits to be sealed again. */
 export async function resealPending(userId: string) {
     const { settings } = await loadSettings(userId);
-    return Object.values(settings.contacts).flatMap((pin) =>
-        pin.resealShares ? [pin.userId] : [],
-    );
+    const owed = Object.values(settings.contacts).filter((pin) => pin.resealShares);
+    const read = new Map<string, string | null>();
+    for (const pin of owed) read.set(pin.userId.toLowerCase(), await keyCommitment(pin));
+    resealRead.set(userId, read);
+    return owed.map((pin) => pin.userId);
 }
 export async function resealAll(userId: string) {
     return Boolean((await loadSettings(userId)).settings.resealOwnShares);
@@ -2017,10 +2026,13 @@ export async function resealedAll(userId: string) {
     });
 }
 export async function resealedTo(userId: string, granteeUserIds: string[]) {
-    await saveSettings(boundQueryClient, userId, (settings) => {
+    const read = resealRead.get(userId);
+    await saveSettings(boundQueryClient, userId, async (settings) => {
         for (const id of granteeUserIds) {
             const pin = settings.contacts[id];
-            if (pin) delete pin.resealShares;
+            // Only the request the pass read: a pin moved to other keys since still owes its re-seal.
+            if (!pin || !read?.has(id.toLowerCase())) continue;
+            if ((await keyCommitment(pin)) === read.get(id.toLowerCase())) delete pin.resealShares;
         }
         return settings;
     });

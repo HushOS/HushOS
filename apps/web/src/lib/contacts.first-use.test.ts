@@ -326,6 +326,26 @@ describe('sharing with someone already there', () => {
     });
 });
 
+describe('the re-seal a Continue asks for', () => {
+    test('is acknowledged only for the keys a pass read, never for keys a Continue moved to while it ran', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        await startOver(w);
+        await continueWith(query, ME, change);
+        // A pass reads what is owed ...
+        expect(await resealPending(ME)).toEqual([MAYA]);
+        // ... while she starts over again and Continue asks for a re-seal to her newest keys.
+        await startOver(w);
+        await continueWith(query, ME, change);
+        // The pass sealed to the keys it read: what Continue asked since is still owed.
+        await contacts.resealedTo(ME, [MAYA]);
+        expect(await resealPending(ME)).toEqual([MAYA]);
+        // The next pass reads it and settles it.
+        await contacts.resealedTo(ME, [MAYA]);
+        expect(await resealPending(ME)).toEqual([]);
+    });
+});
+
 describe('a rotation with no room to save a migration', () => {
     test('seals to a legacy pin’s own keys without saving or remembering anything; other keys stay a verdict', async () => {
         const w = await world();
