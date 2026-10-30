@@ -1,0 +1,25 @@
+apps/ios/App/Contacts.swift
+  s_566b8e0c4467a4::t_b5587407b0fa31 117-119
+apps/ios/App/Sharing.swift
+  s_566b8e0c4467a4::t_075b1fc9a09f0e 413-414
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Trust.swift
+  s_566b8e0c4467a4::t_3eeda351a43bf2 41-44,46,392-397,404
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ContactGuardTests.swift
+  s_566b8e0c4467a4::t_99afb1cb371418 709-723
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e983b59b89cb2408ba97037ec3d9437e87781d4c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
