@@ -228,8 +228,10 @@ extension Vault {
     @discardableResult
     public func upgradeShares() async throws -> RotationOutcome {
         var outcome = RotationOutcome()
+        // The re-seals asked for so far: only these are acknowledged at the end, never one asked for while this pass ran.
+        let requested = ResealTo.requests
         let reply = try await api.performPublic(try api.requestPublic("/shares/mine"), as: SharedByMeResponse.self)
-        if reply.shares.isEmpty { ResealPending.clear(); ResealTo.remove(ResealTo.all); return outcome }
+        if reply.shares.isEmpty { ResealPending.clear(); ResealTo.acknowledge(requested); return outcome }
         let settings = try await loadSettings()
         let ledger = settings.ledger
         let keys = try await identityKeys()
@@ -241,7 +243,7 @@ extension Vault {
         var failedFor: Set<String> = []
         for share in reply.shares where ledger.holdsShare(node: share.node.id, grantee: share.grantee.id) {
             let grantee = share.grantee.id.lowercased()
-            let followed = ResealTo.contains(grantee)
+            let followed = requested[grantee] != nil
             guard pending || share.suite != 4 || followed else { continue }
             guard let pin = settings.pin(of: share.grantee.id) else {
                 outcome.note(ContactError.unpinned)
@@ -290,7 +292,8 @@ extension Vault {
         }
         // Done, or nothing of theirs left to seal: either way they leave the queue.
         let held = Set(reply.shares.filter { ledger.holdsShare(node: $0.node.id, grantee: $0.grantee.id) }.map { $0.grantee.id.lowercased() })
-        ResealTo.remove(resealedTo.subtracting(failedFor).union(ResealTo.all.subtracting(held)))
+        let done = resealedTo.subtracting(failedFor).union(Set(requested.keys).subtracting(held))
+        ResealTo.acknowledge(requested.filter { done.contains($0.key) })
         if !unfinished { ResealPending.clear() }
         return outcome
     }

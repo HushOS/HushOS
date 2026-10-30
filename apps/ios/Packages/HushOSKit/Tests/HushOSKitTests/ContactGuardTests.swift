@@ -682,6 +682,47 @@ extension OnFakeDrive {
             _ = try await phone.vault.trustGrantee(try contact(server), follow: true)
         }
 
+        @Test func aPassAcknowledgesOnlyTheRequestItReadNeverAContinueMadeWhileItRan() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            _ = try await phone(server).vault.addContact(email: "maya@example.com")
+            let workspace = UUID().uuidString.lowercased()
+            let nodeId = UUID().uuidString.lowercased()
+            var document = try server.document(root: root)
+            document["sharing"] = ["shares": [nodeId: [maya]], "links": [String: Any]()]
+            try server.replace(document, root: root)
+            let node = try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: [
+                "id": nodeId, "workspaceId": workspace, "kind": "file", "keyEpoch": 3, "parentKeyEpoch": 1, "keyEnvelope": "k",
+                "metadataVersion": 1, "metadataEnvelope": "m",
+            ]))
+            let served = identity.envelope
+            server.sharesMine = [[
+                "id": "share-1", "role": "viewer", "keyEpoch": 3, "createdAt": "2026-10-30T00:00:00Z", "suite": 4,
+                "grantee": ["id": maya, "name": "Maya Lind", "email": "maya@example.com"],
+                "node": try JSONSerialization.jsonObject(with: JSONEncoder().encode(node)),
+                "granteeIdentity": [
+                    "keyVersion": served.keyVersion, "identityVersion": Int(served.version), "encryptionPublicKey": served.encryptionPublicKey,
+                    "signingPublicKey": served.signingPublicKey, "mlDsaPublicKey": served.mlDsa!.publicKey, "kemPublicKey": served.kem!.publicKey,
+                    "keysSignature": served.keysSignature!,
+                ],
+            ]]
+            ResealTo.remove(ResealTo.all)
+            defer { ResealTo.remove(ResealTo.all) }
+            ResealTo.add(maya)
+            // Another phone of this account (a guard of its own): the pass writes its first guard entry for Maya, and right
+            // then a Continue on her queues a newer re-seal, to keys this pass never saw.
+            let other = await phone(server, folder: guardFolder())
+            _ = try await other.vault.adopt(node, nodeKey: try randomBytes(length: 32),
+                                            metadata: NodeMetadata(name: "plan.md", mime: nil, size: 3, modified: nil, attributes: [:]), in: workspace)
+            let continued = maya
+            await other.vault.adopt(afterGuardCommit: { ResealTo.add(continued) })
+            let outcome = try await other.vault.upgradeShares()
+            #expect(outcome.rotated == 1)
+            // The pass acknowledges the request it read; the one made while it ran is still owed.
+            #expect(ResealTo.contains(maya))
+        }
+
         @Test func aGuardWriteThatFailsStopsTheActAndTheNextOneSettlesIt() async throws {
             defer { done() }
             let server = server(maya: try makeIdentity(maya).envelope)
