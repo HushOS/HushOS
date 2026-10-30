@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest';
+import { FAMILY_MAX_MEMBERS } from './protocol';
 import {
     FAMILY_PER_MEMBER_YEAR_FACTOR,
+    familyIncluded,
     familyPerMember,
     familyPrices,
     familyTiers,
@@ -153,5 +155,51 @@ describe('what Polar is sent', () => {
             },
             minimum_units: 4,
         });
+    });
+});
+
+/*
+ * One raise may fill a family from its included places to the maximum (protocol.ts), and is
+ * charged at once, off-session. An Indian e-mandate needs the cardholder to authenticate a
+ * charge above 15,000 rupees; the spike saw such a raise declined outright in the sandbox (E8).
+ * The threshold is per transaction and follows India-issued cards whatever the currency the
+ * charge is in, so this is a floor, not a promise: a card whose mandate maximum is set lower
+ * can still ask the payer to authenticate a smaller raise. The worst case is the whole period
+ * left (a raise on the day the plan starts or renews), plus 18% GST.
+ *
+ * Renewals are out of scope: Family Plus yearly at 20 places renews at 3,900 + 16 × 590 rupees,
+ * about 15,741 with GST, over the threshold. That was so before raises could reach the
+ * maximum in one go, and a renewal's authentication is Polar's own flow, so it isn't asserted.
+ */
+const E_MANDATE_LIMIT_PAISE = 1_500_000;
+const GST_PERCENT = 118;
+
+/* The dearest single raise, included places to `max`, over every family tier and interval, with GST. */
+function largestRaiseWithGst(max: number) {
+    let largest = 0;
+    for (const tier of familyTiers)
+        for (const interval of ['month', 'year'] as const) {
+            const inr = familyPrices(tier, interval).find(
+                (price) => price.price_currency === 'inr' && price.amount_type === 'unit_based',
+            );
+            const [free, paid] = (inr && 'tiers' in inr ? (inr.tiers?.tiers ?? []) : []) as {
+                bound: number | null;
+                unit_amount: number;
+            }[];
+            // What Polar is sent is what the constants say: free up to the included places,
+            // then the per-member rate (ten months of it a year).
+            expect(free?.bound).toBe(familyIncluded);
+            expect(paid?.unit_amount).toBe(
+                familyPerMember.inr! * (interval === 'year' ? FAMILY_PER_MEMBER_YEAR_FACTOR : 1),
+            );
+            const charge = (max - free!.bound!) * paid!.unit_amount;
+            largest = Math.max(largest, (charge * GST_PERCENT) / 100);
+        }
+    return largest;
+}
+
+describe('the largest raise in rupees', () => {
+    test('stays under the 15,000 rupee e-mandate threshold, with GST, on every tier and interval', () => {
+        expect(largestRaiseWithGst(FAMILY_MAX_MEMBERS)).toBeLessThan(E_MANDATE_LIMIT_PAISE);
     });
 });

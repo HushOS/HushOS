@@ -140,10 +140,20 @@ describe('quoteAdd', () => {
 });
 
 describe('places', () => {
-    test('one raise adds at most five, and never past twenty members', () => {
-        expect(addRange(summary({ units: 6 }))).toEqual({ min: 1, max: 5 });
-        expect(addRange(summary({ units: 18 }))).toEqual({ min: 1, max: 2 });
+    test('one raise may fill the family to its maximum, and never past it', () => {
+        // Four places to twenty in one go: sixteen, not five at a time.
+        expect(addRange(summary({ units: 4 }))).toEqual({ min: 1, max: 16 });
+        expect(addRange(summary({ units: 6 }))).toEqual({ min: 1, max: 14 });
+        expect(addRange(summary({ units: 19 }))).toEqual({ min: 1, max: 1 });
         expect(addRange(summary({ units: 20 }))).toBeNull();
+    });
+
+    test('the range runs to the plan’s own maximum, not the default twenty', () => {
+        const smaller = summary({ units: 6 });
+        smaller.plans = [{ ...plan, maxMembers: 12 }];
+        expect(addRange(smaller)).toEqual({ min: 1, max: 6 });
+        smaller.subscription!.units = 12;
+        expect(addRange(smaller)).toBeNull();
     });
 
     test('a cut never goes below the members, nor what the plan includes', () => {

@@ -542,6 +542,8 @@ These are the card-free parts of section 6, then the card runs after the owner p
 
 **Design change:** Polar will not stop a typo like 10001 members, which on a paid plan is an immediate, large invoice. HushOS should bound a single raise itself: refuse a jump of more than a set step at a time, and pass `max_units` on checkout. This can stay consistent with "no upper limit" in groups-design 3.5, because a deliberate large count is still possible in steps or through support.
 
+**As built (2026-10-27):** the only bound is the family maximum: 20 members, passed as `max_units` on checkout and checked on every raise. A per-raise step of five shipped first and was dropped, since a family that can never pass 20 can never make a typo like 10001, and one "Add places" may now fill a family to its limit, its charge shown before the payer confirms.
+
 ### E3. Quantity changes, discount-only parts: matches section 1 on `pending_update`
 
 One free Family monthly subscription, starting at 6 units:
@@ -733,7 +735,7 @@ HushOS reads a family's paid tier from its newest paid order (groups-design 3.5)
 
 1. **Charge for a raise before admitting the member, and treat a 402 as "nothing happened".** A failed off-session raise leaves `units`, status and orders untouched (E8 step 2). HushOS admits only after a 200, and on a 402 has nothing to roll back. This was observed for `PaymentFailed`; `PaymentActionRequired` is unreproduced.
 2. **A 402 is not always a portal case.** The India decline is `PaymentFailed` with no pending order, so the "send the payer to the portal to confirm" route in section 5 does not apply. The admission screen needs a plain "your bank declined this charge" outcome.
-3. **INR groups with large raises.** One raise whose proration crosses ₹15,000 failed outright in the sandbox. With realistic prices, that is a company adding dozens of members at once. HushOS should say so before the attempt for INR payers. Splitting a raise to stay under the RBI limit is not proposed.
+3. **INR groups with large raises.** One raise whose proration crosses ₹15,000 failed outright in the sandbox. With realistic prices, that is a company adding dozens of members at once. HushOS should say so before the attempt for INR payers. Splitting a raise to stay under the RBI limit is not proposed. Families never reach it on the seeded prices: the largest raise is 16 places (four included to the maximum of 20), at most 16 × ₹590 = ₹9,440 a year before tax and ₹11,139.20 with GST; the archived single Family plan's largest, 14 × ₹790, is ₹13,050.80 with GST. A tier's member priced above ₹794 a year would cross it (`packages/billing/src/protocol.ts`).
 4. **Every raise is its own taxed order.** It carries 18% GST in India, and in production Polar's fixed per-order fee. On a ₹2 member, the fee would exceed the charge. This confirms section 4's fee warning for `invoice` raises at INR prices.
 5. **Quote truncated amounts.** Any "you will be charged X now" figure HushOS computes must truncate per currency minor unit, to match Polar's 199 and 1999.
 6. **A pending cut dies on any raise.** This is now seen on a paid subscription too: re-issue the cut after every increase (E3).

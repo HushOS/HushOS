@@ -74,13 +74,20 @@ export function lapsedPlan<T extends { status: string; endedAt: string | Date | 
 export const GROUP_CUSTOMER_PREFIX = 'group:';
 
 /*
- * Polar enforces no unit cap (docs/polar-group-billing-spike.md, E7), and a
- * raise is charged at once, so HushOS bounds them: a family has at most this
- * many members, and one raise adds at most this many places. A deliberate
- * larger family goes through support.
+ * Polar enforces no unit cap (docs/polar-group-billing-spike.md, E7), so
+ * HushOS bounds a family at this many members, at checkout and on every
+ * raise; a deliberate larger family goes through support. That bound is the
+ * only one: one raise may fill a family to it, and is charged at once, but
+ * only after the payer has seen the amount (the "Add places" dialog quotes it
+ * as Polar charges it). The largest raise on the tiers, four included to
+ * twenty, is 16 places: on the seeded prices (seed-prices.ts) at most
+ * 16 × ₹590 = ₹9,440 a year before tax, ₹11,139.20 with 18% GST, under the
+ * ₹15,000 above which an Indian e-mandate needs the payer to authenticate
+ * (spike, India and E8). The archived single Family plan (six included, ₹790
+ * a member a year) tops out at 14 × ₹790 = ₹11,060, ₹13,050.80 with GST.
+ * Pricing a tier's member above ₹794 a year (₹15,000 / 1.18 / 16) crosses it.
  */
 export const FAMILY_MAX_MEMBERS = 20;
-export const MAX_MEMBERS_PER_RAISE = 5;
 
 /*
  * Seats a group has with billing on and no live plan: its organizer alone.
