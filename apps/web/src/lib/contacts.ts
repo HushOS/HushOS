@@ -1044,7 +1044,7 @@ async function stand(
     userId: string,
     contactId: string,
     served: Served,
-    { act, follow }: { act: boolean; follow: boolean },
+    { act, follow, sealUnsaved = false }: { act: boolean; follow: boolean; sealUnsaved?: boolean },
 ): Promise<Standing> {
     const loaded = await loadSettings(userId);
     const found = pinOf(loaded.settings.contacts, contactId);
@@ -1081,14 +1081,29 @@ async function stand(
         const before = pin;
         // Only over the pin it was worked out from, by every key: another device may have moved
         // first, and a pin of these keys it saved meanwhile (checked, say) is kept as it is.
-        ({ pin, entry } = await commitTrust(
-            boundQueryClient,
-            userId,
-            contactId,
-            entry,
-            upgraded,
-            (settings) => withPinIf(settings, upgraded, before),
-        ));
+        try {
+            ({ pin, entry } = await commitTrust(
+                boundQueryClient,
+                userId,
+                contactId,
+                entry,
+                upgraded,
+                (settings) => withPinIf(settings, upgraded, before),
+            ));
+        } catch (error) {
+            // A rotation (`sealUnsaved`) that can't save the migration for room seals to the keys
+            // the legacy pin already holds, as before first-seen pins, saving and remembering
+            // nothing: no new trust. Left out, the server would revoke them for the owner's full
+            // settings; stopped, the rotation would never finish.
+            if (!sealUnsaved || !(error instanceof Error) || error.message !== CONTACTS_FULL)
+                throw error;
+            const [mine, theirs] = await Promise.all([
+                keyCommitment(upgraded),
+                servedCommitment(served),
+            ]);
+            if (mine === null || mine !== theirs) throw error;
+            return { kind: 'ok', pin: upgraded, entry, followed: false };
+        }
         trust = 'seen';
     }
     if ((await agreement(entry, pin)) === 'changed') {
@@ -1658,10 +1673,14 @@ export async function trustGrantee(
     userId: string,
     granteeUserId: string,
     served: Served,
-    { follow = false }: { follow?: boolean } = {},
+    { follow = false, sealUnsaved = false }: { follow?: boolean; sealUnsaved?: boolean } = {},
 ): Promise<TrustedGrantee> {
     return withGuardLock(userId, async () => {
-        const standing = await stand(userId, granteeUserId, served, { act: true, follow });
+        const standing = await stand(userId, granteeUserId, served, {
+            act: true,
+            follow,
+            sealUnsaved,
+        });
         if (standing.kind === 'new' || (standing.kind === 'changed' && standing.pin === null))
             throw new GranteeRefusedError(
                 'This person is not in your contacts. Add them before sharing.',

@@ -2,7 +2,7 @@
 import 'fake-indexeddb/auto';
 import type { ContactIdentity } from '@hushos/auth/api';
 import type { SettingsEnvelope } from '@hushos/crypto';
-import { keyCommitment, pinTrust } from '@hushos/crypto/pins';
+import { CONTACTS_FULL, SETTINGS_MAX_BYTES, keyCommitment, pinTrust } from '@hushos/crypto/pins';
 import { pinOfServed } from '@hushos/drive/trust';
 import { QueryClient } from '@tanstack/react-query';
 import { openDB } from 'idb';
@@ -274,6 +274,40 @@ describe('adding someone and sharing with them', () => {
         await expect(addContact(query, ME, MAYA_EMAIL)).rejects.toThrow(GUARD_UNSAVED);
         expect(full.server.saves).toBe(0);
         await expect(trustGrantee(ME, MAYA, full.maya)).rejects.toThrow(/not in your contacts/);
+    });
+});
+
+describe('a rotation with no room to save a migration', () => {
+    test('seals to a legacy pin’s own keys without saving or remembering anything; other keys stay a verdict', async () => {
+        const w = await world();
+        const legacy = {
+            userId: MAYA,
+            email: MAYA_EMAIL,
+            name: 'Maya Lindqvist',
+            pinnedAt: '2026-01-01T00:00:00.000Z',
+            encryptionPublicKey: w.maya.encryptionPublicKey,
+            signingPublicKey: w.maya.signingPublicKey,
+            fingerprint: '',
+        };
+        // Room for the legacy pin, none for it made first-seen (its two key digests more).
+        const bare = JSON.stringify({ version: 2, contacts: { [MAYA]: legacy }, padding: '' });
+        const padding = 'x'.repeat(SETTINGS_MAX_BYTES - new TextEncoder().encode(bare).length - 40);
+        await w.replace({ version: 2, contacts: { [MAYA]: legacy }, padding } as never);
+        // Left out, the server would revoke her for the owner's full settings; stopped, the rotation would never finish.
+        expect(await trustGrantee(ME, MAYA, w.maya, { sealUnsaved: true })).toEqual({
+            encryptionPublicKey: w.maya.encryptionPublicKey,
+            kemPublicKey: w.maya.kemPublicKey,
+        });
+        // No new trust: the pin stays as it was, and this device remembers nothing.
+        expect(await pinTrust((await w.stored()).contacts[MAYA]!)).toBe('legacy');
+        expect(await w.real.entry(ME, MAYA)).toBeFalsy();
+        // The person's own act (the share dialog) says the settings are full.
+        await expect(trustGrantee(ME, MAYA, w.maya)).rejects.toThrow(CONTACTS_FULL);
+        // Other keys served for her stay a verdict.
+        const other = await startOver(w);
+        await expect(trustGrantee(ME, MAYA, other, { sealUnsaved: true })).rejects.toBeInstanceOf(
+            AccountChangedError,
+        );
     });
 });
 
