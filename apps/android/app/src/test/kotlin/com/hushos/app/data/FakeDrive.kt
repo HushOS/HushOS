@@ -90,6 +90,8 @@ class FakeDrive : AutoCloseable {
     var failLookups = false
     /* The next settings save lands and its answer is lost (a 500), as a dropped connection would leave it. */
     var loseNextSettingsAnswer = false
+    /* Shares the account made (createShare), and the shares a rotation's work lists per node. */
+    val sharesMade = ArrayList<JSONObject>()
 
     class Version(
         val id: String, val objectId: String, var contentKeyEnvelope: String, val suite: UInt, val chunkCount: Long, val contentNonce: String,
@@ -389,6 +391,13 @@ class FakeDrive : AutoCloseable {
                 ok(JSONObject().put("contact", grace.served.toJson().put("userId", grace.id).put("name", "Grace Hopper").put("email", "grace@example.org")))
             }
             get && at("auth", "contacts", "*", "succession") -> ok(JSONObject().put("links", JSONArray()))
+            post && at("drive", "nodes", "*", "shares") -> {
+                val share = JSONObject().put("id", UUID.randomUUID().toString()).put("role", body.getString("role")).put("keyEpoch", body.getLong("keyEpoch"))
+                    .put("createdAt", "2026-10-30T00:00:00Z").put("suite", 4)
+                    .put("grantee", JSONObject().put("id", body.getString("granteeUserId")).put("name", "Grace Hopper").put("email", "grace@example.org"))
+                sharesMade.add(share)
+                ok(JSONObject().put("share", share))
+            }
 
             get && at("drive", "workspace") -> ok(JSONObject().put("workspaceId", workspace).put("changeSeq", changeSeq).put("grant", grant).put("root", node(root).json()))
             get && at("drive", "nodes", "*", "children") -> {

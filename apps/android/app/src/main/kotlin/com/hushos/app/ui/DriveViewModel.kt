@@ -1243,6 +1243,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun shares(item: Opened): List<OwnedShare>? = io { it.shares(item) }
     suspend fun sharedByMe(): List<SharedByMe>? = io { it.sharedByMe() }
     suspend fun share(item: Opened, pin: ContactPin, role: String): Result<OwnedShare> = withContext(Dispatchers.IO) { runCatching { (vault ?: throw NotAuthenticated()).share(item, pin, role) } }
+        .onSuccess { if (it.trustChanged) trustMoved() }.map { it.share }
     /* Revokes a share and, as the web does, rotates the subtree so the old key opens nothing new. */
     suspend fun revokeShare(share: OwnedShare, item: Opened): Boolean = viewModelScope.async { revokeShareNow(share, item) }.await()
 

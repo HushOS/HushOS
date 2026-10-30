@@ -123,6 +123,10 @@ data class OpenedVersion(val content: Content, val versionId: String) {
  * their parents. A node-to-parent index persists so a document id the system
  * asks about cold is found by listing the folder it was last seen in.
  */
+/* A share made, and whether checking whom it is sealed to moved whom this phone trusts (a legacy pin made first-seen, a
+ * succession followed, a first guard entry), so what is drawn is judged again. */
+data class ShareResult(val share: OwnedShare, val trustChanged: Boolean)
+
 class Vault(internal val context: Context, val api: DriveApi) {
     private var accountKey: ByteArray? = null
     private var workspace: WorkspaceView? = null
@@ -480,11 +484,15 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * halves of this account's identity), and the share goes in the ledger once the server took it. A changed account
      * throws AccountChanged: nothing is shared.
      */
-    fun share(item: Opened, pin: ContactPin, role: String): OwnedShare {
+    fun share(item: Opened, pin: ContactPin, role: String): ShareResult {
         val nodeKey = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val contact = Auth.lookupContact(context, pin.email, api.session)
         if (!contact.userId.equals(pin.userId, ignoreCase = true)) throw ContactProblem.otherAccount()
+        // Every guard write and settings save moves the generation: one during the check (a legacy pin made first-seen,
+        // a succession followed, a first guard entry) is a change in trust, which the caller refreshes for.
+        val generation = memory.generation.get()
         val (publicKey, kem) = trustGrantee(contact, follow = true)
+        val trustChanged = memory.generation.get() != generation
         val keys = identityKeys()
         val ctx = ShareContext(item.node.workspaceId, item.id, item.node.keyEpoch, contact.userId, api.session.userId)
         val envelope = shareSeal(ctx, nodeKey, keys, publicKey, kem)
@@ -492,7 +500,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             .put("keyEpoch", item.node.keyEpoch.toLong()).put("shareEnvelope", base64urlEncode(envelope)))
         ShareSeals.of(context).record(mapOf(share.id to ShareSeals.Seal(keys.keyVersion, contact.keyVersion)))
         updateSettings { it.addShare(item.id, contact.userId) }
-        return share
+        return ShareResult(share, trustChanged)
     }
 
     /* Out of the ledger first (saved before the revoke and the rotation after it), so no rotation seals to them again. */

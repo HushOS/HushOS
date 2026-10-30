@@ -4,6 +4,7 @@ import android.content.Context
 import com.hushos.core.PinTrust
 import com.hushos.core.deviceRemember
 import com.hushos.core.keyCommitment
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -291,4 +292,19 @@ class ContactTrustTest {
         assertFalse(vault.addContact(email).trustChanged)
         assertTrue((vault.addContact(email) as Added.Already).pin.trust == PinTrust.SEEN)
     }
+
+    @Test
+    fun sharingWithSomeoneWhosePinTheCheckMovedSaysTrustMoved() {
+        val legacy = TestPins.preRelease(grace().pin(verified = false, firstSeen = null))
+        server.editSettings { it.pin(legacy) }
+        val folder = server.folder(server.root, "Plans")
+        vault.listChildren(server.root)
+        val item = vault.item(folder)!!
+        // The share's check makes the legacy pin first-seen and remembers her: what is drawn is judged again.
+        assertTrue(vault.share(item, stored()!!, "viewer").trustChanged)
+        assertEquals(PinTrust.SEEN, stored()!!.trust)
+        // Sharing again moves nothing about whom this phone trusts.
+        assertFalse(vault.share(item, stored()!!, "editor").trustChanged)
+    }
+
 }
