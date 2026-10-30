@@ -206,7 +206,8 @@ struct ShareItemSheet: View {
             .onChange(of: step) { _, now in if now == nil { flowDone() } }
             .sheet(item: $person) { share in
                 PersonAccessSheet(item: item, share: share, pin: pins.first { $0.userId.lowercased() == share.grantee.id.lowercased() },
-                                  changed: changed.contains(share.grantee.id.lowercased())) { await load(people: false) }
+                                  changed: changed.contains(share.grantee.id.lowercased()),
+                                  settledChange: { changed.remove(share.grantee.id.lowercased()) }) { await load(people: false) }
                     .environment(store)
             }
             .task { await load() }
@@ -671,6 +672,8 @@ private struct PersonAccessSheet: View {
     let pin: ContactPin?
     /* Their account changed: the role waits for Review; stopping never does. */
     @State var changed: Bool
+    /* Review settled their change here: the row behind this sheet stops saying so. */
+    var settledChange: () -> Void = {}
     let reload: () async -> Void
     @State private var stopping = false
     @State private var busy = false
@@ -728,6 +731,7 @@ private struct PersonAccessSheet: View {
                 guard now == nil, settled else { return }
                 settled = false
                 changed = false
+                settledChange()
                 if let value = waiting { waiting = nil; change(to: value) } else { Task { await reload() } }
             }
             .alert("Stop sharing with \(first)?", isPresented: $stopping) {
