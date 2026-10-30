@@ -151,90 +151,121 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
         val batch = JSONArray()
         // What each node's re-sealed shares were sealed with, recorded once the server took that node.
         val sealedIn = HashMap<String, Map<String, ShareSeals.Seal>>()
-        for (entry in work.nodes) {
-            val node = entry.node
-            val newParentEpoch = if (node.id == rootId) node.parentKeyEpoch else target
-            val wrappedUnder = parentKey(node.parentId, node.parentKeyEpoch) ?: continue
-            val wrapUnder = parentKey(node.parentId, newParentEpoch) ?: continue
-            val old: ByteArray = (if (epochs[node.id] == node.keyEpoch) nodes.key(ws, node.id) else null)
-                ?: nodeOpen(NodeKeyContext(ws, node.id, node.parentId ?: ws, node.parentKeyEpoch, node.keyEpoch), wrappedUnder, base64urlDecode(node.keyEnvelope))
-            val wire = JSONObject().put("id", node.id).put("changeSeq", node.changeSeq ?: 0).put("parentKeyEpoch", newParentEpoch.toLong())
-            if (node.keyEpoch >= target) {
-                // Already at the target, only wrapped under an unrotated parent: the same key, rewrapped.
-                val envelope = nodeWrap(NodeKeyContext(ws, node.id, node.parentId ?: ws, newParentEpoch, node.keyEpoch), wrapUnder, old)
-                wire.put("keyEnvelope", base64urlEncode(envelope)).put("rotated", JSONObject.NULL)
-                nodes.putKey(ws, node.id, old)
-                epochs[node.id] = node.keyEpoch
-                batch.put(wire)
-                continue
-            }
-            val fresh = randomBytes(32u)
-            val envelope = nodeWrap(NodeKeyContext(ws, node.id, node.parentId ?: ws, newParentEpoch, target), wrapUnder, fresh)
-            val metaCtx = MetadataContext(ws, node.id, node.metadataVersion)
-            val metadataEnvelope = metadataSeal(metaCtx, fresh, metadataOpen(metaCtx, old, base64urlDecode(node.metadataEnvelope)))
-            // Every re-sealed envelope is signed by the account running the rotation, at the node's unchanged metadata
-            // version, as the record checked before: ordinary only when it verified.
-            val metadataSignature = signMetadata(ws, node.id, if (node.isFolder) NodeKind.FOLDER else NodeKind.FILE, node.metadataVersion, metadataEnvelope,
-                metadataVerdict(node, trust))
-            val versions = JSONArray()
-            for (version in entry.versions) {
-                val ctx = VersionContext(ws, node.id, version.getString("id"), version.getString("objectId"))
-                val suite = version.getInt("contentSuite").toUInt()
-                val envelope = version.getString("contentKeyEnvelope")
-                val prior = versionVerdict(ws, node.id, ctx.versionId, ctx.objectId, suite, envelope,
-                    version.optJSONObject("signer")?.optString("id")?.ifEmpty { null }, version.optString("signature").takeIf { !version.isNull("signature") && it.isNotEmpty() }, trust)
-                val rowSize = version.optString("plaintextSize").takeIf { !version.isNull("plaintextSize") }?.toULongOrNull()
-                val content = versionOpen(ctx, suite, old, base64urlDecode(envelope), rowSize)
-                val resealed = versionReseal(ctx, suite, fresh, content)
-                versions.put(JSONObject().put("id", version.getString("id")).put("contentKeyEnvelope", base64urlEncode(resealed))
-                    .put("signature", signVersion(ws, node.id, ctx.versionId, ctx.objectId, suite, resealed, prior)))
-            }
-            val plan = planReseal(node.id, entry.shares, entry.links, ledger, sealTo)
-            skipped.addAll(plan.skipped)
-            val shares = JSONArray()
-            val sealedHere = HashMap<String, ShareSeals.Seal>()
-            for (share in plan.shares) {
-                val ctx = ShareContext(ws, node.id, target, share.granteeUserId, api.session.userId)
-                shares.put(JSONObject().put("id", share.id).put("shareEnvelope", base64urlEncode(shareSeal(ctx, fresh, keys, share.publicKey, share.kemPublicKey))))
-                val served = entry.shares.firstOrNull { it.optString("id") == share.id }?.optJSONObject("grantee")?.let { ServedIdentity.from(it) }
-                sealedHere[share.id] = ShareSeals.Seal(keys.keyVersion, served?.keyVersion)
-            }
-            sealedIn[node.id] = sealedHere
-            val links = JSONArray()
-            val unsealable = JSONArray()
-            for (link in plan.links) {
-                val id = link.getString("id")
-                // No sealed secret, a row naming an older derivation, or a secret that no longer opens: a link to end, not a rotation to fail.
-                if (link.isNull("secretEnvelope") || (!link.isNull("kdfVersion") && !LinkKdf.current(link.optInt("kdfVersion")))) { unsealable.put(id); continue }
-                val owned = runCatching {
-                    linkSecretOpen(LinkContext(ws, node.id, node.keyEpoch, id), old, base64urlDecode(link.getString("secretEnvelope")))
-                }.getOrNull()
-                if (owned == null) { unsealable.put(id); continue }
-                // A password link sealed before the password key was kept cannot be re-sealed without the password.
-                if (link.getBoolean("hasPassword") && owned.fromPassword == null) { unsealable.put(id); continue }
-                val stretched = owned.fromPassword ?: ByteArray(32)
-                val newCtx = LinkContext(ws, node.id, target, id)
-                links.put(JSONObject().put("id", id)
-                    .put("linkEnvelope", base64urlEncode(linkSeal(newCtx, fresh, owned.secret, stretched)))
-                    .put("secretEnvelope", base64urlEncode(linkSecretSeal(newCtx, fresh, owned.secret, owned.token, stretched))))
-            }
-            wire.put("keyEnvelope", base64urlEncode(envelope)).put("rotated", JSONObject()
-                .put("metadataEnvelope", base64urlEncode(metadataEnvelope)).put("metadataSignature", metadataSignature)
-                .put("versions", versions).put("shares", shares)
-                .put("links", links).put("unsealableLinks", unsealable))
-            // From here the node's key is the fresh one; the old one stays reachable for its unrotated children.
-            previous[node.id] = node.keyEpoch to old
-            nodes.putKey(ws, node.id, fresh)
-            epochs[node.id] = target
-            batch.put(wire)
+        // What each node of this batch held before it was given a key here: a key becomes the node's own only once the
+        // server applied the batch. Whatever stops it (a grantee check that isn't a verdict, a failure while sealing, a
+        // dropped send) or refuses a node, those nodes get their old keys back, so the vault is as it was and a retry walks
+        // them again from the keys the server holds (the web drops a stopped batch's keys the same way).
+        val staged = HashMap<String, Triple<ByteArray?, ULong?, Pair<ULong, ByteArray>?>>()
+        fun stage(id: String) {
+            if (id !in staged) staged[id] = Triple(nodes.key(ws, id), epochs[id], previous[id])
         }
+        fun unstage(ids: Collection<String>) {
+            for (id in ids) {
+                val (key, epoch, prior) = staged[id] ?: continue
+                if (key == null) nodes.dropKey(ws, id) else nodes.putKey(ws, id, key)
+                if (epoch == null) epochs.remove(id) else epochs[id] = epoch
+                if (prior == null) previous.remove(id) else previous[id] = prior
+            }
+        }
+        var sending = false
         var applied = 0
-        if (batch.length() > 0) {
-            val outcomes = api.rotateNodes(ws, rootId, batch)
-            // A signature the server could not verify is a bug here, not a race: trying again would loop until stuck.
-            if (outcomes.any { it.second == "bad-signature" }) throw ApiError(400, "This change was not signed by your keys. Sign in again and retry.")
-            applied = outcomes.count { it.second == "ok" || it.second == "already" }
-            for ((id, outcome) in outcomes) if (outcome == "ok") sealedIn[id]?.let { seals.record(it) }
+        try {
+            for (entry in work.nodes) {
+                val node = entry.node
+                val newParentEpoch = if (node.id == rootId) node.parentKeyEpoch else target
+                val wrappedUnder = parentKey(node.parentId, node.parentKeyEpoch) ?: continue
+                val wrapUnder = parentKey(node.parentId, newParentEpoch) ?: continue
+                val old: ByteArray = (if (epochs[node.id] == node.keyEpoch) nodes.key(ws, node.id) else null)
+                    ?: nodeOpen(NodeKeyContext(ws, node.id, node.parentId ?: ws, node.parentKeyEpoch, node.keyEpoch), wrappedUnder, base64urlDecode(node.keyEnvelope))
+                val wire = JSONObject().put("id", node.id).put("changeSeq", node.changeSeq ?: 0).put("parentKeyEpoch", newParentEpoch.toLong())
+                if (node.keyEpoch >= target) {
+                    // Already at the target, only wrapped under an unrotated parent: the same key, rewrapped.
+                    val envelope = nodeWrap(NodeKeyContext(ws, node.id, node.parentId ?: ws, newParentEpoch, node.keyEpoch), wrapUnder, old)
+                    wire.put("keyEnvelope", base64urlEncode(envelope)).put("rotated", JSONObject.NULL)
+                    stage(node.id)
+                    nodes.putKey(ws, node.id, old)
+                    epochs[node.id] = node.keyEpoch
+                    batch.put(wire)
+                    continue
+                }
+                val fresh = randomBytes(32u)
+                val envelope = nodeWrap(NodeKeyContext(ws, node.id, node.parentId ?: ws, newParentEpoch, target), wrapUnder, fresh)
+                val metaCtx = MetadataContext(ws, node.id, node.metadataVersion)
+                val metadataEnvelope = metadataSeal(metaCtx, fresh, metadataOpen(metaCtx, old, base64urlDecode(node.metadataEnvelope)))
+                // Every re-sealed envelope is signed by the account running the rotation, at the node's unchanged metadata
+                // version, as the record checked before: ordinary only when it verified.
+                val metadataSignature = signMetadata(ws, node.id, if (node.isFolder) NodeKind.FOLDER else NodeKind.FILE, node.metadataVersion, metadataEnvelope,
+                    metadataVerdict(node, trust))
+                val versions = JSONArray()
+                for (version in entry.versions) {
+                    val ctx = VersionContext(ws, node.id, version.getString("id"), version.getString("objectId"))
+                    val suite = version.getInt("contentSuite").toUInt()
+                    val envelope = version.getString("contentKeyEnvelope")
+                    val prior = versionVerdict(ws, node.id, ctx.versionId, ctx.objectId, suite, envelope,
+                        version.optJSONObject("signer")?.optString("id")?.ifEmpty { null }, version.optString("signature").takeIf { !version.isNull("signature") && it.isNotEmpty() }, trust)
+                    val rowSize = version.optString("plaintextSize").takeIf { !version.isNull("plaintextSize") }?.toULongOrNull()
+                    val content = versionOpen(ctx, suite, old, base64urlDecode(envelope), rowSize)
+                    val resealed = versionReseal(ctx, suite, fresh, content)
+                    versions.put(JSONObject().put("id", version.getString("id")).put("contentKeyEnvelope", base64urlEncode(resealed))
+                        .put("signature", signVersion(ws, node.id, ctx.versionId, ctx.objectId, suite, resealed, prior)))
+                }
+                val plan = planReseal(node.id, entry.shares, entry.links, ledger, sealTo)
+                skipped.addAll(plan.skipped)
+                val shares = JSONArray()
+                val sealedHere = HashMap<String, ShareSeals.Seal>()
+                for (share in plan.shares) {
+                    val ctx = ShareContext(ws, node.id, target, share.granteeUserId, api.session.userId)
+                    shares.put(JSONObject().put("id", share.id).put("shareEnvelope", base64urlEncode(shareSeal(ctx, fresh, keys, share.publicKey, share.kemPublicKey))))
+                    val served = entry.shares.firstOrNull { it.optString("id") == share.id }?.optJSONObject("grantee")?.let { ServedIdentity.from(it) }
+                    sealedHere[share.id] = ShareSeals.Seal(keys.keyVersion, served?.keyVersion)
+                }
+                sealedIn[node.id] = sealedHere
+                val links = JSONArray()
+                val unsealable = JSONArray()
+                for (link in plan.links) {
+                    val id = link.getString("id")
+                    // No sealed secret, a row naming an older derivation, or a secret that no longer opens: a link to end, not a rotation to fail.
+                    if (link.isNull("secretEnvelope") || (!link.isNull("kdfVersion") && !LinkKdf.current(link.optInt("kdfVersion")))) { unsealable.put(id); continue }
+                    val owned = runCatching {
+                        linkSecretOpen(LinkContext(ws, node.id, node.keyEpoch, id), old, base64urlDecode(link.getString("secretEnvelope")))
+                    }.getOrNull()
+                    if (owned == null) { unsealable.put(id); continue }
+                    // A password link sealed before the password key was kept cannot be re-sealed without the password.
+                    if (link.getBoolean("hasPassword") && owned.fromPassword == null) { unsealable.put(id); continue }
+                    val stretched = owned.fromPassword ?: ByteArray(32)
+                    val newCtx = LinkContext(ws, node.id, target, id)
+                    links.put(JSONObject().put("id", id)
+                        .put("linkEnvelope", base64urlEncode(linkSeal(newCtx, fresh, owned.secret, stretched)))
+                        .put("secretEnvelope", base64urlEncode(linkSecretSeal(newCtx, fresh, owned.secret, owned.token, stretched))))
+                }
+                wire.put("keyEnvelope", base64urlEncode(envelope)).put("rotated", JSONObject()
+                    .put("metadataEnvelope", base64urlEncode(metadataEnvelope)).put("metadataSignature", metadataSignature)
+                    .put("versions", versions).put("shares", shares)
+                    .put("links", links).put("unsealableLinks", unsealable))
+                // From here the node's key is the fresh one; the old one stays reachable for its unrotated children.
+                stage(node.id)
+                previous[node.id] = node.keyEpoch to old
+                nodes.putKey(ws, node.id, fresh)
+                epochs[node.id] = target
+                batch.put(wire)
+            }
+            if (batch.length() > 0) {
+                sending = true
+                val outcomes = api.rotateNodes(ws, rootId, batch)
+                // A signature the server could not verify is a bug here, not a race: trying again would loop until stuck.
+                if (outcomes.any { it.second == "bad-signature" }) throw ApiError(400, "This change was not signed by your keys. Sign in again and retry.")
+                val kept = outcomes.filter { it.second == "ok" || it.second == "already" }.map { it.first }.toSet()
+                applied = kept.size
+                // A node the server refused (or left out) keeps the key it holds there.
+                unstage(staged.keys.filter { it !in kept })
+                for ((id, outcome) in outcomes) if (outcome == "ok") sealedIn[id]?.let { seals.record(it) }
+            }
+        } catch (stopped: Exception) {
+            unstage(staged.keys.toList())
+            // A send whose answer never came may have landed: those nodes are read from the server again, under whichever
+            // keys it holds, rather than trusted from what this vault opened before.
+            if (sending) staged.keys.forEach { nodes.forget(ws, it) }
+            throw stopped
         }
         done += applied
         progress(done)

@@ -94,6 +94,10 @@ class FakeDrive : AutoCloseable {
     var onSettingsPut: (() -> Unit)? = null
     /* Shares the account made (createShare), and the shares a rotation's work lists per node. */
     val sharesMade = ArrayList<JSONObject>()
+    val rotationShares = HashMap<String, MutableList<JSONObject>>()
+    /* Settings reads fail (a 500) once a rotation's work has been listed: a check mid-batch that can't run. */
+    var failSettingsOnceWorkListed = false
+    private var workListed = false
 
     class Version(
         val id: String, val objectId: String, var contentKeyEnvelope: String, val suite: UInt, val chunkCount: Long, val contentNonce: String,
@@ -372,7 +376,10 @@ class FakeDrive : AutoCloseable {
             // The account's own routes (Auth.call).
             get && at("auth", "identity") -> ok(JSONObject().put("identity", Auth.json(me.envelope)))
             get && at("auth", "identity", "history") -> ok(JSONObject().put("identities", JSONArray()))
-            get && at("auth", "settings") -> ok(settingsJson())
+            get && at("auth", "settings") -> {
+                if (failSettingsOnceWorkListed && workListed) return 500 to JSONObject().put("message", "Settings are unavailable")
+                ok(settingsJson())
+            }
             method == "PUT" && at("auth", "settings-key") -> {
                 if (settingsKey != null) return conflict("A settings key is already stored")
                 settingsKey = JSONObject().put("nonce", body.getString("nonce")).put("ciphertext", body.getString("ciphertext"))
@@ -483,6 +490,7 @@ class FakeDrive : AutoCloseable {
             }
             get && at("drive", "nodes", "*", "rotation", "work") -> {
                 val rotation = rotations.getValue(segments[2])
+                workListed = true
                 // Parents first: the subtree breadth first, less what was applied.
                 val order = ArrayList<Node>()
                 val queue = ArrayDeque(listOf(node(segments[2])))
@@ -492,7 +500,7 @@ class FakeDrive : AutoCloseable {
                     node.json().put("versions", JSONArray(listOfNotNull(node.version).map { v ->
                         JSONObject().put("id", v.id).put("objectId", v.objectId).put("contentSuite", v.suite.toInt()).put("contentKeyEnvelope", v.contentKeyEnvelope)
                             .put("plaintextSize", JSONObject.NULL).put("signer", JSONObject().put("id", v.signer)).put("signature", v.signature)
-                    })).put("shares", JSONArray()).put("links", JSONArray())
+                    })).put("shares", JSONArray(rotationShares[node.id].orEmpty())).put("links", JSONArray())
                 }
                 ok(JSONObject().put("rotation", JSONObject().put("targetEpoch", rotation.target)).put("nodes", JSONArray(work))
                     .put("nextCursor", JSONObject.NULL).put("done", todo.isEmpty()))

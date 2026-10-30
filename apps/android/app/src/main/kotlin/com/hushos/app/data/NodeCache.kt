@@ -53,6 +53,11 @@ class NodeCache(private val ownWorkspace: () -> String?) {
         keys.getOrPut(nodeId) { ConcurrentHashMap() }[workspaceId] = key
     }
 
+    /* Drops a key this device held for no row before (a rotation's batch that never reached the server). */
+    fun dropKey(workspaceId: String, nodeId: String) {
+        keys[nodeId]?.remove(workspaceId)
+    }
+
     /* A row and its key, under the workspace the row says it is in. */
     fun put(row: Opened, key: ByteArray) {
         putKey(row.node.workspaceId, row.id, key)

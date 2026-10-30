@@ -320,4 +320,29 @@ class ContactTrustTest {
         assertTrue(server.grace.id.lowercase() in seals.queued)
     }
 
+    @Test
+    fun aRotationStoppedMidBatchLeavesEveryKeyAsItWasAndARetryRotatesTheWholeBatch() {
+        vault.addContact(email)
+        val folder = server.folder(server.root, "Plans")
+        val file = server.file(folder, "plan.md", ByteArray(64) { 1 })
+        vault.listChildren(server.root)
+        vault.listChildren(folder)
+        server.editSettings { it.addShare(file, server.grace.id) }
+        server.rotationShares[file] = mutableListOf(JSONObject().put("id", "share-1").put("granteeUserId", server.grace.id)
+            .put("grantee", server.grace.served.toJson()))
+        val folderKey = vault.nodes.key(server.workspace, folder)!!
+        val epoch = server.node(folder).keyEpoch
+        // The file's grantee check can't read the settings (no verdict on Grace), after the folder was sealed.
+        server.failSettingsOnceWorkListed = true
+        assertThrows(AuthFailure::class.java) { vault.rotate(vault.item(folder)!!) }
+        assertEquals(epoch, server.node(folder).keyEpoch)
+        // Nothing was sent, so nothing changed here either: the folder keeps the key the server still holds.
+        assertTrue(folderKey.contentEquals(vault.nodes.key(server.workspace, folder)!!))
+        assertTrue(server.keyOf(folder).contentEquals(vault.nodes.key(server.workspace, folder)!!))
+        // The settings read again: a retry walks both from the keys the server holds, and rotates both.
+        server.failSettingsOnceWorkListed = false
+        assertEquals(2, vault.rotate(vault.item(folder)!!).done)
+        assertTrue(server.node(folder).keyEpoch > epoch && server.node(file).keyEpoch > epoch)
+        assertEquals("plan.md", server.record(file).name)
+    }
 }
