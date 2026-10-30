@@ -264,7 +264,11 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
             unstage(staged.keys.toList())
             // A send whose answer never came may have landed: those nodes are read from the server again, under whichever
             // keys it holds, rather than trusted from what this vault opened before.
-            if (sending) staged.keys.forEach { nodes.forget(ws, it) }
+            if (sending) {
+                staged.keys.forEach { nodes.forget(ws, it) }
+                // The catalogue lists children through those rows: answered from it now, the folders would lose them.
+                catalogueState = CatalogueState.IDLE
+            }
             throw stopped
         }
         done += applied

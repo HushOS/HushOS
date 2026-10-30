@@ -99,6 +99,8 @@ class FakeDrive : AutoCloseable {
     var failSettingsOnceWorkListed = false
     /* Runs once, as the next settings read is answered (another process acting right after it). */
     var onNextSettingsGet: (() -> Unit)? = null
+    /* Rotation batches are refused with a 500, as a dropped send would leave them (nothing applied). */
+    var failRotationSend = false
 
     /* `id` goes to the Trash, as the server keeps it: its parent's listing leaves it out, the trash listing has it. */
     fun trash(id: String) = synchronized(lock) { node(id).trashedAt = "2026-10-30T00:00:00Z"; bump(node(id)) }
@@ -516,6 +518,7 @@ class FakeDrive : AutoCloseable {
                     .put("nextCursor", JSONObject.NULL).put("done", todo.isEmpty()))
             }
             post && at("drive", "nodes", "*", "rotation", "nodes") -> {
+                if (failRotationSend) return 500 to JSONObject().put("message", "The connection dropped")
                 val rotation = rotations.getValue(segments[2])
                 val wires = body.getJSONArray("nodes")
                 val results = JSONArray()

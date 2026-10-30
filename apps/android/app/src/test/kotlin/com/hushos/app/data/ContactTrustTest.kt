@@ -402,4 +402,17 @@ class ContactTrustTest {
         assertFalse((server.workspace to file) in pending.all())
     }
 
+    @Test
+    fun aRotationWhoseSendFailsStillListsTheFileInItsFolder() {
+        val folder = server.folder(server.root, "Plans")
+        val file = server.file(folder, "plan.md", ByteArray(64) { 1 })
+        vault.listChildren(server.root)
+        vault.listChildren(folder)
+        // The catalogue answers for the folder, as after a build.
+        vault.catalogueChildren[folder] = java.util.concurrent.ConcurrentHashMap.newKeySet<String>().apply { add(file) }
+        vault.catalogueState = CatalogueState.READY
+        server.failRotationSend = true
+        assertThrows(Exception::class.java) { vault.rotate(vault.item(file)!!) }
+        assertTrue(vault.listChildren(folder).any { it.id == file })
+    }
 }
