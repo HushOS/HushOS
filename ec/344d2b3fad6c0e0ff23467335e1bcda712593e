@@ -1,0 +1,25 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Contacts.swift
+  s_404a200e025fdd::t_3fb7e3531f79c6 119-120,129
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Rotation.swift
+  s_404a200e025fdd::t_98195af63d533d 139-152,277-280
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Trust.swift
+  s_404a200e025fdd::t_7d01a01103b50c 548
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ContactGuardTests.swift
+  s_404a200e025fdd::t_f319107eaa5aeb 614-666,932-933,1023
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ec344d2b3fad6c0e0ff23467335e1bcda712593e",
+  "prompts": {},
+  "sessions": {
+    "s_404a200e025fdd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a1ee693dc236a24a2",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
