@@ -1,0 +1,86 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_2d4028c461f942 4,7,10,12,15,25,29,45,48,294,297,299
+  s_566b8e0c4467a4::t_85e12d059a2760 293,295
+apps/android/app/src/main/res/values-night/colors.xml
+  s_566b8e0c4467a4::t_18dee8e67c06fa 4-5
+apps/ios/App/Assets.xcassets/LaunchBackground.colorset/Contents.json
+  s_566b8e0c4467a4::t_8bd8b6bf5fbb63 14
+apps/ios/App/Theme.swift
+  s_566b8e0c4467a4::t_4c64826fd557a1 38
+apps/ios/Widgets/HushOSWidgets.swift
+  s_566b8e0c4467a4::t_e93b8bd14b127d 103,105
+apps/web/public/brand/hushos-logo-on-dark.svg
+  s_566b8e0c4467a4::t_f64d3eeb061729 1
+apps/web/public/brand/hushos-wordmark-on-dark.svg
+  s_566b8e0c4467a4::t_44a33ec8e1c206 1
+apps/web/scripts/mobile-brand-assets.ts
+  s_566b8e0c4467a4::t_e85ba0f002f845 95
+apps/web/src/lib/brand.ts
+  s_566b8e0c4467a4::t_f09caaa9db4d43 81
+apps/web/src/routes/__root.tsx
+  s_566b8e0c4467a4::t_d8f4c459a9a529 237,248
+packages/emails/src/rendered/family-plan-ending.ts
+  s_566b8e0c4467a4::t_b4aa9d71785323 4,8
+packages/emails/src/rendered/group-invitation.ts
+  s_566b8e0c4467a4::t_b89f85da77ca3f 3
+packages/emails/src/rendered/security-notice.ts
+  s_566b8e0c4467a4::t_7de88c30add5af 4,8,12,16
+packages/emails/src/rendered/share-notice.ts
+  s_566b8e0c4467a4::t_e7e4291849406b 4,8
+packages/emails/src/rendered/verify-email.ts
+  s_566b8e0c4467a4::t_b88bcef5cba0d8 4,8
+packages/emails/src/templates/family-plan-ending.tsx
+  s_566b8e0c4467a4::t_80dc36d3e2a839 70-74,80-83
+packages/emails/src/templates/group-invitation.tsx
+  s_566b8e0c4467a4::t_7c70a9238ab723 73-77,83-86
+packages/emails/src/templates/security-notice.tsx
+  s_566b8e0c4467a4::t_2af93f25b70560 111-115,121-124
+packages/emails/src/templates/share-notice.tsx
+  s_566b8e0c4467a4::t_753e9000973483 70-74,80-83
+packages/emails/src/templates/verify-email.tsx
+  s_566b8e0c4467a4::t_4385f32ba8f0ae 65-69,75-78
+packages/tokens/generated/Alpine.kt
+  s_566b8e0c4467a4::t_8dde3b20689542 45-46,49-50,54
+packages/tokens/generated/Alpine.swift
+  s_566b8e0c4467a4::t_cce698817d01db 6-7,10,12,18,20,28,100,103-104
+packages/tokens/generated/tokens.css
+  s_566b8e0c4467a4::t_cf54a2c0c70a4f 51-52,55-56,60,92-93,96-97,101
+packages/tokens/scripts/generate.ts
+  s_566b8e0c4467a4::t_769ddcf296f05f 7,14,106-107,112,135,138-139
+packages/tokens/src/index.ts
+  s_566b8e0c4467a4::t_8f79b18dddc675 23-31,39,42,47,50,69,76,104,107,297-298
+apps/web/src/components/access-cell.tsx
+  s_566b8e0c4467a4::t_4ecf324180f58a 52
+apps/web/src/components/access-demo.tsx
+  s_566b8e0c4467a4::t_1023d623d56183 105
+apps/web/src/components/drive/file-list.tsx
+  s_566b8e0c4467a4::t_5dcb06d9d85c05 429
+apps/web/src/components/drive/folder-view.tsx
+  s_566b8e0c4467a4::t_25a15ce32a84ef 996
+apps/web/src/components/drive/home-view.tsx
+  s_566b8e0c4467a4::t_48e7e641af2a12 843,867
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_566b8e0c4467a4::t_e20972f4f4043c 171-172
+apps/web/src/styles.css
+  s_566b8e0c4467a4::t_b4cfdb9a75c6be 101,170-171,276-279,283,288
+packages/tokens/src/contrast.test.ts
+  s_566b8e0c4467a4::t_000cdfdb5d5243 4,86-145
+apps/web/src/components/ui/button.tsx
+  s_566b8e0c4467a4::t_bec129cc13ff86 19-20,22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "07159ef35b9611bf99fe8bf48911be5d16c277aa",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
