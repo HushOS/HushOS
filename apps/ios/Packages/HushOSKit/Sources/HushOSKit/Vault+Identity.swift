@@ -261,9 +261,10 @@ extension Vault {
                 }
                 // Checked before anything is opened: only keys the pin holds, agreeing with this phone's guard, are sealed to.
                 let sealing: (publicKey: Data, kem: Data)
-                if let known = sealed[grantee] { sealing = known } else {
+                // Reused only for these very keys: a share serving other keys for them is judged again (a change pauses it).
+                if let known = sealed[contact.trustKey] { sealing = known } else {
                     sealing = try await trustGrantee(contact, follow: false)
-                    sealed[grantee] = sealing
+                    sealed[contact.trustKey] = sealing
                 }
                 guard let item = await openAnywhere(share.node), let nodeKey = nodeKey(of: item) else {
                     throw DriveAPIError.notFound("A shared item couldn’t be opened to seal it again.")

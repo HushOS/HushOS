@@ -82,6 +82,16 @@ extension Contact {
     var displayName: String { name.isEmpty ? email : name }
     var firstName: String { displayName.split(separator: " ").first.map(String.init) ?? displayName }
 
+    /*
+     * Everything `trustGrantee` judges a served identity by: a verdict kept for one pass (rotation,
+     * the upgrade pass) is reused only for exactly these keys, never for other keys served for the
+     * same person later in the pass.
+     */
+    var trustKey: String {
+        [userId.lowercased(), keyVersion.map(String.init) ?? "-", String(identityVersion), encryptionPublicKey, signingPublicKey,
+         mlDsaPublicKey ?? "-", kemPublicKey ?? "-", keysSignature ?? "-"].joined(separator: "|")
+    }
+
     /* The key commitment of the served keys, or nil for an identity that can't be pinned. */
     var commitment: String? {
         guard let full = served.full, let keys = try? pinOfServed(served: full, verified: false) else { return nil }
@@ -396,8 +406,11 @@ extension Vault {
      */
     public func lookup(email: String) async throws -> Lookup {
         let contact = try await Auth.lookupContact(email: email, as: session)
+        // Every guard write and settings save forgets the signers (moves this generation): one here is a change in trust.
+        let generation = signersGeneration
         let standing = try await withGuardTurn { try await stand(contact, act: true, follow: true) }
         var lookup = Lookup(contact: contact, pinned: nil, changed: false)
+        lookup.trustChanged = signersGeneration != generation
         switch standing {
         case .ok(let pin, _, let followed):
             lookup.pinned = pin

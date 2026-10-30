@@ -571,6 +571,46 @@ extension OnFakeDrive {
             #expect(server.settingsReads == unpassed + 2)
         }
 
+        @Test func onePassNeverSealsToOtherKeysServedLaterForThePersonItAccepted() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            let workspace = UUID().uuidString.lowercased()
+            let nodeIds = [UUID().uuidString.lowercased(), UUID().uuidString.lowercased()]
+            var document = try server.document(root: root)
+            document["sharing"] = ["shares": [nodeIds[0]: [maya], nodeIds[1]: [maya]], "links": [String: Any]()]
+            try server.replace(document, root: root)
+            func served(_ envelope: IdentityEnvelope) -> [String: Any] {
+                ["keyVersion": envelope.keyVersion, "identityVersion": Int(envelope.version), "encryptionPublicKey": envelope.encryptionPublicKey,
+                 "signingPublicKey": envelope.signingPublicKey, "mlDsaPublicKey": envelope.mlDsa!.publicKey, "kemPublicKey": envelope.kem!.publicKey,
+                 "keysSignature": envelope.keysSignature!]
+            }
+            // Two shares to Maya, both owed a re-seal (an older suite): the first lists her keys, the second other keys under her name.
+            let planted = try makeIdentity(maya).envelope
+            server.sharesMine = []
+            for (index, nodeId) in nodeIds.enumerated() {
+                let node = try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: [
+                    "id": nodeId, "workspaceId": workspace, "kind": "file", "keyEpoch": 3, "parentKeyEpoch": 1, "keyEnvelope": "k",
+                    "metadataVersion": 1, "metadataEnvelope": "m",
+                ]))
+                _ = try await phone.vault.adopt(node, nodeKey: try randomBytes(length: 32),
+                                                metadata: NodeMetadata(name: "f\(index)", mime: nil, size: 3, modified: nil, attributes: [:]), in: workspace)
+                server.sharesMine.append([
+                    "id": "share-\(index + 1)", "role": "viewer", "keyEpoch": 3, "createdAt": "2026-10-30T00:00:00Z", "suite": 3,
+                    "grantee": ["id": maya, "name": "Maya Lind", "email": "maya@example.com"],
+                    "node": try JSONSerialization.jsonObject(with: JSONEncoder().encode(node)),
+                    "granteeIdentity": served(index == 0 ? identity.envelope : planted),
+                ])
+            }
+            let outcome = try await phone.vault.upgradeShares()
+            // The first is sealed to the keys she was added with; the second is never sealed on the strength of the first's verdict.
+            #expect(server.resealed["share-1"] != nil)
+            #expect(server.resealed["share-2"] == nil)
+            #expect(outcome.rotated == 1 && outcome.skipped.contains("Maya’s account changed."))
+        }
+
         @Test func aGuardWriteThatFailsStopsTheActAndTheNextOneSettlesIt() async throws {
             defer { done() }
             let server = server(maya: try makeIdentity(maya).envelope)
@@ -677,6 +717,9 @@ extension OnFakeDrive {
             server.links[maya] = [ContactServer.link(from: first, to: succession)]
             let found = try await phone.vault.lookup(email: "maya@example.com")
             #expect(found.followed && !found.changed)
+            // The lookup moved whom signatures count for: the screen that asked must judge again.
+            #expect(found.trustChanged)
+            #expect(try await !phone.vault.lookup(email: "maya@example.com").trustChanged)
             let pin = try #require(found.pinned)
             #expect(pin.trust == .seen && pin.signingPublicKey == succession.identity.signingPublicKey)
             #expect(pin.previousSigningKeys?.contains(first.signingPublicKey) == true)

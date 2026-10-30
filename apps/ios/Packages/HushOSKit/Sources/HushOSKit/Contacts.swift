@@ -95,6 +95,11 @@ public struct Lookup: Sendable {
     public var heldFingerprint: String?
     /* The pin followed their signed succession to the keys looked up just now. */
     public var followed = false
+    /*
+     * The lookup itself saved or remembered something (followed a succession, settled an act left
+     * pending, a first guard entry): whom signatures count for moved, so what is drawn is judged again.
+     */
+    public var trustChanged = false
     /* Words can be compared, and a pin made, only over an upgraded identity whose keys statement holds. */
     public var upgraded: Bool { contact.upgraded }
 

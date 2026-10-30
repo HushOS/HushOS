@@ -223,7 +223,11 @@ struct CheckContactView: View {
 
     private func look() async {
         failure = nil
-        do { found = try await store.vault.lookup(email: email) } catch {
+        do {
+            found = try await store.vault.lookup(email: email)
+            // The lookup followed a succession or moved the guard: what is on screen is judged again now, whatever is tapped next.
+            if found?.trustChanged == true { Task { await store.refreshSigners(); await store.refreshMounts() } }
+        } catch {
             if let words = ErrorWords.say(error) { failure = words }
         }
     }
@@ -363,7 +367,11 @@ struct AccountChangedView: View {
 
     private func look() async {
         failure = nil
-        do { found = try await store.vault.lookup(email: change.email) } catch {
+        do {
+            found = try await store.vault.lookup(email: change.email)
+            // The lookup followed a succession or moved the guard: what is on screen is judged again now, whatever is tapped next.
+            if found?.trustChanged == true { Task { await store.refreshSigners(); await store.refreshMounts() } }
+        } catch {
             if let words = ErrorWords.say(error) { failure = words }
         }
     }

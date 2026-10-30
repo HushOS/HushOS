@@ -253,10 +253,12 @@ extension Vault {
                     do {
                         guard let pin = pins[share.granteeUserId] ?? pins.first(where: { $0.key.lowercased() == share.granteeUserId.lowercased() })?.value
                         else { throw ContactError.unpinned }
-                        if let known = granteeKeys[share.granteeUserId.lowercased()] { sealing = known } else {
-                            // As this phone's guard allows (2.8): a changed account is left out until Continue or a check.
-                            sealing = try await trustGrantee(Contact(userId: share.granteeUserId, served: share.grantee, name: pin.name, email: pin.email), follow: false)
-                            granteeKeys[share.granteeUserId.lowercased()] = sealing
+                        // As this phone's guard allows (2.8): a changed account is left out until Continue or a check. Kept per
+                        // person and served keys, so a later batch serving other keys for them is judged again, never sealed to the old.
+                        let grantee = Contact(userId: share.granteeUserId, served: share.grantee, name: pin.name, email: pin.email)
+                        if let known = granteeKeys[grantee.trustKey] { sealing = known } else {
+                            sealing = try await trustGrantee(grantee, follow: false)
+                            granteeKeys[grantee.trustKey] = sealing
                         }
                     } catch {
                         let reason = ErrorWords.say(error, otherwise: "Their keys couldn’t be checked.") ?? "Their keys couldn’t be checked."
