@@ -1,0 +1,22 @@
+crates/hushos-core/src/contact_guard.rs
+  s_566b8e0c4467a4::t_691951dcc5b940 1-203
+  s_566b8e0c4467a4::t_728ebda9106118 204-214
+crates/hushos-core/src/lib.rs
+  s_566b8e0c4467a4::t_f289ef2b7c89a1 20,52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "623d89a34e99ac33ad2741244e6c850a13aa6081",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
