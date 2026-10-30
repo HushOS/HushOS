@@ -732,12 +732,17 @@ private struct PersonAccessSheet: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Back") { dismiss() } } }
             .contactSteps($step) { settled = true }
             .onChange(of: step) { _, now in
+                guard now == nil else { return }
+                // The role a changed account stopped belongs to this Review only: dismissed unsettled, it is dropped,
+                // so a later, separate Check it's Maya never grants it.
+                let value = settled ? waiting : nil
+                waiting = nil
                 // Review settled the change: the role may change again, and one it stopped runs again.
-                guard now == nil, settled else { return }
+                guard settled else { return }
                 settled = false
                 changed = false
                 settledChange()
-                if let value = waiting { waiting = nil; change(to: value) } else { Task { await reload() } }
+                if let value { change(to: value) } else { Task { await reload() } }
             }
             .alert("Stop sharing with \(first)?", isPresented: $stopping) {
                 Button("Cancel", role: .cancel) {}
