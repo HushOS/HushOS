@@ -1,0 +1,20 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/ShareSeals.kt
+  h_f7ba60a6997566 60-63,66-68,71-72,74-76,78-80,84-90
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  h_f7ba60a6997566 602
+apps/android/app/src/test/kotlin/com/hushos/app/data/ContactTrustTest.kt
+  h_f7ba60a6997566 159,224
+apps/android/app/src/test/kotlin/com/hushos/app/data/ShareSealsTest.kt
+  h_f7ba60a6997566 62-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "56e1355480de169834e8a5478ebeb8079507016b",
+  "prompts": {},
+  "humans": {
+    "h_f7ba60a6997566": {
+      "author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
