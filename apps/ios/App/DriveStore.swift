@@ -90,6 +90,12 @@ final class DriveStore {
     var trust: TrustState = .pending
     /* Everyone pinned, checked or not, by lowercase id: where an Unverified mark can offer "Check their words". */
     var pins: [String: ContactPin] = [:]
+    /*
+     * A contact step a mark started (Check who wrote this, Check it's Maya), shown by the host the
+     * mark sits under (`contactHost`) rather than by the mark: adding or checking the writer clears
+     * the mark, and a sheet the mark owned would close with it mid-flow.
+     */
+    var contactFlow: ContactFlow?
     @ObservationIgnored private var verdicts = VerdictCache()
     /* Rotations that couldn't run because whom to trust didn't load: run again once it does. */
     @ObservationIgnored private var rotationsWaiting: [String: Opened] = [:]

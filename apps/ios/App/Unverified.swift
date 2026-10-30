@@ -77,7 +77,10 @@ struct UnverifiedMark: View {
     /* A whole row's worth (Info), rather than the compact mark on a line. */
     var row = false
     @State private var explaining = false
-    @State private var step: ContactStep?
+    /* Where the check this mark starts is shown: a parent that stays when the mark goes (ContactHost). */
+    @Environment(\.contactHost) private var host
+    /* The check asked for, held until the popover has gone: a host can't show a sheet while it is still up. */
+    @State private var asked: ContactFlow?
 
     var body: some View {
         Button { explaining = true } label: { label }
@@ -86,16 +89,19 @@ struct UnverifiedMark: View {
             .accessibilityHint(provenance.explanation)
             .popover(isPresented: $explaining) {
                 UnverifiedExplanation(provenance: provenance, target: store.checkTarget(for: provenance)) { target in
-                    explaining = false
                     // Someone nobody can name is found by their email first (Add someone), then checked.
-                    step = target.pinned ? .check(email: target.email, name: target.name) : .add(writer: target.id)
+                    asked = ContactFlow(step: target.pinned ? .check(email: target.email, name: target.name) : .add(writer: target.id), host: host)
+                    explaining = false
                 } retry: {
                     explaining = false
                     Task { await store.refreshSigners() }
                 }
                 .presentationCompactAdaptation(.popover)
+                .onDisappear {
+                    if let asked { store.contactFlow = asked }
+                    asked = nil
+                }
             }
-            .contactSheet($step, store: store) { Task { await store.refreshSigners() } }
     }
 
     @ViewBuilder private var label: some View {

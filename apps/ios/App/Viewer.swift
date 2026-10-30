@@ -39,6 +39,8 @@ struct FileViewer: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
         }
+        // A mark's check started in the viewer is the viewer's to show (the mark leaves once the writer is added).
+        .contactHost(.viewer, store: store)
     }
 
     /* The system's bars: Done, the name and where you are, Share and More above; who can open it and Send a copy below. */

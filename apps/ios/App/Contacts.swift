@@ -66,11 +66,6 @@ struct AddSomeoneView: View {
 
     var body: some View {
         List {
-            if writer != nil {
-                Text("Enter the email they use for HushOS. Once they’re in your contacts, what they add and change shows as theirs.")
-                    .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 0, leading: Alpine.Space.s1, bottom: 0, trailing: Alpine.Space.s1))
-            }
             Section {
                 LabeledContent("Email") {
                     TextField("them@example.com", text: $email)
@@ -80,6 +75,13 @@ struct AddSomeoneView: View {
                         .onChange(of: email) { _, _ in hint = nil }
                 }
                 .alpineRow()
+            } header: {
+                // The section's header, not a bare row: as a row the list laid it out wider than the card and clipped its first letters.
+                if writer != nil {
+                    Text("Enter the email they use for HushOS. Once they’re in your contacts, what they add and change shows as theirs.")
+                        .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
+                        .listRowInsets(EdgeInsets(top: 0, leading: Alpine.Space.s1, bottom: Alpine.Space.s3, trailing: Alpine.Space.s1))
+                }
             } footer: {
                 Text(hint?.text ?? "The email they use for HushOS.").foregroundStyle(hint?.error == true ? Alpine.danger : Alpine.inkMuted)
             }
@@ -492,5 +494,42 @@ extension Binding where Value == Bool {
     /* The same binding, telling `then` each value set. */
     func onSet(_ then: @escaping (Bool) -> Void) -> Binding<Bool> {
         Binding(get: { wrappedValue }, set: { wrappedValue = $0; then($0) })
+    }
+}
+
+/* Which presentation shows a mark's contact step: the app's root, an Info sheet, or the viewer. */
+enum ContactHost: Hashable { case root, info, viewer }
+
+struct ContactFlow: Identifiable, Hashable {
+    let step: ContactStep
+    let host: ContactHost
+    var id: String { step.id }
+}
+
+private struct ContactHostKey: EnvironmentKey {
+    static let defaultValue = ContactHost.root
+}
+
+extension EnvironmentValues {
+    /* The host the views below hand a mark's check to. */
+    var contactHost: ContactHost {
+        get { self[ContactHostKey.self] }
+        set { self[ContactHostKey.self] = newValue }
+    }
+}
+
+extension View {
+    /*
+     * Shows the store's contact step when it belongs to `host`, and tells the views below to hand
+     * theirs here. One per presentation (the root, Info, the viewer): SwiftUI presents a sheet only
+     * from the topmost one, and each of these outlives the marks inside it.
+     */
+    func contactHost(_ host: ContactHost, store: DriveStore) -> some View {
+        environment(\.contactHost, host)
+            .sheet(item: Binding(get: { store.contactFlow?.host == host ? store.contactFlow : nil },
+                                 set: { if $0 == nil, store.contactFlow?.host == host { store.contactFlow = nil } })) { flow in
+                ContactSheet(step: flow.step, resolved: { Task { await store.refreshSigners() } }) { store.contactFlow = nil }
+                    .environment(store)
+            }
     }
 }

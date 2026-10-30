@@ -552,6 +552,8 @@ struct InfoSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .contactSteps($step) { Task { await store.refreshSigners() } }
+            // A mark's check started here stays up when the mark goes: Info hosts it, not the mark.
+            .contactHost(.info, store: store)
             .task { store.thumbnail(for: item) }
         }
     }
