@@ -1215,7 +1215,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     /* Add someone (6.2): no words. `writer`, from a mark: the account that wrote the item. */
     suspend fun addContact(email: String, writer: String? = null): Result<Added> = act { it.addContact(email, writer) }
-        .onSuccess { if (it is Added.New) trustMoved() }
+        .onSuccess { if (it.trustChanged) trustMoved() }
 
     suspend fun continueWith(change: AccountChange): Result<ContactPin> = act { it.continueWith(change) }.onSuccess { trustMoved() }
 

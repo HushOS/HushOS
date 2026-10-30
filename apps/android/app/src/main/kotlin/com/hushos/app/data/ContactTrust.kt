@@ -32,11 +32,20 @@ import java.util.concurrent.atomic.AtomicLong
  * `guard_entry_next`); this file only orders the reads and writes.
  */
 
-/* What Add someone came to (6.2). */
+/* What Add someone came to (6.2), and whether the add itself moved whom this phone trusts (so what is drawn is judged again). */
 sealed interface Added {
-    data class New(val pin: ContactPin) : Added
-    data class Already(val pin: ContactPin) : Added
-    data class Changed(val change: AccountChange) : Added
+    val trustChanged: Boolean
+
+    data class New(val pin: ContactPin) : Added {
+        override val trustChanged get() = true
+    }
+
+    /* Already a contact; adding may still have moved trust (a legacy pin made first-seen, a succession followed, a first guard entry). */
+    data class Already(val pin: ContactPin, override val trustChanged: Boolean = false) : Added
+
+    data class Changed(val change: AccountChange) : Added {
+        override val trustChanged get() = false
+    }
 }
 
 /* Where each contact stands on this phone, from the settings and the guard alone. */
@@ -311,12 +320,16 @@ private fun <T> decidedAgain(act: () -> T): T = try {
  * that wrote the item, which the address must be.
  */
 fun Vault.addContact(email: String, writer: String? = null, firstSeen: String = "added"): Added {
+    // Every guard write and settings save moves the generation: one during the add is a change in trust, even for
+    // someone already there (a legacy pin made first-seen, a succession followed, a first guard entry).
+    val generation = memory.generation.get()
     val contact = Auth.lookupContact(context, email, api.session)
     if (writer != null && !contact.userId.equals(writer, ignoreCase = true)) {
         throw ContactProblem("This isn’t the account that wrote it. Check the address, then try again.")
     }
     if (!contact.upgraded) throw ContactProblem.notUpgraded(contact.displayName)
-    return GuardTurn.run { decidedAgain { addDecided(contact, firstSeen) } }
+    val added = GuardTurn.run { decidedAgain { addDecided(contact, firstSeen) } }
+    return if (added is Added.Already) added.copy(trustChanged = memory.generation.get() != generation) else added
 }
 
 private fun Vault.addDecided(contact: Contact, firstSeen: String): Added = when (val standing = stand(contact, act = true, follow = true)) {

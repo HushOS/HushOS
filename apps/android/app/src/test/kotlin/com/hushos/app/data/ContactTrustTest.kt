@@ -278,4 +278,17 @@ class ContactTrustTest {
         // Other keys served for her stay a verdict.
         assertThrows(AccountChanged::class.java) { sealTo(server.grace.id, server.impostorOfGrace().served) }
     }
+
+    @Test
+    fun addingSomeoneAlreadyThereSaysWhenTheAddItselfMovedTrust() {
+        val legacy = TestPins.preRelease(grace().pin(verified = false, firstSeen = null))
+        server.editSettings { it.pin(legacy) }
+        // Already a contact, but the add made the legacy pin first-seen and remembered her: what is drawn is judged again.
+        val added = vault.addContact(email)
+        assertTrue(added is Added.Already)
+        assertTrue(added.trustChanged)
+        // Adding again moves nothing.
+        assertFalse(vault.addContact(email).trustChanged)
+        assertTrue((vault.addContact(email) as Added.Already).pin.trust == PinTrust.SEEN)
+    }
 }
