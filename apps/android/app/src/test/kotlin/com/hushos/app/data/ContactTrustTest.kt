@@ -156,7 +156,7 @@ class ContactTrustTest {
         assertNotNull(vault.guard.pending(server.grace.id))
         assertTrue(ShareSeals.of(context).queued.contains(server.grace.id.lowercase()))
         // As after a re-seal pass that ran meanwhile: the next read that finishes the act owes the re-seal again.
-        ShareSeals.of(context).unqueue(listOf(server.grace.id))
+        ShareSeals.of(context).let { it.unqueue(it.queued) }
         val found = vault.lookup(email)
         assertFalse(found.changed)
         assertTrue(found.trustChanged)
@@ -221,4 +221,5 @@ class ContactTrustTest {
         assertThrows(AuthFailure::class.java) { vault.shareeChanged(pin) }
         assertNotEquals(before + 2, server.lookups)
     }
+
 }

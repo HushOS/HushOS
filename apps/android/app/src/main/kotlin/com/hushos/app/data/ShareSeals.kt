@@ -57,21 +57,35 @@ class ShareSeals(private val file: File) {
      * with them again to the pin's keys, then lets them go. Queued before the save that owes it, so no stop between the
      * two leaves it owed and unqueued; queued twice is only a re-seal done again.
      */
+    /*
+     * Each request carries the generation it was made at, so a pass acknowledges only what it read before it began: one
+     * queued again meanwhile (another Continue, to keys that pass never saw) outlives that pass.
+     */
     fun queue(userId: String) = synchronized(LOCK) {
         val json = read()
-        val to = json.optJSONArray("to") ?: org.json.JSONArray().also { json.put("to", it) }
-        if ((0 until to.length()).none { to.optString(it) == userId.lowercase() }) { to.put(userId.lowercase()); write(json) }
+        val next = json.optLong("toNext", 0L) + 1
+        json.put("toNext", next).put("to", requests(json).also { it.put(userId.lowercase(), next) })
+        write(json)
     }
 
-    val queued: Set<String> get() = synchronized(LOCK) { read().optJSONArray("to")?.let { a -> (0 until a.length()).map { a.optString(it) }.toSet() }.orEmpty() }
+    /* Who is owed a re-seal, by lowercased id, with the generation of the latest request. */
+    val queued: Map<String, Long> get() = synchronized(LOCK) { requests(read()).let { r -> r.keys().asSequence().associateWith { r.optLong(it) } } }
 
-    fun unqueue(userIds: Collection<String>) = synchronized(LOCK) {
-        if (userIds.isEmpty()) return@synchronized
+    /* Acknowledges the requests a pass read (`done`): one made again since, at a later generation, stays. */
+    fun unqueue(done: Map<String, Long>) = synchronized(LOCK) {
+        if (done.isEmpty()) return@synchronized
         val json = read()
-        val gone = userIds.map { it.lowercase() }.toSet()
-        val kept = queued.filter { it !in gone }
-        if (kept.isEmpty()) json.remove("to") else json.put("to", org.json.JSONArray(kept))
+        val requests = requests(json)
+        for ((id, generation) in done) if (requests.has(id) && requests.optLong(id) == generation) requests.remove(id)
+        if (requests.length() == 0) json.remove("to") else json.put("to", requests)
         write(json)
+    }
+
+    /* The requests as stored; the list an earlier build kept reads as generation 0, which any later request is above. */
+    private fun requests(json: JSONObject): JSONObject {
+        json.optJSONObject("to")?.let { return it }
+        val list = json.optJSONArray("to") ?: return JSONObject()
+        return JSONObject().also { r -> for (i in 0 until list.length()) list.optString(i).ifEmpty { null }?.let { r.put(it.lowercase(), 0L) } }
     }
 
     companion object {

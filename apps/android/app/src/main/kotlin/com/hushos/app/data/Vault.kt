@@ -599,7 +599,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             }
         }
         // Everyone queued whose shares were all sealed again (or who has none left) is let go; the rest stay for the next pass.
-        seals.unqueue(queued.filter { it !in failedFor })
+        seals.unqueue(queued.filterKeys { it !in failedFor })
         if (failed > 0) skipped.add("Some shares couldn’t be sealed again under your current keys. They’re tried again the next time you open HushOS.")
         else { seals.pending = null; seals.lastPass = System.currentTimeMillis() }
         return RotationResult(done, skipped.toList())
