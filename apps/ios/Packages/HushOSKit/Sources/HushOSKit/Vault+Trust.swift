@@ -127,7 +127,27 @@ private func agreement(_ userId: String, _ entry: GuardEntry?, _ pin: ContactPin
 }
 
 extension Vault {
-    var contactGuard: ContactGuardStore { guardStore ?? ContactGuardStore.shared(session: session) }
+    /*
+     * The guard, with the settings key it is sealed under: the one resolved for this turn
+     * (`resolveGuardKey`), else the one this process opened for a settings save.
+     */
+    var contactGuard: ContactGuardStore {
+        var store = guardStore ?? ContactGuardStore.shared(session: session)
+        if let guardKey { store.key = guardKey } else if let settingsKey, let settingsKeyEnvelope {
+            store.key = MarksKey(key: settingsKey, envelope: settingsKeyEnvelope)
+        }
+        return store
+    }
+
+    /*
+     * The key the guard opens under, as the rollback marks find theirs: the envelope kept beside
+     * the record when it opens under the account key, else this process's, else the server's.
+     * None to be had (no account key, nothing served) leaves the guard unreadable, never empty.
+     */
+    func resolveGuardKey() async {
+        let kept = (guardStore ?? ContactGuardStore.shared(session: session)).keptKey()
+        guardKey = (try? await marksKey(kept: kept, create: false)) ?? nil
+    }
 
     /* Tests: this vault's guard, in a folder of the test's own. */
     func adopt(guard store: ContactGuardStore) { guardStore = store }
@@ -139,6 +159,7 @@ extension Vault {
     func withGuardTurn<T>(_ body: () async throws -> T) async throws -> T {
         if guardBusy { await withCheckedContinuation { guardWaiting.append($0) } } else { guardBusy = true }
         defer { if guardWaiting.isEmpty { guardBusy = false } else { guardWaiting.removeFirst().resume() } }
+        await resolveGuardKey()
         return try await body()
     }
 
@@ -187,7 +208,11 @@ extension Vault {
         let revision = entry?.revision ?? 0
         if pending.revision == revision {
             if let pin, pin.commitment == pending.target, let next = try? guardEntryNext(previous: entry, pin: pin.keys) {
-                return (try commitGuard(contactId, next, over: revision), nil)
+                let finished = try commitGuard(contactId, next, over: revision)
+                // An act whose save landed but whose app stopped before it went on (a Continue, They match over new keys):
+                // what was shared with them still holds the old keys, so its re-seal is queued here too.
+                if pin.resealShares == true { ResealTo.add(contactId) }
+                return (finished, nil)
             }
             if let base = pending.base, at <= base { return (entry, pending) }
         }
@@ -216,10 +241,10 @@ extension Vault {
         -> (pin: ContactPin, entry: GuardEntry) {
         guard let keys = target.commitment else { throw ContactError.message("These keys can’t be remembered.") }
         let revision = entry?.revision ?? 0
-        let store = contactGuard
         let saved = try await updateSettings(change) { base in
             do {
-                try store.putPending(contactId, PendingAct(target: keys, revision: revision, at: ISO8601DateFormatter().string(from: Date()), base: base))
+                // The store as of now: the save just made (or opened) the settings key the guard is sealed under.
+                try self.contactGuard.putPending(contactId, PendingAct(target: keys, revision: revision, at: ISO8601DateFormatter().string(from: Date()), base: base))
             } catch {
                 throw GuardError.unsaved
             }

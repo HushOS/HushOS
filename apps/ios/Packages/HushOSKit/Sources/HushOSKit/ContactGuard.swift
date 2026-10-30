@@ -10,12 +10,15 @@ import HushOSCore
  * never cleared by anything the server answers.
  *
  * One record per account (`AccountOwner`: the same user id on another server is another
- * account) in `local/guard/<slot>.json`, the slot a digest of the owner, so the file name says
- * neither whose it is nor whom it is about. Out of backups (`Unbacked`), deleted on every wipe
- * with the rest of the account (`AccountStore`), so a phone signed back in trusts the settings
- * as a new device does. Unlike the web's, it is not sealed: the phone has no lock, and the app
- * group's files are `completeUntilFirstUserAuthentication` (the rollback marks are sealed to
- * name nothing; this record holds public keys and account ids).
+ * account) in `local/guard/<slot>.json`, the slot the core's `contact_guard_slot` (a digest of
+ * the server and the user id, found without a key), so the file name says neither whose it is
+ * nor whom it is about. Sealed by the core (`contact_guard_seal`) under a key from the settings
+ * key, as the web's guard and the rollback marks are, with the settings key's envelope as the
+ * server keeps it beside the record, so the app and both extensions open it without asking the
+ * server (`MarksKey`, the marks' own path). A record that is there and does not open (no account
+ * key, another settings key, damaged or swapped bytes) is unreadable, never "nothing recorded".
+ * Out of backups (`Unbacked`), deleted on every wipe with the rest of the account
+ * (`AccountStore`), so a phone signed back in trusts the settings as a new device does.
  *
  * The app, the Files extension and the share extension share it, so every write is one
  * read-change-write under an exclusive `flock` on `local/guard.lock` (FileLock), only while the
@@ -115,6 +118,22 @@ struct ContactGuardStore: Sendable {
     var generation: GuardGeneration = .process
     /* Whether the session this guard is kept for is still the one stored (see RollbackMarkStore.signedIn). */
     var signedIn: @Sendable () -> Bool = { true }
+    /* The settings key the record is sealed under, and its envelope: nil when it could not be had (unreadable, unsaved). */
+    var key: MarksKey?
+
+    /* The record on disk: the sealed guard and the settings key's envelope it opens under. */
+    struct Sealed: Codable {
+        struct Kept: Codable, Equatable {
+            let nonce: String
+            let ciphertext: String
+        }
+
+        var v = 2
+        let key: Kept
+        let record: String
+    }
+
+    private static let kind = "record"
 
     /* The app group's guard for the vault signed in with `session`. */
     static func shared(session: SharedKeychain.Session) -> ContactGuardStore {
@@ -134,21 +153,36 @@ struct ContactGuardStore: Sendable {
     /* Beside the folder and never deleted, as the marks' lock: a deleted lock lets two writers lock two files. */
     private var lockPath: String { folder.path + ".lock" }
 
-    var file: URL {
-        let slot = keyDigest(publicKey: Data("hushos/contact-guard\n\(owner.origin)\n\(owner.userId)".utf8))
-        return folder.appendingPathComponent("\(slot).json")
-    }
+    var slot: String { (try? contactGuardSlot(origin: owner.origin, userId: owner.userId)) ?? "-" }
 
-    /* The record as stored: empty when there is none; `unreadable` when one is there and doesn't read, or holds an entry that isn't one. */
-    func record() throws -> Record {
+    var file: URL { folder.appendingPathComponent("\(slot).json") }
+
+    /* What is on disk: nil when nothing is; `unreadable` when something is that isn't a sealed guard. */
+    private func sealed() throws -> Sealed? {
         let data: Data
         do {
             data = try Data(contentsOf: file)
         } catch {
-            if !FileManager.default.fileExists(atPath: file.path) { return Record() }
+            if !FileManager.default.fileExists(atPath: file.path) { return nil }
             throw GuardError.unreadable
         }
-        guard let record = try? JSONDecoder().decode(Record.self, from: data), record.v == 1,
+        guard let sealed = try? JSONDecoder().decode(Sealed.self, from: data), sealed.v == 2 else { throw GuardError.unreadable }
+        return sealed
+    }
+
+    /* The settings key's envelope the record was sealed under, to open that key with; nil for no record. */
+    func keptKey() -> SettingsKeyEnvelope? {
+        (try? sealed())?.map { SettingsKeyEnvelope(nonce: $0.key.nonce, ciphertext: $0.key.ciphertext) }
+    }
+
+    /*
+     * The record: empty when there is none; `unreadable` when one is there and doesn't open under
+     * this store's key (or there is none), or holds an entry that isn't one.
+     */
+    func record() throws -> Record {
+        guard let sealed = try sealed() else { return Record() }
+        guard let key, let json = try? contactGuardOpen(settingsKey: key.key, userId: owner.userId, slot: slot, kind: Self.kind, envelope: sealed.record),
+              let record = try? JSONDecoder().decode(Record.self, from: Data(json.utf8)), record.v == 1,
               record.entries.values.allSatisfy({ $0.entry != nil }) else { throw GuardError.unreadable }
         return record
     }
@@ -204,9 +238,13 @@ struct ContactGuardStore: Sendable {
                 guard signedIn(), generation.value == began else { throw GuardError.unsaved }
                 var record = try self.record()
                 try body(&record)
+                guard let key else { throw GuardError.unsaved }
                 Unbacked.folder(folder)
                 do {
-                    try JSONEncoder().encode(record).write(to: file, options: .atomic)
+                    let json = String(decoding: try JSONEncoder().encode(record), as: UTF8.self)
+                    let envelope = try contactGuardSeal(settingsKey: key.key, userId: owner.userId, slot: slot, kind: Self.kind, record: json)
+                    let kept = Sealed.Kept(nonce: key.envelope.nonce, ciphertext: key.envelope.ciphertext)
+                    try JSONEncoder().encode(Sealed(key: kept, record: envelope)).write(to: file, options: .atomic)
                 } catch {
                     throw GuardError.unsaved
                 }

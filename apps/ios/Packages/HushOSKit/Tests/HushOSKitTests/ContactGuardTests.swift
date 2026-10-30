@@ -13,8 +13,16 @@ final class GuardSwitch: @unchecked Sendable {
     }
 }
 
-func guardStore(_ folder: URL, _ owner: AccountOwner, generation: GuardGeneration = GuardGeneration(), writes: GuardSwitch = GuardSwitch()) -> ContactGuardStore {
-    ContactGuardStore(folder: folder, owner: owner, generation: generation) { writes.writable }
+/* A settings key and the envelope the server would keep it in, for a store on its own. */
+func settingsKey(_ byte: UInt8) -> MarksKey {
+    MarksKey(key: Data(repeating: byte, count: 32), envelope: SettingsKeyEnvelope(nonce: "n\(byte)", ciphertext: "c\(byte)"))
+}
+
+func guardStore(_ folder: URL, _ owner: AccountOwner, generation: GuardGeneration = GuardGeneration(), writes: GuardSwitch = GuardSwitch(),
+                key: MarksKey? = settingsKey(7)) -> ContactGuardStore {
+    var store = ContactGuardStore(folder: folder, owner: owner, generation: generation) { writes.writable }
+    store.key = key
+    return store
 }
 
 func guardFolder() -> URL {
@@ -60,16 +68,47 @@ struct ContactGuardStoreTests {
         try Data("{not json".utf8).write(to: store.file)
         #expect(throws: GuardError.unreadable) { _ = try store.entry("maya") }
         #expect(throws: GuardError.unreadable) { _ = try store.entry("someone-else") }
-        // An entry edited to keys that make no commitment (a digest cut short) is no entry to judge by either.
+        // An entry edited to keys that make no commitment (a digest cut short), sealed properly, is no entry to judge by either.
         var record = ContactGuardStore.Record()
         let entry = try guardEntryNext(previous: nil, pin: try firstSeen(maya.envelope))
         record.entries["maya"] = StoredGuardEntry(GuardEntry(revision: 1, keyVersion: 1, encryptionPublicKey: entry.encryptionPublicKey,
                                                              signingPublicKey: entry.signingPublicKey, mlDsaPublicKeyHash: "00",
                                                              kemPublicKeyHash: entry.kemPublicKeyHash, previousSigningKeys: [], verified: false))
+        let sealed = try contactGuardSeal(settingsKey: settingsKey(7).key, userId: owner.userId, slot: store.slot, kind: "record",
+                                          record: String(decoding: try JSONEncoder().encode(record), as: UTF8.self))
+        try JSONEncoder().encode(ContactGuardStore.Sealed(key: .init(nonce: "n7", ciphertext: "c7"), record: sealed)).write(to: store.file)
+        #expect(throws: GuardError.unreadable) { _ = try store.entries() }
+        // The plaintext form this branch wrote before the guard was sealed is refused, never read as it is.
         try JSONEncoder().encode(record).write(to: store.file)
         #expect(throws: GuardError.unreadable) { _ = try store.entries() }
         // And nothing is written over a record that doesn't read.
         #expect(throws: GuardError.unreadable) { try store.dropPending("maya") }
+    }
+
+    @Test func aGuardSealedUnderOneSettingsKeyIsUnreadableUnderAnotherAndNamesNobody() throws {
+        let folder = guardFolder()
+        let maya = try makeIdentity("6b1a3f0e-2c4d-4e5f-8a9b-0c1d2e3f4a5b")
+        let sealedUnderA = guardStore(folder, owner, key: settingsKey(7))
+        try sealedUnderA.commit("maya-account-id", try guardEntryNext(previous: nil, pin: try firstSeen(maya.envelope)), over: 0)
+        // The bytes on disk: no account id of the contact, no key, no email, nothing in the clear.
+        let bytes = try Data(contentsOf: sealedUnderA.file)
+        let text = String(decoding: bytes, as: UTF8.self)
+        for clear in ["maya-account-id", maya.envelope.signingPublicKey, maya.envelope.encryptionPublicKey, "entries", "revision"] {
+            #expect(!text.contains(clear), "\(clear) is on disk in the clear")
+        }
+        // Another settings key (the server served a new one, or the record was swapped in): unreadable, never empty.
+        let underB = guardStore(folder, owner, key: settingsKey(8))
+        #expect(throws: GuardError.unreadable) { _ = try underB.entry("maya-account-id") }
+        #expect(throws: GuardError.unreadable) { _ = try underB.entry("someone-else") }
+        // And never written over: a write under B would have dropped what A recorded.
+        #expect(throws: GuardError.unreadable) { try underB.putPending("someone-else", PendingAct(target: "t", revision: 0, at: "now", base: 0)) }
+        // No key at all (an account not unlocked on this phone): the same.
+        #expect(throws: GuardError.unreadable) { _ = try guardStore(folder, owner, key: nil).entries() }
+        // The same record moved under another account's slot does not open there.
+        let other = guardStore(folder, AccountOwner(userId: "someone", origin: owner.origin), key: settingsKey(7))
+        try FileManager.default.copyItem(at: sealedUnderA.file, to: other.file)
+        #expect(throws: GuardError.unreadable) { _ = try other.entries() }
+        #expect(try sealedUnderA.entry("maya-account-id") != nil)
     }
 
     @Test func aCommitOverARevisionAnotherProcessMovedIsRefused() throws {
@@ -162,7 +201,8 @@ extension OnFakeDrive {
             let vault = Vault(api: DriveAPI(session: session, configuration: configuration), session: session)
             await vault.adopt(accountKey: root)
             let writes = GuardSwitch()
-            let store = guardStore(folder, AccountOwner(session), writes: writes)
+            // No key of its own: the vault seals it under the account's settings key, as the app does.
+            let store = guardStore(folder, AccountOwner(session), writes: writes, key: nil)
             await vault.adopt(guard: store)
             return Phone(vault: vault, guardStore: store, writes: writes)
         }
@@ -221,9 +261,9 @@ extension OnFakeDrive {
             let stored = try #require(try storedPin(server))
             #expect(stored["fingerprint"] as? String == "" && stored["firstSeen"] as? String == "added")
             // The guard holds the same keys, and the act left nothing pending.
-            let entry = try #require(try phone.guardStore.entry(maya))
+            let entry = try #require(try await phone.vault.contactGuard.entry(maya))
             #expect(keyCommitment(pin: entry.keys) == pin.commitment && entry.revision == 1 && !entry.verified)
-            #expect(try phone.guardStore.pending(maya) == nil)
+            #expect(try await phone.vault.contactGuard.pending(maya) == nil)
             // Adding again over the same keys says so and writes nothing.
             let puts = server.puts
             guard case .already = try await phone.vault.addContact(email: "maya@example.com") else { Issue.record("added twice"); return }
@@ -252,7 +292,7 @@ extension OnFakeDrive {
             #expect(await phone.vault.accountChanges()[maya] == nil)
             let after = try await phone.vault.trustGrantee(try contact(server), follow: true)
             #expect(after.publicKey == (try base64urlDecode(value: fresh.encryptionPublicKey)))
-            #expect(try phone.guardStore.entry(maya)?.signingPublicKey == fresh.signingPublicKey)
+            #expect(try await phone.vault.contactGuard.entry(maya)?.signingPublicKey == fresh.signingPublicKey)
             ResealTo.remove([maya])
         }
 
@@ -263,7 +303,7 @@ extension OnFakeDrive {
             let found = try await phone.vault.lookup(email: "maya@example.com")
             let checked = try await phone.vault.theyMatch(found)
             #expect(checked.trust == .verified)
-            #expect(try phone.guardStore.entry(maya)?.verified == true)
+            #expect(try await phone.vault.contactGuard.entry(maya)?.verified == true)
             #expect(try await phone.vault.contactStandings()[maya]?.verified == true)
             _ = try startOver(server)
             let changed = try await phone.vault.lookup(email: "maya@example.com")
@@ -327,13 +367,14 @@ extension OnFakeDrive {
             await #expect(throws: (any Error).self) {
                 _ = try await phone.vault.continueWith(AccountChange(contactId: maya, name: "Maya Lind", email: "maya@example.com"))
             }
-            let pending = try #require(try phone.guardStore.pending(maya))
+            let pending = try #require(try await phone.vault.contactGuard.pending(maya))
             #expect(pending.target == (try contact(server)).commitment && pending.revision == 1)
             // Without the pending record, the same settings would be a change: here it finishes silently.
             let restarted = await self.phone(server, folder: folder)
             let sealing = try await restarted.vault.trustGrantee(try contact(server), follow: true)
             #expect(sealing.publicKey == (try base64urlDecode(value: fresh.encryptionPublicKey)))
-            #expect(try restarted.guardStore.entry(maya)?.revision == 2 && (try restarted.guardStore.pending(maya)) == nil)
+            let finished = await restarted.vault.contactGuard
+            #expect(try finished.entry(maya)?.revision == 2 && (try finished.pending(maya)) == nil)
             ResealTo.remove([maya])
         }
 
@@ -346,9 +387,81 @@ extension OnFakeDrive {
             _ = try startOver(server)
             server.loseNextSettingsAnswer = true
             _ = try? await phone.vault.continueWith(AccountChange(contactId: maya, name: "Maya Lind", email: "maya@example.com"))
-            try phone.guardStore.dropPending(maya)
+            try await phone.vault.contactGuard.dropPending(maya)
             await #expect(throws: AccountChangedError.self) { _ = try await phone.vault.trustGrantee(try contact(server), follow: true) }
-            #expect(try phone.guardStore.entry(maya)?.revision == 1)
+            #expect(try await phone.vault.contactGuard.entry(maya)?.revision == 1)
+        }
+
+        @Test func aVaultThatCannotOpenTheSettingsKeyCannotReadTheGuard() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let folder = guardFolder()
+            let phone = await phone(server, folder: folder)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            #expect(try await phone.vault.contactGuard.entry(maya) != nil)
+            // The same account on this phone with no account key opened (signed in, nothing unlocked): ciphertext only.
+            let session = SharedKeychain.Session(origin: "https://contacts.test", token: "t-\(me)", userId: me)
+            let locked = Vault(api: DriveAPI(session: session, configuration: Auth.testTransport!), session: session)
+            await locked.adopt(guard: guardStore(folder, AccountOwner(session), key: nil))
+            await locked.resolveGuardKey()
+            await #expect(throws: GuardError.unreadable) { _ = try await locked.contactGuard.entries() }
+        }
+
+        @Test func aContinueFinishedAfterItsAppStoppedStillResealsWhatWasShared() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let folder = guardFolder()
+            let phone = await phone(server, folder: folder)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            // Shared with her before her account changed: the ledger and the server's list both hold it.
+            let workspace = UUID().uuidString.lowercased()
+            let nodeId = UUID().uuidString.lowercased()
+            var document = try server.document(root: root)
+            document["sharing"] = ["shares": [nodeId: [maya]], "links": [String: Any]()]
+            try server.replace(document, root: root)
+            let node = try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: [
+                "id": nodeId, "workspaceId": workspace, "kind": "file", "keyEpoch": 3, "parentKeyEpoch": 1, "keyEnvelope": "k",
+                "metadataVersion": 1, "metadataEnvelope": "m",
+            ]))
+            let nodeKey = try randomBytes(length: 32)
+            // She starts over; Continue's save lands, its answer is lost, and the app stops before queuing the re-seal.
+            let freshRoot = try randomBytes(length: 32)
+            let fresh = try identityCreate(userId: maya, accountKey: freshRoot, keyVersion: 1)
+            server.people["maya@example.com"]?.identity = fresh
+            server.loseNextSettingsAnswer = true
+            _ = try? await phone.vault.continueWith(AccountChange(contactId: maya, name: "Maya Lind", email: "maya@example.com"))
+            ResealTo.remove([maya])
+            defer { ResealTo.remove([maya]) }
+            server.sharesMine = [[
+                "id": "share-1", "role": "viewer", "keyEpoch": 3, "createdAt": "2026-10-30T00:00:00Z", "suite": 4,
+                "grantee": ["id": maya, "name": "Maya Lind", "email": "maya@example.com"],
+                "node": try JSONSerialization.jsonObject(with: JSONEncoder().encode(node)),
+                "granteeIdentity": [
+                    "keyVersion": fresh.keyVersion, "identityVersion": Int(fresh.version), "encryptionPublicKey": fresh.encryptionPublicKey,
+                    "signingPublicKey": fresh.signingPublicKey, "mlDsaPublicKey": fresh.mlDsa!.publicKey, "kemPublicKey": fresh.kem!.publicKey,
+                    "keysSignature": fresh.keysSignature!,
+                ],
+            ]]
+            // The next process: the pending record finishes the act, and the re-seal is queued with it.
+            let restarted = await self.phone(server, folder: folder)
+            _ = try await restarted.vault.adopt(node, nodeKey: nodeKey, metadata: NodeMetadata(name: "plan.md", mime: nil, size: 3, modified: nil, attributes: [:]),
+                                                in: workspace)
+            _ = try await restarted.vault.trustGrantee(try contact(server), follow: false)
+            #expect(ResealTo.contains(maya))
+            // The upgrade pass seals that share again, to her new keys and nothing else.
+            let outcome = try await restarted.vault.upgradeShares()
+            #expect(outcome.rotated == 1 && outcome.skipped.isEmpty)
+            let resealed = try #require(server.resealed["share-1"])
+            let ownKeys = try identityOpen(userId: me, accountKey: root, envelope: own)
+            let opened = try shareOpen(
+                envelope: try base64urlDecode(value: resealed),
+                granter: HybridPublicKey(signingPublicKey: try base64urlDecode(value: ownKeys.signingPublicKey),
+                                         mlDsaPublicKey: try base64urlDecode(value: ownKeys.mlDsaPublicKey!)),
+                grantee: try identityOpen(userId: maya, accountKey: freshRoot, envelope: fresh),
+                ctx: ShareContext(workspaceId: workspace, nodeId: nodeId, keyEpoch: 3, granteeUserId: maya, granterUserId: me)
+            )
+            #expect(opened == nodeKey)
+            #expect(!ResealTo.contains(maya))
         }
 
         @Test func aGuardWriteThatFailsStopsTheActAndTheNextOneSettlesIt() async throws {
@@ -365,7 +478,8 @@ extension OnFakeDrive {
             phone.writes.writable = true
             // Space again: the pending record names exactly the pin the settings hold, and the act finishes.
             _ = try await phone.vault.trustGrantee(try contact(server), follow: true)
-            #expect(try phone.guardStore.entry(maya) != nil && (try phone.guardStore.pending(maya)) == nil)
+            let settled = await phone.vault.contactGuard
+            #expect(try settled.entry(maya) != nil && (try settled.pending(maya)) == nil)
         }
 
         @Test func anUnreadableGuardPausesEveryoneAndPinsNobody() async throws {
@@ -579,6 +693,9 @@ final class ContactServer: @unchecked Sendable {
     /* The next settings save is stored and its answer lost. */
     var loseNextSettingsAnswer = false
     var onSettingsPut: (() -> Void)?
+    /* What `/shares/mine` lists, and the envelopes put back by share id. */
+    var sharesMine: [[String: Any]] = []
+    var resealed: [String: String] = [:]
     private let lock = NSLock()
 
     init(me: String, identity: IdentityEnvelope) {
@@ -647,6 +764,8 @@ final class ContactServer: @unchecked Sendable {
                 return (500, ["message": "No answer."])
             }
             return (200, ["settingsVersion": settingsVersion])
+        case ("GET", "/api/drive/shares/mine"):
+            return (200, ["shares": sharesMine, "links": []])
         case ("POST", "/api/auth/contacts/lookup"):
             guard let email = json["email"] as? String, let person = people[email] else { return (404, ["message": "No HushOS account uses that email."]) }
             let served = person.identity
@@ -656,6 +775,10 @@ final class ContactServer: @unchecked Sendable {
                 "mlDsaPublicKey": served.mlDsa?.publicKey as Any, "kemPublicKey": served.kem?.publicKey as Any, "keysSignature": served.keysSignature as Any,
             ]])
         default:
+            if request.httpMethod == "PUT", path.hasPrefix("/api/drive/shares/"), path.hasSuffix("/envelope") {
+                resealed[String(path.split(separator: "/")[3])] = json["shareEnvelope"] as? String
+                return (200, [:])
+            }
             if path.hasPrefix("/api/auth/contacts/"), path.hasSuffix("/succession") {
                 let id = path.split(separator: "/")[3]
                 return (200, ["links": links[String(id)] ?? []])

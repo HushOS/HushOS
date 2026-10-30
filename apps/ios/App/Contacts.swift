@@ -30,16 +30,24 @@ struct ContactStepView: View {
     var resolved: () -> Void = {}
     /* In a sheet of its own rather than pushed in another's stack. */
     var presented = false
+    /* Told each step this shows, so a sheet can grow for the words. */
+    var shown: (ContactStep) -> Void = { _ in }
     let done: () -> Void
 
     var body: some View {
+        Group { current }.onChange(of: step, initial: true) { _, now in shown(now) }
+    }
+
+    @ViewBuilder private var current: some View {
         switch step {
         case .check(let email, let name):
             CheckContactView(email: email, name: name, resolved: resolved, done: done)
         case .changed(let change):
             AccountChangedView(change: change, check: { step = .check(email: change.email, name: change.name) }, resolved: resolved, presented: presented, done: done)
         case .add(let writer):
-            AddSomeoneView(writer: writer, added: { pin in step = .check(email: pin.email, name: pin.name) }, changed: { step = .changed($0) }, cancel: done)
+            // Added, and done: no words. Only from a mark (Check who wrote this) do the words come next, if they like, as on the web.
+            AddSomeoneView(writer: writer, added: { pin in if writer != nil { step = .check(email: pin.email, name: pin.name) } else { done() } },
+                           changed: { step = .changed($0) }, cancel: done)
         }
     }
 }
@@ -58,6 +66,11 @@ struct AddSomeoneView: View {
 
     var body: some View {
         List {
+            if writer != nil {
+                Text("Enter the email they use for HushOS. Once they’re in your contacts, what they add and change shows as theirs.")
+                    .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 0, leading: Alpine.Space.s1, bottom: 0, trailing: Alpine.Space.s1))
+            }
             Section {
                 LabeledContent("Email") {
                     TextField("them@example.com", text: $email)
@@ -73,7 +86,7 @@ struct AddSomeoneView: View {
         }
         .listStyle(.insetGrouped)
         .alpineGrouped()
-        .navigationTitle("Add someone")
+        .navigationTitle(writer == nil ? "Add someone" : "Check who wrote this")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden()
         .toolbar {
@@ -374,9 +387,10 @@ struct AccountChangedView: View {
 struct TechnicalDetails<Content: View>: View {
     @ViewBuilder let content: () -> Content
     @State private var open = false
+    @Environment(\.growSheet) private var growSheet
 
     var body: some View {
-        DisclosureGroup(isExpanded: $open) {
+        DisclosureGroup(isExpanded: $open.onSet { if $0 { growSheet() } }) {
             VStack(alignment: .leading, spacing: Alpine.Space.s2) { content() }
                 .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -412,10 +426,56 @@ extension View {
     /* A contact step in a sheet of its own, from a screen that isn't a sheet (Shared, a mark, Info). */
     func contactSheet(_ step: Binding<ContactStep?>, store: DriveStore, resolved: @escaping () -> Void = {}) -> some View {
         sheet(item: step) { shown in
-            NavigationStack {
-                ContactStepView(step: shown, resolved: resolved, presented: true) { step.wrappedValue = nil }
-            }
-            .environment(store)
+            ContactSheet(step: shown, resolved: resolved) { step.wrappedValue = nil }
+                .environment(store)
         }
+    }
+}
+
+/*
+ * A contact step in a sheet of its own, as tall as it needs: the changed-account notice and Add
+ * someone are short and open part way up; the twelve words, Technical details opened, and the
+ * largest text sizes take the whole height.
+ */
+private struct ContactSheet: View {
+    let step: ContactStep
+    let resolved: () -> Void
+    let done: () -> Void
+    @State private var detent = PresentationDetent.large
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    private static let short = PresentationDetent.fraction(0.66)
+
+    var body: some View {
+        NavigationStack {
+            ContactStepView(step: step, resolved: resolved, presented: true, shown: { now in
+                if case .check = now { detent = .large }
+            }, done: done)
+        }
+        .environment(\.growSheet, { detent = .large })
+        .presentationDetents([Self.short, .large], selection: $detent)
+        .onAppear {
+            if case .check = step { return }
+            if !typeSize.isAccessibilitySize { detent = Self.short }
+        }
+    }
+}
+
+private struct GrowSheetKey: EnvironmentKey {
+    static let defaultValue: @MainActor () -> Void = {}
+}
+
+extension EnvironmentValues {
+    /* A sheet that opened part way up grows to its full height (Technical details opened). */
+    var growSheet: @MainActor () -> Void {
+        get { self[GrowSheetKey.self] }
+        set { self[GrowSheetKey.self] = newValue }
+    }
+}
+
+extension Binding where Value == Bool {
+    /* The same binding, telling `then` each value set. */
+    func onSet(_ then: @escaping (Bool) -> Void) -> Binding<Bool> {
+        Binding(get: { wrappedValue }, set: { wrappedValue = $0; then($0) })
     }
 }

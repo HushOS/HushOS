@@ -141,17 +141,21 @@ struct ShareItemSheet: View {
                     ForEach(shares) { share in
                         let first = firstName(share.grantee.name.isEmpty ? share.grantee.email : share.grantee.name)
                         let change = changed.contains(share.grantee.id.lowercased())
-                        Button {
-                            if change { step = .changed(AccountChange(contactId: share.grantee.id, name: share.grantee.name, email: share.grantee.email)) } else { person = share }
-                        } label: {
+                        // Always their sheet: Stop sharing never waits on Review (only a new role does), as on the web.
+                        Button { person = share } label: {
                             HStack(spacing: Alpine.Space.s3) {
                                 PersonAvatar(name: share.grantee.name, seed: share.grantee.id)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(share.grantee.name.isEmpty ? share.grantee.email : share.grantee.name).foregroundStyle(Alpine.ink).lineLimit(1)
                                     if change {
-                                        // Their account changed (6.3): said on the row, with Review, and their role waits until then.
-                                        Text("\(first)’s account changed · \(Text("Review").foregroundStyle(Alpine.primary).fontWeight(.semibold))")
-                                            .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(2)
+                                        // Their account changed (6.3): said on the row, and their role waits for Review. One line: the
+                                        // sentence gives way, "· Review" never starts a line of its own.
+                                        HStack(spacing: 0) {
+                                            Text("\(first)’s account changed").lineLimit(1).truncationMode(.tail)
+                                            Text(" · ") + Text("Review").foregroundStyle(Alpine.primary).fontWeight(.semibold)
+                                        }
+                                        .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                                        .lineLimit(1)
                                     } else {
                                         Text(share.grantee.email).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
                                     }
@@ -638,8 +642,8 @@ private struct PersonAccessSheet: View {
     let share: ShareView
     /* Their pin, when they are in Contacts: what a new role is sealed to. */
     let pin: ContactPin?
-    /* Their account changed: the role waits for Review. */
-    let changed: Bool
+    /* Their account changed: the role waits for Review; stopping never does. */
+    @State var changed: Bool
     let reload: () async -> Void
     @State private var stopping = false
     @State private var busy = false
@@ -657,6 +661,19 @@ private struct PersonAccessSheet: View {
                     role("editor", "Can edit", item.isFolder ? "Add, rename and delete inside" : "Open, download and replace")
                 } footer: {
                     if pin == nil { Text("Add \(first) to Contacts to change what they can do.").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted) }
+                }
+                if changed {
+                    Section {
+                        Button { step = .changed(AccountChange(contactId: share.grantee.id, name: share.grantee.name, email: share.grantee.email)) } label: {
+                            HStack {
+                                Text("\(first)’s account changed").foregroundStyle(Alpine.ink).lineLimit(1)
+                                Spacer(minLength: Alpine.Space.s2)
+                                Text("Review").fontWeight(.semibold).foregroundStyle(Alpine.primary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain).alpineRow()
+                    }
                 }
                 if pin != nil {
                     Section {
@@ -680,8 +697,11 @@ private struct PersonAccessSheet: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Back") { dismiss() } } }
             .contactSteps($step) { settled = true }
             .onChange(of: step) { _, now in
-                // Review settled the change that stopped a new role: it runs again.
-                if now == nil, settled, let value = waiting { settled = false; waiting = nil; change(to: value) }
+                // Review settled the change: the role may change again, and one it stopped runs again.
+                guard now == nil, settled else { return }
+                settled = false
+                changed = false
+                if let value = waiting { waiting = nil; change(to: value) } else { Task { await reload() } }
             }
             .alert("Stop sharing with \(first)?", isPresented: $stopping) {
                 Button("Cancel", role: .cancel) {}
