@@ -664,6 +664,24 @@ extension OnFakeDrive {
             #expect(sent.isEmpty)
         }
 
+        @Test func aPinOverHerKeysWithAFingerprintOverOthersBecomesFirstSeenAndActsGoOn() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            // Her keys, and a fingerprint that isn't theirs (an edited or older format): it vouches for nothing.
+            var invalid = try pinned(maya, identity.keys, name: "Maya Lind")
+            invalid.fingerprint = String(repeating: "0", count: 64)
+            #expect(invalid.trust == .invalid)
+            var settings = Settings()
+            settings.setPin(invalid)
+            try server.replace(try reread(settings), root: root)
+            #expect(try await !phone.vault.lookup(email: "maya@example.com").changed)
+            #expect(try storedPin(server)?["fingerprint"] as? String == "")
+            guard case .already = try await phone.vault.addContact(email: "maya@example.com") else { Issue.record("not already"); return }
+            _ = try await phone.vault.trustGrantee(try contact(server), follow: true)
+        }
+
         @Test func aGuardWriteThatFailsStopsTheActAndTheNextOneSettlesIt() async throws {
             defer { done() }
             let server = server(maya: try makeIdentity(maya).envelope)

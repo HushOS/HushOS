@@ -744,7 +744,9 @@ extension Settings {
      */
     mutating func setPin(_ target: ContactPin, ifOver expected: ContactPin?, verify: Bool = false) throws {
         let current = pin(of: target.userId)
-        if let current, ContactPin.sameKeys(current, target), !verify || (current.trust == .verified && current.trustedVia == nil) {
+        // A pin over the same keys that vouches for nothing (a fingerprint over other keys) is never kept: it is what the act
+        // replaces, and kept, every later guard write over it would be refused.
+        if let current, current.held, ContactPin.sameKeys(current, target), !verify || (current.trust == .verified && current.trustedVia == nil) {
             forgetRemoval(target.userId)
             return
         }
