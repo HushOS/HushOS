@@ -177,7 +177,10 @@ internal fun Vault.guardFor(contactId: String, pin: ContactPin?, at: ULong): Pai
             // was shared with them still holds the old keys. Queued before the commit that drops the pending record, so no
             // stop between the two loses it; queued twice is only a re-seal done again.
             if (pin!!.resealShares) ShareSeals.of(context).queue(contactId)
-            return commitGuard(contactId, next, revision) to null
+            val committed = commitGuard(contactId, next, revision)
+            // Again once committed, at a fresh generation, for a pass that read the settings before this act (as commitTrust).
+            if (pin.resealShares) ShareSeals.of(context).queue(contactId)
+            return committed to null
         }
         if (pending.base != null && at <= pending.base) return entry to pending
     }
@@ -215,7 +218,11 @@ internal fun Vault.commitTrust(contactId: String, entry: GuardEntry?, target: Co
         }
     }, change = change)
     val pin = saved.pinOf(contactId)?.takeIf { it.commitment == keys } ?: throw ContactMoved()
-    return pin to commitGuard(contactId, guardEntryNext(entry, pin.keys), revision)
+    val committed = commitGuard(contactId, guardEntryNext(entry, pin.keys), revision)
+    // And again once it landed, at a fresh generation: a re-seal pass that read the earlier request with settings from
+    // before this save could skip them (no pin there yet) and acknowledge it; this one only a later pass can.
+    if (target.resealShares) ShareSeals.of(context).queue(contactId)
+    return pin to committed
 }
 
 /*

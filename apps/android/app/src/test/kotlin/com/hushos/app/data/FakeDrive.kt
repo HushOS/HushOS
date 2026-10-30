@@ -90,6 +90,8 @@ class FakeDrive : AutoCloseable {
     var failLookups = false
     /* The next settings save lands and its answer is lost (a 500), as a dropped connection would leave it. */
     var loseNextSettingsAnswer = false
+    /* Runs as each settings save lands (another process acting meanwhile, say). */
+    var onSettingsPut: (() -> Unit)? = null
     /* Shares the account made (createShare), and the shares a rotation's work lists per node. */
     val sharesMade = ArrayList<JSONObject>()
 
@@ -381,6 +383,7 @@ class FakeDrive : AutoCloseable {
                 settingsVersion++
                 settingsDocument = JSONObject().put("version", body.getInt("version")).put("settingsVersion", settingsVersion)
                     .put("nonce", body.getString("nonce")).put("ciphertext", body.getString("ciphertext"))
+                onSettingsPut?.invoke()
                 if (loseNextSettingsAnswer) { loseNextSettingsAnswer = false; return 500 to JSONObject().put("message", "The answer was lost") }
                 ok(JSONObject().put("settingsVersion", settingsVersion))
             }

@@ -307,4 +307,17 @@ class ContactTrustTest {
         assertFalse(vault.share(item, stored()!!, "editor").trustChanged)
     }
 
+    @Test
+    fun aReSealPassThatAcknowledgesWhileContinueSavesLeavesTheReSealContinueOwes() {
+        vault.addContact(email)
+        server.startOverGrace()
+        val change = (vault.addContact(email) as Added.Changed).change
+        val seals = ShareSeals.of(context)
+        // A pass that read the queue (Continue's request in it) and settings without the new pin finishes as the save lands.
+        server.onSettingsPut = { seals.unqueue(seals.queued) }
+        vault.continueWith(change)
+        server.onSettingsPut = null
+        assertTrue(server.grace.id.lowercase() in seals.queued)
+    }
+
 }
