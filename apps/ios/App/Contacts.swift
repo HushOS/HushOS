@@ -115,7 +115,8 @@ struct AddSomeoneView: View {
                     Task { await store.refreshSigners(); await store.refreshMounts() }
                     added(pin)
                 case .already(let pin):
-                    hint = ("\(pin.firstName) is already in your contacts.", false)
+                    // From a mark (Check who wrote this), someone already in Contacts goes on to the words it offered.
+                    if writer != nil { added(pin) } else { hint = ("\(pin.firstName) is already in your contacts.", false) }
                 case .changed(let change):
                     changed(change)
                 }
