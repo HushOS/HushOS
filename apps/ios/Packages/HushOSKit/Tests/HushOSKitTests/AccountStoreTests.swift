@@ -124,7 +124,7 @@ extension OfflineStore {
     @Test func whatIsNotAccountDataInTheGroupStays() throws {
         // The group's own preferences (the server address lives beside them) are not the account's:
         // a wipe that emptied the whole container would take them too.
-        let preferences = root.appendingPathComponent("Library/Preferences/group.com.hushos.app.plist")
+        let preferences = root.appendingPathComponent("Library/Preferences/\(SharedKeychain.accessGroup).plist")
         try FileManager.default.createDirectory(at: preferences.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("settings".utf8).write(to: preferences)
         store.claim(alice)

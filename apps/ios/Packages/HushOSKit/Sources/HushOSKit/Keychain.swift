@@ -9,7 +9,15 @@ import Security
  * the sign-in sheet inside Files writes it too.
  */
 public enum SharedKeychain {
-    public static let accessGroup = "group.com.hushos.app"
+    /*
+     * The app group, from the APP_GROUP_ID build setting (Project.xcconfig) that every bundle's Info.plist
+     * carries as HushOSAppGroup, so a build signed under another team changes one value. The package's
+     * tests have no such Info.plist and get HushOS's own group.
+     */
+    public static let accessGroup: String = {
+        let value = Bundle.main.object(forInfoDictionaryKey: "HushOSAppGroup") as? String
+        return value.flatMap { $0.isEmpty ? nil : $0 } ?? "group.com.hushos.app"
+    }()
     public static let service = "com.hushos.files"
     public static let sessionAccount = "session"
     public static let deviceAccount = "device"

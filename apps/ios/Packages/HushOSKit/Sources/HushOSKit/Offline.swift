@@ -137,7 +137,7 @@ public enum Offline {
         keepFailures().values.filter { $0.folderId == folderId }
     }
 
-    static let group = "group.com.hushos.app"
+    static let group = SharedKeychain.accessGroup
     static let key = "offline.entries"
     static let entriesFile = "offline-entries.json"
 

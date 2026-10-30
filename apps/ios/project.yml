@@ -23,6 +23,10 @@ settings:
         MARKETING_VERSION: '0.10.0' # x-release-please-version
         # Xcode's own builds say 1; archive.sh passes the build number from scripts/build-number.sh.
         CURRENT_PROJECT_VERSION: '1'
+# Project-wide settings that a fork may override (APP_GROUP_ID), with App/Local.xcconfig on top.
+configFiles:
+    Debug: Project.xcconfig
+    Release: Project.xcconfig
 packages:
     HushOSCore:
         path: Packages/HushOSCore
@@ -62,6 +66,7 @@ targets:
                 CFBundleName: HushOS
                 CFBundleShortVersionString: '$(MARKETING_VERSION)'
                 CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
+                HushOSAppGroup: '$(APP_GROUP_ID)'
                 UILaunchScreen:
                     UIColorName: LaunchBackground
                     UIImageName: SplashMark
@@ -129,14 +134,15 @@ targets:
         entitlements:
             path: Files/HushOSFiles.entitlements
             properties:
-                com.apple.security.application-groups: [group.com.hushos.app]
-                keychain-access-groups: [$(AppIdentifierPrefix)group.com.hushos.app]
+                com.apple.security.application-groups: [$(APP_GROUP_ID)]
+                keychain-access-groups: [$(AppIdentifierPrefix)$(APP_GROUP_ID)]
         info:
             path: Files/Info.plist
             properties:
                 CFBundleDisplayName: HushOS Files
                 CFBundleShortVersionString: '$(MARKETING_VERSION)'
                 CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
+                HushOSAppGroup: '$(APP_GROUP_ID)'
                 NSExtension:
                     NSExtensionPointIdentifier: com.apple.fileprovider-nonui
                     NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderExtension
@@ -164,14 +170,15 @@ targets:
         entitlements:
             path: FilesUI/HushOSFilesUI.entitlements
             properties:
-                com.apple.security.application-groups: [group.com.hushos.app]
-                keychain-access-groups: [$(AppIdentifierPrefix)group.com.hushos.app]
+                com.apple.security.application-groups: [$(APP_GROUP_ID)]
+                keychain-access-groups: [$(AppIdentifierPrefix)$(APP_GROUP_ID)]
         info:
             path: FilesUI/Info.plist
             properties:
                 CFBundleDisplayName: HushOS
                 CFBundleShortVersionString: '$(MARKETING_VERSION)'
                 CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
+                HushOSAppGroup: '$(APP_GROUP_ID)'
                 NSExtension:
                     NSExtensionPointIdentifier: com.apple.fileprovider-actionsui
                     NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderUIController
@@ -201,6 +208,7 @@ targets:
                 CFBundleDisplayName: HushOS
                 CFBundleShortVersionString: '$(MARKETING_VERSION)'
                 CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
+                HushOSAppGroup: '$(APP_GROUP_ID)'
                 NSExtension:
                     NSExtensionPointIdentifier: com.apple.widgetkit-extension
         settings:
@@ -227,14 +235,15 @@ targets:
         entitlements:
             path: Share/HushOSShare.entitlements
             properties:
-                com.apple.security.application-groups: [group.com.hushos.app]
-                keychain-access-groups: [$(AppIdentifierPrefix)group.com.hushos.app]
+                com.apple.security.application-groups: [$(APP_GROUP_ID)]
+                keychain-access-groups: [$(AppIdentifierPrefix)$(APP_GROUP_ID)]
         info:
             path: Share/Info.plist
             properties:
                 CFBundleDisplayName: Save to HushOS
                 CFBundleShortVersionString: '$(MARKETING_VERSION)'
                 CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
+                HushOSAppGroup: '$(APP_GROUP_ID)'
                 NSExtension:
                     NSExtensionPointIdentifier: com.apple.share-services
                     NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
