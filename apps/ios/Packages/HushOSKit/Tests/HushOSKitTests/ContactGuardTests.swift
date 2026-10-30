@@ -864,6 +864,44 @@ extension OnFakeDrive {
             #expect(!ResealTo.contains(maya))
         }
 
+        @Test func aPassNeverClearsAKeyReplacementThatStartedWhileItRan() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            _ = try await phone(server).vault.addContact(email: "maya@example.com")
+            let workspace = UUID().uuidString.lowercased()
+            let nodeId = UUID().uuidString.lowercased()
+            var document = try server.document(root: root)
+            document["sharing"] = ["shares": [nodeId: [maya]], "links": [String: Any]()]
+            try server.replace(document, root: root)
+            let node = try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: [
+                "id": nodeId, "workspaceId": workspace, "kind": "file", "keyEpoch": 3, "parentKeyEpoch": 1, "keyEnvelope": "k",
+                "metadataVersion": 1, "metadataEnvelope": "m",
+            ]))
+            let served = identity.envelope
+            server.sharesMine = [[
+                "id": "share-1", "role": "viewer", "keyEpoch": 3, "createdAt": "2026-10-30T00:00:00Z", "suite": 3,
+                "grantee": ["id": maya, "name": "Maya Lind", "email": "maya@example.com"],
+                "node": try JSONSerialization.jsonObject(with: JSONEncoder().encode(node)),
+                "granteeIdentity": [
+                    "keyVersion": served.keyVersion, "identityVersion": Int(served.version), "encryptionPublicKey": served.encryptionPublicKey,
+                    "signingPublicKey": served.signingPublicKey, "mlDsaPublicKey": served.mlDsa!.publicKey, "kemPublicKey": served.kem!.publicKey,
+                    "keysSignature": served.keysSignature!,
+                ],
+            ]]
+            ResealPending.clear()
+            defer { ResealPending.clear() }
+            // Another phone of this account (a guard of its own): while its pass seals, this account replaces its keys.
+            let other = await phone(server, folder: guardFolder())
+            _ = try await other.vault.adopt(node, nodeKey: try randomBytes(length: 32),
+                                            metadata: NodeMetadata(name: "plan.md", mime: nil, size: 3, modified: nil, attributes: [:]), in: workspace)
+            await other.vault.adopt(afterGuardCommit: { ResealPending.set(for: "the-next-signing-key") })
+            let outcome = try await other.vault.upgradeShares()
+            #expect(outcome.rotated == 1)
+            // The pass sealed with the keys it read: the replacement begun meanwhile still waits for its own pass.
+            #expect(ResealPending.isSet(for: "the-next-signing-key"))
+        }
+
         @Test func sharingWithSomeoneWhosePinTheCheckMovedSaysTrustMoved() async throws {
             defer { done() }
             let identity = try makeIdentity(maya)

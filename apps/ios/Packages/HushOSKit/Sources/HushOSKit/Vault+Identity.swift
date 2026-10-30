@@ -230,11 +230,12 @@ extension Vault {
         var outcome = RotationOutcome()
         // The re-seals asked for so far: only these are acknowledged at the end, never one asked for while this pass ran.
         let requested = ResealTo.requests
+        // The keys this pass seals under, read first: a key replacement begun while it runs is left for its own pass.
+        let keys = try await identityKeys()
         let reply = try await api.performPublic(try api.requestPublic("/shares/mine"), as: SharedByMeResponse.self)
-        if reply.shares.isEmpty && requested.isEmpty { ResealPending.clear(); return outcome }
+        if reply.shares.isEmpty && requested.isEmpty { ResealPending.clear(for: keys.signingPublicKey); return outcome }
         let settings = try await loadSettings()
         let ledger = settings.ledger
-        let keys = try await identityKeys()
         let pending = ResealPending.isSet(for: keys.signingPublicKey)
         var looked: [String: Contact] = [:]
         var sealed: [String: (publicKey: Data, kem: Data)] = [:]
@@ -295,7 +296,7 @@ extension Vault {
         let unheld = await withNothingInTheTrash(Set(requested.keys).subtracting(held), ledger: ledger)
         let done = resealedTo.subtracting(failedFor).union(unheld)
         ResealTo.acknowledge(requested.filter { done.contains($0.key) })
-        if !unfinished { ResealPending.clear() }
+        if !unfinished { ResealPending.clear(for: keys.signingPublicKey) }
         return outcome
     }
 
@@ -339,6 +340,8 @@ enum ResealPending {
     static func set(for signingPublicKey: String) { Unbacked.write(signingPublicKey, file) }
     static func isSet(for signingPublicKey: String) -> Bool { Unbacked.read(String.self, file) == signingPublicKey }
     static func clear() { Unbacked.write(String?.none, file) }
+    /* Finished for these keys only: a replacement begun since (other keys) keeps waiting for its own pass. */
+    static func clear(for signingPublicKey: String) { if isSet(for: signingPublicKey) { clear() } }
 }
 
 extension IdentityEnvelope {
