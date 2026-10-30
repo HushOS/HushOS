@@ -611,6 +611,421 @@ extension OnFakeDrive {
             #expect(outcome.rotated == 1 && outcome.skipped.contains("Maya’s account changed."))
         }
 
+        /* What a rotation's batches sent, as the server took them. */
+        final class Sent: @unchecked Sendable { var nodes: [[String: Any]] = [] }
+
+        /*
+         * A file shared with Maya in the owner's own drive (its ledger holds the share), and a server that rotates it and
+         * records each batch. Whom to trust is loaded already, so the rotation starts whatever the guard says.
+         */
+        func sharedFile(_ phone: Phone, _ server: ContactServer) async throws -> (item: Opened, sent: Sent) {
+            let workspace = UUID().uuidString.lowercased()
+            let nodeId = UUID().uuidString.lowercased()
+            await phone.vault.adopt(workspace: WorkspaceView(workspaceId: workspace, changeSeq: nil, grant: nil, root: nil), key: try randomBytes(length: 32))
+            let nodeKey = try randomBytes(length: 32)
+            let metadata = NodeMetadata(name: "plan.md", mime: nil, size: 3, modified: nil, attributes: [:])
+            let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace, nodeId: nodeId, metadataVersion: 1), nodeKey: nodeKey, metadata: metadata)
+            let node: [String: Any] = ["id": nodeId, "workspaceId": workspace, "kind": "file", "keyEpoch": 1, "parentKeyEpoch": 1, "keyEnvelope": "k",
+                                       "metadataVersion": 1, "metadataEnvelope": base64urlEncode(bytes: sealed)]
+            let item = try await phone.vault.adopt(try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: node)),
+                                                   nodeKey: nodeKey, metadata: metadata, in: workspace)
+            var document = try server.document(root: root)
+            var sharing = document["sharing"] as? [String: Any] ?? [:]
+            sharing["shares"] = [nodeId: [maya]]
+            sharing["links"] = sharing["links"] ?? [String: Any]()
+            document["sharing"] = sharing
+            document["version"] = document["version"] ?? 2
+            document["contacts"] = document["contacts"] ?? [String: Any]()
+            try server.replace(document, root: root)
+            let served = try #require(server.people["maya@example.com"]).identity
+            let sent = Sent()
+            let maya = self.maya
+            server.routes = { method, path, body in
+                switch (method, path) {
+                case ("POST", "/api/drive/nodes/\(nodeId)/rotation"):
+                    return (200, ["rotation": ["nodeId": nodeId, "targetEpoch": 2]])
+                case ("GET", "/api/drive/nodes/\(nodeId)/rotation/work"):
+                    var entry = node
+                    entry["depth"] = 0
+                    entry["versions"] = [Any]()
+                    entry["links"] = [Any]()
+                    entry["shares"] = [["id": "share-1", "granteeUserId": maya, "grantee": [
+                        "keyVersion": served.keyVersion, "identityVersion": Int(served.version), "encryptionPublicKey": served.encryptionPublicKey,
+                        "signingPublicKey": served.signingPublicKey, "mlDsaPublicKey": served.mlDsa!.publicKey, "kemPublicKey": served.kem!.publicKey,
+                        "keysSignature": served.keysSignature!,
+                    ]]]
+                    let done = !sent.nodes.isEmpty
+                    return (200, ["rotation": ["nodeId": nodeId, "targetEpoch": 2], "nodes": done ? [] : [entry], "nextCursor": NSNull(), "done": done])
+                case ("POST", "/api/drive/nodes/\(nodeId)/rotation/nodes"):
+                    sent.nodes += body["nodes"] as? [[String: Any]] ?? []
+                    return (200, ["results": [["id": nodeId, "status": "ok"]]])
+                default:
+                    return nil
+                }
+            }
+            await phone.vault.adopt(signers: try TrustedSigners(userId: me, identities: [try identityOpen(userId: me, accountKey: root, envelope: own)], pins: []))
+            return (item, sent)
+        }
+
+        /* The share ids a rotation's batches sealed again. */
+        func sealedShares(_ sent: Sent) -> [String] {
+            sent.nodes.flatMap { (($0["rotated"] as? [String: Any])?["shares"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String } }
+        }
+
+        @Test func aRotationThatCannotReadTheGuardStopsBeforeSendingAndLeavesNobodyOut() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let phone = await phone(server)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            let (item, sent) = try await sharedFile(phone, server)
+            try Data("damaged".utf8).write(to: phone.guardStore.file)
+            // Left out, Maya's share would be revoked by the server: the rotation stops instead, having sent nothing.
+            await #expect(throws: GuardError.unreadable) { _ = try await phone.vault.rotate(item) }
+            #expect(sent.nodes.isEmpty)
+        }
+
+        @Test func aRotationStoppedMidBatchLeavesEveryKeyAsItWasAndARetryRotatesTheWholeBatch() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let phone = await phone(server)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            // A folder and a file in it, one batch: the folder is sealed first, then the file's share to Maya is checked.
+            let workspace = UUID().uuidString.lowercased()
+            let workspaceKey = try randomBytes(length: 32)
+            await phone.vault.adopt(workspace: WorkspaceView(workspaceId: workspace, changeSeq: nil, grant: nil, root: nil), key: workspaceKey)
+            let folderId = UUID().uuidString.lowercased()
+            let fileId = UUID().uuidString.lowercased()
+            let folderKey = try randomBytes(length: 32)
+            let fileKey = try randomBytes(length: 32)
+            func node(_ id: String, parent: String?, kind: String, key: Data, name: String) throws -> (wire: [String: Any], metadata: NodeMetadata) {
+                let metadata = NodeMetadata(name: name, mime: nil, size: 3, modified: nil, attributes: [:])
+                let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
+                let wrapped = try nodeWrap(ctx: NodeKeyContext(workspaceId: workspace, nodeId: id, parentId: parent ?? workspace, parentKeyEpoch: 1, keyEpoch: 1),
+                                           parentKey: parent == nil ? workspaceKey : folderKey, nodeKey: key)
+                var wire: [String: Any] = ["id": id, "workspaceId": workspace, "kind": kind, "keyEpoch": 1, "parentKeyEpoch": 1,
+                                           "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataVersion": 1,
+                                           "metadataEnvelope": base64urlEncode(bytes: sealed)]
+                if let parent { wire["parentId"] = parent }
+                return (wire, metadata)
+            }
+            let folder = try node(folderId, parent: nil, kind: "folder", key: folderKey, name: "Plans")
+            let file = try node(fileId, parent: folderId, kind: "file", key: fileKey, name: "plan.md")
+            let folderItem = try await phone.vault.adopt(try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: folder.wire)),
+                                                         nodeKey: folderKey, metadata: folder.metadata, in: workspace)
+            _ = try await phone.vault.adopt(try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: file.wire)),
+                                            nodeKey: fileKey, metadata: file.metadata, in: workspace)
+            var document = try server.document(root: root)
+            var sharing = document["sharing"] as? [String: Any] ?? [:]
+            sharing["shares"] = [fileId: [maya]]
+            sharing["links"] = sharing["links"] ?? [String: Any]()
+            document["sharing"] = sharing
+            try server.replace(document, root: root)
+            let served = try #require(server.people["maya@example.com"]).identity
+            let sent = Sent()
+            let maya = self.maya
+            server.routes = { method, path, body in
+                switch (method, path) {
+                case ("POST", "/api/drive/nodes/\(folderId)/rotation"):
+                    return (200, ["rotation": ["nodeId": folderId, "targetEpoch": 2]])
+                case ("GET", "/api/drive/nodes/\(folderId)/children"):
+                    // As the server still holds them: nothing of an unsent batch reaches it.
+                    return (200, ["folder": folder.wire, "ancestors": [Any](), "children": [file.wire], "nextCursor": NSNull()])
+                case ("GET", "/api/drive/nodes/\(folderId)/rotation/work"):
+                    var first = folder.wire
+                    first["depth"] = 0
+                    first["versions"] = [Any]()
+                    first["links"] = [Any]()
+                    first["shares"] = [Any]()
+                    var second = file.wire
+                    second["depth"] = 1
+                    second["versions"] = [Any]()
+                    second["links"] = [Any]()
+                    second["shares"] = [["id": "share-1", "granteeUserId": maya, "grantee": [
+                        "keyVersion": served.keyVersion, "identityVersion": Int(served.version), "encryptionPublicKey": served.encryptionPublicKey,
+                        "signingPublicKey": served.signingPublicKey, "mlDsaPublicKey": served.mlDsa!.publicKey, "kemPublicKey": served.kem!.publicKey,
+                        "keysSignature": served.keysSignature!,
+                    ]]]
+                    let done = !sent.nodes.isEmpty
+                    return (200, ["rotation": ["nodeId": folderId, "targetEpoch": 2], "nodes": done ? [] : [first, second], "nextCursor": NSNull(), "done": done])
+                case ("POST", "/api/drive/nodes/\(folderId)/rotation/nodes"):
+                    let nodes = body["nodes"] as? [[String: Any]] ?? []
+                    sent.nodes += nodes
+                    return (200, ["results": nodes.map { ["id": $0["id"] as? String ?? "", "status": "ok"] }])
+                default:
+                    return nil
+                }
+            }
+            await phone.vault.adopt(signers: try TrustedSigners(userId: me, identities: [try identityOpen(userId: me, accountKey: root, envelope: own)], pins: []))
+            // The file's grantee check fails for no verdict on Maya (the guard can't be read), after the folder was sealed.
+            let guardBytes = try Data(contentsOf: phone.guardStore.file)
+            try Data("damaged".utf8).write(to: phone.guardStore.file)
+            await #expect(throws: GuardError.unreadable) { _ = try await phone.vault.rotate(folderItem) }
+            #expect(sent.nodes.isEmpty)
+            // Nothing was sent, so nothing changed: the folder still opens under the key the server still holds.
+            #expect(await phone.vault.nodeKey(of: folderItem) == folderKey)
+            // The disk is readable again: a retry walks both again from the keys the server holds, and rotates both.
+            try guardBytes.write(to: phone.guardStore.file)
+            let outcome = try await phone.vault.rotate(folderItem)
+            #expect(outcome.rotated == 2)
+            #expect(Set(sent.nodes.compactMap { $0["id"] as? String }) == [folderId, fileId])
+            #expect(sealedShares(sent) == ["share-1"])
+        }
+
+        @Test func aRotationWhoseSendFailsStillListsTheFileInItsFolder() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let phone = await phone(server)
+            let workspace = UUID().uuidString.lowercased()
+            let workspaceKey = try randomBytes(length: 32)
+            await phone.vault.adopt(workspace: WorkspaceView(workspaceId: workspace, changeSeq: nil, grant: nil, root: nil), key: workspaceKey)
+            let folderId = UUID().uuidString.lowercased()
+            let fileId = UUID().uuidString.lowercased()
+            let folderKey = try randomBytes(length: 32)
+            let fileKey = try randomBytes(length: 32)
+            func node(_ id: String, parent: String?, kind: String, key: Data, name: String) throws -> (wire: [String: Any], metadata: NodeMetadata) {
+                let metadata = NodeMetadata(name: name, mime: nil, size: 3, modified: nil, attributes: [:])
+                let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
+                let wrapped = try nodeWrap(ctx: NodeKeyContext(workspaceId: workspace, nodeId: id, parentId: parent ?? workspace, parentKeyEpoch: 1, keyEpoch: 1),
+                                           parentKey: parent == nil ? workspaceKey : folderKey, nodeKey: key)
+                var wire: [String: Any] = ["id": id, "workspaceId": workspace, "kind": kind, "keyEpoch": 1, "parentKeyEpoch": 1,
+                                           "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataVersion": 1,
+                                           "metadataEnvelope": base64urlEncode(bytes: sealed)]
+                if let parent { wire["parentId"] = parent }
+                return (wire, metadata)
+            }
+            let folder = try node(folderId, parent: nil, kind: "folder", key: folderKey, name: "Plans")
+            let file = try node(fileId, parent: folderId, kind: "file", key: fileKey, name: "plan.md")
+            _ = try await phone.vault.adopt(try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: folder.wire)),
+                                            nodeKey: folderKey, metadata: folder.metadata, in: workspace)
+            let fileItem = try await phone.vault.adopt(try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: file.wire)),
+                                                       nodeKey: fileKey, metadata: file.metadata, in: workspace)
+            server.routes = { method, path, _ in
+                switch (method, path) {
+                case ("POST", "/api/drive/nodes/\(fileId)/rotation"):
+                    return (200, ["rotation": ["nodeId": fileId, "targetEpoch": 2]])
+                case ("GET", "/api/drive/nodes/\(fileId)/rotation/work"):
+                    var entry = file.wire
+                    entry["depth"] = 0
+                    entry["versions"] = [Any]()
+                    entry["links"] = [Any]()
+                    entry["shares"] = [Any]()
+                    return (200, ["rotation": ["nodeId": fileId, "targetEpoch": 2], "nodes": [entry], "nextCursor": NSNull(), "done": false])
+                case ("POST", "/api/drive/nodes/\(fileId)/rotation/nodes"):
+                    // The connection drops on the way: nothing is known to have landed.
+                    return (500, ["message": "The connection dropped."])
+                case ("GET", "/api/drive/nodes/\(folderId)/children"):
+                    return (200, ["folder": folder.wire, "ancestors": [Any](), "children": [file.wire], "nextCursor": NSNull()])
+                default:
+                    return nil
+                }
+            }
+            await phone.vault.adopt(signers: try TrustedSigners(userId: me, identities: [try identityOpen(userId: me, accountKey: root, envelope: own)], pins: []))
+            // The catalogue answers for the folder, as after a build.
+            await phone.vault.markCatalogueReady()
+            await #expect(throws: (any Error).self) { _ = try await phone.vault.rotate(fileItem) }
+            // The folder still lists the file, from the catalogue or (when it can't answer) from the server.
+            let listed: [String]
+            if let cached = await phone.vault.catalogueChildren(of: folderId) { listed = cached.map(\.id) } else {
+                listed = try await phone.vault.listChildren(of: folderId).children.map(\.id)
+            }
+            #expect(listed.contains(fileId))
+        }
+
+        @Test func aPassKeepsSomeoneQueuedWhoseSharedItemIsInTheTrash() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let phone = await phone(server)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            let workspace = UUID().uuidString.lowercased()
+            await phone.vault.adopt(workspace: WorkspaceView(workspaceId: workspace, changeSeq: nil, grant: nil, root: nil), key: try randomBytes(length: 32))
+            let nodeId = UUID().uuidString.lowercased()
+            var document = try server.document(root: root)
+            document["sharing"] = ["shares": [nodeId: [maya]], "links": [String: Any]()]
+            try server.replace(document, root: root)
+            // In the Trash: the server's list of shares leaves it out, as it would a deleted item; the Trash has it.
+            server.sharesMine = []
+            server.routes = { method, path, _ in
+                guard method == "GET", path == "/api/drive/workspaces/\(workspace)/trash" else { return nil }
+                return (200, ["items": [["node": ["id": nodeId, "workspaceId": workspace, "kind": "file", "keyEpoch": 3, "parentKeyEpoch": 1,
+                                                  "keyEnvelope": "k", "metadataVersion": 1, "metadataEnvelope": "m"],
+                                         "ancestors": [Any](), "parentTrashed": false]], "nextCursor": NSNull()])
+            }
+            ResealTo.remove(ResealTo.all)
+            defer { ResealTo.remove(ResealTo.all) }
+            ResealTo.add(maya)
+            _ = try await phone.vault.upgradeShares()
+            // Restored, it would still hold her old keys: she stays owed.
+            #expect(ResealTo.contains(maya))
+            // Deleted for good (in neither list), she is let go.
+            server.routes = { method, path, _ in
+                method == "GET" && path == "/api/drive/workspaces/\(workspace)/trash" ? (200, ["items": [Any](), "nextCursor": NSNull()]) : nil
+            }
+            _ = try await phone.vault.upgradeShares()
+            #expect(!ResealTo.contains(maya))
+        }
+
+        @Test func aPassNeverClearsAKeyReplacementThatStartedWhileItRan() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            _ = try await phone(server).vault.addContact(email: "maya@example.com")
+            let workspace = UUID().uuidString.lowercased()
+            let nodeId = UUID().uuidString.lowercased()
+            var document = try server.document(root: root)
+            document["sharing"] = ["shares": [nodeId: [maya]], "links": [String: Any]()]
+            try server.replace(document, root: root)
+            let node = try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: [
+                "id": nodeId, "workspaceId": workspace, "kind": "file", "keyEpoch": 3, "parentKeyEpoch": 1, "keyEnvelope": "k",
+                "metadataVersion": 1, "metadataEnvelope": "m",
+            ]))
+            let served = identity.envelope
+            server.sharesMine = [[
+                "id": "share-1", "role": "viewer", "keyEpoch": 3, "createdAt": "2026-10-30T00:00:00Z", "suite": 3,
+                "grantee": ["id": maya, "name": "Maya Lind", "email": "maya@example.com"],
+                "node": try JSONSerialization.jsonObject(with: JSONEncoder().encode(node)),
+                "granteeIdentity": [
+                    "keyVersion": served.keyVersion, "identityVersion": Int(served.version), "encryptionPublicKey": served.encryptionPublicKey,
+                    "signingPublicKey": served.signingPublicKey, "mlDsaPublicKey": served.mlDsa!.publicKey, "kemPublicKey": served.kem!.publicKey,
+                    "keysSignature": served.keysSignature!,
+                ],
+            ]]
+            ResealPending.clear()
+            defer { ResealPending.clear() }
+            // Another phone of this account (a guard of its own): while its pass seals, this account replaces its keys.
+            let other = await phone(server, folder: guardFolder())
+            _ = try await other.vault.adopt(node, nodeKey: try randomBytes(length: 32),
+                                            metadata: NodeMetadata(name: "plan.md", mime: nil, size: 3, modified: nil, attributes: [:]), in: workspace)
+            await other.vault.adopt(afterGuardCommit: { ResealPending.set(for: "the-next-signing-key") })
+            let outcome = try await other.vault.upgradeShares()
+            #expect(outcome.rotated == 1)
+            // The pass sealed with the keys it read: the replacement begun meanwhile still waits for its own pass.
+            #expect(ResealPending.isSet(for: "the-next-signing-key"))
+        }
+
+        @Test func sharingWithSomeoneWhosePinTheCheckMovedSaysTrustMoved() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            var settings = Settings()
+            // Her address as the server knows it (maya@example.com), so the share can look her up.
+            settings.setPin(pinnedBeforeTheRelease(try pinned(maya, identity.keys, name: "Maya")))
+            try server.replace(try reread(settings), root: root)
+            let (item, _) = try await sharedFile(phone, server)
+            let rotation = server.routes
+            server.routes = { method, path, body in
+                if method == "POST", path == "/api/drive/nodes/\(item.id)/shares" {
+                    return (200, ["share": ["id": UUID().uuidString, "role": body["role"] as? String ?? "viewer", "keyEpoch": 1,
+                                            "createdAt": "2026-10-30T00:00:00Z", "suite": 4,
+                                            "grantee": ["id": body["granteeUserId"] as? String ?? "", "name": "Maya Lind", "email": "maya@example.com"]]])
+                }
+                return rotation?(method, path, body)
+            }
+            let legacy = try #require(try await phone.vault.contacts().first)
+            // The share's check makes the legacy pin first-seen and remembers her: what is drawn is judged again.
+            #expect(try await phone.vault.share(item, with: legacy, role: "viewer").trustChanged)
+            #expect(try storedPin(server)?["mlDsaPublicKeyHash"] as? String != nil)
+            // Sharing again moves nothing about whom this phone trusts.
+            let pin = try #require(try await phone.vault.contacts().first)
+            #expect(try await !phone.vault.share(item, with: pin, role: "editor").trustChanged)
+        }
+
+        @Test func aRotationSealsToALegacyPinsOwnKeysWhenTheSettingsHaveNoRoomToSaveItsMigration() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            let (item, sent) = try await sharedFile(phone, server)
+            // Room for her legacy pin, none for it made first-seen (its ML-DSA digest more).
+            var legacy = pinnedBeforeTheRelease(try pinned(maya, identity.keys, name: "Maya Lind"))
+            legacy.fingerprint = ""
+            var settings = Settings()
+            settings.document = try server.document(root: root)
+            settings.setPin(legacy)
+            settings.document["padding"] = String(repeating: "x", count: Settings.maxBytes - (try settings.bytes()) - 40)
+            try server.replace(try reread(settings), root: root)
+            // Neither left out (revoked for the owner's full settings) nor stopped for good: sealed to the keys she has.
+            let outcome = try await phone.vault.rotate(item)
+            #expect(sealedShares(sent) == ["share-1"] && outcome.skipped.isEmpty)
+            // Nothing saved and nothing remembered: no new trust.
+            #expect(try storedPin(server)?["mlDsaPublicKeyHash"] == nil)
+            #expect(try phone.guardStore.entry(maya) == nil)
+        }
+
+        @Test func addingSomeoneAlreadyThereSaysWhenTheAddItselfMovedTrust() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            var settings = Settings()
+            settings.setPin(pinnedBeforeTheRelease(try pinned(maya, identity.keys, name: "Maya Lind")))
+            try server.replace(try reread(settings), root: root)
+            // Already a contact, but the add made the legacy pin first-seen and remembered her: what is drawn is judged again.
+            guard case .already(_, let moved) = try await phone.vault.addContact(email: "maya@example.com") else { Issue.record("not already"); return }
+            #expect(moved)
+            guard case .already(_, let again) = try await phone.vault.addContact(email: "maya@example.com") else { Issue.record("not already"); return }
+            #expect(!again)
+        }
+
+        @Test func aPinOverHerKeysWithAFingerprintOverOthersBecomesFirstSeenAndActsGoOn() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            // Her keys, and a fingerprint that isn't theirs (an edited or older format): it vouches for nothing.
+            var invalid = try pinned(maya, identity.keys, name: "Maya Lind")
+            invalid.fingerprint = String(repeating: "0", count: 64)
+            #expect(invalid.trust == .invalid)
+            var settings = Settings()
+            settings.setPin(invalid)
+            try server.replace(try reread(settings), root: root)
+            #expect(try await !phone.vault.lookup(email: "maya@example.com").changed)
+            #expect(try storedPin(server)?["fingerprint"] as? String == "")
+            guard case .already = try await phone.vault.addContact(email: "maya@example.com") else { Issue.record("not already"); return }
+            _ = try await phone.vault.trustGrantee(try contact(server), follow: true)
+        }
+
+        @Test func aPassAcknowledgesOnlyTheRequestItReadNeverAContinueMadeWhileItRan() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            _ = try await phone(server).vault.addContact(email: "maya@example.com")
+            let workspace = UUID().uuidString.lowercased()
+            let nodeId = UUID().uuidString.lowercased()
+            var document = try server.document(root: root)
+            document["sharing"] = ["shares": [nodeId: [maya]], "links": [String: Any]()]
+            try server.replace(document, root: root)
+            let node = try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: [
+                "id": nodeId, "workspaceId": workspace, "kind": "file", "keyEpoch": 3, "parentKeyEpoch": 1, "keyEnvelope": "k",
+                "metadataVersion": 1, "metadataEnvelope": "m",
+            ]))
+            let served = identity.envelope
+            server.sharesMine = [[
+                "id": "share-1", "role": "viewer", "keyEpoch": 3, "createdAt": "2026-10-30T00:00:00Z", "suite": 4,
+                "grantee": ["id": maya, "name": "Maya Lind", "email": "maya@example.com"],
+                "node": try JSONSerialization.jsonObject(with: JSONEncoder().encode(node)),
+                "granteeIdentity": [
+                    "keyVersion": served.keyVersion, "identityVersion": Int(served.version), "encryptionPublicKey": served.encryptionPublicKey,
+                    "signingPublicKey": served.signingPublicKey, "mlDsaPublicKey": served.mlDsa!.publicKey, "kemPublicKey": served.kem!.publicKey,
+                    "keysSignature": served.keysSignature!,
+                ],
+            ]]
+            ResealTo.remove(ResealTo.all)
+            defer { ResealTo.remove(ResealTo.all) }
+            ResealTo.add(maya)
+            // Another phone of this account (a guard of its own): the pass writes its first guard entry for Maya, and right
+            // then a Continue on her queues a newer re-seal, to keys this pass never saw.
+            let other = await phone(server, folder: guardFolder())
+            _ = try await other.vault.adopt(node, nodeKey: try randomBytes(length: 32),
+                                            metadata: NodeMetadata(name: "plan.md", mime: nil, size: 3, modified: nil, attributes: [:]), in: workspace)
+            let continued = maya
+            await other.vault.adopt(afterGuardCommit: { ResealTo.add(continued) })
+            let outcome = try await other.vault.upgradeShares()
+            #expect(outcome.rotated == 1)
+            // The pass acknowledges the request it read; the one made while it ran is still owed.
+            #expect(ResealTo.contains(maya))
+        }
+
         @Test func aGuardWriteThatFailsStopsTheActAndTheNextOneSettlesIt() async throws {
             defer { done() }
             let server = server(maya: try makeIdentity(maya).envelope)
@@ -876,6 +1291,8 @@ final class ContactServer: @unchecked Sendable {
     var lookups = 0
     var settingsReads = 0
     var resealed: [String: String] = [:]
+    /* Any other route a test answers itself (a rotation's), by method, path and JSON body; nil passes it on. */
+    var routes: ((String, String, [String: Any]) -> (Int, [String: Any])?)?
     private let lock = NSLock()
 
     init(me: String, identity: IdentityEnvelope) {
@@ -965,6 +1382,7 @@ final class ContactServer: @unchecked Sendable {
                 let id = path.split(separator: "/")[3]
                 return (200, ["links": links[String(id)] ?? []])
             }
+            if let answered = routes?(request.httpMethod ?? "GET", path, json) { return answered }
             return (404, ["message": "Not here."])
         }
     }

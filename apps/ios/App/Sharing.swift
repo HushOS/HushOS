@@ -381,7 +381,9 @@ struct ShareItemSheet: View {
         let role = role
         Task {
             do {
-                _ = try await store.vault.share(item, with: pin, role: role)
+                let shared = try await store.vault.share(item, with: pin, role: role)
+                // The check moved trust (a legacy pin made first-seen, a succession followed): judged again.
+                if shared.trustChanged { Task { await store.refreshSigners(); await store.refreshMounts() } }
                 store.notify("\(pin.name.isEmpty ? pin.email : pin.name) \(role == "editor" ? "can edit" : "can view") “\(item.name)” now")
                 chosen = nil
                 self.role = "viewer"
@@ -410,7 +412,8 @@ struct ShareItemSheet: View {
                 case .added(let added):
                     pin = added
                     Task { await store.refreshSigners() }
-                case .already(let known):
+                case .already(let known, let moved):
+                    if moved { Task { await store.refreshSigners() } }
                     pin = known
                 case .changed(let change):
                     interrupted = .new(email: email, role: role)
@@ -418,7 +421,9 @@ struct ShareItemSheet: View {
                     sharing = false
                     return
                 }
-                _ = try await store.vault.share(item, with: pin, role: role)
+                let shared = try await store.vault.share(item, with: pin, role: role)
+                // The check moved trust (a legacy pin made first-seen, a succession followed): judged again.
+                if shared.trustChanged { Task { await store.refreshSigners(); await store.refreshMounts() } }
                 store.notify("Shared with \(pin.firstName)")
                 query = ""
                 self.role = "viewer"
@@ -727,12 +732,17 @@ private struct PersonAccessSheet: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Back") { dismiss() } } }
             .contactSteps($step) { settled = true }
             .onChange(of: step) { _, now in
+                guard now == nil else { return }
+                // The role a changed account stopped belongs to this Review only: dismissed unsettled, it is dropped,
+                // so a later, separate Check it's Maya never grants it.
+                let value = settled ? waiting : nil
+                waiting = nil
                 // Review settled the change: the role may change again, and one it stopped runs again.
-                guard now == nil, settled else { return }
+                guard settled else { return }
                 settled = false
                 changed = false
                 settledChange()
-                if let value = waiting { waiting = nil; change(to: value) } else { Task { await reload() } }
+                if let value { change(to: value) } else { Task { await reload() } }
             }
             .alert("Stop sharing with \(first)?", isPresented: $stopping) {
                 Button("Cancel", role: .cancel) {}
@@ -769,7 +779,8 @@ private struct PersonAccessSheet: View {
         Task {
             do {
                 guard let pin = try await store.vault.contacts().first(where: { $0.userId.lowercased() == share.grantee.id.lowercased() }) else { return }
-                _ = try await store.vault.share(item, with: pin, role: value)
+                let shared = try await store.vault.share(item, with: pin, role: value)
+                if shared.trustChanged { Task { await store.refreshSigners(); await store.refreshMounts() } }
                 store.notify("\(first) \(value == "editor" ? "can edit" : "can view") “\(item.name)” now")
                 await reload()
                 dismiss()

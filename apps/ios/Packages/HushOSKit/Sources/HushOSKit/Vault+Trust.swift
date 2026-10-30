@@ -38,9 +38,12 @@ public struct AccountChangedError: Error, LocalizedError, Equatable, WordedError
     public var errorDescription: String? { "\(change.firstName)’s account changed." }
 }
 
-/* What Add someone came to (6.2). */
+/*
+ * What Add someone came to (6.2). `already` says whether the add itself moved whom this phone trusts (a legacy pin made
+ * first-seen, a succession followed, a first guard entry), so what is drawn is judged again, as after a new contact.
+ */
 public enum Added: Sendable, Equatable {
-    case added(ContactPin), already(ContactPin), changed(AccountChange)
+    case added(ContactPin), already(ContactPin, trustChanged: Bool), changed(AccountChange)
 }
 
 /* Where this phone stands with one person, given the keys the server serves for them now. */
@@ -277,7 +280,7 @@ extension Vault {
      * looks a succession up, only on the person's act, so the server cannot learn whom this phone
      * pins by watching it look people up. In the guard's turn.
      */
-    func stand(_ contact: Contact, act: Bool, follow: Bool, pass: MountPass? = nil) async throws -> Standing {
+    func stand(_ contact: Contact, act: Bool, follow: Bool, pass: MountPass? = nil, sealUnsaved: Bool = false) async throws -> Standing {
         // A mounting pass reads the settings once for all its shares, and again only after something saved them.
         let settings: Settings
         if let read = pass?.settings { settings = read } else {
@@ -307,7 +310,15 @@ extension Vault {
             }
             if !act { return .ok(pin: upgraded, entry: entry, followed: false) }
             let before = current
-            (current, entry) = try await commitTrust(id, entry: entry, target: upgraded) { try $0.setPin(upgraded, ifOver: before) }
+            do {
+                (current, entry) = try await commitTrust(id, entry: entry, target: upgraded) { try $0.setPin(upgraded, ifOver: before) }
+            } catch ContactError.message(let words) where words == Settings.contactsFull && sealUnsaved {
+                // A rotation that can't save the migration for room seals to the keys the legacy pin already holds, as
+                // before first-seen pins existed, saving and remembering nothing: no new trust. Left out, the server would
+                // revoke them for the owner's full settings; stopped, the rotation would never finish.
+                guard let served = contact.commitment, upgraded.commitment == served else { throw ContactError.message(words) }
+                return .ok(pin: upgraded, entry: entry, followed: false)
+            }
             pass?.settings = nil
             pin = current
             trust = .seen
@@ -378,14 +389,19 @@ extension Vault {
             throw ContactError.message("This isn’t the account that wrote it. Check the address, then try again.")
         }
         guard contact.upgraded else { throw ContactError.notUpgraded(contact.displayName) }
-        return try await withGuardTurn { try await decidedAgain { try await addDecided(contact, firstSeen: firstSeen) } }
+        // Every guard write and settings save forgets the signers (moves this generation): one during the add is a change
+        // in trust, even for someone already there.
+        let generation = signersGeneration
+        let added = try await withGuardTurn { try await decidedAgain { try await addDecided(contact, firstSeen: firstSeen) } }
+        if case .already(let pin, _) = added { return .already(pin, trustChanged: signersGeneration != generation) }
+        return added
     }
 
     private func addDecided(_ contact: Contact, firstSeen: String) async throws -> Added {
         switch try await stand(contact, act: true, follow: true) {
         case .ok(let pin, _, _):
             clearChange(contact.userId)
-            return .already(pin)
+            return .already(pin, trustChanged: false)
         case .notUpgraded:
             throw ContactError.notUpgraded(contact.displayName)
         case .succession(let pin), .changed(.some(let pin), _, _):
@@ -536,16 +552,16 @@ extension Vault {
      * served keys must be the pinned ones, the pin must agree with this phone's guard, and a legacy
      * pin becomes first-seen first. Anything else shares nothing.
      */
-    func trustGrantee(_ contact: Contact, follow: Bool) async throws -> (publicKey: Data, kem: Data) {
+    func trustGrantee(_ contact: Contact, follow: Bool, sealUnsaved: Bool = false) async throws -> (publicKey: Data, kem: Data) {
         try await withGuardTurn {
-            let standing = try await stand(contact, act: true, follow: follow)
+            let standing = try await stand(contact, act: true, follow: follow, sealUnsaved: sealUnsaved)
             switch standing {
             case .new, .changed(nil, _, _):
                 throw ContactError.unpinned
             case .notUpgraded(let pin):
                 throw ContactError.notUpgraded(pin.displayName)
             case .succession(let pin):
-                throw ContactError.message("\(pin.firstName) updated their account. Share with them again to follow it.")
+                throw ContactError.notFollowed("\(pin.firstName) updated their account. Share with them again to follow it.")
             case .changed(.some(let pin), _, _):
                 throw AccountChangedError(change: note(AccountChange(contactId: pin.userId, name: pin.name, email: pin.email)))
             case .ok(let pin, _, _):
@@ -744,7 +760,9 @@ extension Settings {
      */
     mutating func setPin(_ target: ContactPin, ifOver expected: ContactPin?, verify: Bool = false) throws {
         let current = pin(of: target.userId)
-        if let current, ContactPin.sameKeys(current, target), !verify || (current.trust == .verified && current.trustedVia == nil) {
+        // A pin over the same keys that vouches for nothing (a fingerprint over other keys) is never kept: it is what the act
+        // replaces, and kept, every later guard write over it would be refused.
+        if let current, current.held, ContactPin.sameKeys(current, target), !verify || (current.trust == .verified && current.trustedVia == nil) {
             forgetRemoval(target.userId)
             return
         }

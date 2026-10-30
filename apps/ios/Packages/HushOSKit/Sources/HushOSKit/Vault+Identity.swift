@@ -228,11 +228,14 @@ extension Vault {
     @discardableResult
     public func upgradeShares() async throws -> RotationOutcome {
         var outcome = RotationOutcome()
+        // The re-seals asked for so far: only these are acknowledged at the end, never one asked for while this pass ran.
+        let requested = ResealTo.requests
+        // The keys this pass seals under, read first: a key replacement begun while it runs is left for its own pass.
+        let keys = try await identityKeys()
         let reply = try await api.performPublic(try api.requestPublic("/shares/mine"), as: SharedByMeResponse.self)
-        if reply.shares.isEmpty { ResealPending.clear(); ResealTo.remove(ResealTo.all); return outcome }
+        if reply.shares.isEmpty && requested.isEmpty { ResealPending.clear(for: keys.signingPublicKey); return outcome }
         let settings = try await loadSettings()
         let ledger = settings.ledger
-        let keys = try await identityKeys()
         let pending = ResealPending.isSet(for: keys.signingPublicKey)
         var looked: [String: Contact] = [:]
         var sealed: [String: (publicKey: Data, kem: Data)] = [:]
@@ -241,7 +244,7 @@ extension Vault {
         var failedFor: Set<String> = []
         for share in reply.shares where ledger.holdsShare(node: share.node.id, grantee: share.grantee.id) {
             let grantee = share.grantee.id.lowercased()
-            let followed = ResealTo.contains(grantee)
+            let followed = requested[grantee] != nil
             guard pending || share.suite != 4 || followed else { continue }
             guard let pin = settings.pin(of: share.grantee.id) else {
                 outcome.note(ContactError.unpinned)
@@ -290,9 +293,39 @@ extension Vault {
         }
         // Done, or nothing of theirs left to seal: either way they leave the queue.
         let held = Set(reply.shares.filter { ledger.holdsShare(node: $0.node.id, grantee: $0.grantee.id) }.map { $0.grantee.id.lowercased() })
-        ResealTo.remove(resealedTo.subtracting(failedFor).union(ResealTo.all.subtracting(held)))
-        if !unfinished { ResealPending.clear() }
+        let unheld = await withNothingInTheTrash(Set(requested.keys).subtracting(held), ledger: ledger)
+        let done = resealedTo.subtracting(failedFor).union(unheld)
+        ResealTo.acknowledge(requested.filter { done.contains($0.key) })
+        if !unfinished { ResealPending.clear(for: keys.signingPublicKey) }
         return outcome
+    }
+
+    /*
+     * Of the people queued with nothing served to seal, those with nothing of theirs in the Trash
+     * either: /shares/mine leaves a trashed item out as it does a deleted one, but restored it would
+     * still hold their old keys, so they stay queued until it is restored (and sealed) or deleted
+     * for good. When the Trash can't be read, everyone the ledger still names stays queued.
+     */
+    func withNothingInTheTrash(_ people: Set<String>, ledger: SharingLedger) async -> Set<String> {
+        let named = ledger.shares.filter { !$0.value.isEmpty && !Set($0.value.map { $0.lowercased() }).isDisjoint(with: people) }
+        guard !named.isEmpty else { return people }
+        guard let trashed = try? await trashedIds() else {
+            return people.subtracting(named.values.flatMap { $0.map { $0.lowercased() } })
+        }
+        return people.subtracting(named.filter { trashed.contains($0.key.lowercased()) }.values.flatMap { $0.map { $0.lowercased() } })
+    }
+
+    /* The ids of this drive's items in the Trash, as the server lists them (a folder's listing leaves them out). */
+    func trashedIds() async throws -> Set<String> {
+        let workspaceId = try await loadWorkspace().workspaceId
+        var ids: Set<String> = []
+        var after: String?
+        repeat {
+            let page = try await api.trashListing(workspaceId: workspaceId, after: after)
+            ids.formUnion(page.items.map { $0.node.id.lowercased() })
+            after = page.nextCursor
+        } while after != nil
+        return ids
     }
 }
 
@@ -307,6 +340,8 @@ enum ResealPending {
     static func set(for signingPublicKey: String) { Unbacked.write(signingPublicKey, file) }
     static func isSet(for signingPublicKey: String) -> Bool { Unbacked.read(String.self, file) == signingPublicKey }
     static func clear() { Unbacked.write(String?.none, file) }
+    /* Finished for these keys only: a replacement begun since (other keys) keeps waiting for its own pass. */
+    static func clear(for signingPublicKey: String) { if isSet(for: signingPublicKey) { clear() } }
 }
 
 extension IdentityEnvelope {

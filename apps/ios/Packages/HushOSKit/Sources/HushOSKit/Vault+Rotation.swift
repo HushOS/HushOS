@@ -81,6 +81,15 @@ struct RotationWork: Decodable, Sendable {
     let done: Bool
 }
 
+/* A node a rotation on this device re-keyed: its applied epoch, and the key its unreached children are wrapped under. */
+struct RotatedKey: Sendable {
+    /* The item whose rotation re-keyed it: when that rotation ends, nothing is wrapped under the previous key any more. */
+    let root: String
+    let epoch: UInt64
+    let previousEpoch: UInt64
+    let previousKey: Data
+}
+
 struct RotationResults: Decodable, Sendable {
     struct Result: Decodable, Sendable {
         let id: String
@@ -137,6 +146,20 @@ extension DriveAPI {
 
 extension Vault {
     /*
+     * Whether a grantee is left out of a rotation for `error`: only a verdict on them (their account changed, they're
+     * not in Contacts, they can't be sealed to, a succession not followed), never a failure that says nothing about
+     * them, which a later attempt may not meet.
+     */
+    static func leavesOut(_ error: Error) -> Bool {
+        if error is AccountChangedError { return true }
+        guard let contact = error as? ContactError else { return false }
+        switch contact {
+        case .unpinned, .changed, .notUpgraded, .notFollowed: return true
+        case .moved, .message: return false
+        }
+    }
+
+    /*
      * Rotates the subtree under `item`. Shares the pins no longer vouch for are left out and
      * named in the outcome, so the person sees who lost access, rather than sealing to X25519
      * alone or to a key nobody checked.
@@ -158,6 +181,14 @@ extension Vault {
         var granteeKeys: [String: (publicKey: Data, kem: Data)] = [:]
         var epochs: [String: UInt64] = opened.values(in: ws).mapValues { $0.node.keyEpoch }
         var previous: [String: (epoch: UInt64, key: Data)] = [:]
+        // What an earlier run of this rotation already had applied: those nodes are at their new epoch, and the keys
+        // before it still open what that run didn't reach (the rows in `opened` were read again, or will be).
+        for (id, kept) in rotatedKeys.values(in: ws) {
+            // A row read since at another epoch (another device went on) is what holds: the kept key is stale.
+            if let row = opened[ref(id)], row.node.keyEpoch != kept.epoch { rotatedKeys[ref(id)] = nil; continue }
+            epochs[id] = kept.epoch
+            previous[id] = (kept.previousEpoch, kept.previousKey)
+        }
         var outcome = RotationOutcome()
         var cursor: String? = nil
         var idle = 0
@@ -181,11 +212,30 @@ extension Vault {
                 continue
             }
             let inBatch = Set(work.nodes.map(\.node.id))
-            for parentId in Set(work.nodes.compactMap(\.node.parentId)) where !inBatch.contains(parentId) && opened[ref(parentId)] == nil {
+            for parentId in Set(work.nodes.compactMap(\.node.parentId)) where !inBatch.contains(parentId) && opened[ref(parentId)] == nil && epochs[parentId] == nil {
                 _ = try? await listChildren(of: parentId)
                 if let known = opened[ref(parentId)] { epochs[parentId] = known.node.keyEpoch }
             }
             var batch: [[String: Any]] = []
+            // What each node of this batch held before it was given a key here: a key becomes the node's own only once the
+            // server applied the batch. Whatever stops it (a grantee check that isn't a verdict, a failure while sealing, a
+            // dropped send) or refuses a node, those nodes get their old keys back, so the vault is as it was and a retry
+            // walks them again from the keys the server holds (the web drops a stopped batch's keys the same way).
+            var staged: [String: (key: Data?, epoch: UInt64?, previous: (epoch: UInt64, key: Data)?)] = [:]
+            func stage(_ id: String) {
+                if staged[id] == nil { staged[id] = (nodeKeys[ref(id)], epochs[id], previous[id]) }
+            }
+            func unstage(_ ids: some Sequence<String>) {
+                for id in ids {
+                    guard let held = staged[id] else { continue }
+                    nodeKeys[ref(id)] = held.key
+                    epochs[id] = held.epoch
+                    previous[id] = held.previous
+                }
+            }
+            var sending = false
+            var applied = 0
+            do {
             for entry in work.nodes {
                 let node = entry.node
                 // Work for another workspace is not this subtree's.
@@ -212,6 +262,7 @@ extension Vault {
                     )
                     wire["keyEnvelope"] = base64urlEncode(bytes: envelope)
                     wire["rotated"] = NSNull()
+                    stage(node.id)
                     nodeKeys[ref(node.id)] = old
                     epochs[node.id] = node.keyEpoch
                     batch.append(wire)
@@ -257,10 +308,13 @@ extension Vault {
                         // person and served keys, so a later batch serving other keys for them is judged again, never sealed to the old.
                         let grantee = Contact(userId: share.granteeUserId, served: share.grantee, name: pin.name, email: pin.email)
                         if let known = granteeKeys[grantee.trustKey] { sealing = known } else {
-                            sealing = try await trustGrantee(grantee, follow: false)
+                            sealing = try await trustGrantee(grantee, follow: false, sealUnsaved: true)
                             granteeKeys[grantee.trustKey] = sealing
                         }
-                    } catch {
+                    } catch where Self.leavesOut(error) {
+                        // Left out, the server revokes their share: only a verdict on the person may do that. Anything else (the
+                        // guard couldn't be read or written, the pin moved meanwhile, no network) stops the rotation before this
+                        // batch is sent, and it is tried again.
                         let reason = ErrorWords.say(error, otherwise: "Their keys couldn’t be checked.") ?? "Their keys couldn’t be checked."
                         if !outcome.skipped.contains(reason) { outcome.skipped.append(reason) }
                         continue
@@ -297,15 +351,41 @@ extension Vault {
                 wire["rotated"] = ["metadataEnvelope": base64urlEncode(bytes: metadataEnvelope), "metadataSignature": metadataSignature,
                                    "versions": versions, "shares": shares, "links": links, "unsealableLinks": unsealable]
                 // From here the node's key is the fresh one; the old one stays reachable for its unrotated children.
+                stage(node.id)
                 previous[node.id] = (node.keyEpoch, old)
                 nodeKeys[ref(node.id)] = fresh
                 epochs[node.id] = target
                 batch.append(wire)
             }
-            var applied = 0
             if !batch.isEmpty {
+                sending = true
                 let results = try await api.rotateNodes(workspaceId: ws, nodeId: rootId, nodes: batch)
-                applied = results.filter { $0.status == "ok" || $0.status == "already" }.count
+                let kept = Set(results.filter { $0.status == "ok" || $0.status == "already" }.map(\.id))
+                applied = kept.count
+                // A node the server refused (or left out) keeps the key it holds there.
+                unstage(staged.keys.filter { !kept.contains($0) })
+                // What the server applied is committed here at once, so a later batch that stops has only its own
+                // nodes to undo: their rows (still at the old epoch) are read again, and a re-keyed node's previous
+                // key is kept for the children the walk hasn't reached, past this run if it stops.
+                for id in staged.keys where kept.contains(id) {
+                    if let epoch = epochs[id], let prior = previous[id], prior.epoch != epoch {
+                        rotatedKeys[ref(id)] = RotatedKey(root: rootId, epoch: epoch, previousEpoch: prior.epoch, previousKey: prior.key)
+                    }
+                    opened[ref(id)] = nil
+                }
+                if !kept.isEmpty { catalogueState = .idle }
+            }
+            } catch {
+                unstage(staged.keys)
+                // A send whose answer never came may have landed: those nodes are read from the server again, under
+                // whichever keys it holds, rather than trusted from what this vault opened before.
+                // The catalogue answers from those rows too: it stops answering until a sync builds it again,
+                // so a folder lists from the server instead of without them.
+                if sending {
+                    for id in staged.keys { opened[ref(id)] = nil }
+                    catalogueState = .idle
+                }
+                throw error
             }
             outcome.rotated += applied
             progress(outcome.rotated)
@@ -317,7 +397,9 @@ extension Vault {
         // Envelopes changed in the subtree: those items are opened again from the server, under
         // their fresh keys. Everything else stays as it was, so lists outside it keep their rows.
         // The catalogue holds the old rows too; the next sync rebuilds it from the feed.
+        // Every node is under the new keys now: no child is left wrapped under a previous one.
         for id in touched { opened[ref(id)] = nil }
+        for (id, kept) in rotatedKeys.values(in: ws) where kept.root == rootId || touched.contains(id) { rotatedKeys[ref(id)] = nil }
         catalogueState = .idle
         return outcome
     }

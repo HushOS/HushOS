@@ -193,21 +193,58 @@ extension SharedWithMeView.Granter {
  */
 enum ResealTo {
     static let file = "reseal-to.json"
+    private static let lock = NSLock()
 
-    static func add(_ userId: String) {
-        var all = Set(Unbacked.read([String].self, file) ?? [])
-        all.insert(userId.lowercased())
-        Unbacked.write(all.sorted(), file)
+    /*
+     * Each request carries the generation it was made at, so a pass acknowledges only what it read before it began: one
+     * made again meanwhile (another Continue, to keys that pass never saw) outlives that pass.
+     */
+    private struct Stored: Codable {
+        var next: UInt64 = 0
+        var to: [String: UInt64] = [:]
     }
 
-    static var all: Set<String> { Set(Unbacked.read([String].self, file) ?? []) }
+    /* As stored; the list an earlier build kept reads as generation 0, which any later request is above. */
+    private static func read() -> Stored {
+        if let stored = Unbacked.read(Stored.self, file) { return stored }
+        let list = Unbacked.read([String].self, file) ?? []
+        return Stored(to: Dictionary(list.map { ($0.lowercased(), 0) }, uniquingKeysWith: { first, _ in first }))
+    }
+
+    static func add(_ userId: String) {
+        lock.withLock {
+            var stored = read()
+            stored.next += 1
+            stored.to[userId.lowercased()] = stored.next
+            Unbacked.write(stored, file)
+        }
+    }
+
+    /* Who is owed a re-seal, with the generation of the latest request: what a pass reads before it begins. */
+    static var requests: [String: UInt64] { lock.withLock { read().to } }
+
+    static var all: Set<String> { Set(requests.keys) }
 
     static func contains(_ userId: String) -> Bool { all.contains(userId.lowercased()) }
 
+    /* Acknowledges the requests a pass read: one made again since, at a later generation, stays. */
+    static func acknowledge(_ done: [String: UInt64]) {
+        guard !done.isEmpty else { return }
+        lock.withLock {
+            var stored = read()
+            for (id, generation) in done where stored.to[id] == generation { stored.to[id] = nil }
+            Unbacked.write(stored, file)
+        }
+    }
+
+    /* Forgets these requests whatever their generation (tests). */
     static func remove(_ userIds: Set<String>) {
         guard !userIds.isEmpty else { return }
-        let left = (Unbacked.read([String].self, file) ?? []).filter { !userIds.contains($0) }
-        Unbacked.write(left, file)
+        lock.withLock {
+            var stored = read()
+            for id in userIds { stored.to[id.lowercased()] = nil }
+            Unbacked.write(stored, file)
+        }
     }
 }
 

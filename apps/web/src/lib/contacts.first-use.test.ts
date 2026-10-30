@@ -2,7 +2,7 @@
 import 'fake-indexeddb/auto';
 import type { ContactIdentity } from '@hushos/auth/api';
 import type { SettingsEnvelope } from '@hushos/crypto';
-import { keyCommitment, pinTrust } from '@hushos/crypto/pins';
+import { CONTACTS_FULL, SETTINGS_MAX_BYTES, keyCommitment, pinTrust } from '@hushos/crypto/pins';
 import { pinOfServed } from '@hushos/drive/trust';
 import { QueryClient } from '@tanstack/react-query';
 import { openDB } from 'idb';
@@ -274,6 +274,109 @@ describe('adding someone and sharing with them', () => {
         await expect(addContact(query, ME, MAYA_EMAIL)).rejects.toThrow(GUARD_UNSAVED);
         expect(full.server.saves).toBe(0);
         await expect(trustGrantee(ME, MAYA, full.maya)).rejects.toThrow(/not in your contacts/);
+    });
+});
+
+describe('adding someone already there', () => {
+    test('says when the add itself moved trust, so what is drawn is judged again', async () => {
+        const w = await world();
+        // A pin from before post-quantum identities: adding them makes it first-seen and remembers them.
+        const legacy = {
+            userId: MAYA,
+            email: MAYA_EMAIL,
+            name: 'Maya Lindqvist',
+            pinnedAt: '2026-01-01T00:00:00.000Z',
+            encryptionPublicKey: w.maya.encryptionPublicKey,
+            signingPublicKey: w.maya.signingPublicKey,
+            fingerprint: 'words-from-before',
+        };
+        await w.replace({ version: 2, contacts: { [MAYA]: legacy } } as never);
+        const first = await addContact(query, ME, MAYA_EMAIL);
+        expect(first).toMatchObject({ outcome: 'already', trustChanged: true });
+        expect(await pinTrust((await w.stored()).contacts[MAYA]!)).toBe('seen');
+        // Adding again moves nothing.
+        expect(await addContact(query, ME, MAYA_EMAIL)).toMatchObject({
+            outcome: 'already',
+            trustChanged: false,
+        });
+    });
+});
+
+describe('sharing with someone already there', () => {
+    test('says when the share’s check moved trust, so what is drawn is judged again', async () => {
+        const w = await world();
+        const legacy = {
+            userId: MAYA,
+            email: MAYA_EMAIL,
+            name: 'Maya Lindqvist',
+            pinnedAt: '2026-01-01T00:00:00.000Z',
+            encryptionPublicKey: w.maya.encryptionPublicKey,
+            signingPublicKey: w.maya.signingPublicKey,
+            fingerprint: 'words-from-before',
+        };
+        await w.replace({ version: 2, contacts: { [MAYA]: legacy } } as never);
+        // The check makes the legacy pin first-seen and remembers her.
+        expect(await contacts.granteeKeys(ME, legacy as never)).toMatchObject({
+            trustChanged: true,
+        });
+        expect(await pinTrust((await w.stored()).contacts[MAYA]!)).toBe('seen');
+        // Sharing again moves nothing.
+        const pin = (await w.stored()).contacts[MAYA]!;
+        expect(await contacts.granteeKeys(ME, pin)).toMatchObject({ trustChanged: false });
+    });
+});
+
+describe('the re-seal a Continue asks for', () => {
+    test('is acknowledged only for the keys a pass read, never for keys a Continue moved to while it ran', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        await startOver(w);
+        await continueWith(query, ME, change);
+        // A pass reads what is owed ...
+        expect(await resealPending(ME)).toEqual([MAYA]);
+        // ... while she starts over again and Continue asks for a re-seal to her newest keys.
+        await startOver(w);
+        await continueWith(query, ME, change);
+        // The pass sealed to the keys it read: what Continue asked since is still owed.
+        await contacts.resealedTo(ME, [MAYA]);
+        expect(await resealPending(ME)).toEqual([MAYA]);
+        // The next pass reads it and settles it.
+        await contacts.resealedTo(ME, [MAYA]);
+        expect(await resealPending(ME)).toEqual([]);
+    });
+});
+
+describe('a rotation with no room to save a migration', () => {
+    test('seals to a legacy pin’s own keys without saving or remembering anything; other keys stay a verdict', async () => {
+        const w = await world();
+        const legacy = {
+            userId: MAYA,
+            email: MAYA_EMAIL,
+            name: 'Maya Lindqvist',
+            pinnedAt: '2026-01-01T00:00:00.000Z',
+            encryptionPublicKey: w.maya.encryptionPublicKey,
+            signingPublicKey: w.maya.signingPublicKey,
+            fingerprint: '',
+        };
+        // Room for the legacy pin, none for it made first-seen (its two key digests more).
+        const bare = JSON.stringify({ version: 2, contacts: { [MAYA]: legacy }, padding: '' });
+        const padding = 'x'.repeat(SETTINGS_MAX_BYTES - new TextEncoder().encode(bare).length - 40);
+        await w.replace({ version: 2, contacts: { [MAYA]: legacy }, padding } as never);
+        // Left out, the server would revoke her for the owner's full settings; stopped, the rotation would never finish.
+        expect(await trustGrantee(ME, MAYA, w.maya, { sealUnsaved: true })).toEqual({
+            encryptionPublicKey: w.maya.encryptionPublicKey,
+            kemPublicKey: w.maya.kemPublicKey,
+        });
+        // No new trust: the pin stays as it was, and this device remembers nothing.
+        expect(await pinTrust((await w.stored()).contacts[MAYA]!)).toBe('legacy');
+        expect(await w.real.entry(ME, MAYA)).toBeFalsy();
+        // The person's own act (the share dialog) says the settings are full.
+        await expect(trustGrantee(ME, MAYA, w.maya)).rejects.toThrow(CONTACTS_FULL);
+        // Other keys served for her stay a verdict.
+        const other = await startOver(w);
+        await expect(trustGrantee(ME, MAYA, other, { sealUnsaved: true })).rejects.toBeInstanceOf(
+            AccountChangedError,
+        );
     });
 });
 

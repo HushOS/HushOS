@@ -1,7 +1,7 @@
 import type { Signer } from '@hushos/drive/api';
 import type { QueryClient } from '@tanstack/react-query';
 import { contactKeys, followServedKeys } from '@/lib/contacts';
-import { driveClient } from '@/lib/drive';
+import { driveClient, driveKeys } from '@/lib/drive';
 
 /*
  * What happens when the people a person trusts change, and the ways out a
@@ -27,6 +27,18 @@ export function afterTrustChanged(queryClient: QueryClient) {
         predicate: (query) => query.queryKey[0] === 'drive' && query.queryKey[1] !== 'open',
     });
     void driveClient.recheckIntegrity().catch(() => {});
+}
+
+/*
+ * After Add someone moved trust (someone new, or someone already there whose
+ * pin the add made first-seen or followed to new keys): every listing judged
+ * again, Shared read again (what they shared opens), and what was shared with
+ * them sealed to the keys the pin holds now when the pin asks for it.
+ */
+export function afterContactAdded(queryClient: QueryClient, pin: { resealShares?: boolean }) {
+    afterTrustChanged(queryClient);
+    void queryClient.invalidateQueries({ queryKey: driveKeys.shared });
+    if (pin.resealShares) void driveClient.upgradeShares().catch(() => {});
 }
 
 /*

@@ -114,8 +114,11 @@ struct AddSomeoneView: View {
                     // What they wrote now reads as theirs, and what they shared opens.
                     Task { await store.refreshSigners(); await store.refreshMounts() }
                     added(pin)
-                case .already(let pin):
-                    hint = ("\(pin.firstName) is already in your contacts.", false)
+                case .already(let pin, let moved):
+                    // Already there, but the add may have moved trust: judged again, as after a new contact.
+                    if moved { Task { await store.refreshSigners(); await store.refreshMounts() } }
+                    // From a mark (Check who wrote this), someone already in Contacts goes on to the words it offered.
+                    if writer != nil { added(pin) } else { hint = ("\(pin.firstName) is already in your contacts.", false) }
                 case .changed(let change):
                     changed(change)
                 }

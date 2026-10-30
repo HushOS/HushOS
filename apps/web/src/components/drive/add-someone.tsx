@@ -3,21 +3,22 @@ import { useId, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { addContact, type AccountChange, type Pin as ContactPin } from '@/lib/contacts';
-import { driveKeys } from '@/lib/drive';
-import { afterTrustChanged } from '@/lib/integrity';
+import { afterContactAdded } from '@/lib/integrity';
 import { cue } from '@/lib/sounds';
 
 /*
  * Add someone (docs/optional-verification.md 6.2): their email, Add, and they
  * are a contact at once, remembered with the keys HushOS serves for them now.
  * No words: checking it's them is a later, optional step (Check it's Maya).
- * Someone already added is said so in the hint; an account that changed since
- * this device last saw it goes to the changed-account notice instead.
+ * Someone already added is said so in the hint (from a mark, `onAlready` goes
+ * on to the check it offered instead); an account that changed since this
+ * device last saw it goes to the changed-account notice instead.
  */
 export function AddSomeone({
     userId,
     writer,
     onAdded,
+    onAlready,
     onChanged,
     onCancel,
 }: {
@@ -29,6 +30,8 @@ export function AddSomeone({
      */
     writer?: string;
     onAdded: (pin: ContactPin) => void;
+    /* Someone already in Contacts, from a mark: the words come next rather than the hint. */
+    onAlready?: (pin: ContactPin) => void;
     onChanged: (change: AccountChange) => void;
     onCancel: () => void;
 }) {
@@ -50,6 +53,12 @@ export function AddSomeone({
                 return;
             }
             if (added.outcome === 'already') {
+                // Already there, but the add may have moved trust: judged again, as after a new contact.
+                if (added.trustChanged) afterContactAdded(queryClient, added.pin);
+                if (writer && onAlready) {
+                    onAlready(added.pin);
+                    return;
+                }
                 setHint({
                     text: `${firstName(added.pin.name)} is already in your contacts.`,
                     error: false,
@@ -57,8 +66,7 @@ export function AddSomeone({
                 return;
             }
             // What they wrote now reads as theirs, and what they shared opens.
-            afterTrustChanged(queryClient);
-            void queryClient.invalidateQueries({ queryKey: driveKeys.shared });
+            afterContactAdded(queryClient, added.pin);
             cue('success');
             onAdded(added.pin);
         } catch (cause) {

@@ -21,6 +21,7 @@ import type { ServedIdentity } from '@hushos/drive/api';
 import type { SharingLedger, TrustedGranter, TrustedGrantee } from '@hushos/drive/client';
 import {
     comparePin,
+    GranteeRefusedError,
     granterKeysOf,
     keysPassedThrough,
     pinAfterSuccession,
@@ -669,7 +670,8 @@ function sealOlderGuard(userId: string) {
  * paused until the person continues or checks (2.4). Said calmly wherever it
  * is met, as the same notice (components/drive/account-changed.tsx).
  */
-export class AccountChangedError extends Error {
+/* A verdict on the person (GranteeRefusedError): a rotation leaves them out, an act shows the notice. */
+export class AccountChangedError extends GranteeRefusedError {
     override name = 'AccountChangedError';
     constructor(
         readonly contactId: string,
@@ -1042,7 +1044,7 @@ async function stand(
     userId: string,
     contactId: string,
     served: Served,
-    { act, follow }: { act: boolean; follow: boolean },
+    { act, follow, sealUnsaved = false }: { act: boolean; follow: boolean; sealUnsaved?: boolean },
 ): Promise<Standing> {
     const loaded = await loadSettings(userId);
     const found = pinOf(loaded.settings.contacts, contactId);
@@ -1079,14 +1081,29 @@ async function stand(
         const before = pin;
         // Only over the pin it was worked out from, by every key: another device may have moved
         // first, and a pin of these keys it saved meanwhile (checked, say) is kept as it is.
-        ({ pin, entry } = await commitTrust(
-            boundQueryClient,
-            userId,
-            contactId,
-            entry,
-            upgraded,
-            (settings) => withPinIf(settings, upgraded, before),
-        ));
+        try {
+            ({ pin, entry } = await commitTrust(
+                boundQueryClient,
+                userId,
+                contactId,
+                entry,
+                upgraded,
+                (settings) => withPinIf(settings, upgraded, before),
+            ));
+        } catch (error) {
+            // A rotation (`sealUnsaved`) that can't save the migration for room seals to the keys
+            // the legacy pin already holds, as before first-seen pins, saving and remembering
+            // nothing: no new trust. Left out, the server would revoke them for the owner's full
+            // settings; stopped, the rotation would never finish.
+            if (!sealUnsaved || !(error instanceof Error) || error.message !== CONTACTS_FULL)
+                throw error;
+            const [mine, theirs] = await Promise.all([
+                keyCommitment(upgraded),
+                servedCommitment(served),
+            ]);
+            if (mine === null || mine !== theirs) throw error;
+            return { kind: 'ok', pin: upgraded, entry, followed: false };
+        }
         trust = 'seen';
     }
     if ((await agreement(entry, pin)) === 'changed') {
@@ -1286,10 +1303,14 @@ export async function lookupContact(
  * words. Someone already added is said so; a change from the keys this device
  * holds for them (a contact removed and added again over other keys included)
  * is the notice instead. `writer`, from a mark: the account that wrote an
- * item, which the address must be.
+ * item, which the address must be. `trustChanged` on someone already added:
+ * the add itself moved whom this device trusts (a legacy pin made first-seen,
+ * a succession followed, a first guard entry), so what is drawn is judged
+ * again, as after a new contact.
  */
 export type Added =
-    | { outcome: 'added' | 'already'; pin: Pin }
+    | { outcome: 'added'; pin: Pin }
+    | { outcome: 'already'; pin: Pin; trustChanged: boolean }
     | { outcome: 'changed'; change: AccountChange };
 export async function addContact(
     queryClient: QueryClient,
@@ -1303,9 +1324,15 @@ export async function addContact(
     if (writer !== undefined && contact.userId.toLowerCase() !== writer.toLowerCase())
         throw new Error('This isn’t the account that wrote it. Check the address, then try again.');
     if (!(await keysHold(contact.userId, contact))) throw new Error(notUpgradedWords(contact.name));
-    return withGuardLock(userId, () =>
+    // Every guard write moves this revision: one during the add is a change in trust, even for
+    // someone already there.
+    const before = guardRevision();
+    const added = await withGuardLock(userId, () =>
         decidedAgain(() => addDecided(queryClient, userId, contact, firstSeen)),
     );
+    return added.outcome === 'already'
+        ? { ...added, trustChanged: guardRevision() !== before }
+        : added;
 }
 
 /*
@@ -1329,7 +1356,8 @@ async function addDecided(
     firstSeen: 'added' | 'family' = 'added',
 ): Promise<Added> {
     const standing = await stand(userId, contact.userId, contact, { act: true, follow: true });
-    if (standing.kind === 'ok') return { outcome: 'already', pin: standing.pin };
+    if (standing.kind === 'ok')
+        return { outcome: 'already', pin: standing.pin, trustChanged: false };
     if (standing.kind === 'not-upgraded') throw new Error(notUpgradedWords(contact.name));
     if (standing.kind !== 'new')
         return {
@@ -1656,15 +1684,22 @@ export async function trustGrantee(
     userId: string,
     granteeUserId: string,
     served: Served,
-    { follow = false }: { follow?: boolean } = {},
+    { follow = false, sealUnsaved = false }: { follow?: boolean; sealUnsaved?: boolean } = {},
 ): Promise<TrustedGrantee> {
     return withGuardLock(userId, async () => {
-        const standing = await stand(userId, granteeUserId, served, { act: true, follow });
+        const standing = await stand(userId, granteeUserId, served, {
+            act: true,
+            follow,
+            sealUnsaved,
+        });
         if (standing.kind === 'new' || (standing.kind === 'changed' && standing.pin === null))
-            throw new Error('This person is not in your contacts. Add them before sharing.');
-        if (standing.kind === 'not-upgraded') throw new Error(notUpgradedWords(standing.pin.name));
+            throw new GranteeRefusedError(
+                'This person is not in your contacts. Add them before sharing.',
+            );
+        if (standing.kind === 'not-upgraded')
+            throw new GranteeRefusedError(notUpgradedWords(standing.pin.name));
         if (standing.kind === 'succession')
-            throw new Error(
+            throw new GranteeRefusedError(
                 `${firstNameOf(standing.pin.name)} updated their account. Share with them again to follow it.`,
             );
         if (standing.kind === 'changed') {
@@ -1674,7 +1709,8 @@ export async function trustGrantee(
         }
         // comparePin said `same` (or the pin followed to them): the served ML-KEM key is the one
         // the version 3 pin's digest names.
-        if (!served.kemPublicKey) throw new Error(notUpgradedWords(standing.pin.name));
+        if (!served.kemPublicKey)
+            throw new GranteeRefusedError(notUpgradedWords(standing.pin.name));
         return {
             encryptionPublicKey: standing.pin.encryptionPublicKey,
             kemPublicKey: served.kemPublicKey,
@@ -1687,10 +1723,11 @@ export async function granteeKeys(userId: string, pin: Pin) {
     const { contact } = await authClient.lookupContact(pin.email);
     if (contact.userId.toLowerCase() !== pin.userId.toLowerCase())
         throw new Error('That address now belongs to a different account.');
-    return {
-        userId: pin.userId,
-        ...(await trustGrantee(userId, pin.userId, contact, { follow: true })),
-    };
+    // Every guard write moves this revision: one during the check (a legacy pin made first-seen,
+    // a succession followed, a first guard entry) is a change in trust the caller refreshes for.
+    const before = guardRevision();
+    const keys = await trustGrantee(userId, pin.userId, contact, { follow: true });
+    return { userId: pin.userId, ...keys, trustChanged: guardRevision() !== before };
 }
 
 /*
@@ -1963,12 +2000,21 @@ export async function contactPins(userId: string) {
     return (await cachedSettings(userId)).settings.contacts;
 }
 
+/*
+ * The keys each owed re-seal was asked for when a pass last read it (resealPending), by account
+ * and lowercased contact id: a pass acknowledges only that request (resealedTo), never one a
+ * Continue or a check made since over other keys, which it never sealed to.
+ */
+const resealRead = new Map<string, Map<string, string | null>>();
+
 /* Grantees whose pin followed a succession: what was shared with them waits to be sealed again. */
 export async function resealPending(userId: string) {
     const { settings } = await loadSettings(userId);
-    return Object.values(settings.contacts).flatMap((pin) =>
-        pin.resealShares ? [pin.userId] : [],
-    );
+    const owed = Object.values(settings.contacts).filter((pin) => pin.resealShares);
+    const read = new Map<string, string | null>();
+    for (const pin of owed) read.set(pin.userId.toLowerCase(), await keyCommitment(pin));
+    resealRead.set(userId, read);
+    return owed.map((pin) => pin.userId);
 }
 export async function resealAll(userId: string) {
     return Boolean((await loadSettings(userId)).settings.resealOwnShares);
@@ -1980,10 +2026,13 @@ export async function resealedAll(userId: string) {
     });
 }
 export async function resealedTo(userId: string, granteeUserIds: string[]) {
-    await saveSettings(boundQueryClient, userId, (settings) => {
+    const read = resealRead.get(userId);
+    await saveSettings(boundQueryClient, userId, async (settings) => {
         for (const id of granteeUserIds) {
             const pin = settings.contacts[id];
-            if (pin) delete pin.resealShares;
+            // Only the request the pass read: a pin moved to other keys since still owes its re-seal.
+            if (!pin || !read?.has(id.toLowerCase())) continue;
+            if ((await keyCommitment(pin)) === read.get(id.toLowerCase())) delete pin.resealShares;
         }
         return settings;
     });
