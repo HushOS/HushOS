@@ -1,4 +1,4 @@
-import type { DriveNode } from '@hushos/drive/client';
+import { folderColour, type DriveNode } from '@hushos/drive/client';
 import { cn } from 'cn';
 import { FolderMark } from '@/components/folder-mark';
 import { extensionOf, previewKind } from '@/lib/previews';
@@ -32,7 +32,14 @@ type FileMarkProps = (
 export function FileMark({ node, kind, name, size = 'row', className }: FileMarkProps) {
     const thumbnail = useThumbnail(node ?? null);
     const box = SIZES[size];
-    if ((node?.kind ?? kind) === 'folder') return <FolderMark box={box} className={className} />;
+    if ((node?.kind ?? kind) === 'folder')
+        return (
+            <FolderMark
+                box={box}
+                colour={node ? folderColour(node) : undefined}
+                className={className}
+            />
+        );
     const preview = node ? previewKind(node) : 'none';
     if (thumbnail && preview === 'pdf')
         return <PageMark box={box} src={thumbnail} className={className} />;

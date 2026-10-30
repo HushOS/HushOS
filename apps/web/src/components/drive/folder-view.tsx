@@ -7,6 +7,7 @@ import {
 } from '@/components/drive/access';
 import { CreateFolderDialog } from '@/components/drive/create-folder-dialog';
 import { DetailsPanel } from '@/components/drive/details-panel';
+import { FolderColourDialog } from '@/components/drive/folder-colour-dialog';
 import { useDrive } from '@/components/drive/drive-shell';
 import { AreaNotice } from '@/components/drive/area-notice';
 import { useFamilyArea, waitsForKeyChange, type FamilyArea } from '@/components/drive/family-area';
@@ -268,6 +269,7 @@ export function FolderView({ folderId }: { folderId: string }) {
     const [sharing, setSharing] = useState<DriveNode | null>(null);
     const [reporting, setReporting] = useState<DriveNode | null>(null);
     const [tagging, setTagging] = useState<DriveNode[] | null>(null);
+    const [colouring, setColouring] = useState<DriveNode[] | null>(null);
     // Tag colours are this workspace's; a shared item's tags read by name alone.
     const registry = useQuery({ ...tagsQueryOptions, enabled: !area }).data ?? null;
     const [trashing, setTrashing] = useState(false);
@@ -934,6 +936,7 @@ export function FolderView({ folderId }: { folderId: string }) {
             onRename: writable ? actions.onRename : null,
             onMove: writable ? actions.onMove : null,
             onTrash: writable ? actions.onTrash : null,
+            onColour: writable ? setColouring : null,
         });
     }
     const markOpened = (node: DriveNode) => () => {
@@ -1470,6 +1473,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                     onInfo={toggleInfo}
                     onSelectAll={selectAll}
                     onClear={clear}
+                    onColour={writable ? () => setColouring(selection) : null}
                 />
             )}
             {folder && (
@@ -1527,6 +1531,10 @@ export function FolderView({ folderId }: { folderId: string }) {
                 node={sharing}
                 open={sharing !== null}
                 onOpenChange={(open) => !open && setSharing(null)}
+            />
+            <FolderColourDialog
+                nodes={colouring}
+                onOpenChange={(open) => !open && setColouring(null)}
             />
             <TagDialog
                 nodes={tagging ?? []}

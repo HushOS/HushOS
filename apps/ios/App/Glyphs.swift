@@ -5,8 +5,14 @@ import SwiftUI
  * a folder of two solid sheets, a page with its type, and byte counts as the web writes them.
  */
 
-/* Two solid sheets, back darker than front (viewBox 56 x 46). */
+/*
+ * Two solid sheets, back darker than front (viewBox 56 x 46): Hush blue, or a folder's
+ * own colour (FolderGlyph(folder:), in the app).
+ */
 struct FolderGlyph: View {
+    var front: Color = Alpine.folderFront
+    var back: Color = Alpine.folderBack
+
     var body: some View {
         Canvas { context, size in
             let sx = size.width / 56, sy = size.height / 46
@@ -22,9 +28,9 @@ struct FolderGlyph: View {
             back.addLine(to: CGPoint(x: 6 * sx, y: 46 * sy))
             back.addArc(tangent1End: CGPoint(x: 0, y: 46 * sy), tangent2End: CGPoint(x: 0, y: 40 * sy), radius: 6 * sx)
             back.closeSubpath()
-            context.fill(back, with: .color(Alpine.folderBack))
+            context.fill(back, with: .color(self.back))
             let front = Path(roundedRect: CGRect(x: 0, y: 8 * sy, width: 56 * sx, height: 38 * sy), cornerRadius: 6 * sx)
-            context.fill(front, with: .color(Alpine.folderFront))
+            context.fill(front, with: .color(self.front))
         }
     }
 }

@@ -212,7 +212,9 @@
  * `open` (links no longer have a colour), so `open` can be renamed or removed
  * without touching the web. The warning values are the ones `open` had, already
  * checked for contrast; the yellow tag carries ink that reads on it at AA, or AAA
- * in high contrast. Same four schemes, selectors and order as @hushos/tokens.
+ * in high contrast. The folder steps are the lightness and vividness a folder in
+ * its own colour is drawn at (FolderMark; the phones' twin is in the Rust core's
+ * colour.rs). Same four schemes, selectors and order as @hushos/tokens.
  */
 :root,
 .light {
@@ -220,6 +222,10 @@
     --warning-soft: #f7eddc;
     --tag-yellow: #b8860b;
     --on-tag-yellow: #17203a;
+    --folder-front-l: 0.8;
+    --folder-front-c: 0.11;
+    --folder-back-l: 0.66;
+    --folder-back-c: 0.132;
 }
 @media (prefers-color-scheme: dark) {
     :root:not(.light) {
@@ -227,6 +233,10 @@
         --warning-soft: #33281a;
         --tag-yellow: #e3b341;
         --on-tag-yellow: #121833;
+        --folder-front-l: 0.68;
+        --folder-front-c: 0.121;
+        --folder-back-l: 0.54;
+        --folder-back-c: 0.121;
     }
 }
 .dark {
@@ -234,6 +244,10 @@
     --warning-soft: #33281a;
     --tag-yellow: #e3b341;
     --on-tag-yellow: #121833;
+    --folder-front-l: 0.68;
+    --folder-front-c: 0.121;
+    --folder-back-l: 0.54;
+    --folder-back-c: 0.121;
 }
 @media (prefers-contrast: more) {
     :root:not(.dark) {
@@ -241,6 +255,10 @@
         --warning-soft: #f7eddc;
         --tag-yellow: #6b4d00;
         --on-tag-yellow: #ffffff;
+        --folder-front-l: 0.58;
+        --folder-front-c: 0.15;
+        --folder-back-l: 0.46;
+        --folder-back-c: 0.15;
     }
 }
 @media (prefers-contrast: more) and (prefers-color-scheme: dark) {
@@ -249,6 +267,10 @@
         --warning-soft: #2b1f0b;
         --tag-yellow: #ffd966;
         --on-tag-yellow: #000000;
+        --folder-front-l: 0.82;
+        --folder-front-c: 0.1;
+        --folder-back-l: 0.7;
+        --folder-back-c: 0.11;
     }
 }
 .hc:not(.dark) {
@@ -256,6 +278,10 @@
     --warning-soft: #f7eddc;
     --tag-yellow: #6b4d00;
     --on-tag-yellow: #ffffff;
+    --folder-front-l: 0.58;
+    --folder-front-c: 0.15;
+    --folder-back-l: 0.46;
+    --folder-back-c: 0.15;
 }
 @media (prefers-color-scheme: dark) {
     .hc:not(.light) {
@@ -263,6 +289,10 @@
         --warning-soft: #2b1f0b;
         --tag-yellow: #ffd966;
         --on-tag-yellow: #000000;
+        --folder-front-l: 0.82;
+        --folder-front-c: 0.1;
+        --folder-back-l: 0.7;
+        --folder-back-c: 0.11;
     }
 }
 .dark.hc {
@@ -270,6 +300,19 @@
     --warning-soft: #2b1f0b;
     --tag-yellow: #ffd966;
     --on-tag-yellow: #000000;
+    --folder-front-l: 0.82;
+    --folder-front-c: 0.1;
+    --folder-back-l: 0.7;
+    --folder-back-c: 0.11;
+}
+
+/*
+ * A folder in its own colour (@hushos/drive colour.ts): its hue and vividness
+ * (--fh, --fs on the mark), at this scheme's folder steps above.
+ */
+[data-folder-colour] {
+    --folder-front: oklch(var(--folder-front-l) calc(var(--folder-front-c) * var(--fs)) var(--fh));
+    --folder-back: oklch(var(--folder-back-l) calc(var(--folder-back-c) * var(--fs)) var(--fh));
 }
 
 /*
