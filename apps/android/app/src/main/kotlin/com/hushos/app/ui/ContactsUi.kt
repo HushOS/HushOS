@@ -37,6 +37,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.retain.retain
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -87,7 +88,9 @@ sealed interface ContactStep {
  */
 @Composable
 fun ContactStepSheet(model: DriveViewModel, start: ContactStep, resolved: () -> Unit = {}, done: () -> Unit) {
-    var step by remember(start) { mutableStateOf(start) }
+    // Retained, so a fold, a rotation or a theme change keeps the step it reached (Check it's Kim after Check who
+    // wrote this added Kim), never the one it started from.
+    var step by retain(start) { mutableStateOf(start) }
     val tall = step is ContactStep.Check
     key(tall) {
         Sheet(onDismissRequest = done, full = tall) {
