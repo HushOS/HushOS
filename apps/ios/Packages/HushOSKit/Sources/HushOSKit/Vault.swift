@@ -89,6 +89,13 @@ public actor Vault {
     var nodeKeys = NodeTable<Data>()
     var opened = NodeTable<Opened>()
     /*
+     * Nodes a rotation on this device re-keyed whose subtree it hasn't finished: the epoch the server
+     * applied, and the key before it, which children the walk hasn't reached are still wrapped under.
+     * Kept from the moment the server applies a batch until the rotation ends, so a retry (or a listing
+     * meanwhile) opens what is left.
+     */
+    var rotatedKeys = NodeTable<RotatedKey>()
+    /*
      * Rows the server confirmed gone (trashed from here, a feed tombstone, a purge), by workspace and
      * node: `remove`, never `forget`, which only drops a row to be read again. Info beside the list
      * closes on these (RowStanding); a row opened again (a restore, a sync) is no longer gone.
@@ -450,7 +457,12 @@ public actor Vault {
             return workspaceKey
         }
         // The parent in the node's own workspace, exactly: never a same-id node of another.
-        guard let key = nodeKeys[NodeRef(workspaceId: node.workspaceId, nodeId: parentId)] else {
+        let parent = NodeRef(workspaceId: node.workspaceId, nodeId: parentId)
+        // A rotation here re-keyed the parent and hasn't reached this child: it is still wrapped under the previous key.
+        if let kept = rotatedKeys[parent], kept.epoch != node.parentKeyEpoch, kept.previousEpoch == node.parentKeyEpoch {
+            return kept.previousKey
+        }
+        guard let key = nodeKeys[parent] else {
             throw DriveAPIError.server(500, "Open the containing folder first.")
         }
         return key

@@ -81,6 +81,15 @@ struct RotationWork: Decodable, Sendable {
     let done: Bool
 }
 
+/* A node a rotation on this device re-keyed: its applied epoch, and the key its unreached children are wrapped under. */
+struct RotatedKey: Sendable {
+    /* The item whose rotation re-keyed it: when that rotation ends, nothing is wrapped under the previous key any more. */
+    let root: String
+    let epoch: UInt64
+    let previousEpoch: UInt64
+    let previousKey: Data
+}
+
 struct RotationResults: Decodable, Sendable {
     struct Result: Decodable, Sendable {
         let id: String
@@ -172,6 +181,14 @@ extension Vault {
         var granteeKeys: [String: (publicKey: Data, kem: Data)] = [:]
         var epochs: [String: UInt64] = opened.values(in: ws).mapValues { $0.node.keyEpoch }
         var previous: [String: (epoch: UInt64, key: Data)] = [:]
+        // What an earlier run of this rotation already had applied: those nodes are at their new epoch, and the keys
+        // before it still open what that run didn't reach (the rows in `opened` were read again, or will be).
+        for (id, kept) in rotatedKeys.values(in: ws) {
+            // A row read since at another epoch (another device went on) is what holds: the kept key is stale.
+            if let row = opened[ref(id)], row.node.keyEpoch != kept.epoch { rotatedKeys[ref(id)] = nil; continue }
+            epochs[id] = kept.epoch
+            previous[id] = (kept.previousEpoch, kept.previousKey)
+        }
         var outcome = RotationOutcome()
         var cursor: String? = nil
         var idle = 0
@@ -195,7 +212,7 @@ extension Vault {
                 continue
             }
             let inBatch = Set(work.nodes.map(\.node.id))
-            for parentId in Set(work.nodes.compactMap(\.node.parentId)) where !inBatch.contains(parentId) && opened[ref(parentId)] == nil {
+            for parentId in Set(work.nodes.compactMap(\.node.parentId)) where !inBatch.contains(parentId) && opened[ref(parentId)] == nil && epochs[parentId] == nil {
                 _ = try? await listChildren(of: parentId)
                 if let known = opened[ref(parentId)] { epochs[parentId] = known.node.keyEpoch }
             }
@@ -347,6 +364,16 @@ extension Vault {
                 applied = kept.count
                 // A node the server refused (or left out) keeps the key it holds there.
                 unstage(staged.keys.filter { !kept.contains($0) })
+                // What the server applied is committed here at once, so a later batch that stops has only its own
+                // nodes to undo: their rows (still at the old epoch) are read again, and a re-keyed node's previous
+                // key is kept for the children the walk hasn't reached, past this run if it stops.
+                for id in staged.keys where kept.contains(id) {
+                    if let epoch = epochs[id], let prior = previous[id], prior.epoch != epoch {
+                        rotatedKeys[ref(id)] = RotatedKey(root: rootId, epoch: epoch, previousEpoch: prior.epoch, previousKey: prior.key)
+                    }
+                    opened[ref(id)] = nil
+                }
+                if !kept.isEmpty { catalogueState = .idle }
             }
             } catch {
                 unstage(staged.keys)
@@ -370,7 +397,9 @@ extension Vault {
         // Envelopes changed in the subtree: those items are opened again from the server, under
         // their fresh keys. Everything else stays as it was, so lists outside it keep their rows.
         // The catalogue holds the old rows too; the next sync rebuilds it from the feed.
+        // Every node is under the new keys now: no child is left wrapped under a previous one.
         for id in touched { opened[ref(id)] = nil }
+        for (id, kept) in rotatedKeys.values(in: ws) where kept.root == rootId || touched.contains(id) { rotatedKeys[ref(id)] = nil }
         catalogueState = .idle
         return outcome
     }
