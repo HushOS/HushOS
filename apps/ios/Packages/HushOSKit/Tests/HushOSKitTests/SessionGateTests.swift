@@ -158,6 +158,50 @@ import Testing
         #expect(book.verdict(of: ref, node: node)?.writtenBy == "newer")
     }
 
+    /*
+     * Two listings judge two versions of one file under the same trust, and the older judgement
+     * lands last: the newer version's verdict stands, so its mark and lines stay. Fails if a
+     * judgement replaces another by arrival alone.
+     */
+    @Test func anOlderVersionsJudgementLandingLastKeepsTheNewerOne() {
+        var book = FamilyVerdictBook()
+        let ref = NodeRef(workspaceId: ws, nodeId: node.id)
+        let trust = book.capture(group)
+        let newer = NodeView(id: node.id, workspaceId: ws, parentId: nil, kind: "file", keyEpoch: 1, parentKeyEpoch: 1, keyEnvelope: "", metadataVersion: 2,
+                             metadataEnvelope: "", currentVersion: nil, trashedAt: nil, changeSeq: 2, createdAt: nil, updatedAt: nil)
+        let landedFirst = book.publish(group, trust: trust, [(ref, newer, verdict("newer"))])
+        #expect(landedFirst)
+        _ = book.publish(group, trust: trust, [(ref, node, verdict("older"))])
+        #expect(book.verdict(of: ref, node: newer)?.writtenBy == "newer", "an older version's judgement replaced the newer one's")
+        // A later version still replaces it.
+        let latest = NodeView(id: node.id, workspaceId: ws, parentId: nil, kind: "file", keyEpoch: 2, parentKeyEpoch: 1, keyEnvelope: "", metadataVersion: 2,
+                              metadataEnvelope: "", currentVersion: nil, trashedAt: nil, changeSeq: 2, createdAt: nil, updatedAt: nil)
+        _ = book.publish(group, trust: trust, [(ref, latest, verdict("latest"))])
+        #expect(book.verdict(of: ref, node: latest)?.writtenBy == "latest")
+        // The server's change order decides first: a row from before a later change stays older whatever its key epoch says.
+        let changed = NodeView(id: node.id, workspaceId: ws, parentId: nil, kind: "file", keyEpoch: 2, parentKeyEpoch: 1, keyEnvelope: "", metadataVersion: 2,
+                               metadataEnvelope: "", currentVersion: nil, trashedAt: nil, changeSeq: 9, createdAt: nil, updatedAt: nil)
+        _ = book.publish(group, trust: trust, [(ref, changed, verdict("changed"))])
+        let earlier = NodeView(id: node.id, workspaceId: ws, parentId: nil, kind: "file", keyEpoch: 3, parentKeyEpoch: 1, keyEnvelope: "", metadataVersion: 3,
+                               metadataEnvelope: "", currentVersion: nil, trashedAt: nil, changeSeq: 5, createdAt: nil, updatedAt: nil)
+        _ = book.publish(group, trust: trust, [(ref, earlier, verdict("earlier"))])
+        #expect(book.verdict(of: ref, node: changed)?.writtenBy == "changed")
+    }
+
+    /* Two listings of one folder overlap and the one begun first lands last: it shows nothing. Fails if listings show by arrival. */
+    @Test func anOlderListingThatLandsLastShowsNothing() {
+        var order = ListingOrder()
+        let first = order.begin()
+        let second = order.begin()
+        let secondShown = order.admits(second, of: "folder")
+        #expect(secondShown)
+        let firstShown = order.admits(first, of: "folder")
+        #expect(!firstShown)
+        // Another folder's listings are their own.
+        let elsewhere = order.admits(first, of: "other")
+        #expect(elsewhere)
+    }
+
     @Test func aTrustChangeDropsEveryFamilysVerdictsAndHoldsBackWhatBeganBefore() {
         var book = FamilyVerdictBook()
         let ref = NodeRef(workspaceId: ws, nodeId: node.id)

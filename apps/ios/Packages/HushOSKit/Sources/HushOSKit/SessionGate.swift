@@ -72,6 +72,30 @@ public final class SessionGate<Owner: AnyObject & Sendable> {
  * publishes, so a newer verdict can't be overwritten by an older judgement that finished last,
  * and an unchanged row can't keep a verdict its family's trust took back.
  */
+/*
+ * Overlapping listings of one folder (a tick, a pull, a sync's relist): each is numbered as it
+ * starts, and the one begun last is what shows, so an older listing that lands late never puts
+ * back older rows (and verdicts keyed to the newer ones).
+ */
+public struct ListingOrder: Sendable {
+    private var started: UInt64 = 0
+    private var shown: [String: UInt64] = [:]
+    public init() {}
+
+    /* A listing starting now: its number. */
+    public mutating func begin() -> UInt64 {
+        started += 1
+        return started
+    }
+
+    /* Whether a listing begun as `ticket` may show for `folder` (its rows or its failure): never one begun before the last shown. */
+    public mutating func admits(_ ticket: UInt64, of folder: String) -> Bool {
+        guard ticket > shown[folder, default: 0] else { return false }
+        shown[folder] = ticket
+        return true
+    }
+}
+
 public struct FamilyVerdictBook: Sendable {
     public struct Trust: Sendable, Equatable {
         let epoch: UInt64
@@ -114,12 +138,26 @@ public struct FamilyVerdictBook: Sendable {
         }
     }
 
-    /* A judgement begun under `trust`, published; false, and nothing changed, when the family's trust moved since. */
+    /*
+     * A judgement begun under `trust`, published; false, and nothing changed, when the family's
+     * trust moved since. A row's judgement for an older version than the one held (two listings
+     * overlapping, the older landing last) is dropped: the newer one's mark and lines stand.
+     */
     @discardableResult
     public mutating func publish(_ groupId: String, trust: Trust, _ judged: [(ref: NodeRef, node: NodeView, verdict: FamilyVerdict)]) -> Bool {
         guard trust == capture(groupId) else { return false }
-        for row in judged { rows[row.ref] = Entry(node: row.node, verdict: row.verdict, groupId: groupId.lowercased()) }
+        for row in judged {
+            if let held = rows[row.ref]?.node, Self.older(row.node, than: held) { continue }
+            rows[row.ref] = Entry(node: row.node, verdict: row.verdict, groupId: groupId.lowercased())
+        }
         return true
+    }
+
+    /* Whether `row` is an older version of the node than `held`: the server's change order first, then key epoch, then metadata version. */
+    static func older(_ row: NodeView, than held: NodeView) -> Bool {
+        if let a = row.changeSeq, let b = held.changeSeq, a != b { return a < b }
+        if row.keyEpoch != held.keyEpoch { return row.keyEpoch < held.keyEpoch }
+        return row.metadataVersion < held.metadataVersion
     }
 
     /*

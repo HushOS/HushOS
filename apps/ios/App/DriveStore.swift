@@ -115,6 +115,8 @@ final class DriveStore {
     @ObservationIgnored var familyGenerations = FamilyGenerations()
     /* The revision each family's shown answer was found at (FamilySync.syncRevised): only a later look replaces it. */
     @ObservationIgnored var familyRevisions = FamilyRevisions()
+    /* Overlapping listings of a folder: only the one begun last shows (ListingOrder). */
+    @ObservationIgnored var listingOrder = ListingOrder()
     /* Family work and folder listings kept to the session they began in (`inSession`, `resetFamilies`). */
     @ObservationIgnored let sessionGate = SessionGate<Vault>()
     /* An operation's session, taken once at its outermost entry and passed down (SessionGate). */
@@ -790,6 +792,8 @@ final class DriveStore {
         guard current(session) else { return }
         loading.insert(id)
         defer { if current(session) { loading.remove(id) } }
+        // Numbered as it starts: a listing begun before the last one shown here shows nothing when it lands.
+        let ticket = listingOrder.begin()
         // The folder's family as it stands now: a fork, refusal or removal that clears it while this listing is out wins.
         let mark = familyListings.mark(familyGroup(ofFolder: id))
         func cleared() -> Bool { !familyListings.admits(mark, states: familyStates) }
@@ -798,7 +802,7 @@ final class DriveStore {
             guard current(session) else { return }
             // Kept to its session: a listing the last session asked for is never asked of, or answered into, a new one.
             guard let children = try await inSession(session, { try await $0.children(of: id) }) else { return }
-            if removed() || cleared() { return }
+            if removed() || cleared() || !listingOrder.admits(ticket, of: id) { return }
             folders[id] = children
             folderProblems[id] = nil
             noteFamilyFolders(id, children: children)
@@ -819,7 +823,7 @@ final class DriveStore {
         } catch {
             // Left before it answered (a tab switched, the folder closed): nothing failed, so nothing changes.
             if ErrorWords.isCancellation(error) || staleRefusal(error) { return }
-            if !current(session) || removed() || cleared() { return }
+            if !current(session) || removed() || cleared() || !listingOrder.admits(ticket, of: id) { return }
             // A family folder's refusal is said in the families' words, never the generic failure.
             if isFamilyFolder(id) {
                 if case DriveAPIError.transport = error {
