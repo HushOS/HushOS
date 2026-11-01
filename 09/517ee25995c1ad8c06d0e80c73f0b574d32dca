@@ -1,0 +1,27 @@
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/CatalogueFeedTests.swift
+  s_566b8e0c4467a4::t_feb6a8a9c5d099 1-123,144-226,231-281,289-290,293-296,300-307
+  s_566b8e0c4467a4::t_6fa9f0aedccf06 124-143
+  s_566b8e0c4467a4::t_801c9bcd90b31e 227-230,282-288,291-292,297-299
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_deba985bc5f2ea 67
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Catalogue.swift
+  s_566b8e0c4467a4::t_b963ba3c47b72d 17-28,30-71,73-74,144-149,161-166,168-170,172-173,175-177,179-180,182,198-200,204-210,238-296
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_566b8e0c4467a4::t_43a848298806fe 140-150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "09517ee25995c1ad8c06d0e80c73f0b574d32dca",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
