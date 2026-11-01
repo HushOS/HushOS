@@ -153,7 +153,8 @@ struct FileViewer: View {
                     .fixedSize(horizontal: false, vertical: true)
             } else if version == nil, let seen = store.seenBy(of: current) {
                 // Written by someone first seen and not checked: no mark, said in the subtitle's place (Info has the way to check).
-                Text("Added by \(seen.shown) · Not verified").font(.caption).foregroundStyle(Alpine.inkMuted).lineLimit(1)
+                // Cut in the middle, so a long address never pushes "Not verified" off the line.
+                Text("Added by \(seen.shown) · Not verified").font(.caption).foregroundStyle(Alpine.inkMuted).lineLimit(1).truncationMode(.middle)
             } else {
                 Text(subtitle).font(.caption).foregroundStyle(Alpine.inkMuted).lineLimit(1)
             }
