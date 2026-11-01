@@ -55,8 +55,8 @@ extension FamilySync {
      * throws: nobody is shown verified.
      */
     public func memberStandings(_ view: FamilyView) async throws -> [String: MemberStanding] {
-        let standings = try await vault.contactStandings()
-        let pins = await vault.knownPins()
+        // One read of the settings and the guard: the verdict and the keys compared with the entry are the same pin's.
+        let standings = try await vault.guardedStandings()
         var out: [String: MemberStanding] = [:]
         for member in view.members where member.userId.lowercased() != userId.lowercased() {
             let id = member.userId.lowercased()
@@ -65,8 +65,8 @@ extension FamilySync {
                 out[id] = .changed
                 continue
             }
-            guard let pin = pins[id], standing?.verified == true, pin.trustedVia == nil, pin.trust == .verified,
-                  let held = pin.commitment, held == member.commitment else {
+            guard let standing, standing.verified, standing.pin.trustedVia == nil, standing.pin.trust == .verified,
+                  let held = standing.pin.commitment, held == member.commitment else {
                 out[id] = .notVerified
                 continue
             }
@@ -76,29 +76,45 @@ extension FamilySync {
     }
 
     /*
+     * What opening Check it's Sam found: the family as its sync left it (`state`, for the screens to
+     * show as after any sync: a fork's warning, a removal, Couldn't check), and the words when it
+     * accepted (`code`); otherwise why there are none (`problem`).
+     */
+    public struct CheckStart: Sendable {
+        public let state: FamilyState
+        public let code: FamilyCheckCode?
+        public let problem: String?
+    }
+
+    /*
      * The family check's words with `memberId` (6.10, "Getting the latest" first): the family synced
      * to the server's head, then the pair code over the chain this phone committed, with the roster's
-     * digest for Technical details. A family that didn't accept says why, and shows no words.
+     * digest for Technical details. The sync's outcome comes back whatever it was, so the screens adopt
+     * it (a fork or a removal it found clears what this phone opened, as any sync's does).
      */
-    public func checkCode(_ summary: GroupSummary, with memberId: String) async throws -> FamilyCheckCode {
-        switch await sync(summary) {
+    public func checkCode(_ summary: GroupSummary, with memberId: String) async throws -> CheckStart {
+        let state = await sync(summary)
+        switch state {
         case .accepted: break
-        case .fork: throw FamilyFailure(message: "This family looks different on this device. Check it from the family page.")
-        case .failed(let words): throw FamilyFailure(message: words)
-        default: throw FamilyFailure(message: GuardWords.unreadable)
+        case .fork: return CheckStart(state: state, code: nil, problem: "This family looks different on this device. Check it from the family page.")
+        case .failed(let words): return CheckStart(state: state, code: nil, problem: words)
+        case .wiped: return CheckStart(state: state, code: nil, problem: FamilyFailure.notInFamily.message)
+        case .waiting, .unchecked: return CheckStart(state: state, code: nil, problem: GuardWords.unreadable)
         }
-        guard let chain = acceptedChain(summary.id) else { throw FamilyFailure(message: GuardWords.unreadable) }
+        guard let chain = acceptedChain(summary.id) else { return CheckStart(state: state, code: nil, problem: GuardWords.unreadable) }
         let served = try await fetchServed(summary.id, after: 0)
+        let code: FamilyCheckCode
         switch try pairCode(chain: chain, me: try await vault.ownIdentities(), otherUserId: memberId.lowercased(), rosters: served.rosters) {
-        case .code(let version, let code):
+        case .code(let version, let words):
             let at = Int(version) - 1
             let digest = served.rosters.indices.contains(at) ? rosterDigest(statement: served.rosters[at].statement) : nil
-            return .code(rosterVersion: version, code: code, rosterDigest: digest)
+            code = .code(rosterVersion: version, code: words, rosterDigest: digest)
         case .ownEntryWrong:
-            return .ownEntryWrong
+            code = .ownEntryWrong
         case .notAdmitted:
-            return .notAdmitted
+            code = .notAdmitted
         }
+        return CheckStart(state: state, code: code, problem: nil)
     }
 
     /*

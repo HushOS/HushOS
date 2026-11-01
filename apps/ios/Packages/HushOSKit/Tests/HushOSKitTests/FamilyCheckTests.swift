@@ -32,7 +32,7 @@ extension OnFakeDrive {
             guard case .joined(.accepted(let joined)) = try await phone.sync.joinStatus(family.groupId) else { Issue.record("not joined"); return }
             #expect(try await phone.sync.memberStandings(joined)[family.creator.userId.lowercased()] == .notVerified)
 
-            guard case .code(let version, let words, let digest) = try await phone.sync.checkCode(family.summary, with: family.creator.userId) else {
+            guard case .code(let version, let words, let digest) = try await phone.sync.checkCode(family.summary, with: family.creator.userId).code else {
                 Issue.record("no words")
                 return
             }
@@ -64,7 +64,7 @@ extension OnFakeDrive {
             let phone = try await family.phone(server)
             defer { phone.done() }
             guard case .accepted(let view) = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
-            guard case .code(let version, let words, _) = try await phone.sync.checkCode(family.summary, with: family.creator.userId) else {
+            guard case .code(let version, let words, _) = try await phone.sync.checkCode(family.summary, with: family.creator.userId).code else {
                 Issue.record("no words")
                 return
             }
@@ -74,6 +74,47 @@ extension OnFakeDrive {
                 == FamilyCheckSaved(checked: false, verified: false))
             #expect(try server.savedDocuments().count == before)
             #expect(try await phone.sync.memberStandings(view)[family.creator.userId.lowercased()] == .notVerified)
+        }
+
+        /*
+         * A verified pin that agrees with this phone's guard but holds other keys than the member's
+         * entry: the member is not Verified, decided from the one guarded read (the standing and the
+         * keys compared with the entry are the same pin's). Fails if the label skips the comparison
+         * with the entry, or takes the keys from anywhere but the pin the verdict was about.
+         */
+        @Test func aVerifiedPinOfOtherKeysThanTheEntryIsNotVerified() async throws {
+            let family = try FamilyFixture()
+            let other = try FamilyPerson()
+            let wrongKeys = try pinned(family.creator.userId, other.keys, name: "Maya Lindqvist")
+            #expect(wrongKeys.trust == .verified)
+            let pin = try family.pin(through: [family.r1, family.r2])
+            let server = family.server(chain: [family.r1, family.r2], pin: pin)
+            try server.storeSettings(pin: pin, contacts: [wrongKeys])
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted(let view) = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            // Verified as a contact on this phone (the guard holds these keys) ...
+            #expect(try await phone.vault.contactStandings()[family.creator.userId.lowercased()]?.verified == true)
+            // ... but not the keys the family's member list names for them.
+            #expect(try await phone.sync.memberStandings(view)[family.creator.userId.lowercased()] == .notVerified)
+        }
+
+        /*
+         * Check it's Sam's "Getting the latest" meets a fork: the outcome comes back (never thrown
+         * away), with no words, so the screens show the warning as after any sync, and the phone
+         * holds nothing of the family open. Fails if the sync's state is dropped.
+         */
+        @Test func aCheckThatMeetsAForkHandsBackTheWarning() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2, family.r3], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            server.serve(chain: [family.r1, family.r2, family.r3Fork, family.r4Fork])
+            let start = try await phone.sync.checkCode(family.summary, with: family.creator.userId)
+            guard case .fork = start.state else { Issue.record("the fork was not handed back: \(start.state)"); return }
+            #expect(start.code == nil && start.problem != nil)
+            await #expect(throws: (any Error).self) { _ = try await phone.vault.children(of: family.rootId) }
         }
 
         /*

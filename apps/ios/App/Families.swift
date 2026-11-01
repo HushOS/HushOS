@@ -143,6 +143,11 @@ extension DriveStore {
         await show(state, of: summary, previous: familyStates[groupId])
     }
 
+    /* A sync's outcome a screen ran itself (Check it's Sam's "Getting the latest"), shown as any sync's is. */
+    func adopt(_ state: FamilyState, of summary: GroupSummary) async {
+        await show(state, of: summary, previous: familyStates[summary.id])
+    }
+
     private func show(_ state: FamilyState, of summary: GroupSummary, previous: FamilyState?) async {
         familyStates[summary.id] = state
         familyCheckedAt[summary.id] = Date()

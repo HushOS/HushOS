@@ -708,11 +708,20 @@ extension Vault {
      * an account changed. A guard that can't be read fails the whole list: nobody is shown verified.
      */
     public func contactStandings() async throws -> [String: (verified: Bool, changed: Bool)] {
+        try await guardedStandings().mapValues { ($0.verified, $0.changed) }
+    }
+
+    /*
+     * The same standings with the very pin each was judged from, from one read of the settings and
+     * the guard: whatever is compared with a pin's keys afterwards (a member's entry) is compared
+     * with the pin the verdict is about, never with one a later settings read brought.
+     */
+    func guardedStandings() async throws -> [String: (pin: ContactPin, verified: Bool, changed: Bool)] {
         let (pins, entries) = try await guardedView()
-        var out: [String: (verified: Bool, changed: Bool)] = [:]
+        var out: [String: (pin: ContactPin, verified: Bool, changed: Bool)] = [:]
         for pin in pins.values {
             let held = agreement(pin.userId, entries[pin.userId.lowercased()], pin)
-            out[pin.userId.lowercased()] = (held != .changed && pin.trust == .verified, held == .changed)
+            out[pin.userId.lowercased()] = (pin, held != .changed && pin.trust == .verified, held == .changed)
         }
         return out
     }
