@@ -269,6 +269,14 @@ extension Vault {
         guard let groupId = familyAreaGroup[workspaceId.lowercased()], !familyGuardOwed.contains(groupId) else { throw GuardError.unsaved }
     }
 
+    /*
+     * Right before a write leaves for the server, after every await of its own (a key from the server,
+     * a signature, a lookup): a sync may have committed and failed to store its guard meanwhile.
+     */
+    func sendingIntoFamily(_ workspaceId: String) throws {
+        if isFamilyWorkspace(workspaceId) { try requireGuardKept(workspaceId) }
+    }
+
     /* Raised before an acceptance of `groupId` commits; whether it was raised already (an earlier guard still owed). */
     @discardableResult
     func oweFamilyGuard(_ groupId: String) -> Bool { !familyGuardOwed.insert(groupId.lowercased()).inserted }

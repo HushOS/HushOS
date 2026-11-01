@@ -683,6 +683,13 @@ final class FamilyServer: @unchecked Sendable {
     /* Routes 14 and 15, answered with these when set (the invitation the member opens from the mailed link). */
     var invitationAnswer: (Int, Any)?
     var acceptAnswer: (Int, Any)?
+    /*
+     * Holds the answer to a key epoch request (a new folder's first await) until signalled, answered
+     * off the loading thread so other requests go on meanwhile; `epochsArrived` is signalled as it comes in.
+     */
+    var holdEpochs: DispatchSemaphore?
+
+    let epochsArrived = DispatchSemaphore(value: 0)
     /* Every request as it went out: method, the whole URL (query included) and the body's bytes. */
     private(set) var traffic: [(method: String, url: String, body: Data)] = []
     /* Every settings document a PUT stored, sealed as sent. */
@@ -1108,7 +1115,20 @@ final class FamilyServerProtocol: URLProtocol {
             stream.close()
             body = data
         }
-        let (status, json) = FamilyServer.current?.answer(request, body: body) ?? (500, ["message": "No server"])
+        let server = FamilyServer.current
+        let (status, json) = server?.answer(request, body: body) ?? (500, ["message": "No server"])
+        if let server, let hold = server.holdEpochs, request.httpMethod == "POST", request.url?.path.hasSuffix("/epochs") == true {
+            server.epochsArrived.signal()
+            DispatchQueue.global().async {
+                hold.wait()
+                self.deliver(status, json)
+            }
+            return
+        }
+        deliver(status, json)
+    }
+
+    private func deliver(_ status: Int, _ json: Any) {
         var headers = ["Content-Type": json is Data ? "application/octet-stream" : "application/json"]
         // The store answers a part PUT with its ETag.
         if request.url?.host == "store.test", request.httpMethod == "PUT" { headers["ETag"] = "\"etag-\(request.url?.lastPathComponent ?? "")\"" }

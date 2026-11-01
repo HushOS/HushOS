@@ -35,6 +35,8 @@ extension Vault {
             let metadata = NodeMetadata(name: name, mime: nil, size: nil, modified: nil, attributes: attributes)
             let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
             let signature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .folder, version: 1, envelope: sealed, signing: signing)
+            // Right before it leaves: a sync may have committed while this awaited (FamilyGuard.swift).
+            try sendingIntoFamily(workspace.workspaceId)
             let nodes = try await api.createFolders(workspaceId: workspace.workspaceId, folders: [[
                 "id": id, "idSeed": made.seed, "parentId": parent.node.id, "keyEpoch": epochs.from, "parentKeyEpoch": parent.node.keyEpoch,
                 "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataEnvelope": base64urlEncode(bytes: sealed), "metadataSignature": signature,
@@ -56,6 +58,8 @@ extension Vault {
     private func newKey(_ id: String, under parent: Opened, keyEpoch: UInt64, family: Bool) throws -> (key: Data, envelope: Data) {
         let workspaceId = parent.node.workspaceId
         if family {
+            // The choke point every new family node passes: never a key made under an acceptance whose guard is owed.
+            try requireGuardKept(workspaceId)
             let made = try areaLedger.newNodeKey(workspaceId: workspaceId, nodeId: id, parentId: parent.id, parentKeyEpoch: parent.node.keyEpoch, keyEpoch: keyEpoch)
             return (made.key, made.keyEnvelope)
         }
@@ -93,6 +97,7 @@ extension Vault {
         let prior = try await priorMetadata(of: item.node, family: family)
         let signature = try await signMetadata(workspaceId: item.node.workspaceId, nodeId: nodeId, kind: item.isFolder ? .folder : .file,
                                                version: item.node.metadataVersion + 1, envelope: sealed, signing: .after(prior))
+        try sendingIntoFamily(item.node.workspaceId)
         let node = try await api.rename(
             nodeId: nodeId, workspaceId: item.node.workspaceId, metadataVersion: item.node.metadataVersion,
             keyEpoch: item.node.keyEpoch, metadataEnvelope: base64urlEncode(bytes: sealed), metadataSignature: signature
@@ -107,6 +112,7 @@ extension Vault {
         }
         // A family folder's item is re-wrapped by the ledger, under a parent rooted at the folder's current key only.
         if try familyTarget(item.node.workspaceId) {
+            try requireGuardKept(parent.node.workspaceId)
             return base64urlEncode(bytes: try areaLedger.rewrapNode(workspaceId: item.node.workspaceId, nodeId: item.id, parentId: parent.id,
                                                                     parentKeyEpoch: parent.node.keyEpoch, keyEpoch: item.node.keyEpoch))
         }
@@ -153,6 +159,8 @@ extension Vault {
         _ = try familyTarget(item.node.workspaceId)
         _ = try familyTarget(parent.node.workspaceId)
         guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
+        try sendingIntoFamily(item.node.workspaceId)
+        try sendingIntoFamily(parent.node.workspaceId)
         let node = try await api.move(
             nodeId: nodeId, workspaceId: item.node.workspaceId, parentId: parent.id,
             parentKeyEpoch: parent.node.keyEpoch, keyEnvelope: try rewrap(item, under: parent)
@@ -224,6 +232,7 @@ extension Vault {
         let versionSignature = try await signVersion(workspaceId: workspace.workspaceId, nodeId: id, versionId: versionId, objectId: version.objectId,
                                                      suite: version.contentSuite, envelope: contentKeyEnvelope,
                                                      signing: .copy(versionPrior))
+        try sendingIntoFamily(workspace.workspaceId)
         let node = try await api.copy(sourceNodeId: source.id, workspaceId: workspace.workspaceId, body: [
             "sourceVersionId": version.id,
             "node": ["id": id, "idSeed": made.seed, "parentId": parent.id, "parentKeyEpoch": parent.node.keyEpoch, "keyEpoch": epochs.from,
@@ -355,6 +364,7 @@ extension Vault {
             let root = try await resolve(try rootId())
             toRoot = (root.node.keyEpoch, try rewrap(item, under: root))
         }
+        try sendingIntoFamily(item.node.workspaceId)
         let node = try await api.restore(nodeId: item.id, workspaceId: item.node.workspaceId, toRoot: toRoot)
         return try adopt(node, nodeKey: key, metadata: item.metadata, in: item.node.workspaceId)
     }
@@ -514,6 +524,7 @@ extension Vault {
         let layout = try contentLayout(suite: suite, plaintextSize: plaintextSize, thumbnailBytes: thumbnailBytes)
         let versionSignature = try await signVersion(workspaceId: workspace.workspaceId, nodeId: nodeId, versionId: versionId, objectId: objectId,
                                                      suite: suite, envelope: version.envelope, signing: signing.version)
+        try sendingIntoFamily(workspace.workspaceId)
         let begun = try await api.beginUpload(workspaceId: workspace.workspaceId, body: [
             "node": nodeInput, "versionId": versionId, "versionIdSeed": madeVersion.seed, "objectId": objectId, "objectIdSeed": madeObject.seed,
             "contentKeyEnvelope": base64urlEncode(bytes: version.envelope), "versionSignature": versionSignature,
@@ -561,6 +572,7 @@ extension Vault {
             let item = try await resolve(nodeId)
             familyName = (try knownKey ?? writableKey(of: item), try await priorMetadata(of: item.node, family: true))
         }
+        try sendingIntoFamily(workspaceId)
         let completed = try await api.completeUpload(uploadId: uploadId, workspaceId: workspaceId, parts: parts)
         guard let node = completed.node else { throw DriveAPIError.server(500, "Upload completed without a node") }
         if replacing {
@@ -808,6 +820,7 @@ extension Vault {
         )
         let signature = try await signMetadata(workspaceId: node.workspaceId, nodeId: node.id, kind: .file, version: node.metadataVersion + 1, envelope: sealed,
                                                signing: .after(prior))
+        try sendingIntoFamily(node.workspaceId)
         let renamed = try await api.rename(nodeId: node.id, workspaceId: node.workspaceId, metadataVersion: node.metadataVersion, keyEpoch: node.keyEpoch,
                                            metadataEnvelope: base64urlEncode(bytes: sealed), metadataSignature: signature)
         return try adopt(renamed, nodeKey: nodeKey, metadata: final, in: node.workspaceId)

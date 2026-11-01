@@ -83,6 +83,39 @@ extension OnFakeDrive {
         }
 
         /*
+         * A new folder started while the family's guard was stored, suspended on its first await (the
+         * server's key epochs), while a sync commits a newer member list and fails to store its guard:
+         * when it resumes, the folder is never sent. Fails unless the barrier is checked again past the
+         * entry, where the key is made and right before the write leaves.
+         */
+        @Test func aWriteSuspendedWhileASyncFailsToStoreItsGuardIsNeverSent() async throws {
+            let family = try FamilyFixture()
+            let writes = GuardSwitch()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server, guards: familyGuards(family.member, writes: writes))
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            _ = try await phone.vault.children(of: family.rootId)
+
+            let hold = DispatchSemaphore(value: 0)
+            server.holdEpochs = hold
+            let vault = phone.vault
+            let rootId = family.rootId
+            let creating = Task { try await vault.createFolder(in: rootId, name: "Trips") }
+            // Past the entry check, waiting on the server.
+            await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+                DispatchQueue.global().async { server.epochsArrived.wait(); done.resume() }
+            }
+            server.serve(chain: [family.r1, family.r2, family.r3])
+            writes.writable = false
+            #expect(await phone.sync.sync(family.summary) == .failed(GuardWords.unsaved))
+            server.holdEpochs = nil
+            hold.signal()
+            await #expect(throws: GuardError.unsaved) { _ = try await creating.value }
+            #expect(server.sent("/api/drive/folders").isEmpty, "a folder was sent under a chain whose guard wasn't stored")
+        }
+
+        /*
          * A selection to the trash and its Undo in a writable family folder go through the batch
          * routes to the family's own workspace, gated by the ledger like every write: the file is
          * trashed and back. Fails if either is sent elsewhere, or not sent.
