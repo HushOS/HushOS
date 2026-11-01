@@ -142,12 +142,14 @@ public struct FamilyVerdict: Sendable, Equatable {
     public let writtenBy: String?
     public let replacedBy: [String]
     public let verifiedBy: String?
+    /* Who wrote it, when nobody checked them (a family taken on first use) and no mark speaks instead: Info's "Added by". */
+    public var seen: FamilySeen? = nil
 
     public var provenance: Provenance? { mark.map { .family($0) } }
 
     public static func == (a: FamilyVerdict, b: FamilyVerdict) -> Bool {
         a.mark == b.mark && a.changedBy?.label == b.changedBy?.label && a.changedBy?.words == b.changedBy?.words
-            && a.writtenBy == b.writtenBy && a.replacedBy == b.replacedBy && a.verifiedBy == b.verifiedBy
+            && a.writtenBy == b.writtenBy && a.replacedBy == b.replacedBy && a.verifiedBy == b.verifiedBy && a.seen == b.seen
     }
 
     /* Everything unchecked: whom to judge by didn't load. */
@@ -155,6 +157,17 @@ public struct FamilyVerdict: Sendable, Equatable {
         mark: FamilyMark(label: "Couldn’t check", lines: [FamilyLines.couldntCheck], danger: false, retry: true, check: nil),
         changedBy: ("Changed by", "Not checked"), writtenBy: nil, replacedBy: [], verifiedBy: nil
     )
+}
+
+/*
+ * Who wrote a family item whose writer nobody checked (2.6, first use): Info's "Added by <name>"
+ * with "Not verified · Check it's <first name>", as personal files say it. The account id picks
+ * the check: the family's member check for a member, the person's own otherwise.
+ */
+public struct FamilySeen: Sendable, Equatable {
+    public let name: String
+    public let userId: String
+    public let email: String?
 }
 
 struct FamilyFailure: Error, LocalizedError, Equatable {
@@ -934,7 +947,8 @@ public actor FamilySync: FamilyJudge {
             changedBy: issues.first.map { (FamilyLines.changedByLabel($0), FamilyLines.changedByWords($0, names)) },
             writtenBy: issues.isEmpty ? rekeyed.writtenBy : nil,
             replacedBy: rekeyed.replacedBy,
-            verifiedBy: FamilyLines.vouched(judged, issues: issues, groupId: groupId) ? "Verified by \(names.family)" : nil
+            verifiedBy: FamilyLines.vouched(judged, issues: issues, groupId: groupId) ? "Verified by \(names.family)" : nil,
+            seen: FamilyLines.seenWriter(judged, issues: issues, names: names)
         )
     }
 

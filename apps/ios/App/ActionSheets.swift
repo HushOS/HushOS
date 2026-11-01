@@ -475,6 +475,8 @@ struct InfoSheet: View {
     var open: (NodeAction) -> Void = { _ in }
     /* Check it's Maya from the Added by line, in Info's place. */
     @State private var step: ContactStep?
+    /* The same for a family's member: the family's check, as its page opens it. */
+    @State private var familyCheck: DriveStore.FamilyMemberCheck?
 
     private func dismiss() {
         if let close { close() } else { dismissSheet() }
@@ -552,6 +554,12 @@ struct InfoSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .contactSteps($step) { Task { await store.refreshSigners() } }
+            .sheet(item: $familyCheck) { check in
+                MemberCheckSheet(check: check.check, summary: check.summary, me: check.me, organizer: check.organizer,
+                                 checked: { Task { await store.refreshSigners(); await store.rejudgeFamilies(check.summary.id) } },
+                                 done: { familyCheck = nil })
+                    .environment(store)
+            }
             // A mark's check started here stays up when the mark goes: Info hosts it, not the mark.
             .contactHost(.info, store: store)
             .task { store.thumbnail(for: item) }
@@ -614,8 +622,11 @@ struct InfoSheet: View {
         }
     }
 
-    private func addedBy(_ seen: (name: String, id: String)) -> some View {
+    private func addedBy(_ seen: DriveStore.SeenWriter) -> some View {
+        // A family's member is checked as the family's page checks them; anyone else by their own words.
+        let family = seen.groupId.flatMap { store.memberCheck(groupId: $0, userId: seen.id) }
         let pin = store.pins[seen.id.lowercased()]
+        let email = seen.email ?? pin?.email
         return HStack(alignment: .firstTextBaseline) {
             Text("Added by").foregroundStyle(Alpine.ink)
             Spacer()
@@ -623,10 +634,12 @@ struct InfoSheet: View {
                 Text(seen.name).foregroundStyle(Alpine.inkMuted)
                 HStack(spacing: 4) {
                     Text("Not verified")
-                    if let pin, !pin.email.isEmpty {
+                    if family != nil || email?.isEmpty == false {
                         Text("·")
-                        Button("Check it’s \(firstName(seen.name))") { step = .check(email: pin.email, name: pin.name) }
-                            .fontWeight(.semibold).buttonStyle(.borderless)
+                        Button("Check it’s \(firstName(seen.name))") {
+                            if let family { familyCheck = family } else if let email { step = .check(email: email, name: pin?.name ?? seen.name) }
+                        }
+                        .fontWeight(.semibold).buttonStyle(.borderless)
                     }
                 }
                 .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)

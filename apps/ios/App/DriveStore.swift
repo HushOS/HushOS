@@ -604,9 +604,29 @@ final class DriveStore {
         trust.provenance(of: version, in: item.node)
     }
 
-    /* Who added it, first seen and not verified (6.4, 6.12): no mark, "Added by" with "Not verified" in Info and the viewer. */
-    func seenBy(of item: Opened) -> (name: String, id: String)? {
-        isFamily(item) ? nil : trust.seenBy(of: item.node)
+    /* Who added an item, first seen and nobody checked them: the way to check them goes by their address, or their family. */
+    struct SeenWriter: Equatable {
+        let name: String
+        let id: String
+        let email: String?
+        /* The family whose verdict named them (a family taken on first use): its member check, for a member. */
+        let groupId: String?
+    }
+
+    /*
+     * Who added it, first seen and not verified (6.4, 6.12): no mark, "Added by" with "Not verified"
+     * in Info and the viewer. A family folder's item takes it from the family's verdict (a family
+     * taken on first use), by the name and address the family serves; anything else from whom this
+     * person trusts.
+     */
+    func seenBy(of item: Opened) -> SeenWriter? {
+        if isFamily(item) {
+            guard let seen = familyVerdict(of: item)?.seen else { return nil }
+            return SeenWriter(name: seen.name, id: seen.userId, email: seen.email, groupId: familyAreaGroups[item.node.workspaceId.lowercased()])
+        }
+        guard let seen = trust.seenBy(of: item.node) else { return nil }
+        let email = pins[seen.id.lowercased()]?.email
+        return SeenWriter(name: seen.name, id: seen.id, email: email?.isEmpty == false ? email : nil, groupId: nil)
     }
 
     /* Saved from a link: no mark, and this line in Info and the viewer. */

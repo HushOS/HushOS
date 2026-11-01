@@ -350,6 +350,24 @@ enum FamilyLines {
      * integrity-lines.ts verifiedByLine for this folder's family: every record verified, one at
      * least on the family's word. Never beside a mark (an unattested re-key leaves the origin verified).
      */
+    /*
+     * The first-seen writer Info names, with no mark speaking instead: the content's writer first
+     * (who added what is there now), then the name's. Someone nobody can name gets no line, nor
+     * does this account.
+     */
+    static func seenWriter(_ records: [FamilyJudged], issues: [FamilyIssue], names: FamilyNames) -> FamilySeen? {
+        guard issues.isEmpty else { return nil }
+        for record in records.sorted(by: { ($0.record == .version ? 0 : 1) < ($1.record == .version ? 0 : 1) }) {
+            guard record.verdict == .seen, record.note == nil, let id = record.signer?.lowercased() else { continue }
+            switch name(id, names) {
+            case .member(let name, let email): return FamilySeen(name: name, userId: id, email: email)
+            case .contact(let name, let vouched): return FamilySeen(name: vouched?.name ?? name, userId: id, email: vouched?.email)
+            case .you, .unknown: continue
+            }
+        }
+        return nil
+    }
+
     static func vouched(_ records: [FamilyJudged], issues: [FamilyIssue], groupId: String) -> Bool {
         guard issues.isEmpty, records.allSatisfy({ $0.verdict == .verified }) else { return false }
         return records.contains { $0.via?.lowercased() == groupId.lowercased() }

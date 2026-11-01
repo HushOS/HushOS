@@ -361,6 +361,29 @@ extension DriveStore {
         await refreshFamily(summary, session: session)
     }
 
+    /* Check it's <name> for someone in a family, as its page opens it (Info's "Added by" on a first-seen writer). */
+    struct FamilyMemberCheck: Identifiable {
+        let check: MemberCheck
+        let summary: GroupSummary
+        let me: String
+        let organizer: String?
+        var id: String { check.id }
+    }
+
+    /* Nil when they aren't in the family's accepted member list now, or the family isn't listed: their own check instead. */
+    func memberCheck(groupId: String, userId: String) -> FamilyMemberCheck? {
+        guard let summary = familyList?.first(where: { $0.id == groupId }) else { return nil }
+        let view: FamilyView? = if case .accepted(let accepted)? = familyStates[groupId] { accepted } else { familyShown[groupId] }
+        guard let view, view.members.contains(where: { $0.userId.lowercased() == userId.lowercased() }) else { return nil }
+        let me = vault.api.session.userId.lowercased()
+        let named = familyDetails[groupId]?.members.filter { $0.state == "active" } ?? []
+        func served(_ id: String) -> GroupDetail.Member? { named.first { $0.userId.lowercased() == id.lowercased() } }
+        let who = served(userId)
+        let organizer = view.members.first { $0.roles.contains("billing") && $0.userId.lowercased() != me }.flatMap { served($0.userId) }.map { HushOS.firstName($0.name) }
+        return FamilyMemberCheck(check: MemberCheck(member: FamilyMemberRef(userId: userId, email: who?.email ?? "", name: who?.name ?? "Someone"), personal: false),
+                                 summary: summary, me: served(me).map { HushOS.firstName($0.name) } ?? "you", organizer: organizer)
+    }
+
     /* Try again on a family folder that couldn't be opened: the family checked again, then the folder, in one session. */
     func reopenFamilyFolder(_ id: String) async {
         guard let session = beginSession() else { return }
@@ -587,7 +610,7 @@ struct FamilyPage: View {
         }
         .sheet(item: $checking) { check in
             if let summary {
-                MemberCheckSheet(check: check, summary: summary, me: served(me).map { firstName($0.name) } ?? "you", organizer: organizer,
+                MemberCheckSheet(check: check, summary: summary, me: served(me).map { HushOS.firstName($0.name) } ?? "you", organizer: organizer,
                                  checked: { checks += 1; Task { await store.refreshSigners(); await store.rejudgeFamilies(groupId) } },
                                  done: { checking = nil })
                     .environment(store)

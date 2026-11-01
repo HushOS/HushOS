@@ -228,6 +228,30 @@ extension OnFakeDrive {
         }
 
         /*
+         * After a first-use join, Maya's file reads as written by someone nobody checked: no mark, and
+         * Info gets its writer from the family's verdict, by the name and address the family serves
+         * and by account id, so "Added by Maya Lindqvist · Not verified · Check it's Maya" can open the
+         * family's check. Fails if the verdict carries no writer (Info then says nothing and offers no
+         * check), or names one where a mark speaks or the family vouches.
+         */
+        @Test func aFirstUseJoinNamesTheUncheckedWriterForInfo() async throws {
+            let family = try FamilyFixture()
+            let (server, phone) = try await newcomer(family)
+            defer { phone.done() }
+            server.members = [
+                ["userId": family.creator.userId, "name": "Maya Lindqvist", "email": "maya@example.com", "state": "active", "roles": ["billing", "members"]],
+                ["userId": family.member.userId, "name": "Sam Lindqvist", "email": "sam@example.com", "state": "active", "roles": [String]()],
+            ]
+            _ = try joinedView(try await phone.sync.joinStatus(family.groupId))
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let file = try #require(try await phone.vault.listChildren(of: family.rootId).children.first { $0.id == family.fileId })
+            let verdict = await phone.sync.verdict(of: file, groupId: family.groupId)
+            #expect(verdict.mark == nil)
+            #expect(verdict.seen == FamilySeen(name: "Maya Lindqvist", userId: family.creator.userId.lowercased(), email: "maya@example.com"))
+            #expect(verdict.verifiedBy == nil)
+        }
+
+        /*
          * The same wait when the removal is found by route 2 no longer listing the family (the live
          * check, `listReconciling`), not by a sync: nothing goes while the guard the core hands back
          * can't be stored, then the family goes, its guard kept at the later roster and its write
