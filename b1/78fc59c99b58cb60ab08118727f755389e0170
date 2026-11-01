@@ -1,0 +1,23 @@
+apps/ios/App/ActionSheets.swift
+  s_566b8e0c4467a4::t_99d5c8910ae534 567
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_40881adf40ee12 952-953
+apps/ios/App/NodeRow.swift
+  s_566b8e0c4467a4::t_a6f40aadbb8b3d 57-58,164-165
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b178fc59c99b58cb60ab08118727f755389e0170",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
