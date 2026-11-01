@@ -288,6 +288,83 @@ struct Settings {
         document["groups"] = groups
     }
 
+    // MARK: Family checks (docs/optional-verification.md 3.4, 7.2; the web's lib/groups/family-checks.ts)
+
+    /*
+     * Which families this person vouched for: `familyChecks`, one record per family (a family
+     * check `{rosterVersion, with, code, checkedAt}`, or `{rosterVersion, how, checkedAt}` with
+     * `how` one of `before`, `created`, `join`), and `familyChecksSince`, when this account's first
+     * client able to take a family on first use began writing them. Every family accepted before
+     * first use existed was anchored by creation or a compared join code, so a group pin with no
+     * record reads as checked until the marker is set, and as first use after it. Both are kept as
+     * another client wrote them: only a record this account has none of is ever added.
+     */
+
+    /* JavaScript's truthiness, as the web reads these fields: absent, null, false, 0 and "" are not set. */
+    private static func truthy(_ value: Any?) -> Bool {
+        guard let value, !(value is NSNull) else { return false }
+        if let number = value as? NSNumber {
+            if CFGetTypeID(number) == CFBooleanGetTypeID() { return number.boolValue }
+            return number.doubleValue != 0 && !number.doubleValue.isNaN
+        }
+        if let text = value as? String { return !text.isEmpty }
+        return true
+    }
+
+    /* A roster version as the web's Number.isSafeInteger reads it: never a boolean. */
+    private static func safeInteger(_ value: Any?) -> NSNumber? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        let double = number.doubleValue
+        guard double.rounded() == double, abs(double) <= 9_007_199_254_740_991 else { return nil }
+        return number
+    }
+
+    /* Whether this person vouched for `groupId`: a check record, or a pin from before the marker (the web's familyChecked). */
+    func familyChecked(_ groupId: String) -> Bool {
+        if Self.truthy((document["familyChecks"] as? [String: Any])?[groupId]) { return true }
+        guard Self.truthy((document["groups"] as? [String: Any])?[groupId]) else { return false }
+        return !Self.truthy(document["familyChecksSince"])
+    }
+
+    /*
+     * The document a family pin is saved into (the web's withFamilyChecks): the marker, if it is
+     * missing, with a `before` record at each pin's own roster for every family pin already here;
+     * then a record of what vouched for this acceptance (`checked`: created, or a join code
+     * compared). A first-use acceptance (`checked` nil) adds no record. **The invariant (7.2):** no
+     * group pin is ever saved into settings that lack the marker without it, so a pin labelled
+     * `before` was never a first-use one. Derived again on every attempt of the compare-and-set.
+     */
+    mutating func markFamilyChecks(now: String, acceptance: (groupId: String, checked: FamilyChecked?)? = nil) {
+        var checks = document["familyChecks"] as? [String: Any] ?? [:]
+        var since = document["familyChecksSince"]
+        if !Self.truthy(since) {
+            for (groupId, pin) in document["groups"] as? [String: Any] ?? [:] {
+                guard !Self.truthy(checks[groupId]), let pin = pin as? [String: Any], let version = Self.safeInteger(pin["rosterVersion"]) else { continue }
+                checks[groupId] = ["rosterVersion": version, "how": "before", "checkedAt": now]
+            }
+            since = now
+        }
+        if let acceptance, let checked = acceptance.checked, checked.how != .compared, !Self.truthy(checks[acceptance.groupId]) {
+            checks[acceptance.groupId] = ["rosterVersion": NSNumber(value: checked.rosterVersion), "how": checked.how == .created ? "created" : "join",
+                                          "checkedAt": now]
+        }
+        document["familyChecks"] = checks
+        document["familyChecksSince"] = since
+    }
+
+    /* A family check this person made (3.4), with the marker first if it is missing: what They match saves. */
+    mutating func setFamilyCheck(_ groupId: String, _ check: FamilyCheck) {
+        markFamilyChecks(now: check.checkedAt)
+        var checks = document["familyChecks"] as? [String: Any] ?? [:]
+        checks[groupId] = ["rosterVersion": NSNumber(value: check.rosterVersion), "with": check.with, "code": check.code, "checkedAt": check.checkedAt]
+        document["familyChecks"] = checks
+    }
+
+    /* The other member of this person's family check of `groupId`, if the record is one. */
+    func familyCheckWith(_ groupId: String) -> String? {
+        ((document["familyChecks"] as? [String: Any])?[groupId] as? [String: Any])?["with"] as? String
+    }
+
     /* The document as sealed: compact, keys sorted, version 2 (read as 1 or 2; the only one that may hold version 3 pins). */
     func json() throws -> String {
         var out = document

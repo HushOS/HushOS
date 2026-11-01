@@ -122,7 +122,10 @@ public actor Vault {
     var afterGuardCommit: (@Sendable () throws -> Void)?
     /* The settings key the guard is sealed under, resolved at the start of each guard turn. */
     var guardKey: MarksKey?
-    /* The guard's turn (`withGuardTurn`): whether an act holds it, and who waits for it, in order. */
+    /* The family guard (FamilyGuard.swift): a test's own, else the app group's for this session. */
+    var familyGuardOverride: FamilyGuardStore?
+    /* Tests: runs right after each family guard write, so a test can stop there as a crash would. */
+    var afterFamilyGuard: (@Sendable () throws -> Void)?    /* The guard's turn (`withGuardTurn`): whether an act holds it, and who waits for it, in order. */
     var guardBusy = false
     var guardWaiting: [CheckedContinuation<Void, Never>] = []
     /* Contacts looked up for display, by lowercased email, with when (`cachedLookup`). */

@@ -1,0 +1,198 @@
+import HushOSKit
+import SwiftUI
+
+/*
+ * Check it's Sam, in a family (docs/optional-verification.md 3.4, 6.10; the web's
+ * components/families/family-check.tsx, in its words): one comparison between two members. The
+ * family is synced first ("Getting the latest"), then both screens show the same twelve words,
+ * worked out from the member list that let the later of the two in and both accounts. They match
+ * on each side writes that side's records; They don't match writes nothing. A phone whose own
+ * entry was wrong at that list shows no words and leads to Sam's own twelve words instead.
+ */
+
+/* Whom a member row's check is with, and whether it is their own twelve words (an account changed, or a family check over keys since changed). */
+struct MemberCheck: Identifiable, Hashable {
+    let member: FamilyMemberRef
+    let personal: Bool
+    var id: String { member.userId + (personal ? "-words" : "-family") }
+}
+
+/* A member's check in a sheet of its own: it outlives the row it was started from. */
+struct MemberCheckSheet: View {
+    let check: MemberCheck
+    let summary: GroupSummary
+    let me: String
+    let organizer: String?
+    let checked: () -> Void
+    let done: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            if check.personal {
+                CheckContactView(email: check.member.email, name: check.member.name, resolved: checked, done: done)
+            } else {
+                FamilyCheckView(summary: summary, member: check.member, me: me, organizer: organizer, checked: checked, done: done)
+            }
+        }
+    }
+}
+
+struct FamilyCheckView: View {
+    @Environment(DriveStore.self) private var store
+    let summary: GroupSummary
+    let member: FamilyMemberRef
+    /* This person's own first name, as the other screen names them. */
+    let me: String
+    /* Who to ask for help when the words differ: the organizer, or nil when it's this person. */
+    let organizer: String?
+    let checked: () -> Void
+    let done: () -> Void
+
+    private enum Stage { case words, mismatch }
+
+    @State private var code: FamilyCheckCode?
+    @State private var failure: String?
+    @State private var stage = Stage.words
+    @State private var saving = false
+    @State private var error = ""
+    @State private var ownWords = false
+
+    private var who: String { firstName(member.name.isEmpty ? member.email : member.name) }
+    private var family: String { summary.name }
+
+    private var shown: (rosterVersion: UInt64, code: [String], rosterDigest: String?)? {
+        if case .code(let version, let code, let digest) = code { return (version, code, digest) }
+        return nil
+    }
+
+    var body: some View {
+        List {
+            Section {
+                if stage == .mismatch {
+                    let help = organizer.map { "ask \($0) to help" } ?? "contact support"
+                    Text("These don’t match. Make sure you’re both in \(family), reload, and compare again. If they still don’t match, \(help).")
+                        .font(Theme.Text.callout).foregroundStyle(Alpine.ink).alpineRow()
+                } else if shown != nil {
+                    Text("Ask \(who) to open \(family) and choose Check it’s \(me) beside your name. If the twelve words on both screens match, you’ve checked each other.")
+                        .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
+                }
+                if let failure {
+                    Text(failure).font(Theme.Text.callout).foregroundStyle(Alpine.danger).alpineRow()
+                    Button("Try again") { Task { await load() } }.alpineRow()
+                } else if code == nil {
+                    HStack(spacing: Alpine.Space.s2) { ProgressView(); Text("Getting the latest").foregroundStyle(Alpine.inkMuted) }.alpineRow()
+                } else if code == .ownEntryWrong {
+                    Text("This device can’t check the family with \(who). You can check \(who)’s own twelve words instead.")
+                        .font(Theme.Text.callout).foregroundStyle(Alpine.ink).alpineRow()
+                } else if code == .notAdmitted {
+                    Text("\(who) isn’t in \(family) on this device yet. Try again in a moment.")
+                        .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).alpineRow()
+                } else if let shown, stage == .words {
+                    WordGrid(words: shown.code).padding(.vertical, Alpine.Space.s2).alpineRow()
+                    TechnicalDetails {
+                        Text("These words are worked out from the family’s member list as it was when \(who) joined, and from your two accounts. When they match, your devices see the same family, and each confirms the other’s keys.")
+                        HStack {
+                            Text("Member list version")
+                            Spacer()
+                            Text(String(shown.rosterVersion)).monospacedDigit()
+                        }
+                        if let digest = shown.rosterDigest {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Member list digest")
+                                Text(digest).font(.footnote.monospaced()).textSelection(.enabled)
+                            }
+                        }
+                    }
+                    .alpineRow()
+                }
+            }
+            if !error.isEmpty { Text(error).font(Theme.Text.footnote).foregroundStyle(Alpine.danger).alpineRow() }
+            if code == .ownEntryWrong {
+                Section {
+                    Button { ownWords = true } label: { Text("Check \(who)’s words").frame(maxWidth: .infinity) }.buttonStyle(PrimaryCapsuleStyle())
+                }
+                .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+            } else if let shown, stage == .words {
+                Section {
+                    VStack(spacing: Alpine.Space.s2) {
+                        Button { match(shown.rosterVersion, shown.code) } label: { Text(saving ? "Saving…" : "They match").frame(maxWidth: .infinity) }
+                            .buttonStyle(PrimaryCapsuleStyle()).disabled(saving)
+                        Button { stage = .mismatch } label: { Text("They don’t match").frame(maxWidth: .infinity) }
+                            .buttonStyle(SecondaryCapsuleStyle()).disabled(saving)
+                    }
+                }
+                .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+            }
+        }
+        .listStyle(.insetGrouped)
+        .alpineGrouped()
+        .navigationTitle("Check it’s \(who)")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done", action: done).disabled(saving) } }
+        // Their own twelve words, in this sheet's place.
+        .navigationDestination(isPresented: $ownWords) {
+            CheckContactView(email: member.email, name: member.name, resolved: checked, done: done)
+        }
+        .interactiveDismissDisabled(saving)
+        .task { await load() }
+    }
+
+    private func load() async {
+        failure = nil
+        code = nil
+        do {
+            code = try await store.families.checkCode(summary, with: member.userId)
+        } catch {
+            if endsSession(error) { store.report(error); done(); return }
+            failure = FamilyWords.error(error)
+        }
+    }
+
+    private func match(_ rosterVersion: UInt64, _ words: [String]) {
+        saving = true
+        error = ""
+        Task {
+            do {
+                let saved = try await store.families.checkMatch(summary.id, member: member, rosterVersion: rosterVersion, code: words)
+                guard saved.checked else {
+                    // The family moved on here since the words were shown: worked out again.
+                    error = "The family changed meanwhile. Compare these words again."
+                    saving = false
+                    await load()
+                    return
+                }
+                store.notify(saved.verified ? "You and \(who) checked each other" : "You and \(who) see the same family")
+                // What this phone trusts moved: what is on screen is judged again now.
+                Task { await store.refreshSigners(); await store.rejudgeFamilies(summary.id) }
+                checked()
+                done()
+            } catch {
+                if endsSession(error) { store.report(error); done(); return }
+                self.error = ErrorWords.say(error, otherwise: "That wasn’t saved. Try again.") ?? ""
+            }
+            saving = false
+        }
+    }
+}
+
+/* Twelve words in two columns, numbered, for reading aloud (one column at the largest text sizes). */
+struct WordGrid: View {
+    let words: [String]
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: typeSize.isAccessibilitySize ? 1 : 2), alignment: .leading, spacing: Alpine.Space.s2) {
+            ForEach(words.indices, id: \.self) { index in
+                HStack(spacing: 6) {
+                    Text("\(index + 1)").font(.caption.monospacedDigit()).foregroundStyle(Alpine.inkMuted).frame(width: 18, alignment: .trailing)
+                    Text(words[index]).font(.body.weight(.medium)).foregroundStyle(Alpine.ink)
+                }
+                .padding(.horizontal, Alpine.Space.s2).padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Alpine.ground, in: RoundedRectangle(cornerRadius: Alpine.Radius.control))
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(words.joined(separator: ", "))
+    }
+}

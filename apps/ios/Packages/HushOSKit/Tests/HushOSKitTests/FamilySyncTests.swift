@@ -622,7 +622,7 @@ struct FamilyFixture {
     }
 
     /* The member's phone: a vault with their keys and drive, its own ledger, and FamilySync over the stub. */
-    func phone(_ server: FamilyServer, records: FamilyRecords? = nil) async throws -> Phone {
+    func phone(_ server: FamilyServer, records: FamilyRecords? = nil, guards: FamilyGuardStore? = nil) async throws -> Phone {
         let session = SharedKeychain.Session(origin: "https://family.test", token: "t", userId: member.userId)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [FamilyServerProtocol.self]
@@ -637,15 +637,32 @@ struct FamilyFixture {
         let grant = GrantView(version: 1, workspaceId: personal, keyVersion: 1, workspaceKeyVersion: 1, wrappingSalt: "", wrappingNonce: "", encryptedKey: "")
         await vault.adopt(workspace: WorkspaceView(workspaceId: personal, changeSeq: nil, grant: grant, root: personalRoot), key: personalKey)
         let store = records ?? FamilyRecords(folder: FileManager.default.temporaryDirectory.appendingPathComponent("family-records-\(UUID().uuidString)"), activity: .expired)
-        return Phone(vault: vault, sync: FamilySync(vault: vault, api: GroupsAPI(drive: api), records: store), records: store)
+        // The phone's family guard in a folder of the test's own: a relaunch passes the same one.
+        let guards = guards ?? familyGuards(member)
+        await vault.adopt(familyGuard: guards)
+        // The contact guard in the same folder (a family check moves it): never the app group's.
+        await vault.adopt(guard: ContactGuardStore(folder: guards.folder, owner: guards.owner, activity: .expired, generation: GuardGeneration()))
+        var held = guards
+        held.key = server.guardKey
+        return Phone(vault: vault, sync: FamilySync(vault: vault, api: GroupsAPI(drive: api), records: store), records: store, guards: guards, held: held)
     }
 
     struct Phone {
         let vault: Vault
         let sync: FamilySync
         let records: FamilyRecords
+        let guards: FamilyGuardStore
+        /* The same store under the settings key the phone seals it with: what a test reads it through. */
+        let held: FamilyGuardStore
         func done() { Auth.testSession = nil; Auth.testTransport = nil; FamilyServer.current = nil }
     }
+}
+
+/* A phone's family guard in a folder of the test's own, which a test can make refuse writes, as a full disk would. */
+func familyGuards(_ person: FamilyPerson, writes: GuardSwitch = GuardSwitch()) -> FamilyGuardStore {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("family-guard-\(UUID().uuidString)", isDirectory: true)
+    return FamilyGuardStore(folder: folder, owner: AccountOwner(userId: person.userId, origin: "https://family.test"), activity: .expired,
+                            generation: GuardGeneration()) { writes.writable }
 }
 
 /* The group routes, the settings routes, and the family folder's and the member's own drive's tree, as the server has them. */
@@ -761,6 +778,23 @@ final class FamilyServer: @unchecked Sendable {
         let next = (lock.withLock { settings?.settingsVersion } ?? 0) + 1
         let sealed = try settingsSeal(userId: family.member.userId, settingsKey: settingsKey, settingsVersion: next, json: try document.json())
         lock.withLock { settings = sealed }
+    }
+
+    /* The settings key and its envelope, as the phone's guards are sealed under it. */
+    var guardKey: MarksKey { MarksKey(key: settingsKey, envelope: settingsKeyEnvelope) }
+
+    /* A whole settings document, sealed one version above what is stored (fields other clients write included). */
+    func storeSettings(document: Settings) throws {
+        let next = (lock.withLock { settings?.settingsVersion } ?? 0) + 1
+        let sealed = try settingsSeal(userId: family.member.userId, settingsKey: settingsKey, settingsVersion: next, json: try document.json())
+        lock.withLock { settings = sealed }
+    }
+
+    /* The stored settings document, opened. */
+    func storedDocument() throws -> [String: Any]? {
+        guard let envelope = lock.withLock({ settings }),
+              let json = try settingsOpen(userId: family.member.userId, settingsKey: settingsKey, envelope: envelope) else { return nil }
+        return try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
     }
 
     /* Every settings document the phone saved, opened: what it wrote into the account's own sealed settings. */

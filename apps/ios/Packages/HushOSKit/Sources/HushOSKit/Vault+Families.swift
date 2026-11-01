@@ -150,13 +150,16 @@ extension Vault {
     /*
      * Compare and set: `pin` saved as the family's mark only while the stored one is still
      * `expected` (read again inside the save, which another device's write makes read again).
-     * False when it changed meanwhile, and nothing was saved.
+     * False when it changed meanwhile, and nothing was saved. The first-use marker and the
+     * `before` records go in the same save, derived again from what each attempt read, with a
+     * record of what vouched for this acceptance (`checked`) (docs/optional-verification.md 7.2).
      */
-    func saveGroupPin(_ groupId: String, over expected: GroupPin?, _ pin: GroupPin) async throws -> Bool {
+    func saveGroupPin(_ groupId: String, over expected: GroupPin?, _ pin: GroupPin, checked: FamilyChecked?, now: String) async throws -> Bool {
         struct Moved: Error {}
         do {
             try await updateSettings { settings in
                 guard try settings.groupPin(groupId) == expected else { throw Moved() }
+                settings.markFamilyChecks(now: now, acceptance: (groupId, checked))
                 settings.setGroupPin(groupId, pin)
             }
             return true

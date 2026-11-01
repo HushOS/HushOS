@@ -318,21 +318,27 @@ private struct FamilyRow: View {
     }
 }
 
-/* The hard warning: the family's member list was shown differently to this person, with what each side was. */
+/*
+ * The hard warning (docs/optional-verification.md 6.11, the web's ForkAlert): the family's member
+ * list was shown differently to this person. Calm words in the warning colours, never the danger
+ * ones, with both sides under Technical details.
+ */
 struct FamilyForkSection: View {
     let name: String
     let fork: FamilyFork
+    /* The organizer's first name, when it is someone else: who to tell. */
+    var organizer: String? = nil
 
     var body: some View {
         Section {
             VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                Label("\(name)’s member list was shown differently to you", systemImage: "exclamationmark.triangle.fill")
-                    .font(Theme.Text.headline).foregroundStyle(Alpine.danger)
-                Text("This device won’t change anything in \(name) until it’s sorted. Tell the other members, and don’t use this family until you’ve sorted it out together.")
+                Label("\(name) looks different on this device", systemImage: "exclamationmark.triangle")
+                    .font(Theme.Text.headline).foregroundStyle(Alpine.warning)
+                Text("HushOS has paused changes to the family here. Let \(organizer ?? "the others") know, and check each other from the family page.")
                     .font(Theme.Text.callout).foregroundStyle(Alpine.ink)
             }
             .padding(.vertical, Alpine.Space.s1)
-            .listRowBackground(Alpine.dangerSoft)
+            .listRowBackground(Alpine.warningSoft)
             DisclosureGroup("Technical details") {
                 fact(fork.memberList ? "Member list version" : "Family key version", String(fork.version))
                 ForEach(fork.sides, id: \.digest) { side in
@@ -343,7 +349,7 @@ struct FamilyForkSection: View {
                 }
             }
             .tint(Alpine.ink)
-            .listRowBackground(Alpine.dangerSoft)
+            .listRowBackground(Alpine.warningSoft)
         }
     }
 
@@ -400,6 +406,26 @@ struct FamilyPage: View {
 
     private var joining: Bool { state == .waiting || state == .unchecked }
 
+    /* Who this person checked in the family, on this phone (3.8): nil until read, or when it couldn't be (no labels then). */
+    @State private var standings: [String: MemberStanding]?
+    /* Whom this person's family check was with: their own words check them once their keys changed since (6.10). */
+    @State private var checkedWith: String?
+    /* Moved after every check, so the labels are read again. */
+    @State private var checks = 0
+    @State private var checking: MemberCheck?
+
+    private var me: String { store.vault.api.session.userId.lowercased() }
+    private var named: [GroupDetail.Member] { store.familyDetails[groupId]?.members.filter { $0.state == "active" } ?? [] }
+
+    private func served(_ userId: String) -> GroupDetail.Member? { named.first { $0.userId.lowercased() == userId.lowercased() } }
+
+    /* The organizer's first name, when it is someone else. */
+    private var organizer: String? {
+        guard let view, let entry = view.members.first(where: { $0.roles.contains("billing") && $0.userId.lowercased() != me }),
+              let member = served(entry.userId) else { return nil }
+        return firstName(member.name)
+    }
+
     var body: some View {
         List {
             if joining {
@@ -426,12 +452,26 @@ struct FamilyPage: View {
         .task {
             if store.familyList == nil { await store.refreshFamilies() } else if let summary { await store.refreshFamily(summary) }
         }
+        // The labels follow the member list this phone accepted, and every check made here.
+        .task(id: "\(view?.rosterDigest ?? "")-\(checks)") {
+            guard let view else { return }
+            standings = try? await store.families.memberStandings(view)
+            checkedWith = await store.families.checkedFamilyWith(groupId)
+        }
+        .sheet(item: $checking) { check in
+            if let summary {
+                MemberCheckSheet(check: check, summary: summary, me: served(me).map { firstName($0.name) } ?? "you", organizer: organizer,
+                                 checked: { checks += 1; Task { await store.refreshSigners(); await store.rejudgeFamilies(groupId) } },
+                                 done: { checking = nil })
+                    .environment(store)
+            }
+        }
     }
 
     @ViewBuilder private var alerts: some View {
         switch state {
         case .fork(let fork):
-            FamilyForkSection(name: name, fork: fork)
+            FamilyForkSection(name: name, fork: fork, organizer: organizer)
         case .failed(let message):
             notice(title: "Couldn’t check \(name)", message: message, danger: false) {
                 Button("Try again") { Task { if let summary { await store.refreshFamily(summary) } } }
@@ -444,11 +484,13 @@ struct FamilyPage: View {
             EmptyView()
         case .accepted(let view):
             if view.ownEntryWrong {
-                notice(title: "Your entry in \(name)’s member list isn’t your keys", message: "Ask someone who manages the family to check your words again.", danger: true) { EmptyView() }
+                // The web's words (family-page.tsx), in the warning colours.
+                notice(title: "\(name) has your account wrong on this device", message: "Ask someone who manages the family to check it’s you, from the family’s page.",
+                       danger: false) { EmptyView() }
             }
             if !view.ownEntryWrong && view.ownEntryBehind {
                 Section {
-                    Text("\(name)’s member list still has your previous keys. A manager’s device updates it the next time they open the family.")
+                    Text("\(name) still has your account as it was before you updated it. A manager’s device catches up the next time they open the family.")
                         .font(Theme.Text.callout).foregroundStyle(Alpine.ink).listRowBackground(Alpine.tint)
                 }
             }
@@ -518,33 +560,57 @@ struct FamilyPage: View {
     }
 
     @ViewBuilder private func members(_ view: Accepted) -> some View {
-        let named = store.familyDetails[groupId]?.members.filter { $0.state == "active" } ?? []
-        let me = store.vault.api.session.userId.lowercased()
         Section {
             // The member list this phone accepted says who is in the family and with what roles; route 3 gives the names.
             ForEach(view.members) { member in
-                let served = named.first { $0.userId.lowercased() == member.userId.lowercased() }
-                let you = member.userId.lowercased() == me
-                let name = served?.name ?? "Someone"
-                HStack(spacing: Alpine.Space.s3) {
-                    PersonAvatar(name: name, seed: member.userId)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(you ? "\(name) (you)" : name).foregroundStyle(Alpine.ink).lineLimit(1)
-                        if let email = served?.email, !email.isEmpty {
-                            Text(email).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
+                if member.userId.lowercased() == me {
+                    memberRow(member, you: true).alpineRow()
+                } else {
+                    let standing = standings?[member.userId.lowercased()]
+                    let who = served(member.userId)
+                    let ref = FamilyMemberRef(userId: member.userId, email: who?.email ?? "", name: who?.name ?? "Someone")
+                    Menu {
+                        Button(standing == .verified ? "Check again" : "Check it’s \(firstName(ref.name))", systemImage: "checkmark.shield") {
+                            // An account that changed, or a family check over keys that changed since: their own twelve words (6.10).
+                            let personal = standing == .changed || (checkedWith?.lowercased() == member.userId.lowercased() && standing != .verified)
+                            checking = MemberCheck(member: ref, personal: personal)
                         }
-                        Text(DriveStore.rolesLine(member.roles)).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                        .disabled(ref.email.isEmpty)
+                    } label: {
+                        memberRow(member, you: false)
                     }
-                    Spacer(minLength: 0)
+                    .accessibilityLabel("More for \(ref.name)")
+                    .alpineRow()
                 }
-                .padding(.vertical, Alpine.Space.s1)
-                .frame(minHeight: Theme.row)
-                .accessibilityElement(children: .combine)
-                .alpineRow()
             }
         } header: {
             Text("Members").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
         }
+    }
+
+    private func memberRow(_ member: FamilyMember, you: Bool) -> some View {
+        let served = served(member.userId)
+        let name = served?.name ?? "Someone"
+        let standing = standings?[member.userId.lowercased()]
+        return HStack(spacing: Alpine.Space.s3) {
+            PersonAvatar(name: name, seed: member.userId)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(you ? "\(name) (you)" : name).foregroundStyle(Alpine.ink).lineLimit(1)
+                if let email = served?.email, !email.isEmpty {
+                    Text(email).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
+                }
+                Text(DriveStore.rolesLine(member.roles)).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                if standing == .changed {
+                    Text("Account changed").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                }
+            }
+            Spacer(minLength: 0)
+            if !you, let standing, standing != .changed { VerifiedLabel(verified: standing == .verified) }
+        }
+        .padding(.vertical, Alpine.Space.s1)
+        .frame(minHeight: Theme.row)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
     }
 
     private func technical(_ view: Accepted) -> some View {

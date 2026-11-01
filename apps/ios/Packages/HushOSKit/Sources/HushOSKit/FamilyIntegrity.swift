@@ -21,6 +21,8 @@ public struct RekeyNote: Sendable, Equatable {
     public let by: String?
     public let integrity: GroupVerdict
     public let bound: Bool?
+    /* Whose word vouched for the re-keyer (a family's id), as the record's own `via`. */
+    public var via: String? = nil
 }
 
 /* One record that did not verify (trust.ts IntegrityIssue); `integrity` is never verified or saved-from-link. */
@@ -80,10 +82,17 @@ public struct FamilyMark: Sendable, Equatable, Hashable {
 
 enum FamilyLines {
     /* The re-keyer verdicts that leave the record unmarked: said in Info, never as a mark (decision D5). */
-    // Stop-gap (docs/optional-verification.md PR 1): a first-seen writer (`seen`) reads as one nobody checked until PR 5/6 design its own UI; this app never asks for `seen` yet.
     static let infoOnly: [GroupVerdict] = [.verified, .savedFromLink, .retiredKey, .unknownSigner, .seen, .unchecked, .formerMember, .resealed]
 
+    /* Who wrote a re-keyed item is named only when every record verified (rekeyedLines' `trusted`). */
     static func trusted(_ verdict: GroupVerdict) -> Bool { verdict == .verified || verdict == .savedFromLink }
+
+    /*
+     * The verdicts that are no issue at all (trust.ts UNMARKED): a verified record, a first-seen
+     * writer's (`seen`: what a family taken on first use vouches for, docs/optional-verification.md
+     * 2.6, no mark), and a copy saved from a link.
+     */
+    static func unmarked(_ verdict: GroupVerdict) -> Bool { trusted(verdict) || verdict == .seen }
 
     /* trust.ts recordIssues. */
     static func recordIssues(_ record: FamilyRecordKind, _ integrity: GroupVerdict, signer: String?, note: RekeyNote?) -> [FamilyIssue] {
@@ -97,14 +106,14 @@ enum FamilyLines {
             } else if note.bound == nil {
                 issues.append(FamilyIssue(record: record, integrity: .unchecked, signer: nil, rekey: .init(cause: .unconfirmed, rekeyer: rekeyer)))
             } else {
-                if !trusted(integrity) { issues.append(FamilyIssue(record: record, integrity: integrity, signer: note.writer)) }
+                if !unmarked(integrity) { issues.append(FamilyIssue(record: record, integrity: integrity, signer: note.writer)) }
                 if !infoOnly.contains(rekeyer) {
                     issues.append(FamilyIssue(record: record, integrity: rekeyer, signer: nil, rekey: .init(cause: .unattested, rekeyer: rekeyer)))
                 }
             }
             return issues
         }
-        if !trusted(integrity) { issues.append(FamilyIssue(record: record, integrity: integrity, signer: signer)) }
+        if !unmarked(integrity) { issues.append(FamilyIssue(record: record, integrity: integrity, signer: signer)) }
         return issues
     }
 
