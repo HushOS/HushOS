@@ -106,9 +106,26 @@ struct FileViewer: View {
             // Paged past before it came down: the next page's task is the one that counts.
             do { url = try await store.fetch(current, version: version) } catch where !ErrorWords.isCancellation(error) { failed = true } catch {}
         }
-        .onChange(of: store.folders[current.node.parentId ?? ""]?.contains { $0.id == current.id }) { _, here in
-            // Moved to the Trash or elsewhere from the menu, or its folder cleared (a family removed or forked): nothing left to show.
-            if here != true, version == nil { dismiss() }
+        .onChange(of: removed) { _, gone in
+            if gone { dismiss() }
+        }
+    }
+
+    /*
+     * Whether the file on screen is confirmed gone: its folder is listed and it isn't there (moved
+     * to the Trash or elsewhere from the menu), or its family was removed, forked or refused. A
+     * folder this phone hasn't listed (a file opened from Home or Search, paged to) says nothing,
+     * nor does a family whose state isn't known yet: the viewer stays.
+     */
+    private var removed: Bool {
+        guard version == nil else { return false }
+        if let listed = store.folders[current.node.parentId ?? ""], !listed.contains(where: { $0.id == current.id }) { return true }
+        guard store.isFamily(current), let groupId = store.familyAreaGroups[current.node.workspaceId.lowercased()],
+              let state = store.familyStates[groupId] else { return false }
+        switch state {
+        case .accepted: return false
+        case .failed(let words): return words != FamilyWords.noAnswer
+        default: return true
         }
     }
 
