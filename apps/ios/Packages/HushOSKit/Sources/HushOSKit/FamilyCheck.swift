@@ -139,7 +139,13 @@ extension FamilySync {
                                          rosters: served.rosters, rosterVersion: rosterVersion, code: code, guard: held.state,
                                          checkedAt: Self.checkTime(now()))
         guard let check = match.check else { return FamilyCheckSaved(checked: false, verified: false) }
-        let verified = try await vault.saveFamilyCheck(groupId, member: member, check: check, keys: match.pin, decidedOver: held.revision)
+        let verified: Bool
+        do {
+            verified = try await vault.saveFamilyCheck(groupId, member: member, check: check, keys: match.pin, decidedOver: held.revision)
+        } catch is FamilyCheckMoved {
+            // Their pin moved since the match was decided: nothing saved, the words compared again.
+            return FamilyCheckSaved(checked: false, verified: false)
+        }
         vouched[groupId] = true
         return FamilyCheckSaved(checked: true, verified: verified)
     }
@@ -149,6 +155,9 @@ extension FamilySync {
         (try? await vault.familyCheckWith(groupId)) ?? nil
     }
 }
+
+/* A settings pin of the other member that moved between the match and its save. */
+struct FamilyCheckMoved: Error {}
 
 extension Vault {
     /* Whether this person vouched for the family, from the settings read now (Settings.familyChecked). */
@@ -193,6 +202,9 @@ extension Vault {
             let (entry, _) = try guardFor(contactId, pin: before, at: settings.version)
             // Decided over this very entry, or not at all: a Continue or a check since is its own act.
             guard (entry?.revision ?? 0) == revision else { throw ContactError.moved }
+            // With no entry here, the core judged the keys against the settings pin as it read it (pair_match): a pin
+            // saved since with other keys is someone's act, and a family check never moves a pin. Compared again.
+            if entry == nil, let before, before.commitment == nil || before.commitment != keyCommitment(pin: keys) { throw FamilyCheckMoved() }
             var target = (before ?? ContactPin(userId: contactId, email: member.email, name: member.name, keys: keys, pinnedAt: "", firstSeen: "family"))
                 .replacing(keys, pinnedAt: ISO8601DateFormatter().string(from: Date()))
             // This person's own check now, never a family's word.
@@ -232,3 +244,4 @@ public struct FamilyGenerations: Sendable {
         }
     }
 }
+

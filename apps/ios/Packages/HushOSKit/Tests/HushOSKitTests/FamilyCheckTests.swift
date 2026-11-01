@@ -57,6 +57,40 @@ extension OnFakeDrive {
             #expect(await phone.sync.verdict(of: file.node, groupId: family.groupId).mark == nil)
         }
 
+        /*
+         * With no guard entry for them on this phone, the core judged the compared keys against the
+         * settings pin as it read it. Another device saves a pin of them with other keys before this
+         * save reads the settings: that pin is theirs to keep, and the words are compared again.
+         * Fails if the family check moves an existing pin to the compared keys.
+         */
+        @Test func aPinAnotherDeviceSavedMeanwhileIsLeftAndTheWordsAreComparedAgain() async throws {
+            let family = try FamilyFixture()
+            let server = FamilyServer(family: family)
+            server.serve(chain: [family.r1, family.r2])
+            try server.storeSettings(pin: nil)
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .joined(.accepted) = try await phone.sync.joinStatus(family.groupId) else { Issue.record("not joined"); return }
+            guard case .code(let version, let words, _) = try await phone.sync.checkCode(family.summary, with: family.creator.userId).code else {
+                Issue.record("no words")
+                return
+            }
+            let theirs = ContactPin(userId: family.creator.userId, email: "maya@example.com", name: "Maya Lindqvist",
+                                    keys: PinKeys(keyVersion: 1, encryptionPublicKey: "their-encryption", signingPublicKey: "their-signing",
+                                                  mlDsaPublicKeyHash: "their-ml-dsa", kemPublicKeyHash: "their-kem", fingerprint: ""),
+                                    pinnedAt: "2026-11-01T12:00:00.000Z", firstSeen: "added")
+            // Saved on another device while this one fetches the member lists to match against.
+            server.afterRosters = { try? server.editSettings { $0.setPin(theirs) } }
+            let saved = try await phone.sync.checkMatch(family.groupId, member: creator(family), rosterVersion: version, code: words)
+            #expect(saved == FamilyCheckSaved(checked: false, verified: false))
+
+            let document = try #require(try server.storedDocument())
+            let pinRaw = try #require((document["contacts"] as? [String: Any])?[family.creator.userId] as? [String: Any])
+            #expect(pinRaw["signingPublicKey"] as? String == "their-signing")
+            #expect(pinRaw["encryptionPublicKey"] as? String == "their-encryption")
+            #expect((document["familyChecks"] as? [String: Any])?[family.groupId] == nil)
+        }
+
         /* They match over words that aren't this phone's (another family, a misread list): nothing is saved, and the member stays not verified. */
         @Test func wordsThatDontMatchHereSaveNothing() async throws {
             let family = try FamilyFixture()
@@ -222,3 +256,4 @@ extension OnFakeDrive {
         #expect(FamilySync.checkProblem(.waiting) != nil)
     }
 }
+

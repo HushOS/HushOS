@@ -797,6 +797,15 @@ final class FamilyServer: @unchecked Sendable {
         lock.withLock { settings = sealed }
     }
 
+    /* Another device's save: the stored settings opened, changed, and sealed one version above. */
+    func editSettings(_ change: (inout Settings) throws -> Void) throws {
+        guard let envelope = lock.withLock({ settings }),
+              let json = try settingsOpen(userId: family.member.userId, settingsKey: settingsKey, envelope: envelope) else { return }
+        var document = try Settings(json: json, version: envelope.settingsVersion)
+        try change(&document)
+        try storeSettings(document: document)
+    }
+
     /* The stored settings document, opened. */
     func storedDocument() throws -> [String: Any]? {
         guard let envelope = lock.withLock({ settings }),
