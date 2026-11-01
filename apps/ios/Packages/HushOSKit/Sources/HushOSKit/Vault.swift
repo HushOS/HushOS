@@ -537,6 +537,8 @@ public actor Vault {
     }
 
     public func item(_ id: String) -> Opened? { opened[id] }
+    /* Exactly this row, in its own workspace: never another workspace's row with the same id. */
+    public func item(_ ref: NodeRef) -> Opened? { opened[ref] }
     public func nodeKey(_ id: String) -> Data? { nodeKeys[id] }
     /* The key of exactly this item, in its own workspace. */
     func nodeKey(of item: Opened) -> Data? { nodeKeys[item.ref] }
@@ -682,7 +684,9 @@ public actor Vault {
      * gate by the caller). When the row held here is newer than `item` (the vault learned a newer
      * version while the screen showed the older), the copy is made once more for that row, so the
      * newer content shows instead of a refusal on every Try again. Returns the row the copy is of.
-     * A held row older than `item`, or a second mismatch, is the refusal (VersionChanged).
+     * A held row older than `item`, or a second mismatch, is the refusal (VersionChanged). Rows are
+     * looked up by workspace and id, never by id alone (which answers with the own drive's row
+     * first), and only a family item takes a newer row this way.
      */
     public func downloadCurrent(_ item: Opened, gate: FamilyCopyGate? = nil, to destination: @Sendable (Opened) async throws -> URL,
                                 progress: @Sendable (Double) -> Void = { _ in }) async throws -> (item: Opened, file: URL) {
@@ -691,9 +695,9 @@ public actor Vault {
             let file = try await destination(item)
             if FileManager.default.fileExists(atPath: file.path) { return (item, file) }
             do {
-                try await download(item.id, expectedVersionId: item.node.currentVersion?.id, to: file, gate: gate, progress: progress)
+                try await download(item.id, ref: item.ref, expectedVersionId: item.node.currentVersion?.id, to: file, gate: gate, progress: progress)
                 return (item, file)
-            } catch is VersionChanged where attempt == 0 {
+            } catch is VersionChanged where attempt == 0 && isFamilyWorkspace(item.node.workspaceId) {
                 guard let held = opened[item.ref], held.node.currentVersion?.id != item.node.currentVersion?.id,
                       !held.node.isOlder(than: item.node) else { throw VersionChanged() }
                 item = held
@@ -707,11 +711,18 @@ public actor Vault {
      * The row held here may name another (an older answer kept out, a newer one since): then nothing
      * is written, so a copy's path never holds another version's content.
      */
-    public func download(_ nodeId: String, version: VersionListView? = nil, expectedVersionId: String? = nil, to destination: URL, gate: FamilyCopyGate? = nil,
-                         progress: @Sendable (Double) -> Void = { _ in }) async throws {
+    /*
+     * `ref`: the row's workspace and id, when the caller holds the row. By id alone the own drive's
+     * row answers first, so a share's or family folder's row with the same id would download the
+     * own file instead; with `ref` only that row is copied, and a row of another workspace is refused.
+     */
+    public func download(_ nodeId: String, ref: NodeRef? = nil, version: VersionListView? = nil, expectedVersionId: String? = nil, to destination: URL,
+                         gate: FamilyCopyGate? = nil, progress: @Sendable (Double) -> Void = { _ in }) async throws {
         // Taken before anything is awaited: a session that ends while the address comes writes nothing.
         let gate = gate ?? TemporaryCopies.copyGate(familyWorkspace: nil)
-        let item = try await resolve(nodeId)
+        let item: Opened
+        if let ref, let held = opened[ref] { item = held } else { item = try await resolve(nodeId) }
+        if let ref, item.ref != ref { throw DriveAPIError.server(500, "This item has not been seen yet; open its folder first.") }
         let opened = try openVersion(item, version: version)
         if let expectedVersionId, opened.versionId != expectedVersionId { throw VersionChanged() }
         let url = try await api.versionURL(opened.versionId, workspaceId: item.node.workspaceId)

@@ -117,15 +117,62 @@ extension OnFakeDrive {
             #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent(first.id).path))
         }
 
+        /*
+         * The member's own drive holds a file with the family photo's id. A copy of the family photo
+         * is of the family row only: by id alone the own drive's row answers first, and its bytes
+         * must never come down under the family file's name, nor after a retry, nor for a row of a
+         * workspace not held here. Fails if a download looks a row up by id alone.
+         */
+        @Test func aFamilyRowWithAPersonalFilesIdNeverDownloadsThePersonalBytes() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            server.put(family.photo)
+            let familyVersion = try #require(family.photo.currentVersion)
+            server.objects[familyVersion.id] = family.photoObject
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let vault = phone.vault
+            _ = try await vault.children(of: family.rootId)
+            let familyRow = try #require(await vault.item(family.photo.ref))
+
+            // The own drive's file under the same node id and version id, with other bytes.
+            let ownKey = try randomBytes(length: 32)
+            let ownBytes = Data("the member's own file".utf8)
+            let (ownVersion, ownObject) = try sealVersion(ownBytes, of: family.photo.id, family, in: family.personal, nodeKey: ownKey)
+            let own = try FamilyFixture.node(id: family.photo.id, in: family.personal, parent: family.personalRoot.id, parentKey: family.personalRootKey,
+                                             key: ownKey, kind: .file, name: "Beach.jpg", writer: family.member).with(version: ownVersion)
+            server.objects[ownVersion.id] = ownObject
+            try await vault.open(family.personalRoot)
+            try await vault.open(own)
+            #expect(await vault.item(family.photo.id)?.ref == own.ref, "the own drive's row should answer by id alone")
+
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("collide-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let (copied, file) = try await vault.downloadCurrent(familyRow) { row in folder.appendingPathComponent(row.node.workspaceId) }
+            #expect(copied.ref == family.photo.ref)
+            #expect(try Data(contentsOf: file) == family.photoBytes, "the own drive's bytes came down as the family photo")
+            let direct = folder.appendingPathComponent("direct")
+            try await vault.download(family.photo.id, ref: family.photo.ref, expectedVersionId: familyVersion.id, to: direct)
+            #expect(try Data(contentsOf: direct) == family.photoBytes)
+            // A row of a workspace not held here (a share not listed yet): refused, never answered by the own drive's.
+            let elsewhere = folder.appendingPathComponent("elsewhere")
+            let unheld = NodeRef(workspaceId: UUID().uuidString, nodeId: family.photo.id)
+            await #expect(throws: (any Error).self) { try await vault.download(family.photo.id, ref: unheld, to: elsewhere) }
+            #expect(!FileManager.default.fileExists(atPath: elsewhere.path), "the own drive's bytes came down for another workspace's row")
+        }
+
         /* `bytes` sealed as a new version of `nodeId` in the family folder, under the photo's key, signed by the creator. */
-        private func sealVersion(_ bytes: Data, of nodeId: String, _ family: FamilyFixture) throws -> (VersionView, Data) {
-            let versionId = try newId(kind: .version, scopeId: family.workspaceId).id
-            let objectId = try newId(kind: .object, scopeId: family.workspaceId).id
+        private func sealVersion(_ bytes: Data, of nodeId: String, _ family: FamilyFixture, in workspace: String? = nil, nodeKey: Data? = nil,
+                                 versionId: String? = nil) throws -> (VersionView, Data) {
+            let workspaceId = workspace ?? family.workspaceId
+            let versionId = try versionId ?? newId(kind: .version, scopeId: workspaceId).id
+            let objectId = try newId(kind: .object, scopeId: workspaceId).id
             let contentKey = try randomBytes(length: 32)
             let nonce = try randomBytes(length: 16)
             let suite = HushOSCore.contentSuite()
             let size = UInt64(bytes.count)
-            let content = Content(workspaceId: family.workspaceId, objectId: objectId, suite: suite, key: contentKey, nonce: nonce, plaintextSize: size, thumbnailBytes: 0)
+            let content = Content(workspaceId: workspaceId, objectId: objectId, suite: suite, key: contentKey, nonce: nonce, plaintextSize: size, thumbnailBytes: 0)
             let layout = try contentLayout(suite: suite, plaintextSize: size, thumbnailBytes: 0)
             var object = Data()
             var at = 0
@@ -134,10 +181,10 @@ extension OnFakeDrive {
                 object.append(try chunkEncrypt(content: content, index: index, plaintext: bytes.subdata(in: at ..< at + length)))
                 at += length
             }
-            let sealed = try versionSeal(ctx: VersionContext(workspaceId: family.workspaceId, nodeId: nodeId, versionId: versionId, objectId: objectId),
-                                         nodeKey: family.photoKey, contentKey: contentKey, plaintextSize: size, thumbnailBytes: 0)
+            let sealed = try versionSeal(ctx: VersionContext(workspaceId: workspaceId, nodeId: nodeId, versionId: versionId, objectId: objectId),
+                                         nodeKey: nodeKey ?? family.photoKey, contentKey: contentKey, plaintextSize: size, thumbnailBytes: 0)
             let signature = try versionSign(signingSeed: family.creator.keys.signingSeed,
-                                            statement: VersionStatement(workspaceId: family.workspaceId, nodeId: nodeId, versionId: versionId, objectId: objectId, contentSuite: suite),
+                                            statement: VersionStatement(workspaceId: workspaceId, nodeId: nodeId, versionId: versionId, objectId: objectId, contentSuite: suite),
                                             contentKeyEnvelope: sealed.envelope)
             var version = VersionView(id: versionId, objectId: objectId, contentKeyEnvelope: base64urlEncode(bytes: sealed.envelope), status: "ready", contentSuite: suite,
                                       chunkCount: Int(layout.chunkCount), contentNonce: base64urlEncode(bytes: nonce), plaintextSize: nil,

@@ -239,7 +239,7 @@ extension Vault {
         if !moved {
             do {
                 // The version the kept path is named after, and no other.
-                try await download(item.id, expectedVersionId: item.node.currentVersion?.id, to: destination, gate: gate, progress: progress)
+                try await download(item.id, ref: item.ref, expectedVersionId: item.node.currentVersion?.id, to: destination, gate: gate, progress: progress)
             } catch {
                 // A first keep that failed is nobody's to resume: its partial goes. A kept file's stays for the next refresh.
                 if !Offline.isKept(item.id) { try? FileManager.default.removeItem(at: Offline.root().appendingPathComponent(item.id, isDirectory: true)) }

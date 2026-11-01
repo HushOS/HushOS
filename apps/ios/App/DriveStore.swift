@@ -940,7 +940,7 @@ final class DriveStore {
             if let data = try? await vault.thumbnail(of: item), (try? gate.check()) != nil {
                 // Kept only for the version the vault holds now (it replaces an earlier version's): a row read before a
                 // replacement never puts the old picture back over the new one's.
-                let held = await vault.item(item.id)?.node.currentVersion?.id ?? version
+                let held = await vault.item(item.ref)?.node.currentVersion?.id ?? version
                 if held == version { thumbnails[item.id] = Thumbnail(version: version, data: data) }
             }
             thumbnailTasks.remove(task)
@@ -1903,7 +1903,7 @@ final class DriveStore {
                 if row.node != item.node { adopted?(row) }
                 return copied
             }
-            try await vault.download(item.id, version: version, to: file, gate: gate) { fraction in Task { @MainActor in self.opening[item.id] = fraction } }
+            try await vault.download(item.id, ref: item.ref, version: version, to: file, gate: gate) { fraction in Task { @MainActor in self.opening[item.id] = fraction } }
             // Nothing is handed on (the viewer, Send a copy, Open in) once its family was forgotten.
             try gate.check()
         } catch {
@@ -1943,7 +1943,7 @@ final class DriveStore {
                 try gate.check()
                 return copied
             }
-            try await vault.download(item.id, version: version, to: file, gate: gate) { fraction in Task { @MainActor in self.opening[item.id] = fraction } }
+            try await vault.download(item.id, ref: item.ref, version: version, to: file, gate: gate) { fraction in Task { @MainActor in self.opening[item.id] = fraction } }
             try gate.check()
             return file
         } catch {
