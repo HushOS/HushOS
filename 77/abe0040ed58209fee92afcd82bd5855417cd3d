@@ -1,0 +1,53 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_391941e8d99368 374,464,466-469
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_9dbfb47440b95f 78-85
+apps/android/app/src/main/AndroidManifest.xml
+  s_566b8e0c4467a4::t_0d9f6289b39d1e 83-95
+apps/android/app/src/main/kotlin/com/hushos/app/data/AppLinks.kt
+  s_566b8e0c4467a4::t_ffde09467186e4 26-29,103-112
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_566b8e0c4467a4::t_7b42a5ee8c7f31 121-122,125-126,146-150,171-172
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_db3b316ee130e8 195-200,449-450,452,465,467,615-616,652,747-748,767-772,827-829,911-913,1149-1150,1160-1162,1241
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Families.kt
+  s_566b8e0c4467a4::t_062eac45f4ed3a 1-339
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_e241cc1e7d5a32 1-322
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamilyCheck.kt
+  s_566b8e0c4467a4::t_3637b7f2ba9add 1-165
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamilyJoin.kt
+  s_566b8e0c4467a4::t_20b663f9e52866 1-267
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_566b8e0c4467a4::t_c60f29356f38f9 138-142,196-199,257,312-313,346,404-412,431-432,458
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_566b8e0c4467a4::t_d6af110f7812f0 200,389-391
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_566b8e0c4467a4::t_dc5cc164085718 137-138,174,210-211,213-218,645-647,659-661,668-669,675-676
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NodeRow.kt
+  s_566b8e0c4467a4::t_1a125e561cec20 215
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Unverified.kt
+  s_566b8e0c4467a4::t_06dec593cb48bc 42,77-110
+apps/android/app/src/test/kotlin/com/hushos/app/data/AppLinksTest.kt
+  s_566b8e0c4467a4::t_1b542499570ca7 22-37
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyFoldersTest.kt
+  s_566b8e0c4467a4::t_38b88866fc0cdf 1-51
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_6dac23d3d24c5e 215-216
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "77abe0040ed58209fee92afcd82bd5855417cd3d",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
