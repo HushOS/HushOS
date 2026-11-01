@@ -121,7 +121,7 @@ class FakeDrive : AutoCloseable {
     }
 
     class Node(
-        val id: String, val workspaceId: String, val parentId: String?, val kind: String, var keyEpoch: Long, var parentKeyEpoch: Long,
+        val id: String, val workspaceId: String, var parentId: String?, val kind: String, var keyEpoch: Long, var parentKeyEpoch: Long,
         var keyEnvelope: String, var metadataVersion: Long, var metadataEnvelope: String, var signer: String, var signature: String,
         var version: Version? = null, var changeSeq: Int = 1, var trashedAt: String? = null,
     ) {
@@ -427,6 +427,22 @@ class FakeDrive : AutoCloseable {
             })).put("nextCursor", JSONObject.NULL))
 
             get && at("drive", "workspace") -> ok(JSONObject().put("workspaceId", workspace).put("changeSeq", changeSeq).put("grant", grant).put("root", node(root).json()))
+            // The feed is state, not a log: each node changed since the cursor once, as it is now.
+            get && at("drive", "workspaces", "*", "changes") -> {
+                val since = query.getValue("since").toInt()
+                val changed = nodes.values.filter { it.workspaceId == segments[2] && it.changeSeq > since }.sortedBy { it.changeSeq }
+                ok(JSONObject().put("changes", JSONArray(changed.map { JSONObject().put("kind", "node").put("changeSeq", it.changeSeq).put("node", it.json()) }))
+                    .put("nextCursor", changed.maxOfOrNull { it.changeSeq } ?: since).put("hasMore", false))
+            }
+            post && at("drive", "nodes", "*", "parent") -> {
+                val node = node(segments[2])
+                node.parentId = body.getString("parentId")
+                node.parentKeyEpoch = body.getLong("parentKeyEpoch")
+                node.keyEnvelope = body.getString("keyEnvelope")
+                bump(node)
+                ok(JSONObject().put("node", node.json()))
+            }
+            post && at("drive", "nodes", "*", "trash") -> { trash(segments[2]); ok(JSONObject()) }
             get && at("drive", "nodes", "*", "children") -> {
                 val folder = nodes[segments[2]]?.takeIf { it.workspaceId == query["workspaceId"] } ?: return 404 to JSONObject().put("message", "Not found")
                 ok(listing(folder))

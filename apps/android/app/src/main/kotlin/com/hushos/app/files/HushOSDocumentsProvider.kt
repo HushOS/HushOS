@@ -16,6 +16,7 @@ import android.provider.DocumentsContract.Document
 import android.provider.DocumentsContract.Root
 import android.provider.DocumentsProvider
 import android.webkit.MimeTypeMap
+import com.hushos.app.data.FilesRoots
 import com.hushos.app.data.NotAuthenticated
 import com.hushos.app.data.Opened
 import com.hushos.app.data.Shared
@@ -42,7 +43,10 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     @Volatile private var vault: Vault? = null
     private val vaultLock = Any()
 
-    override fun onCreate(): Boolean = true
+    override fun onCreate(): Boolean {
+        current = this
+        return true
+    }
 
     private val authority: String get() = "${context!!.packageName}.documents"
 
@@ -153,8 +157,8 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         return cursor
     }
 
-    private fun docId(id: String, vault: Vault) = if (id == vault.rootId) "root" else id
-    private fun nodeId(documentId: String, vault: Vault) = if (documentId == "root") vault.rootId else documentId
+    private fun docId(id: String, vault: Vault) = FilesRoots.documentId(id, vault.rootId)
+    private fun nodeId(documentId: String, vault: Vault) = FilesRoots.nodeId(documentId, vault.rootId)
 
     private fun mimeOf(item: Opened): String {
         if (item.isFolder) return Document.MIME_TYPE_DIR
@@ -202,28 +206,46 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         val trust = trustFor(vault)
         for (child in vault.listChildren(nodeId(parentDocumentId, vault))) addRow(cursor, child, vault, trust)
         cursor.setNotificationUri(context!!.contentResolver, DocumentsContract.buildChildDocumentsUri(authority, parentDocumentId))
-        syncInBackground(vault, parentDocumentId)
+        listedAt = android.os.SystemClock.elapsedRealtime()
+        pulls.request(parentDocumentId)
+        FilesPoll.start(context!!)
         cursor
     }
 
-    private val syncing = java.util.concurrent.atomic.AtomicBoolean(false)
     private val background = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     /*
-     * The listing answers from what the phone holds; the feed is pulled after,
-     * off the binder thread, and Files is told to ask again if anything changed.
-     * A slow or absent network never holds a listing up.
+     * The listing answers from what the phone holds; the feed is pulled after, off the binder thread, and the sync
+     * tells Files of every folder it changed (Vault.sync). A slow or absent network never holds a listing up.
      */
-    private fun syncInBackground(vault: Vault, parentDocumentId: String) {
-        if (!syncing.compareAndSet(false, true)) return
-        background.execute {
-            try {
-                val touched = runCatching { vault.sync() }.getOrNull()
-                if (!touched.isNullOrEmpty()) context?.contentResolver?.notifyChange(DocumentsContract.buildChildDocumentsUri(authority, parentDocumentId), null)
-            } finally {
-                syncing.set(false)
-            }
-        }
+    private val pulls = FeedPulls(
+        execute = { background.execute(it) },
+        pull = { liveVault()?.sync() },
+        tell = { folders ->
+            val ctx = context ?: return@FeedPulls
+            for (folder in folders) ctx.contentResolver.notifyChange(DocumentsContract.buildChildDocumentsUri(authority, folder), null)
+        },
+    )
+
+    /* When Files or a picker last asked for a listing: polls run until FilesPoll.WINDOW_MS after it. */
+    @Volatile private var listedAt = 0L
+
+    /*
+     * One poll of the feed, on the calling job's thread, which keeps this process thawed until it returns (the sync tells
+     * Files of what changed). False once no listing was asked for within the window: the polls stop.
+     */
+    internal fun pollOnce(): Boolean {
+        if (listedAt == 0L || android.os.SystemClock.elapsedRealtime() - listedAt >= FilesPoll.WINDOW_MS) return false
+        val vault = liveVault() ?: return false
+        runCatching { vault.sync() }
+        return true
+    }
+
+    /* The vault while its session is still the one signed in: nothing is pulled for an account that has left. */
+    private fun liveVault(): Vault? {
+        val held = vault ?: return null
+        val ctx = context ?: return null
+        return held.takeIf { Shared.session(ctx) == it.api.session }
     }
 
     override fun queryRecentDocuments(rootId: String, projection: Array<out String>?): Cursor = guarded {
@@ -332,8 +354,11 @@ class HushOSDocumentsProvider : DocumentsProvider() {
 
     override fun removeDocument(documentId: String, parentDocumentId: String) = deleteDocument(documentId)
 
-    private companion object {
-        const val TRUST_TTL_MS = 5 * 60_000L
-        const val TRUST_RETRY_MS = 30_000L
+    companion object {
+        /* The provider's one instance in this process (the system makes it as the process starts), for FilesPoll's jobs. */
+        @Volatile internal var current: HushOSDocumentsProvider? = null
+
+        private const val TRUST_TTL_MS = 5 * 60_000L
+        private const val TRUST_RETRY_MS = 30_000L
     }
 }
