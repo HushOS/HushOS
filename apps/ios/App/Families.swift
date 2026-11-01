@@ -186,7 +186,9 @@ extension DriveStore {
         // A reset cleared it already; the next session may be checking the same family by now.
         defer { if current(session) { familySyncing.remove(summary.id) } }
         let previous = familyStates[summary.id]
-        guard let state = try? await inFamily(session, { await $0.sync(summary) }) else { return }
+        guard let (state, ended) = try? await inFamily(session, { sync in (await sync.sync(summary), await sync.takeEnded()) }) else { return }
+        // A 401 the sync met is any request's: the app asks whether the session ended.
+        if let ended { report(ended) }
         await show(state, of: summary, previous: previous, session: session)
     }
 

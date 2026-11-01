@@ -310,6 +310,35 @@ extension OnFakeDrive {
             await #expect(throws: (any Error).self) { _ = try await phone.vault.resolve(family.fileId) }
         }
 
+        /*
+         * Removed between route 5 and route 3: the member list still served, then route 3 says
+         * not-member. The family is wiped as any not-member answer wipes it, never kept accepted with
+         * its keys and rows until the next sync. Fails if route 3's answer is swallowed.
+         */
+        @Test func routeThreeNotMemberWipes() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            server.detailNotMember = true
+            #expect(await phone.sync.sync(family.summary) == .wiped)
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId) == nil)
+        }
+
+        /* A 401 there ends the session as any other request's does: handed to the app, not said as "couldn't check" only. */
+        @Test func aSessionThatEndedDuringASyncIsHandedOn() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            #expect(await phone.sync.takeEnded() == nil)
+            server.unauthorized = true
+            if case .accepted = await phone.sync.sync(family.summary) { Issue.record("accepted under an ended session") }
+            let ended = await phone.sync.takeEnded()
+            #expect(ended.map { endsSession($0) } == true)
+            #expect(await phone.sync.takeEnded() == nil, "handed on twice")
+        }
+
         /* A plaintext copy opened before: in its place, a file in it. */
         func copy(_ phone: FamilyFixture.Phone, item: String, family: String?) throws -> URL {
             let folder = try #require(TemporaryCopies.openedFolder(itemId: item, version: "v1", familyWorkspace: family, in: phone.temporary))
@@ -881,6 +910,9 @@ final class FamilyServer: @unchecked Sendable {
     var groupsFail = false
     /* Route 5 answers with a 503 (a server in trouble, never a refusal). */
     var rostersFail = false
+    /* Route 3 answers not-member while route 5 still serves: removed between the two. */
+    var detailNotMember = false
+    var unauthorized = false
     /* Route 2's state for the member: `accepted` (waiting to be let in) or `active`. */
     var groupState = "active"
     /* Routes 14 and 15, answered with these when set (the invitation the member opens from the mailed link). */
@@ -1096,6 +1128,8 @@ final class FamilyServer: @unchecked Sendable {
             guard range.count == 2 else { return (200, object) }
             return (206, object.subdata(in: range[0] ..< min(range[1] + 1, object.count)))
         }
+        // The session ended: every group route answers 401.
+        if path.hasPrefix("/api/groups"), lock.withLock({ unauthorized }) { return (401, ["message": "Sign in."]) }
         switch (method, path) {
         case ("GET", "/api/auth/settings"):
             return lock.withLock {
@@ -1139,6 +1173,7 @@ final class FamilyServer: @unchecked Sendable {
             return (200, ["groups": [["id": f.groupId, "kind": "family", "name": "Lindqvist family", "roles": [String](), "state": lock.withLock { groupState },
                                       "rosterVersion": lock.withLock { chain.count }, "groupKeyVersion": 1]]])
         case ("GET", "/api/groups/\(f.groupId)"):
+            if lock.withLock({ detailNotMember }) { return (404, ["code": "not-member", "message": "You are not in this group."]) }
             return (200, ["members": lock.withLock { members }, "seats": ["used": 2, "limit": 6]])
         case ("GET", "/api/groups/\(f.groupId)/identities"):
             var creator = identity(f.creator)

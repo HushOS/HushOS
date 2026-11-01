@@ -197,6 +197,8 @@ public actor FamilySync: FamilyJudge {
     private var groupsOf: [String: String] = [:]
     /* Families route 2 stopped listing that this session wiped on the server's not-member: not asked about again unless listed again. */
     private var settledUnlisted: Set<String> = []
+    /* A 401 a sync met, until the app takes it (takeEnded). */
+    private var endedBy: (any Error)?
     /*
      * Whether this person vouched for each family (Settings.familyChecked), read after every
      * accepted sync: until it is, a family reads as first use (an under-claim, never an over-claim).
@@ -462,6 +464,8 @@ public actor FamilySync: FamilyJudge {
             // Refused (a rollback, a race that kept losing, keys that didn't check): the ledger kept nothing of this run, and
             // nothing of the family stays open here. No answer at all leaves what was opened before as it was.
             if !Self.unanswered(error) { await forgetOpened(groupId) }
+            // A 401: kept for the app (takeEnded), which asks whether the session ended.
+            if endsSession(error) { endedBy = error }
             return .failed(FamilyWords.error(error))
         }
     }
@@ -478,7 +482,15 @@ public actor FamilySync: FamilyJudge {
             await forgetOpened(groupId)
             return .fork(fork)
         case .settled(let latest):
-            if let detail = try? await api.group(groupId) { details[groupId] = detail }
+            // The family's details are a nicety: going without them is fine, but not-member means the family went (the wipe)
+            // and a 401 that the session may have ended (handed on).
+            do {
+                details[groupId] = try await api.group(groupId)
+            } catch let error as GroupsAPIError where error.isNotMember {
+                throw error
+            } catch where endsSession(error) {
+                throw error
+            } catch {}
             // Read with the settings the pin was just saved into: Verified by the family only when this person vouched for it.
             vouched[groupId] = (try? await vault.familyChecked(groupId)) ?? false
             return .accepted(view(groupId, chain: latest ?? chain, areas: areas.map(\.area), reset: reset))
@@ -487,6 +499,12 @@ public actor FamilySync: FamilyJudge {
 
     /* Whether this person vouched for the family, as the last accepted sync read it (false until one did). */
     public func familyChecked(_ groupId: String) -> Bool { vouched[groupId] ?? false }
+
+    /* A 401 a sync met, once, for the app to treat as any request's (the session may have ended): nil when none. */
+    public func takeEnded() -> (any Error)? {
+        defer { endedBy = nil }
+        return endedBy
+    }
 
     /* The chain this process last accepted for the family: the pair code is worked out over it. */
     func acceptedChain(_ groupId: String) -> AcceptedRosters? { chains[groupId] }
