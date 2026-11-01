@@ -102,7 +102,7 @@ final class DriveStore {
     @ObservationIgnored private var verdicts = VerdictCache()
     /* Rotations that couldn't run because whom to trust didn't load: run again once it does. */
     @ObservationIgnored private var rotationsWaiting: [String: Opened] = [:]
-    @ObservationIgnored private var loadingSigners = false
+    @ObservationIgnored private var loadingSigners: Session?
     /*
      * Families (docs/groups-mobile-plan.md, iOS 1, read only): route 2's list (nil until it
      * answers, or on a server without families), each family's sync on this phone, the members
@@ -115,6 +115,8 @@ final class DriveStore {
     @ObservationIgnored var familyGenerations = FamilyGenerations()
     /* Family work and folder listings kept to the session they began in (`inSession`, `resetFamilies`). */
     @ObservationIgnored let sessionGate = SessionGate<Vault>()
+    /* An operation's session, taken once at its outermost entry and passed down (SessionGate). */
+    typealias Session = SessionGate<Vault>.Token
     /* Each family's name as route 2 last listed it, kept after it stops listing one (a removal's page names it). */
     var familyNames: [String: String] = [:]
     /*
@@ -135,7 +137,8 @@ final class DriveStore {
     }
     /* Every family folder this session learned of, to its family: only grows (FamilySync.familyAreas), so a family that fails a sync stays read only. */
     var familyAreaGroups: [String: String] = [:]
-    var familyVerdicts: [NodeRef: (node: NodeView, verdict: FamilyVerdict)] = [:]
+    /* Family items' verdicts under each family's trust generation (FamilyVerdictBook). */
+    var familyBook = FamilyVerdictBook()
     /* Each family's last accepted view: still drawn under "Couldn't check" when only the answer is missing. */
     var familyShown: [String: FamilyView] = [:]
     /* Every family folder's top folder this session opened: only grows, so a later failed check never makes one writable-looking. */
@@ -310,12 +313,18 @@ final class DriveStore {
         // old session asked lands in this one.
         resetFamilies()
         BackgroundTransfers.shared.vault = next
+        // Everything below runs in the new session, as one operation: what the old one still has out is dropped.
+        guard let session = beginSession() else { return }
         Task { await refreshSigners() }
-        await sync()
+        await sync(session: session)
         // Families checked again under the new session at once, so an open family page doesn't wait for the next tick.
-        await refreshFamilies(force: true)
-        for id in folders.keys { await refresh(folder: id) }
-        await refreshRecents()
+        await refreshFamilies(force: true, session: session)
+        for id in folders.keys {
+            guard current(session) else { return }
+            await refresh(folder: id, session: session)
+        }
+        guard current(session) else { return }
+        await refreshRecents(session: session)
     }
 
     init(vault: Vault) {
@@ -395,19 +404,26 @@ final class DriveStore {
      * shares follows any change in its drive (the server leaves trashed items out of it, and a change
      * can't say it was a restore), and always after a restore (`restored`).
      */
-    func sync(restored: Bool = false) async {
-        let touched = await pull()
-        guard error != Self.sessionEnded else { return }
+    func sync(restored: Bool = false, session: Session? = nil) async {
+        guard let session = session ?? beginSession() else { return }
+        let touched = await pull(session)
+        guard current(session), error != Self.sessionEnded else { return }
         Task { await sharingLoads.afterSync(touched: touched, restored: restored) }
     }
 
-    /* The feed's part of `sync`: the ids it changed, nil when the server was not asked or didn't answer. */
-    private func pull() async -> Set<String>? {
+    /*
+     * The feed's part of `sync`: the ids it changed, nil when the server was not asked or didn't
+     * answer, or when the session it began in ended meanwhile (its answer, a 401 included, is dropped:
+     * an old vault's late "signed out" never ends the session that replaced it).
+     */
+    private func pull(_ session: Session) async -> Set<String>? {
         if let rotation { await rotation.value }
+        guard current(session) else { return nil }
         // Nil: the server was not asked (no network, or the tree opened from the phone), so the offline line stays.
         let touched: Set<String>?
         do {
-            touched = try await vault.sync()
+            guard let pulled = try await inSession(session, { try await $0.sync() }) else { return nil }
+            touched = pulled
         } catch {
             // A session that ended is the one failure the feed reports: the app checks why at once
             // (this phone may have been removed) and the polling stops.
@@ -423,9 +439,12 @@ final class DriveStore {
         // Changes from other devices reach the Files location too, not only this device's own writes.
         FilesDomain.signal()
         for id in folders.keys where touched.contains(id) || folders[id]?.contains(where: { touched.contains($0.id) }) == true {
-            if let children = try? await vault.children(of: id) { folders[id] = children }
+            guard let listed = try? await inSession(session, { try await $0.children(of: id) }), current(session) else { continue }
+            folders[id] = listed
         }
-        recents = (try? await vault.recents()) ?? recents
+        guard current(session) else { return nil }
+        if let latest = try? await inSession(session, { try await $0.recents() }), current(session) { recents = latest }
+        guard current(session) else { return nil }
         await reloadCatalogue()
         catalogueVersion += 1
         refreshKept(touched)
@@ -538,14 +557,19 @@ final class DriveStore {
      * check"; it is never taken as no marks at all.
      */
     func refreshSigners() async {
-        guard !loadingSigners else { return }
-        loadingSigners = true
-        defer { loadingSigners = false }
+        guard let session = beginSession() else { return }
+        // One load at a time per session: a load the last session began never stops this one's.
+        if let running = loadingSigners, current(running) { return }
+        loadingSigners = session
+        defer { if loadingSigners == session { loadingSigners = nil } }
+        let vault = session.owner
         await vault.forgetSigners()
-        let next = await TrustState.load { [vault] in try await vault.signers() }
-        // Whoever asked went away mid-load: a cancelled read says nothing about whom to trust.
-        if Task.isCancelled { return }
+        let next = await TrustState.load { try await vault.signers() }
+        // Whoever asked went away mid-load: a cancelled read says nothing about whom to trust. Nor does an ended session's:
+        // its 401 never makes the new session's marks "Couldn't check".
+        if Task.isCancelled || !current(session) { return }
         pins = await vault.knownPins()
+        guard current(session) else { return }
         // Off the network a set already loaded stands: nothing new can arrive to check against it. Any other failure,
         // a refused rollback included, replaces it, and every record says "Couldn't check".
         if case .failed = next, case .loaded = trust, offline { return }
@@ -554,8 +578,8 @@ final class DriveStore {
             trust = next
         }
         trustGeneration += 1
-        // Family marks rest on the same pins and identities: judged again, what is on screen first.
-        await rejudgeFamilies()
+        // Family marks rest on the same pins and identities: every family's trust moved, judged again, what is on screen first.
+        await rejudgeFamilies(session: session)
         if case .loaded = next, !rotationsWaiting.isEmpty {
             let waiting = Array(rotationsWaiting.values)
             rotationsWaiting = [:]
@@ -707,7 +731,9 @@ final class DriveStore {
         }
     }
 
-    func refresh(folder id: String) async {
+    func refresh(folder id: String, session: Session? = nil) async {
+        // The session this listing began in: every step below, and every listing it asks for, belongs to it.
+        guard let session = session ?? beginSession(), current(session) else { return }
         // A folder of a family the server says this account was removed from stays said as such until the family is
         // accepted again (refreshed then by `show`): listing it can only fail, and its error would hide the removal.
         // Asked again after every wait below too: a removal that lands while this listing is out wins over its answer.
@@ -719,17 +745,19 @@ final class DriveStore {
         }
         if let groupId = familyGroup(ofFolder: id), familyStates[groupId] == .wiped {
             // Checked again (a pull to refresh): back if the family lists this account again, else still removed.
-            await refreshFamilies(force: true)
-            if removed() { return }
+            await refreshFamilies(force: true, session: session)
+            if !current(session) || removed() { return }
         }
         // Keys changing underneath: wait, then list with the new ones.
         if let rotation { await rotation.value }
+        guard current(session) else { return }
         loading.insert(id)
-        defer { loading.remove(id) }
+        defer { if current(session) { loading.remove(id) } }
         do {
-            await sync()
-            // Kept to its session: a listing the last session asked for, answering after a new one began, is dropped.
-            guard let children = try await inSession({ try await $0.children(of: id) }) else { return }
+            await sync(session: session)
+            guard current(session) else { return }
+            // Kept to its session: a listing the last session asked for is never asked of, or answered into, a new one.
+            guard let children = try await inSession(session, { try await $0.children(of: id) }) else { return }
             if removed() { return }
             folders[id] = children
             folderProblems[id] = nil
@@ -739,17 +767,19 @@ final class DriveStore {
             if var follow = infoBeside, isReceived(follow.item) {
                 // Read only: the vault's row as it is now, so a move made here (adopted there before this
                 // refresh of the folder it left) is followed, and only its current folder's listing counts.
-                if case .live(let row) = await vault.standing(of: follow.item.ref) { follow.adopt(row) }
+                let ref = follow.item.ref
+                guard let standing = try? await inSession(session, { await $0.standing(of: ref) }), current(session) else { return }
+                if case .live(let row) = standing { follow.adopt(row) }
                 if infoBeside?.item.ref == follow.item.ref {
                     if follow.missing(from: id, children: children) { infoBeside = nil } else if infoBeside != follow { infoBeside = follow }
                 }
             }
             for child in children { names[child.id] = child.name }
-            await judgeFamilyItems(children)
+            await judgeFamilyItems(children, session: session)
         } catch {
             // Left before it answered (a tab switched, the folder closed): nothing failed, so nothing changes.
             if ErrorWords.isCancellation(error) { return }
-            if removed() { return }
+            if !current(session) || removed() { return }
             // A family folder's refusal is said in the families' words, never the generic failure.
             if isFamilyFolder(id) {
                 if case DriveAPIError.transport = error {
@@ -797,10 +827,12 @@ final class DriveStore {
         return result.sorted(by: Opened.byName)
     }
 
-    func refreshRecents() async {
+    func refreshRecents(session: Session? = nil) async {
+        guard let session = session ?? beginSession() else { return }
         do {
-            await sync()
-            recents = try await vault.recents()
+            await sync(session: session)
+            guard let latest = try await inSession(session, { try await $0.recents() }) else { return }
+            recents = latest
         } catch {
             report(error)
         }
@@ -1312,12 +1344,14 @@ final class DriveStore {
      * left them.
      */
     private func settle(_ changed: Set<String>, restored: Bool = false) async {
-        await sync(restored: restored)
+        guard let session = beginSession() else { return }
+        await sync(restored: restored, session: session)
         for id in changed {
-            if let children = try? await vault.children(of: id) {
+            guard current(session) else { return }
+            if let children = try? await inSession(session, { try await $0.children(of: id) }), current(session) {
                 folders[id] = children
                 for child in children { names[child.id] = child.name }
-                await judgeFamilyItems(children)
+                await judgeFamilyItems(children, session: session)
             }
             FilesDomain.signal(folderId: id)
         }

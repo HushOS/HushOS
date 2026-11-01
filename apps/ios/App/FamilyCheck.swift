@@ -141,12 +141,14 @@ struct FamilyCheckView: View {
         failure = nil
         code = nil
         do {
+            // One session for the whole check: if it ends (a sign-out, the same account signed in again), nothing of it shows.
+            guard let session = store.beginSession() else { done(); return }
             let since = store.familyGenerations.current(summary.id)
             let (summary, memberId) = (summary, member.userId)
-            // The session it began in ended (a sign-out, the same account signed in again): nothing of it shows.
-            guard let start = try await store.family({ try await $0.checkCode(summary, with: memberId) }) else { done(); return }
+            guard let start = try await store.inFamily(session, { try await $0.checkCode(summary, with: memberId) }) else { done(); return }
             // The sync it ran is shown as after any sync (a warning, a removal), unless the family was shown anew meanwhile.
-            await store.adopt(start.state, of: summary, since: since)
+            await store.adopt(start.state, of: summary, since: since, session: session)
+            guard store.current(session) else { done(); return }
             // The family as it is shown now decides: words worked out over a chain it has since left don't show.
             if let problem = start.problem ?? FamilySync.checkProblem(store.familyStates[summary.id] ?? start.state) {
                 failure = problem
@@ -165,7 +167,7 @@ struct FamilyCheckView: View {
         Task {
             do {
                 let (groupId, member) = (summary.id, member)
-                guard let saved = try await store.family({ try await $0.checkMatch(groupId, member: member, rosterVersion: rosterVersion, code: words) }) else {
+                guard let saved = try await store.inFamily(nil, { try await $0.checkMatch(groupId, member: member, rosterVersion: rosterVersion, code: words) }) else {
                     saving = false
                     done()
                     return
