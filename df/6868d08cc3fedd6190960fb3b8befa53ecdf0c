@@ -1,0 +1,23 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Catalogue.kt
+  s_566b8e0c4467a4::t_5138d13e05abd4 149-150,204-206,214,217
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_6202d97ccd4c4e 143-144
+apps/android/app/src/test/kotlin/com/hushos/app/data/FilesChangesTest.kt
+  s_566b8e0c4467a4::t_103559d648ecc4 148-172
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "df6868d08cc3fedd6190960fb3b8befa53ecdf0c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
