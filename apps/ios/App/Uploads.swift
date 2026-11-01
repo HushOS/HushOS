@@ -190,9 +190,12 @@ private struct UploadFlow: ViewModifier {
             if made.contains(id) { return [] }
             if let known = listings[id] { return known }
             do {
+                let ticket = store.listingOrder.begin()
                 let children = try await store.vault.children(of: id)
                 listings[id] = children
-                store.folders[id] = children
+                // A family folder's rows reach the screen only through refresh(folder:), under its guards; any folder's only
+                // when no listing begun since showed first.
+                if !store.isFamilyFolder(id), store.listingOrder.admits(ticket, of: id) { store.folders[id] = children }
                 return children
             } catch {
                 store.report(error)

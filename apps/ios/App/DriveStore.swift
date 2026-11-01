@@ -408,7 +408,12 @@ final class DriveStore {
     private func buildCatalogue() async {
         await vault.buildCatalogue()
         guard await vault.catalogueState == .ready else { return }
-        for id in folders.keys { if let children = try? await vault.children(of: id) { folders[id] = children } }
+        // The own drive's folders only: a family folder is listed through refresh(folder:) alone, under its guards.
+        for id in folders.keys where !isFamilyFolder(id) {
+            // Numbered as it starts: a listing begun since that showed first is never covered by this one.
+            let ticket = listingOrder.begin()
+            if let children = try? await vault.children(of: id), listingOrder.admits(ticket, of: id) { folders[id] = children }
+        }
         recents = (try? await vault.recents()) ?? recents
         await reloadCatalogue()
         catalogueVersion += 1
@@ -456,11 +461,13 @@ final class DriveStore {
         if touched.isEmpty { return touched }
         // Changes from other devices reach the Files location too, not only this device's own writes.
         FilesDomain.signal()
-        for id in folders.keys where touched.contains(id) || folders[id]?.contains(where: { touched.contains($0.id) }) == true {
+        // The own drive's folders only (the feed is the own drive's): a family folder is listed through refresh(folder:) alone.
+        for id in folders.keys where !isFamilyFolder(id) && (touched.contains(id) || folders[id]?.contains(where: { touched.contains($0.id) }) == true) {
             let mark = familyListings.mark(familyGroup(ofFolder: id))
+            let ticket = listingOrder.begin()
             guard let listed = try? await inSession(session, { try await $0.children(of: id) }), current(session) else { continue }
-            // A family clear that landed meanwhile stands: its folder isn't listed back.
-            guard familyListings.admits(mark, states: familyStates) else { continue }
+            // A family clear that landed meanwhile stands, and a listing begun since that showed first is never covered.
+            guard familyListings.admits(mark, states: familyStates), listingOrder.admits(ticket, of: id) else { continue }
             folders[id] = listed
         }
         guard current(session) else { return nil }
@@ -1423,9 +1430,16 @@ final class DriveStore {
         await sync(restored: restored, session: session)
         for id in changed {
             guard current(session) else { return }
+            // A family folder goes through refresh(folder:), under every family listing guard (session, clears, order, verdicts).
+            if isFamilyFolder(id) {
+                await refresh(folder: id, session: session)
+                FilesDomain.signal(folderId: id)
+                continue
+            }
             let mark = familyListings.mark(familyGroup(ofFolder: id))
+            let ticket = listingOrder.begin()
             if let children = try? await inSession(session, { try await $0.children(of: id) }), current(session),
-               familyListings.admits(mark, states: familyStates) {
+               familyListings.admits(mark, states: familyStates), listingOrder.admits(ticket, of: id) {
                 folders[id] = children
                 for child in children { names[child.id] = child.name }
                 await judgeFamilyItems(children, session: session)
