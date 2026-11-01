@@ -350,8 +350,8 @@ extension DriveStore {
             thumbnails[id] = nil
             try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("opened/\(id)", isDirectory: true))
         }
-        // Every opened copy of the family's folders, those this session never listed included.
-        TemporaryCopies.forgetFamily(Array(areas))
+        // Every opened copy of the family's folders, those this session never listed included: never once this session ended.
+        TemporaryCopies.forgetFamily(Array(areas), session: FamilySync.shared(for: vault).session)
         // A listing of its folders that is out now never undoes this clear.
         familyListings.cleared(groupId)
         familyBook.moved(groupId)

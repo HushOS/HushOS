@@ -210,16 +210,21 @@ public actor FamilySync: FamilyJudge {
     private var forked: Set<String> = []
 
     public init(vault: Vault, api: GroupsAPI? = nil, records: FamilyRecords = .shared, now: @escaping @Sendable () -> Date = { Date() },
-                temporary: URL = FileManager.default.temporaryDirectory) {
+                temporary: URL = FileManager.default.temporaryDirectory, account: CopyEpoch = .process) {
         self.vault = vault
         self.api = api ?? GroupsAPI(drive: vault.api)
-        self.records = records
+        // Kept to the session open now: once it ends, nothing this sync does deletes or writes a record or a copy.
+        let session = TemporaryCopies.session(account)
+        self.session = session
+        self.records = records.bound(to: session)
         self.now = now
         self.temporary = temporary
     }
 
     /* This process's temporary folder, where opened copies of family items are kept (TemporaryCopies.openedFolder). */
     let temporary: URL
+    /* The session this sync belongs to (CopySession): its cleanup and record writes do nothing once it ended. */
+    public nonisolated let session: CopySession
 
     /* One per session in this process: the app's screens and any background task share it. */
     private static let registry = Registry()
@@ -582,7 +587,7 @@ public actor FamilySync: FamilyJudge {
     func forgetOpened(_ groupId: String) async {
         let areas = await knownAreas(groupId)
         await vault.forgetWorkspaces(areas)
-        TemporaryCopies.forgetFamily(areas, in: temporary)
+        TemporaryCopies.forgetFamily(areas, in: temporary, session: session)
     }
 
     /*
@@ -921,9 +926,11 @@ public actor FamilySync: FamilyJudge {
     func wipe(_ groupId: String) async throws {
         let areas = await knownAreas(groupId)
         guard try await forgetInCore(groupId) else { return }
-        records.delete(userId: userId, groupId: groupId)
+        // Its folders' rows, keys and copies first, then the record that ties them to the family: a stop in between leaves
+        // the record, and the next cleanup finds them again.
         await vault.forgetWorkspaces(areas)
-        TemporaryCopies.forgetFamily(areas, in: temporary)
+        TemporaryCopies.forgetFamily(areas, in: temporary, session: session)
+        records.delete(userId: userId, groupId: groupId)
         identities[groupId] = nil
         details[groupId] = nil
         areasOf[groupId] = nil

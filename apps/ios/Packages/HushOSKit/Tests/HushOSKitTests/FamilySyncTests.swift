@@ -154,6 +154,40 @@ extension OnFakeDrive {
         }
 
         /*
+         * A sync of the last session answers not-member after the account signed in again (its session
+         * ended; its task can't be cancelled). Its wipe deletes nothing the new session wrote: not the
+         * copy it opened, not the record it saved. Fails if an ended session's cleanup reaches the
+         * shared paths.
+         */
+        @Test func aClosedSessionsLateWipeDeletesNothingTheNewSessionWrote() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let account = CopyEpoch()
+            let old = try await family.phone(server, account: account)
+            defer { old.done() }
+            guard case .accepted = await old.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            // Signed out, then in again: a new vault and sync over the same records, guard and temporary folder.
+            TemporaryCopies.endAccount(account)
+            let now = try await family.phone(server, records: old.records, guards: old.guards, account: account)
+            guard case .accepted = await now.sync.sync(family.summary) else { Issue.record("not accepted again"); return }
+            _ = try await now.vault.children(of: family.rootId)
+            let folder = try #require(TemporaryCopies.openedFolder(itemId: family.fileId, version: "v1", familyWorkspace: family.workspaceId, in: now.temporary))
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let copy = folder.appendingPathComponent("Recipes.txt")
+            try Data("Pancakes".utf8).write(to: copy)
+            // The old session's late not-member, wiped by its own sync.
+            try? await old.sync.wipe(family.groupId)
+            #expect(FileManager.default.fileExists(atPath: copy.path), "the old session's wipe deleted the new session's copy")
+            #expect(now.records.read(userId: family.member.userId, groupId: family.groupId) != nil, "the old session's wipe deleted the new session's record")
+            #expect(await now.vault.item(family.rootId) != nil)
+            // Nor does it write one.
+            let row = FamilyRecords.Row(envelope: "e30", rosterVersion: 99, areas: [])
+            let oldRecords = await old.sync.records
+            #expect(throws: (any Error).self) { try oldRecords.put(userId: family.member.userId, groupId: family.groupId, row) }
+            #expect(now.records.read(userId: family.member.userId, groupId: family.groupId)?.rosterVersion == 2)
+        }
+
+        /*
          * A family opened on this phone, then the server shows another history from version 3:
          * the hard warning, and what was opened of its folders is gone, so nothing in them opens.
          */
@@ -946,7 +980,8 @@ struct FamilyFixture {
     }
 
     /* The member's phone: a vault with their keys and drive, its own ledger, and FamilySync over the stub. */
-    func phone(_ server: FamilyServer, records: FamilyRecords? = nil, guards: FamilyGuardStore? = nil) async throws -> Phone {
+    /* `account`: the session epoch its sync is kept to (a test's own, so ending it touches no other test). */
+    func phone(_ server: FamilyServer, records: FamilyRecords? = nil, guards: FamilyGuardStore? = nil, account: CopyEpoch = CopyEpoch()) async throws -> Phone {
         let session = SharedKeychain.Session(origin: "https://family.test", token: "t", userId: member.userId)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [FamilyServerProtocol.self]
@@ -970,7 +1005,7 @@ struct FamilyFixture {
         held.key = server.guardKey
         // Opened copies in a folder of the test's own, beside the guard: a relaunch passing the same guard finds them.
         let temporary = guards.folder.deletingLastPathComponent().appendingPathComponent(guards.folder.lastPathComponent + "-tmp", isDirectory: true)
-        return Phone(vault: vault, sync: FamilySync(vault: vault, api: GroupsAPI(drive: api), records: store, temporary: temporary),
+        return Phone(vault: vault, sync: FamilySync(vault: vault, api: GroupsAPI(drive: api), records: store, temporary: temporary, account: account),
                      records: store, guards: guards, held: held, temporary: temporary)
     }
 

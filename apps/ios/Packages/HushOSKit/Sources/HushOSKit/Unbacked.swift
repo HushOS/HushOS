@@ -254,9 +254,11 @@ public enum TemporaryCopies {
      * aren't UUIDs name none. Under the lock every family copy's writes take (`FamilyCopyGate`), and
      * each folder's forget generation moves: a download begun before never writes after.
      */
-    public static func forgetFamily(_ workspaces: [String], in temporary: URL = FileManager.default.temporaryDirectory) {
+    public static func forgetFamily(_ workspaces: [String], in temporary: URL = FileManager.default.temporaryDirectory, session: CopySession? = nil) {
         let family = temporary.appendingPathComponent("opened", isDirectory: true).appendingPathComponent(familyFolder, isDirectory: true)
         forgetLock.withLock {
+            // An ended session's cleanup touches nothing: the copies there now may be the next session's.
+            if let session, !session.open { return }
             for id in workspaces {
                 guard let workspace = UUID(uuidString: id) else { continue }
                 let key = workspace.uuidString.lowercased()
@@ -292,6 +294,11 @@ public enum TemporaryCopies {
      */
     public static func endAccount(_ account: CopyEpoch = .process) {
         forgetLock.withLock { account.value &+= 1 }
+    }
+
+    /* The session open now, for cleanup and record writes that must do nothing once it ends (CopySession). */
+    public static func session(_ account: CopyEpoch = .process) -> CopySession {
+        forgetLock.withLock { CopySession(account: account, epoch: account.value) }
     }
 
     /* `opened/family/`: family folders' copies by workspace; never an item id (those are UUIDs). */
@@ -331,6 +338,25 @@ public final class CopyEpoch: @unchecked Sendable {
     /* Read and moved only under TemporaryCopies.forgetLock. */
     var value: UInt64 = 0
     public init() {}
+}
+
+/*
+ * A session of the account, as cleanup and record writes are kept to it: a sync of an ended
+ * session (its task can't be cancelled, and it may answer late) deletes no copy or record and
+ * writes no record, since the ones there now may be the next session's. Checked under the
+ * copies' lock, which a session's end takes.
+ */
+public struct CopySession: Sendable {
+    let account: CopyEpoch
+    let epoch: UInt64
+
+    /* Whether the session still stands; read under TemporaryCopies.forgetLock. */
+    var open: Bool { account.value == epoch }
+
+    /* `body` under the copies' lock while the session stands; nil, and nothing done, once it ended. */
+    func whileOpen<T>(_ body: () throws -> T) rethrows -> T? {
+        try TemporaryCopies.forgetLock.withLock { open ? try body() : nil }
+    }
 }
 
 /*

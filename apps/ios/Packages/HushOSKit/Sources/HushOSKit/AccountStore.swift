@@ -117,10 +117,12 @@ public struct AccountStore: Sendable {
         // The contact guard too, under its own lock, so an act's write that waited through the sign-out writes nothing back.
         ContactGuardStore(folder: root.appendingPathComponent("local/guard", isDirectory: true), owner: AccountOwner(userId: "", origin: ""),
                           generation: guardGeneration).deleteAll()
-        for name in Self.accountFiles { try? files.removeItem(at: root.appendingPathComponent(name)) }
+        // Decrypted copies before the family records that tie them to their families: a stop in between never leaves
+        // family copies with nothing that names them.
         for item in (try? files.contentsOfDirectory(at: temporary, includingPropertiesForKeys: nil)) ?? [] {
             try? files.removeItem(at: item)
         }
+        for name in Self.accountFiles { try? files.removeItem(at: root.appendingPathComponent(name)) }
         forgetStores()
         try? files.removeItem(at: ownerFile)
     }
