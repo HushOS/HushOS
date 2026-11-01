@@ -214,6 +214,33 @@ class FakeDrive : AutoCloseable {
         bump(node)
     }
 
+    /*
+     * The owner re-keys folder `id` (a revoke-and-rotate): a new key and key epoch, its name sealed and signed again under
+     * it, and each child's key wrapped again under the new key. The children's own keys are unchanged.
+     */
+    fun rekeyFolderAs(id: String) = synchronized(lock) {
+        val node = node(id)
+        val ws = node.workspaceId
+        val oldKey = keyOf(id)
+        val childKeys = children(id).associate { it.id to keyOf(it.id) }
+        val metadata = metadataOpen(MetadataContext(ws, id, node.metadataVersion.toULong()), oldKey, base64urlDecode(node.metadataEnvelope))
+        val newKey = randomBytes(32u)
+        val epoch = nextEpoch++
+        val parentKey = node.parentId?.let { keyOf(it) } ?: workspaceKeys.getValue(ws)
+        node.keyEnvelope = base64urlEncode(nodeWrap(NodeKeyContext(ws, id, node.parentId ?: ws, node.parentKeyEpoch.toULong(), epoch.toULong()), parentKey, newKey))
+        node.keyEpoch = epoch
+        val sealed = metadataSeal(MetadataContext(ws, id, node.metadataVersion.toULong()), newKey, metadata)
+        node.metadataEnvelope = base64urlEncode(sealed)
+        node.signature = base64urlEncode(metadataSign(owners.getValue(ws).keys.signingSeed, MetadataStatement(ws, id, NodeKind.FOLDER, node.metadataVersion.toULong()), sealed))
+        node.signer = owners.getValue(ws).id
+        bump(node)
+        for (child in children(id)) {
+            child.parentKeyEpoch = epoch
+            child.keyEnvelope = base64urlEncode(nodeWrap(NodeKeyContext(ws, child.id, id, epoch.toULong(), child.keyEpoch.toULong()), newKey, childKeys.getValue(child.id)))
+            bump(child)
+        }
+    }
+
     /* `id` moved under `parentId` by another device: its key wrapped again under the new parent's, as a move is. */
     fun moveAs(id: String, parentId: String) = synchronized(lock) {
         val node = node(id)

@@ -11,6 +11,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -98,6 +99,31 @@ class InfoShareListTest {
         val out = java.io.File(RuntimeEnvironment.getApplication().cacheDir, "opened/${t}/${row.node.currentVersion!!.id}/t.txt")
         vault.download(t, out, expectedVersionId = row.node.currentVersion!!.id, workspaceId = theirs)
         assertEquals("restored content", out.readText())
+    }
+
+    /*
+     * #247 check, round 2: Grace re-keys the nested shared folder U (a revoke-and-rotate) while its listing is cached here.
+     * One listing of U opens U afresh from the page first, then its file under U's new key, and the file downloads; S,
+     * unchanged, keeps the rows it held. Fails if a listing opens children under a cached parent's old key, or evicts
+     * what it can't reopen.
+     */
+    @Test
+    fun aNestedSharedFolderReKeyedByItsOwnerListsAndOpensAfterOneListing() {
+        val x = server.file(u, "x.txt", "inside U".toByteArray())
+        assertEquals(listOf("x.txt"), vault.listChildren(u).map { it.name })
+        val heldT = vault.liveItem(t, theirs)
+        server.rekeyFolderAs(u)
+        val listed = vault.listChildren(u)
+        assertEquals(listOf("x.txt"), listed.map { it.name })
+        // The rows kept are the re-keyed ones: U at its new key epoch, x wrapped under it.
+        assertEquals(server.node(u).keyEpoch, vault.liveItem(u, theirs)!!.node.keyEpoch.toLong())
+        assertEquals(server.node(u).keyEpoch, listed.single().node.parentKeyEpoch.toLong())
+        val out = java.io.File(RuntimeEnvironment.getApplication().cacheDir, "opened/$x/v/x.txt")
+        vault.download(x, out, workspaceId = theirs)
+        assertEquals("inside U", out.readText())
+        // S unchanged: its rows are the ones held, not opened again.
+        vault.listChildren(s)
+        assertTrue("an unchanged folder's row was replaced", vault.liveItem(t, theirs) === heldT)
     }
 
     @Test

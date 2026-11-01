@@ -1041,16 +1041,23 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     @Synchronized
-    fun open(node: NodeView): Opened {
+    /*
+     * `replace` (a listing's own rows): a row of this drive or a share served differently from the one held, and not older,
+     * is opened afresh and kept in its place once it opened; until then, and if it can't be opened, the held one stays.
+     */
+    fun open(node: NodeView, replace: Boolean = false): Opened {
         checkSuite(node.envelopeSuite)
         val family = isFamilyWorkspace(node.workspaceId)
         nodes.row(node.workspaceId, node.id)?.let { held ->
             // A family folder has no change feed here: a row served differently (another member's rename, a new version, a
             // walk's re-key) is opened again through the ledger, never answered from what this process opened before. An
             // older answer arriving after a newer one (listings out of order) keeps the newer row and key.
-            if (!family || sameRecords(held.node, node) || node.olderThan(held.node)) return held
-            nodes.forget(node.workspaceId, node.id)
-            nodes.dropKey(node.workspaceId, node.id)
+            if (sameRecords(held.node, node) || node.olderThan(held.node)) return held
+            if (!family && !replace) return held
+            if (family) {
+                nodes.forget(node.workspaceId, node.id)
+                nodes.dropKey(node.workspaceId, node.id)
+            }
         }
         // One id, one workspace on this phone where a family is involved: a family row whose id another workspace's row
         // holds (a personal file, a share), or a row of another workspace whose id a family row holds, is refused, so no
@@ -1135,20 +1142,25 @@ class Vault(internal val context: Context, val api: DriveApi) {
             val page = api.children(folderId, ws, after)
             // Rows are opened only in the workspace asked about; one claiming another is not this folder's.
             if (page.folder.workspaceId != ws || page.folder.id != folderId) throw ApiError(502, "HushOS answered with a different folder.")
-            // Above a share's root the keys are the granter's; those ancestors stay closed.
-            page.ancestors.filter { it.workspaceId == ws }.forEach { runCatching { open(it) } }
-            open(page.folder)
+            // Parents first: the ancestors, then the folder, each refreshed from the page's own row where it differs (an owner's
+            // re-key included), so the children open under the keys their new envelopes are wrapped in. Above a share's root
+            // the keys are the granter's: those stay closed, and a row the page can't open keeps the one held.
+            var pending = page.ancestors.filter { it.workspaceId == ws }
+            repeat(pending.size) { pending = pending.filter { runCatching { open(it, replace = true) }.isFailure } }
+            runCatching { open(page.folder, replace = true) }.onFailure { if (nodes.row(ws, page.folder.id) == null) throw it }
             for (child in page.children) {
                 if (child.workspaceId != ws) continue
-                // A row in a later format stays out of the list; anything else wrong with one fails the folder, as before.
-                var row = try { open(child) } catch (error: NewerFormat) { continue }
-                // The cache held an older row of it (a share's or this drive's, refreshed by no feed here): this listing's
-                // row is the newer one, and it is the one kept, a move included.
-                // When the counters can't decide (a share's row has no change order, and restoring an earlier version
-                // moves neither its key epoch nor its metadata version), the row this listing returned is trusted.
-                if (row.node.olderThan(child) || (!child.olderThan(row.node) && !sameRecords(row.node, child))) {
-                    nodes.forget(ws, child.id)
-                    row = try { open(child) } catch (error: NewerFormat) { continue }
+                // The listing's row is kept over a cached one that is older, or tied on every counter but different (a share's
+                // row has no change order, and restoring an earlier version moves neither its key epoch nor its metadata
+                // version), a move included. Nothing is evicted before the fresh row opened: one this phone can't open (a
+                // parent key the page didn't carry) keeps the row held. A row in a later format stays out of the list;
+                // anything else wrong with one it never held fails the folder, as before.
+                val row = try {
+                    open(child, replace = true)
+                } catch (error: NewerFormat) {
+                    continue
+                } catch (error: Exception) {
+                    nodes.row(ws, child.id) ?: throw error
                 }
                 // Only when the cache knows of a move this listing doesn't (its row is newer and under another folder) is
                 // the row left out here: it belongs to its new folder.
