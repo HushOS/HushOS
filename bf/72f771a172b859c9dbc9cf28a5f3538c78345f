@@ -1,0 +1,33 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_3c32204835ca16 996-998,1147-1148,1151-1153
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_7f43e3f8d6ee02 2121-2124,2127-2129,2133-2140,2159,2175,2193-2196
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_566b8e0c4467a4::t_a6678be0cccb3e 180,444
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HomeScreen.kt
+  s_566b8e0c4467a4::t_4339b09a9f437b 217,318
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_566b8e0c4467a4::t_428071dd9c11cf 453-454,456,458,461
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SharedScreen.kt
+  s_566b8e0c4467a4::t_fba4815a92d156 149
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_566b8e0c4467a4::t_bf61584635f34f 203-229
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamiliesSessionTest.kt
+  s_566b8e0c4467a4::t_b8c4faac7b4649 153-169
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bf72f771a172b859c9dbc9cf28a5f3538c78345f",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
