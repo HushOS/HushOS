@@ -1,0 +1,21 @@
+apps/ios/App/AppModel.swift
+  s_566b8e0c4467a4::t_4984a8b3e99382 199-200,211-222,224,245,266,324
+apps/ios/App/MainView.swift
+  s_566b8e0c4467a4::t_836a75884fd619 204-205
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9274e3ee43915fe92e365e2be8f34a0289546e21",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
