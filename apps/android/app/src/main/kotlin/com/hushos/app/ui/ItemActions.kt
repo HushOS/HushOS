@@ -103,6 +103,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.hushos.app.data.Offline
 import com.hushos.app.data.Opened
 import com.hushos.app.data.savedLineOf
@@ -649,6 +650,8 @@ private fun InfoBody(model: DriveViewModel, state: DriveState, item: Opened, onS
             whenText(item.modifiedMillis)?.let { Fact("Changed", it) }
             created?.let { Fact("Added", it) }
             folder?.let { Fact("Folder", it, primary = true) }
+            // Written by someone this person's devices first saw and nobody checked (6.4): no mark, and the way to check.
+            remember(item.node, state.trust) { model.seenBy(item, state) }?.let { seen -> AddedBy(model, seen) }
             SheetDivider()
             // Who can open it, in words (never "Same as folder"), once it is known; it opens the share sheet.
             // Who can open it, as a whole sentence with you first; it opens the share sheet.
@@ -659,6 +662,31 @@ private fun InfoBody(model: DriveViewModel, state: DriveState, item: Opened, onS
                     Text("Tags", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
                     if (tags.isEmpty()) Text("None", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
                     else Row(horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S1)) { for (tag in tags.take(3)) TagPill(tag) }
+                }
+            }
+        }
+    }
+}
+
+/*
+ * Info's "Added by" for a writer first seen and not checked (docs/optional-verification.md 6.4): their name, then "Not
+ * verified" in muted text with Check it's Maya, which the app shows (Main) so it outlives Info's own state.
+ */
+@Composable
+private fun AddedBy(model: DriveViewModel, seen: com.hushos.app.data.SeenBy) {
+    val alpine = Alpine.colors
+    val first = com.hushos.app.data.firstNameOf(seen.name)
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
+        Text("Added by", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(start = AlpineSpace.S4)) {
+            Text(seen.name, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.End)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Not verified", fontSize = 13.sp, color = alpine.inkMuted)
+                // The dot goes with the way to check, so a narrow column never strands it.
+                seen.email?.let { email ->
+                    Text(" · Check it’s $first", fontSize = 13.sp, color = alpine.primary, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                        modifier = Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button) { model.contactStep = ContactStep.Check(email, seen.name) }
+                            .heightIn(min = 32.dp).padding(vertical = 6.dp))
                 }
             }
         }

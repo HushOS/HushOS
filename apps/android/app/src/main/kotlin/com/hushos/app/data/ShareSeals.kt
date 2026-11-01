@@ -46,10 +46,54 @@ class ShareSeals(private val file: File) {
         get() = synchronized(LOCK) { read().optLong("pending", 0L).takeIf { it >= 1 }?.toULong() }
         set(value) = synchronized(LOCK) { val json = read(); if (value == null) json.remove("pending") else json.put("pending", value.toLong()); write(json) }
 
+    /* Clears the waiting replacement only when it is at most `upTo` (the identity a pass sealed with), under the lock. */
+    fun clearPending(upTo: ULong) = synchronized(LOCK) {
+        val json = read()
+        val waiting = json.optLong("pending", 0L).takeIf { it >= 1 }?.toULong() ?: return@synchronized
+        if (waiting <= upTo) { json.remove("pending"); write(json) }
+    }
+
     /* When the last full pass finished, in epoch milliseconds. */
     var lastPass: Long
         get() = synchronized(LOCK) { read().optLong("lastPass", 0L) }
         set(value) = synchronized(LOCK) { write(read().put("lastPass", value)) }
+
+    /*
+     * People whose keys this person accepted or followed while what was shared with them still holds the old keys (a
+     * Continue, They match over new keys, a followed succession, `resealShares`): the next pass seals everything shared
+     * with them again to the pin's keys, then lets them go. Queued before the save that owes it, so no stop between the
+     * two leaves it owed and unqueued; queued twice is only a re-seal done again.
+     */
+    /*
+     * Each request carries the generation it was made at, so a pass acknowledges only what it read before it began: one
+     * queued again meanwhile (another Continue, to keys that pass never saw) outlives that pass.
+     */
+    fun queue(userId: String) = synchronized(LOCK) {
+        val json = read()
+        val next = json.optLong("toNext", 0L) + 1
+        json.put("toNext", next).put("to", requests(json).also { it.put(userId.lowercase(), next) })
+        write(json)
+    }
+
+    /* Who is owed a re-seal, by lowercased id, with the generation of the latest request. */
+    val queued: Map<String, Long> get() = synchronized(LOCK) { requests(read()).let { r -> r.keys().asSequence().associateWith { r.optLong(it) } } }
+
+    /* Acknowledges the requests a pass read (`done`): one made again since, at a later generation, stays. */
+    fun unqueue(done: Map<String, Long>) = synchronized(LOCK) {
+        if (done.isEmpty()) return@synchronized
+        val json = read()
+        val requests = requests(json)
+        for ((id, generation) in done) if (requests.has(id) && requests.optLong(id) == generation) requests.remove(id)
+        if (requests.length() == 0) json.remove("to") else json.put("to", requests)
+        write(json)
+    }
+
+    /* The requests as stored; the list an earlier build kept reads as generation 0, which any later request is above. */
+    private fun requests(json: JSONObject): JSONObject {
+        json.optJSONObject("to")?.let { return it }
+        val list = json.optJSONArray("to") ?: return JSONObject()
+        return JSONObject().also { r -> for (i in 0 until list.length()) list.optString(i).ifEmpty { null }?.let { r.put(it.lowercase(), 0L) } }
+    }
 
     companion object {
         private val LOCK = Any()
