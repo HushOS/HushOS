@@ -1,0 +1,23 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_295de5fcb59bb6 179-184,1147-1149
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_566b8e0c4467a4::t_e209462f629b22 112-115,118,121-126,210,216-222,236
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_566b8e0c4467a4::t_07a1f32855a141 203-226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0026474568783ac47b9e170362ce4503d35b461f",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
