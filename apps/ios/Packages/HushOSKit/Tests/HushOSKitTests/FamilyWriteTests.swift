@@ -164,6 +164,102 @@ extension OnFakeDrive {
             #expect(!FileManager.default.fileExists(atPath: elsewhere.path), "the own drive's bytes came down for another workspace's row")
         }
 
+        /*
+         * A personal file's preview shows the version it was listed with, and the vault has since
+         * learned a newer one (another device replaced it): the copy comes down for the newer row,
+         * by its workspace and id, instead of a refusal on every Try again. Fails if only a family
+         * file takes the newer row.
+         */
+        @Test func aStalePersonalPreviewTakesTheNewerRow() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            try await vault.open(family.personalRoot)
+            let key = try randomBytes(length: 32)
+            let id = try newId(kind: .node, scopeId: family.personal).id
+            let base = try FamilyFixture.node(id: id, in: family.personal, parent: family.personalRoot.id, parentKey: family.personalRootKey,
+                                              key: key, kind: .file, name: "Notes.txt", writer: family.member)
+            let (first, firstObject) = try sealVersion(Data("first".utf8), of: id, family, in: family.personal, nodeKey: key)
+            let (second, secondObject) = try sealVersion(Data("second".utf8), of: id, family, in: family.personal, nodeKey: key)
+            server.objects[first.id] = firstObject
+            server.objects[second.id] = secondObject
+            server.put(family.personalRoot, base.with(version: first))
+            let shown = try #require(try await vault.children(of: family.personalRoot.id).first)
+            // Replaced on another device: the next listing of the folder brings the newer row while the preview shows the first.
+            server.put(base.with(version: first).with(version: second))
+            _ = try await vault.children(of: family.personalRoot.id)
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("personal-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let (copied, file) = try await vault.downloadCurrent(shown) { row in folder.appendingPathComponent(try #require(row.node.currentVersion).id) }
+            #expect(copied.node.currentVersion?.id == second.id)
+            #expect(try Data(contentsOf: file) == Data("second".utf8))
+        }
+
+        /*
+         * Another member moved the photo from the family's top folder into Docs: Docs' listing opens
+         * the moved row first, then an older listing of the top folder (from before the move) lands.
+         * The photo shows in Docs alone. Fails if a listing shows a row the vault holds as moved out.
+         */
+        @Test func aFamilyFileMovedBetweenFoldersShowsOnlyInTheNewOne() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            server.put(family.photo, family.docs)
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let vault = phone.vault
+            #expect(try await vault.children(of: family.rootId).map(\.name).contains("Beach.jpg"))
+            let version = try #require(family.photo.currentVersion)
+            let moved = try FamilyFixture.node(id: family.photo.id, in: family.workspaceId, parent: family.docs.id, parentKey: family.docsKey, key: family.photoKey,
+                                               kind: .file, name: "Beach.jpg", writer: family.creator, keyEpoch: 3, parentKeyEpoch: 2)
+                .with(version: version).with(version: version)
+            #expect(try #require(moved.changeSeq) > (family.photo.changeSeq ?? 0))
+            server.put(moved)
+            #expect(try await vault.children(of: family.docs.id).map(\.name) == ["Beach.jpg"])
+            // The top folder's listing from before the move lands now.
+            server.put(family.photo)
+            #expect(!(try await vault.children(of: family.rootId).map(\.name).contains("Beach.jpg")), "a moved file showed in the folder it left")
+            #expect(await vault.item(family.photo.ref)?.node.parentId == family.docs.id)
+        }
+
+        /*
+         * A received share's file moved on another device from A to B: shares get no feed, so the row
+         * held here is the one from before the move. B's listing is newer and is trusted: the file
+         * shows in B, and the row held follows it. Fails if a listing drops a row because the row held
+         * is older than the listing's.
+         */
+        @Test func aSharedFileMovedOnAnotherDeviceShowsInItsNewFolder() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            // Eve's workspace: the shared folder S (opened from the share), its folders A and B, and a file in A.
+            let theirs = UUID().uuidString.lowercased()
+            let (sKey, aKey, bKey, fileKey) = (try randomBytes(length: 32), try randomBytes(length: 32), try randomBytes(length: 32), try randomBytes(length: 32))
+            let shared = try FamilyFixture.node(id: try newId(kind: .node, scopeId: theirs).id, in: theirs, parent: nil, parentKey: try randomBytes(length: 32), key: sKey,
+                                                kind: .folder, name: "Shared", writer: family.creator)
+            let a = try FamilyFixture.node(id: try newId(kind: .node, scopeId: theirs).id, in: theirs, parent: shared.id, parentKey: sKey, key: aKey,
+                                           kind: .folder, name: "A", writer: family.creator)
+            let b = try FamilyFixture.node(id: try newId(kind: .node, scopeId: theirs).id, in: theirs, parent: shared.id, parentKey: sKey, key: bKey,
+                                           kind: .folder, name: "B", writer: family.creator)
+            let fileId = try newId(kind: .node, scopeId: theirs).id
+            let inA = try FamilyFixture.node(id: fileId, in: theirs, parent: a.id, parentKey: aKey, key: fileKey, kind: .file, name: "Plan.txt", writer: family.creator)
+            server.put(shared, a, b, inA)
+            _ = try await vault.adopt(shared, nodeKey: sKey, metadata: NodeMetadata(name: "Shared", mime: nil, size: nil, modified: nil, attributes: [:]), in: theirs)
+            _ = try await vault.children(of: shared.id)
+            #expect(try await vault.children(of: a.id).map(\.name) == ["Plan.txt"])
+            // Moved on Eve's device: rewrapped under B, a later change.
+            let inB = try FamilyFixture.node(id: fileId, in: theirs, parent: b.id, parentKey: bKey, key: fileKey, kind: .file, name: "Plan.txt", writer: family.creator)
+                .with(version: nil)
+            server.put(inB)
+            #expect(try await vault.children(of: b.id).map(\.name) == ["Plan.txt"], "a moved shared file was left out of its new folder")
+            #expect(await vault.item(inB.ref)?.node.parentId == b.id, "the row held didn't follow the newer listing")
+            #expect(try await vault.children(of: a.id).isEmpty)
+        }
+
         /* An own-drive row with `id`, under the member's top folder. */
         private func ownRow(_ id: String, _ family: FamilyFixture, kind: NodeKind, name: String) throws -> NodeView {
             try FamilyFixture.node(id: id, in: family.personal, parent: family.personalRoot.id, parentKey: family.personalRootKey,

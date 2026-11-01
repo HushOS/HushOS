@@ -737,7 +737,7 @@ public actor Vault {
      * newer content shows instead of a refusal on every Try again. Returns the row the copy is of.
      * A held row older than `item`, or a second mismatch, is the refusal (VersionChanged). Rows are
      * looked up by workspace and id, never by id alone (which answers with the own drive's row
-     * first), and only a family item takes a newer row this way.
+     * first), and only a strictly newer row is taken, a personal file's as much as a family one's.
      */
     public func downloadCurrent(_ item: Opened, gate: FamilyCopyGate? = nil, to destination: @Sendable (Opened) async throws -> URL,
                                 progress: @Sendable (Double) -> Void = { _ in }) async throws -> (item: Opened, file: URL) {
@@ -748,9 +748,9 @@ public actor Vault {
             do {
                 try await download(item.id, ref: item.ref, expectedVersionId: item.node.currentVersion?.id, to: file, gate: gate, progress: progress)
                 return (item, file)
-            } catch is VersionChanged where attempt == 0 && isFamilyWorkspace(item.node.workspaceId) {
+            } catch is VersionChanged where attempt == 0 {
                 guard let held = opened[item.ref], held.node.currentVersion?.id != item.node.currentVersion?.id,
-                      !held.node.isOlder(than: item.node) else { throw VersionChanged() }
+                      item.node.isOlder(than: held.node) else { throw VersionChanged() }
                 item = held
             }
         }
