@@ -1,0 +1,29 @@
+apps/ios/App/Families.swift
+  s_566b8e0c4467a4::t_022fc535b282d5 353-354
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AccountStore.swift
+  s_566b8e0c4467a4::t_fca8459ff6c17b 120-121,125
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyRecords.swift
+  s_566b8e0c4467a4::t_f63e5806dad6ee 33-47,84-96,98,142-146,152-156,162-167
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_566b8e0c4467a4::t_5211a3a3428c98 213,216-219,226-227,590,929-930,932-933
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Unbacked.swift
+  s_566b8e0c4467a4::t_ba82e5123c8912 257,260-261,299-303,343-361
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilySyncTests.swift
+  s_566b8e0c4467a4::t_78bbb7534e2074 156-189,983-984,1008
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "58c95ad2debb2e6cff58092f868fc29369d1a5bf",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
