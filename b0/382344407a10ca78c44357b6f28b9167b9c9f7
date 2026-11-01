@@ -1,0 +1,25 @@
+apps/android/app/src/test/kotlin/com/hushos/app/files/ProviderRefreshTest.kt
+  s_566b8e0c4467a4::t_a8b07c14cfe1d9 1-79
+apps/android/app/src/main/kotlin/com/hushos/app/files/ProviderRefresh.kt
+  s_566b8e0c4467a4::t_3b011bb38a276a 1-43
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_1d02fdb4e64d3a 29
+apps/android/app/src/main/kotlin/com/hushos/app/files/HushOSDocumentsProvider.kt
+  s_566b8e0c4467a4::t_1366ad3d8b1352 244-266,386
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b0382344407a10ca78c44357b6f28b9167b9c9f7",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
