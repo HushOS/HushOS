@@ -69,6 +69,19 @@ class InfoShareListTest {
         missingFromList = missingFromShareList(item, vault.ownWorkspaceId, refreshed = true, listed = listed),
     )
 
+    /*
+     * Round 17, item 1: Grace moves t.txt into U on her own device. A share has no feed here, so the cached row still
+     * names S; U's listing serves the moved row, which is the newer one and is kept: the file shows in U, and no longer
+     * in S. Fails if a listing trusts a stale cached row's parent over its own newer row.
+     */
+    @Test
+    fun aShareFileMovedOnAnotherDeviceShowsInItsNewFolder() {
+        server.moveAs(t, u)
+        assertEquals(listOf("t.txt"), vault.listChildren(u).map { it.name })
+        assertEquals(u, vault.liveItem(t, theirs)?.node?.parentId)
+        assertFalse(vault.listChildren(s).any { it.id == t })
+    }
+
     @Test
     fun aShareItemMissingFromItsParentsRefreshedListClosesInfoAndTheCacheIsUntouched() {
         val shown = vault.liveItem(t, theirs)!!

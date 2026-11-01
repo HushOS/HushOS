@@ -137,7 +137,7 @@ fun Vault.accountChanges(): Map<String, AccountChange> = memory.changes.toMap()
 
 private fun Vault.note(change: AccountChange): AccountChange = change.also { memory.changes[it.id] = it }
 
-private fun Vault.clearChange(contactId: String) { memory.changes.remove(contactId.lowercase()) }
+internal fun Vault.clearChange(contactId: String) { memory.changes.remove(contactId.lowercase()) }
 
 /* This phone's entry and pending act for a person; a read that fails is never first use. */
 private fun Vault.readGuard(contactId: String): Pair<GuardEntry?, PendingAct?> = try {
@@ -610,11 +610,17 @@ internal fun Vault.guardedView(): Pair<Map<String, ContactPin>, Map<String, Guar
  * verified pin that agrees with the guard; a pin that disagrees with it is an account changed. A guard that can't be
  * read fails the whole list: nobody is shown verified.
  */
-fun Vault.contactStandings(): Map<String, ContactStanding> {
+fun Vault.contactStandings(): Map<String, ContactStanding> = guardedStandings().mapValues { it.value.second }
+
+/*
+ * The same standings with the very pin each was judged from, from one read of the settings and the guard: whatever is
+ * compared with a pin's keys afterwards (a family member's entry) is compared with the pin the verdict is about.
+ */
+internal fun Vault.guardedStandings(): Map<String, Pair<ContactPin, ContactStanding>> {
     val (pins, entries) = guardedView()
     return pins.values.associate { pin ->
         val held = agreement(pin.userId, entries[pin.userId.lowercase()], pin)
-        pin.userId.lowercase() to ContactStanding(held != GuardVerdict.CHANGED && pin.verified, held == GuardVerdict.CHANGED)
+        pin.userId.lowercase() to (pin to ContactStanding(held != GuardVerdict.CHANGED && pin.verified, held == GuardVerdict.CHANGED))
     }
 }
 

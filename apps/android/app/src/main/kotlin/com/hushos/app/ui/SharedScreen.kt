@@ -146,7 +146,7 @@ fun SharedScreen(model: DriveViewModel, state: DriveState) {
     // The top folder reads as Files, as everywhere else in the app.
     fun nameOf(item: Opened?) = when { item == null -> "Item outside this workspace"; item.id == state.rootId -> "Files"; else -> item.name }
     fun open(item: Opened) {
-        if (item.isFolder) openedId = item.id else scope.launch { model.download(item)?.let { openWith(context, it, mimeOf(item), model, item.name) } }
+        if (item.isFolder) openedId = item.id else scope.launch { model.downloadOpened(item)?.let { (uri, opened) -> openWith(context, uri, mimeOf(opened), model, opened.name) } }
     }
     Scaffold(contentWindowInsets = WindowInsets(0), containerColor = alpine.ground, topBar = {
         DestinationBar("Shared") {
@@ -386,8 +386,8 @@ private fun ReceivedRow(model: DriveViewModel, state: DriveState, mount: Vault.S
         }
         return
     }
-    LaunchedEffect(root.id) { model.thumbnail(root) }
-    val thumbnail = state.thumbnails[root.id]
+    LaunchedEffect(thumbnailKey(root)) { model.thumbnail(root) }
+    val thumbnail = state.thumbnails[thumbnailKey(root)]
     val bitmap = remember(thumbnail) { thumbnail?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp).combinedClickable(onClick = onOpen, onLongClick = onMore).padding(start = AlpineSpace.S4, end = AlpineSpace.S1),
@@ -412,8 +412,8 @@ private fun ReceivedRow(model: DriveViewModel, state: DriveState, mount: Vault.S
 private fun OutgoingRow(model: DriveViewModel, state: DriveState, row: Outgoing, onOpen: () -> Unit, onMore: () -> Unit) {
     val alpine = Alpine.colors
     val item = row.item
-    item?.let { LaunchedEffect(it.id) { model.thumbnail(it) } }
-    val thumbnail = item?.let { state.thumbnails[it.id] }
+    item?.let { LaunchedEffect(thumbnailKey(it)) { model.thumbnail(it) } }
+    val thumbnail = item?.let { state.thumbnails[thumbnailKey(it)] }
     val bitmap = remember(thumbnail) { thumbnail?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp).combinedClickable(enabled = item != null, onClick = onOpen, onLongClick = onMore).padding(start = AlpineSpace.S4, end = AlpineSpace.S1),

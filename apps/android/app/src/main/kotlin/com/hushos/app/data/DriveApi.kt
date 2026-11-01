@@ -48,6 +48,17 @@ data class VersionView(
     }
 }
 
+/*
+ * Whether `this` is an older version of the same node than `held`: the server's change order first, then key epoch, then
+ * metadata version. Caches and verdicts of family rows keep the newer one when answers arrive out of order.
+ */
+fun NodeView.olderThan(held: NodeView): Boolean {
+    val (a, b) = changeSeq to held.changeSeq
+    if (a != null && b != null && a != b) return a < b
+    if (keyEpoch != held.keyEpoch) return keyEpoch < held.keyEpoch
+    return metadataVersion < held.metadataVersion
+}
+
 data class NodeView(
     val id: String, val workspaceId: String, val parentId: String?, val kind: String,
     val keyEpoch: ULong, val parentKeyEpoch: ULong, val keyEnvelope: String,

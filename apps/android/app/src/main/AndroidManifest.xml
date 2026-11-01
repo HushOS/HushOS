@@ -80,6 +80,11 @@
                 <!-- The emailed recovery link: recovery carries on in the app. -->
                 <data android:path="/recover/complete" />
             </intent-filter>
+            <!--
+                The mailed family invitation reaches the app only as hushos://join#invite=<token> (the hushos
+                filter above) for now. The https /join filter goes in with the owner's /join rollout: the host is
+                already verified for this package, so it would open the app on release installs at once.
+            -->
         </activity>
 
         <!--

@@ -25,6 +25,9 @@ class NodeCache(private val ownWorkspace: () -> String?) {
     fun key(item: Opened): ByteArray? = key(item.node.workspaceId, item.id)
     fun row(workspaceId: String, nodeId: String): Opened? = rows[nodeId]?.get(workspaceId)
 
+    /* The workspaces this device holds a row of `nodeId` in. */
+    fun workspacesOf(nodeId: String): Set<String> = rows[nodeId]?.keys?.toSet().orEmpty()
+
     /* By id alone: this account's own row, or another workspace's when this account has none by that id. */
     fun find(nodeId: String): Opened? {
         val byWorkspace = rows[nodeId] ?: return null
@@ -92,6 +95,14 @@ class NodeCache(private val ownWorkspace: () -> String?) {
     }
 
     fun rowsIn(workspaceId: String): List<Opened> = rows.values.mapNotNull { it[workspaceId] }
+
+    /* Every key and row of one workspace dropped (a family folder its family no longer opens here); the node ids. */
+    fun forgetWorkspace(workspaceId: String): Set<String> {
+        val gone = HashSet<String>()
+        for ((id, byWorkspace) in keys) if (byWorkspace.remove(workspaceId) != null) gone.add(id)
+        for ((id, byWorkspace) in rows) if (byWorkspace.remove(workspaceId) != null) gone.add(id)
+        return gone
+    }
 }
 
 /* A refusal written for people: shown as it is, never as "That didn’t work". */

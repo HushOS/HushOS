@@ -94,10 +94,11 @@ class ContactGuard(
 
     /* What is on disk: null when nothing is; GuardUnreadable when something is that isn't a sealed guard. */
     private fun sealed(): Sealed? {
-        val file = file
-        if (!file.exists()) return null
+        // Only a file confirmed missing is "nothing stored": a folder that can't be searched or read also makes `exists`
+        // say no, and read as none it would be first use for everyone.
+        val text = GuardFile.read(file) ?: return null
         return runCatching {
-            val json = JSONObject(file.readText())
+            val json = JSONObject(text)
             check(json.getInt("v") == 2)
             val key = json.getJSONObject("key")
             Sealed(SettingsKeyEnvelope(key.getString("nonce"), key.getString("ciphertext")), json.getString("record"))
@@ -178,9 +179,10 @@ class ContactGuard(
     }
 
     companion object {
-        private val LOCK = Any()
+        /* The guard's lock, shared with the family guard (FamilyGuard.kt): one writer, one wipe. */
+        internal val LOCK = Any()
         /* Moved by every sign-out: a write begun before it keeps nothing. */
-        private var GENERATION = 0L
+        @Volatile internal var GENERATION = 0L
         private const val KIND = "record"
 
         /* Under noBackupFilesDir. */
@@ -197,6 +199,17 @@ class ContactGuard(
                 File(noBackup, FOLDER).deleteRecursively()
             }
         }
+    }
+}
+
+/* A guard file read: null only for a file confirmed missing; any other read error is GuardUnreadable, never "nothing stored". */
+internal object GuardFile {
+    fun read(file: File): String? = try {
+        String(java.nio.file.Files.readAllBytes(file.toPath()), Charsets.UTF_8)
+    } catch (_: java.nio.file.NoSuchFileException) {
+        null
+    } catch (_: Exception) {
+        throw GuardUnreadable()
     }
 }
 

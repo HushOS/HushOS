@@ -8,7 +8,8 @@ import java.io.File
  * (opened/), from links (links/) or sent through the share sheet (share/), photos taken for upload
  * (camera/), and a copy across drives cut short (copy-*). They don't outlive a day: swept at every
  * process start, which is also when the Files app's provider first runs without the app. Kept files
- * (filesDir/offline) are not here.
+ * (filesDir/offline) are not here. A family file's copy is under opened/family/<workspace>, so a removal
+ * deletes every copy of that family folder, those an earlier session opened included.
  */
 object DecryptedCopies {
     val FOLDERS = listOf("files", "thumbnails", "opened", "links", "share", "edits", "camera")
@@ -30,5 +31,25 @@ object DecryptedCopies {
                 }
             }
         }
+    }
+}
+
+/*
+ * Where a family file opened on this phone is copied: one folder per family workspace, under opened/ (the provider's
+ * path and the sweep cover it, a sign-out clears it with the cache). A workspace id that isn't a UUID gets no folder.
+ */
+object FamilyCopies {
+    /*
+     * Process-wide: every vault's cleanup of family copies and records, a session's close, and a download's writes take it,
+     * so an old vault's late cleanup and a new one's writes never interleave.
+     */
+    val LOCK = Any()
+
+    fun folder(cache: File, workspaceId: String): File? =
+        if (FamilyRecords.valid(workspaceId)) File(cache, "opened/family/${workspaceId.lowercase()}") else null
+
+    /* What a family's clear leaves of these workspaces' copies: nothing. A folder the personal drive's id names holds none. */
+    fun delete(cache: File, workspaceIds: Collection<String>) {
+        for (id in workspaceIds) folder(cache, id)?.deleteRecursively()
     }
 }
