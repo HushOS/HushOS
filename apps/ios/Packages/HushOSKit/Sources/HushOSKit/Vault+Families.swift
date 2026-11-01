@@ -196,10 +196,12 @@ extension Vault {
         return version
     }
 
-    /* Route 25 named these as family folders: never opened under a key from the personal path. */
-    func noteFamilyWorkspaces(_ ids: [String]) {
+    /* Route 25 named these as family folders of `groupId`: never opened under a key from the personal path. */
+    func noteFamilyWorkspaces(_ ids: [String], of groupId: String) {
         let own = workspace?.workspaceId.lowercased()
-        familyWorkspaces.formUnion(ids.map { $0.lowercased() }.filter { $0 != own })
+        let family = ids.map { $0.lowercased() }.filter { $0 != own }
+        familyWorkspaces.formUnion(family)
+        for id in family { familyAreaGroup[id] = groupId.lowercased() }
     }
 
     /*
@@ -252,12 +254,31 @@ extension Vault {
     func familyTarget(_ workspaceId: String) throws -> Bool {
         guard isFamilyWorkspace(workspaceId) else { return false }
         guard areaLedger.isArea(workspaceId: workspaceId) else { throw FamilyWriteError.notOpen }
+        try requireGuardKept(workspaceId)
         try areaLedger.requireWritable(workspaceId: workspaceId)
         return true
     }
 
+    /*
+     * The web worker's requireGuardKept: nothing is written into a family while the guard its last
+     * acceptance handed back isn't stored (docs/optional-verification.md 2.8); reading goes on. A
+     * family folder whose family isn't known here is refused while any family's guard is owed.
+     */
+    func requireGuardKept(_ workspaceId: String) throws {
+        guard !familyGuardOwed.isEmpty else { return }
+        guard let groupId = familyAreaGroup[workspaceId.lowercased()], !familyGuardOwed.contains(groupId) else { throw GuardError.unsaved }
+    }
+
+    /* Raised before an acceptance of `groupId` commits; whether it was raised already (an earlier guard still owed). */
+    @discardableResult
+    func oweFamilyGuard(_ groupId: String) -> Bool { !familyGuardOwed.insert(groupId.lowercased()).inserted }
+
+    /* The guard an acceptance handed back is stored (or there was none): writes into the family go on. */
+    func familyGuardKept(_ groupId: String) { familyGuardOwed.remove(groupId.lowercased()) }
+
     /* The key of a family folder node a write puts something under (its metadata, a version), at the epoch it was opened at. */
     func writableKey(of item: Opened) throws -> Data {
+        try requireGuardKept(item.node.workspaceId)
         guard let held = try areaLedger.writableNodeKey(workspaceId: item.node.workspaceId, nodeId: item.id) else {
             throw DriveAPIError.server(500, "Open the containing folder first.")
         }

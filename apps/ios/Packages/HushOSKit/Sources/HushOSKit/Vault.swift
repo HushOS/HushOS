@@ -125,7 +125,15 @@ public actor Vault {
     /* The family guard (FamilyGuard.swift): a test's own, else the app group's for this session. */
     var familyGuardOverride: FamilyGuardStore?
     /* Tests: runs right after each family guard write, so a test can stop there as a crash would. */
-    var afterFamilyGuard: (@Sendable () throws -> Void)?    /* The guard's turn (`withGuardTurn`): whether an act holds it, and who waits for it, in order. */
+    var afterFamilyGuard: (@Sendable () throws -> Void)?
+    /*
+     * Families whose acceptance may hand back a guard not stored yet (the web worker's `guardsOwed`
+     * and `ledger.owes`): raised before an acceptance commits, released once its guard is stored
+     * (or it had none to store). While raised, every write into the family is refused (FamilyGuard.swift).
+     */
+    var familyGuardOwed: Set<String> = []
+    /* Each family folder route 25 named this session, lowercased, to its family. */
+    var familyAreaGroup: [String: String] = [:]    /* The guard's turn (`withGuardTurn`): whether an act holds it, and who waits for it, in order. */
     var guardBusy = false
     var guardWaiting: [CheckedContinuation<Void, Never>] = []
     /* Contacts looked up for display, by lowercased email, with when (`cachedLookup`). */

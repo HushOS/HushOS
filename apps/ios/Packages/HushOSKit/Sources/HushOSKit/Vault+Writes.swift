@@ -554,6 +554,8 @@ extension Vault {
         // A family folder's replacement is checked before the version goes live: the file's key as the ledger holds it and the
         // family's judgement of the name it carries over, so a key change or a refusal never leaves a version without its metadata.
         let family = replacing ? try familyTarget(workspaceId) : false
+        // A new file's completion is a write into the family too: never while its guard is owed (FamilyGuard.swift).
+        if isFamilyWorkspace(workspaceId) { try requireGuardKept(workspaceId) }
         var familyName: (key: Data, prior: Integrity)?
         if replacing, family {
             let item = try await resolve(nodeId)

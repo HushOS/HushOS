@@ -236,8 +236,17 @@ extension FamilySync {
         var served = first
         var overtaken = 0
         while true {
-            let result = try ledger.acceptJoining(me: me, groupId: groupId, record: records.read(userId: userId, groupId: groupId)?.envelope,
+            // The write barrier, as for a sync's acceptance (FamilySync.accept).
+            let owedBefore = await vault.oweFamilyGuard(groupId)
+            let result: JoinAcceptance
+            do {
+                result = try ledger.acceptJoining(me: me, groupId: groupId, record: records.read(userId: userId, groupId: groupId)?.envelope,
                                                   served: served, matched: matched, guard: await vault.heldFamilyGuard(groupId))
+            } catch {
+                if !owedBefore { await vault.familyGuardKept(groupId) }
+                throw error
+            }
+            if case .accepted = result {} else if !owedBefore { await vault.familyGuardKept(groupId) }
             switch result {
             case .recordUnreadable:
                 records.delete(userId: userId, groupId: groupId)
@@ -260,6 +269,7 @@ extension FamilySync {
             case .accepted(let chain, let record, let pin, let guardPin):
                 do {
                     if let guardPin { try await vault.keepFamilyGuard(groupId, guardPin) }
+                    await vault.familyGuardKept(groupId)
                     try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: record, rosterVersion: chain.roster().rosterVersion,
                                                                                         areas: Array(chain.areaKeys().keys).sorted()))
                 } catch {

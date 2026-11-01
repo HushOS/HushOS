@@ -48,6 +48,41 @@ extension OnFakeDrive {
         }
 
         /*
+         * A newer member list that changes no folder key is accepted (the core commits it, so the ledger
+         * says writable) while the guard it hands back can't be stored: until a later sync stores it,
+         * every write into the family is refused with the storage words and nothing reaches the server,
+         * though reading goes on; once stored, writes go on. Fails if a write checks only the ledger.
+         */
+        @Test func aFamilyWriteWhileItsGuardIsNotStoredIsRefusedAndNothingIsSent() async throws {
+            let family = try FamilyFixture()
+            let writes = GuardSwitch()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server, guards: familyGuards(family.member, writes: writes))
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            _ = try await phone.vault.children(of: family.rootId)
+
+            server.serve(chain: [family.r1, family.r2, family.r3])
+            writes.writable = false
+            #expect(await phone.sync.sync(family.summary) == .failed(GuardWords.unsaved))
+            #expect(phone.vault.areaLedger.isArea(workspaceId: family.workspaceId))
+            // Reading goes on: the folder lists again through the ledger.
+            #expect(try await phone.vault.children(of: family.rootId).map(\.name).contains("Recipes.txt"))
+            server.clearRequests()
+            await #expect(throws: GuardError.unsaved) { _ = try await phone.vault.createFolder(in: family.rootId, name: "Trips") }
+            await #expect(throws: GuardError.unsaved) { _ = try await phone.vault.rename(family.fileId, to: "Recipes (old).txt") }
+            await #expect(throws: GuardError.unsaved) { try await phone.vault.trash(family.fileId) }
+            #expect(server.writes.isEmpty, "a family write was sent while its guard wasn't stored: \(server.writes)")
+
+            writes.writable = true
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted once the guard stored"); return }
+            #expect(try phone.held.family(family.groupId)?.rosterVersion == 3)
+            _ = try await phone.vault.children(of: family.rootId)
+            _ = try await phone.vault.createFolder(in: family.rootId, name: "Trips")
+            #expect(server.sent("/api/drive/folders").count == 1)
+        }
+
+        /*
          * A selection to the trash and its Undo in a writable family folder go through the batch
          * routes to the family's own workspace, gated by the ledger like every write: the file is
          * trashed and back. Fails if either is sent elsewhere, or not sent.

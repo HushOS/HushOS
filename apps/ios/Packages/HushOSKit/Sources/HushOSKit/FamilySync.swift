@@ -358,7 +358,7 @@ public actor FamilySync: FamilyJudge {
     /* Folders route 25 named for the family and derived under it: family folders for the rest of the session. */
     private func note(_ areas: [String], of groupId: String) async {
         for area in areas { groupsOf[area.lowercased()] = groupId }
-        await vault.noteFamilyWorkspaces(areas)
+        await vault.noteFamilyWorkspaces(areas, of: groupId)
     }
 
     /* One family synced, after any sync of it already running. */
@@ -510,17 +510,30 @@ public actor FamilySync: FamilyJudge {
             let me = try await vault.ownIdentities()
             let checkedAt = Self.checkTime(now())
             var served = try await fetchServed(groupId, after: row?.rosterVersion ?? 0)
-            var answer = try ledger.acceptServed(me: me, groupId: groupId, record: row?.envelope, served: served,
-                                                 guard: await vault.heldFamilyGuard(groupId), checkedAt: checkedAt)
-            if case .fetchFromVersionOne = answer {
-                served = try await fetchServed(groupId, after: 0)
-                answer = try ledger.acceptServed(me: me, groupId: groupId, record: row?.envelope, served: served,
-                                                 guard: await vault.heldFamilyGuard(groupId), checkedAt: checkedAt)
+            // The write barrier (the web worker's guard owed): raised before the core commits, so no write into the
+            // family seals under this acceptance until its guard is stored; put back as it was if nothing commits.
+            let owedBefore = await vault.oweFamilyGuard(groupId)
+            let answer: ServedAcceptance
+            do {
+                var first = try ledger.acceptServed(me: me, groupId: groupId, record: row?.envelope, served: served,
+                                                    guard: await vault.heldFamilyGuard(groupId), checkedAt: checkedAt)
+                if case .fetchFromVersionOne = first {
+                    served = try await fetchServed(groupId, after: 0)
+                    first = try ledger.acceptServed(me: me, groupId: groupId, record: row?.envelope, served: served,
+                                                    guard: await vault.heldFamilyGuard(groupId), checkedAt: checkedAt)
+                }
+                answer = first
+            } catch {
+                if !owedBefore { await vault.familyGuardKept(groupId) }
+                throw error
             }
+            if case .accepted = answer {} else if !owedBefore { await vault.familyGuardKept(groupId) }
             switch answer {
             case .accepted(let chain, let record, let pin, let guardPin):
-                // A guard that can't be stored stops everything of this acceptance; the next one hands it back again.
+                // A guard that can't be stored stops everything of this acceptance, and the barrier stays raised until a
+                // later acceptance stores it; one with nothing new to store (the held guard covers it) releases it.
                 if let guardPin { try await vault.keepFamilyGuard(groupId, guardPin) }
+                await vault.familyGuardKept(groupId)
                 let areas = Array(chain.areaKeys().keys).sorted()
                 try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: record, rosterVersion: chain.roster().rosterVersion, areas: areas))
                 noteAccepted(groupId, chain)
@@ -1004,7 +1017,11 @@ public actor FamilySync: FamilyJudge {
         let at = Self.checkTime(now())
         for _ in 0 ..< 4 {
             let answer = try ledger.forgetGroup(groupId: groupId, guard: await vault.heldFamilyGuard(groupId), checkedAt: at)
-            guard let pin = answer.guard else { return true }
+            guard let pin = answer.guard else {
+                // Let go of in the core: nothing is written under its chains any more, so no guard is owed.
+                await vault.familyGuardKept(groupId)
+                return true
+            }
             if answer.unreadable { throw GuardError.unreadable }
             try await vault.keepFamilyGuard(groupId, pin)
         }
