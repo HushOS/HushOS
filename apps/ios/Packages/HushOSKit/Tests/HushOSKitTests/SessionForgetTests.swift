@@ -57,6 +57,34 @@ extension OnFakeDrive {
             #expect(now.records.read(userId: family.member.userId, groupId: family.groupId) != nil, "the last session's sync deleted the new session's record")
         }
 
+        /*
+         * The same account signs in again inside the app (after Change password or Rotate account
+         * key, which end every session): a sync of the last session that finishes after the new
+         * sign-in deletes nothing the new session wrote. Fails if an in-app sign-in leaves the last
+         * session's cleanup open.
+         */
+        @Test func anOldSyncThatFinishesAfterAnInAppSignInDeletesNothingTheNewSessionWrote() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let account = CopyEpoch()
+            let old = try await family.phone(server, account: account)
+            defer { old.done(); FamilySync.forget() }
+            guard case .accepted = await old.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            // What Auth.signIn runs before it stores the new session.
+            SessionChange.closeLastSession(account: account)
+            let now = try await family.phone(server, records: old.records, guards: old.guards, account: account)
+            guard case .accepted = await now.sync.sync(family.summary) else { Issue.record("not accepted again"); return }
+            _ = try await now.vault.children(of: family.rootId)
+            let folder = try #require(TemporaryCopies.openedFolder(itemId: family.fileId, version: "v1", familyWorkspace: family.workspaceId, in: now.temporary))
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let copy = folder.appendingPathComponent("Recipes.txt")
+            try Data("Pancakes".utf8).write(to: copy)
+            await old.sync.refuse(family.groupId)
+            try? await old.sync.wipe(family.groupId)
+            #expect(FileManager.default.fileExists(atPath: copy.path), "the last session's sync deleted the new session's copy")
+            #expect(now.records.read(userId: family.member.userId, groupId: family.groupId) != nil, "the last session's sync deleted the new session's record")
+        }
+
         @Test func theSameSessionKeepsItsFamily() async throws {
             guard let (family, phone) = try await accepted() else { return }
             defer { phone.done(); FamilySync.forget() }

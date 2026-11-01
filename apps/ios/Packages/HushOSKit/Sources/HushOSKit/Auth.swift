@@ -164,6 +164,8 @@ public enum Auth {
         let owner = AccountOwner(userId: user.id, origin: origin)
         if AccountStore.shared.owner() != owner { SharedKeychain.delete(SharedKeychain.sessionAccount) }
         AccountStore.shared.claim(owner)
+        // The session this one replaces (a re-sign-in after Change password or Rotate account key included) is closed first.
+        SessionChange.closeLastSession()
         try SharedKeychain.write(SharedKeychain.configAccount, SharedKeychain.Config(origin: origin))
         try SharedKeychain.write(SharedKeychain.sessionAccount, SharedKeychain.Session(origin: origin, token: token, userId: user.id))
         // A device the proof did not bring back describes itself and gets a key; a failure waits for the next launch.
