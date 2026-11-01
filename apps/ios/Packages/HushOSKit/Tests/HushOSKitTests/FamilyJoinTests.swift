@@ -228,6 +228,38 @@ extension OnFakeDrive {
         }
 
         /*
+         * The same wait when the removal is found by route 2 no longer listing the family (the live
+         * check, `listReconciling`), not by a sync: nothing goes while the guard the core hands back
+         * can't be stored, then the family goes, its guard kept at the later roster and its write
+         * barrier let go. Fails if the unlisted path deletes before storing, deletes the guard, or
+         * leaves family writes held after the family is gone.
+         */
+        @Test func anUnlistedFamilyIsWipedOnlyAfterItsGuardIsStored() async throws {
+            let family = try FamilyFixture()
+            let writes = GuardSwitch()
+            let (server, phone) = try await newcomer(family, guards: familyGuards(family.member, writes: writes))
+            defer { phone.done() }
+            _ = try joinedView(try await phone.sync.joinStatus(family.groupId))
+
+            server.serve(chain: [family.r1, family.r2, family.r3])
+            writes.writable = false
+            #expect(await phone.sync.sync(family.summary) == .failed(GuardWords.unsaved))
+            #expect(await phone.vault.familyGuardOwed.contains(family.groupId.lowercased()))
+
+            server.listed = false
+            server.notMember = true
+            #expect(try await phone.sync.listReconciling().removed.isEmpty)
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId) != nil, "the wipe deleted before the guard was stored")
+
+            writes.writable = true
+            #expect(try await phone.sync.listReconciling().removed == [family.groupId])
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId) == nil)
+            #expect(try phone.held.family(family.groupId)?.rosterVersion == 3)
+            #expect(FileManager.default.fileExists(atPath: phone.guards.file.path))
+            #expect(await phone.vault.familyGuardOwed.isEmpty)
+        }
+
+        /*
          * The guard only moves up: an older pin written after a newer one changes nothing, and a pin
          * of another history is refused and writes nothing. Fails if the store overwrites.
          */
