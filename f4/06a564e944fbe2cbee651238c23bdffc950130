@@ -1,0 +1,23 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ContactGuard.swift
+  s_566b8e0c4467a4::t_266b3c3a878be5 48-56,175-177
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyGuard.swift
+  s_566b8e0c4467a4::t_a009d64cb71b8a 104-106
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyJoinTests.swift
+  s_566b8e0c4467a4::t_3ea02e567a860f 276-299
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f406a564e944fbe2cbee651238c23bdffc950130",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

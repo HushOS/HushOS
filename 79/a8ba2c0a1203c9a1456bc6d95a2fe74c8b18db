@@ -1,0 +1,63 @@
+apps/ios/project.yml
+  s_566b8e0c4467a4::t_bebdf30da039bf 227,229,231,233
+apps/ios/App/FamilyCheck.swift
+  s_566b8e0c4467a4::t_f78bd9093cea91 1-198
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_566b8e0c4467a4::t_34cc5d21d7dda8 125-127
+  s_566b8e0c4467a4::t_bf3edefc7f8630 128
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Families.swift
+  s_566b8e0c4467a4::t_167ad5b5284689 153-155,157,162
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyCheck.swift
+  s_566b8e0c4467a4::t_5996c032df8fb2 1-184
+  s_566b8e0c4467a4::t_b5acb833643d30 185-190
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyGuard.swift
+  s_566b8e0c4467a4::t_43c787edf73a4a 1-243
+  s_566b8e0c4467a4::t_3f4bb05954cd8c 244-248
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Settings.swift
+  s_566b8e0c4467a4::t_70a6909bbd2f5d 291-367
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_566b8e0c4467a4::t_62759b24adbeda 498-502,513-514,517-518,521-523
+  s_566b8e0c4467a4::t_7f8889e7cefec7 423-429
+  s_566b8e0c4467a4::t_b20d53fff1f343 60-61
+  s_566b8e0c4467a4::t_b0206e13a8aca2 192-193
+  s_566b8e0c4467a4::t_fc15bf59518007 187-191,964
+  s_566b8e0c4467a4::t_2259a4287fec7a 446,452-453,458-462
+  s_566b8e0c4467a4::t_d0ce51ee93a4ba 759-764,766,769-770
+  s_566b8e0c4467a4::t_e3c884184df64f 737-740
+  s_566b8e0c4467a4::t_c404e7c8d33ce4 463-465,526,711,718,741,743,745,751,771,773,810,812,818,843,857-871,904-905,952-954,960-963,965-966,982-983,993-1001,1003,1005-1009,1011-1012,1015
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyCheckTests.swift
+  s_566b8e0c4467a4::t_d5fdd6977680fa 1-137
+  s_566b8e0c4467a4::t_274f6657122941 138
+DESIGN.md
+  s_566b8e0c4467a4::t_c8cfb135829346 374,464,466-468
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_f2f7583d7582cb 131-134
+apps/ios/App/Families.swift
+  s_566b8e0c4467a4::t_053734a8cdedd0 321-325,329-330,335-337,341,352,409-428,455-468,474,487-489,493,566-576,578-580,582-583,591-615
+apps/ios/App/Join.swift
+  s_566b8e0c4467a4::t_4ba7d1ade59081 5,7-10,51,63-70,83-87,123,125-129,132-134,137-145,147-154,156-159,161-162,164,167-168,228-232,238-239,253-254,324-326,331,333,337
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyIntegrity.swift
+  s_566b8e0c4467a4::t_8a1a11d1b40245 24-25,87,90-96,109,116
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyJoin.swift
+  s_566b8e0c4467a4::t_766640354e7279 5-7,9-20,22-24,124-125,130,135,138-148,150,154-155,158-160,165,169,172-173,181-184,187-190,198,207,218,221,223,227-232,234,240,251-252,254-255,260,262,266-267,270,274-275
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyJoinTests.swift
+  s_566b8e0c4467a4::t_3f52113fdb5acb 7-13,18,22,26-31,33,41,43,47-49,51-57,59-65,68-75,77-84,87-97,101-104,106,110-111,113-123,125-131,135-138,140,142-143,145,147-151,153-156,159-165,167-176,178-180,182-199,203-205,207,209-218,220-222,224-227,231-232,234,236-255,257-287,363-371
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilySyncTests.swift
+  s_566b8e0c4467a4::t_9a57faa7a15617 625,640-647,654-656,661-667,783-799
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "79a8ba2c0a1203c9a1456bc6d95a2fe74c8b18db",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
