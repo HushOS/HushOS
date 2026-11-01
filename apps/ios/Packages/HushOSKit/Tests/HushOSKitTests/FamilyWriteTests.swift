@@ -66,6 +66,77 @@ extension OnFakeDrive {
         }
 
         /*
+         * Two answers for one family file arrive out of order: the newer row (a second version) is
+         * opened first, then an older listing's row lands. The vault keeps the newer row and key, a
+         * download fetches the newer version, and asking for the old version's id writes nothing.
+         * Fails if an older answer replaces a newer row, or a copy's path can hold another version.
+         */
+        @Test func anOlderAnswerLandingLastKeepsTheNewerRowAndItsVersion() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            server.put(family.photo)
+            let first = try #require(family.photo.currentVersion)
+            server.objects[first.id] = family.photoObject
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let vault = phone.vault
+            _ = try await vault.children(of: family.rootId)
+
+            // The creator replaced the photo: a second version, sealed as an upload seals it.
+            let bytes = Data((0 ..< 2000).map { UInt8(($0 * 7) % 251) })
+            let (second, object) = try sealVersion(bytes, of: family.photo.id, family)
+            let newer = family.photo.with(version: second)
+            server.put(newer)
+            server.objects[second.id] = object
+            try await vault.open(newer)
+            // The older listing's answer lands last.
+            try await vault.open(family.photo)
+            #expect(await vault.item(family.photo.id)?.node.currentVersion?.id == second.id, "an older answer replaced the newer row")
+
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("versions-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let current = folder.appendingPathComponent("current")
+            try await vault.download(family.photo.id, expectedVersionId: second.id, to: current)
+            #expect(try Data(contentsOf: current) == bytes)
+            // A path named after the old version gets nothing: the row names another now.
+            let old = folder.appendingPathComponent("old")
+            await #expect(throws: VersionChanged.self) { try await vault.download(family.photo.id, expectedVersionId: first.id, to: old) }
+            #expect(!FileManager.default.fileExists(atPath: old.path))
+            #expect(!FileManager.default.fileExists(atPath: old.appendingPathExtension("part").path))
+        }
+
+        /* `bytes` sealed as a new version of `nodeId` in the family folder, under the photo's key, signed by the creator. */
+        private func sealVersion(_ bytes: Data, of nodeId: String, _ family: FamilyFixture) throws -> (VersionView, Data) {
+            let versionId = try newId(kind: .version, scopeId: family.workspaceId).id
+            let objectId = try newId(kind: .object, scopeId: family.workspaceId).id
+            let contentKey = try randomBytes(length: 32)
+            let nonce = try randomBytes(length: 16)
+            let suite = HushOSCore.contentSuite()
+            let size = UInt64(bytes.count)
+            let content = Content(workspaceId: family.workspaceId, objectId: objectId, suite: suite, key: contentKey, nonce: nonce, plaintextSize: size, thumbnailBytes: 0)
+            let layout = try contentLayout(suite: suite, plaintextSize: size, thumbnailBytes: 0)
+            var object = Data()
+            var at = 0
+            for index in 0 ..< layout.chunkCount {
+                let length = Int(chunkLength(plaintextSize: size, index: index))
+                object.append(try chunkEncrypt(content: content, index: index, plaintext: bytes.subdata(in: at ..< at + length)))
+                at += length
+            }
+            let sealed = try versionSeal(ctx: VersionContext(workspaceId: family.workspaceId, nodeId: nodeId, versionId: versionId, objectId: objectId),
+                                         nodeKey: family.photoKey, contentKey: contentKey, plaintextSize: size, thumbnailBytes: 0)
+            let signature = try versionSign(signingSeed: family.creator.keys.signingSeed,
+                                            statement: VersionStatement(workspaceId: family.workspaceId, nodeId: nodeId, versionId: versionId, objectId: objectId, contentSuite: suite),
+                                            contentKeyEnvelope: sealed.envelope)
+            var version = VersionView(id: versionId, objectId: objectId, contentKeyEnvelope: base64urlEncode(bytes: sealed.envelope), status: "ready", contentSuite: suite,
+                                      chunkCount: Int(layout.chunkCount), contentNonce: base64urlEncode(bytes: nonce), plaintextSize: nil,
+                                      ciphertextSize: String(object.count), readyAt: "2026-10-19T10:00:00.000Z")
+            version.signer = Signer(id: family.creator.userId)
+            version.signature = base64urlEncode(bytes: signature)
+            return (version, object)
+        }
+
+        /*
          * A newer member list that changes no folder key is accepted (the core commits it, so the ledger
          * says writable) while the guard it hands back can't be stored: the refusal takes the commit back
          * (the web's uncommit), so nothing of the family lists, and until a later sync stores it every

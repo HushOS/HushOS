@@ -147,18 +147,12 @@ public struct FamilyVerdictBook: Sendable {
     public mutating func publish(_ groupId: String, trust: Trust, _ judged: [(ref: NodeRef, node: NodeView, verdict: FamilyVerdict)]) -> Bool {
         guard trust == capture(groupId) else { return false }
         for row in judged {
-            if let held = rows[row.ref]?.node, Self.older(row.node, than: held) { continue }
+            if let held = rows[row.ref]?.node, row.node.isOlder(than: held) { continue }
             rows[row.ref] = Entry(node: row.node, verdict: row.verdict, groupId: groupId.lowercased())
         }
         return true
     }
 
-    /* Whether `row` is an older version of the node than `held`: the server's change order first, then key epoch, then metadata version. */
-    static func older(_ row: NodeView, than held: NodeView) -> Bool {
-        if let a = row.changeSeq, let b = held.changeSeq, a != b { return a < b }
-        if row.keyEpoch != held.keyEpoch { return row.keyEpoch < held.keyEpoch }
-        return row.metadataVersion < held.metadataVersion
-    }
 
     /*
      * Whether a family sync's outcome moves its trust generation: anything it found does, but no

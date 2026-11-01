@@ -233,6 +233,8 @@ extension Vault {
     func openListed(_ node: NodeView) throws -> Opened {
         // Through the ledger only: a node of any workspace not known as a family folder is refused before any cache is touched.
         guard isFamilyWorkspace(node.workspaceId) else { throw FamilyFailure(message: "Couldn’t check this folder’s keys") }
+        // A newer row of it already held stays: an older listing never replaces it (open keeps the newer one too).
+        if let held = opened[node.ref], node.isOlder(than: held.node) { return held }
         opened[node.ref] = nil
         nodeKeys[node.ref] = nil
         let item = try open(node)

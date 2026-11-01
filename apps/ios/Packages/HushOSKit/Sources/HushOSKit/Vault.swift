@@ -239,11 +239,13 @@ public actor Vault {
 
     private func remember(_ listing: Listing) {
         var changed = false
-        for child in listing.children where parents[child.id] != listing.folder.id {
+        // A newer row kept over an older one in this listing keeps its own parent (a move this listing doesn't know of).
+        func kept(_ node: NodeView) -> Bool { opened[node.ref].map { !node.isOlder(than: $0.node) } ?? true }
+        for child in listing.children where parents[child.id] != listing.folder.id && kept(child) {
             parents[child.id] = listing.folder.id
             changed = true
         }
-        for node in listing.ancestors + [listing.folder] {
+        for node in listing.ancestors + [listing.folder] where kept(node) {
             if let parent = node.parentId, parents[node.id] != parent {
                 parents[node.id] = parent
                 changed = true
@@ -500,7 +502,8 @@ public actor Vault {
         let family = areaLedger.isArea(workspaceId: node.workspaceId) || familyWorkspaces.contains(node.workspaceId.lowercased())
         // A family folder row served differently (a walk re-keyed it, its root moved to the next key) opens through the ledger
         // again, so what the ledger holds of its path is what the server serves now, never what this process saw first.
-        if let done = opened[node.ref], !family || done.node == node { return done }
+        // An older answer arriving after a newer one (listings out of order) keeps the newer row and key.
+        if let done = opened[node.ref], !family || done.node == node || node.isOlder(than: done.node) { return done }
         try node.checkEnvelopeSuite()
         let key: Data
         if family {
@@ -513,11 +516,13 @@ public actor Vault {
             )
             key = try nodeOpen(ctx: ctx, parentKey: try parentKey(for: node), keyEnvelope: try base64urlDecode(value: node.keyEnvelope))
         }
-        nodeKeys[node.ref] = key
         let metadata = try metadataOpen(
             ctx: MetadataContext(workspaceId: node.workspaceId, nodeId: node.id, metadataVersion: node.metadataVersion),
             nodeKey: key, envelope: try base64urlDecode(value: node.metadataEnvelope)
         )
+        // Checked again where it is kept: nothing newer is ever replaced by an older row or its key.
+        if let held = opened[node.ref], node.isOlder(than: held.node) { return held }
+        nodeKeys[node.ref] = key
         let result = Opened(node: node, metadata: metadata, nodeKey: key)
         opened[node.ref] = result
         removedRows.remove(node.ref)
@@ -672,12 +677,18 @@ public actor Vault {
     }
 
     /* Downloads and decrypts a file's version to `destination`, chunk by chunk. */
-    public func download(_ nodeId: String, version: VersionListView? = nil, to destination: URL, gate: FamilyCopyGate? = nil,
+    /*
+     * `expectedVersionId`: the version the destination's path is named after (the row on screen).
+     * The row held here may name another (an older answer kept out, a newer one since): then nothing
+     * is written, so a copy's path never holds another version's content.
+     */
+    public func download(_ nodeId: String, version: VersionListView? = nil, expectedVersionId: String? = nil, to destination: URL, gate: FamilyCopyGate? = nil,
                          progress: @Sendable (Double) -> Void = { _ in }) async throws {
         // Taken before anything is awaited: a session that ends while the address comes writes nothing.
         let gate = gate ?? TemporaryCopies.copyGate(familyWorkspace: nil)
         let item = try await resolve(nodeId)
         let opened = try openVersion(item, version: version)
+        if let expectedVersionId, opened.versionId != expectedVersionId { throw VersionChanged() }
         let url = try await api.versionURL(opened.versionId, workspaceId: item.node.workspaceId)
         guard var objectURL = URL(string: url.url) else { throw DriveAPIError.server(500, "Bad object URL") }
         // Resumable: a dropped chunk is fetched again, an expired address renewed, and a `.part`

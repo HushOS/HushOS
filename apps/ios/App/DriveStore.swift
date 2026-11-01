@@ -923,7 +923,11 @@ final class DriveStore {
         let gate = copyGate(item)
         Task {
             // The row this list holds, never looked up again: one a batch just forgot would list its folder once more.
-            if let data = try? await vault.thumbnail(of: item), (try? gate.check()) != nil { thumbnails[item.id] = data }
+            // A family item's picture only for the version the vault holds now: an older row's never stands for a newer one.
+            if let data = try? await vault.thumbnail(of: item), (try? gate.check()) != nil,
+               !isFamily(item) || (await vault.item(item.id))?.node.currentVersion?.id == item.node.currentVersion?.id {
+                thumbnails[item.id] = data
+            }
             thumbnailTasks.remove(item.id)
         }
     }
@@ -1860,7 +1864,10 @@ final class DriveStore {
             releaseBackground()
         }
         do {
-            try await vault.download(item.id, version: version, to: file, gate: gate) { fraction in Task { @MainActor in self.opening[item.id] = fraction } }
+            // The version the path is named after, and no other.
+            try await vault.download(item.id, version: version, expectedVersionId: version == nil ? item.node.currentVersion?.id : nil, to: file, gate: gate) { fraction in
+                Task { @MainActor in self.opening[item.id] = fraction }
+            }
             // Nothing is handed on (the viewer, Send a copy, Open in) once its family was forgotten.
             try gate.check()
         } catch {
@@ -1893,7 +1900,9 @@ final class DriveStore {
             releaseBackground()
         }
         do {
-            try await vault.download(item.id, version: version, to: file, gate: gate) { fraction in Task { @MainActor in self.opening[item.id] = fraction } }
+            try await vault.download(item.id, version: version, expectedVersionId: version == nil ? item.node.currentVersion?.id : nil, to: file, gate: gate) { fraction in
+                Task { @MainActor in self.opening[item.id] = fraction }
+            }
             try gate.check()
             return file
         } catch {
