@@ -113,6 +113,10 @@ class FakeDrive : AutoCloseable {
     /* Feed pages still answered before each one fails with a 500 (null: all are answered). */
     var changePagesLeft: Int? = null
     private var changesServed = 0
+    /* Nodes the feed leaves out, as a page this device missed would: a sync then holds rows under a folder it never saw. */
+    val missedByFeed = HashSet<String>()
+    /* The node changes again (a write elsewhere): the feed has it after any cursor up to now. */
+    fun touch(id: String) = synchronized(lock) { bump(node(id)) }
 
     /* `id` goes to the Trash, as the server keeps it: its parent's listing leaves it out, the trash listing has it. */
     fun trash(id: String) = synchronized(lock) { node(id).trashedAt = "2026-10-30T00:00:00Z"; bump(node(id)) }
@@ -442,7 +446,7 @@ class FakeDrive : AutoCloseable {
                 changePagesLeft?.let { changePagesLeft = it - 1 }
                 val since = query.getValue("since").toInt()
                 val limit = minOf(query.getValue("limit").toInt(), changesPage ?: Int.MAX_VALUE)
-                val changed = nodes.values.filter { it.workspaceId == segments[2] && it.changeSeq > since }.sortedBy { it.changeSeq }
+                val changed = nodes.values.filter { it.workspaceId == segments[2] && it.changeSeq > since && it.id !in missedByFeed }.sortedBy { it.changeSeq }
                 val page = changed.take(limit)
                 ok(JSONObject().put("changes", JSONArray(page.map { JSONObject().put("kind", "node").put("changeSeq", it.changeSeq).put("node", it.json()) }))
                     .put("nextCursor", page.maxOfOrNull { it.changeSeq } ?: since).put("hasMore", changed.size > page.size)

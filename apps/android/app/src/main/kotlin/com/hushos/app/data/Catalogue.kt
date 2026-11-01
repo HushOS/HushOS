@@ -131,6 +131,14 @@ fun Vault.buildCatalogue(): Boolean = synchronized(syncLock) {
         catalogueGeneration = at.generation
         catalogueChildren.clear()
         file(ordered, workspaceId)
+        // Built from a whole mirror at the head of the feed: a row this vault still holds that the mirror doesn't, last
+        // changed at or before the mirror's cursor, was deleted for good (a refill after a resync carries no tombstones).
+        // It goes, marked gone, as its tombstone would have had it; a row newer than the cursor (a write that landed
+        // since the pull, or one without a sequence) can't be judged yet and stays.
+        if (pulled && !at.refilling) {
+            val mirrored = held.mapTo(HashSet()) { it.id }
+            for (row in nodes.rowsIn(workspaceId)) if (row.id !in mirrored && row.node.changeSeq?.let { it <= at.cursor } == true) remove(workspaceId, row.id)
+        }
         catalogueState = CatalogueState.READY
         pulled
     } catch (error: Exception) {
@@ -146,8 +154,10 @@ fun Vault.buildCatalogue(): Boolean = synchronized(syncLock) {
  * phone alone. Files is told of every folder whose children changed.
  */
 fun Vault.sync(): Set<String>? = synchronized(syncLock) {
-    // A rebuild that failed still owes Files the folders it changed: the next one compares with what was filed before it.
-    if (catalogueState != CatalogueState.READY && owedFiled != null) return rebuildCatalogue(loadWorkspace().workspaceId)
+    // Not ready with a catalogue already filed (a rebuild threw, or a sync found rows under a folder it never saw):
+    // built again against what was filed, so Files hears what changed, as from any sync. A first build tells nobody,
+    // since nothing was listed from it yet.
+    if (catalogueState != CatalogueState.READY && (owedFiled != null || catalogueChildren.isNotEmpty())) return rebuildCatalogue(loadWorkspace().workspaceId)
     if (catalogueState != CatalogueState.READY) return if (buildCatalogue()) emptySet() else null
     val workspaceId = loadWorkspace().workspaceId
     val pulled = try { pullFeed(workspaceId, catalogueCursor) } catch (stale: StaleCursor) { null }

@@ -170,6 +170,57 @@ class FilesChangesTest {
         assertTrue("and lists the file", provider.listChildren(b).any { it.id == added })
     }
 
+    /*
+     * Deleted for good on the server while the provider was behind (f from A; g, already in the Trash, from B), and the
+     * tombstones dropped since: the provider's pull starts over and the refill simply omits them. The rebuilt catalogue
+     * must let go of them as a tombstone would (gone from resolve, from everything live, from the Trash), and tell
+     * their folders, rather than keep serving the rows it had cached.
+     */
+    @Test
+    fun aRefillThatOmitsPurgedNodesEvictsThemAsTombstonesWould() {
+        val provider = vault()
+        provider.buildCatalogue()
+        server.trash(g)
+        provider.sync()
+        assertTrue("in the Trash before", provider.catalogueTrash()!!.any { it.item.id == g })
+        assertTrue("live before", provider.catalogueAll().any { it.id == f })
+
+        server.drop(f)
+        server.drop(g)
+        server.tombstonesDroppedThrough = provider.catalogueCursor + 1
+        val told = notified { provider.sync() }
+
+        for (id in listOf(f, g)) {
+            assertTrue("$id no longer resolves", runCatching { provider.resolve(id) }.isFailure)
+            assertTrue("$id is marked gone", provider.removed(server.workspace, id))
+        }
+        assertFalse("f left everything live", provider.catalogueAll().any { it.id == f })
+        assertFalse("g left the Trash", provider.catalogueTrash()!!.any { it.item.id == g })
+        assertTrue("A is told", children(a) in told)
+        assertTrue("B is told", children(b) in told)
+    }
+
+    /*
+     * A sync finds a file under a folder this device never saw (the feed page with the folder was missed): it files
+     * what it can and leaves the catalogue to be built again. The build that follows, once the folder arrives, must tell
+     * the top folder it appeared in, as a sync would have; a plain build tells nobody.
+     */
+    @Test
+    fun theBuildAfterRowsUnderAnUnseenFolderTellsWhereTheFolderAppeared() {
+        val provider = vault()
+        provider.buildCatalogue()
+        val unseen = server.folder(server.root, "Unseen")
+        server.missedByFeed.add(unseen)
+        server.file(unseen, "inside.txt", ByteArray(8))
+        provider.sync()
+
+        server.missedByFeed.clear()
+        server.touch(unseen)
+        val told = notified { provider.sync() }
+        assertTrue("the top folder is told", children(FilesRoots.ROOT_DOCUMENT) in told)
+        assertTrue("and lists the folder", provider.listChildren(server.root).any { it.id == unseen })
+    }
+
     @Test
     fun aSyncTellsTheFolderAMoveLeftAsWellAsTheOneItEntered() {
         val app = vault()
