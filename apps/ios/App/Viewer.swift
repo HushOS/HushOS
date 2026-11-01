@@ -22,6 +22,8 @@ struct FileViewer: View {
     @State private var failed = false
     @State private var attempt = 0
     @State private var action: NodeAction?
+    /* The file on screen, once a loaded listing of its folder showed it: only then can that listing say it's gone. */
+    @State private var seenListed: String?
 
     init(items: [Opened], start: Opened, version: VersionListView? = nil, versionNote: String? = nil, onRestore: (() -> Void)? = nil) {
         self.items = items.isEmpty ? [start] : items
@@ -106,20 +108,29 @@ struct FileViewer: View {
             // Paged past before it came down: the next page's task is the one that counts.
             do { url = try await store.fetch(current, version: version) } catch where !ErrorWords.isCancellation(error) { failed = true } catch {}
         }
+        .onChange(of: listedHere, initial: true) { _, id in
+            if let id { seenListed = id }
+        }
         .onChange(of: removed) { _, gone in
             if gone { dismiss() }
         }
     }
 
+    /* The file on screen's id while its folder's loaded listing shows it. */
+    private var listedHere: String? {
+        guard let listed = store.folders[current.node.parentId ?? ""], listed.contains(where: { $0.id == current.id }) else { return nil }
+        return current.id
+    }
+
     /*
-     * Whether the file on screen is confirmed gone: its folder is listed and it isn't there (moved
-     * to the Trash or elsewhere from the menu), or its family was removed, forked or refused. A
-     * folder this phone hasn't listed (a file opened from Home or Search, paged to) says nothing,
-     * nor does a family whose state isn't known yet: the viewer stays.
+     * Whether the file on screen is confirmed gone: its folder's loaded listing showed it and no
+     * longer does (moved to the Trash or elsewhere from the menu), or its family was removed, forked
+     * or refused. A listing that never showed it (a folder not listed, a cached listing older than
+     * the file, paged to) says nothing, nor does a family whose state isn't known yet: the viewer stays.
      */
     private var removed: Bool {
         guard version == nil else { return false }
-        if let listed = store.folders[current.node.parentId ?? ""], !listed.contains(where: { $0.id == current.id }) { return true }
+        if seenListed == current.id, listedHere == nil { return true }
         guard store.isFamily(current), let groupId = store.familyAreaGroups[current.node.workspaceId.lowercased()],
               let state = store.familyStates[groupId] else { return false }
         switch state {
