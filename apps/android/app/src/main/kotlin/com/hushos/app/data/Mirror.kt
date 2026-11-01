@@ -35,6 +35,44 @@ class Mirror private constructor(context: Context) : SQLiteOpenHelper(context, "
     /* Sealed documents the app needs before it can ask the server: the workspace view, the tags registry. */
     override fun onOpen(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE IF NOT EXISTS documents (key TEXT PRIMARY KEY, json TEXT NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS resets (workspace_id TEXT PRIMARY KEY, generation INTEGER NOT NULL, refilling INTEGER NOT NULL)")
+    }
+
+    /*
+     * Held by whoever pulls the feed into the mirror, from reading where the mirror stands to the last page applied: the
+     * app's, the provider's and the transfer jobs' Vaults share the mirror, and a pull that started from a cursor the
+     * mirror no longer stands on must not land beside another's reset. Never the helper itself, whose monitor
+     * SQLiteOpenHelper takes for every read.
+     */
+    val feedLock = Any()
+
+    /*
+     * Where a workspace's mirror stands: its cursor; its generation, which every clear bumps, so a cursor a Vault took
+     * under an earlier one is known to describe rows the mirror no longer holds; and whether a refill after a clear
+     * is still unfinished, when the cursor is only as far as the refill got and no other cursor may move it.
+     */
+    data class FeedState(val cursor: Int, val generation: Long, val refilling: Boolean)
+
+    fun state(workspaceId: String): FeedState {
+        val db = writableDatabase
+        db.execSQL("INSERT OR IGNORE INTO resets (workspace_id, generation, refilling) VALUES (?, 1, 0)", arrayOf(workspaceId))
+        return db.rawQuery("SELECT generation, refilling FROM resets WHERE workspace_id = ?", arrayOf(workspaceId)).use {
+            it.moveToFirst()
+            FeedState(cursor(workspaceId), it.getLong(0), it.getInt(1) != 0)
+        }
+    }
+
+    /* A refill reached the head of the feed: the mirror holds the whole workspace again. */
+    fun refilled(workspaceId: String) {
+        writableDatabase.execSQL("UPDATE resets SET refilling = 0 WHERE workspace_id = ?", arrayOf(workspaceId))
+    }
+
+    /* A new generation, a refill owed (in the clear's own transaction). */
+    private fun reset(db: SQLiteDatabase, workspaceId: String) {
+        val generation = db.rawQuery("SELECT generation FROM resets WHERE workspace_id = ?", arrayOf(workspaceId)).use { if (it.moveToFirst()) it.getLong(0) else 0L }
+        db.insertWithOnConflict("resets", null, ContentValues().apply {
+            put("workspace_id", workspaceId); put("generation", generation + 1); put("refilling", 1)
+        }, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
     fun document(key: String): String? = readableDatabase.rawQuery("SELECT json FROM documents WHERE key = ?", arrayOf(key)).use {
@@ -79,15 +117,33 @@ class Mirror private constructor(context: Context) : SQLiteOpenHelper(context, "
         out
     }
 
-    /* Forgets everything about `workspaceId`, or every workspace when none is named. */
+    /*
+     * Forgets everything about `workspaceId`, or every workspace when none is named. Each one cleared moves to a new
+     * generation with a refill owed (kept across the clear, so no Vault's cursor from before it counts again).
+     */
     fun clear(workspaceId: String? = null) {
         val db = writableDatabase
         if (workspaceId == null) {
-            db.delete("nodes", null, null); db.delete("cursors", null, null); db.delete("thumbnails", null, null); db.delete("documents", null, null)
+            db.beginTransaction()
+            try {
+                db.delete("nodes", null, null); db.delete("cursors", null, null); db.delete("thumbnails", null, null); db.delete("documents", null, null)
+                db.execSQL("UPDATE resets SET generation = generation + 1, refilling = 1")
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
             // An account leaving the phone: its rows don't linger in the file's free pages either.
             db.execSQL("VACUUM")
+            return
         }
-        else { db.delete("nodes", "workspace_id = ?", arrayOf(workspaceId)); db.delete("cursors", "workspace_id = ?", arrayOf(workspaceId)) }
+        db.beginTransaction()
+        try {
+            db.delete("nodes", "workspace_id = ?", arrayOf(workspaceId)); db.delete("cursors", "workspace_id = ?", arrayOf(workspaceId))
+            reset(db, workspaceId)
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
     }
 
     fun workspaces(): List<String> = readableDatabase.rawQuery("SELECT workspace_id FROM cursors", null).use { cursor ->

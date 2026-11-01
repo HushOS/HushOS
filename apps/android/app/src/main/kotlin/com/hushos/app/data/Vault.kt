@@ -136,6 +136,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
     @Volatile internal var catalogueState: CatalogueState = CatalogueState.IDLE
     /* The catalogue holds what the server sent this session, not only what the phone had: a node missing from it is gone. */
     @Volatile internal var cataloguePulled = false
+    /* Where this vault's catalogue stands in the feed: its own, since other vaults in this process share the mirror. */
+    @Volatile internal var catalogueCursor = 0
+    /* The mirror generation that cursor was taken under (Mirror.FeedState): 0, none, until the catalogue is built. */
+    @Volatile internal var catalogueGeneration = 0L
+    /* What the catalogue held before a rebuild that hasn't succeeded yet (Catalogue.kt, rebuildCatalogue): Files is owed the difference. */
+    @Volatile internal var owedFiled: Map<String, Pair<String, Int?>>? = null
     /* One sync or build at a time; the maps below are read from many threads while one of them writes. */
     internal val syncLock = Any()
     internal val catalogueChildren = ConcurrentHashMap<String, MutableSet<String>>()
@@ -991,6 +997,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     private fun adopt(node: NodeView, key: ByteArray, metadata: NodeMetadata): Opened {
         checkSuite(node.envelopeSuite)
         val result = openedRow(node, metadata, key)
+        fileWritten(node)
         nodes.put(result, key)
         node.parentId?.let { rememberParent(node.id, it) }
         return result
@@ -1001,6 +1008,20 @@ class Vault(internal val context: Context, val api: DriveApi) {
         checkWritten(node, workspaceId, nodeId)
         return adopt(node, key, metadata)
     }
+
+    /*
+     * A write's row filed in this vault's catalogue at once (out of the folder it left, into the one it is in), so a
+     * listing asked for right after the write, as Files asks once told, has it before the feed brings it.
+     */
+    private fun fileWritten(node: NodeView) {
+        if (catalogueState != CatalogueState.READY || node.workspaceId != workspace?.workspaceId) return
+        val parent = node.parentId ?: return
+        nodes.row(node.workspaceId, node.id)?.node?.parentId?.let { old -> if (old != parent) catalogueChildren[old]?.remove(node.id) }
+        catalogueChildren.getOrPut(parent) { ConcurrentHashMap.newKeySet() }.add(node.id)
+    }
+
+    /* Files and the pickers read these folders again (FilesRoots); every write that changes a folder's children ends here. */
+    internal fun foldersChanged(folders: Collection<String?>) = FilesRoots.foldersChanged(context, folders.filterNotNull(), workspace?.root?.id)
 
     fun forget(workspaceId: String, id: String) {
         nodes.forget(workspaceId, id)
@@ -1150,7 +1171,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val node = api.createFolder(ws, JSONObject().putId(made).put("parentId", parent.id).put("keyEpoch", epoch.toLong())
             .put("parentKeyEpoch", parent.node.keyEpoch.toLong()).put("keyEnvelope", base64urlEncode(wrapped)).put("metadataEnvelope", base64urlEncode(sealed))
             .put("metadataSignature", signature))
-        return adoptWritten(node, key, metadata, ws, id)
+        return adoptWritten(node, key, metadata, ws, id).also { foldersChanged(listOf(parent.id)) }
     }
 
     fun rename(id: String, name: String): Opened {
@@ -1163,7 +1184,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val sealed = metadataSeal(MetadataContext(item.node.workspaceId, id, next), key, metadata)
         val node = api.rename(id, item.node.workspaceId, item.node.metadataVersion, item.node.keyEpoch, base64urlEncode(sealed),
             signMetadata(item.node.workspaceId, id, if (item.isFolder) NodeKind.FOLDER else NodeKind.FILE, next, sealed, prior))
-        return adoptWritten(node, key, metadata, item.node.workspaceId, id)
+        return adoptWritten(node, key, metadata, item.node.workspaceId, id).also { foldersChanged(listOf(item.node.parentId, it.node.parentId)) }
     }
 
     /* A node's key wrapped under a new parent's; both in one workspace, or the envelope would name the wrong one. */
@@ -1179,7 +1200,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val parent = resolve(parentId)
         val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val node = api.move(id, item.node.workspaceId, parent.id, parent.node.keyEpoch, rewrap(item, parent))
-        return adoptWritten(node, key, item.metadata, item.node.workspaceId, id)
+        // Both listings change: the folder it left and the one it entered.
+        return adoptWritten(node, key, item.metadata, item.node.workspaceId, id).also { foldersChanged(listOf(item.node.parentId, parent.id)) }
     }
 
     /*
@@ -1223,12 +1245,14 @@ class Vault(internal val context: Context, val api: DriveApi) {
                 .put("metadataSignature", signCopiedMetadata(ws, newId, NodeKind.FILE, metadataEnvelope, prior)))
             .putId(madeVersion).put("contentKeyEnvelope", base64urlEncode(contentKeyEnvelope))
             .put("versionSignature", signCopiedVersion(ws, newId, versionId, version.objectId, version.contentSuite, contentKeyEnvelope, prior)))
-        return adoptWritten(node, key, metadata, ws, newId)
+        return adoptWritten(node, key, metadata, ws, newId).also { foldersChanged(listOf(parent.id)) }
     }
 
     fun trash(id: String) {
+        val parent = resolve(id).node.parentId
         val workspace = sendTrash(id)
         remove(workspace, id)
+        foldersChanged(listOf(parent))
     }
 
     /* The single route's trash, without forgetting the row: its workspace, for the caller to forget it once the lists let go. */
@@ -1247,6 +1271,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
     suspend fun trashMany(ids: List<String>, moved: (List<String>) -> Unit = {}): List<Result<TrashMove>> {
         val items = ids.map { id -> id to (nodes.find(id)?.node?.workspaceId ?: runCatching { resolve(id).node.workspaceId }.getOrDefault(workspaceId)) }
         val workspaces = items.toMap()
+        // Read before the rows are forgotten: the folders whose listings lose what moved.
+        val parentsOf = ids.associateWith { id -> nodes.find(id)?.node?.parentId ?: parents[id] }
         return trashInBatches(
             items,
             send = { ws, chunk -> api.trashBatch(ws, chunk) },
@@ -1259,7 +1285,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             // Called after `moved`: the row leaves the lists first, then this device forgets it.
             forget = { landed -> for (id in landed) workspaces[id]?.let { remove(it, id) } },
             moved = { landed -> moved(landed.map { it.first }) },
-        )
+        ).also { outcomes -> foldersChanged(ids.filterIndexed { index, _ -> outcomes[index].isSuccess }.map { parentsOf[it] }.distinct()) }
     }
 
     /*
@@ -1280,6 +1306,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             sequential = { chunk -> chunk.map { id -> runCatching { rows[id] = restore(TrashItem(given.getValue(id), false)) } } },
             back = { id -> rows[id]?.let(back) },
         )
+        foldersChanged(rows.values.map { it.node.parentId }.distinct())
         return items.mapIndexed { index, item -> outcomes[index].map { rows.getValue(item.id) } }
     }
 
@@ -1306,7 +1333,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val toRoot = if (entry.parentTrashed) resolve(rootId).let { root -> root.node.keyEpoch to rewrap(item, root) } else null
         val node = api.restore(item.id, item.node.workspaceId, toRoot)
-        return adoptWritten(node, key, item.metadata, item.node.workspaceId, item.id)
+        return adoptWritten(node, key, item.metadata, item.node.workspaceId, item.id).also { foldersChanged(listOf(it.node.parentId)) }
     }
 
     fun purge(id: String) {
@@ -1320,7 +1347,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
     fun restoreVersion(version: VersionListView, id: String): Opened {
         val item = resolve(id)
         val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
-        return adoptWritten(api.restoreVersion(version.id, item.node.workspaceId), key, item.metadata, item.node.workspaceId, id)
+        // Its size and date change in its folder's listing.
+        return adoptWritten(api.restoreVersion(version.id, item.node.workspaceId), key, item.metadata, item.node.workspaceId, id).also { foldersChanged(listOf(it.node.parentId)) }
     }
 
     /* A JPEG for the lists, the grid and the picker, 512px on the long edge as the web makes one at upload; null when not an image or too big. */
@@ -1468,6 +1496,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             val sealed = metadataSeal(MetadataContext(ws, nodeId, next), nodeKey, final)
             node = api.rename(nodeId, ws, node.metadataVersion, node.keyEpoch, base64urlEncode(sealed), signMetadata(ws, nodeId, NodeKind.FILE, next, sealed, keptName))
         }
-        return adoptWritten(node, nodeKey, final, ws, nodeId)
+        // Told once it has landed, wherever it was started from (the app, a transfer job, Files writing a file back).
+        return adoptWritten(node, nodeKey, final, ws, nodeId).also { foldersChanged(listOf(it.node.parentId)) }
     }
 }

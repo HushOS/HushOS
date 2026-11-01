@@ -675,7 +675,12 @@ final class BackgroundTransfers {
         update(id) { $0.state = .done }
         // Saved at once: a background launch is suspended soon after, and a record left `finishing` would be finished again.
         save()
-        if let record = record(id) { ended(record, reason: nil) }
+        if let record = record(id) {
+            ended(record, reason: nil)
+            // Files reads the feed itself once told: told here, so an upload finished in a background launch, before any
+            // screen (and its sync) exists, still reaches the folder Files has open.
+            if record.kind == .upload { FilesDomain.signal(folderId: record.folderId) }
+        }
         try? FileManager.default.removeItem(at: folder(id))
         onLanded?()
         // Finished rows linger so the result is seen.
