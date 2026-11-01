@@ -674,6 +674,8 @@ public actor Vault {
     /* Downloads and decrypts a file's version to `destination`, chunk by chunk. */
     public func download(_ nodeId: String, version: VersionListView? = nil, to destination: URL, gate: FamilyCopyGate? = nil,
                          progress: @Sendable (Double) -> Void = { _ in }) async throws {
+        // Taken before anything is awaited: a session that ends while the address comes writes nothing.
+        let gate = gate ?? TemporaryCopies.copyGate(familyWorkspace: nil)
         let item = try await resolve(nodeId)
         let opened = try openVersion(item, version: version)
         let url = try await api.versionURL(opened.versionId, workspaceId: item.node.workspaceId)

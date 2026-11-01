@@ -103,7 +103,7 @@ public enum Resumable {
         sleep: (Double) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
         onExpired: () async throws -> Void = {},
         progress: (Double) -> Void = { _ in },
-        /* A family item's copy: every write only while its family stands (FamilyCopyGate). */
+        /* Every write only while the session (and a family item's family) stands (FamilyCopyGate). */
         gate: FamilyCopyGate? = nil,
         fetch: (UInt64) async throws -> Data
     ) async throws {

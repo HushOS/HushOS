@@ -171,20 +171,46 @@ import Testing
         let temporary = base.appendingPathComponent("tmp", isDirectory: true)
         let copy = temporary.appendingPathComponent("downloads/node-a/version-1/content")
         // Alice is served, then Files downloads one of her files.
-        TemporaryCopies.claim(alice, in: temporary)
+        TemporaryCopies.claim(alice, in: temporary, account: CopyEpoch())
         try FileManager.default.createDirectory(at: copy.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("decrypted".utf8).write(to: copy)
 
-        TemporaryCopies.claim(AccountOwner(userId: alice.userId, origin: "https://hushos.com/"), in: temporary)
+        TemporaryCopies.claim(AccountOwner(userId: alice.userId, origin: "https://hushos.com/"), in: temporary, account: CopyEpoch())
         #expect(FileManager.default.fileExists(atPath: copy.path), "the same account lost its copies")
 
-        TemporaryCopies.claim(aliceOnStaging, in: temporary)
+        TemporaryCopies.claim(aliceOnStaging, in: temporary, account: CopyEpoch())
         #expect(!FileManager.default.fileExists(atPath: copy.path), "Alice's copy survived the same user id on another server")
 
         try FileManager.default.createDirectory(at: copy.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("decrypted".utf8).write(to: copy)
-        TemporaryCopies.claim(nil, in: temporary)
+        TemporaryCopies.claim(nil, in: temporary, account: CopyEpoch())
         #expect(!FileManager.default.fileExists(atPath: copy.path), "a copy survived with nobody signed in")
+    }
+
+    /*
+     * Files serves another account while one of Alice's files comes down (the extension saw the
+     * change, not a sign-out): her download writes nothing into the folder emptied for the next,
+     * while the same account served again lets its own go on. Fails if a claim that empties the
+     * folder doesn't end what was begun before it.
+     */
+    @Test func aDownloadBegunForAnotherAccountWritesNothing() async throws {
+        let temporary = base.appendingPathComponent("tmp-switch", isDirectory: true)
+        let account = CopyEpoch()
+        TemporaryCopies.claim(alice, in: temporary, account: account)
+        let copy = temporary.appendingPathComponent("downloads/node-a/version-1/content")
+        let gate = TemporaryCopies.copyGate(familyWorkspace: nil, account: account)
+        TemporaryCopies.claim(alice, in: temporary, account: account)
+        try await Resumable.download(to: copy, count: 1, chunkBytes: 4, gate: gate) { _ in Data("abcd".utf8) }
+        #expect(FileManager.default.fileExists(atPath: copy.path), "the same account's download was stopped")
+
+        let other = temporary.appendingPathComponent("downloads/node-b/version-1/content")
+        let begun = TemporaryCopies.copyGate(familyWorkspace: nil, account: account)
+        TemporaryCopies.claim(aliceOnStaging, in: temporary, account: account)
+        await #expect(throws: (any Error).self) {
+            try await Resumable.download(to: other, count: 1, chunkBytes: 4, gate: begun) { _ in Data("abcd".utf8) }
+        }
+        #expect(!FileManager.default.fileExists(atPath: other.path))
+        #expect(!FileManager.default.fileExists(atPath: other.appendingPathExtension("part").path))
     }
 
     @Test func copiesUnderAnOlderVersionsMarkerAreNobodys() throws {
@@ -194,7 +220,7 @@ import Testing
         try FileManager.default.createDirectory(at: copy.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("decrypted".utf8).write(to: copy)
         try Data(alice.userId.utf8).write(to: temporary.appendingPathComponent("account-owner"))
-        TemporaryCopies.claim(alice, in: temporary)
+        TemporaryCopies.claim(alice, in: temporary, account: CopyEpoch())
         #expect(!FileManager.default.fileExists(atPath: copy.path))
     }
 }

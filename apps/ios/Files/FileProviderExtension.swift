@@ -134,6 +134,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                        request: NSFileProviderRequest,
                        completionHandler: @escaping (URL?, NSFileProviderItem?, Error?) -> Void) -> Progress {
         let progress = Progress(totalUnitCount: 100)
+        // Taken before anything is awaited: an account change meanwhile (TemporaryCopies.claim) writes nothing.
+        let gate = TemporaryCopies.copyGate(familyWorkspace: nil)
         let task = Task {
             do {
                 let vault = try requireVault()
@@ -143,9 +145,9 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                 let item = try await vault.resolve(itemIdentifier.rawValue)
                 let directory = FileManager.default.temporaryDirectory
                     .appendingPathComponent("downloads/\(item.id)/\(item.node.currentVersion?.id ?? "none")", isDirectory: true)
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try gate.perform { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
                 let file = directory.appendingPathComponent("content")
-                try await vault.download(itemIdentifier.rawValue, to: file) { fraction in
+                try await vault.download(itemIdentifier.rawValue, to: file, gate: gate) { fraction in
                     progress.completedUnitCount = Int64(fraction * 100)
                 }
                 let opened = try await vault.resolve(itemIdentifier.rawValue)

@@ -206,7 +206,43 @@ import Testing
  * A family file's plaintext copy against a wipe that lands while it comes down. Fails if any
  * chunk, the finished copy or its folder outlives the forget, or if the copy is handed on.
  */
-@Suite struct FamilyCopyGateTests {
+@Suite(.serialized) struct FamilyCopyGateTests {
+    /*
+     * Signed out while a family file and a personal one come down (their content keys already
+     * opened): the sign-out's wipe lands while each waits for its address, before any write, or
+     * between two chunks, and no download writes again or leaves a file. Fails if a personal copy
+     * has no guard, or the wipe doesn't end what the account's downloads write under.
+     */
+    @Test func aSignOutDuringDownloadsLeavesNoFileForEither() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("signout-\(UUID().uuidString)")
+        let temporary = base.appendingPathComponent("tmp")
+        let account = CopyEpoch()
+        let store = AccountStore(root: base.appendingPathComponent("group"), temporary: temporary, copies: account)
+        let ws = UUID().uuidString.lowercased()
+        let familyFile = try #require(TemporaryCopies.openedFolder(itemId: "f", version: "v", familyWorkspace: ws, in: temporary)).appendingPathComponent("Recipes.txt")
+        let personalFile = try #require(TemporaryCopies.openedFolder(itemId: "p", version: "v", familyWorkspace: nil, in: temporary)).appendingPathComponent("Notes.txt")
+        // Each download's gate is taken as it starts; the sign-out lands while it waits for its address (before any write),
+        // or between two chunks.
+        for (file, gate, wipeAt) in [(familyFile, TemporaryCopies.copyGate(familyWorkspace: ws, account: account), -1),
+                                     (personalFile, TemporaryCopies.copyGate(familyWorkspace: nil, account: account), -1),
+                                     (personalFile, TemporaryCopies.copyGate(familyWorkspace: nil, account: account), 1)] {
+            if wipeAt < 0 { store.wipe() }
+            do {
+                try await Resumable.download(to: file, count: 3, chunkBytes: 4, gate: gate) { index in
+                    if index == wipeAt { store.wipe() }
+                    return Data("abcd".utf8)
+                }
+                Issue.record("a download went on after the sign-out")
+            } catch {}
+            #expect(!FileManager.default.fileExists(atPath: file.path), "plaintext outlived the sign-out: \(file.lastPathComponent)")
+            #expect(!FileManager.default.fileExists(atPath: file.appendingPathExtension("part").path))
+        }
+        // The next account's downloads go on.
+        let next = try #require(TemporaryCopies.openedFolder(itemId: "n", version: "v", familyWorkspace: nil, in: temporary)).appendingPathComponent("n.txt")
+        try await Resumable.download(to: next, count: 1, chunkBytes: 4, gate: TemporaryCopies.copyGate(familyWorkspace: nil, account: account)) { _ in Data("abcd".utf8) }
+        #expect(FileManager.default.fileExists(atPath: next.path))
+    }
+
     @Test func aWipeMidDownloadLeavesNoPlaintextAndHandsNothingOn() async throws {
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("copies-\(UUID().uuidString)")
         let ws = UUID().uuidString.lowercased()

@@ -225,21 +225,24 @@ extension Vault {
         // Family folders are read only in this version, and nothing of them is kept on the phone.
         try refuseFamilyWrite(item.node.workspaceId)
         guard !item.isFolder, let destination = Offline.file(for: item) else { throw DriveAPIError.server(400, "Only files can be kept downloaded.") }
-        Unbacked.folder(Offline.root())
-        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if !FileManager.default.fileExists(atPath: destination.path) {
+        // The session's: a sign-out while it comes down leaves nothing kept (TemporaryCopies.copyGate).
+        let gate = TemporaryCopies.copyGate(familyWorkspace: nil)
+        let moved = try gate.perform { () -> Bool in
+            Unbacked.folder(Offline.root())
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: destination.path) { return true }
             // Renamed elsewhere: the same version is already here under its old name, so move it rather than fetch it again.
             let folder = destination.deletingLastPathComponent()
             let earlier = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []).first { $0.pathExtension != "part" }
-            let moved = earlier.map { (try? FileManager.default.moveItem(at: $0, to: destination)) != nil } ?? false
-            if !moved {
-                do {
-                    try await download(item.id, to: destination, progress: progress)
-                } catch {
-                    // A first keep that failed is nobody's to resume: its partial goes. A kept file's stays for the next refresh.
-                    if !Offline.isKept(item.id) { try? FileManager.default.removeItem(at: Offline.root().appendingPathComponent(item.id, isDirectory: true)) }
-                    throw error
-                }
+            return earlier.map { (try? FileManager.default.moveItem(at: $0, to: destination)) != nil } ?? false
+        }
+        if !moved {
+            do {
+                try await download(item.id, to: destination, gate: gate, progress: progress)
+            } catch {
+                // A first keep that failed is nobody's to resume: its partial goes. A kept file's stays for the next refresh.
+                if !Offline.isKept(item.id) { try? FileManager.default.removeItem(at: Offline.root().appendingPathComponent(item.id, isDirectory: true)) }
+                throw error
             }
         }
         // Older versions of the same file go; only the current one is kept.
@@ -247,7 +250,7 @@ extension Vault {
         for entry in (try? FileManager.default.contentsOfDirectory(at: versions, includingPropertiesForKeys: nil)) ?? [] where entry.lastPathComponent != item.node.currentVersion?.id {
             try? FileManager.default.removeItem(at: entry)
         }
-        Offline.remember(item, folder: folder)
+        try gate.perform { Offline.remember(item, folder: folder) }
     }
 
     /* Every file in a folder and its subfolders, not in the trash: what keeping the folder keeps. */

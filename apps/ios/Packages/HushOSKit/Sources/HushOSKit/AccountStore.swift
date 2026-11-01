@@ -24,6 +24,8 @@ public struct AccountStore: Sendable {
     let marksFloor: MarkFloor
     /* Moved by every wipe: a guard write begun before it keeps nothing (the process's own in the app, a store's own in a test). */
     let guardGeneration: GuardGeneration
+    /* Moved by every wipe before anything goes: a copy begun before writes nothing after (the process's own in the app). */
+    let copies: CopyEpoch
 
     /* Under the group container: kept files, the queue's copies, Save to HushOS's staged copies, the
      * lists of kept files, the last folder, recent searches and the last email (`Unbacked.state`), the
@@ -38,11 +40,12 @@ public struct AccountStore: Sendable {
     private var ownerFile: URL { root.appendingPathComponent("local/account-owner") }
 
     init(root: URL, temporary: URL, marksFloor: MarkFloor = MarkFloor(), guardGeneration: GuardGeneration = GuardGeneration(),
-         forgetStores: @escaping @Sendable () -> Void = {}) {
+         copies: CopyEpoch = CopyEpoch(), forgetStores: @escaping @Sendable () -> Void = {}) {
         self.root = root
         self.temporary = temporary
         self.marksFloor = marksFloor
         self.guardGeneration = guardGeneration
+        self.copies = copies
         self.forgetStores = forgetStores
     }
 
@@ -107,6 +110,8 @@ public struct AccountStore: Sendable {
      */
     public func wipe() {
         let files = FileManager.default
+        // First: every download of the session, family or personal, stops writing before its folder goes.
+        TemporaryCopies.endAccount(copies)
         // Under the marks' lock, so a raise from before the sign-out can't write them back after.
         RollbackMarkStore(folder: root.appendingPathComponent("local/marks", isDirectory: true), floor: marksFloor).deleteAll()
         // The contact guard too, under its own lock, so an act's write that waited through the sign-out writes nothing back.
@@ -132,7 +137,8 @@ public struct AccountStore: Sendable {
     public static var shared: AccountStore {
         let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedKeychain.accessGroup)
             ?? FileManager.default.temporaryDirectory.appendingPathComponent("group", isDirectory: true)
-        return AccountStore(root: group, temporary: FileManager.default.temporaryDirectory, marksFloor: .process, guardGeneration: .process) {
+        return AccountStore(root: group, temporary: FileManager.default.temporaryDirectory, marksFloor: .process, guardGeneration: .process,
+                            copies: .process) {
             Offline.forgetAll()
             Places.forget()
             // Emptied and vacuumed, so ids and sealed rows don't linger in free pages or the WAL.

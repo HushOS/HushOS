@@ -269,11 +269,29 @@ public enum TemporaryCopies {
     static let forgetLock = NSLock()
     nonisolated(unsafe) static var forgotten: [String: UInt64] = [:]
 
-    /* A copy about to be made of an item: of a family folder, kept to the family's forget generation now (FamilyCopyGate). */
-    public static func copyGate(familyWorkspace: String?) -> FamilyCopyGate {
-        guard let familyWorkspace, let workspace = UUID(uuidString: familyWorkspace) else { return FamilyCopyGate(workspace: nil, generation: 0) }
-        let key = workspace.uuidString.lowercased()
-        return FamilyCopyGate(workspace: key, generation: forgetLock.withLock { forgotten[key, default: 0] })
+    /*
+     * A copy about to be made of an item, kept to the account's session now and, for a family
+     * folder's, the family's forget generation (FamilyCopyGate). Taken before anything is awaited
+     * for it (the version, its address), so a session that ends meanwhile is seen.
+     */
+    public static func copyGate(familyWorkspace: String?, account: CopyEpoch = .process) -> FamilyCopyGate {
+        forgetLock.withLock {
+            let epoch = account.value
+            guard let familyWorkspace, let workspace = UUID(uuidString: familyWorkspace) else {
+                return FamilyCopyGate(workspace: nil, generation: 0, account: account, epoch: epoch)
+            }
+            let key = workspace.uuidString.lowercased()
+            return FamilyCopyGate(workspace: key, generation: forgotten[key, default: 0], account: account, epoch: epoch)
+        }
+    }
+
+    /*
+     * The account's session ended (sign-out, deletion, a removal, a lost session, another account in):
+     * under the lock every copy's writes take, so a download begun before, family or personal, never
+     * writes again, even one still waiting on its address. Before anything is wiped.
+     */
+    public static func endAccount(_ account: CopyEpoch = .process) {
+        forgetLock.withLock { account.value &+= 1 }
     }
 
     /* `opened/family/`: family folders' copies by workspace; never an item id (those are UUIDs). */
@@ -288,11 +306,13 @@ public enum TemporaryCopies {
      * Each process runs it for its own folder: the app at sign-in, the Files extension whenever
      * the account it serves changes. A marker an older version wrote (a bare user id) is no owner.
      */
-    public static func claim(_ owner: AccountOwner?, in temporary: URL = FileManager.default.temporaryDirectory) {
+    public static func claim(_ owner: AccountOwner?, in temporary: URL = FileManager.default.temporaryDirectory, account: CopyEpoch = .process) {
         let files = FileManager.default
         let marker = temporary.appendingPathComponent(ownerMarker)
         let recorded = (try? Data(contentsOf: marker)).flatMap { try? JSONDecoder().decode(AccountOwner.self, from: $0) }
         if let owner, recorded == owner { return }
+        // A download the last account began writes nothing into the folder emptied here.
+        endAccount(account)
         for item in (try? files.contentsOfDirectory(at: temporary, includingPropertiesForKeys: nil)) ?? [] {
             try? files.removeItem(at: item)
         }
@@ -303,20 +323,33 @@ public enum TemporaryCopies {
 }
 
 /*
- * A family item's plaintext copy, kept to the family it was begun under: making its folder,
- * writing each chunk and moving it into place run under the lock forgetting the family deletes
- * under, and only while the family wasn't forgotten since, so a wipe that lands mid-download leaves
- * nothing behind and nothing is handed on. A personal item's gate always lets it through.
+ * Which session of the account a copy belongs to: moved under the copies' lock whenever the
+ * session ends (TemporaryCopies.endAccount). The process's own in the app, a test's own in a test.
+ */
+public final class CopyEpoch: @unchecked Sendable {
+    public static let process = CopyEpoch()
+    /* Read and moved only under TemporaryCopies.forgetLock. */
+    var value: UInt64 = 0
+    public init() {}
+}
+
+/*
+ * An item's plaintext copy, kept to the session it was begun in and, for a family item, the
+ * family it was begun under: making its folder, writing each chunk and moving it into place run
+ * under the lock a sign-out and forgetting a family move under, and only while neither happened
+ * since, so a wipe that lands mid-download leaves nothing behind and nothing is handed on.
  */
 public struct FamilyCopyGate: Sendable {
     let workspace: String?
     let generation: UInt64
+    let account: CopyEpoch
+    let epoch: UInt64
 
-    /* `body` under the forget lock, while the family stands; the family's words when it was forgotten since. */
+    /* `body` under the copies' lock, while the session and the family stand; refused when either ended since. */
     public func perform<T>(_ body: () throws -> T) throws -> T {
-        guard let workspace else { return try body() }
-        return try TemporaryCopies.forgetLock.withLock {
-            guard TemporaryCopies.forgotten[workspace, default: 0] == generation else { throw FamilyFailure(message: FamilyWords.openAgain) }
+        try TemporaryCopies.forgetLock.withLock {
+            guard account.value == epoch else { throw CancellationError() }
+            if let workspace, TemporaryCopies.forgotten[workspace, default: 0] != generation { throw FamilyFailure(message: FamilyWords.openAgain) }
             return try body()
         }
     }

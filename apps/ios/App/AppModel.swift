@@ -216,6 +216,8 @@ final class AppModel {
     @ObservationIgnored weak var driveStore: DriveStore?
 
     private func sessionClosed() {
+        // Before the vault goes: no download of the session, family or personal, writes again (TemporaryCopies.endAccount).
+        TemporaryCopies.endAccount()
         driveStore?.resetFamilies()
         driveStore = nil
     }
