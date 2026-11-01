@@ -1,0 +1,23 @@
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_3ca7eb95665af7 33
+apps/ios/App/BackgroundTransfers.swift
+  s_566b8e0c4467a4::t_510c9b2c0337c2 678-683
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_6bee570150e203 1207-1209
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e4eebb0585a4f9e6f42903e1f93ef9739e489e5a",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
