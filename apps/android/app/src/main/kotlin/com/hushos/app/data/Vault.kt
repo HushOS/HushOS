@@ -140,6 +140,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
     @Volatile internal var catalogueCursor = 0
     /* The mirror generation that cursor was taken under (Mirror.FeedState): 0, none, until the catalogue is built. */
     @Volatile internal var catalogueGeneration = 0L
+    /* What the catalogue held before a rebuild that hasn't succeeded yet (Catalogue.kt, rebuildCatalogue): Files is owed the difference. */
+    @Volatile internal var owedFiled: Map<String, Pair<String, Int?>>? = null
     /* One sync or build at a time; the maps below are read from many threads while one of them writes. */
     internal val syncLock = Any()
     internal val catalogueChildren = ConcurrentHashMap<String, MutableSet<String>>()

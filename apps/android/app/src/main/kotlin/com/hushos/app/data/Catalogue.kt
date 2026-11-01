@@ -146,6 +146,8 @@ fun Vault.buildCatalogue(): Boolean = synchronized(syncLock) {
  * phone alone. Files is told of every folder whose children changed.
  */
 fun Vault.sync(): Set<String>? = synchronized(syncLock) {
+    // A rebuild that failed still owes Files the folders it changed: the next one compares with what was filed before it.
+    if (catalogueState != CatalogueState.READY && owedFiled != null) return rebuildCatalogue(loadWorkspace().workspaceId)
     if (catalogueState != CatalogueState.READY) return if (buildCatalogue()) emptySet() else null
     val workspaceId = loadWorkspace().workspaceId
     val pulled = try { pullFeed(workspaceId, catalogueCursor) } catch (stale: StaleCursor) { null }
@@ -199,7 +201,9 @@ fun Vault.sync(): Set<String>? = synchronized(syncLock) {
 /*
  * The catalogue built again from the mirror, the refill carried on first, inside a sync: returns what differs from the
  * catalogue it replaces (as a sync's touched set: the nodes, the folders they left and entered), or null when the
- * server was out of reach, and tells Files of those folders.
+ * server was out of reach, and tells Files of those folders. What was filed before is kept (`owedFiled`) until a
+ * rebuild succeeds: one that throws leaves the catalogue FAILED, and the sync that builds it next must still compare
+ * with it, or the folders that changed meanwhile are never told (that sync's cursor is current by then).
  */
 private fun Vault.rebuildCatalogue(workspaceId: String): Set<String>? {
     fun filed(): Map<String, Pair<String, Int?>> {
@@ -207,9 +211,10 @@ private fun Vault.rebuildCatalogue(workspaceId: String): Set<String>? {
         for ((parent, children) in catalogueChildren) for (child in children) nodes.row(workspaceId, child)?.let { out[child] = parent to it.node.changeSeq }
         return out
     }
-    val before = filed()
+    val before = owedFiled ?: filed().also { owedFiled = it }
     catalogueState = CatalogueState.IDLE
     val pulled = buildCatalogue()
+    owedFiled = null
     val after = filed()
     val touched = HashSet<String>()
     for (id in before.keys + after.keys) {

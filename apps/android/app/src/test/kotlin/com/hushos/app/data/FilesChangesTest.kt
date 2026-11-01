@@ -145,6 +145,31 @@ class FilesChangesTest {
         assertEquals(setOf(g) + later, cold.catalogueChildren(b)!!.map { it.id }.toSet())
     }
 
+    /*
+     * The app reset the mirror (its cursor predated dropped tombstones), so the provider's next poll rebuilds its
+     * catalogue, and that rebuild fails (the server answers 500). The poll after it succeeds: the folder that changed
+     * while the provider was behind must still be told, or Files keeps the old listing for good (the provider's cursor
+     * is current by then, and no later poll brings that change again).
+     */
+    @Test
+    fun aRebuildThatFailsStillTellsTheFoldersOnceALaterPollSucceeds() {
+        val app = vault()
+        val provider = vault()
+        app.buildCatalogue()
+        provider.buildCatalogue()
+        val added = server.file(b, "while behind.txt", ByteArray(8))
+        server.tombstonesDroppedThrough = app.catalogueCursor + 1
+        app.sync()
+
+        server.changePagesLeft = 0
+        assertTrue("the provider's rebuild fails", runCatching { provider.sync() }.isFailure)
+        server.changePagesLeft = null
+
+        val told = notified { provider.sync() }
+        assertTrue("the folder that changed is told", children(b) in told)
+        assertTrue("and lists the file", provider.listChildren(b).any { it.id == added })
+    }
+
     @Test
     fun aSyncTellsTheFolderAMoveLeftAsWellAsTheOneItEntered() {
         val app = vault()
