@@ -48,10 +48,30 @@ extension OnFakeDrive {
         }
 
         /*
+         * The first acceptance on this phone hands back a guard that can't be stored, so the family is
+         * refused before any of its folders was opened. Its folders are still known as the family's:
+         * a write into one is held by the barrier with the storage words, never taken as a personal
+         * folder's. Fails if the folders are noted only after the guard is stored.
+         */
+        @Test func aFirstAcceptanceWhoseGuardIsNotStoredStillHoldsItsFolders() async throws {
+            let family = try FamilyFixture()
+            let writes = GuardSwitch()
+            writes.writable = false
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server, guards: familyGuards(family.member, writes: writes))
+            defer { phone.done() }
+            #expect(await phone.sync.sync(family.summary) == .failed(GuardWords.unsaved))
+            #expect(await phone.vault.isFamilyWorkspace(family.workspaceId))
+            await #expect(throws: GuardError.unsaved) { try await phone.vault.sendingIntoFamily(family.workspaceId) }
+        }
+
+        /*
          * A newer member list that changes no folder key is accepted (the core commits it, so the ledger
-         * says writable) while the guard it hands back can't be stored: until a later sync stores it,
-         * every write into the family is refused with the storage words and nothing reaches the server,
-         * though reading goes on; once stored, writes go on. Fails if a write checks only the ledger.
+         * says writable) while the guard it hands back can't be stored: the refusal takes the commit back
+         * (the web's uncommit), so nothing of the family lists, and until a later sync stores it every
+         * write into the family is refused with the storage words (the barrier, before the core) and
+         * nothing reaches the server; once stored, reading and writing go on. Fails if a write checks
+         * only the ledger, or the refused chain still opens the folder.
          */
         @Test func aFamilyWriteWhileItsGuardIsNotStoredIsRefusedAndNothingIsSent() async throws {
             let family = try FamilyFixture()
@@ -66,12 +86,14 @@ extension OnFakeDrive {
             writes.writable = false
             #expect(await phone.sync.sync(family.summary) == .failed(GuardWords.unsaved))
             #expect(phone.vault.areaLedger.isArea(workspaceId: family.workspaceId))
-            // Reading goes on: the folder lists again through the ledger.
-            #expect(try await phone.vault.children(of: family.rootId).map(\.name).contains("Recipes.txt"))
+            // The refused chain opens nothing: the folder doesn't list through it.
+            await #expect(throws: (any Error).self) { _ = try await phone.vault.children(of: family.rootId) }
             server.clearRequests()
-            await #expect(throws: GuardError.unsaved) { _ = try await phone.vault.createFolder(in: family.rootId, name: "Trips") }
-            await #expect(throws: GuardError.unsaved) { _ = try await phone.vault.rename(family.fileId, to: "Recipes (old).txt") }
-            await #expect(throws: GuardError.unsaved) { try await phone.vault.trash(family.fileId) }
+            // The barrier holds the family's folders with the storage words, the last check every write makes before it leaves.
+            await #expect(throws: GuardError.unsaved) { try await phone.vault.sendingIntoFamily(family.workspaceId) }
+            await #expect(throws: (any Error).self) { _ = try await phone.vault.createFolder(in: family.rootId, name: "Trips") }
+            await #expect(throws: (any Error).self) { _ = try await phone.vault.rename(family.fileId, to: "Recipes (old).txt") }
+            await #expect(throws: (any Error).self) { try await phone.vault.trash(family.fileId) }
             #expect(server.writes.isEmpty, "a family write was sent while its guard wasn't stored: \(server.writes)")
 
             writes.writable = true

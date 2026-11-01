@@ -206,6 +206,8 @@ public actor FamilySync: FamilyJudge {
     var vouched: [String: Bool] = [:]
     /* Each family's chain as this process last committed it. */
     private var chains: [String: AcceptedRosters] = [:]
+    /* Families whose last refusal was a fork (lowercase): a later refusal keeps the core's fork. A commit clears it. */
+    private var forked: Set<String> = []
 
     public init(vault: Vault, api: GroupsAPI? = nil, records: FamilyRecords = .shared, now: @escaping @Sendable () -> Date = { Date() },
                 temporary: URL = FileManager.default.temporaryDirectory) {
@@ -273,7 +275,8 @@ public actor FamilySync: FamilyJudge {
      * already accepted it. Throws the family's words when it isn't accepted.
      */
     public func ensureOpen(_ groupId: String) async throws {
-        if areasOf[groupId] != nil, ledger.isArea(workspaceId: areasOf[groupId]?.first ?? "") { return }
+        // Accepted in this process and not refused since (a refusal drops the chain): open already.
+        if chains[groupId] != nil, areasOf[groupId] != nil, ledger.isArea(workspaceId: areasOf[groupId]?.first ?? "") { return }
         let summary: GroupSummary
         if let known = summaries[groupId] { summary = known } else {
             let listed: [GroupSummary]
@@ -347,8 +350,8 @@ public actor FamilySync: FamilyJudge {
                 try await wipe(groupId)
             } catch {
                 // The guard the wipe hands back couldn't be stored (or read): nothing of the family was let go of, and
-                // nothing of it stays open here; said as a sync's failed wipe is, and asked again on the next pass.
-                await forgetOpened(groupId)
+                // nothing of it opens here; said as a sync's failed wipe is, and asked again on the next pass.
+                await refuse(groupId)
                 return .failed(FamilyWords.error(error))
             }
             forgetSession(groupId)
@@ -429,7 +432,7 @@ public actor FamilySync: FamilyJudge {
         // Accepted but not let in: the join flow's (iOS 3), never a sync's. Nothing of the family stays open meanwhile.
         // A record on this device means the join finished (a list read before it, still saying `accepted`): synced as a member.
         if summary.state == "accepted" && records.read(userId: userId, groupId: groupId) == nil {
-            await forgetOpened(groupId)
+            await refuse(groupId)
             return .waiting
         }
         do {
@@ -438,10 +441,10 @@ public actor FamilySync: FamilyJudge {
             for _ in 0 ..< 2 {
                 switch try await accept(groupId) {
                 case .unchecked:
-                    await forgetOpened(groupId)
+                    await refuse(groupId)
                     return .unchecked
                 case .fork(let fork):
-                    await forgetOpened(groupId)
+                    await refuse(groupId, fork: true)
                     return .fork(fork)
                 case .recordReset:
                     reset = true
@@ -455,15 +458,16 @@ public actor FamilySync: FamilyJudge {
             do {
                 try await wipe(groupId)
             } catch {
-                // The guard the wipe hands back couldn't be stored (or read): nothing of the family was let go of.
-                await forgetOpened(groupId)
+                // The guard the wipe hands back couldn't be stored (or read): nothing of the family was let go of, but
+                // nothing of it opens either.
+                await refuse(groupId)
                 return .failed(FamilyWords.error(error))
             }
             return .wiped
         } catch {
             // Refused (a rollback, a race that kept losing, keys that didn't check): the ledger kept nothing of this run, and
             // nothing of the family stays open here. No answer at all leaves what was opened before as it was.
-            if !Self.unanswered(error) { await forgetOpened(groupId) }
+            if !Self.unanswered(error) { await refuse(groupId) }
             // A 401: kept for the app (takeEnded), which asks whether the session ended.
             if endsSession(error) { endedBy = error }
             return .failed(FamilyWords.error(error))
@@ -479,7 +483,7 @@ public actor FamilySync: FamilyJudge {
         let areas = try await openAreas(groupId, chain: chain)
         switch try await settle(groupId, pin: pin, checked: chain.checked(), opened: areas.compactMap(\.pinArea)) {
         case .fork(let fork):
-            await forgetOpened(groupId)
+            await refuse(groupId, fork: true)
             return .fork(fork)
         case .settled(let latest):
             // The family's details are a nicety: going without them is fine, but not-member means the family went (the wipe)
@@ -509,7 +513,26 @@ public actor FamilySync: FamilyJudge {
     /* The chain this process last accepted for the family: the pair code is worked out over it. */
     func acceptedChain(_ groupId: String) -> AcceptedRosters? { chains[groupId] }
 
-    func noteAccepted(_ groupId: String, _ chain: AcceptedRosters) { chains[groupId] = chain }
+    func noteAccepted(_ groupId: String, _ chain: AcceptedRosters) {
+        chains[groupId] = chain
+        forked.remove(groupId.lowercased())
+    }
+
+    /*
+     * Refused (a settings rollback, a fork, a guard that can't be stored, an unchecked chain, keys
+     * that didn't check, a race that kept losing): the core opens and writes nothing of the family
+     * until a chain is committed again (the web's uncommit), so no listing or queued upload goes on
+     * through the chain an earlier sync committed, and nothing of it stays open here. A refusal of
+     * a family found forked keeps the fork.
+     */
+    func refuse(_ groupId: String, fork: Bool? = nil) async {
+        let key = groupId.lowercased()
+        let fork = fork ?? forked.contains(key)
+        if fork { forked.insert(key) }
+        ledger.uncommit(groupId: groupId, fork: fork)
+        chains[groupId] = nil
+        await forgetOpened(groupId)
+    }
 
     /* The family folders this process or the device record knows of. */
     /*
@@ -590,6 +613,9 @@ public actor FamilySync: FamilyJudge {
             if case .accepted = answer {} else if !owedBefore { await vault.familyGuardKept(groupId) }
             switch answer {
             case .accepted(let chain, let record, let pin, let guardPin):
+                // Its folders are this family's whatever follows: a guard that can't be stored refuses the family (the core then
+                // opens none of them) and the barrier holds writes into them, never taken as personal.
+                await note(chain.areaKeys().keys.filter { groupsOf[$0.lowercased()].map { $0.lowercased() == groupId.lowercased() } ?? true }, of: groupId)
                 // A guard that can't be stored stops everything of this acceptance, and the barrier stays raised until a
                 // later acceptance stores it; one with nothing new to store (the held guard covers it) releases it.
                 if let guardPin { try await vault.keepFamilyGuard(groupId, guardPin) }
@@ -836,6 +862,7 @@ public actor FamilySync: FamilyJudge {
         details[groupId] = nil
         areasOf[groupId] = nil
         chains[groupId] = nil
+        forked.remove(groupId.lowercased())
     }
 
     // MARK: Verdicts

@@ -60,6 +60,43 @@ extension OnFakeDrive {
         }
 
         /*
+         * The server replays older settings (a rollback) after the family was accepted: the sync is
+         * refused before the core is asked, and the core stops opening the family too, so neither a
+         * listing nor a queued upload goes through the chain the earlier sync committed. Fails if a
+         * refusal only clears the app's own rows.
+         */
+        @Test func aSettingsRollbackStopsTheCoreOpeningTheFamily() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(try await phone.vault.children(of: family.rootId).map(\.name) == ["Recipes.txt"])
+            // Another device saves; this phone reads it, then the server serves the copy from before.
+            let older = server.settingsSnapshot()
+            try server.editSettings { _ in }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("the newer settings weren't read"); return }
+            older()
+            guard case .failed(let words) = await phone.sync.sync(family.summary), words != FamilyWords.noAnswer else {
+                Issue.record("a settings rollback wasn't refused")
+                return
+            }
+            do {
+                _ = try await phone.vault.children(of: family.rootId)
+                Issue.record("the refused family's folder was listed again")
+            } catch {}
+            #expect(await phone.vault.item(family.fileId) == nil)
+            // The upload queue opens the family for its write, then writes: neither goes.
+            server.clearRequests()
+            let source = try temporaryFile("note.txt", Data("x".utf8))
+            await #expect(throws: (any Error).self) { try await phone.sync.ensureOpen(family.groupId) }
+            await #expect(throws: (any Error).self) {
+                _ = try await phone.vault.upload(fileURL: source, name: "note.txt", mime: "text/plain", in: family.rootId, replacing: nil)
+            }
+            #expect(server.writes.isEmpty)
+        }
+
+        /*
          * A family opened on this phone, then the server shows another history from version 3:
          * the hard warning, and what was opened of its folders is gone, so nothing in them opens.
          */
@@ -1032,6 +1069,12 @@ final class FamilyServer: @unchecked Sendable {
         let next = (lock.withLock { settings?.settingsVersion } ?? 0) + 1
         let sealed = try settingsSeal(userId: family.member.userId, settingsKey: settingsKey, settingsVersion: next, json: try document.json())
         lock.withLock { settings = sealed }
+    }
+
+    /* What the server holds now, served again when the returned call runs: a server replaying an older copy (a rollback). */
+    func settingsSnapshot() -> @Sendable () -> Void {
+        let held = lock.withLock { settings }
+        return { self.lock.withLock { self.settings = held } }
     }
 
     /* Another device's save: the stored settings opened, changed, and sealed one version above. */
