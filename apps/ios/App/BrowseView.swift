@@ -110,6 +110,8 @@ struct FolderView: View {
     private var family: Bool { store.isFamilyFolder(folderId) }
     /* A family folder this device may not write in now (its keys not checked at the latest version): nothing here adds, pastes or selects for changes. */
     private var readOnly: Bool { family && !store.familyFolderWritable(folderId) }
+    /* A folder of a family the server says this account was removed from (shown until the family is accepted again). */
+    private var removed: Bool { store.folderProblems[folderId] == .removed }
 
     @Environment(\.scenePhase) private var scenePhase
 
@@ -195,7 +197,8 @@ struct FolderView: View {
         .screenChrome(title: headerTitle, root: isRoot) { headerActions }
         // "Search in Lisbon 2026": this folder and the ones inside it, in the system's field under the bar as in
         // Apple's Files. The top level searches from the search tab.
-        .folderSearch(isRoot ? nil : title, text: $query, focused: $searchFocused)
+        // A folder of a family this account was removed from has nothing to search: no field.
+        .folderSearch(isRoot || removed ? nil : title, text: $query, focused: $searchFocused)
         // While selecting, Done ends it; Back would leave with a selection made.
         .navigationBarBackButtonHidden(selecting)
         .toolbar(selecting ? .hidden : .automatic, for: .tabBar)
@@ -353,6 +356,9 @@ struct FolderView: View {
             EmptyStateView(title: "This folder couldn’t be opened", message: words) {
                 Button("Try again") { Task { await store.reopenFamilyFolder(folderId) } }.buttonStyle(PrimaryCapsuleStyle())
             }
+        case .removed:
+            // The web's words for a family space someone was removed from (family-space.tsx).
+            EmptyStateView(title: "You’re not in this family", message: "It may have ended, or someone removed you.")
         case nil:
             EmptyView()
         }
@@ -440,6 +446,9 @@ struct FolderView: View {
                 .disabled(trashingSelection)
             Button { endSelecting() } label: { HeaderWord(text: "Done") }
                 .disabled(trashingSelection)
+        } else if removed {
+            // Removed from its family: nothing to view, sort, select or add here.
+            EmptyView()
         } else {
             // A folder you can only view takes nothing new.
             if !readOnly, store.known(folderId).map({ store.role(of: $0) != .viewer }) ?? true {

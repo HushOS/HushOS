@@ -53,7 +53,8 @@ final class DriveStore {
     private var rotation: Task<Void, Never>?
     /* Folders with nothing to show and a reason: the request failed, or the phone is offline and never listed them. */
     /* `family`: a family folder that can't be opened now (its family not accepted, or a refusal), in FamilyWords' words. */
-    enum FolderProblem: Equatable { case failed, notOnPhone, family(String) }
+    /* `removed`: a family folder of a family the server says this account is no longer in. */
+    enum FolderProblem: Equatable { case failed, notOnPhone, family(String), removed }
     var folderProblems: [String: FolderProblem] = [:]
     /* Every node of this drive the catalogue opened, by id: search across folders and the way up to a shared folder. */
     var catalogue: [String: Opened] = [:]
@@ -108,6 +109,13 @@ final class DriveStore {
      */
     var familyList: [GroupSummary]?
     var familyStates: [String: FamilyState] = [:]
+    /* Each family's name as route 2 last listed it, kept after it stops listing one (a removal's page names it). */
+    var familyNames: [String: String] = [:]
+    /*
+     * Whether this server serves families: nil until route 2 answers (not loaded, or the last load failed:
+     * the live sync keeps trying), false once it said it has none (404/501), true once it listed.
+     */
+    var familiesServed: Bool?
     var familyDetails: [String: GroupDetail] = [:]
     var familySyncing: Set<String> = []
     /* Join screens open per family (a count: two screens for one family never turn the gate off for each other). While any is open the screen owns the family, so a background check neither clears nor forgets it. */
@@ -126,6 +134,8 @@ final class DriveStore {
     var familyShown: [String: FamilyView] = [:]
     /* Every family folder's top folder this session opened: only grows, so a later failed check never makes one writable-looking. */
     var familyRoots: [String: String] = [:]
+    /* Every folder this session saw in a family folder, to its family: only grows, and clearing a family leaves it, so a folder whose listing was dropped still knows its family. */
+    @ObservationIgnored var familyFolders: [String: String] = [:]
     /* When each family was last checked on this phone: a family folder on screen checks again when it is old. */
     @ObservationIgnored var familyCheckedAt: [String: Date] = [:]
     @ObservationIgnored var familiesSyncedAt: Date?
@@ -684,6 +694,20 @@ final class DriveStore {
     }
 
     func refresh(folder id: String) async {
+        // A folder of a family the server says this account was removed from stays said as such until the family is
+        // accepted again (refreshed then by `show`): listing it can only fail, and its error would hide the removal.
+        // Asked again after every wait below too: a removal that lands while this listing is out wins over its answer.
+        func removed() -> Bool {
+            guard let groupId = familyGroup(ofFolder: id), familyStates[groupId] == .wiped else { return false }
+            folders[id] = nil
+            folderProblems[id] = .removed
+            return true
+        }
+        if let groupId = familyGroup(ofFolder: id), familyStates[groupId] == .wiped {
+            // Checked again (a pull to refresh): back if the family lists this account again, else still removed.
+            await refreshFamilies(force: true)
+            if removed() { return }
+        }
         // Keys changing underneath: wait, then list with the new ones.
         if let rotation { await rotation.value }
         loading.insert(id)
@@ -691,8 +715,10 @@ final class DriveStore {
         do {
             await sync()
             let children = try await vault.children(of: id)
+            if removed() { return }
             folders[id] = children
             folderProblems[id] = nil
+            noteFamilyFolders(id, children: children)
             // A received share's item missing from its folder listed afresh closes Info (there is no feed for
             // their drive); the vault keeps its row, so nothing a close decides changes what it holds.
             if var follow = infoBeside, isReceived(follow.item) {
@@ -708,6 +734,7 @@ final class DriveStore {
         } catch {
             // Left before it answered (a tab switched, the folder closed): nothing failed, so nothing changes.
             if ErrorWords.isCancellation(error) { return }
+            if removed() { return }
             // A family folder's refusal is said in the families' words, never the generic failure.
             if isFamilyFolder(id) {
                 if case DriveAPIError.transport = error {
@@ -1337,6 +1364,11 @@ final class DriveStore {
         // A dead session gets no more requests: every one would be another 401.
         while !Task.isCancelled && error != Self.sessionEnded {
             await sync()
+            // Families too, about once a minute (refreshFamilies reuses a pass under a minute old), on a server
+            // that serves them: a removal on another device reaches an open app without a relaunch.
+            // Retried while the list hasn't loaded (offline, a 5xx at launch); only a server that said it has no
+            // families (404/501) is left alone.
+            if tick % 6 == 0, familiesServed != false { await refreshFamilies() }
             // A share's kept folders aren't in this drive's feed: they are listed again every half minute.
             tick += 1
             if tick % 3 == 0 { await syncKeptNow() }

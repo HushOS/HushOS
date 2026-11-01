@@ -180,6 +180,8 @@ public actor FamilySync: FamilyJudge {
     private var areasOf: [String: [String]] = [:]
     /* Every family folder this process learned of, to its family: never forgotten in a session (a wipe or fork keeps it a family folder). */
     private var groupsOf: [String: String] = [:]
+    /* Families route 2 stopped listing that this session wiped on the server's not-member: not asked about again unless listed again. */
+    private var settledUnlisted: Set<String> = []
     /* Families whose kept join escalation went into this sync's ledger (FamilyJoin): once per ledger, before anything is shown. */
     var restoredHolds: Set<String> = []
 
@@ -264,6 +266,64 @@ public actor FamilySync: FamilyJudge {
         case .wiped: throw FamilyFailure.notInFamily
         default: throw FamilyFailure(message: FamilyWords.openAgain)
         }
+    }
+
+    /*
+     * Families this phone holds (a device record, or a chain accepted this session) that route 2 no
+     * longer lists: each asked about once (route 5 from the record's version). Only the server's
+     * 404 `not-member` wipes one, as any sync's does (`wipe`); a family still served (route 2 caught
+     * between two states) or no answer at all changes nothing. A list that didn't load never reaches
+     * here: nothing is unlisted without one. The wiped families, by id.
+     */
+    public func listReconciling() async throws -> (listed: [GroupSummary], removed: [String]) {
+        // Route 2 first: when it doesn't load, nothing is unlisted and nothing is asked about.
+        let listed = try await list()
+        return (listed, await reconcile(listed: listed))
+    }
+
+    func reconcile(listed: [GroupSummary]) async -> [String] {
+        let shown = Set(listed.map { $0.id.lowercased() })
+        settledUnlisted.subtract(shown)
+        var held = Set(records.groups(userId: userId))
+        held.formUnion(groupsOf.values.map { $0.lowercased() })
+        held.subtract(settledUnlisted)
+        var wiped: [String] = []
+        for groupId in held.subtracting(shown).sorted() where FamilyRecords.valid(groupId) {
+            if await checkUnlisted(groupId) { wiped.append(groupId) }
+        }
+        return wiped
+    }
+
+    /* One family route 2 stopped listing, asked about in its own turn: true when the server said not-member and it was wiped. */
+    private func checkUnlisted(_ groupId: String) async -> Bool {
+        await exclusive(groupId) { await self.askUnlisted(groupId) }
+    }
+
+    private func askUnlisted(_ groupId: String) async -> Bool {
+        let after = Int(records.read(userId: userId, groupId: groupId)?.rosterVersion ?? 0)
+        do {
+            _ = try await api.rosters(groupId, after: after)
+            // Still served: a list caught mid-change, never a removal.
+            return false
+        } catch let error as GroupsAPIError where error.isNotMember {
+            await wipe(groupId)
+            forgetSession(groupId)
+            return true
+        } catch {
+            // No answer, a 5xx, any other refusal: nothing is taken away.
+            return false
+        }
+    }
+
+    /*
+     * A wiped family's place in route 2 goes with it, and it isn't asked about again this session
+     * unless route 2 lists it again. Its folders stay family folders (`groupsOf`): never opened under
+     * a personal key, whatever a server says later.
+     */
+    private func forgetSession(_ groupId: String) {
+        summaries[groupId] = nil
+        families[groupId] = nil
+        settledUnlisted.insert(groupId.lowercased())
     }
 
     /* Route 3 as the last sync read it: who is in the family, named by the server. */

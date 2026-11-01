@@ -173,6 +173,79 @@ extension OnFakeDrive {
         }
 
         /*
+         * Removed on another device: route 2 stops listing the family, and asked about it, the server
+         * says not-member. The phone drops it then, without a relaunch: the device record, the
+         * ledger's keys and the folders opened here go, and it is named as removed. Fails if a family
+         * route 2 no longer lists is never asked about.
+         */
+        @Test func aFamilyNoLongerListedAndNotMemberIsWiped() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            _ = try await phone.vault.children(of: family.rootId)
+
+            server.listed = false
+            server.notMember = true
+            let (listed, removed) = try await phone.sync.listReconciling()
+            #expect(listed.isEmpty)
+            #expect(removed == [family.groupId])
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId) == nil)
+            #expect(!phone.vault.areaLedger.isArea(workspaceId: family.workspaceId))
+            #expect(await phone.vault.item(family.rootId) == nil)
+            // Asked once: the next pass doesn't ask again.
+            server.clearRequests()
+            #expect(try await phone.sync.listReconciling().removed.isEmpty)
+            #expect(!server.requested("/api/groups/\(family.groupId)/rosters"))
+        }
+
+        /*
+         * Route 2 doesn't load (a 503), or the server doesn't answer about the family (a 503 on route
+         * 5): nothing is taken away. Only the server's not-member is a removal. Fails if a failed list
+         * or a failed question counts as one.
+         */
+        @Test func aListOrAnAnswerThatFailsWipesNothing() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+
+            server.groupsFail = true
+            server.notMember = true
+            await #expect(throws: GroupsAPIError.self) { _ = try await phone.sync.listReconciling() }
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId) != nil)
+            #expect(phone.vault.areaLedger.isArea(workspaceId: family.workspaceId))
+
+            server.groupsFail = false
+            server.notMember = false
+            server.listed = false
+            server.rostersFail = true
+            #expect(try await phone.sync.listReconciling().removed.isEmpty)
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId) != nil)
+            #expect(phone.vault.areaLedger.isArea(workspaceId: family.workspaceId))
+        }
+
+        /*
+         * Route 2 stops listing the family but the server still serves it (route 2 caught mid-change):
+         * a race, never a removal, so nothing is wiped. Fails if absence from the list alone wipes.
+         */
+        @Test func aFamilyUnlistedButStillServedIsKept() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+
+            server.listed = false
+            #expect(try await phone.sync.listReconciling().removed.isEmpty)
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId) != nil)
+            #expect(phone.vault.areaLedger.isArea(workspaceId: family.workspaceId))
+            #expect(try await phone.vault.children(of: family.rootId).map(\.name) == ["Recipes.txt"])
+        }
+
+        /*
          * Another device saves a later pin (roster 3, an earlier words check) the moment this one
          * saves: this one's pin, merged against what it read before, must not land over it. The
          * family is accepted again against the stored pin, and only what that adds is saved.
@@ -583,6 +656,11 @@ final class FamilyServer: @unchecked Sendable {
     private var chain: [SignedGroupStatement] = []
     private var ignoringAfter = false
     var notMember = false
+    /* Route 2 lists the family (false: the server stopped listing it); `groupsFail` answers route 2 with a 503. */
+    var listed = true
+    var groupsFail = false
+    /* Route 5 answers with a 503 (a server in trouble, never a refusal). */
+    var rostersFail = false
     /* Route 2's state for the member: `accepted` (waiting to be let in) or `active`. */
     var groupState = "active"
     /* Routes 14 and 15, answered with these when set (the invitation the member opens from the mailed link). */
@@ -784,6 +862,7 @@ final class FamilyServer: @unchecked Sendable {
             }
         case ("GET", "/api/groups/\(f.groupId)/rosters"):
             if notMember { return (404, ["code": "not-member", "message": "You are not in this group."]) }
+            if lock.withLock({ rostersFail }) { return (503, ["message": "Drive is temporarily unavailable. Please try again."]) }
             onRosters?()
             let after = Int(query.first { $0.name == "after" }?.value ?? "0") ?? 0
             let answer: (Int, Any) = lock.withLock {
@@ -800,6 +879,8 @@ final class FamilyServer: @unchecked Sendable {
         case ("POST", "/api/invitations/accept"):
             return lock.withLock { acceptAnswer } ?? (410, ["code": "gone", "message": "This invitation is no longer open."] as [String: Any])
         case ("GET", "/api/groups"):
+            if lock.withLock({ groupsFail }) { return (503, ["message": "Drive is temporarily unavailable. Please try again."]) }
+            if !lock.withLock({ listed }) { return (200, ["groups": [Any]()]) }
             return (200, ["groups": [["id": f.groupId, "kind": "family", "name": "Lindqvist family", "roles": [String](), "state": lock.withLock { groupState },
                                       "rosterVersion": lock.withLock { chain.count }, "groupKeyVersion": 1]]])
         case ("GET", "/api/groups/\(f.groupId)"):
