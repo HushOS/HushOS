@@ -229,36 +229,45 @@ extension DriveStore {
         familyGenerations.published(groupId)
     }
 
+    /*
+     * A member check and a refresh can show the same family at once: after every suspension this
+     * goes on only while its publication is still the latest (`stillShown`), so an older result
+     * never clears, deletes or redraws over a newer one.
+     */
     private func show(_ state: FamilyState, of summary: GroupSummary, previous: FamilyState?, session: Session) async {
         guard current(session) else { return }
         publishFamily(state, of: summary.id)
+        let shownAs = familyGenerations.current(summary.id)
+        func stillShown() -> Bool { current(session) && familyGenerations.current(summary.id) == shownAs }
         familyCheckedAt[summary.id] = Date()
         familyRefreshed[summary.id, default: 0] += 1
         // Every family sync that found something moves its trust generation: a judgement from before it never publishes
         // after it. No answer says nothing new, so the marks already judged stay (the rows are still shown, read only).
         if FamilyVerdictBook.moves(after: state) { familyBook.moved(summary.id) }
         guard let areas = try? await inFamily(session, { await $0.familyAreas() }) else { return }
+        // Which folders are family folders is only ever learned, never undone: kept whoever shows the family now.
         for (area, groupId) in areas { familyAreaGroups[area] = groupId }
+        guard stillShown() else { return }
         if case .accepted(let view) = state {
             familyShown[summary.id] = view
             for root in view.areas.compactMap({ $0.root?.id.lowercased() }) { familyRoots[root] = summary.id }
             let groupId = summary.id
-            guard let detail = await sessionGate.run(session, { await FamilySync.shared(for: $0).detail(groupId) }), current(session) else { return }
+            guard let detail = await sessionGate.run(session, { await FamilySync.shared(for: $0).detail(groupId) }), stillShown() else { return }
             familyDetails[summary.id] = (try? detail.get()) ?? nil
             // Listed again, not only judged again: a walk since may have re-keyed every row on screen.
             let areas = Set(familyAreaGroups.filter { $0.value == summary.id }.map(\.key))
             let roots = Set(view.areas.compactMap { $0.root?.id })
             let shown = folders.filter { id, items in roots.contains(id) || items.contains { areas.contains($0.node.workspaceId.lowercased()) } }.map(\.key)
             for id in shown {
-                guard current(session) else { return }
+                guard stillShown() else { return }
                 await refresh(folder: id, session: session)
             }
             // Folders a refusal or fork took off screen open again now.
             for (id, problem) in folderProblems where familyGroup(ofFolder: id) == summary.id {
-                guard current(session) else { return }
+                guard stillShown() else { return }
                 if case .family = problem { await refresh(folder: id, session: session) } else if problem == .removed { await refresh(folder: id, session: session) }
             }
-            guard current(session) else { return }
+            guard stillShown() else { return }
             await rejudgeFamilies(summary.id, session: session)
         } else if case .failed(let message) = state, message == FamilyWords.noAnswer {
             // No answer: what this phone opened before stays on screen, read only.
