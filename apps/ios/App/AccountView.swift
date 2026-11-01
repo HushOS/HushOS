@@ -29,12 +29,17 @@ struct AccountView: View {
     @State private var onScreen = false
 
     /* A family pushed by the app (a join just finished), as Account's own Families row pushes it. */
-    @State private var openedFamily: FamilyRoute?
+    /*
+     * Account's stack, as values: a family the app opens (a join just finished) goes in as the same
+     * FamilyRoute its row pushes, so a folder pushed from it stacks above it and Back returns to it.
+     * A view-based destination beside value links popped the family page when a folder was pushed.
+     */
+    @State private var path = NavigationPath()
 
     private func openFamily(_ groupId: String?) {
         guard onScreen, let groupId else { return }
         store.familyToOpen = nil
-        openedFamily = .family(groupId)
+        path.append(FamilyRoute.family(groupId))
     }
 
     private func openTrash(_ link: AppLink?) {
@@ -44,7 +49,7 @@ struct AccountView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
                 // Who is signed in, as the first row (iOS Settings' account row, Android's AccountScreen): a tap edits the name.
                 Section {
@@ -130,9 +135,6 @@ struct AccountView: View {
             .onChange(of: store.route, initial: true) { _, link in openTrash(link) }
             .onChange(of: onScreen) { _, _ in openTrash(store.route); openFamily(store.familyToOpen) }
             .onChange(of: store.familyToOpen, initial: true) { _, groupId in openFamily(groupId) }
-            .navigationDestination(item: $openedFamily) { route in
-                if case .family(let groupId) = route { FamilyPage(groupId: groupId).environment(store) }
-            }
             .refreshable {
                 await load()
                 await store.refreshFamilies()
