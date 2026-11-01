@@ -197,14 +197,17 @@ extension DriveStore {
         let areas = Set(familyAreaGroups.filter { $0.value == groupId }.map(\.key))
         guard !areas.isEmpty else { return }
         var ids: Set<String> = []
+        var folderIds = Set(roots)
         for (folderId, items) in folders {
             let family = items.filter { areas.contains($0.node.workspaceId.lowercased()) }
             ids.formUnion(family.map(\.id))
-            if !family.isEmpty { ids.insert(folderId) }
+            folderIds.formUnion(family.filter(\.isFolder).map(\.id))
+            if !family.isEmpty { ids.insert(folderId); folderIds.insert(folderId) }
         }
         ids.formUnion(roots)
-        // Their rows go below; which family each was in stays, for the removal to stay said on a refresh.
-        for id in ids { familyFolders[id.lowercased()] = groupId }
+        // Their rows go below; which family each folder was in stays, for the removal to stay said on a
+        // refresh. Folders only: a file kept here would be asked for as a folder by every later recovery.
+        for id in folderIds { familyFolders[id.lowercased()] = groupId }
         for id in ids {
             folders[id] = nil
             // Said in the folder's place, never as an empty folder.
