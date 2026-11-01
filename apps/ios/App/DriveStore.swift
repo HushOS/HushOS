@@ -39,7 +39,19 @@ final class DriveStore {
         /* What came back to Files instead of its folder, and that folder's name. */
         let moved: [(item: Opened, folder: String?)]
     }
-    var thumbnails: [String: Data] = [:]
+    /* A decrypted thumbnail and the version it is of: a replaced file's row shows its new picture, never the last one's. */
+    struct Thumbnail: Equatable {
+        let version: String?
+        let data: Data
+    }
+    /* By item id; read through `thumbnailData(for:)`, which only answers for the version a row shows. */
+    var thumbnails: [String: Thumbnail] = [:]
+
+    /* The thumbnail for exactly the version `item` shows; nil while it is loading or for another version. */
+    func thumbnailData(for item: Opened) -> Data? {
+        guard let held = thumbnails[item.id], held.version == item.node.currentVersion?.id else { return nil }
+        return held.data
+    }
     var rootId: String?
     var tags: TagRegistry = .empty
     /* What Copy or Cut picked up, until Paste places it. */
@@ -917,19 +929,21 @@ final class DriveStore {
     }
 
     func thumbnail(for item: Opened) {
-        guard item.hasThumbnail, thumbnails[item.id] == nil, !thumbnailTasks.contains(item.id) else { return }
-        thumbnailTasks.insert(item.id)
+        let version = item.node.currentVersion?.id
+        let task = "\(item.id)@\(version ?? "")"
+        guard item.hasThumbnail, thumbnailData(for: item) == nil, !thumbnailTasks.contains(task) else { return }
+        thumbnailTasks.insert(task)
         // A family item's picture is kept to the family as it stands now: one decrypted before a clear never lands after.
         let gate = copyGate(item)
         Task {
             // The row this list holds, never looked up again: one a batch just forgot would list its folder once more.
-            // A family item's picture only for the version the vault holds now: an older row's never stands for a newer one.
             if let data = try? await vault.thumbnail(of: item), (try? gate.check()) != nil {
-                var held = item.node.currentVersion?.id
-                if isFamily(item) { held = await vault.item(item.id)?.node.currentVersion?.id }
-                if held == item.node.currentVersion?.id { thumbnails[item.id] = data }
+                // Kept only for the version the vault holds now (it replaces an earlier version's): a row read before a
+                // replacement never puts the old picture back over the new one's.
+                let held = await vault.item(item.id)?.node.currentVersion?.id ?? version
+                if held == version { thumbnails[item.id] = Thumbnail(version: version, data: data) }
             }
-            thumbnailTasks.remove(item.id)
+            thumbnailTasks.remove(task)
         }
     }
 

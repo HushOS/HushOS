@@ -487,7 +487,7 @@ struct InfoSheet: View {
             List {
                 Section {} header: {
                     VStack(spacing: Alpine.Space.s2) {
-                        FileMark(item: item, box: store.thumbnails[item.id] != nil ? 120 : 88)
+                        FileMark(item: item, box: store.thumbnailData(for: item) != nil ? 120 : 88)
                         Text(item.name).font(.title3.weight(.bold)).foregroundStyle(Alpine.ink).multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
@@ -562,7 +562,7 @@ struct InfoSheet: View {
             }
             // A mark's check started here stays up when the mark goes: Info hosts it, not the mark.
             .contactHost(.info, store: store)
-            .task { store.thumbnail(for: item) }
+            .task(id: item.node.currentVersion?.id) { store.thumbnail(for: item) }
         }
     }
 
