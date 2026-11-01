@@ -197,7 +197,8 @@ extension DriveStore {
      * A join that finished on the join screen: the family as its acceptance left it, shown as a
      * sync's would be, with route 2 read again so the row says it is in (no second acceptance).
      */
-    func joined(_ groupId: String, _ state: FamilyState, session: Session? = nil) async {
+    /* `revision`: the join's, taken in the family's turn: a fork or removal found since by a check or sync is never covered. */
+    func joined(_ groupId: String, _ state: FamilyState, revision: UInt64? = nil, session: Session? = nil) async {
         guard let session = session ?? beginSession(), current(session) else { return }
         // Dropped (the session it began in ended) is not "no list": nothing of the old session is shown in the new one.
         guard let listed = await sessionGate.run(session, { try await FamilySync.shared(for: $0).list() }) else { return }
@@ -207,11 +208,10 @@ extension DriveStore {
         }
         guard current(session) else { return }
         guard let summary = familyList?.first(where: { $0.id == groupId }) else {
-            publishFamily(state, of: groupId)
-            familyBook.moved(groupId)
+            if publishFamily(state, of: groupId, revision: revision) { familyBook.moved(groupId) }
             return
         }
-        await show(state, of: summary, previous: familyStates[groupId], session: session)
+        await show(state, of: summary, previous: familyStates[groupId], revision: revision, session: session)
     }
 
     /*

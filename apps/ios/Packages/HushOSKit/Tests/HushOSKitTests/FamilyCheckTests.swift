@@ -22,6 +22,40 @@ extension OnFakeDrive {
          * as checked, and the creator's file carries no mark. Fails if the record or
          * the pin isn't saved, or if the label doesn't follow the pin.
          */
+        /*
+         * A join holds the family's turn while a sync (a check's, a refresh's) waits behind it: the
+         * join's answer carries a revision taken in that turn, earlier than the sync's, so a fork or
+         * removal the sync publishes is never covered by the join's older Accepted. Fails if the
+         * join publishes with no revision, or one not taken in the family's turn.
+         */
+        @Test func aJoinsAnswerIsOrderedBeforeASyncThatWaitedBehindIt() async throws {
+            let family = try FamilyFixture()
+            let server = FamilyServer(family: family)
+            server.serve(chain: [family.r1, family.r2])
+            try server.storeSettings(pin: nil)
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let sync = phone.sync
+            let held = DispatchSemaphore(value: 0)
+            server.onRosters = { held.wait() }
+            let joining = Task { try await sync.joinStatusRevised(family.groupId) }
+            try await Task.sleep(for: .milliseconds(300))
+            let behind = Task { await sync.syncRevised(family.summary) }
+            try await Task.sleep(for: .milliseconds(200))
+            server.onRosters = nil
+            held.signal()
+            let (outcome, joinRevision) = try await joining.value
+            guard case .joined(.accepted) = outcome else { Issue.record("not joined: \(outcome)"); return }
+            let later = await behind.value
+            let join = try #require(joinRevision, "the join's answer carries no revision")
+            #expect(join < later.revision)
+            // The sync's answer shown first, the join's landing after it: the join's never covers it.
+            var book = FamilyRevisions()
+            let syncShown = book.admits(later.revision, of: family.groupId)
+            let joinShown = book.admits(join, of: family.groupId)
+            #expect(syncShown && !joinShown)
+        }
+
         @Test func theyMatchSavesTheCheckAndAVerifiedPinAndTheMemberReadsVerified() async throws {
             let family = try FamilyFixture()
             let server = FamilyServer(family: family)

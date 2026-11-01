@@ -314,8 +314,8 @@ struct JoinSections: View {
                 if Task.isCancelled { return }
                 do {
                     // Dropped when the session it began in ended: the screen goes with it.
-                    guard let outcome = try await store.inFamily(nil, { try await $0.joinStatus(groupId) }) else { return }
-                    if outcome != .waiting { show(outcome); return }
+                    guard let (outcome, revision) = try await store.inFamily(nil, { try await $0.joinStatusRevised(groupId) }) else { return }
+                    if outcome != .waiting { show(outcome, revision: revision); return }
                     error = nil
                 } catch {
                     if endsSession(error) { store.report(error); return }
@@ -352,14 +352,14 @@ struct JoinSections: View {
 
     // MARK: Actions
 
-    /* Each answer from the join steps, as a step. */
-    private func show(_ outcome: JoinOutcome) {
+    /* Each answer from the join steps, as a step; `revision`: when the join's answer was found, for the family it left to publish in order. */
+    private func show(_ outcome: JoinOutcome, revision: UInt64? = nil) {
         error = nil
         switch outcome {
         case .joined(let state):
             store.notify("You’re in \(family)")
             Task {
-                await store.joined(groupId, state)
+                await store.joined(groupId, state, revision: revision)
                 onJoined?()
             }
         case .member:
@@ -381,8 +381,8 @@ struct JoinSections: View {
     private func resume() async {
         error = nil
         do {
-            guard let outcome = try await store.inFamily(nil, { try await $0.joinStatus(groupId) }) else { return }
-            show(outcome)
+            guard let (outcome, revision) = try await store.inFamily(nil, { try await $0.joinStatusRevised(groupId) }) else { return }
+            show(outcome, revision: revision)
         } catch {
             if endsSession(error) { store.report(error); return }
             // The retry belongs to the loading step, whatever step this came from.

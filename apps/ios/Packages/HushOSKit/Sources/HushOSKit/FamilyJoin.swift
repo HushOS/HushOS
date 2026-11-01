@@ -124,14 +124,22 @@ extension FamilySync {
      * let in, joined now (on first use, or a join a relaunch cut short, finished here), or `member`
      * when this phone already holds the family.
      */
-    public func joinStatus(_ groupId: String) async throws -> JoinOutcome {
-        guard let summary = try await admitted(groupId) else { return .waiting }
+    public func joinStatus(_ groupId: String) async throws -> JoinOutcome { try await joinStatusRevised(groupId).outcome }
+
+    /*
+     * As `joinStatus`, with the revision the join's answer was found at (taken inside the family's
+     * turn, as a sync's is, FamilySync.syncRevised): the screens publish the family it left only
+     * over an older answer, never over a fork or removal a check or sync found while the join
+     * waited. Nil when nothing was joined in the family's turn (waiting, already a member).
+     */
+    public func joinStatusRevised(_ groupId: String) async throws -> (outcome: JoinOutcome, revision: UInt64?) {
+        guard let summary = try await admitted(groupId) else { return (.waiting, nil) }
         try await vault.prepareLedger()
         // Kept before acceptance: a relaunch finishes from it.
         if let joins = records.read(.joins, userId: userId, groupId: groupId) {
             return try await completeJoin(summary, joins: joins)
         }
-        if records.read(userId: userId, groupId: groupId) != nil { return .member }
+        if records.read(userId: userId, groupId: groupId) != nil { return (.member, nil) }
         return try await joinOnFirstUse(summary)
     }
 
@@ -142,12 +150,12 @@ extension FamilySync {
     }
 
     /* The first-use join over what route 5 serves now, in the family's turn. */
-    private func joinOnFirstUse(_ summary: GroupSummary) async throws -> JoinOutcome {
+    private func joinOnFirstUse(_ summary: GroupSummary) async throws -> (outcome: JoinOutcome, revision: UInt64?) {
         // Read first, so the ledger holds the settings' pin of the family (a rejoin's mark).
         _ = try await vault.familyPin(summary.id)
         return try await exclusive(summary.id) {
-            if let before = try await self.finishedBefore(summary) { return before }
-            return try await self.firstUse(summary.id, served: try await self.fetchServed(summary.id, after: 0))
+            if let before = try await self.finishedBefore(summary) { return (before, Self.revise()) }
+            return (try await self.firstUse(summary.id, served: try await self.fetchServed(summary.id, after: 0)), Self.revise())
         }
     }
 
@@ -205,11 +213,11 @@ extension FamilySync {
     }
 
     /* A relaunch finishing a join: from the joins record, against what route 5 serves now. */
-    private func completeJoin(_ summary: GroupSummary, joins: String) async throws -> JoinOutcome {
+    private func completeJoin(_ summary: GroupSummary, joins: String) async throws -> (outcome: JoinOutcome, revision: UInt64?) {
         _ = try await vault.familyPin(summary.id)
         return try await exclusive(summary.id) {
-            if let before = try await self.finishedBefore(summary) { return before }
-            return try await self.resume(summary.id, joins: joins)
+            if let before = try await self.finishedBefore(summary) { return (before, Self.revise()) }
+            return (try await self.resume(summary.id, joins: joins), Self.revise())
         }
     }
 
