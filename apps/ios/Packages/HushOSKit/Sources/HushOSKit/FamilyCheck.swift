@@ -100,6 +100,7 @@ extension FamilySync {
     public func checkCode(_ summary: GroupSummary, with memberId: String) async throws -> CheckStart {
         let revised = await syncRevised(summary)
         let (state, revision) = (revised.state, revised.revision)
+        if let ended = takeEnded() { throw ended }
         if let problem = Self.checkProblem(state) { return CheckStart(state: state, code: nil, problem: problem, revision: revision) }
         guard let chain = acceptedChain(summary.id) else { return CheckStart(state: state, code: nil, problem: GuardWords.unreadable, revision: revision) }
         let code: FamilyCheckCode

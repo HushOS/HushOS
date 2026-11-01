@@ -147,6 +147,26 @@ extension OnFakeDrive {
         }
 
         /*
+         * The check's own sync meets a 401: the session may have ended, so the check throws it for the
+         * app to treat as any request's, never a problem the sheet offers to try again. Fails if the
+         * sync's 401 is only kept for later.
+         */
+        @Test func aSessionThatEndedInTheChecksSyncIsThrown() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            server.unauthorized = true
+            do {
+                let start = try await phone.sync.checkCode(family.summary, with: family.creator.userId)
+                Issue.record("the check went on after a 401: \(start.problem ?? "")")
+            } catch {
+                #expect(endsSession(error))
+            }
+        }
+
+        /*
          * A check asked while another sync of the family holds its turn runs after it, and its answer
          * carries the later revision, so the screens show the check's over the earlier one. Fails if
          * the check's answer isn't ordered after the sync it waited behind.
