@@ -241,6 +241,29 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         return true
     }
 
+    /*
+     * Files' pull-down (DocumentsUI's swipe calls this with the folder's document URI): a sync now, then the folder told
+     * to ask again (ProviderRefresh), with the binder waiting at most REFRESH_WAIT_MS. False when signed out or no vault
+     * is open yet, and when the sync didn't reach the server in time: Files then reloads the folder itself.
+     */
+    override fun refresh(uri: android.net.Uri, extras: android.os.Bundle?, cancellationSignal: CancellationSignal?): Boolean = runCatching {
+        val ctx = context ?: return false
+        val documentId = runCatching { DocumentsContract.getDocumentId(uri) }.getOrNull() ?: return false
+        val vault = liveVault() ?: return false
+        val rootId = vault.rootId
+        val folder = FilesRoots.nodeId(documentId, rootId)
+        // Someone is looking: the polls run on from now.
+        listedAt = android.os.SystemClock.elapsedRealtime()
+        FilesPoll.start(ctx)
+        ProviderRefresh.run(
+            submit = { background.submit(it) },
+            sync = { vault.sync() != null },
+            tell = { FilesRoots.foldersChanged(ctx, listOf(folder), rootId) },
+            waitMs = REFRESH_WAIT_MS,
+            cancelled = { cancellationSignal?.isCanceled == true },
+        )
+    }.getOrDefault(false)
+
     /* The vault while its session is still the one signed in: nothing is pulled for an account that has left. */
     private fun liveVault(): Vault? {
         val held = vault ?: return null
@@ -360,5 +383,6 @@ class HushOSDocumentsProvider : DocumentsProvider() {
 
         private const val TRUST_TTL_MS = 5 * 60_000L
         private const val TRUST_RETRY_MS = 30_000L
+        private const val REFRESH_WAIT_MS = 5_000L
     }
 }
