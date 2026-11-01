@@ -663,7 +663,33 @@ public actor Vault {
         // The catalogue answers first when it can, so a folder draws before the server is asked.
         if let fast = catalogueChildren(of: folderId) { return fast }
         let listing = try await listChildren(of: folderId)
-        return listing.children.compactMap { opened[$0.ref] }.sorted(by: Opened.byName)
+        let folder = listing.folder.id.lowercased()
+        return listing.children.compactMap { row -> Opened? in
+            guard let held = opened[row.ref] else { return nil }
+            // The row held is newer than this listing's (another listing, after a move, opened it first): shown here only
+            // while it is still in this folder, so a moved file shows in its new folder alone.
+            if row.isOlder(than: held.node) { return held.node.parentId?.lowercased() == folder ? held : nil }
+            // Otherwise the listing is trusted, and the row held follows it: a received share's rows get no feed, so a file
+            // moved on another device is taken from its new folder's listing.
+            if held.node != row { return (try? refreshed(row)) ?? held }
+            return held
+        }.sorted(by: Opened.byName)
+    }
+
+    /* A row of the own drive or a share, opened again from a listing newer than the row held (open keeps what it holds). */
+    private func refreshed(_ row: NodeView) throws -> Opened {
+        guard let held = opened[row.ref], held.node != row, !row.isOlder(than: held.node) else { return try open(row) }
+        if isFamilyWorkspace(row.workspaceId) { return try open(row) }
+        opened[row.ref] = nil
+        do {
+            let fresh = try open(row)
+            if let parent = row.parentId { rememberParent(row.id, parent: parent) }
+            return fresh
+        } catch {
+            // The listing's row didn't open (its parent's key isn't held): the row held stays.
+            opened[row.ref] = held
+            throw error
+        }
     }
 
     /* A node this process has not opened yet: listing the folder it was last seen in opens it and everything above. */
