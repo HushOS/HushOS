@@ -266,7 +266,7 @@ public actor Vault {
 
     func unlockAccount() throws -> Data {
         if let accountKey { return accountKey }
-        guard let device = try SharedKeychain.device?.open() else { throw DriveAPIError.notAuthenticated }
+        guard let device = try SharedKeychain.device?.open() else { throw DriveAPIError.notAuthenticated(session: api.session.tag) }
         let key = try deviceRestore(bundle: device.bundle, deviceKey: device.key)
         accountKey = key
         return key

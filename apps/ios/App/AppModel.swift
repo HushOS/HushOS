@@ -262,7 +262,13 @@ final class AppModel {
      * left until then. If it died because this phone was removed from the account, everything of
      * the account on the phone goes as well, as on sign-out.
      */
-    func sessionLost() {
+    func sessionLost(ended: SharedKeychain.Session? = nil) {
+        // The session said to have ended is no longer the one stored (a sign-in since replaced it): nothing of the
+        // stored one goes. The account is looked at again instead, which adopts the stored session.
+        if let ended, let stored = SharedKeychain.session, stored != ended {
+            Task { await checkAccount() }
+            return
+        }
         sessionClosed()
         if let email = user?.email, !email.isEmpty { lastEmail = email }
         lastOwner = owner

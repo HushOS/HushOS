@@ -692,8 +692,12 @@ final class BackgroundTransfers {
     }
 
     private func fail(_ id: UUID, _ error: Error) {
-        // No network yet: stays where it was, for the next pass.
-        if Resumable.retryable(error) { update(id) { $0.failures += 1 }; return }
+        // No network yet: stays where it was, for the next pass. So does a late 401 of a session no longer in use (the
+        // same account signed in again): the transfer is this account's, and the next pass runs it under the new session.
+        if Resumable.retryable(error) || (endsSession(error) && !endsSession(error, current: SharedKeychain.session)) {
+            update(id) { $0.failures += 1 }
+            return
+        }
         let message = record(id)?.kind == .keep ? TransferWords.keepReason(error) : TransferWords.reason(error)
         if let sealed = records.first(where: { $0.id == id })?.sealed, let vault = currentVault() {
             Task { await vault.abortUpload(sealed) }

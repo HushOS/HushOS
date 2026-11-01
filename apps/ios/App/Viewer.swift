@@ -237,8 +237,8 @@ enum Opener {
             } catch {
                 if store.offline {
                     store.notify("You’re offline. Files you keep on this phone open without a connection.")
-                } else if case DriveAPIError.notAuthenticated = error {
-                    // The session alert says it.
+                } else if store.endsThisSession(error) {
+                    // The session alert says it. (A late 401 of a session no longer in use says nothing of the one in use.)
                 } else {
                     store.notify("Couldn’t open “\(item.name)”. Check your connection and try again.")
                 }

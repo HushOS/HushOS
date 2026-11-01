@@ -1,7 +1,8 @@
 import Foundation
 
 public enum DriveAPIError: Error, LocalizedError, Sendable {
-    case notAuthenticated
+    /* A 401: the session the request went under (`SharedKeychain.Session.tag`) is over; nil when it isn't known. */
+    case notAuthenticated(session: String? = nil)
     case server(Int, String)
     case transport(String)
     case notFound(String)
@@ -112,7 +113,7 @@ public final class DriveAPI: Sendable {
             throw DriveAPI.noAnswer(error)
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        if status == 401 { throw DriveAPIError.notAuthenticated }
+        if status == 401 { throw DriveAPIError.notAuthenticated(session: session.tag) }
         guard (200 ..< 300).contains(status) else {
             let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             let message = body?["message"] as? String
@@ -253,12 +254,12 @@ public final class DriveAPI: Sendable {
     /* One request of a selection to the trash, or back in place (Undo): up to TrashBatch.maxBatch ids of one workspace. */
     public func trashBatch(workspaceId: String, ids: [String]) async throws -> [TrashBatch.Answer] {
         let (status, data) = try await send(try mutation("/workspaces/\(workspaceId)/trash-batch", body: ["nodeIds": ids]))
-        return try TrashBatch.answers(status: status, data: data)
+        return try TrashBatch.answers(status: status, data: data, session: session.tag)
     }
 
     public func restoreBatch(workspaceId: String, ids: [String]) async throws -> [TrashBatch.Answer] {
         let (status, data) = try await send(try mutation("/workspaces/\(workspaceId)/restore-batch", body: ["nodeIds": ids]))
-        return try TrashBatch.answers(status: status, data: data)
+        return try TrashBatch.answers(status: status, data: data, session: session.tag)
     }
 
     public func trash(nodeId: String, workspaceId: String) async throws -> NodeView {

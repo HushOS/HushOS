@@ -427,7 +427,7 @@ final class DriveStore {
         } catch {
             // A session that ended is the one failure the feed reports: the app checks why at once
             // (this phone may have been removed) and the polling stops.
-            if endsSession(error) { self.error = Self.sessionEnded }
+            if endsThisSession(error) { self.error = Self.sessionEnded }
             return nil
         }
         guard let touched else { return nil }
@@ -778,7 +778,7 @@ final class DriveStore {
             await judgeFamilyItems(children, session: session)
         } catch {
             // Left before it answered (a tab switched, the folder closed): nothing failed, so nothing changes.
-            if ErrorWords.isCancellation(error) { return }
+            if ErrorWords.isCancellation(error) || staleRefusal(error) { return }
             if !current(session) || removed() { return }
             // A family folder's refusal is said in the families' words, never the generic failure.
             if isFamilyFolder(id) {
@@ -894,7 +894,7 @@ final class DriveStore {
             FilesDomain.signal(folderId: folder)
             return true
         } catch {
-            if ErrorWords.isCancellation(error) { return false }
+            if ErrorWords.isCancellation(error) || staleRefusal(error) { return false }
             if let failed, !isSessionEnd(error) {
                 if case DriveAPIError.transport = error { offline = true }
                 failed(reason(error))
@@ -905,7 +905,17 @@ final class DriveStore {
         }
     }
 
-    private func isSessionEnd(_ error: Error) -> Bool { endsSession(error) }
+    private func isSessionEnd(_ error: Error) -> Bool { endsThisSession(error) }
+
+    /*
+     * Whether a failure ends the session in use: a 401 says which session it was sent under, and
+     * one for a session that ended before this one began (the same account signed in again while
+     * the request was out) ends nothing here. Every "signed out" goes through this.
+     */
+    func endsThisSession(_ error: Error) -> Bool { endsSession(error, current: vault.api.session) }
+
+    /* A refusal of a session that is no longer in use: it is dropped, said nowhere. */
+    func staleRefusal(_ error: Error) -> Bool { endsSession(error) && !endsThisSession(error) }
 
     /* The new folder, or nil when it could not be made (the failure is reported). */
     @discardableResult
@@ -1363,9 +1373,9 @@ final class DriveStore {
      * write always did.
      */
     private func reportFailures(_ errors: [Error], single: Bool) {
-        let worth = errors.filter { !ErrorWords.isCancellation($0) }
+        let worth = errors.filter { !ErrorWords.isCancellation($0) && !staleRefusal($0) }
         guard let first = worth.first else { return }
-        if let ended = worth.first(where: endsSession) { report(ended); return }
+        if let ended = worth.first(where: endsThisSession) { report(ended); return }
         if worth.contains(where: { TrashBatch.failure(of: $0) == .offline }) { offline = true }
         if single { report(first) }
     }
@@ -1385,7 +1395,7 @@ final class DriveStore {
         reportFailures(errors, single: items.count == 1)
         if errors.isEmpty {
             notify(back.count == 1 ? "Restored “\(back[0].name)”" + (wasIn(back[0]).map { " to \($0)" } ?? "") : "Restored \(back.count) items")
-        } else if !errors.contains(where: endsSession), let problem = TrashBatch.undoProblem(back: back.count, tried: items.count, errors: errors) {
+        } else if !errors.contains(where: { endsSession($0) }), let problem = TrashBatch.undoProblem(back: back.count, tried: items.count, errors: errors) {
             notify(problem)
         }
     }
@@ -1800,7 +1810,7 @@ final class DriveStore {
             try await vault.download(item.id, version: version, to: file) { fraction in Task { @MainActor in self.opening[item.id] = fraction } }
         } catch {
             if case DriveAPIError.transport = error { offline = true }
-            if endsSession(error) { self.error = Self.sessionEnded }
+            if endsThisSession(error) { self.error = Self.sessionEnded }
             throw error
         }
         return file
@@ -1833,8 +1843,11 @@ final class DriveStore {
     func report(_ error: Error) {
         // Cancelled work (a view that went away, a request a newer one replaced) failed nobody: nothing to say.
         if ErrorWords.isCancellation(error) { return }
+        // A late 401 of a session no longer in use (the same account signed in again meanwhile): nothing to say,
+        // and never "signed out", whose Sign in would delete the session in use.
+        if staleRefusal(error) { return }
         error_: do {
-            if endsSession(error) { self.error = Self.sessionEnded; break error_ }
+            if endsThisSession(error) { self.error = Self.sessionEnded; break error_ }
             // No network: say so at the top rather than interrupting; kept files still open.
             if case DriveAPIError.transport = error { offline = true; break error_ }
             if case AuthError.message(let text) = error, text == AuthError.unreachable { offline = true; break error_ }

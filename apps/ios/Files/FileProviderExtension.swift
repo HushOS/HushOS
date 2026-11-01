@@ -55,6 +55,9 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
             // The gate's refusal (signed out, or another account's location) reaches Files as it is.
             if refused.code == .notAuthenticated { SignInPrompt.ask() }
             return refused
+        case DriveAPIError.notAuthenticated where !endsSession(error, current: SharedKeychain.session):
+            // A late 401 of a session no longer stored (signed in again meanwhile): nothing to sign in to; Files tries again.
+            return NSFileProviderError(.cannotSynchronize)
         case DriveAPIError.notAuthenticated:
             SignInPrompt.ask()
             return NSFileProviderError(.notAuthenticated)

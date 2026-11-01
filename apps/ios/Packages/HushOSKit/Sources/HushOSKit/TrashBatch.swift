@@ -300,8 +300,8 @@ public enum TrashBatch {
      * back. A busy workspace (409 `conflict`), the rate limit (429) and the body cap (413) are
      * RequestRefusal, never retried here.
      */
-    public static func answers(status: Int, data: Data) throws -> [Answer] {
-        if status == 401 { throw DriveAPIError.notAuthenticated }
+    public static func answers(status: Int, data: Data, session: String? = nil) throws -> [Answer] {
+        if status == 401 { throw DriveAPIError.notAuthenticated(session: session) }
         let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         guard (200 ..< 300).contains(status) else {
             let message = body?["message"] as? String

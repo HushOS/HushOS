@@ -174,7 +174,7 @@ struct MainView: View {
                 .alert("You’ve been signed out", isPresented: Binding(get: { store.error == DriveStore.sessionEnded && model.sessionCheck == .kept }, set: { if !$0 { store.error = nil } })) {
                     Button("Sign in") {
                         store.error = nil
-                        model.sessionLost()
+                        model.sessionLost(ended: store.vault.api.session)
                     }
                 } message: {
                     Text("Your session ended, perhaps because your password was changed on another device. Sign in again to carry on.")
