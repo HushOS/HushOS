@@ -298,6 +298,8 @@ extension DriveStore {
             thumbnails[id] = nil
             try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("opened/\(id)", isDirectory: true))
         }
+        // Every opened copy of the family's folders, those this session never listed included.
+        TemporaryCopies.forgetFamily(Array(areas))
         for (ref, _) in familyVerdicts where areas.contains(ref.workspaceId) { familyVerdicts[ref] = nil }
         familyShown[groupId] = nil
         if details { familyDetails[groupId] = nil }

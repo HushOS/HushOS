@@ -192,12 +192,17 @@ public actor FamilySync: FamilyJudge {
     /* Each family's chain as this process last committed it. */
     private var chains: [String: AcceptedRosters] = [:]
 
-    public init(vault: Vault, api: GroupsAPI? = nil, records: FamilyRecords = .shared, now: @escaping @Sendable () -> Date = { Date() }) {
+    public init(vault: Vault, api: GroupsAPI? = nil, records: FamilyRecords = .shared, now: @escaping @Sendable () -> Date = { Date() },
+                temporary: URL = FileManager.default.temporaryDirectory) {
         self.vault = vault
         self.api = api ?? GroupsAPI(drive: vault.api)
         self.records = records
         self.now = now
+        self.temporary = temporary
     }
+
+    /* This process's temporary folder, where opened copies of family items are kept (TemporaryCopies.openedFolder). */
+    let temporary: URL
 
     /* One per session in this process: the app's screens and any background task share it. */
     private static let registry = Registry()
@@ -328,7 +333,7 @@ public actor FamilySync: FamilyJudge {
             } catch {
                 // The guard the wipe hands back couldn't be stored (or read): nothing of the family was let go of, and
                 // nothing of it stays open here; said as a sync's failed wipe is, and asked again on the next pass.
-                await vault.forgetWorkspaces(knownAreas(groupId))
+                await forgetOpened(groupId)
                 return .failed(FamilyWords.error(error))
             }
             forgetSession(groupId)
@@ -409,7 +414,7 @@ public actor FamilySync: FamilyJudge {
         // Accepted but not let in: the join flow's (iOS 3), never a sync's. Nothing of the family stays open meanwhile.
         // A record on this device means the join finished (a list read before it, still saying `accepted`): synced as a member.
         if summary.state == "accepted" && records.read(userId: userId, groupId: groupId) == nil {
-            await vault.forgetWorkspaces(knownAreas(groupId))
+            await forgetOpened(groupId)
             return .waiting
         }
         do {
@@ -418,10 +423,10 @@ public actor FamilySync: FamilyJudge {
             for _ in 0 ..< 2 {
                 switch try await accept(groupId) {
                 case .unchecked:
-                    await vault.forgetWorkspaces(knownAreas(groupId))
+                    await forgetOpened(groupId)
                     return .unchecked
                 case .fork(let fork):
-                    await vault.forgetWorkspaces(knownAreas(groupId))
+                    await forgetOpened(groupId)
                     return .fork(fork)
                 case .recordReset:
                     reset = true
@@ -436,14 +441,14 @@ public actor FamilySync: FamilyJudge {
                 try await wipe(groupId)
             } catch {
                 // The guard the wipe hands back couldn't be stored (or read): nothing of the family was let go of.
-                await vault.forgetWorkspaces(knownAreas(groupId))
+                await forgetOpened(groupId)
                 return .failed(FamilyWords.error(error))
             }
             return .wiped
         } catch {
             // Refused (a rollback, a race that kept losing, keys that didn't check): the ledger kept nothing of this run, and
             // nothing of the family stays open here. No answer at all leaves what was opened before as it was.
-            if !Self.unanswered(error) { await vault.forgetWorkspaces(knownAreas(groupId)) }
+            if !Self.unanswered(error) { await forgetOpened(groupId) }
             return .failed(FamilyWords.error(error))
         }
     }
@@ -457,7 +462,7 @@ public actor FamilySync: FamilyJudge {
         let areas = try await openAreas(groupId, chain: chain)
         switch try await settle(groupId, pin: pin, checked: chain.checked(), opened: areas.compactMap(\.pinArea)) {
         case .fork(let fork):
-            await vault.forgetWorkspaces(knownAreas(groupId))
+            await forgetOpened(groupId)
             return .fork(fork)
         case .settled(let latest):
             if let detail = try? await api.group(groupId) { details[groupId] = detail }
@@ -476,6 +481,18 @@ public actor FamilySync: FamilyJudge {
     func noteAccepted(_ groupId: String, _ chain: AcceptedRosters) { chains[groupId] = chain }
 
     /* The family folders this process or the device record knows of. */
+    /*
+     * Everything opened of a family on this phone goes (a not-member wipe, a fork, a refusal, a
+     * guard that couldn't be stored): its rows and keys, and the plaintext copies opened from it,
+     * by every folder of it this phone knows, the device record's included, not only those this
+     * session listed.
+     */
+    func forgetOpened(_ groupId: String) async {
+        let areas = knownAreas(groupId)
+        await vault.forgetWorkspaces(areas)
+        TemporaryCopies.forgetFamily(areas, in: temporary)
+    }
+
     func knownAreas(_ groupId: String) -> [String] {
         let known = groupsOf.filter { $0.value == groupId }.map(\.key)
         return Array(Set(known + (areasOf[groupId] ?? []) + (records.read(userId: userId, groupId: groupId)?.areas ?? [])))
@@ -783,6 +800,7 @@ public actor FamilySync: FamilyJudge {
         guard try await forgetInCore(groupId) else { return }
         records.delete(userId: userId, groupId: groupId)
         await vault.forgetWorkspaces(areas)
+        TemporaryCopies.forgetFamily(areas, in: temporary)
         identities[groupId] = nil
         details[groupId] = nil
         areasOf[groupId] = nil

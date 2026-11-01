@@ -185,7 +185,8 @@ public enum LastEmail {
  *   save from a link (`save-*`);
  * - removed after a day: files opened (`opened/`), fetched through a link (`links/`), and the
  *   Files extension's decrypted downloads and their partials (`downloads/`), each
- *   `<node>/<version>/<file>`, which a reopen within the day reuses.
+ *   `<node>/<version>/<file>`, which a reopen within the day reuses; a family folder's opened
+ *   copies are `opened/family/<workspace>/<node>/<version>/<file>` (`openedFolder`).
  */
 public enum TemporaryCopies {
     static let maxAge: TimeInterval = 24 * 3600
@@ -210,12 +211,55 @@ public enum TemporaryCopies {
             }
             guard cachedFolders.contains(name) else { continue }
             // <folder>/<node>/<version>/<file>: a version's folder is as old as the copy in it.
+            func sweepNodes(_ folder: URL) {
+                for node in contents(folder) {
+                    for version in contents(node) where old(version) { try? files.removeItem(at: version) }
+                    if contents(node).isEmpty { try? files.removeItem(at: node) }
+                }
+            }
             for node in contents(entry) {
+                // opened/family/<workspace>/<node>/<version>/<file>: the same, a workspace at a time.
+                if name == "opened", node.lastPathComponent == familyFolder {
+                    for workspace in contents(node) {
+                        sweepNodes(workspace)
+                        if contents(workspace).isEmpty { try? files.removeItem(at: workspace) }
+                    }
+                    continue
+                }
                 for version in contents(node) where old(version) { try? files.removeItem(at: version) }
                 if contents(node).isEmpty { try? files.removeItem(at: node) }
             }
         }
     }
+
+    /*
+     * Where an opened copy of an item goes: `opened/<item>/<version>/`, and a family folder's item
+     * under its workspace, `opened/family/<workspace>/<item>/<version>/`, so forgetting the family
+     * removes every copy of it whatever this session listed. Nil for a family workspace id that
+     * isn't a UUID: no copy is made where it couldn't be found again.
+     */
+    public static func openedFolder(itemId: String, version: String, familyWorkspace: String?,
+                                    in temporary: URL = FileManager.default.temporaryDirectory) -> URL? {
+        let opened = temporary.appendingPathComponent("opened", isDirectory: true)
+        if let familyWorkspace {
+            guard let workspace = UUID(uuidString: familyWorkspace) else { return nil }
+            return opened.appendingPathComponent(familyFolder, isDirectory: true).appendingPathComponent(workspace.uuidString.lowercased(), isDirectory: true)
+                .appendingPathComponent(itemId, isDirectory: true).appendingPathComponent(version, isDirectory: true)
+        }
+        return opened.appendingPathComponent(itemId, isDirectory: true).appendingPathComponent(version, isDirectory: true)
+    }
+
+    /* Every opened copy of these family folders, gone (a family forgotten on this phone): ids that aren't UUIDs name none. */
+    public static func forgetFamily(_ workspaces: [String], in temporary: URL = FileManager.default.temporaryDirectory) {
+        let family = temporary.appendingPathComponent("opened", isDirectory: true).appendingPathComponent(familyFolder, isDirectory: true)
+        for id in workspaces {
+            guard let workspace = UUID(uuidString: id) else { continue }
+            try? FileManager.default.removeItem(at: family.appendingPathComponent(workspace.uuidString.lowercased(), isDirectory: true))
+        }
+    }
+
+    /* `opened/family/`: family folders' copies by workspace; never an item id (those are UUIDs). */
+    static let familyFolder = "family"
 
     static let ownerMarker = "account-owner"
 

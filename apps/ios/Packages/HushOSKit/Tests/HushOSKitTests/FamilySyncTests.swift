@@ -278,6 +278,95 @@ extension OnFakeDrive {
             #expect(try await phone.vault.openListed(family.root).name == "Photos")
         }
 
+        /* A plaintext copy opened before: in its place, a file in it. */
+        func copy(_ phone: FamilyFixture.Phone, item: String, family: String?) throws -> URL {
+            let folder = try #require(TemporaryCopies.openedFolder(itemId: item, version: "v1", familyWorkspace: family, in: phone.temporary))
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let file = folder.appendingPathComponent("Recipes.txt")
+            try Data("pancakes".utf8).write(to: file)
+            return file
+        }
+
+        /*
+         * A family file opened in an earlier session (this one never listed it) leaves its plaintext
+         * copy on the phone. The server says not-member: the copy goes, found by the device record's
+         * folders, not by what this session listed; a personal copy stays. Fails if the wipe misses
+         * copies it didn't list, or takes personal ones.
+         */
+        @Test func aNotMemberWipeDeletesFamilyCopiesFromAnEarlierSessionOnly() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let first = try await family.phone(server)
+            guard case .accepted = await first.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let familyCopy = try copy(first, item: family.fileId, family: family.workspaceId)
+            let personalCopy = try copy(first, item: family.personalRoot.id, family: nil)
+            first.done()
+
+            // A relaunch: a new session that hasn't listed anything of the family.
+            server.notMember = true
+            let later = try await family.phone(server, records: first.records, guards: first.guards)
+            defer { later.done() }
+            #expect(await later.sync.sync(family.summary) == .wiped)
+            #expect(!FileManager.default.fileExists(atPath: familyCopy.path), "a family copy outlived the removal")
+            #expect(FileManager.default.fileExists(atPath: personalCopy.path))
+        }
+
+        /*
+         * The same when the wipe has to wait for the guard (it can't be stored): nothing of the
+         * family stays open here, its copies included, though its device record does.
+         */
+        @Test func aWipeThatWaitsForTheGuardStillDeletesTheCopies() async throws {
+            let family = try FamilyFixture()
+            let writes = GuardSwitch()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server, guards: familyGuards(family.member, writes: writes))
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let familyCopy = try copy(phone, item: family.fileId, family: family.workspaceId)
+            server.serve(chain: [family.r1, family.r2, family.r3])
+            writes.writable = false
+            server.notMember = true
+            _ = await phone.sync.sync(family.summary)
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId) != nil)
+            #expect(!FileManager.default.fileExists(atPath: familyCopy.path))
+        }
+
+        /* A family copy goes only under a family folder id that is one: never somewhere a forget can't find. */
+        @Test func aFamilyCopyNeedsAWorkspaceIdThatIsAUUID() async throws {
+            let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("copies-\(UUID().uuidString)")
+            #expect(TemporaryCopies.openedFolder(itemId: "a", version: "v", familyWorkspace: "../personal", in: temporary) == nil)
+            let ws = UUID().uuidString.lowercased()
+            #expect(TemporaryCopies.openedFolder(itemId: "a", version: "v", familyWorkspace: ws, in: temporary)?.path
+                == temporary.appendingPathComponent("opened/family/\(ws)/a/v").path)
+        }
+
+        /*
+         * A day on, the sweep removes family copies as it does personal ones, and leaves a fresh one,
+         * the `family` folder read as the folder it is, not as an item. Fails if the sweep misreads it.
+         */
+        @Test func theSweepReadsFamilyCopies() async throws {
+            let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("copies-\(UUID().uuidString)")
+            let ws = UUID().uuidString.lowercased()
+            let files = FileManager.default
+            func make(_ folder: URL?, age: TimeInterval) throws -> URL {
+                let folder = try #require(folder)
+                try files.createDirectory(at: folder, withIntermediateDirectories: true)
+                let file = folder.appendingPathComponent("f.txt")
+                try Data("x".utf8).write(to: file)
+                try files.setAttributes([.modificationDate: Date().addingTimeInterval(-age)], ofItemAtPath: folder.path)
+                return file
+            }
+            let oldFamily = try make(TemporaryCopies.openedFolder(itemId: "old", version: "v", familyWorkspace: ws, in: temporary), age: 2 * 86400)
+            let freshFamily = try make(TemporaryCopies.openedFolder(itemId: "fresh", version: "v", familyWorkspace: ws, in: temporary), age: 60)
+            let oldPersonal = try make(TemporaryCopies.openedFolder(itemId: "mine", version: "v", familyWorkspace: nil, in: temporary), age: 2 * 86400)
+            // The family folders as old as a copy in them could make them look, as a node's folder would.
+            try files.setAttributes([.modificationDate: Date().addingTimeInterval(-3 * 86400)], ofItemAtPath: temporary.appendingPathComponent("opened/family").path)
+            TemporaryCopies.sweep(in: temporary)
+            #expect(!files.fileExists(atPath: oldFamily.path))
+            #expect(files.fileExists(atPath: freshFamily.path))
+            #expect(!files.fileExists(atPath: oldPersonal.path))
+        }
+
         /*
          * Route 2 doesn't load (a 503), or the server doesn't answer about the family (a 503 on route
          * 5): nothing is taken away. Only the server's not-member is a removal. Fails if a failed list
@@ -722,7 +811,10 @@ struct FamilyFixture {
         await vault.adopt(guard: ContactGuardStore(folder: guards.folder, owner: guards.owner, activity: .expired, generation: GuardGeneration()))
         var held = guards
         held.key = server.guardKey
-        return Phone(vault: vault, sync: FamilySync(vault: vault, api: GroupsAPI(drive: api), records: store), records: store, guards: guards, held: held)
+        // Opened copies in a folder of the test's own, beside the guard: a relaunch passing the same guard finds them.
+        let temporary = guards.folder.deletingLastPathComponent().appendingPathComponent(guards.folder.lastPathComponent + "-tmp", isDirectory: true)
+        return Phone(vault: vault, sync: FamilySync(vault: vault, api: GroupsAPI(drive: api), records: store, temporary: temporary),
+                     records: store, guards: guards, held: held, temporary: temporary)
     }
 
     struct Phone {
@@ -732,6 +824,7 @@ struct FamilyFixture {
         let guards: FamilyGuardStore
         /* The same store under the settings key the phone seals it with: what a test reads it through. */
         let held: FamilyGuardStore
+        let temporary: URL
         func done() { Auth.testSession = nil; Auth.testTransport = nil; FamilyServer.current = nil }
     }
 }

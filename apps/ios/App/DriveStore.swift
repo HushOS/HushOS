@@ -1740,10 +1740,19 @@ final class DriveStore {
     /* "report.pdf" becomes "report (2).pdf", then "(3)", until the name is free. */
     static func freeName(_ name: String, among taken: [String]) -> String { UploadNames.freeName(name, among: taken) }
 
+    /*
+     * Where an item's opened copy goes (TemporaryCopies.openedFolder): a family folder's item under
+     * its workspace, so forgetting the family removes every copy of it; nil when that can't be.
+     */
+    private func openedFolder(_ item: Opened, version: VersionListView?) -> URL? {
+        TemporaryCopies.openedFolder(itemId: item.id, version: version?.id ?? item.node.currentVersion?.id ?? "current",
+                                     familyWorkspace: isFamily(item) ? item.node.workspaceId : nil)
+    }
+
     /* As `download`, but the failure comes back to the caller (the viewer and Send a copy say it in place). */
     func fetch(_ item: Opened, version: VersionListView? = nil) async throws -> URL {
         if version == nil, let kept = Offline.localCopy(of: item) { return kept }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("opened/\(item.id)/\(version?.id ?? item.node.currentVersion?.id ?? "current")", isDirectory: true)
+        guard let directory = openedFolder(item, version: version) else { throw CocoaError(.fileWriteInvalidFileName) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent(item.name)
         if FileManager.default.fileExists(atPath: file.path) { return file }
@@ -1767,7 +1776,7 @@ final class DriveStore {
     func download(_ item: Opened, version: VersionListView? = nil) async -> URL? {
         if version == nil, let kept = Offline.localCopy(of: item) { return kept }
         // Keyed by the version itself, so a file replaced elsewhere is fetched again rather than served from an old copy.
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("opened/\(item.id)/\(version?.id ?? item.node.currentVersion?.id ?? "current")", isDirectory: true)
+        guard let directory = openedFolder(item, version: version) else { return nil }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let file = directory.appendingPathComponent(item.name)
         if FileManager.default.fileExists(atPath: file.path) { return file }
