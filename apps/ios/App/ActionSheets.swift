@@ -631,7 +631,7 @@ struct InfoSheet: View {
             Text("Added by").foregroundStyle(Alpine.ink)
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
-                Text(seen.name).foregroundStyle(Alpine.inkMuted)
+                Text(seen.shown).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.trailing)
                 HStack(spacing: 4) {
                     Text("Not verified")
                     if family != nil || email?.isEmpty == false {

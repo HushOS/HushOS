@@ -611,6 +611,16 @@ final class DriveStore {
         let email: String?
         /* The family whose verdict named them (a family taken on first use): its member check, for a member. */
         let groupId: String?
+
+        /*
+         * How they are named where they are shown: a family's member by the name the server serves with
+         * their address beside it (D10), since nothing on this phone vouches for the name; anyone else
+         * by the name this person's own contacts give.
+         */
+        var shown: String {
+            guard groupId != nil, let email, !email.isEmpty, email.lowercased() != name.lowercased() else { return name }
+            return name.isEmpty ? email : "\(name) (\(email))"
+        }
     }
 
     /*
