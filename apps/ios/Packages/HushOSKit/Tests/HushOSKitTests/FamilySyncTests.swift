@@ -188,7 +188,8 @@ extension OnFakeDrive {
 
             server.listed = false
             server.notMember = true
-            let (listed, removed) = try await phone.sync.listReconciling()
+            let (listed, removed, failed) = try await phone.sync.listReconciling()
+            #expect(failed.isEmpty)
             #expect(listed.isEmpty)
             #expect(removed == [family.groupId])
             #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId) == nil)

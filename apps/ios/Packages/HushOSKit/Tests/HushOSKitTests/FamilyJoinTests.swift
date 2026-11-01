@@ -248,11 +248,16 @@ extension OnFakeDrive {
 
             server.listed = false
             server.notMember = true
-            #expect(try await phone.sync.listReconciling().removed.isEmpty)
+            // Said, not swallowed: the page leaves its accepted state for the storage words, and the family is asked again.
+            let first = try await phone.sync.listReconciling()
+            #expect(first.removed.isEmpty)
+            #expect(first.failed == [family.groupId: GuardWords.unsaved])
             #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId) != nil, "the wipe deleted before the guard was stored")
+            #expect(FileManager.default.fileExists(atPath: phone.guards.file.path))
 
             writes.writable = true
-            #expect(try await phone.sync.listReconciling().removed == [family.groupId])
+            let second = try await phone.sync.listReconciling()
+            #expect(second.removed == [family.groupId] && second.failed.isEmpty)
             #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId) == nil)
             #expect(try phone.held.family(family.groupId)?.rosterVersion == 3)
             #expect(FileManager.default.fileExists(atPath: phone.guards.file.path))

@@ -280,50 +280,62 @@ public actor FamilySync: FamilyJudge {
      * longer lists: each asked about once (route 5 from the record's version). Only the server's
      * 404 `not-member` wipes one, as any sync's does (`wipe`); a family still served (route 2 caught
      * between two states) or no answer at all changes nothing. A list that didn't load never reaches
-     * here: nothing is unlisted without one. The wiped families, by id.
+     * here: nothing is unlisted without one. The wiped families, by id; and those the server said
+     * not-member of whose wipe couldn't store the guard it hands back (`failed`, with the words to
+     * show, as a sync's failed wipe says them): kept, with their device record, and asked again.
      */
-    public func listReconciling() async throws -> (listed: [GroupSummary], removed: [String]) {
+    public func listReconciling() async throws -> (listed: [GroupSummary], removed: [String], failed: [String: String]) {
         // Route 2 first: when it doesn't load, nothing is unlisted and nothing is asked about.
         let listed = try await list()
-        return (listed, await reconcile(listed: listed))
+        let (removed, failed) = await reconcile(listed: listed)
+        return (listed, removed, failed)
     }
 
-    func reconcile(listed: [GroupSummary]) async -> [String] {
+    func reconcile(listed: [GroupSummary]) async -> (removed: [String], failed: [String: String]) {
         let shown = Set(listed.map { $0.id.lowercased() })
         settledUnlisted.subtract(shown)
         var held = Set(records.groups(userId: userId))
         held.formUnion(groupsOf.values.map { $0.lowercased() })
         held.subtract(settledUnlisted)
         var wiped: [String] = []
+        var failed: [String: String] = [:]
         for groupId in held.subtracting(shown).sorted() where FamilyRecords.valid(groupId) {
-            if await checkUnlisted(groupId) { wiped.append(groupId) }
+            switch await checkUnlisted(groupId) {
+            case .kept: break
+            case .wiped: wiped.append(groupId)
+            case .failed(let words): failed[groupId] = words
+            }
         }
-        return wiped
+        return (wiped, failed)
     }
 
-    /* One family route 2 stopped listing, asked about in its own turn: true when the server said not-member and it was wiped. */
-    private func checkUnlisted(_ groupId: String) async -> Bool {
+    private enum Unlisted: Sendable { case kept, wiped, failed(String) }
+
+    /* One family route 2 stopped listing, asked about in its own turn. */
+    private func checkUnlisted(_ groupId: String) async -> Unlisted {
         await exclusive(groupId) { await self.askUnlisted(groupId) }
     }
 
-    private func askUnlisted(_ groupId: String) async -> Bool {
+    private func askUnlisted(_ groupId: String) async -> Unlisted {
         let after = Int(records.read(userId: userId, groupId: groupId)?.rosterVersion ?? 0)
         do {
             _ = try await api.rosters(groupId, after: after)
             // Still served: a list caught mid-change, never a removal.
-            return false
+            return .kept
         } catch let error as GroupsAPIError where error.isNotMember {
             do {
                 try await wipe(groupId)
             } catch {
-                // The guard the wipe hands back couldn't be stored (or read): nothing of the family was let go of.
-                return false
+                // The guard the wipe hands back couldn't be stored (or read): nothing of the family was let go of, and
+                // nothing of it stays open here; said as a sync's failed wipe is, and asked again on the next pass.
+                await vault.forgetWorkspaces(knownAreas(groupId))
+                return .failed(FamilyWords.error(error))
             }
             forgetSession(groupId)
-            return true
+            return .wiped
         } catch {
             // No answer, a 5xx, any other refusal: nothing is taken away.
-            return false
+            return .kept
         }
     }
 

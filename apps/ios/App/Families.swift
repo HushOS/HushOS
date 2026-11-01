@@ -100,12 +100,13 @@ extension DriveStore {
         do {
             // A family this phone holds that the list no longer names is asked about, and wiped only on the server's
             // not-member, so an open family page or folder leaves at once rather than at the next launch.
-            let (list, gone) = try await families.listReconciling()
+            let (list, gone, unsaved) = try await families.listReconciling()
             for summary in list { familyNames[summary.id] = summary.name }
             familyList = list
             familiesServed = true
             familiesSyncedAt = Date()
             for groupId in gone { removed(groupId) }
+            for (groupId, words) in unsaved { couldntRemove(groupId, words) }
             for summary in list { await refreshFamily(summary) }
         } catch let error as GroupsAPIError where error.status == 404 || error.status == 501 {
             familyList = nil
@@ -203,6 +204,20 @@ extension DriveStore {
         familyCheckedAt[groupId] = Date()
         clearFamily(groupId, roots: roots, details: true, problem: .removed)
         BackgroundTransfers.shared.endFamily(groupId)
+    }
+
+    /*
+     * A family the server says this account is no longer in, whose wipe waits for the guard it hands
+     * back to be stored: shown as a sync's failed wipe is (the storage words), nothing of it left open
+     * here, and its device record and guard kept, so the next pass asks again.
+     */
+    func couldntRemove(_ groupId: String, _ words: String) {
+        var roots: [String] = []
+        if case .accepted(let view)? = familyStates[groupId] { roots = view.areas.compactMap { $0.root?.id } }
+        roots += familyRoots.filter { $0.value == groupId }.map(\.key)
+        publishFamily(.failed(words), of: groupId)
+        familyCheckedAt[groupId] = Date()
+        clearFamily(groupId, roots: roots, details: false)
     }
 
     /*
@@ -494,7 +509,8 @@ struct FamilyPage: View {
             FamilyForkSection(name: name, fork: fork, organizer: organizer)
         case .failed(let message):
             notice(title: "Couldn’t check \(name)", message: message, danger: false) {
-                Button("Try again") { Task { if let summary { await store.refreshFamily(summary) } } }
+                // A family route 2 no longer lists (a removal that couldn't be saved yet) is asked about by listing again.
+                Button("Try again") { Task { if let summary { await store.refreshFamily(summary) } else { await store.refreshFamilies(force: true) } } }
                     .font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
             }
         case .wiped:
