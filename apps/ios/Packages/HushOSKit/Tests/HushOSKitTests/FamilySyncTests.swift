@@ -278,6 +278,38 @@ extension OnFakeDrive {
             #expect(try await phone.vault.openListed(family.root).name == "Photos")
         }
 
+        /*
+         * A listing of the family folder was waiting on the server when the family's check found it
+         * shown differently: the core committed the newer member list, then the settings pin (saved
+         * meanwhile from another device) named another history, so the core still holds the keys it
+         * just took. The listing then resumes: it keeps neither rows nor keys, and asking for the file
+         * afterwards is refused rather than answered from the cache. Fails if an open puts back what
+         * a fork's forget cleared.
+         */
+        @Test func anOpenThatResumesAfterAForkKeepsNothingAndResolveRefuses() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+
+            server.serve(chain: [family.r1, family.r2, family.r3])
+            let other = try family.pin(through: [family.r1, family.r2, family.r3Fork])
+            server.afterRosters = { try? server.storeSettings(pin: other) }
+            let (sync, summary) = (phone.sync, family.summary)
+            let found = FoundState()
+            await phone.vault.listingPage {
+                guard found.value == nil else { return }
+                found.value = await sync.sync(summary)
+            }
+            await #expect(throws: (any Error).self) { _ = try await phone.vault.listChildren(of: family.rootId) }
+            await phone.vault.listingPage(nil)
+            guard case .fork? = found.value else { Issue.record("no fork in between: \(String(describing: found.value))"); return }
+            #expect(await phone.vault.item(family.fileId) == nil, "the opened row came back after the fork")
+            #expect(await phone.vault.nodeKey(family.fileId) == nil)
+            await #expect(throws: (any Error).self) { _ = try await phone.vault.resolve(family.fileId) }
+        }
+
         /* A plaintext copy opened before: in its place, a file in it. */
         func copy(_ phone: FamilyFixture.Phone, item: String, family: String?) throws -> URL {
             let folder = try #require(TemporaryCopies.openedFolder(itemId: item, version: "v1", familyWorkspace: family, in: phone.temporary))
@@ -1321,4 +1353,18 @@ final class FamilyServerProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+}
+
+final class FoundState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held: FamilyState?
+    var value: FamilyState? {
+        get { lock.withLock { held } }
+        set { lock.withLock { held = newValue } }
+    }
+}
+
+extension Vault {
+    /* Tests: a step run after a listing page arrives and before it is opened. */
+    func listingPage(_ hook: (@Sendable () async -> Void)?) { afterListingPage = hook }
 }

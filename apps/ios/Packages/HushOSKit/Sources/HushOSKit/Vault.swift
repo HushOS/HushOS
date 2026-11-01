@@ -180,6 +180,8 @@ public actor Vault {
     public nonisolated let areaLedger = AreaLedger()
     /* Every family folder route 25 named this session, lowercased: refused by the personal key path whatever the ledger holds. */
     var familyWorkspaces: Set<String> = []
+    /* Tests: runs after a listing page arrives, before it is opened (a forget landing there). */
+    var afterListingPage: (@Sendable () async -> Void)?
     /* The family's sync, for the forms family records are signed again with (weak: it holds this vault). */
     weak var familyJudge: (any FamilyJudge)?
 
@@ -613,6 +615,7 @@ public actor Vault {
         var first: Listing? = nil
         repeat {
             let page = try await api.children(of: folderId, workspaceId: workspaceId, after: after)
+            if let afterListingPage { await afterListingPage() }
             try openChain(page)
             remember(page)
             all.append(contentsOf: page.children)

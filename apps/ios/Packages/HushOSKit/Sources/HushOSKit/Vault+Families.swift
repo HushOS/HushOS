@@ -227,8 +227,11 @@ extension Vault {
     @discardableResult
     func forgetWorkspaces(_ ids: [String]) -> Set<String> {
         var gone: Set<String> = []
-        // Only family folders: a member list naming the personal drive (or anything else) never clears it here.
-        for id in ids where familyWorkspaces.contains(id.lowercased()) {
+        // Every folder the family names (the device record's too, not only those this session opened), never this
+        // account's own drive, whatever a member list names. On this actor nothing runs between the clearing and an
+        // open, which asks the core for the key as it runs: one that resumes after a fork or removal is refused there.
+        let own = workspace?.workspaceId.lowercased()
+        for id in ids.map({ $0.lowercased() }) where id != own {
             for nodeId in nodeKeys.values(in: id).keys { nodeKeys[NodeRef(workspaceId: id, nodeId: nodeId)] = nil; gone.insert(nodeId) }
             for nodeId in opened.values(in: id).keys { opened[NodeRef(workspaceId: id, nodeId: nodeId)] = nil; gone.insert(nodeId) }
         }
