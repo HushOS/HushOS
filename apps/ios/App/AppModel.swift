@@ -175,7 +175,9 @@ final class AppModel {
         guard state == .signedIn || state == .signedOut, wiping == nil else { return }
         let shown = state == .signedIn ? vault?.api.session : nil
         let change = SessionChange.decide(shown: shown, last: owner ?? lastOwner, stored: SharedKeychain.session, declined: declinedToken)
-        // The last session's family sync, ledger keys and vault go before anything follows the new one.
+        // The last session's family sync, ledger keys and vault go before anything follows the new one, and the last
+        // session is closed as a sign-out closes it (its late syncs delete nothing, its downloads write nothing), the same
+        // account's new session (`adopt`) included.
         change.forgetLastSession()
         switch change {
         case .none:
