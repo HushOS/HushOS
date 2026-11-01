@@ -1,0 +1,25 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_633942b88491a3 29
+apps/android/app/src/main/kotlin/com/hushos/app/data/Catalogue.kt
+  s_566b8e0c4467a4::t_b2ad1f7e3afcba 134-141,157-160
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_566b8e0c4467a4::t_c9201bf57045d3 116-119,449
+apps/android/app/src/test/kotlin/com/hushos/app/data/FilesChangesTest.kt
+  s_566b8e0c4467a4::t_58706097ad0187 173-223
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a5834c15806f32d51b33a253069cd90dc2f39c2e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
