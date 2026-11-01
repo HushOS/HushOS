@@ -113,6 +113,8 @@ final class DriveStore {
     var familyStates: [String: FamilyState] = [:]
     /* How many times each family's state was published (`publishFamily`): a screen's own sync shown only over none newer. */
     @ObservationIgnored var familyGenerations = FamilyGenerations()
+    /* Family work and folder listings kept to the session they began in (`inSession`, `resetFamilies`). */
+    @ObservationIgnored let sessionGate = SessionGate<Vault>()
     /* Each family's name as route 2 last listed it, kept after it stops listing one (a removal's page names it). */
     var familyNames: [String: String] = [:]
     /*
@@ -304,18 +306,21 @@ final class DriveStore {
         vault = next
         // A new session for this account (signed in again, here or from the Files sheet): the old one's end is no longer news.
         if error == Self.sessionEnded { error = nil }
-        // The new session's vault has its own area ledger: families are checked again under it.
-        familyVerdicts = [:]
-        familiesSyncedAt = nil
+        // The new session's vault has its own area ledger: families are checked again under it, and nothing the
+        // old session asked lands in this one.
+        resetFamilies()
         BackgroundTransfers.shared.vault = next
         Task { await refreshSigners() }
         await sync()
+        // Families checked again under the new session at once, so an open family page doesn't wait for the next tick.
+        await refreshFamilies(force: true)
         for id in folders.keys { await refresh(folder: id) }
         await refreshRecents()
     }
 
     init(vault: Vault) {
         self.vault = vault
+        sessionGate.session = { [weak self] in self?.vault }
         // The background queue shares this vault, and a landed transfer redraws the lists.
         BackgroundTransfers.shared.vault = vault
         BackgroundTransfers.shared.onLanded = { [weak self] in
@@ -723,7 +728,8 @@ final class DriveStore {
         defer { loading.remove(id) }
         do {
             await sync()
-            let children = try await vault.children(of: id)
+            // Kept to its session: a listing the last session asked for, answering after a new one began, is dropped.
+            guard let children = try await inSession({ try await $0.children(of: id) }) else { return }
             if removed() { return }
             folders[id] = children
             folderProblems[id] = nil

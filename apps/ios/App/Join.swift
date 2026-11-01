@@ -196,7 +196,8 @@ struct InvitationSheet: View {
         }
         step = .opening
         do {
-            step = .invitation(try await store.families.openInvitation(token))
+            guard let invitation = try await store.family({ try await $0.openInvitation(token) }) else { dismiss(); return }
+            step = .invitation(invitation)
         } catch let error as GroupsAPIError where error.code == "gone" {
             step = .failed(gone: true, words: "")
         } catch {
@@ -212,7 +213,7 @@ struct InvitationSheet: View {
         error = nil
         problem = nil
         do {
-            let groupId = try await store.families.acceptInvitation(token)
+            guard let groupId = try await store.family({ try await $0.acceptInvitation(token) }) else { dismiss(); return }
             await store.refreshFamilies(force: true)
             step = .joining(groupId, family: invitation.name)
         } catch let refused as GroupsAPIError where refused.status != 0 {
@@ -299,7 +300,7 @@ struct JoinSections: View {
         // Route 3 answers someone who accepted: who manages the family, read again every few seconds.
         .task(id: groupId) {
             while !Task.isCancelled {
-                if let detail = try? await store.families.members(groupId) {
+                if let detail = try? await store.family({ try await $0.members(groupId) }) {
                     managers = detail.members.filter { $0.state == "active" && $0.roles.contains("members") }
                 }
                 try? await Task.sleep(for: .seconds(5))
@@ -312,7 +313,8 @@ struct JoinSections: View {
                 try? await Task.sleep(for: .seconds(3))
                 if Task.isCancelled { return }
                 do {
-                    let outcome = try await store.families.joinStatus(groupId)
+                    // Dropped when the session it began in ended: the screen goes with it.
+                    guard let outcome = try await store.family({ try await $0.joinStatus(groupId) }) else { return }
                     if outcome != .waiting { show(outcome); return }
                     error = nil
                 } catch {
@@ -363,7 +365,7 @@ struct JoinSections: View {
         case .member:
             // This phone already holds the family: nothing to join. Checked as a member, from this screen.
             Task {
-                if let summary = try? await store.families.list().first(where: { $0.id == groupId }) {
+                if let summary = (try? await store.family({ try await $0.list() }))?.first(where: { $0.id == groupId }) {
                     await store.refreshFamily(summary, fromJoin: true)
                 }
                 onJoined?()
@@ -379,7 +381,8 @@ struct JoinSections: View {
     private func resume() async {
         error = nil
         do {
-            show(try await store.families.joinStatus(groupId))
+            guard let outcome = try await store.family({ try await $0.joinStatus(groupId) }) else { return }
+            show(outcome)
         } catch {
             if endsSession(error) { store.report(error); return }
             // The retry belongs to the loading step, whatever step this came from.

@@ -142,7 +142,9 @@ struct FamilyCheckView: View {
         code = nil
         do {
             let since = store.familyGenerations.current(summary.id)
-            let start = try await store.families.checkCode(summary, with: member.userId)
+            let (summary, memberId) = (summary, member.userId)
+            // The session it began in ended (a sign-out, the same account signed in again): nothing of it shows.
+            guard let start = try await store.family({ try await $0.checkCode(summary, with: memberId) }) else { done(); return }
             // The sync it ran is shown as after any sync (a warning, a removal), unless the family was shown anew meanwhile.
             await store.adopt(start.state, of: summary, since: since)
             // The family as it is shown now decides: words worked out over a chain it has since left don't show.
@@ -162,7 +164,12 @@ struct FamilyCheckView: View {
         error = ""
         Task {
             do {
-                let saved = try await store.families.checkMatch(summary.id, member: member, rosterVersion: rosterVersion, code: words)
+                let (groupId, member) = (summary.id, member)
+                guard let saved = try await store.family({ try await $0.checkMatch(groupId, member: member, rosterVersion: rosterVersion, code: words) }) else {
+                    saving = false
+                    done()
+                    return
+                }
                 guard saved.checked else {
                     // The family moved on here since the words were shown: worked out again.
                     error = "The family changed meanwhile. Compare these words again."

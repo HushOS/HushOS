@@ -14,6 +14,46 @@ import SwiftUI
 extension DriveStore {
     var families: FamilySync { FamilySync.shared(for: vault) }
 
+    /*
+     * Work of this session, through its gate: nil when the session ended or changed before it
+     * answered (dropped, its failure too), the failure thrown otherwise.
+     */
+    func inSession<T: Sendable>(_ work: @escaping @Sendable (Vault) async throws -> T) async throws -> T? {
+        guard let result = await sessionGate.run(work) else { return nil }
+        return try result.get()
+    }
+
+    /* A family request of this session (`inSession`), against the session's family sync. */
+    func family<T: Sendable>(_ work: @escaping @Sendable (FamilySync) async throws -> T) async throws -> T? {
+        try await inSession { try await work(FamilySync.shared(for: $0)) }
+    }
+
+    /*
+     * The session ended or is replaced (the same account signed in again, a sign-out, a deletion):
+     * everything drawn of its families goes, and what it still has out is cancelled and dropped.
+     * Which folders are family folders stays (`familyRoots`, `familyAreaGroups`, `familyFolders`):
+     * never read under a personal key, whatever the new session finds.
+     */
+    func resetFamilies() {
+        sessionGate.reset()
+        for groupId in familyStates.keys { familyGenerations.published(groupId) }
+        familyList = nil
+        familiesServed = nil
+        familiesSyncedAt = nil
+        familyStates = [:]
+        familyShown = [:]
+        familyDetails = [:]
+        familyNames = [:]
+        familySyncing = []
+        familyVerdicts = [:]
+        familyCheckedAt = [:]
+        familyToOpen = nil
+        for (id, problem) in folderProblems {
+            if case .family = problem { folderProblems[id] = nil } else if problem == .removed { folderProblems[id] = nil }
+        }
+        for groupId in familyRefreshed.keys { familyRefreshed[groupId, default: 0] += 1 }
+    }
+
     /* A family folder's item: decided by every family folder this session learned of, never by the last sync's answer. */
     func isFamily(_ item: Opened) -> Bool { familyAreaGroups[item.node.workspaceId.lowercased()] != nil }
 
@@ -78,7 +118,8 @@ extension DriveStore {
     func judgeFamilyItems(_ items: [Opened]) async {
         let due = items.filter { isFamily($0) && familyVerdict(of: $0) == nil }
         for (groupId, group) in Dictionary(grouping: due, by: { familyAreaGroups[$0.node.workspaceId.lowercased()] ?? "" }) where !groupId.isEmpty {
-            let verdicts = await families.verdicts(of: group.map(\.node), groupId: groupId)
+            let nodes = group.map(\.node)
+            guard let verdicts = try? await family({ await $0.verdicts(of: nodes, groupId: groupId) }) else { continue }
             for (item, verdict) in zip(group, verdicts) { familyVerdicts[item.ref] = (item.node, verdict) }
         }
     }
@@ -100,7 +141,7 @@ extension DriveStore {
         do {
             // A family this phone holds that the list no longer names is asked about, and wiped only on the server's
             // not-member, so an open family page or folder leaves at once rather than at the next launch.
-            let (list, gone, unsaved) = try await families.listReconciling()
+            guard let (list, gone, unsaved) = try await family({ try await $0.listReconciling() }) else { return }
             for summary in list { familyNames[summary.id] = summary.name }
             familyList = list
             familiesServed = true
@@ -125,7 +166,8 @@ extension DriveStore {
         familySyncing.insert(summary.id)
         defer { familySyncing.remove(summary.id) }
         let previous = familyStates[summary.id]
-        await show(await families.sync(summary), of: summary, previous: previous)
+        guard let state = try? await family({ await $0.sync(summary) }) else { return }
+        await show(state, of: summary, previous: previous)
     }
 
     /*
@@ -133,7 +175,7 @@ extension DriveStore {
      * sync's would be, with route 2 read again so the row says it is in (no second acceptance).
      */
     func joined(_ groupId: String, _ state: FamilyState) async {
-        if let list = try? await families.list() {
+        if let list = try? await family({ try await $0.list() }) {
             familyList = list
             familiesSyncedAt = Date()
         }
@@ -161,14 +203,18 @@ extension DriveStore {
     }
 
     private func show(_ state: FamilyState, of summary: GroupSummary, previous: FamilyState?) async {
+        guard let ticket = sessionGate.ticket() else { return }
         publishFamily(state, of: summary.id)
         familyCheckedAt[summary.id] = Date()
         familyRefreshed[summary.id, default: 0] += 1
-        for (area, groupId) in await families.familyAreas() { familyAreaGroups[area] = groupId }
+        guard let areas = try? await family({ await $0.familyAreas() }) else { return }
+        for (area, groupId) in areas { familyAreaGroups[area] = groupId }
         if case .accepted(let view) = state {
             familyShown[summary.id] = view
             for root in view.areas.compactMap({ $0.root?.id.lowercased() }) { familyRoots[root] = summary.id }
-            familyDetails[summary.id] = await families.detail(summary.id)
+            let groupId = summary.id
+            guard let detail = await sessionGate.run({ await FamilySync.shared(for: $0).detail(groupId) }), sessionGate.holds(ticket) else { return }
+            familyDetails[summary.id] = (try? detail.get()) ?? nil
             // Listed again, not only judged again: a walk since may have re-keyed every row on screen.
             let areas = Set(familyAreaGroups.filter { $0.value == summary.id }.map(\.key))
             let roots = Set(view.areas.compactMap { $0.root?.id })
@@ -491,8 +537,9 @@ struct FamilyPage: View {
         .task(id: "\(view?.rosterDigest ?? "")-\(checks)-\(store.familyRefreshed[groupId] ?? 0)-\(store.trustGeneration)") {
             guard let view else { return }
             let trust = store.trustGeneration
-            labels = (try? await store.families.memberStandings(view)).map { MemberLabels($0, of: view, trust: trust) }
-            checkedWith = await store.families.checkedFamilyWith(groupId)
+            let groupId = groupId
+            labels = (try? await store.family({ try await $0.memberStandings(view) })).map { MemberLabels($0, of: view, trust: trust) }
+            checkedWith = (try? await store.family({ await $0.checkedFamilyWith(groupId) })) ?? nil
         }
         .sheet(item: $checking) { check in
             if let summary {
