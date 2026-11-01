@@ -133,7 +133,12 @@ public actor Vault {
      */
     var familyGuardOwed: Set<String> = []
     /* Each family folder route 25 named this session, lowercased, to its family. */
-    var familyAreaGroup: [String: String] = [:]    /* The guard's turn (`withGuardTurn`): whether an act holds it, and who waits for it, in order. */
+    var familyAreaGroup: [String: String] = [:]
+    /*
+     * Folders an accepted member list named, held for the write barrier only (holdAsFamilyWorkspaces):
+     * never how a node opens or writes, which only folders proven a family's decide (familyWorkspaces).
+     */
+    var heldAreaGroup: [String: String] = [:]    /* The guard's turn (`withGuardTurn`): whether an act holds it, and who waits for it, in order. */
     var guardBusy = false
     var guardWaiting: [CheckedContinuation<Void, Never>] = []
     /* Contacts looked up for display, by lowercased email, with when (`cachedLookup`). */
@@ -471,7 +476,7 @@ public actor Vault {
 
     func parentKey(for node: NodeView) throws -> Data {
         // A family folder's keys come from the area ledger alone (see `open`): never under a key cached here.
-        if areaLedger.isArea(workspaceId: node.workspaceId) || familyWorkspaces.contains(node.workspaceId.lowercased()) {
+        if isFamilyWorkspace(node.workspaceId) {
             throw DriveAPIError.server(500, FamilyWords.openAgain)
         }
         let parentId = node.parentId ?? node.workspaceId
@@ -501,7 +506,7 @@ public actor Vault {
      */
     @discardableResult
     public func open(_ node: NodeView) throws -> Opened {
-        let family = areaLedger.isArea(workspaceId: node.workspaceId) || familyWorkspaces.contains(node.workspaceId.lowercased())
+        let family = isFamilyWorkspace(node.workspaceId)
         // A family folder row served differently (a walk re-keyed it, its root moved to the next key) opens through the ledger
         // again, so what the ledger holds of its path is what the server serves now, never what this process saw first.
         // An older answer arriving after a newer one (listings out of order) keeps the newer row and key.

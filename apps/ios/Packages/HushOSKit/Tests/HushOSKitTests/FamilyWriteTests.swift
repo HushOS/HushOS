@@ -49,9 +49,9 @@ extension OnFakeDrive {
 
         /*
          * The first acceptance on this phone hands back a guard that can't be stored, so the family is
-         * refused before any of its folders was opened. Its folders are still known as the family's:
-         * a write into one is held by the barrier with the storage words, never taken as a personal
-         * folder's. Fails if the folders are noted only after the guard is stored.
+         * refused before any of its folders was opened. Its folders are still held for the barrier: a
+         * write into one waits for the guard with the storage words, never sent as a personal folder's.
+         * Fails if the folders are held only after the guard is stored.
          */
         @Test func aFirstAcceptanceWhoseGuardIsNotStoredStillHoldsItsFolders() async throws {
             let family = try FamilyFixture()
@@ -61,8 +61,36 @@ extension OnFakeDrive {
             let phone = try await family.phone(server, guards: familyGuards(family.member, writes: writes))
             defer { phone.done() }
             #expect(await phone.sync.sync(family.summary) == .failed(GuardWords.unsaved))
-            #expect(await phone.vault.isFamilyWorkspace(family.workspaceId))
             await #expect(throws: GuardError.unsaved) { try await phone.vault.sendingIntoFamily(family.workspaceId) }
+        }
+
+        /*
+         * The member list names a received share's workspace as a family folder as well. Only route 25
+         * and the folder ids prove a family folder: the share stays a share, read and written as one
+         * once the guard is stored, never refused as a family folder this family doesn't hold. Fails if
+         * a member list's word alone makes a workspace a family folder.
+         */
+        @Test func aRosterNamingAReceivedSharesWorkspaceLeavesTheShareAShare() async throws {
+            let theirs = UUID().uuidString.lowercased()
+            let family = try await onLargeStack { try FamilyFixture.$naming.withValue(theirs) { try FamilyFixture() } }
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            let sKey = try randomBytes(length: 32)
+            let shared = try FamilyFixture.node(id: try newId(kind: .node, scopeId: theirs).id, in: theirs, parent: nil, parentKey: try randomBytes(length: 32), key: sKey,
+                                                kind: .folder, name: "Shared", writer: family.creator)
+            let plan = try FamilyFixture.node(id: try newId(kind: .node, scopeId: theirs).id, in: theirs, parent: shared.id, parentKey: sKey, key: try randomBytes(length: 32),
+                                              kind: .file, name: "Plan.txt", writer: family.creator)
+            server.put(shared, plan)
+            _ = try await vault.adopt(shared, nodeKey: sKey, metadata: NodeMetadata(name: "Shared", mime: nil, size: nil, modified: nil, attributes: [:]), in: theirs)
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(!(await vault.isFamilyWorkspace(theirs)), "a member list's word made a share a family folder")
+            #expect(try await vault.children(of: shared.id).map(\.name) == ["Plan.txt"])
+            server.clearRequests()
+            let made = try await vault.createFolder(in: shared.id, name: "Notes")
+            #expect(made.node.workspaceId == theirs)
+            #expect(!server.writes.isEmpty)
         }
 
         /*

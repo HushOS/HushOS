@@ -939,6 +939,20 @@ struct FamilyFixture {
     var signerKeys: [String: String] { get throws { [try digest(creator.keys.mlDsaPublicKey!): creator.keys.mlDsaPublicKey!] } }
 
     /* `namingPersonal`: roster 1 also names the member's own drive as a family folder (a server or creator lying). */
+    /*
+     * Roster 1 also names this workspace (another's, a received share's) as a family folder, for a
+     * fixture made inside `FamilyFixture.$naming.withValue`. A task-local, not a parameter: this
+     * initializer's frame is close to the test thread's stack limit (ML-DSA keys), and one more
+     * parameter crashed an unrelated test.
+     */
+    @TaskLocal static var naming: String?
+
+    /* Every area key roster 1 names: the family folder's, and any other workspace a test has it name. */
+    private static func areaKeys(_ workspaceId: String, _ areaKey: Data, _ rootKey: Data, also others: [String]) throws -> [AreaKey] {
+        try [AreaKey(workspaceId: workspaceId, workspaceKey: areaKey, rootKey: rootKey)]
+            + others.map { AreaKey(workspaceId: $0, workspaceKey: try randomBytes(length: 32), rootKey: try randomBytes(length: 32)) }
+    }
+
     init(namingPersonal: Bool = false) throws {
         creator = try FamilyPerson()
         member = try FamilyPerson()
@@ -950,9 +964,9 @@ struct FamilyFixture {
         areaKey = try randomBytes(length: 32)
         rootKey = try randomBytes(length: 32)
         let owner = try creator.entry([.billing, .members], since: 1)
-        var areaKeys = [AreaKey(workspaceId: workspaceId, workspaceKey: areaKey, rootKey: rootKey)]
-        if namingPersonal { areaKeys.append(AreaKey(workspaceId: personal, workspaceKey: try randomBytes(length: 32), rootKey: try randomBytes(length: 32))) }
-        let first = try rosterFirst(groupId: groupId, kind: .family, creator: owner, areaKeys: areaKeys, format: 2)
+        let first = try rosterFirst(groupId: groupId, kind: .family, creator: owner,
+                                    areaKeys: try Self.areaKeys(workspaceId, areaKey, rootKey, also: [namingPersonal ? personal : nil, Self.naming].compactMap { $0 }),
+                                    format: 2)
         r1 = try rosterSign(roster: first, groupSeed: groupSeed, signer: creator.keys)
         let (group, seed, signer) = (groupId, groupSeed, creator)
         func next(_ previous: SignedGroupStatement, version: UInt64, _ memberEntry: RosterMember) throws -> SignedGroupStatement {
@@ -1106,6 +1120,18 @@ struct FamilyFixture {
 }
 
 /* A phone's family guard in a folder of the test's own, which a test can make refuse writes, as a full disk would. */
+/*
+ * `body` on a thread with an 8 MB stack: FamilyFixture's initializer (ML-DSA keys) sits close to a
+ * test thread's limit, and a fixture made under a task-local's closure goes over it.
+ */
+func onLargeStack<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { done in
+        let thread = Thread { done.resume(with: Result { try body() }) }
+        thread.stackSize = 8 << 20
+        thread.start()
+    }
+}
+
 func familyGuards(_ person: FamilyPerson, writes: GuardSwitch = GuardSwitch()) -> FamilyGuardStore {
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent("family-guard-\(UUID().uuidString)", isDirectory: true)
     return FamilyGuardStore(folder: folder, owner: AccountOwner(userId: person.userId, origin: "https://family.test"), activity: .expired,

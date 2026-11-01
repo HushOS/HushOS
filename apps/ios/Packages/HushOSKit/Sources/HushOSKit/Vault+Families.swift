@@ -197,16 +197,17 @@ extension Vault {
     }
 
     /*
-     * Held as family folders for the write barrier on a roster's word alone (an acceptance whose
-     * guard may not store): never this account's own drive, and never over a folder already known
-     * as another family's. Holding one never makes it this family's to clear (`mayForget`).
+     * Held for the write barrier on a roster's word alone (an acceptance whose guard may not store):
+     * writes into them wait for the guard (sendingIntoFamily). Never this account's own drive, never
+     * over a folder already known as another family's, and never a family folder for how a node
+     * opens or writes, nor this family's to clear: only route 25 and the id check prove that
+     * (noteFamilyWorkspaces). A received share a member list names stays a share.
      */
     func holdAsFamilyWorkspaces(_ ids: [String], of groupId: String) async {
         _ = try? await loadWorkspace()
         let own = workspace?.workspaceId.lowercased()
         for id in ids.map({ $0.lowercased() }) where id != own {
-            familyWorkspaces.insert(id)
-            if familyAreaGroup[id] == nil { familyAreaGroup[id] = groupId.lowercased() }
+            if heldAreaGroup[id] == nil, familyAreaGroup[id] == nil { heldAreaGroup[id] = groupId.lowercased() }
         }
     }
 
@@ -265,7 +266,9 @@ extension Vault {
 
     /* Whether a workspace is a family folder (as far as this session knows). */
     public func isFamilyWorkspace(_ workspaceId: String) -> Bool {
-        familyWorkspaces.contains(workspaceId.lowercased()) || areaLedger.isArea(workspaceId: workspaceId)
+        // Proven only (route 25 and the folder id derived under the family, noteFamilyWorkspaces): the ledger also names
+        // as areas the workspaces a committed member list merely lists, a received share's among them, which stay shares.
+        familyWorkspaces.contains(workspaceId.lowercased())
     }
 
     /* What family folders don't offer (sharing, links, reports, keeping, versions): refused before anything is sent. */
@@ -295,7 +298,8 @@ extension Vault {
      */
     func requireGuardKept(_ workspaceId: String) throws {
         guard !familyGuardOwed.isEmpty else { return }
-        guard let groupId = familyAreaGroup[workspaceId.lowercased()], !familyGuardOwed.contains(groupId) else { throw GuardError.unsaved }
+        let id = workspaceId.lowercased()
+        guard let groupId = familyAreaGroup[id] ?? heldAreaGroup[id], !familyGuardOwed.contains(groupId) else { throw GuardError.unsaved }
     }
 
     /*
@@ -303,7 +307,8 @@ extension Vault {
      * a signature, a lookup): a sync may have committed and failed to store its guard meanwhile.
      */
     func sendingIntoFamily(_ workspaceId: String) throws {
-        if isFamilyWorkspace(workspaceId) { try requireGuardKept(workspaceId) }
+        // A folder a member list named but not proven a family's (a share, maybe) waits for the guard too, as a family folder.
+        if isFamilyWorkspace(workspaceId) || heldAreaGroup[workspaceId.lowercased()] != nil { try requireGuardKept(workspaceId) }
     }
 
     /* Raised before an acceptance of `groupId` commits; whether it was raised already (an earlier guard still owed). */
