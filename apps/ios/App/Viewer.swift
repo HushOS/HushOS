@@ -103,7 +103,9 @@ struct FileViewer: View {
         .nodeActionSheets(action: $action, store: store, beside: false)
         // Somewhere else was asked for (a link, Info's Folder row): get out of its way.
         .onChange(of: store.route) { _, link in if link != nil { dismiss() } }
-        .task(id: "\(current.id)-\(attempt)") {
+        // Keyed on the session's vault too: a new session (the same account signed in again from Files) cancels a copy
+        // under way, and the copy starts again under the new one rather than waiting on a cancelled one.
+        .task(id: "\(current.id)-\(attempt)-\(ObjectIdentifier(store.vault).hashValue)") {
             url = nil
             // Paged past before it came down: the next page's task is the one that counts. A newer version the vault learned
             // comes down instead, and the viewer shows that row.
