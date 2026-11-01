@@ -139,6 +139,8 @@ final class DriveStore {
     var familyAreaGroups: [String: String] = [:]
     /* Family items' verdicts under each family's trust generation (FamilyVerdictBook). */
     var familyBook = FamilyVerdictBook()
+    /* Each family's clears, so a listing that was out never undoes one (FamilyListings). */
+    @ObservationIgnored var familyListings = FamilyListings()
     /* Each family's last accepted view: still drawn under "Couldn't check" when only the answer is missing. */
     var familyShown: [String: FamilyView] = [:]
     /* Every family folder's top folder this session opened: only grows, so a later failed check never makes one writable-looking. */
@@ -439,7 +441,10 @@ final class DriveStore {
         // Changes from other devices reach the Files location too, not only this device's own writes.
         FilesDomain.signal()
         for id in folders.keys where touched.contains(id) || folders[id]?.contains(where: { touched.contains($0.id) }) == true {
+            let mark = familyListings.mark(familyGroup(ofFolder: id))
             guard let listed = try? await inSession(session, { try await $0.children(of: id) }), current(session) else { continue }
+            // A family clear that landed meanwhile stands: its folder isn't listed back.
+            guard familyListings.admits(mark, states: familyStates) else { continue }
             folders[id] = listed
         }
         guard current(session) else { return nil }
@@ -753,12 +758,15 @@ final class DriveStore {
         guard current(session) else { return }
         loading.insert(id)
         defer { if current(session) { loading.remove(id) } }
+        // The folder's family as it stands now: a fork, refusal or removal that clears it while this listing is out wins.
+        let mark = familyListings.mark(familyGroup(ofFolder: id))
+        func cleared() -> Bool { !familyListings.admits(mark, states: familyStates) }
         do {
             await sync(session: session)
             guard current(session) else { return }
             // Kept to its session: a listing the last session asked for is never asked of, or answered into, a new one.
             guard let children = try await inSession(session, { try await $0.children(of: id) }) else { return }
-            if removed() { return }
+            if removed() || cleared() { return }
             folders[id] = children
             folderProblems[id] = nil
             noteFamilyFolders(id, children: children)
@@ -779,7 +787,7 @@ final class DriveStore {
         } catch {
             // Left before it answered (a tab switched, the folder closed): nothing failed, so nothing changes.
             if ErrorWords.isCancellation(error) || staleRefusal(error) { return }
-            if !current(session) || removed() { return }
+            if !current(session) || removed() || cleared() { return }
             // A family folder's refusal is said in the families' words, never the generic failure.
             if isFamilyFolder(id) {
                 if case DriveAPIError.transport = error {
@@ -875,9 +883,11 @@ final class DriveStore {
     func thumbnail(for item: Opened) {
         guard item.hasThumbnail, thumbnails[item.id] == nil, !thumbnailTasks.contains(item.id) else { return }
         thumbnailTasks.insert(item.id)
+        // A family item's picture is kept to the family as it stands now: one decrypted before a clear never lands after.
+        let gate = copyGate(item)
         Task {
             // The row this list holds, never looked up again: one a batch just forgot would list its folder once more.
-            if let data = try? await vault.thumbnail(of: item) { thumbnails[item.id] = data }
+            if let data = try? await vault.thumbnail(of: item), (try? gate.check()) != nil { thumbnails[item.id] = data }
             thumbnailTasks.remove(item.id)
         }
     }
@@ -1358,7 +1368,9 @@ final class DriveStore {
         await sync(restored: restored, session: session)
         for id in changed {
             guard current(session) else { return }
-            if let children = try? await inSession(session, { try await $0.children(of: id) }), current(session) {
+            let mark = familyListings.mark(familyGroup(ofFolder: id))
+            if let children = try? await inSession(session, { try await $0.children(of: id) }), current(session),
+               familyListings.admits(mark, states: familyStates) {
                 folders[id] = children
                 for child in children { names[child.id] = child.name }
                 await judgeFamilyItems(children, session: session)
@@ -1797,9 +1809,14 @@ final class DriveStore {
     func fetch(_ item: Opened, version: VersionListView? = nil) async throws -> URL {
         if version == nil, let kept = Offline.localCopy(of: item) { return kept }
         guard let directory = openedFolder(item, version: version) else { throw CocoaError(.fileWriteInvalidFileName) }
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // A family file's copy is kept to the family as it stands now: a wipe while it comes down leaves nothing.
+        let gate = copyGate(item)
+        try gate.perform { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
         let file = directory.appendingPathComponent(item.name)
-        if FileManager.default.fileExists(atPath: file.path) { return file }
+        if FileManager.default.fileExists(atPath: file.path) {
+            try gate.check()
+            return file
+        }
         opening[item.id] = 0
         holdBackground()
         defer {
@@ -1807,7 +1824,9 @@ final class DriveStore {
             releaseBackground()
         }
         do {
-            try await vault.download(item.id, version: version, to: file) { fraction in Task { @MainActor in self.opening[item.id] = fraction } }
+            try await vault.download(item.id, version: version, to: file, gate: gate) { fraction in Task { @MainActor in self.opening[item.id] = fraction } }
+            // Nothing is handed on (the viewer, Send a copy, Open in) once its family was forgotten.
+            try gate.check()
         } catch {
             if case DriveAPIError.transport = error { offline = true }
             if endsThisSession(error) { self.error = Self.sessionEnded }
@@ -1816,14 +1835,20 @@ final class DriveStore {
         return file
     }
 
+    /* The gate a copy of `item` is made under (FamilyCopyGate): a family folder's item's, else one that lets it through. */
+    private func copyGate(_ item: Opened) -> FamilyCopyGate {
+        TemporaryCopies.copyGate(familyWorkspace: isFamily(item) ? item.node.workspaceId : nil)
+    }
+
     /* Decrypts to a temporary file named as the user sees it, for Quick Look and the share sheet. */
     func download(_ item: Opened, version: VersionListView? = nil) async -> URL? {
         if version == nil, let kept = Offline.localCopy(of: item) { return kept }
         // Keyed by the version itself, so a file replaced elsewhere is fetched again rather than served from an old copy.
         guard let directory = openedFolder(item, version: version) else { return nil }
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let gate = copyGate(item)
+        guard (try? gate.perform({ try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) })) != nil else { return nil }
         let file = directory.appendingPathComponent(item.name)
-        if FileManager.default.fileExists(atPath: file.path) { return file }
+        if FileManager.default.fileExists(atPath: file.path) { return (try? gate.check()) == nil ? nil : file }
         // Opening a file is not a transfer to announce: the row shows a small ring while it comes down.
         opening[item.id] = 0
         holdBackground()
@@ -1832,7 +1857,8 @@ final class DriveStore {
             releaseBackground()
         }
         do {
-            try await vault.download(item.id, version: version, to: file) { fraction in Task { @MainActor in self.opening[item.id] = fraction } }
+            try await vault.download(item.id, version: version, to: file, gate: gate) { fraction in Task { @MainActor in self.opening[item.id] = fraction } }
+            try gate.check()
             return file
         } catch {
             report(error)

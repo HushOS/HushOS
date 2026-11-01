@@ -232,8 +232,9 @@ extension DriveStore {
         publishFamily(state, of: summary.id)
         familyCheckedAt[summary.id] = Date()
         familyRefreshed[summary.id, default: 0] += 1
-        // Every family sync moves its trust generation: a judgement from before it never publishes after it.
-        familyBook.moved(summary.id)
+        // Every family sync that found something moves its trust generation: a judgement from before it never publishes
+        // after it. No answer says nothing new, so the marks already judged stay (the rows are still shown, read only).
+        if FamilyVerdictBook.moves(after: state) { familyBook.moved(summary.id) }
         guard let areas = try? await inFamily(session, { await $0.familyAreas() }) else { return }
         for (area, groupId) in areas { familyAreaGroups[area] = groupId }
         if case .accepted(let view) = state {
@@ -332,6 +333,8 @@ extension DriveStore {
         }
         // Every opened copy of the family's folders, those this session never listed included.
         TemporaryCopies.forgetFamily(Array(areas))
+        // A listing of its folders that is out now never undoes this clear.
+        familyListings.cleared(groupId)
         familyBook.moved(groupId)
         familyShown[groupId] = nil
         if details { familyDetails[groupId] = nil }

@@ -103,12 +103,17 @@ public enum Resumable {
         sleep: (Double) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
         onExpired: () async throws -> Void = {},
         progress: (Double) -> Void = { _ in },
+        /* A family item's copy: every write only while its family stands (FamilyCopyGate). */
+        gate: FamilyCopyGate? = nil,
         fetch: (UInt64) async throws -> Data
     ) async throws {
         let files = FileManager.default
-        try files.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        func guarded(_ body: () throws -> Void) throws { if let gate { try gate.perform(body) } else { try body() } }
         let partial = destination.appendingPathExtension("part")
-        if !files.fileExists(atPath: partial.path) { files.createFile(atPath: partial.path, contents: nil) }
+        try guarded {
+            try files.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if !files.fileExists(atPath: partial.path) { files.createFile(atPath: partial.path, contents: nil) }
+        }
         let existing = (try? files.attributesOfItem(atPath: partial.path)[.size] as? UInt64) ?? 0
         let kept = min(existing / chunkBytes, count)
         let handle = try FileHandle(forWritingTo: partial)
@@ -121,7 +126,7 @@ public enum Resumable {
                 try Task.checkCancellation()
                 let chunk = index
                 let plaintext = try await run(online: online, sleep: sleep, onExpired: onExpired) { try await fetch(chunk) }
-                try handle.write(contentsOf: plaintext)
+                try guarded { try handle.write(contentsOf: plaintext) }
                 progress(size.map { FileProgress.fraction(size: $0, through: index + 1) } ?? Double(index + 1) / Double(count))
                 index += 1
             }
@@ -130,8 +135,10 @@ public enum Resumable {
             try? handle.close()
             throw error
         }
-        if files.fileExists(atPath: destination.path) { try files.removeItem(at: destination) }
-        try files.moveItem(at: partial, to: destination)
+        try guarded {
+            if files.fileExists(atPath: destination.path) { try files.removeItem(at: destination) }
+            try files.moveItem(at: partial, to: destination)
+        }
     }
 }
 

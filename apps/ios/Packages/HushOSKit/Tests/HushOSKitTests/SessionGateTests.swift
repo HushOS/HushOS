@@ -201,3 +201,98 @@ import Testing
         #expect(!published7)
     }
 }
+
+/*
+ * A family file's plaintext copy against a wipe that lands while it comes down. Fails if any
+ * chunk, the finished copy or its folder outlives the forget, or if the copy is handed on.
+ */
+@Suite struct FamilyCopyGateTests {
+    @Test func aWipeMidDownloadLeavesNoPlaintextAndHandsNothingOn() async throws {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("copies-\(UUID().uuidString)")
+        let ws = UUID().uuidString.lowercased()
+        let folder = try #require(TemporaryCopies.openedFolder(itemId: "item", version: "v", familyWorkspace: ws, in: temporary))
+        let destination = folder.appendingPathComponent("Recipes.txt")
+        let gate = TemporaryCopies.copyGate(familyWorkspace: ws)
+        await #expect(throws: FamilyFailure.self) {
+            try await Resumable.download(to: destination, count: 3, chunkBytes: 4, gate: gate) { index in
+                // The family is forgotten while the second chunk is on its way.
+                if index == 1 { TemporaryCopies.forgetFamily([ws], in: temporary) }
+                return Data("abcd".utf8)
+            }
+        }
+        #expect(!FileManager.default.fileExists(atPath: destination.path))
+        #expect(!FileManager.default.fileExists(atPath: destination.appendingPathExtension("part").path))
+        #expect(!FileManager.default.fileExists(atPath: folder.path))
+        #expect(throws: FamilyFailure.self) { try gate.check() }
+    }
+
+    /* The forget lands after the last chunk, just before the copy moves into place: it never does. */
+    @Test func aWipeBeforeTheCopyMovesIntoPlaceStopsIt() async throws {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("copies-\(UUID().uuidString)")
+        let ws = UUID().uuidString.lowercased()
+        let folder = try #require(TemporaryCopies.openedFolder(itemId: "item", version: "v", familyWorkspace: ws, in: temporary))
+        let destination = folder.appendingPathComponent("Recipes.txt")
+        let gate = TemporaryCopies.copyGate(familyWorkspace: ws)
+        await #expect(throws: FamilyFailure.self) {
+            try await Resumable.download(to: destination, count: 2, chunkBytes: 4, progress: { fraction in
+                if fraction >= 1 { TemporaryCopies.forgetFamily([ws], in: temporary) }
+            }, gate: gate) { _ in Data("abcd".utf8) }
+        }
+        #expect(!FileManager.default.fileExists(atPath: destination.path))
+    }
+
+    @Test func aCopyBegunAfterTheForgetAndAPersonalOneGoThrough() async throws {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("copies-\(UUID().uuidString)")
+        let ws = UUID().uuidString.lowercased()
+        TemporaryCopies.forgetFamily([ws], in: temporary)
+        let after = TemporaryCopies.copyGate(familyWorkspace: ws)
+        let folder = try #require(TemporaryCopies.openedFolder(itemId: "item", version: "v", familyWorkspace: ws, in: temporary))
+        try await Resumable.download(to: folder.appendingPathComponent("f"), count: 1, chunkBytes: 4, gate: after) { _ in Data("abcd".utf8) }
+        #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("f").path))
+        // Another family's forget doesn't touch it; a personal copy's gate always lets it through.
+        TemporaryCopies.forgetFamily([UUID().uuidString], in: temporary)
+        try after.check()
+        try TemporaryCopies.copyGate(familyWorkspace: nil).check()
+    }
+}
+
+/* Family marks when a sync got no answer, and listings out while a family was cleared. */
+@Suite struct FamilyStaleWorkTests {
+    let group = "0a427e6e-a934-4366-aea3-b09f70984781"
+    var accepted: FamilyState {
+        .accepted(FamilyView(groupId: group, rosterVersion: 2, rosterDigest: "d", groupKeyVersion: 1, members: [], areas: [],
+                             recordReset: false, ownEntryWrong: false, ownEntryBehind: false, foreign: []))
+    }
+
+    /* No connection says nothing new: "Unverified" and the like stay on the rows. Anything a sync found moves the generation. */
+    @Test func aSyncWithNoAnswerKeepsTheMarks() {
+        #expect(!FamilyVerdictBook.moves(after: .failed(FamilyWords.noAnswer)))
+        #expect(FamilyVerdictBook.moves(after: .failed("Refused")))
+        #expect(FamilyVerdictBook.moves(after: accepted))
+        #expect(FamilyVerdictBook.moves(after: .wiped))
+        #expect(FamilyVerdictBook.moves(after: .fork(FamilyFork(memberList: true, version: 2, sides: []))))
+    }
+
+    /*
+     * A family folder's listing out while a fork, refusal or removal cleared the family: dropped,
+     * never undoing the clear. Fails if a listing begun before a clear lands, or lands while the
+     * family isn't open.
+     */
+    @Test func aListingOutDuringAClearNeverUndoesIt() {
+        var listings = FamilyListings()
+        let mark = listings.mark(group)
+        #expect(listings.admits(mark, state: accepted))
+        listings.cleared(group)
+        #expect(!listings.admits(mark, state: accepted), "a listing begun before the clear landed")
+        let fresh = listings.mark(group)
+        #expect(listings.admits(fresh, state: accepted))
+        #expect(listings.admits(fresh, state: .failed(FamilyWords.noAnswer)))
+        #expect(!listings.admits(fresh, state: .fork(FamilyFork(memberList: true, version: 2, sides: []))))
+        #expect(!listings.admits(fresh, state: .failed("Refused")))
+        #expect(!listings.admits(fresh, state: nil))
+        // A folder of no family always lands; another family's clear holds nothing back.
+        #expect(listings.admits(listings.mark(nil), state: nil))
+        listings.cleared("1b427e6e-a934-4366-aea3-b09f70984781")
+        #expect(listings.admits(fresh, state: accepted))
+    }
+}

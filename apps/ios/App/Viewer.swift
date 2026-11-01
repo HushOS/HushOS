@@ -107,8 +107,8 @@ struct FileViewer: View {
             do { url = try await store.fetch(current, version: version) } catch where !ErrorWords.isCancellation(error) { failed = true } catch {}
         }
         .onChange(of: store.folders[current.node.parentId ?? ""]?.contains { $0.id == current.id }) { _, here in
-            // Moved to the Trash or elsewhere from the menu: the viewer has nothing left to show.
-            if here == false, version == nil { dismiss() }
+            // Moved to the Trash or elsewhere from the menu, or its folder cleared (a family removed or forked): nothing left to show.
+            if here != true, version == nil { dismiss() }
         }
     }
 

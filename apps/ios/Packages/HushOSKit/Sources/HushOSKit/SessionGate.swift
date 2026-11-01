@@ -122,9 +122,55 @@ public struct FamilyVerdictBook: Sendable {
         return true
     }
 
+    /*
+     * Whether a family sync's outcome moves its trust generation: anything it found does, but no
+     * answer at all says nothing new, and what was judged before stays on screen (read only).
+     */
+    public static func moves(after state: FamilyState) -> Bool {
+        if case .failed(let words) = state, words == FamilyWords.noAnswer { return false }
+        return true
+    }
+
     /* A session ended: nothing of it stays, and nothing begun in it lands. */
     public mutating func reset() {
         epoch += 1
         rows = [:]
+    }
+}
+
+/*
+ * Whether a family folder's listing that was out may land: each family's clears (a removal, a
+ * fork, a refusal, a guard that couldn't be stored) are counted, and a listing begun before one,
+ * or answering while the family isn't open (accepted, or still shown read only with no answer),
+ * is dropped rather than undoing the clear. A folder of no family always lands.
+ */
+public struct FamilyListings: Sendable {
+    public struct Mark: Sendable, Equatable {
+        let groupId: String?
+        let clears: UInt64
+    }
+
+    private var clears: [String: UInt64] = [:]
+
+    public init() {}
+
+    public func mark(_ groupId: String?) -> Mark { Mark(groupId: groupId?.lowercased(), clears: groupId.map { clears[$0.lowercased(), default: 0] } ?? 0) }
+
+    public mutating func cleared(_ groupId: String) { clears[groupId.lowercased(), default: 0] += 1 }
+
+    /* `admits` against the families' states as shown, by the mark's own family. */
+    public func admits(_ mark: Mark, states: [String: FamilyState]) -> Bool {
+        let state = mark.groupId.flatMap { id in states[id] ?? states.first { $0.key.lowercased() == id }?.value }
+        return admits(mark, state: state)
+    }
+
+    public func admits(_ mark: Mark, state: FamilyState?) -> Bool {
+        guard let groupId = mark.groupId else { return true }
+        guard clears[groupId, default: 0] == mark.clears else { return false }
+        switch state {
+        case .accepted: return true
+        case .failed(let words): return words == FamilyWords.noAnswer
+        default: return false
+        }
     }
 }

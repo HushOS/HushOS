@@ -669,7 +669,8 @@ public actor Vault {
     }
 
     /* Downloads and decrypts a file's version to `destination`, chunk by chunk. */
-    public func download(_ nodeId: String, version: VersionListView? = nil, to destination: URL, progress: @Sendable (Double) -> Void = { _ in }) async throws {
+    public func download(_ nodeId: String, version: VersionListView? = nil, to destination: URL, gate: FamilyCopyGate? = nil,
+                         progress: @Sendable (Double) -> Void = { _ in }) async throws {
         let item = try await resolve(nodeId)
         let opened = try openVersion(item, version: version)
         let url = try await api.versionURL(opened.versionId, workspaceId: item.node.workspaceId)
@@ -682,7 +683,7 @@ public actor Vault {
         try await Resumable.download(
             to: destination, count: layout.chunkCount, chunkBytes: layout.chunkBytes, size: opened.content.plaintextSize,
             onExpired: { if let fresh = URL(string: (try await api.versionURL(opened.versionId, workspaceId: item.node.workspaceId)).url) { objectURL = fresh } },
-            progress: progress
+            progress: progress, gate: gate
         ) { index in
             let ciphertext = try await api.range(objectURL, try opened.range(index))
             return try chunkDecrypt(content: opened.content, index: index, ciphertext: ciphertext)

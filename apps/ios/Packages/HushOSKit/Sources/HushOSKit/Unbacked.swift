@@ -249,13 +249,31 @@ public enum TemporaryCopies {
         return opened.appendingPathComponent(itemId, isDirectory: true).appendingPathComponent(version, isDirectory: true)
     }
 
-    /* Every opened copy of these family folders, gone (a family forgotten on this phone): ids that aren't UUIDs name none. */
+    /*
+     * Every opened copy of these family folders, gone (a family forgotten on this phone): ids that
+     * aren't UUIDs name none. Under the lock every family copy's writes take (`FamilyCopyGate`), and
+     * each folder's forget generation moves: a download begun before never writes after.
+     */
     public static func forgetFamily(_ workspaces: [String], in temporary: URL = FileManager.default.temporaryDirectory) {
         let family = temporary.appendingPathComponent("opened", isDirectory: true).appendingPathComponent(familyFolder, isDirectory: true)
-        for id in workspaces {
-            guard let workspace = UUID(uuidString: id) else { continue }
-            try? FileManager.default.removeItem(at: family.appendingPathComponent(workspace.uuidString.lowercased(), isDirectory: true))
+        forgetLock.withLock {
+            for id in workspaces {
+                guard let workspace = UUID(uuidString: id) else { continue }
+                let key = workspace.uuidString.lowercased()
+                forgotten[key, default: 0] += 1
+                try? FileManager.default.removeItem(at: family.appendingPathComponent(key, isDirectory: true))
+            }
         }
+    }
+
+    static let forgetLock = NSLock()
+    nonisolated(unsafe) static var forgotten: [String: UInt64] = [:]
+
+    /* A copy about to be made of an item: of a family folder, kept to the family's forget generation now (FamilyCopyGate). */
+    public static func copyGate(familyWorkspace: String?) -> FamilyCopyGate {
+        guard let familyWorkspace, let workspace = UUID(uuidString: familyWorkspace) else { return FamilyCopyGate(workspace: nil, generation: 0) }
+        let key = workspace.uuidString.lowercased()
+        return FamilyCopyGate(workspace: key, generation: forgetLock.withLock { forgotten[key, default: 0] })
     }
 
     /* `opened/family/`: family folders' copies by workspace; never an item id (those are UUIDs). */
@@ -282,4 +300,27 @@ public enum TemporaryCopies {
         try? files.createDirectory(at: temporary, withIntermediateDirectories: true)
         try? data.write(to: marker, options: .atomic)
     }
+}
+
+/*
+ * A family item's plaintext copy, kept to the family it was begun under: making its folder,
+ * writing each chunk and moving it into place run under the lock forgetting the family deletes
+ * under, and only while the family wasn't forgotten since, so a wipe that lands mid-download leaves
+ * nothing behind and nothing is handed on. A personal item's gate always lets it through.
+ */
+public struct FamilyCopyGate: Sendable {
+    let workspace: String?
+    let generation: UInt64
+
+    /* `body` under the forget lock, while the family stands; the family's words when it was forgotten since. */
+    public func perform<T>(_ body: () throws -> T) throws -> T {
+        guard let workspace else { return try body() }
+        return try TemporaryCopies.forgetLock.withLock {
+            guard TemporaryCopies.forgotten[workspace, default: 0] == generation else { throw FamilyFailure(message: FamilyWords.openAgain) }
+            return try body()
+        }
+    }
+
+    /* Whether the copy may still be handed on: throws when its family was forgotten since. */
+    public func check() throws { try perform {} }
 }
