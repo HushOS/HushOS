@@ -98,6 +98,17 @@ public final class FilesGate<Value>: @unchecked Sendable {
         cached = (admitted, value)
         return value
     }
+
+    /*
+     * The vault and the gate a copy it makes is kept to (TemporaryCopies.copyGate), taken in that
+     * order: opening may claim the extension's folder for the account (`changed`), which ends the
+     * copies of the last one, so a gate taken before it would refuse this download's own writes.
+     * Both before anything is awaited, so a sign-out after is still seen.
+     */
+    public func openForCopy(account: CopyEpoch = .process) throws -> (Value, FamilyCopyGate) {
+        let value = try open()
+        return (value, TemporaryCopies.copyGate(familyWorkspace: nil, account: account))
+    }
 }
 
 /* The HushOS location in the Files app: one replicated domain, added at sign-in for that account and removed at sign-out. */

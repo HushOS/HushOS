@@ -134,20 +134,20 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                        request: NSFileProviderRequest,
                        completionHandler: @escaping (URL?, NSFileProviderItem?, Error?) -> Void) -> Progress {
         let progress = Progress(totalUnitCount: 100)
-        // Taken before anything is awaited: an account change meanwhile (TemporaryCopies.claim) writes nothing.
-        let gate = TemporaryCopies.copyGate(familyWorkspace: nil)
         let task = Task {
             do {
-                let vault = try requireVault()
+                // The vault first (opening may claim this folder for the account), then the copy's gate, before anything is
+                // awaited: an account change after it writes nothing, and the claim itself never refuses this download.
+                let (vault, copyGate) = try self.gate.openForCopy()
                 let rootId = try await vault.rootId()
                 // Decrypted into the extension's own temporary directory; Files moves it into place. The path is the
                 // item's and its version's, so when Files asks again after a failure the partial is continued, not orphaned.
                 let item = try await vault.resolve(itemIdentifier.rawValue)
                 let directory = FileManager.default.temporaryDirectory
                     .appendingPathComponent("downloads/\(item.id)/\(item.node.currentVersion?.id ?? "none")", isDirectory: true)
-                try gate.perform { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
+                try copyGate.perform { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
                 let file = directory.appendingPathComponent("content")
-                try await vault.download(itemIdentifier.rawValue, to: file, gate: gate) { fraction in
+                try await vault.download(itemIdentifier.rawValue, to: file, gate: copyGate) { fraction in
                     progress.completedUnitCount = Int64(fraction * 100)
                 }
                 let opened = try await vault.resolve(itemIdentifier.rawValue)
