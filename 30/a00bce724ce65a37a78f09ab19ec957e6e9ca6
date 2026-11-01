@@ -1,0 +1,31 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyCheck.kt
+  s_566b8e0c4467a4::t_28d7412e9a2aaf 63,65-72,93-99
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_566b8e0c4467a4::t_aba57d025da112 155-156,237,245-246,260-262,273-286,296,318-335,381-383,651-666
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_8ca8c9685e33c0 286-304,308,345,385-393,400,410
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamilyCheck.kt
+  s_566b8e0c4467a4::t_dcf1ad243c8e6b 36-37,89,92-93,95-97,148-153
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_566b8e0c4467a4::t_ddf12b5c4c76c1 322-328
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_566b8e0c4467a4::t_b165e84f3439a3 203-262
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamiliesModelRacesTest.kt
+  s_566b8e0c4467a4::t_deb546e0d19c2e 100-147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "30a00bce724ce65a37a78f09ab19ec957e6e9ca6",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
