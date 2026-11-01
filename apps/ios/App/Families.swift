@@ -103,11 +103,13 @@ extension DriveStore {
             let (list, gone) = try await families.listReconciling()
             for summary in list { familyNames[summary.id] = summary.name }
             familyList = list
+            familiesServed = true
             familiesSyncedAt = Date()
             for groupId in gone { removed(groupId) }
             for summary in list { await refreshFamily(summary) }
         } catch let error as GroupsAPIError where error.status == 404 || error.status == 501 {
             familyList = nil
+            familiesServed = false
         } catch {
             // No answer: what was shown stays.
         }
