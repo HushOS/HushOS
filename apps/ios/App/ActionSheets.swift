@@ -275,6 +275,8 @@ struct SendCopySheet: View {
                         try? await Task.sleep(for: .milliseconds(100))
                         if let top = TextPrompt.topController(), !top.isBeingDismissed, !top.isBeingPresented, !(top.presentingViewController != nil && top.view.window == nil) { break }
                     }
+                    // Checked again after the wait: a family let go of meanwhile took its copy with it, and nothing is handed on.
+                    guard FileManager.default.fileExists(atPath: ready.path) else { return }
                     TextPrompt.topController()?.present(UIActivityViewController(activityItems: [ready], applicationActivities: nil), animated: true)
                 }
             } catch {

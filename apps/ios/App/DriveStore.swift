@@ -825,6 +825,8 @@ final class DriveStore {
             folders[id] = children
             folderProblems[id] = nil
             noteFamilyFolders(id, children: children)
+            // With the rows, before anything below waits: a clear that lands meanwhile is never undone by a late name.
+            for child in children { names[child.id] = child.name }
             // A received share's item missing from its folder listed afresh closes Info (there is no feed for
             // their drive); the vault keeps its row, so nothing a close decides changes what it holds.
             if var follow = infoBeside, isReceived(follow.item) {
@@ -837,7 +839,6 @@ final class DriveStore {
                     if follow.missing(from: id, children: children) { infoBeside = nil } else if infoBeside != follow { infoBeside = follow }
                 }
             }
-            for child in children { names[child.id] = child.name }
             await judgeFamilyItems(children, session: session)
         } catch {
             // Left before it answered (a tab switched, the folder closed): nothing failed, so nothing changes.
@@ -938,19 +939,23 @@ final class DriveStore {
     func thumbnail(for item: Opened) {
         let version = item.node.currentVersion?.id
         let task = "\(item.id)@\(version ?? "")"
-        guard item.hasThumbnail, thumbnailData(for: item) == nil, !thumbnailTasks.contains(task) else { return }
+        guard item.hasThumbnail, thumbnailData(for: item) == nil, !thumbnailTasks.contains(task), let session = beginSession() else { return }
         thumbnailTasks.insert(task)
         // A family item's picture is kept to the family as it stands now: one decrypted before a clear never lands after.
         let gate = copyGate(item)
+        let mark = familyListings.mark(isFamily(item) ? familyAreaGroups[item.node.workspaceId.lowercased()] : nil)
         Task {
+            defer { thumbnailTasks.remove(task) }
             // The row this list holds, never looked up again: one a batch just forgot would list its folder once more.
-            if let data = try? await vault.thumbnail(of: item), (try? gate.check()) != nil {
-                // Kept only for the version the vault holds now (it replaces an earlier version's): a row read before a
-                // replacement never puts the old picture back over the new one's.
-                let held = await vault.item(item.ref)?.node.currentVersion?.id ?? version
-                if held == version { thumbnails[item.id] = Thumbnail(version: version, data: data) }
-            }
-            thumbnailTasks.remove(task)
+            guard let decrypted = try? await inSession(session, { try await $0.thumbnail(of: item) }), let data = decrypted else { return }
+            // Kept only for the version the vault holds now (it replaces an earlier version's): a row read before a
+            // replacement never puts the old picture back over the new one's.
+            let held = (try? await inSession(session, { await $0.item(item.ref) })) ?? nil
+            // Checked again right before it lands, after every wait above: a family cleared, or a session ended, while the
+            // vault answered keeps its picture out.
+            guard current(session), (try? gate.check()) != nil, familyListings.admits(mark, states: familyStates),
+                  (held?.node.currentVersion?.id ?? version) == version else { return }
+            thumbnails[item.id] = Thumbnail(version: version, data: data)
         }
     }
 
@@ -1275,17 +1280,20 @@ final class DriveStore {
      * being read again (InfoFollow, the same rule as Android's).
      */
     func followInfo() async {
-        guard var follow = infoBeside else { return }
+        guard var follow = infoBeside, let session = beginSession() else { return }
         let item = follow.item
-        let standing = await vault.standing(of: item.ref)
+        // The family it is in as it stands now: a clear while the vault answers keeps the row it read out of Info.
+        let mark = familyListings.mark(isFamily(item) ? familyAreaGroups[item.node.workspaceId.lowercased()] : nil)
+        func stands() -> Bool { current(session) && familyListings.admits(mark, states: familyStates) }
+        guard let standing = (try? await inSession(session, { await $0.standing(of: item.ref) })) ?? nil else { return }
         let step = follow.update(standing, outOfReach: outOfReach(item))
         // Another item opened, or Info closed, while the vault answered.
         guard infoBeside?.item.id == item.id else { return }
         switch step {
         case .close: infoBeside = nil
-        case .show: if infoBeside != follow { infoBeside = follow }
+        case .show: if stands(), infoBeside != follow { infoBeside = follow }
         case .hold: break
-        case .find: if let found = await lookUp(item.id), infoBeside?.item.id == item.id { infoBeside = InfoFollow(found) }
+        case .find: if let found = await lookUp(item.id), stands(), infoBeside?.item.id == item.id { infoBeside = InfoFollow(found) }
         }
     }
 
