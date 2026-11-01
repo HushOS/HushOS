@@ -559,14 +559,33 @@ public actor FamilySync: FamilyJudge {
      * session listed.
      */
     func forgetOpened(_ groupId: String) async {
-        let areas = knownAreas(groupId)
+        let areas = await knownAreas(groupId)
         await vault.forgetWorkspaces(areas)
         TemporaryCopies.forgetFamily(areas, in: temporary)
     }
 
-    func knownAreas(_ groupId: String) -> [String] {
-        let known = groupsOf.filter { $0.value == groupId }.map(\.key)
-        return Array(Set(known + (areasOf[groupId] ?? []) + (records.read(userId: userId, groupId: groupId)?.areas ?? [])))
+    /*
+     * The family folders this process or the device record knows of, that may be let go of with the
+     * family: never one proven another family's (derived under it, seen this process) or this
+     * account's own drive, whatever a member list or a saved record names. A roster's word alone
+     * clears nothing.
+     */
+    func knownAreas(_ groupId: String) async -> [String] {
+        let key = groupId.lowercased()
+        let known = groupsOf.filter { $0.value.lowercased() == key }.map(\.key)
+        var out: [String] = []
+        for area in Set((known + (areasOf[groupId] ?? []) + (records.read(userId: userId, groupId: groupId)?.areas ?? [])).map { $0.lowercased() }) {
+            if let owner = groupsOf[area], owner.lowercased() != key { continue }
+            if await vault.mayForget(area, with: groupId) { out.append(area) }
+        }
+        return out.sorted()
+    }
+
+    /* The folders a device record keeps for `groupId`: of the chain's, only those proven this family's (opened under it). */
+    func provenAreas(_ groupId: String, of chainAreas: [String]) -> [String] {
+        let key = groupId.lowercased()
+        let proven = Set(((areasOf[groupId] ?? []) + groupsOf.filter { $0.value.lowercased() == key }.map(\.key)).map { $0.lowercased() })
+        return chainAreas.filter { proven.contains($0.lowercased()) }.sorted()
     }
 
     /* A request that got no answer, the settings route's included: nothing was refused, so nothing is taken away. */
@@ -630,14 +649,16 @@ public actor FamilySync: FamilyJudge {
             if case .accepted = answer {} else if !owedBefore { await vault.familyGuardKept(groupId) }
             switch answer {
             case .accepted(let chain, let record, let pin, let guardPin):
-                // Its folders are this family's whatever follows: a guard that can't be stored refuses the family (the core then
-                // opens none of them) and the barrier holds writes into them, never taken as personal.
-                await note(chain.areaKeys().keys.filter { groupsOf[$0.lowercased()].map { $0.lowercased() == groupId.lowercased() } ?? true }, of: groupId)
+                // Its folders are held as family folders whatever follows: a guard that can't be stored refuses the family (the
+                // core then opens none of them) and the barrier holds writes into them, never taken as personal. Only for the
+                // barrier: a roster's word never makes a folder this family's to show or clear (route 25 and checkId do).
+                await vault.holdAsFamilyWorkspaces(Array(chain.areaKeys().keys), of: groupId)
                 // A guard that can't be stored stops everything of this acceptance, and the barrier stays raised until a
                 // later acceptance stores it; one with nothing new to store (the held guard covers it) releases it.
                 if let guardPin { try await vault.keepFamilyGuard(groupId, guardPin) }
                 await vault.familyGuardKept(groupId)
-                let areas = Array(chain.areaKeys().keys).sorted()
+                // Only folders proven this family's (opened under it before): a roster's word never names another's for cleanup.
+                let areas = provenAreas(groupId, of: Array(chain.areaKeys().keys))
                 try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: record, rosterVersion: chain.roster().rosterVersion, areas: areas))
                 noteAccepted(groupId, chain)
                 return .accepted(chain, pin)
@@ -708,6 +729,13 @@ public actor FamilySync: FamilyJudge {
         }
         areasOf[groupId] = family.map(\.workspaceId)
         await note(family.map(\.workspaceId), of: groupId)
+        // The record keeps the folders proven this family's now, for a cleanup after a relaunch.
+        if let row = records.read(userId: userId, groupId: groupId) {
+            let proven = family.map { $0.workspaceId.lowercased() }.sorted()
+            if row.areas != proven {
+                try? records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: row.envelope, rosterVersion: row.rosterVersion, areas: proven))
+            }
+        }
         let served = try await fetchIdentities(groupId)
         identities[groupId] = served
         let keyVersion = try await vault.accountKeyVersion()
@@ -870,7 +898,7 @@ public actor FamilySync: FamilyJudge {
      * that can't be stored or read throws, and nothing is deleted.
      */
     func wipe(_ groupId: String) async throws {
-        let areas = knownAreas(groupId)
+        let areas = await knownAreas(groupId)
         guard try await forgetInCore(groupId) else { return }
         records.delete(userId: userId, groupId: groupId)
         await vault.forgetWorkspaces(areas)

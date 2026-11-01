@@ -196,6 +196,28 @@ extension Vault {
         return version
     }
 
+    /*
+     * Held as family folders for the write barrier on a roster's word alone (an acceptance whose
+     * guard may not store): never this account's own drive, and never over a folder already known
+     * as another family's. Holding one never makes it this family's to clear (`mayForget`).
+     */
+    func holdAsFamilyWorkspaces(_ ids: [String], of groupId: String) async {
+        _ = try? await loadWorkspace()
+        let own = workspace?.workspaceId.lowercased()
+        for id in ids.map({ $0.lowercased() }) where id != own {
+            familyWorkspaces.insert(id)
+            if familyAreaGroup[id] == nil { familyAreaGroup[id] = groupId.lowercased() }
+        }
+    }
+
+    /* Whether a folder may be let go of with `groupId`: never this account's own drive, never one known as another family's. */
+    func mayForget(_ workspaceId: String, with groupId: String) async -> Bool {
+        _ = try? await loadWorkspace()
+        let id = workspaceId.lowercased()
+        guard id != workspace?.workspaceId.lowercased() else { return false }
+        return familyAreaGroup[id].map { $0 == groupId.lowercased() } ?? true
+    }
+
     /* Route 25 named these as family folders of `groupId`: never opened under a key from the personal path. */
     func noteFamilyWorkspaces(_ ids: [String], of groupId: String) {
         let own = workspace?.workspaceId.lowercased()

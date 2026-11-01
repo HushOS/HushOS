@@ -97,6 +97,63 @@ extension OnFakeDrive {
         }
 
         /*
+         * The member list names the member's own drive as a family folder as well. Route 25 and the
+         * folder ids decide what is the family's: the own drive is never handed to the screens as a
+         * family folder, never saved in the device record, and a refusal of the family lets go of
+         * its folder only. Fails if a roster's word alone makes a folder the family's.
+         */
+        @Test func aRosterNamingThePersonalDriveLeavesItPersonal() async throws {
+            let family = try FamilyFixture(namingPersonal: true)
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            // Accepted, its folders not opened yet (route 25 fails): the record names none of what the roster alone says.
+            server.spacesFail = true
+            _ = await phone.sync.sync(family.summary)
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId)?.areas.contains(family.personal) == false,
+                    "the device record saved the own drive on a roster's word")
+            server.spacesFail = false
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(await phone.sync.familyAreas()[family.personal] == nil, "the own drive was handed to the screens as a family folder")
+            #expect(!(await phone.vault.isFamilyWorkspace(family.personal)))
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId)?.areas == [family.workspaceId])
+            #expect(await phone.sync.knownAreas(family.groupId) == [family.workspaceId])
+            // Refused (a fork after roster 3): the family's folder goes, the own drive stays out of it.
+            server.serve(chain: [family.r1, family.r2, family.r3])
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("roster 3 not accepted"); return }
+            server.serve(chain: [family.r1, family.r2, family.r3Fork, family.r4Fork])
+            guard case .fork = await phone.sync.sync(family.summary) else { Issue.record("no warning"); return }
+            #expect(await phone.sync.familyAreas()[family.personal] == nil)
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId)?.areas == [family.workspaceId])
+        }
+
+        /*
+         * This phone holds a record of another family whose saved folders name this family's folder
+         * (its member list listed it). Refusing or wiping that other family leaves this family's rows,
+         * keys and opened copies alone. Fails if a saved record lets one family clear another's.
+         */
+        @Test func lettingGoOfAnotherFamilyLeavesThisFamilysFolder() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId)?.areas == [family.workspaceId])
+            _ = try await phone.vault.children(of: family.rootId)
+            let folder = try #require(TemporaryCopies.openedFolder(itemId: family.fileId, version: "v1", familyWorkspace: family.workspaceId, in: phone.temporary))
+            let copy = folder.appendingPathComponent("Recipes.txt")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data("Pancakes".utf8).write(to: copy)
+            let other = try newId(kind: .group, scopeId: family.creator.userId).id
+            try phone.records.put(userId: family.member.userId, groupId: other, FamilyRecords.Row(envelope: "e30", rosterVersion: 1, areas: [family.workspaceId]))
+            await phone.sync.refuse(other)
+            try? await phone.sync.wipe(other)
+            #expect(FileManager.default.fileExists(atPath: copy.path), "the other family's cleanup deleted this family's copy")
+            #expect(await phone.vault.item(family.rootId) != nil, "the other family's cleanup dropped this family's rows")
+            #expect(try await phone.vault.children(of: family.rootId).map(\.name) == ["Recipes.txt"])
+        }
+
+        /*
          * A family opened on this phone, then the server shows another history from version 3:
          * the hard warning, and what was opened of its folders is gone, so nothing in them opens.
          */
@@ -763,7 +820,8 @@ struct FamilyFixture {
     var firstKeys: GroupPublicKey { get throws { try groupPublicKey(seed: groupSeed) } }
     var signerKeys: [String: String] { get throws { [try digest(creator.keys.mlDsaPublicKey!): creator.keys.mlDsaPublicKey!] } }
 
-    init() throws {
+    /* `namingPersonal`: roster 1 also names the member's own drive as a family folder (a server or creator lying). */
+    init(namingPersonal: Bool = false) throws {
         creator = try FamilyPerson()
         member = try FamilyPerson()
         groupId = try newId(kind: .group, scopeId: creator.userId).id
@@ -774,8 +832,9 @@ struct FamilyFixture {
         areaKey = try randomBytes(length: 32)
         rootKey = try randomBytes(length: 32)
         let owner = try creator.entry([.billing, .members], since: 1)
-        let first = try rosterFirst(groupId: groupId, kind: .family, creator: owner,
-                                    areaKeys: [AreaKey(workspaceId: workspaceId, workspaceKey: areaKey, rootKey: rootKey)], format: 2)
+        var areaKeys = [AreaKey(workspaceId: workspaceId, workspaceKey: areaKey, rootKey: rootKey)]
+        if namingPersonal { areaKeys.append(AreaKey(workspaceId: personal, workspaceKey: try randomBytes(length: 32), rootKey: try randomBytes(length: 32))) }
+        let first = try rosterFirst(groupId: groupId, kind: .family, creator: owner, areaKeys: areaKeys, format: 2)
         r1 = try rosterSign(roster: first, groupSeed: groupSeed, signer: creator.keys)
         let (group, seed, signer) = (groupId, groupSeed, creator)
         func next(_ previous: SignedGroupStatement, version: UInt64, _ memberEntry: RosterMember) throws -> SignedGroupStatement {
@@ -949,6 +1008,8 @@ final class FamilyServer: @unchecked Sendable {
     var rostersFail = false
     /* Route 3 answers not-member while route 5 still serves: removed between the two. */
     var detailNotMember = false
+    /* Route 25 (the account's spaces) answers with a 503: a family accepted but its folders not opened yet. */
+    var spacesFail = false
     /* Route 5 from version 1 answers not-member (a member check's own read), while a continuation still serves. */
     var notMemberFromStart = false
     var unauthorized = false
@@ -1238,6 +1299,7 @@ final class FamilyServer: @unchecked Sendable {
                 return (200, ["ok": true])
             }
         case ("GET", "/api/drive/spaces"):
+            if lock.withLock({ spacesFail }) { return (503, ["message": "Drive is temporarily unavailable. Please try again."]) }
             return lock.withLock {
                 (200, ["spaces": [
                     ["space": ["kind": "personal"], "areas": [["workspaceId": f.personal, "workspaceKeyVersion": 1, "changeSeq": 0, "root": NSNull(), "rotation": NSNull()]]],
