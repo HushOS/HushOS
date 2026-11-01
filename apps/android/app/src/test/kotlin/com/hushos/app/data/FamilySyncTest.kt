@@ -201,6 +201,30 @@ class FamilySyncTest {
     }
 
     /*
+     * #247 check, item 1: an accepted member list names a received share's workspace (a hostile roster). The barrier's
+     * hold over it never makes it a family folder: the share still opens and lists, a write into it isn't refused as a
+     * family's, and the family's own folder, proven by route 25, still is one. Fails if a roster's word classes a
+     * workspace as family.
+     */
+    @Test
+    fun aRosterNamingAShareNeverMakesItAFamilyFolder() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        accepted(phone)
+        val shared = server.folder(server.graceRoot, "S")
+        server.file(shared, "t.txt", "theirs".toByteArray())
+        server.shareWithMe(shared)
+        server.pinGrace()
+        assertNull(phone.vault.mountShares().single().error)
+        // What the accept path holds when the member list names the share's workspace.
+        phone.vault.holdAsFamilyWorkspaces(listOf(server.graceWorkspace), family.groupId)
+        assertFalse("a roster's word made a share a family folder", phone.vault.isFamilyWorkspace(server.graceWorkspace))
+        assertEquals(listOf("t.txt"), phone.vault.listChildren(shared).map { it.name })
+        phone.vault.refuseFamilyWrite(server.graceWorkspace)
+        assertTrue(phone.vault.isFamilyWorkspace(family.workspaceId))
+    }
+
+    /*
      * Round 16, item 2: another member moves the file from the family's top folder into a subfolder. The subfolder's
      * newer listing opens it first; the top folder's older listing (answered before the move) lands after. The file shows
      * only in its new folder. Fails if a listing keeps a cached row whose parent is now another folder.

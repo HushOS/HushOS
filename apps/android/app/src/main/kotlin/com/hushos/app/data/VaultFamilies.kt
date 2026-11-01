@@ -109,14 +109,21 @@ internal fun Vault.noteFamilyWorkspaces(ids: List<String>, groupId: String) {
     for (id in ids.map { it.lowercase() }) if (id != own) familyAreas[id] = groupId.lowercase()
 }
 
-/* Held as family folders for the write barrier (a roster's word): never over a folder already known as another family's. */
+/*
+ * Held for the write barrier (a roster's word, familyHeld): never a family folder by it, and never over a folder already
+ * held for another family. Only route 25 with the id check (noteFamilyWorkspaces) makes a workspace a family folder.
+ */
 internal fun Vault.holdAsFamilyWorkspaces(ids: Collection<String>, groupId: String) {
     val own = ownWorkspaceId?.lowercase()
-    for (id in ids.map { it.lowercase() }) if (id != own) familyAreas.putIfAbsent(id, groupId.lowercase())
+    for (id in ids.map { it.lowercase() }) if (id != own) familyHeld.putIfAbsent(id, groupId.lowercase())
 }
 
-/* Whether a workspace is a family folder, as far as this session knows: once named, always, whatever later syncs say. */
-fun Vault.isFamilyWorkspace(workspaceId: String): Boolean = familyAreas.containsKey(workspaceId.lowercase()) || areaLedger.isArea(workspaceId)
+/*
+ * Whether a workspace is a family folder, as far as this session knows: proven by route 25 and the id check, once named
+ * always. Not by a member list's word (the ledger's own idea of its areas counts every folder a roster names, a share's
+ * included), so a hostile roster never turns a share into a family folder here.
+ */
+fun Vault.isFamilyWorkspace(workspaceId: String): Boolean = familyAreas.containsKey(workspaceId.lowercase())
 
 /* The family a family folder belongs to. */
 fun Vault.familyOf(workspaceId: String): String? = familyAreas[workspaceId.lowercase()]
@@ -200,9 +207,17 @@ internal fun Vault.requireFamilyEpoch(workspaceId: String, epoch: Long) {
 
 /* What family folders don't take on Android yet: refused before anything is sent, after the write barrier. */
 internal fun Vault.refuseFamilyWrite(workspaceId: String) {
+    heldBarrier(workspaceId)
     if (!isFamilyWorkspace(workspaceId)) return
     requireGuardKept(workspaceId)
     throw FamilyReadOnly()
+}
+
+/* A folder only held for a family's barrier: refused while that family's guard is owed, and otherwise left alone. */
+private fun Vault.heldBarrier(workspaceId: String) {
+    if (isFamilyWorkspace(workspaceId)) return
+    val held = familyHeld[workspaceId.lowercase()] ?: return
+    if (held in familyGuardOwed) throw GuardUnsaved()
 }
 
 /*
@@ -218,6 +233,7 @@ internal fun Vault.requireGuardKept(workspaceId: String) {
 
 /* Right before a write leaves for the server: a sync may have committed and failed to store its guard meanwhile. */
 internal fun Vault.sendingIntoFamily(workspaceId: String) {
+    heldBarrier(workspaceId)
     if (isFamilyWorkspace(workspaceId)) requireGuardKept(workspaceId)
 }
 

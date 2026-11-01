@@ -176,6 +176,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
     internal val areaLedger = com.hushos.core.AreaLedger()
     /* Each family folder route 25 named this session, lowercase, to its family: never opened under a personal key. */
     internal val familyAreas = ConcurrentHashMap<String, String>()
+    /*
+     * The write barrier's hold, apart from familyAreas: the folders an accepted member list names before route 25 proved
+     * them (a guard that can't be stored stops writes into them). Never makes a workspace a family folder: a member list
+     * naming a share's workspace (or any other) only holds that family's writes while its guard is owed.
+     */
+    internal val familyHeld = ConcurrentHashMap<String, String>()
     /* Every family folder node this session opened, to its workspace: listed there again after its family let go of it (the core then refuses). */
     internal val familyNodes = ConcurrentHashMap<String, String>()
     /*
@@ -1138,7 +1144,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
                 var row = try { open(child) } catch (error: NewerFormat) { continue }
                 // The cache held an older row of it (a share's or this drive's, refreshed by no feed here): this listing's
                 // row is the newer one, and it is the one kept, a move included.
-                if (row.node.olderThan(child)) {
+                // When the counters can't decide (a share's row has no change order, and restoring an earlier version
+                // moves neither its key epoch nor its metadata version), the row this listing returned is trusted.
+                if (row.node.olderThan(child) || (!child.olderThan(row.node) && !sameRecords(row.node, child))) {
                     nodes.forget(ws, child.id)
                     row = try { open(child) } catch (error: NewerFormat) { continue }
                 }
