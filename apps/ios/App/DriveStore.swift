@@ -696,10 +696,17 @@ final class DriveStore {
     func refresh(folder id: String) async {
         // A folder of a family the server says this account was removed from stays said as such until the family is
         // accepted again (refreshed then by `show`): listing it can only fail, and its error would hide the removal.
-        if folderProblems[id] == .removed, let groupId = familyGroup(ofFolder: id), familyStates[groupId] == .wiped {
+        // Asked again after every wait below too: a removal that lands while this listing is out wins over its answer.
+        func removed() -> Bool {
+            guard let groupId = familyGroup(ofFolder: id), familyStates[groupId] == .wiped else { return false }
+            folders[id] = nil
+            folderProblems[id] = .removed
+            return true
+        }
+        if let groupId = familyGroup(ofFolder: id), familyStates[groupId] == .wiped {
             // Checked again (a pull to refresh): back if the family lists this account again, else still removed.
             await refreshFamilies(force: true)
-            if familyStates[groupId] == .wiped { return }
+            if removed() { return }
         }
         // Keys changing underneath: wait, then list with the new ones.
         if let rotation { await rotation.value }
@@ -708,6 +715,7 @@ final class DriveStore {
         do {
             await sync()
             let children = try await vault.children(of: id)
+            if removed() { return }
             folders[id] = children
             folderProblems[id] = nil
             noteFamilyFolders(id, children: children)
@@ -726,6 +734,7 @@ final class DriveStore {
         } catch {
             // Left before it answered (a tab switched, the folder closed): nothing failed, so nothing changes.
             if ErrorWords.isCancellation(error) { return }
+            if removed() { return }
             // A family folder's refusal is said in the families' words, never the generic failure.
             if isFamilyFolder(id) {
                 if case DriveAPIError.transport = error {

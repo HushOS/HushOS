@@ -205,6 +205,10 @@ extension DriveStore {
             if !family.isEmpty { ids.insert(folderId); folderIds.insert(folderId) }
         }
         ids.formUnion(roots)
+        // Folders an earlier clear already dropped (a refusal, a fork) are still this family's, and are said anew.
+        let cleared = familyFolders.filter { $0.value == groupId }.map(\.key)
+        folderIds.formUnion(cleared)
+        ids.formUnion(cleared)
         // Their rows go below; which family each folder was in stays, for the removal to stay said on a
         // refresh. Folders only: a file kept here would be asked for as a folder by every later recovery.
         for id in folderIds { familyFolders[id.lowercased()] = groupId }
