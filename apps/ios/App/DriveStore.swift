@@ -924,9 +924,10 @@ final class DriveStore {
         Task {
             // The row this list holds, never looked up again: one a batch just forgot would list its folder once more.
             // A family item's picture only for the version the vault holds now: an older row's never stands for a newer one.
-            if let data = try? await vault.thumbnail(of: item), (try? gate.check()) != nil,
-               !isFamily(item) || (await vault.item(item.id))?.node.currentVersion?.id == item.node.currentVersion?.id {
-                thumbnails[item.id] = data
+            if let data = try? await vault.thumbnail(of: item), (try? gate.check()) != nil {
+                var held = item.node.currentVersion?.id
+                if isFamily(item) { held = await vault.item(item.id)?.node.currentVersion?.id }
+                if held == item.node.currentVersion?.id { thumbnails[item.id] = data }
             }
             thumbnailTasks.remove(item.id)
         }
