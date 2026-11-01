@@ -288,6 +288,49 @@ extension OnFakeDrive {
             #expect(try await vault.children(of: a.id).isEmpty)
         }
 
+        /* The row as a received share's listing serves it: with no change order. */
+        private func unordered(_ node: NodeView) throws -> NodeView {
+            var json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(node)) as? [String: Any])
+            json["changeSeq"] = nil
+            return try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: json))
+        }
+
+        /*
+         * A received share's file is restored to an earlier version on another device while this
+         * phone's row shows the later one. Shares carry no change order and a restore moves neither
+         * key epoch nor metadata version, so the row the latest listing returned is trusted: opening
+         * the file brings the restored content. Fails if a tie in the ordering refuses on every try.
+         */
+        @Test func aSharedFileRestoredToAnEarlierVersionOpensWithTheRestoredContent() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            let theirs = UUID().uuidString.lowercased()
+            let (sKey, fileKey) = (try randomBytes(length: 32), try randomBytes(length: 32))
+            let shared = try FamilyFixture.node(id: try newId(kind: .node, scopeId: theirs).id, in: theirs, parent: nil, parentKey: try randomBytes(length: 32), key: sKey,
+                                                kind: .folder, name: "Shared", writer: family.creator)
+            let fileId = try newId(kind: .node, scopeId: theirs).id
+            let base = try FamilyFixture.node(id: fileId, in: theirs, parent: shared.id, parentKey: sKey, key: fileKey, kind: .file, name: "Plan.txt", writer: family.creator)
+            let (earlier, earlierObject) = try sealVersion(Data("earlier".utf8), of: fileId, family, in: theirs, nodeKey: fileKey)
+            let (later, laterObject) = try sealVersion(Data("later".utf8), of: fileId, family, in: theirs, nodeKey: fileKey)
+            server.objects[earlier.id] = earlierObject
+            server.objects[later.id] = laterObject
+            server.put(shared, try unordered(base.with(version: later)))
+            _ = try await vault.adopt(shared, nodeKey: sKey, metadata: NodeMetadata(name: "Shared", mime: nil, size: nil, modified: nil, attributes: [:]), in: theirs)
+            let shown = try #require(try await vault.children(of: shared.id).first)
+            #expect(shown.node.currentVersion?.id == later.id)
+            // Restored to the earlier version elsewhere; the next listing of the folder serves that row.
+            server.put(try unordered(base.with(version: earlier)))
+            _ = try await vault.children(of: shared.id)
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("restored-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let (copied, file) = try await vault.downloadCurrent(shown) { row in folder.appendingPathComponent(try #require(row.node.currentVersion).id) }
+            #expect(copied.node.currentVersion?.id == earlier.id)
+            #expect(try Data(contentsOf: file) == Data("earlier".utf8))
+        }
+
         /* An own-drive row with `id`, under the member's top folder. */
         private func ownRow(_ id: String, _ family: FamilyFixture, kind: NodeKind, name: String) throws -> NodeView {
             try FamilyFixture.node(id: id, in: family.personal, parent: family.personalRoot.id, parentKey: family.personalRootKey,
