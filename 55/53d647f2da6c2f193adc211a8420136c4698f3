@@ -1,0 +1,33 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_036b4182ceca26 106,1424-1425,1433-1438,2162-2170
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_a062577929a221 369
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_566b8e0c4467a4::t_878f5d486cc61b 162-163,641-642
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_566b8e0c4467a4::t_b52a48caee38d4 415-416
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NodeRow.kt
+  s_566b8e0c4467a4::t_e0e01d852ef49b 146-147
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NodeTile.kt
+  s_566b8e0c4467a4::t_83d824911b47ad 90-91
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SharedScreen.kt
+  s_566b8e0c4467a4::t_50d12b266af234 389-390,415-416
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamiliesSessionTest.kt
+  s_566b8e0c4467a4::t_b42be19afeab14 138-156
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5553d647f2da6c2f193adc211a8420136c4698f3",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
