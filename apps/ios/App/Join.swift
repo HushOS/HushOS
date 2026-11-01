@@ -291,10 +291,10 @@ struct JoinSections: View {
                 FamilyForkSection(name: family, fork: fork)
             }
         }
-        .task {
-            store.openJoin(groupId)
-            await resume()
-        }
+        .task { store.openJoin(groupId) }
+        // Keyed on the session's vault too: a new session (the same account signed in again from Files) drops what the last
+        // one asked, and the screen asks again under the new one rather than staying where it was.
+        .task(id: ObjectIdentifier(store.vault)) { await resume() }
         .onDisappear { store.closeJoin(groupId) }
         .onChange(of: "\(waitingEntry != 0)-\(waitingTitle)", initial: true) { _, _ in title?(waitingEntry != 0 ? waitingTitle : nil) }
         // Route 3 answers someone who accepted: who manages the family, read again every few seconds.
@@ -307,7 +307,8 @@ struct JoinSections: View {
             }
         }
         // Waiting: route 2 polled through the join status until the person is let in.
-        .task(id: waitingEntry) {
+        // Keyed on the session's vault too: a poll the last session's end dropped starts again under the new one.
+        .task(id: "\(waitingEntry)-\(ObjectIdentifier(store.vault).hashValue)") {
             guard waitingEntry != 0 else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(3))
