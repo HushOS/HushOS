@@ -54,8 +54,8 @@ struct NodeRow: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected == true ? .isSelected : [])
-        // Asked again when the row shows another version: a replaced picture comes back new.
-        .task(id: item.node.currentVersion?.id) { store.thumbnail(for: item) }
+        // Asked again when the row shows another version (a replaced picture comes back new) or under a new session.
+        .task(id: "\(item.node.currentVersion?.id ?? "")-\(store.sessionKey.hashValue)") { store.thumbnail(for: item) }
     }
 
     /*
@@ -161,8 +161,8 @@ struct NodeTile: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected == true ? .isSelected : [])
-        // Asked again when the row shows another version: a replaced picture comes back new.
-        .task(id: item.node.currentVersion?.id) { store.thumbnail(for: item) }
+        // Asked again when the row shows another version (a replaced picture comes back new) or under a new session.
+        .task(id: "\(item.node.currentVersion?.id ?? "")-\(store.sessionKey.hashValue)") { store.thumbnail(for: item) }
     }
 
     /* A photo or a video frame fills the picture; anything else, a PDF included, is its type mark. */

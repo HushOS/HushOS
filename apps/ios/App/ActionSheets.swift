@@ -564,7 +564,7 @@ struct InfoSheet: View {
             }
             // A mark's check started here stays up when the mark goes: Info hosts it, not the mark.
             .contactHost(.info, store: store)
-            .task(id: item.node.currentVersion?.id) { store.thumbnail(for: item) }
+            .task(id: "\(item.node.currentVersion?.id ?? "")-\(store.sessionKey.hashValue)") { store.thumbnail(for: item) }
         }
     }
 

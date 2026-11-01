@@ -949,7 +949,8 @@ final class DriveStore {
 
     func thumbnail(for item: Opened) {
         let version = item.node.currentVersion?.id
-        let task = "\(item.id)@\(version ?? "")"
+        // By session too: one the last session left in flight never holds back its replacement.
+        let task = "\(item.id)@\(version ?? "")@\(sessionKey.hashValue)"
         guard item.hasThumbnail, thumbnailData(for: item) == nil, !thumbnailTasks.contains(task), let session = beginSession() else { return }
         thumbnailTasks.insert(task)
         // A family item's picture is kept to the family as it stands now: one decrypted before a clear never lands after.
