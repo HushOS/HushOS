@@ -1,0 +1,27 @@
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_3d6ee569ec6dd5 1743-1751,1755,1779
+apps/ios/App/Families.swift
+  s_566b8e0c4467a4::t_05891d65405b43 301-302
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_566b8e0c4467a4::t_89f8892099d492 195-196,201,204-206,336,417,426,429,444,451,465,484-495,803
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Unbacked.swift
+  s_566b8e0c4467a4::t_c1eabf4445bef3 188-189,214-219,221-228,235-263
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilySyncTests.swift
+  s_566b8e0c4467a4::t_dfe0b8e1982799 281-369,814-817,827
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "185f73654744bb545419943b1408d6cfab2c3706",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
