@@ -209,6 +209,8 @@ extension Vault {
      * opened before): the ledger decides from it whether the folder's root is the committed one.
      */
     func openListed(_ node: NodeView) throws -> Opened {
+        // Through the ledger only: a node of any workspace not known as a family folder is refused before any cache is touched.
+        guard isFamilyWorkspace(node.workspaceId) else { throw FamilyFailure(message: "Couldn’t check this folder’s keys") }
         opened[node.ref] = nil
         nodeKeys[node.ref] = nil
         let item = try open(node)

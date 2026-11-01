@@ -622,7 +622,8 @@ public actor FamilySync: FamilyJudge {
         let keyVersion = try await vault.accountKeyVersion()
         var out: [OpenedFolder] = []
         for area in family {
-            var folder = OpenedFolder(area: FamilyArea(workspaceId: area.workspaceId, root: area.root, rotating: area.rotation != nil))
+            // The top folder is set only once it proved to be this area's own (below): a refused one is never handed out.
+            var folder = OpenedFolder(area: FamilyArea(workspaceId: area.workspaceId, root: nil, rotating: area.rotation != nil))
             do {
                 guard let seed = area.idSeed else {
                     out.append(folder)
@@ -672,11 +673,16 @@ public actor FamilySync: FamilyJudge {
                 folder.area.opened = true
                 folder.pinArea = opened.opened.pinArea
                 if let root = area.root {
+                    // The area's own top folder or nothing: a server naming a folder of another workspace (this account's own
+                    // drive, another family's) or one inside the area is the family's Couldn't check, never opened by its own
+                    // workspace's key path, checked before any cache is touched.
+                    guard Self.isAreaRoot(root, of: area.workspaceId) else { throw FamilyFailure(message: "Couldn’t check this folder’s keys") }
                     let item = try await vault.openListed(root)
+                    folder.area.root = root
                     folder.area.name = item.name
                     folder.area.rootListed = root.parentKeyEpoch == areaWriteVersion(chain: chain, workspaceId: area.workspaceId)
                 }
-                folder.area.write = Self.write(reason: opened.opened.reason, rootListed: folder.area.rootListed, root: area.root != nil)
+                folder.area.write = Self.write(reason: opened.opened.reason, rootListed: folder.area.rootListed, root: folder.area.root != nil)
             } catch let error as GroupsAPIError where error.isNotMember {
                 throw error
             } catch where Self.unanswered(error) {
@@ -684,12 +690,19 @@ public actor FamilySync: FamilyJudge {
                 throw error
             } catch {
                 // The row says "Couldn't check this folder's keys", as the web's does; nothing of it opens.
+                folder.area.root = nil
                 folder.area.name = nil
                 folder.area.write = .readOnly
             }
             out.append(folder)
         }
         return out
+    }
+
+    /* A family area's top folder: a folder of that very workspace, at its top (no parent, or the workspace itself). */
+    static func isAreaRoot(_ root: NodeView, of workspaceId: String) -> Bool {
+        root.workspaceId.lowercased() == workspaceId.lowercased() && root.isFolder
+            && (root.parentId == nil || root.parentId?.lowercased() == workspaceId.lowercased())
     }
 
     /* A member's identity and links as route 6 served them, by user id in any case; none when it served none. */

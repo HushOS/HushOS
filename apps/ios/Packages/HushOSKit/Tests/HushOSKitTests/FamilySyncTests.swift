@@ -202,6 +202,83 @@ extension OnFakeDrive {
         }
 
         /*
+         * Route 25 names one of this account's own folders as the family area's top folder: refused
+         * as the family's Couldn't check, never opened through the personal key path, and nothing
+         * personal becomes a family folder. Fails if the root is opened by its own workspace's path.
+         */
+        @Test func aRootFromAnotherWorkspaceIsRefusedAndNothingPersonalBecomesAFamilyFolder() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            server.servedRootId = family.personalRoot.id
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted(let view) = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let area = try #require(view.areas.first)
+            #expect(area.root == nil, "a personal folder was handed out as the family's top folder")
+            #expect(area.name == nil && !area.openable)
+            #expect(area.line == "Couldn’t check this folder’s keys")
+            #expect(!(await phone.vault.isFamilyWorkspace(family.personal)))
+            #expect(await phone.sync.familyAreas()[family.personal.lowercased()] == nil)
+        }
+
+        /* Route 25 names a file inside the area, not its top folder: refused the same way. */
+        @Test func aRootThatIsNotTheAreasTopFolderIsRefused() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            server.servedRootId = family.fileId
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted(let view) = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let area = try #require(view.areas.first)
+            #expect(area.root == nil && !area.openable)
+        }
+
+        /*
+         * Route 25 names a folder inside the area whose key this phone already holds (listed after an
+         * earlier sync): it opens, but it isn't the area's top, so it is refused all the same. Fails if
+         * only the opening decides what the top folder is.
+         */
+        @Test func aFolderInsideTheAreaIsNotItsTopFolder() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            server.put(family.docs)
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(try await phone.vault.children(of: family.rootId).contains { $0.id == family.docs.id })
+
+            server.servedRootId = family.docs.id
+            guard case .accepted(let view) = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(view.areas.first?.root == nil)
+        }
+
+        /* Only a folder of the area's own workspace, at its top, is the area's top folder. */
+        @Test func anAreasTopFolderIsAFolderAtTheTopOfItsOwnWorkspace() async throws {
+            let family = try FamilyFixture()
+            #expect(FamilySync.isAreaRoot(family.root, of: family.workspaceId))
+            #expect(!FamilySync.isAreaRoot(family.root, of: family.personal))
+            #expect(!FamilySync.isAreaRoot(family.personalRoot, of: family.workspaceId))
+            #expect(!FamilySync.isAreaRoot(family.docs, of: family.workspaceId))
+            #expect(!FamilySync.isAreaRoot(family.file, of: family.workspaceId))
+            // A file at the area's top is no top folder either.
+            let topFile = try FamilyFixture.node(id: try newId(kind: .node, scopeId: family.workspaceId).id, in: family.workspaceId, parent: nil,
+                                                 parentKey: family.areaKey, key: try randomBytes(length: 32), kind: .file, name: "Loose.txt", writer: family.creator)
+            #expect(!FamilySync.isAreaRoot(topFile, of: family.workspaceId))
+        }
+
+        /* The ledger's own path refuses a node of any workspace not known as a family folder, before it touches a cache. */
+        @Test func aFamilyListingNeverOpensAPersonalNode() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            await #expect(throws: (any Error).self) { _ = try await phone.vault.openListed(family.personalRoot) }
+            // The family's own top folder still opens through it.
+            #expect(try await phone.vault.openListed(family.root).name == "Photos")
+        }
+
+        /*
          * Route 2 doesn't load (a 503), or the server doesn't answer about the family (a 503 on route
          * 5): nothing is taken away. Only the server's not-member is a removal. Fails if a failed list
          * or a failed question counts as one.
@@ -714,6 +791,8 @@ final class FamilyServer: @unchecked Sendable {
     var areaGrant: (rosterVersion: UInt64, rosterDigest: String, envelope: Data)
     /* Every node either drive holds, by id: listings, route 25's top folder and every write go through it. */
     var tree: [String: NodeView] = [:]
+    /* The node route 25 names as the family area's top folder (a server's choice): the family's own unless a test names another. */
+    var servedRootId: String?
     /* Upload begins answered 409 `rotating` (a key change the server knows of), then 409 `stale`, before one is taken. */
     var rotatingBegins = 0
     var staleBegins = 0
@@ -958,7 +1037,7 @@ final class FamilyServer: @unchecked Sendable {
                     ["space": ["kind": "personal"], "areas": [["workspaceId": f.personal, "workspaceKeyVersion": 1, "changeSeq": 0, "root": NSNull(), "rotation": NSNull()]]],
                     ["space": ["kind": "group", "groupId": f.groupId, "name": "Lindqvist family"], "areas": [[
                         "workspaceId": f.workspaceId, "idSeed": f.workspaceSeed, "workspaceKeyVersion": areaVersion, "changeSeq": 2,
-                        "root": tree[f.rootId].map(json) ?? NSNull(), "rotation": NSNull(),
+                        "root": tree[servedRootId ?? f.rootId].map(json) ?? NSNull(), "rotation": NSNull(),
                         "grant": ["workspaceKeyVersion": areaVersion, "granteeKeyVersion": f.member.keys.keyVersion, "granterUserId": f.creator.userId,
                                   "rosterVersion": areaGrant.rosterVersion, "rosterDigest": areaGrant.rosterDigest,
                                   "envelope": malformedGrant ? "not base64url!" : base64urlEncode(bytes: areaGrant.envelope)],
