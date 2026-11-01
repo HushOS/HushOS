@@ -1204,8 +1204,9 @@ final class DriveStore {
             throw error
         }
         rotation = nil
-        // The vault rebuilds its catalogue from the feed; this side picks the fresh items up from it.
-        _ = try? await vault.sync()
+        // The vault rebuilds its catalogue from the feed; this side picks the fresh items up from it. Whatever that
+        // pull brought (re-keyed items, a change from another device) is Files' news too, as after any sync.
+        if let touched = try? await vault.sync(), !touched.isEmpty { FilesDomain.signal() }
         await reloadCatalogue()
         for id in stale { await refresh(folder: id) }
         await refreshRecents()
