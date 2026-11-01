@@ -101,7 +101,9 @@ struct FamilyGuardStore: Sendable {
         do {
             data = try Data(contentsOf: file)
         } catch {
-            if !FileManager.default.fileExists(atPath: file.path) { return nil }
+            // Only a file confirmed missing is "nothing stored": a folder that can't be searched or read also makes
+            // `fileExists` say no, and read as none it would be first use for everyone.
+            if GuardFile.missing(error) { return nil }
             throw GuardError.unreadable
         }
         guard let sealed = try? JSONDecoder().decode(Sealed.self, from: data), sealed.v == 1 else { throw GuardError.unreadable }

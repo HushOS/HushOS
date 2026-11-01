@@ -273,6 +273,30 @@ extension OnFakeDrive {
             flock(lock, LOCK_UN)
         }
 
+        /*
+         * A guard folder this process can't search (permissions, a data-protection class not open yet)
+         * makes the file look missing to `fileExists`: it must read as unreadable, never as no guard,
+         * which would be first use. Fails if any read error but a confirmed missing file reads as none.
+         */
+        @Test func aGuardFolderThatCantBeSearchedIsUnreadableNeverAbsent() async throws {
+            let family = try FamilyFixture()
+            var store = familyGuards(family.member)
+            store.key = settingsKey(7)
+            #expect(try store.family(family.groupId) == nil, "no folder at all is nothing stored")
+            try store.keep(family.groupId, try family.pin(through: [family.r1, family.r2]))
+            #expect(chmod(store.folder.path, 0) == 0)
+            defer { chmod(store.folder.path, 0o755) }
+            #expect(throws: GuardError.unreadable) { _ = try store.family(family.groupId) }
+            // The contact guard's read path is the same, in the same folder.
+            var contacts = ContactGuardStore(folder: store.folder, owner: store.owner, activity: .expired, generation: GuardGeneration())
+            contacts.key = settingsKey(7)
+            chmod(store.folder.path, 0o755)
+            let maya = try makeIdentity("maya")
+            try contacts.commit("maya", try guardEntryNext(previous: nil, pin: try firstSeen(maya.envelope)), over: 0)
+            chmod(store.folder.path, 0)
+            #expect(throws: GuardError.unreadable) { _ = try contacts.entry("maya") }
+        }
+
         /* A sign-out (any wipe of the account) deletes the family guard with the contact guard. */
         @Test func aSignOutDeletesTheFamilyGuard() async throws {
             let family = try FamilyFixture()
