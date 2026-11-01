@@ -322,6 +322,12 @@ final class DriveStore {
      * session): the new session's vault takes over in place, so screens and open sheets
      * stay as they are, and the lists catch up from the server under it.
      */
+    /*
+     * Which session the screens' first loads belong to: a load the last session's end dropped (a
+     * same-account sign-in from the Files sheet) starts again when its task is keyed on this.
+     */
+    var sessionKey: ObjectIdentifier { ObjectIdentifier(vault) }
+
     func adopt(_ next: Vault) async {
         guard next !== vault else { return }
         vault = next
@@ -337,7 +343,12 @@ final class DriveStore {
         await sync(session: session)
         // Families checked again under the new session at once, so an open family page doesn't wait for the next tick.
         await refreshFamilies(force: true, session: session)
-        for id in folders.keys {
+        // Every folder on screen, and every one whose first listing the last session's end dropped (still `loading`, never
+        // listed): listed again under the new session, so none stays a skeleton.
+        let pending = Set(folders.keys).union(loading)
+        loading = []
+        if rootId == nil { _ = await loadRoot() }
+        for id in pending {
             guard current(session) else { return }
             await refresh(folder: id, session: session)
         }

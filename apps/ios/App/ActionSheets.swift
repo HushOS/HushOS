@@ -388,7 +388,7 @@ struct VersionsSheet: View {
                 }
                 .environment(store)
             }
-            .task { await load() }
+            .task(id: store.sessionKey) { await load() }
         }
     }
 

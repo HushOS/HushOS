@@ -34,7 +34,8 @@ struct SharedView: View {
 
     init(visible: Bool = true) { self.visible = visible }
 
-    private var loadKey: Int { visible ? (byMe ? store.sharingVersion : -1) : -2 }
+    /* What the load is for, and the session it runs in: a load a new session's adoption dropped starts again. */
+    private var loadKey: String { "\(visible ? (byMe ? store.sharingVersion : -1) : -2)-\(store.sessionKey.hashValue)" }
 
     private func handle(_ link: AppLink?) {
         guard onScreen else { return }

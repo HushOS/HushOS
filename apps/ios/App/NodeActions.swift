@@ -537,11 +537,14 @@ private struct InfoWatch: Hashable {
     let shares: [String]
     let item: String?
     let cached: Opened?
+    /* The session: Info follows its item again under a new one. */
+    let session: ObjectIdentifier
 
     @MainActor init(store: DriveStore) {
         version = store.catalogueVersion
         shares = store.mountsLoaded ? store.mounts.map(\.share.workspaceId) : []
         item = store.infoBeside?.item.id
         cached = store.infoBeside.flatMap { store.known($0.item.id) }
+        session = store.sessionKey
     }
 }

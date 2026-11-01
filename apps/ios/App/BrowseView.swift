@@ -26,7 +26,8 @@ struct BrowseView: View {
                 }
             }
         }
-        .task { rootId = await store.loadRoot() }
+        // Keyed on the session: a first load a new session's adoption dropped is asked again under it.
+        .task(id: store.sessionKey) { rootId = await store.loadRoot() }
         .onChange(of: store.route, initial: true) { _, link in
             guard shown, let link else { return }
             Task { await route(link) }
@@ -257,7 +258,8 @@ struct FolderView: View {
             guard searchFocused else { return }
             Task { searchFocused = true }
         }
-        .task {
+        // Keyed on the session too: a first listing a new session's adoption dropped is asked again under it.
+        .task(id: store.sessionKey) {
             // A family folder checks its family again while browsing when the last check is a few minutes old.
             if family { await store.refreshFamilyIfStale(folder: folderId, maxAge: 180) }
             if store.folders[folderId] == nil { await store.refresh(folder: folderId) }
