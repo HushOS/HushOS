@@ -1,0 +1,31 @@
+apps/ios/App/ActionSheets.swift
+  s_566b8e0c4467a4::t_ffa65e21f6a9a9 391
+apps/ios/App/BrowseView.swift
+  s_566b8e0c4467a4::t_b732d2e1bfafc8 29-30,261-262
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_ab9f5026016c8a 325-330,346-351
+apps/ios/App/NodeActions.swift
+  s_566b8e0c4467a4::t_ec1c3e30094d3f 540-541,548
+apps/ios/App/Received.swift
+  s_566b8e0c4467a4::t_03d5eb5935ce6d 37-38
+apps/ios/App/RecentsView.swift
+  s_566b8e0c4467a4::t_4015e84265ec46 124,452
+apps/ios/App/SearchView.swift
+  s_566b8e0c4467a4::t_5eb3c18ed6a23d 95
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3876c0b61448c1aa12161c5e52eb237951d19071",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
