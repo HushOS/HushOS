@@ -224,12 +224,13 @@ targets:
             # Apple's required-reason declarations (docs/release/privacy-answers.md): one manifest for every bundle.
             - path: Privacy/PrivacyInfo.xcprivacy
               buildPhase: resources
+            # Each in the group the app files it under: Xcode 27.2 refuses a file reference in two groups.
             - path: App/Theme.swift
-              group: Share/Shared
+              group: App
             - path: App/Glyphs.swift
-              group: Share/Shared
+              group: App
             - path: ../../packages/tokens/generated/Alpine.swift
-              group: Share/Shared
+              group: App/Theme
         dependencies:
             - package: HushOSKit
         entitlements:
