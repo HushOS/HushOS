@@ -196,6 +196,8 @@ final class AppModel {
         case .restart:
             break
         }
+        // Another account, or a start over: the shown session ended.
+        sessionClosed()
         user = nil
         vault = nil
         self.owner = nil
@@ -206,7 +208,20 @@ final class AppModel {
     /* The account shown before the app went to sign-in (a session that ended), whose queue and notices may still be here. */
     private var lastOwner: AccountOwner?
 
+    /*
+     * The signed-in screens' store, while there is one: every end of the session (sign-out, deletion,
+     * a lost session) resets its families and cancels their work in flight (DriveStore.resetFamilies).
+     * Tied to these transitions only: a view leaving the screen (a file opened full screen) is no end.
+     */
+    @ObservationIgnored weak var driveStore: DriveStore?
+
+    private func sessionClosed() {
+        driveStore?.resetFamilies()
+        driveStore = nil
+    }
+
     func signOut() async {
+        sessionClosed()
         await BackgroundTransfers.shared.cancelAll()
         await Auth.signOut()
         await FilesDomain.remove()
@@ -227,6 +242,7 @@ final class AppModel {
 
     /* After deletion there is nothing left on the server; forget the Files location too, and say so. */
     func deleted() async {
+        sessionClosed()
         await FilesDomain.remove()
         SharedKeychain.delete(SharedKeychain.sessionAccount)
         AccountStore.shared.wipe()
@@ -247,6 +263,7 @@ final class AppModel {
      * the account on the phone goes as well, as on sign-out.
      */
     func sessionLost() {
+        sessionClosed()
         if let email = user?.email, !email.isEmpty { lastEmail = email }
         lastOwner = owner
         let ended = SharedKeychain.session
@@ -304,6 +321,7 @@ final class AppModel {
      * the phone before stays where it went.
      */
     private func forgetRemovedDevice() async {
+        sessionClosed()
         await BackgroundTransfers.shared.cancelAll()
         await FilesDomain.remove()
         SharedKeychain.delete(SharedKeychain.sessionAccount)

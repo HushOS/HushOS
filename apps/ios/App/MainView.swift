@@ -198,11 +198,11 @@ struct MainView: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         // A new vault (a sign-in again after Change password or Rotate account key ended the old session)
         // replaces the store's in place: the old one's session is dead and its keys may be too.
-        // Signed out, deleted or the session lost: nothing of its families lands after, and what it asked is cancelled.
-        .onDisappear { store?.resetFamilies() }
         .task(id: model.vault.map(ObjectIdentifier.init)) {
             guard let vault = model.vault else { return }
             if let store { await store.adopt(vault) } else { store = DriveStore(vault: vault) }
+            // The session's ends (sign-out, deletion, a lost session) reset its families from the model, never from a view's lifecycle.
+            model.driveStore = store
         }
     }
 
