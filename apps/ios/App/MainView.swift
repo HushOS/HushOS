@@ -118,6 +118,8 @@ struct MainView: View {
                     if scenePhase == .active { BackgroundAccess.shared.version += 1; await BackgroundAccess.shared.readNotifications() }
                     if scenePhase == .active { await store.liveSync() }
                 }
+                // A family opened from the invitation sheet is pushed in Account, where its row is.
+                .onChange(of: store.familyToOpen) { _, groupId in if groupId != nil { tab = .account } }
                 // Anything that routes (a link, Info's Folder row) brings its tab forward.
                 .onChange(of: store.route) { _, link in
                     switch link {

@@ -28,6 +28,15 @@ struct AccountView: View {
     /* Account has finished appearing: a link may push onto its stack. */
     @State private var onScreen = false
 
+    /* A family pushed by the app (a join just finished), as Account's own Families row pushes it. */
+    @State private var openedFamily: FamilyRoute?
+
+    private func openFamily(_ groupId: String?) {
+        guard onScreen, let groupId else { return }
+        store.familyToOpen = nil
+        openedFamily = .family(groupId)
+    }
+
     private func openTrash(_ link: AppLink?) {
         guard onScreen, link == .trash else { return }
         store.route = nil
@@ -119,7 +128,11 @@ struct AccountView: View {
             // A link to the Trash pushes it once Account has finished appearing, as a tap would (Appeared.swift).
             .onFinishedAppearing { onScreen = true }
             .onChange(of: store.route, initial: true) { _, link in openTrash(link) }
-            .onChange(of: onScreen) { _, _ in openTrash(store.route) }
+            .onChange(of: onScreen) { _, _ in openTrash(store.route); openFamily(store.familyToOpen) }
+            .onChange(of: store.familyToOpen, initial: true) { _, groupId in openFamily(groupId) }
+            .navigationDestination(item: $openedFamily) { route in
+                if case .family(let groupId) = route { FamilyPage(groupId: groupId).environment(store) }
+            }
             .refreshable {
                 await load()
                 await store.refreshFamilies()

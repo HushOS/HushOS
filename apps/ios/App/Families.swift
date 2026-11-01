@@ -146,6 +146,7 @@ extension DriveStore {
     private func show(_ state: FamilyState, of summary: GroupSummary, previous: FamilyState?) async {
         familyStates[summary.id] = state
         familyCheckedAt[summary.id] = Date()
+        familyRefreshed[summary.id, default: 0] += 1
         for (area, groupId) in await families.familyAreas() { familyAreaGroups[area] = groupId }
         if case .accepted(let view) = state {
             familyShown[summary.id] = view
@@ -413,6 +414,8 @@ struct FamilyPage: View {
     /* Moved after every check, so the labels are read again. */
     @State private var checks = 0
     @State private var checking: MemberCheck?
+    /* "Waiting for Sam" while the join below waits: the page's title, as the web's. */
+    @State private var waitTitle: String?
 
     private var me: String { store.vault.api.session.userId.lowercased() }
     private var named: [GroupDetail.Member] { store.familyDetails[groupId]?.members.filter { $0.state == "active" } ?? [] }
@@ -431,7 +434,7 @@ struct FamilyPage: View {
             if joining {
                 // Accepted but not let in, or let in with nothing on this phone or account checking the family yet:
                 // the join screen is where that goes on (the web's family page redirects to it too).
-                JoinSections(groupId: groupId, family: name)
+                JoinSections(groupId: groupId, family: name, title: { waitTitle = $0 })
             } else if let view {
                 alerts
                 folders(view)
@@ -447,13 +450,14 @@ struct FamilyPage: View {
         .listStyle(.insetGrouped)
         .alpineGrouped()
         .listSectionSpacing(Alpine.Space.s4)
-        .screenChrome(title: joining ? "Join \(name)" : name)
+        .screenChrome(title: joining ? (waitTitle ?? "Join \(name)") : name)
         .refreshable { await store.refreshFamilies(force: true) }
         .task {
             if store.familyList == nil { await store.refreshFamilies() } else if let summary { await store.refreshFamily(summary) }
         }
-        // The labels follow the member list this phone accepted, and every check made here.
-        .task(id: "\(view?.rosterDigest ?? "")-\(checks)") {
+        // The labels are read again after every finished check of the family (pull to refresh included), every trust
+        // reload and every check made here: a pin changed on another device never leaves someone shown Verified.
+        .task(id: "\(view?.rosterDigest ?? "")-\(checks)-\(store.familyRefreshed[groupId] ?? 0)-\(store.trustGeneration)") {
             guard let view else { return }
             standings = try? await store.families.memberStandings(view)
             checkedWith = await store.families.checkedFamilyWith(groupId)

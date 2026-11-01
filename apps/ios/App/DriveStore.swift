@@ -72,6 +72,8 @@ final class DriveStore {
     static let sessionEnded = "Your session ended. Sign in again."
     /* A link the shell handed over, for the tab it opened to act on and clear. */
     var route: AppLink?
+    /* A family to push onto Account's stack (a join that finished in the invitation sheet, "Open <family>"): Account clears it. */
+    var familyToOpen: String?
     /* A file a link asked to open in the viewer, and the files beside it. */
     var deepFile: Opened?
     /*
@@ -138,6 +140,10 @@ final class DriveStore {
     @ObservationIgnored var familyFolders: [String: String] = [:]
     /* When each family was last checked on this phone: a family folder on screen checks again when it is old. */
     @ObservationIgnored var familyCheckedAt: [String: Date] = [:]
+    /* Moved by every finished check of a family, whatever it found: what a family page reads its labels again on. */
+    var familyRefreshed: [String: Int] = [:]
+    /* Moved by every trust reload (refreshSigners): pins saved or changed on another device are read again on it. */
+    var trustGeneration = 0
     @ObservationIgnored var familiesSyncedAt: Date?
     var mounts: [ShareMount] = []
     var mountsError: String?
@@ -540,6 +546,7 @@ final class DriveStore {
             verdicts.reset()
             trust = next
         }
+        trustGeneration += 1
         // Family marks rest on the same pins and identities: judged again, what is on screen first.
         await rejudgeFamilies()
         if case .loaded = next, !rotationsWaiting.isEmpty {

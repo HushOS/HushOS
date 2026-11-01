@@ -34,13 +34,19 @@ struct InvitationSheet: View {
         case failed(gone: Bool, words: String)
         case invitation(Invitation)
         case joining(String, family: String)
-        case joined(String)
     }
 
     @State private var step: Step = .opening
     @State private var accepting = false
     @State private var error: GroupsAPIError?
     @State private var problem: String?
+    /* The wait's title, as the step below says it ("Waiting for Sam"): the sheet's own title. */
+    @State private var waitTitle: String?
+    @State private var detent = InvitationSheet.short
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /* As tall as these steps need: the invitation and the wait are a few lines, so the sheet opens part way up. */
+    static let short = PresentationDetent.fraction(0.5)
 
     var body: some View {
         NavigationStack {
@@ -48,12 +54,12 @@ struct InvitationSheet: View {
                 switch step {
                 case .joining(let groupId, let family):
                     List {
-                        JoinSections(groupId: groupId, family: family, prominent: true) { step = .joined(groupId) }
+                        JoinSections(groupId: groupId, family: family, title: { waitTitle = $0 }) { open(family: groupId) }
                     }
                     .listStyle(.insetGrouped)
                     .alpineGrouped()
-                case .joined(let groupId):
-                    FamilyPage(groupId: groupId)
+                    .navigationTitle(waitTitle ?? "Join \(family)")
+                    .navigationBarTitleDisplayMode(.inline)
                 default:
                     List { invitation }
                         .listStyle(.insetGrouped)
@@ -68,16 +74,17 @@ struct InvitationSheet: View {
                     ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
                 }
             }
-            // A family's folders and their subfolders, pushed by value as Account's stack pushes them.
-            .navigationDestination(for: FamilyRoute.self) { route in
-                switch route {
-                case .family(let id): FamilyPage(groupId: id).environment(store)
-                case .folder(let id, let name): FolderView(folderId: id, title: name).environment(store)
-                }
-            }
-            .navigationDestination(for: Opened.self) { folder in FolderView(folderId: folder.id, title: folder.name).environment(store) }
         }
+        // Part way up for these few lines; the whole height at the largest text sizes, and always one drag away.
+        .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [Self.short, .large], selection: $detent)
+        .onChange(of: typeSize, initial: true) { _, size in if size.isAccessibilitySize { detent = .large } }
         .task { if step == .opening { await open() } }
+    }
+
+    /* The family's page, pushed in Account where its row is (never inside this sheet), once in or already in. */
+    private func open(family groupId: String) {
+        store.familyToOpen = groupId
+        dismiss()
     }
 
     private var showsInvitation: Bool {
@@ -140,18 +147,20 @@ struct InvitationSheet: View {
                 case .inFamily(let words, let yours):
                     VStack(alignment: .leading, spacing: Alpine.Space.s2) {
                         Text(words).font(Theme.Text.callout).foregroundStyle(Alpine.ink)
-                        NavigationLink(value: FamilyRoute.family(yours.groupId)) {
+                        Button { open(family: yours.groupId) } label: {
                             Text("Open \(yours.name)").font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
                         }
+                        .buttonStyle(.borderless)
                     }
                     .padding(.vertical, Alpine.Space.s1)
                     .listRowBackground(Alpine.tint)
                 case .alreadyMember:
                     VStack(alignment: .leading, spacing: Alpine.Space.s2) {
                         Text("You’re already in this family").font(Theme.Text.headline).foregroundStyle(Alpine.ink)
-                        NavigationLink(value: FamilyRoute.family(invitation.groupId)) {
+                        Button { open(family: invitation.groupId) } label: {
                             Text("Open \(invitation.name)").font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
                         }
+                        .buttonStyle(.borderless)
                     }
                     .padding(.vertical, Alpine.Space.s1)
                     .listRowBackground(Alpine.tint)
@@ -235,8 +244,8 @@ struct JoinSections: View {
     @Environment(DriveStore.self) private var store
     let groupId: String
     let family: String
-    /* In the invitation sheet, where the wait's title is the page's. */
-    var prominent = false
+    /* The wait's title ("Waiting for Sam"), for the screen it sits in to show as its own title; nil while not waiting. */
+    var title: ((String?) -> Void)? = nil
     var onJoined: (() -> Void)? = nil
 
     private enum Step: Equatable {
@@ -286,6 +295,7 @@ struct JoinSections: View {
             await resume()
         }
         .onDisappear { store.closeJoin(groupId) }
+        .onChange(of: "\(waitingEntry != 0)-\(waitingTitle)", initial: true) { _, _ in title?(waitingEntry != 0 ? waitingTitle : nil) }
         // Route 3 answers someone who accepted: who manages the family, read again every few seconds.
         .task(id: groupId) {
             while !Task.isCancelled {
@@ -320,21 +330,21 @@ struct JoinSections: View {
 
     // MARK: Steps
 
+    private var waitingTitle: String { only.map { "Waiting for \($0)" } ?? "Waiting to be let in" }
+
+    /* The web's waiting screen: the title is the screen's, then one line of what happens, with a spinner beside it. */
     @ViewBuilder private var waiting: some View {
-        let title = only.map { "Waiting for \($0)" } ?? "Waiting to be let in"
         let words = only.map { "\($0) lets you in from the family’s page. This page updates when you’re in." }
             ?? "Someone who manages \(family) lets you in from the family’s page. This page updates when you’re in."
         Section {
-            VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                HStack(spacing: Alpine.Space.s2) {
-                    ProgressView()
-                    Text(title).font(prominent ? Theme.Text.titleLarge : Theme.Text.headline).foregroundStyle(Alpine.ink).accessibilityAddTraits(.isHeader)
-                }
-                Text(words).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
+            HStack(alignment: .firstTextBaseline, spacing: Alpine.Space.s2) {
+                ProgressView().accessibilityHidden(true)
+                Text(words).font(Theme.Text.callout).foregroundStyle(Alpine.ink)
             }
             .padding(.vertical, Alpine.Space.s1)
             .alpineRow()
             .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(waitingTitle). \(words)")
         }
     }
 
