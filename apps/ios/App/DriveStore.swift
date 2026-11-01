@@ -113,6 +113,8 @@ final class DriveStore {
     var familyStates: [String: FamilyState] = [:]
     /* How many times each family's state was published (`publishFamily`): a screen's own sync shown only over none newer. */
     @ObservationIgnored var familyGenerations = FamilyGenerations()
+    /* The revision each family's shown answer was found at (FamilySync.syncRevised): only a later look replaces it. */
+    @ObservationIgnored var familyRevisions = FamilyRevisions()
     /* Family work and folder listings kept to the session they began in (`inSession`, `resetFamilies`). */
     @ObservationIgnored let sessionGate = SessionGate<Vault>()
     /* An operation's session, taken once at its outermost entry and passed down (SessionGate). */

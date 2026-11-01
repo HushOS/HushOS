@@ -146,6 +146,31 @@ extension OnFakeDrive {
             #expect(other.records.read(userId: family.member.userId, groupId: family.groupId) == nil)
         }
 
+        /*
+         * A check asked while another sync of the family holds its turn runs after it, and its answer
+         * carries the later revision, so the screens show the check's over the earlier one. Fails if
+         * the check's answer isn't ordered after the sync it waited behind.
+         */
+        @Test func aCheckQueuedBehindASyncCarriesTheLaterRevision() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let sync = phone.sync
+            // The check is asked first but waits: the refresh already holds the family's turn, slowed at its member list read.
+            let held = DispatchSemaphore(value: 0)
+            server.onRosters = { held.wait() }
+            let refresh = Task { await sync.syncRevised(family.summary) }
+            try await Task.sleep(for: .milliseconds(200))
+            let check = Task { try await sync.checkCode(family.summary, with: family.creator.userId) }
+            try await Task.sleep(for: .milliseconds(200))
+            server.onRosters = nil
+            held.signal()
+            let first = await refresh.value
+            let second = try await check.value
+            #expect(try #require(second.revision) > first.revision)
+        }
+
         /* They match over words that aren't this phone's (another family, a misread list): nothing is saved, and the member stays not verified. */
         @Test func wordsThatDontMatchHereSaveNothing() async throws {
             let family = try FamilyFixture()
@@ -268,55 +293,55 @@ extension OnFakeDrive {
 }
 
 /*
- * Check it's Sam syncs, then fetches the member lists for the words; meanwhile the live sync may
- * find a fork or a removal and show it. What the check found when it started must not cover that
- * afterwards, and its words must not show for a family no longer accepted. Fails if an older
- * acceptance is shown over a newer warning or removal, or a fork or removal it found is dropped.
+ * Check it's Sam syncs behind any sync of the family already running, then fetches the member
+ * lists; a refresh may show its own answer meanwhile. Answers are ordered by the revision taken
+ * inside the family's turn: a later look always shows (a refusal too, not only a fork or a
+ * removal), an earlier one never covers it (an old fork no more than an old acceptance), and an
+ * answer without a revision is the latest when it shows. Fails if answers are ordered by when a
+ * screen asked, or a fork or removal wins regardless of when it was found.
  */
 @Suite struct FamilyCheckRaceTests {
     let group = "0a427e6e-a934-4366-aea3-b09f70984781"
-    var accepted: FamilyState {
-        .accepted(FamilyView(groupId: group, rosterVersion: 2, rosterDigest: "d", groupKeyVersion: 1, members: [], areas: [],
-                             recordReset: false, ownEntryWrong: false, ownEntryBehind: false, foreign: []))
-    }
-    var fork: FamilyState { .fork(FamilyFork(memberList: true, version: 2, sides: [])) }
 
-    @Test func aCheckThatStartedBeforeAWarningCannotCoverIt() {
-        var book = FamilyGenerations()
-        book.published(group)
-        let started = book.current(group)
-        // The live sync finds the fork while the check waits on the member lists, and shows it.
-        book.published(group)
-        #expect(!book.admits(accepted, of: group, since: started))
-        #expect(!book.admits(.failed("Couldn’t check"), of: group, since: started))
-        // A fork or removal the check itself found is always shown.
-        #expect(book.admits(fork, of: group, since: started))
-        #expect(book.admits(.wiped, of: group, since: started))
+    @Test func aRefusalFoundAfterARefreshShowsOverIt() {
+        var book = FamilyRevisions()
+        // The refresh held the family's turn and accepted (revision 1); the check's own sync ran after it and was refused.
+        let admitted1 = book.admits(1, of: group)
+        #expect(admitted1)
+        let admitted2 = book.admits(2, of: group)
+        #expect(admitted2)
     }
 
-    @Test func aCheckWithNothingShownMeanwhileIsShown() {
-        var book = FamilyGenerations()
-        let started = book.current(group)
-        #expect(book.admits(accepted, of: group, since: started))
-        // Counted per family: another family's news doesn't hold this one back.
-        book.published("1b427e6e-a934-4366-aea3-b09f70984781")
-        #expect(book.admits(accepted, of: group.uppercased(), since: started))
+    @Test func anOlderAnswerNeverCoversALaterOne() {
+        var book = FamilyRevisions()
+        let admitted3 = book.admits(5, of: group)
+        #expect(admitted3)
+        // Found before what is shown, whatever it says: an old fork or removal as much as an old acceptance.
+        let admitted4 = book.admits(4, of: group)
+        #expect(!admitted4)
+        let admitted5 = book.admits(5, of: group)
+        #expect(!admitted5)
+        let admitted6 = book.admits(6, of: group)
+        #expect(admitted6)
     }
 
-    @Test func wordsShowOnlyForAnAcceptedFamily() {
-        #expect(FamilySync.checkProblem(accepted) == nil)
-        #expect(FamilySync.checkProblem(fork) != nil)
-        #expect(FamilySync.checkProblem(.wiped) == FamilyFailure.notInFamily.message)
-        #expect(FamilySync.checkProblem(.failed("Couldn’t check")) == "Couldn’t check")
-        #expect(FamilySync.checkProblem(.waiting) != nil)
+    @Test func anUnrevisedAnswerIsTheLatestWhenItShows() {
+        var book = FamilyRevisions()
+        let admitted7 = book.admits(2, of: group)
+        #expect(admitted7)
+        // A removal the family list found, published when revision 7 was the last given out: a sync settled by then is older.
+        let admitted8 = book.admits(nil, of: group, latest: 7)
+        #expect(admitted8)
+        let admitted9 = book.admits(7, of: group)
+        #expect(!admitted9)
+        let admitted10 = book.admits(8, of: group)
+        #expect(admitted10)
+        // Another family's order is its own.
+        let admitted11 = book.admits(3, of: "1b427e6e-a934-4366-aea3-b09f70984781")
+        #expect(admitted11)
     }
 }
 
-/*
- * The member list's labels after a sync accepted a newer list or trust was loaded again, while
- * they are read again. Fails if a member whose entry changed, or anyone under an older trust load,
- * can still read Verified from labels read before.
- */
 @Suite struct MemberLabelsTests {
     let sam = "1b427e6e-a934-4366-aea3-b09f70984781"
     let ana = "2c427e6e-a934-4366-aea3-b09f70984781"

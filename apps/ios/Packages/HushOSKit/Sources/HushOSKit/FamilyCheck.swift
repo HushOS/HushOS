@@ -84,6 +84,8 @@ extension FamilySync {
         public let state: FamilyState
         public let code: FamilyCheckCode?
         public let problem: String?
+        /* The revision `state` was found at (FamilySync.syncRevised): what the screens order it by. */
+        public var revision: UInt64? = nil
     }
 
     /*
@@ -92,12 +94,14 @@ extension FamilySync {
      * digest for Technical details. The sync's outcome comes back whatever it was, so the screens adopt
      * it (a fork or a removal it found clears what this phone opened, as any sync's does), even when
      * the words can't be worked out after it: the sync's outcome then comes back with why.
-     * Only an ended session still throws.
+     * Only an ended session throws, the sync's own 401 included (never a problem the sheet offers
+     * to try again).
      */
     public func checkCode(_ summary: GroupSummary, with memberId: String) async throws -> CheckStart {
-        let state = await sync(summary)
-        if let problem = Self.checkProblem(state) { return CheckStart(state: state, code: nil, problem: problem) }
-        guard let chain = acceptedChain(summary.id) else { return CheckStart(state: state, code: nil, problem: GuardWords.unreadable) }
+        let revised = await syncRevised(summary)
+        let (state, revision) = (revised.state, revised.revision)
+        if let problem = Self.checkProblem(state) { return CheckStart(state: state, code: nil, problem: problem, revision: revision) }
+        guard let chain = acceptedChain(summary.id) else { return CheckStart(state: state, code: nil, problem: GuardWords.unreadable, revision: revision) }
         let code: FamilyCheckCode
         do {
             let served = try await fetchServed(summary.id, after: 0)
@@ -114,12 +118,12 @@ extension FamilySync {
         } catch let error as GroupsAPIError where error.isNotMember {
             // Its own read of the member list: a not-member here is a removal, let go of and shown as a sync's.
             let removed = await removedNow(summary.id)
-            return CheckStart(state: removed, code: nil, problem: Self.checkProblem(removed))
+            return CheckStart(state: removed.state, code: nil, problem: Self.checkProblem(removed.state), revision: removed.revision)
         } catch {
             if endsSession(error) { throw error }
-            return CheckStart(state: state, code: nil, problem: FamilyWords.error(error))
+            return CheckStart(state: state, code: nil, problem: FamilyWords.error(error), revision: revision)
         }
-        return CheckStart(state: state, code: code, problem: nil)
+        return CheckStart(state: state, code: code, problem: nil, revision: revision)
     }
 
     /* Why Check it's Sam shows no words while the family stands as `state`; nil when it is accepted and they can show. */
@@ -241,11 +245,31 @@ extension Vault {
 }
 
 /*
+ * Which answer each family shows, by the revision it was found at (FamilySync.syncRevised, taken
+ * inside the family's turn). An answer replaces what is shown only when it is a later look: an
+ * older acceptance never covers a fork, refusal or removal found since, and an older fork never
+ * covers a later acceptance either. An answer without a revision (a join, a removal the list
+ * found) is the latest now: it shows, and nothing revised before it may cover it.
+ */
+public struct FamilyRevisions: Sendable {
+    private var shown: [String: UInt64] = [:]
+    public init() {}
+
+    public mutating func admits(_ revision: UInt64?, of groupId: String, latest: UInt64 = FamilySync.latestRevision()) -> Bool {
+        let key = groupId.lowercased()
+        guard let revision else {
+            shown[key] = max(shown[key, default: 0], latest)
+            return true
+        }
+        guard revision > shown[key, default: 0] else { return false }
+        shown[key] = revision
+        return true
+    }
+}
+
+/*
  * Each family's published state as a count of publications (every sync, refresh, removal or
- * check a screen adopted). A screen that ran a sync of its own (Check it's Sam's "Getting the
- * latest") notes the count when it starts; what it found may be shown only if nothing was
- * published since, unless it is a fork or a removal, which always win: an older acceptance must
- * never cover a warning or a removal found meanwhile.
+ * check a screen adopted): a show that suspends goes on only while its own is still the latest.
  */
 public struct FamilyGenerations: Sendable {
     private var counts: [String: UInt64] = [:]
@@ -254,13 +278,6 @@ public struct FamilyGenerations: Sendable {
     public func current(_ groupId: String) -> UInt64 { counts[groupId.lowercased(), default: 0] }
 
     public mutating func published(_ groupId: String) { counts[groupId.lowercased(), default: 0] += 1 }
-
-    public func admits(_ state: FamilyState, of groupId: String, since: UInt64) -> Bool {
-        switch state {
-        case .fork, .wiped: return true
-        default: return current(groupId) == since
-        }
-    }
 }
 
 /*

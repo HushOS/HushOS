@@ -397,14 +397,33 @@ public actor FamilySync: FamilyJudge {
     }
 
     /* One family synced, after any sync of it already running. */
-    public func sync(_ summary: GroupSummary) async -> FamilyState {
+    public func sync(_ summary: GroupSummary) async -> FamilyState { await syncRevised(summary).state }
+
+    /* A sync's outcome and the revision it ran at (`FamilySync.revise`), for the screens to order answers by. */
+    public struct Revised: Sendable {
+        public let state: FamilyState
+        public let revision: UInt64
+    }
+
+    /*
+     * Revisions for every family, taken inside the family's turn as an answer is settled: a later
+     * revision is a later look at the family, whenever it was asked for. Process-wide, so what
+     * publishes without one (a join, a removal the list found) can take the latest.
+     */
+    private static let revisions = OSAllocatedUnfairLock(initialState: UInt64(0))
+    static func revise() -> UInt64 { revisions.withLock { $0 += 1; return $0 } }
+    /* The last revision given out: an answer taken at or before it is no later than now. */
+    public static func latestRevision() -> UInt64 { revisions.withLock { $0 } }
+
+    /* A sync with the revision it ran at: taken inside the family's turn, after the sync settled. */
+    public func syncRevised(_ summary: GroupSummary) async -> Revised {
         families[summary.id] = summary.name
         summaries[summary.id] = summary
         // The vault asks this sync how family records are signed again (FamilyJudge).
         await vault.useFamilyJudge(self)
         running[summary.id, default: 0] += 1
         defer { running[summary.id, default: 1] -= 1 }
-        return await exclusive(summary.id) { await self.run(summary) }
+        return await exclusive(summary.id) { Revised(state: await self.run(summary), revision: Self.revise()) }
     }
 
     /* `body` once every earlier piece of work on the family has finished, and before any queued after it. */
@@ -539,15 +558,17 @@ public actor FamilySync: FamilyJudge {
      * go of in two phases as a sync's removal is, after any sync of it; a guard the wipe can't store
      * leaves the family refused instead.
      */
-    func removedNow(_ groupId: String) async -> FamilyState {
+    func removedNow(_ groupId: String) async -> Revised {
         await exclusive(groupId) {
+            let state: FamilyState
             do {
                 try await self.wipe(groupId)
-                return .wiped
+                state = .wiped
             } catch {
                 await self.refuse(groupId)
-                return .failed(FamilyWords.error(error))
+                state = .failed(FamilyWords.error(error))
             }
+            return Revised(state: state, revision: Self.revise())
         }
     }
 

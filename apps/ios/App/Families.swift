@@ -44,6 +44,7 @@ extension DriveStore {
     func resetFamilies() {
         sessionGate.reset()
         for groupId in familyStates.keys { familyGenerations.published(groupId) }
+        familyRevisions = FamilyRevisions()
         familyList = nil
         familiesServed = nil
         familiesSyncedAt = nil
@@ -186,10 +187,10 @@ extension DriveStore {
         // A reset cleared it already; the next session may be checking the same family by now.
         defer { if current(session) { familySyncing.remove(summary.id) } }
         let previous = familyStates[summary.id]
-        guard let (state, ended) = try? await inFamily(session, { sync in (await sync.sync(summary), await sync.takeEnded()) }) else { return }
+        guard let (revised, ended) = try? await inFamily(session, { sync in (await sync.syncRevised(summary), await sync.takeEnded()) }) else { return }
         // A 401 the sync met is any request's: the app asks whether the session ended.
         if let ended { report(ended) }
-        await show(state, of: summary, previous: previous, session: session)
+        await show(revised.state, of: summary, previous: previous, revision: revised.revision, session: session)
     }
 
     /*
@@ -215,18 +216,26 @@ extension DriveStore {
 
     /*
      * A sync's outcome a screen ran itself (Check it's Sam's "Getting the latest"), shown as any
-     * sync's is, unless the family was shown anew since the screen started it (`since`): an older
-     * acceptance never covers a fork or a removal found meanwhile. A fork or removal always shows.
+     * sync's is when it is a later look at the family than what is shown (its revision, taken inside
+     * the family's turn): a check queued behind a refresh shows what it found after it, a refusal as
+     * much as a fork or a removal, and an older answer of any kind never covers a newer one.
      */
-    func adopt(_ state: FamilyState, of summary: GroupSummary, since: UInt64, session: Session) async {
-        guard current(session), familyGenerations.admits(state, of: summary.id, since: since) else { return }
-        await show(state, of: summary, previous: familyStates[summary.id], session: session)
+    func adopt(_ state: FamilyState, of summary: GroupSummary, revision: UInt64?, session: Session) async {
+        guard current(session) else { return }
+        await show(state, of: summary, previous: familyStates[summary.id], revision: revision, session: session)
     }
 
-    /* Every family state shown goes through here, so each publication is counted (`familyGenerations`). */
-    func publishFamily(_ state: FamilyState, of groupId: String) {
+    /*
+     * Every family state shown goes through here, so each publication is counted (`familyGenerations`)
+     * and ordered (`familyRevisions`): false, and nothing shown, when what is shown is a later look.
+     * Without a revision (a join, a removal the list found) it is the latest now.
+     */
+    @discardableResult
+    func publishFamily(_ state: FamilyState, of groupId: String, revision: UInt64? = nil) -> Bool {
+        guard familyRevisions.admits(revision, of: groupId) else { return false }
         familyStates[groupId] = state
         familyGenerations.published(groupId)
+        return true
     }
 
     /*
@@ -234,9 +243,8 @@ extension DriveStore {
      * goes on only while its publication is still the latest (`stillShown`), so an older result
      * never clears, deletes or redraws over a newer one.
      */
-    private func show(_ state: FamilyState, of summary: GroupSummary, previous: FamilyState?, session: Session) async {
-        guard current(session) else { return }
-        publishFamily(state, of: summary.id)
+    private func show(_ state: FamilyState, of summary: GroupSummary, previous: FamilyState?, revision: UInt64? = nil, session: Session) async {
+        guard current(session), publishFamily(state, of: summary.id, revision: revision) else { return }
         let shownAs = familyGenerations.current(summary.id)
         func stillShown() -> Bool { current(session) && familyGenerations.current(summary.id) == shownAs }
         familyCheckedAt[summary.id] = Date()
