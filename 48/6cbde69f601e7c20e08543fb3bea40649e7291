@@ -1,0 +1,29 @@
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_8a578c519ecf09 116-117
+apps/ios/App/Families.swift
+  s_566b8e0c4467a4::t_c9adf476573214 47,190,193,219-221,223-225,228-235,238,246-247
+apps/ios/App/FamilyCheck.swift
+  s_566b8e0c4467a4::t_6f532814204edb 148-149
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyCheck.swift
+  s_566b8e0c4467a4::t_b86da034fb84be 87-88,97-98,101-104,121,124,126,247-269,272
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_566b8e0c4467a4::t_8bc5b477bfdbfc 400-419,426,561,563,566,569,571
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyCheckTests.swift
+  s_566b8e0c4467a4::t_ecfc4833482832 149-173,296-301,306-312,315-325,328-341
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "486cbde69f601e7c20e08543fb3bea40649e7291",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
