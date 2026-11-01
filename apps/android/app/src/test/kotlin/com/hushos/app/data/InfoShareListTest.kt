@@ -8,6 +8,7 @@ import com.hushos.core.deviceRemember
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Before
@@ -80,6 +81,23 @@ class InfoShareListTest {
         assertEquals(listOf("t.txt"), vault.listChildren(u).map { it.name })
         assertEquals(u, vault.liveItem(t, theirs)?.node?.parentId)
         assertFalse(vault.listChildren(s).any { it.id == t })
+    }
+
+    /*
+     * #247 check, item 2: Grace restores an earlier version of t.txt. A share's row carries no change order here and a
+     * restore moves neither its key epoch nor its metadata version, so nothing says which row is newer: the one the
+     * listing returned is trusted, and t.txt opens as restored. Fails if the stale cached row wins a tie (the download
+     * would then answer "It changed meanwhile" for the listed version every time).
+     */
+    @Test
+    fun aShareFileRestoredToAnEarlierVersionOpensAsRestored() {
+        val cached = vault.liveItem(t, theirs)!!
+        server.newVersion(t, "restored content".toByteArray(), bumped = false)
+        val row = vault.listChildren(s).single { it.id == t }
+        assertNotEquals(cached.node.currentVersion?.id, row.node.currentVersion?.id)
+        val out = java.io.File(RuntimeEnvironment.getApplication().cacheDir, "opened/${t}/${row.node.currentVersion!!.id}/t.txt")
+        vault.download(t, out, expectedVersionId = row.node.currentVersion!!.id, workspaceId = theirs)
+        assertEquals("restored content", out.readText())
     }
 
     @Test

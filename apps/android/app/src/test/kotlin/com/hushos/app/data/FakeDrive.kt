@@ -234,7 +234,7 @@ class FakeDrive : AutoCloseable {
     }
 
     /* Its workspace's owner uploads new content for `id`: a new current version, sealed and signed as an upload is. */
-    fun newVersion(id: String, bytes: ByteArray) = synchronized(lock) {
+    fun newVersion(id: String, bytes: ByteArray, bumped: Boolean = true) = synchronized(lock) {
         val ws = node(id).workspaceId
         val node = node(id)
         val versionId = UUID.randomUUID().toString()
@@ -253,7 +253,7 @@ class FakeDrive : AutoCloseable {
         val signature = versionSign(owners.getValue(ws).keys.signingSeed, VersionStatement(ws, id, versionId, objectId, suite), sealed.envelope)
         node.version = Version(versionId, objectId, base64urlEncode(sealed.envelope), suite, sealed.layout.chunkCount.toLong(), base64urlEncode(nonce),
             owners.getValue(ws).id, base64urlEncode(signature))
-        bump(node)
+        if (bumped) bump(node)
     }
 
     /* Another workspace this server holds (a family folder): its key and whose records it holds. */
