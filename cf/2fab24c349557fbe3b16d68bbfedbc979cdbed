@@ -1,0 +1,33 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_566b8e0c4467a4::t_1b87f086a71964 57-59
+apps/android/app/src/main/kotlin/com/hushos/app/data/DecryptedCopies.kt
+  s_566b8e0c4467a4::t_e4cb55550ddb66 42-47
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyRecords.kt
+  s_566b8e0c4467a4::t_2c3cd5d7dea4ef 20,30-32,54-58,72,74-77,101-102,111
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_566b8e0c4467a4::t_36d3ae2f7b8077 141,144-145,460-468,470,574-575,577
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_f5d73d27f2e0b8 181
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_566b8e0c4467a4::t_886a71d3a6b89f 145-146,155-164
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyFixture.kt
+  s_566b8e0c4467a4::t_75176f96cf0cc8 106-107,176-181
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_566b8e0c4467a4::t_d1a484a51e759c 203-252
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cf2fab24c349557fbe3b16d68bbfedbc979cdbed",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
