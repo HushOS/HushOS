@@ -98,9 +98,13 @@ extension DriveStore {
     func refreshFamilies(force: Bool = false) async {
         if !force, let at = familiesSyncedAt, Date().timeIntervalSince(at) < 60, familyList != nil { return }
         do {
-            let list = try await families.list()
+            // A family this phone holds that the list no longer names is asked about, and wiped only on the server's
+            // not-member, so an open family page or folder leaves at once rather than at the next launch.
+            let (list, gone) = try await families.listReconciling()
+            for summary in list { familyNames[summary.id] = summary.name }
             familyList = list
             familiesSyncedAt = Date()
+            for groupId in gone { removed(groupId) }
             for summary in list { await refreshFamily(summary) }
         } catch let error as GroupsAPIError where error.status == 404 || error.status == 501 {
             familyList = nil
@@ -152,7 +156,7 @@ extension DriveStore {
             for id in shown { await refresh(folder: id) }
             // Folders a refusal or fork took off screen open again now.
             for (id, problem) in folderProblems where familyGroup(ofFolder: id) == summary.id {
-                if case .family = problem { await refresh(folder: id) }
+                if case .family = problem { await refresh(folder: id) } else if problem == .removed { await refresh(folder: id) }
             }
             await rejudgeFamilies(summary.id)
         } else if case .failed(let message) = state, message == FamilyWords.noAnswer {
@@ -160,10 +164,26 @@ extension DriveStore {
         } else {
             var roots: [String] = []
             if case .accepted(let view)? = previous { roots = view.areas.compactMap { $0.root?.id } }
-            clearFamily(summary.id, roots: roots, details: state == .wiped)
+            clearFamily(summary.id, roots: roots, details: state == .wiped,
+                        problem: state == .wiped ? .removed : .family(FamilyWords.openAgain))
             // Removed from the family: what was queued into its folders fails now, its plaintext removed.
             if state == .wiped { BackgroundTransfers.shared.endFamily(summary.id) }
         }
+    }
+
+    /*
+     * A family the server says this account is no longer in, found while it wasn't listed: shown as
+     * a sync's `.wiped` is (the page says so in the web's words), everything drawn of it dropped, its
+     * queued uploads failed and their plaintext removed. Its folders on screen say the web's words.
+     */
+    func removed(_ groupId: String) {
+        var roots: [String] = []
+        if case .accepted(let view)? = familyStates[groupId] { roots = view.areas.compactMap { $0.root?.id } }
+        roots += familyRoots.filter { $0.value == groupId }.map(\.key)
+        familyStates[groupId] = .wiped
+        familyCheckedAt[groupId] = Date()
+        clearFamily(groupId, roots: roots, details: true, problem: .removed)
+        BackgroundTransfers.shared.endFamily(groupId)
     }
 
     /*
@@ -171,7 +191,7 @@ extension DriveStore {
      * deleteMirrors): its folders' lists, names, thumbnails and marks, and the plaintext copies
      * opened from them. The folders stay family folders, read only, for the session.
      */
-    func clearFamily(_ groupId: String, roots: [String], details: Bool) {
+    func clearFamily(_ groupId: String, roots: [String], details: Bool, problem: FolderProblem = .family(FamilyWords.openAgain)) {
         let areas = Set(familyAreaGroups.filter { $0.value == groupId }.map(\.key))
         guard !areas.isEmpty else { return }
         var ids: Set<String> = []
@@ -184,7 +204,7 @@ extension DriveStore {
         for id in ids {
             folders[id] = nil
             // Said in the folder's place, never as an empty folder.
-            folderProblems[id] = .family(FamilyWords.openAgain)
+            folderProblems[id] = problem
             names[id] = nil
             thumbnails[id] = nil
             try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("opened/\(id)", isDirectory: true))
@@ -347,7 +367,8 @@ struct FamilyPage: View {
     let groupId: String
 
     private var summary: GroupSummary? { store.familyList?.first { $0.id == groupId } }
-    private var name: String { summary?.name ?? "Family" }
+    /* Its name as route 2 last named it: a family it no longer lists (a removal) keeps its name on the page that says so. */
+    private var name: String { summary?.name ?? store.familyNames[groupId] ?? "Family" }
     private var state: FamilyState? { store.familyStates[groupId] }
     private var view: Accepted? {
         if case .accepted(let view) = state { return view }

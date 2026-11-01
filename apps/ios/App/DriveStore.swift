@@ -53,7 +53,8 @@ final class DriveStore {
     private var rotation: Task<Void, Never>?
     /* Folders with nothing to show and a reason: the request failed, or the phone is offline and never listed them. */
     /* `family`: a family folder that can't be opened now (its family not accepted, or a refusal), in FamilyWords' words. */
-    enum FolderProblem: Equatable { case failed, notOnPhone, family(String) }
+    /* `removed`: a family folder of a family the server says this account is no longer in. */
+    enum FolderProblem: Equatable { case failed, notOnPhone, family(String), removed }
     var folderProblems: [String: FolderProblem] = [:]
     /* Every node of this drive the catalogue opened, by id: search across folders and the way up to a shared folder. */
     var catalogue: [String: Opened] = [:]
@@ -108,6 +109,8 @@ final class DriveStore {
      */
     var familyList: [GroupSummary]?
     var familyStates: [String: FamilyState] = [:]
+    /* Each family's name as route 2 last listed it, kept after it stops listing one (a removal's page names it). */
+    var familyNames: [String: String] = [:]
     var familyDetails: [String: GroupDetail] = [:]
     var familySyncing: Set<String> = []
     /* Join screens open per family (a count: two screens for one family never turn the gate off for each other). While any is open the screen owns the family, so a background check neither clears nor forgets it. */
@@ -1336,6 +1339,9 @@ final class DriveStore {
         // A dead session gets no more requests: every one would be another 401.
         while !Task.isCancelled && error != Self.sessionEnded {
             await sync()
+            // Families too, about once a minute (refreshFamilies reuses a pass under a minute old), on a server
+            // that serves them: a removal on another device reaches an open app without a relaunch.
+            if tick % 6 == 0, familyList != nil || tick == 0 { await refreshFamilies() }
             // A share's kept folders aren't in this drive's feed: they are listed again every half minute.
             tick += 1
             if tick % 3 == 0 { await syncKeptNow() }

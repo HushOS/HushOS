@@ -353,6 +353,9 @@ struct FolderView: View {
             EmptyStateView(title: "This folder couldn’t be opened", message: words) {
                 Button("Try again") { Task { await store.reopenFamilyFolder(folderId) } }.buttonStyle(PrimaryCapsuleStyle())
             }
+        case .removed:
+            // The web's words for a family space someone was removed from (family-space.tsx).
+            EmptyStateView(title: "You’re not in this family", message: "It may have ended, or someone removed you.")
         case nil:
             EmptyView()
         }

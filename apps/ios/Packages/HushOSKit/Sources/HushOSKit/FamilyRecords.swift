@@ -81,6 +81,17 @@ public struct FamilyRecords: Sendable {
         return try outcome.get()
     }
 
+    /* The families this account holds a device record of on this phone, by the record files' names. */
+    public func groups(userId: String) -> [String] {
+        let prefix = "\(userId.lowercased())_"
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        return names.compactMap { name in
+            guard name.hasPrefix(prefix), name.hasSuffix(".json") else { return nil }
+            let groupId = String(name.dropFirst(prefix.count).dropLast(".json".count))
+            return Self.valid(groupId) ? groupId : nil
+        }
+    }
+
     // MARK: Joining
 
     /*
