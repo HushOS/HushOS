@@ -271,6 +271,28 @@ public enum TemporaryCopies {
         }
     }
 
+    /*
+     * The allowlist sweep: every family copy folder (`opened/family/<workspace>`) whose workspace
+     * isn't in `keeping` goes, its forget generation moved first so no download of it writes after.
+     * Under the copies' lock, and never from an ended session. Copies go whatever any record
+     * remembers; an empty `keeping` (a cold start) deletes them all, which only costs a download.
+     */
+    @discardableResult
+    public static func sweepFamily(keeping: Set<String>, in temporary: URL = FileManager.default.temporaryDirectory, session: CopySession? = nil) -> Bool {
+        let family = temporary.appendingPathComponent("opened", isDirectory: true).appendingPathComponent(familyFolder, isDirectory: true)
+        let kept = Set(keeping.map { $0.lowercased() })
+        return forgetLock.withLock {
+            if let session, !session.open { return false }
+            for folder in (try? FileManager.default.contentsOfDirectory(at: family, includingPropertiesForKeys: nil)) ?? [] {
+                let workspace = folder.lastPathComponent.lowercased()
+                if kept.contains(workspace) { continue }
+                forgotten[workspace, default: 0] += 1
+                try? FileManager.default.removeItem(at: folder)
+            }
+            return true
+        }
+    }
+
     static let forgetLock = NSLock()
     nonisolated(unsafe) static var forgotten: [String: UInt64] = [:]
 

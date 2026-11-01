@@ -159,7 +159,7 @@ extension FamilySync {
                                                  served: served, guard: await vault.heldFamilyGuard(groupId), now: Self.checkTime(now()))
             switch joined {
             case .recordUnreadable:
-                records.delete(userId: userId, groupId: groupId)
+                await dropUnreadableRecord(groupId)
                 continue
             case .notAdmitted:
                 // Active on route 2 but not on the member list it serves yet: still waiting.
@@ -249,7 +249,7 @@ extension FamilySync {
             if case .accepted = result {} else if !owedBefore { await vault.familyGuardKept(groupId) }
             switch result {
             case .recordUnreadable:
-                records.delete(userId: userId, groupId: groupId)
+                await dropUnreadableRecord(groupId)
                 continue
             case .overtaken(let split):
                 // Another acceptance moved the family on meanwhile: read the member list again, as a sync does.

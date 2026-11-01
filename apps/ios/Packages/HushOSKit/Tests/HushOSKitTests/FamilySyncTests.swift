@@ -183,6 +183,60 @@ extension OnFakeDrive {
             #expect(!FileManager.default.fileExists(atPath: folder.path))
         }
 
+        /* A decrypted copy of `itemId` in a family folder's copies under `temporary`, as an earlier open left it. */
+        private func copy(_ itemId: String, in workspaceId: String, under temporary: URL) throws -> URL {
+            let folder = try #require(TemporaryCopies.openedFolder(itemId: itemId, version: "v1", familyWorkspace: workspaceId, in: temporary))
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let file = folder.appendingPathComponent("copy.txt")
+            try Data("plaintext".utf8).write(to: file)
+            return file
+        }
+
+        /*
+         * Copies are swept by what families hold, not by what a record remembers: one in a folder no
+         * family holds goes when the families start and after every sync that finds a folder set,
+         * while an accepted family's own copy stays; after a not-member nothing of it stays. Fails
+         * if a copy outlives the families when no record names its folder.
+         */
+        @Test func copiesOfFoldersNoFamilyHoldsAreSweptAndAnAcceptedFamilysStay() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let guards = familyGuards(family.member)
+            let temporary = guards.folder.deletingLastPathComponent().appendingPathComponent(guards.folder.lastPathComponent + "-tmp", isDirectory: true)
+            // Left by an earlier run, in a folder nothing remembers.
+            let leftover = try copy(family.fileId, in: UUID().uuidString.lowercased(), under: temporary)
+            let phone = try await family.phone(server, guards: guards)
+            defer { phone.done() }
+            #expect(!FileManager.default.fileExists(atPath: leftover.path), "a copy no family holds outlived the start")
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            _ = try await phone.vault.children(of: family.rootId)
+            let own = try copy(family.fileId, in: family.workspaceId, under: temporary)
+            let stray = try copy(family.fileId, in: UUID().uuidString.lowercased(), under: temporary)
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted again"); return }
+            #expect(FileManager.default.fileExists(atPath: own.path), "the accepted family's copy was swept")
+            #expect(!FileManager.default.fileExists(atPath: stray.path), "a copy no family holds outlived a sync")
+            let another = try copy(family.fileId, in: UUID().uuidString.lowercased(), under: temporary)
+            server.notMember = true
+            #expect(await phone.sync.sync(family.summary) == .wiped)
+            #expect(!FileManager.default.fileExists(atPath: own.path))
+            #expect(!FileManager.default.fileExists(atPath: another.path))
+        }
+
+        /* An ended session's sweep deletes nothing: the copies there now may be the next session's. */
+        @Test func anEndedSessionSweepsNothing() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let account = CopyEpoch()
+            let phone = try await family.phone(server, account: account)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            TemporaryCopies.endAccount(account)
+            let next = try copy(family.fileId, in: UUID().uuidString.lowercased(), under: phone.temporary)
+            await phone.sync.sweepCopies()
+            await phone.sync.refuse(family.groupId)
+            #expect(FileManager.default.fileExists(atPath: next.path), "an ended session swept the next one's copy")
+        }
+
         /*
          * A sync of the last session answers not-member after the account signed in again (its session
          * ended; its task can't be cancelled). Its wipe deletes nothing the new session wrote: not the

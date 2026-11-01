@@ -208,6 +208,8 @@ public actor FamilySync: FamilyJudge {
     private var chains: [String: AcceptedRosters] = [:]
     /* Families whose last refusal was a fork (lowercase): a later refusal keeps the core's fork. A commit clears it. */
     private var forked: Set<String> = []
+    /* Families accepted in this process and not refused, forked or wiped since (lowercase): whose proven folders' copies may stay. */
+    private var acceptedFamilies: Set<String> = []
 
     public init(vault: Vault, api: GroupsAPI? = nil, records: FamilyRecords = .shared, now: @escaping @Sendable () -> Date = { Date() },
                 temporary: URL = FileManager.default.temporaryDirectory, account: CopyEpoch = .process) {
@@ -217,6 +219,8 @@ public actor FamilySync: FamilyJudge {
         let session = TemporaryCopies.session(account)
         self.session = session
         self.records = records.bound(to: session)
+        // The families start with nothing proven: every family copy goes before any family download (sweepCopies).
+        TemporaryCopies.sweepFamily(keeping: [], in: temporary, session: session)
         self.now = now
         self.temporary = temporary
     }
@@ -540,6 +544,25 @@ public actor FamilySync: FamilyJudge {
     func noteAccepted(_ groupId: String, _ chain: AcceptedRosters) {
         chains[groupId] = chain
         forked.remove(groupId.lowercased())
+        acceptedFamilies.insert(groupId.lowercased())
+    }
+
+    /*
+     * The allowlist sweep (TemporaryCopies.sweepFamily): only the copies of folders proven this
+     * process to belong to a family accepted now (or shown read only after no answer) stay. Run when
+     * this sync starts, after every refusal, fork or wipe, after an unreadable record goes, and
+     * whenever a family's folders change. Nothing once this session ended.
+     */
+    func sweepCopies() {
+        let keep = Set(groupsOf.filter { acceptedFamilies.contains($0.value.lowercased()) }.map(\.key))
+        TemporaryCopies.sweepFamily(keeping: keep, in: temporary, session: session)
+    }
+
+    /* A device record nothing opens any more: its folders' rows and keys first (the sweep takes their copies), then the record. */
+    func dropUnreadableRecord(_ groupId: String) async {
+        await vault.forgetWorkspaces(await knownAreas(groupId))
+        records.delete(userId: userId, groupId: groupId)
+        sweepCopies()
     }
 
     /*
@@ -555,7 +578,9 @@ public actor FamilySync: FamilyJudge {
         if fork { forked.insert(key) }
         ledger.uncommit(groupId: groupId, fork: fork)
         chains[groupId] = nil
+        acceptedFamilies.remove(key)
         await forgetOpened(groupId)
+        sweepCopies()
     }
 
     /*
@@ -707,7 +732,7 @@ public actor FamilySync: FamilyJudge {
             case .fork(let of, let version, let sides):
                 return .fork(Self.fork(of: of, version: version, sides: sides))
             case .recordUnreadable:
-                records.delete(userId: userId, groupId: groupId)
+                await dropUnreadableRecord(groupId)
                 return .recordReset
             case .overtaken(let split):
                 overtaken += 1
@@ -789,10 +814,14 @@ public actor FamilySync: FamilyJudge {
         // replaced, so a folder deleted while the app was closed is still found after a relaunch.
         if let row {
             let kept = Array(Set(row.areas.map { $0.lowercased() } + proven)).filter { !forgotten.contains($0) }.sorted()
-            if kept != row.areas.map({ $0.lowercased() }).sorted() {
-                try? records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: row.envelope, rosterVersion: row.rosterVersion, areas: kept))
+            // Passed on: folders whose ids couldn't be kept are not opened, so no copy of them is made either.
+            if kept != row.areas.map({ $0.lowercased() }).sorted(),
+               !(try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: row.envelope, rosterVersion: row.rosterVersion, areas: kept))) {
+                throw FamilyRecords.RecordsError.busy
             }
         }
+        // The family's folders changed: only the copies of folders proven a family's accepted now stay.
+        sweepCopies()
         let served = try await fetchIdentities(groupId)
         identities[groupId] = served
         let keyVersion = try await vault.accountKeyVersion()
@@ -967,6 +996,8 @@ public actor FamilySync: FamilyJudge {
         areasOf[groupId] = nil
         chains[groupId] = nil
         forked.remove(groupId.lowercased())
+        acceptedFamilies.remove(groupId.lowercased())
+        sweepCopies()
     }
 
     // MARK: Verdicts
