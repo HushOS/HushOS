@@ -309,7 +309,8 @@ extension Vault {
 
     /* This folder's children from the catalogue, or nil when the catalogue cannot answer for it. */
     public func catalogueChildren(of folderId: String) -> [Opened]? {
-        guard catalogueState == .ready, own(folderId) != nil else { return nil }
+        // An id a family row shared with the own drive's: the catalogue never answers for it (a family root would list the own folder).
+        guard catalogueState == .ready, !opened.isAmbiguous(folderId), own(folderId) != nil else { return nil }
         // Only what still lives here: an id filed under a folder it has since left is not listed in it.
         return (catalogueChildren[folderId] ?? []).compactMap { own($0) }
             .filter { $0.node.trashedAt == nil && $0.node.parentId == folderId }.sorted(by: Opened.byName)

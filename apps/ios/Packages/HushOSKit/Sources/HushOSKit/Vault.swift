@@ -462,6 +462,8 @@ public actor Vault {
 
     /* The workspace a node lives in: a share's subtree belongs to the granter's. */
     public func workspaceId(of nodeId: String) async throws -> String {
+        // An id a family row shared with another workspace's: never guessed (the own drive would answer).
+        if opened.isAmbiguous(nodeId) { throw IdCollision() }
         if let known = opened[nodeId] { return known.node.workspaceId }
         if let hinted = workspaceHints[nodeId] { return hinted }
         return try await loadWorkspace().workspaceId
@@ -505,6 +507,7 @@ public actor Vault {
         // An older answer arriving after a newer one (listings out of order) keeps the newer row and key.
         if let done = opened[node.ref], !family || done.node == node || node.isOlder(than: done.node) { return done }
         try node.checkEnvelopeSuite()
+        try admitId(node, family: family)
         let key: Data
         if family {
             // A family shown differently or refused since: the ledger holds its keys back until it is accepted again.
@@ -533,7 +536,28 @@ public actor Vault {
         // Above a share's root the keys are the granter's; those ancestors stay closed.
         for ancestor in listing.ancestors { _ = try? open(ancestor) }
         try open(listing.folder)
-        for child in listing.children { try open(child) }
+        // A family row sharing another workspace's id is left out of the listing alone (admitId), never the whole folder.
+        for child in listing.children {
+            do { try open(child) } catch is IdCollision { continue }
+        }
+    }
+
+    /*
+     * A family row never shares its id with a row of another workspace held here (the own drive's,
+     * a share's, another family's): most of the app and every write name items by id alone, which
+     * would then answer with the other row (the own drive's first). When one would, the row
+     * arriving second is refused (IdCollision), a family row or not, so an id on the phone belongs
+     * to one side only and the screens' id-keyed state can't mix them; and the id is marked so no
+     * id-only lookup answers for it again this session, even after the held side is forgotten.
+     */
+    func admitId(_ node: NodeView, family: Bool) throws {
+        let others = opened.workspaces(holding: node.id).union(nodeKeys.workspaces(holding: node.id)).subtracting([node.workspaceId.lowercased()])
+        let involvesFamily = family || others.contains { isFamilyWorkspace($0) }
+        guard involvesFamily, !others.isEmpty || opened.isAmbiguous(node.id) else { return }
+        opened.markAmbiguous(node.id)
+        nodeKeys.markAmbiguous(node.id)
+        // A row already held under exactly this workspace stays as it was (a family row the same id named first).
+        if !others.isEmpty || family { throw IdCollision() }
     }
 
     public func item(_ id: String) -> Opened? { opened[id] }
@@ -553,6 +577,7 @@ public actor Vault {
             throw DriveAPIError.server(500, "HushOS answered for a different drive.")
         }
         try node.checkEnvelopeSuite()
+        try admitId(node, family: isFamilyWorkspace(node.workspaceId))
         let previous = opened[node.ref]?.node.parentId
         nodeKeys[node.ref] = key
         let result = Opened(node: node, metadata: metadata, nodeKey: key)

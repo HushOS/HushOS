@@ -144,8 +144,10 @@ extension OnFakeDrive {
                                              key: ownKey, kind: .file, name: "Beach.jpg", writer: family.member).with(version: ownVersion)
             server.objects[ownVersion.id] = ownObject
             try await vault.open(family.personalRoot)
-            try await vault.open(own)
-            #expect(await vault.item(family.photo.id)?.ref == own.ref, "the own drive's row should answer by id alone")
+            // The family row holds the id here: the own row is refused (Vault.admitId), and could only be asked for by its workspace.
+            await #expect(throws: IdCollision.self) { try await vault.open(own) }
+            // Two workspaces hold the id now: by id alone nothing answers for it (Vault.admitId).
+            #expect(await vault.item(family.photo.id) == nil)
 
             let folder = FileManager.default.temporaryDirectory.appendingPathComponent("collide-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -160,6 +162,95 @@ extension OnFakeDrive {
             let unheld = NodeRef(workspaceId: UUID().uuidString, nodeId: family.photo.id)
             await #expect(throws: (any Error).self) { try await vault.download(family.photo.id, ref: unheld, to: elsewhere) }
             #expect(!FileManager.default.fileExists(atPath: elsewhere.path), "the own drive's bytes came down for another workspace's row")
+        }
+
+        /* An own-drive row with `id`, under the member's top folder. */
+        private func ownRow(_ id: String, _ family: FamilyFixture, kind: NodeKind, name: String) throws -> NodeView {
+            try FamilyFixture.node(id: id, in: family.personal, parent: family.personalRoot.id, parentKey: family.personalRootKey,
+                                   key: try randomBytes(length: 32), kind: kind, name: name, writer: family.member)
+        }
+
+        /*
+         * The own drive holds a folder with the family's top folder's id and a file with a family
+         * file's id before the family is opened. The family's top folder is refused (Couldn't check),
+         * never listed as the own folder; the family file is left out of its listing; by id alone
+         * neither answers, so nothing written by id lands on the own rows. Fails if an id-only
+         * lookup, the catalogue or a listing takes the own row for the family one.
+         */
+        @Test func ownRowsHeldFirstNeverStandForFamilyRowsWithTheirIds() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            server.put(family.photo)
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            try await vault.open(family.personalRoot)
+            let ownFile = try ownRow(family.fileId, family, kind: .file, name: "Mine.txt")
+            try await vault.open(ownFile)
+
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            // The family's file with the own file's id is left out; the rest of the folder lists.
+            #expect(try await vault.children(of: family.rootId).map(\.name) == ["Beach.jpg"])
+            #expect(await vault.item(family.fileId) == nil, "an id two workspaces hold answered by id alone")
+            #expect(await vault.item(ownFile.ref)?.name == "Mine.txt")
+            server.clearRequests()
+            await #expect(throws: (any Error).self) { _ = try await vault.rename(family.fileId, to: "Renamed.txt") }
+            await #expect(throws: (any Error).self) { try await vault.trash(family.fileId) }
+            #expect(server.writes.isEmpty, "a write by id landed: \(server.writes)")
+        }
+
+        /* The family's top folder's id held by an own folder first: the family folder is refused, never listed as the own one. */
+        @Test func anOwnFolderWithTheFamilyRootsIdNeverListsAsIt() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            try await vault.open(family.personalRoot)
+            try await vault.open(try ownRow(family.rootId, family, kind: .folder, name: "Mine"))
+            guard case .accepted(let view) = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(view.areas.first?.root == nil, "the family's top folder opened over the own folder's id")
+            server.clearRequests()
+            await #expect(throws: (any Error).self) { _ = try await vault.children(of: family.rootId) }
+            // Never asked of the own drive either: by id alone the own workspace would answer with the own folder's children.
+            #expect(!server.traffic.contains { $0.url.contains("/nodes/\(family.rootId)/children") && $0.url.contains(family.personal) },
+                    "the family root's id was listed in the own drive")
+            #expect(await vault.item(family.rootId) == nil)
+            server.clearRequests()
+            await #expect(throws: (any Error).self) { _ = try await vault.createFolder(in: family.rootId, name: "New") }
+            #expect(server.writes.isEmpty)
+        }
+
+        /*
+         * The family's rows are held first, then the own drive's file with a family file's id: the own
+         * row is refused, the family file still downloads as itself by its workspace and id, and by id
+         * alone nothing answers, so a write by id touches neither. Fails if a later own row takes over
+         * the id.
+         */
+        @Test func anOwnRowArrivingLaterNeverTakesAFamilyRowsId() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            server.put(family.photo)
+            let photoVersion = try #require(family.photo.currentVersion)
+            server.objects[photoVersion.id] = family.photoObject
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            _ = try await vault.children(of: family.rootId)
+            try await vault.open(family.personalRoot)
+            let ownPhoto = try ownRow(family.photo.id, family, kind: .file, name: "Mine.jpg")
+            // Refused: the id belongs to the family row on this phone, so the screens never hold both.
+            await #expect(throws: IdCollision.self) { try await vault.open(ownPhoto) }
+            #expect(await vault.item(ownPhoto.ref) == nil)
+            #expect(await vault.item(family.photo.id) == nil)
+            #expect(await vault.item(family.photo.ref)?.name == "Beach.jpg")
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent("later-\(UUID().uuidString)")
+            try await vault.download(family.photo.id, ref: family.photo.ref, expectedVersionId: photoVersion.id, to: file)
+            #expect(try Data(contentsOf: file) == family.photoBytes)
+            server.clearRequests()
+            await #expect(throws: (any Error).self) { _ = try await vault.rename(family.photo.id, to: "Renamed.jpg") }
+            #expect(server.writes.isEmpty)
         }
 
         /* `bytes` sealed as a new version of `nodeId` in the family folder, under the photo's key, signed by the creator. */
