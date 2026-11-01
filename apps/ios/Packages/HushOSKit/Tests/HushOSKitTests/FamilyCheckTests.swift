@@ -91,6 +91,27 @@ extension OnFakeDrive {
             #expect((document["familyChecks"] as? [String: Any])?[family.groupId] == nil)
         }
 
+        /*
+         * Getting the latest accepts a newer member list, then the words can't be worked out (the
+         * member lists don't load again): the accepted family still comes back, for the page to show
+         * as after any sync, with the words' failure as the problem. Fails if a failure after an
+         * accepting sync throws the acceptance away.
+         */
+        @Test func anAcceptingSyncIsHandedBackWhenTheWordsCantBeWorkedOut() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            server.serve(chain: [family.r1, family.r2, family.r3])
+            // The sync's own fetch is served; the words' fetch after it isn't.
+            server.afterRosters = { server.rostersFail = true }
+            let start = try await phone.sync.checkCode(family.summary, with: family.creator.userId)
+            guard case .accepted(let view) = start.state else { Issue.record("the acceptance was thrown away: \(start.state)"); return }
+            #expect(view.rosterVersion == 3)
+            #expect(start.code == nil && start.problem != nil)
+        }
+
         /* They match over words that aren't this phone's (another family, a misread list): nothing is saved, and the member stays not verified. */
         @Test func wordsThatDontMatchHereSaveNothing() async throws {
             let family = try FamilyFixture()

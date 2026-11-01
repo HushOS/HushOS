@@ -90,23 +90,30 @@ extension FamilySync {
      * The family check's words with `memberId` (6.10, "Getting the latest" first): the family synced
      * to the server's head, then the pair code over the chain this phone committed, with the roster's
      * digest for Technical details. The sync's outcome comes back whatever it was, so the screens adopt
-     * it (a fork or a removal it found clears what this phone opened, as any sync's does).
+     * it (a fork or a removal it found clears what this phone opened, as any sync's does), even when
+     * the words can't be worked out after it: the sync's outcome then comes back with why.
+     * Only an ended session still throws.
      */
     public func checkCode(_ summary: GroupSummary, with memberId: String) async throws -> CheckStart {
         let state = await sync(summary)
         if let problem = Self.checkProblem(state) { return CheckStart(state: state, code: nil, problem: problem) }
         guard let chain = acceptedChain(summary.id) else { return CheckStart(state: state, code: nil, problem: GuardWords.unreadable) }
-        let served = try await fetchServed(summary.id, after: 0)
         let code: FamilyCheckCode
-        switch try pairCode(chain: chain, me: try await vault.ownIdentities(), otherUserId: memberId.lowercased(), rosters: served.rosters) {
-        case .code(let version, let words):
-            let at = Int(version) - 1
-            let digest = served.rosters.indices.contains(at) ? rosterDigest(statement: served.rosters[at].statement) : nil
-            code = .code(rosterVersion: version, code: words, rosterDigest: digest)
-        case .ownEntryWrong:
-            code = .ownEntryWrong
-        case .notAdmitted:
-            code = .notAdmitted
+        do {
+            let served = try await fetchServed(summary.id, after: 0)
+            switch try pairCode(chain: chain, me: try await vault.ownIdentities(), otherUserId: memberId.lowercased(), rosters: served.rosters) {
+            case .code(let version, let words):
+                let at = Int(version) - 1
+                let digest = served.rosters.indices.contains(at) ? rosterDigest(statement: served.rosters[at].statement) : nil
+                code = .code(rosterVersion: version, code: words, rosterDigest: digest)
+            case .ownEntryWrong:
+                code = .ownEntryWrong
+            case .notAdmitted:
+                code = .notAdmitted
+            }
+        } catch {
+            if endsSession(error) { throw error }
+            return CheckStart(state: state, code: nil, problem: FamilyWords.error(error))
         }
         return CheckStart(state: state, code: code, problem: nil)
     }
