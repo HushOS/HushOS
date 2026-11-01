@@ -137,8 +137,17 @@ public actor Vault {
     var signersGeneration: UInt64 = 0
     var parents: [String: String]
     private let indexURL: URL?
-    /* The tree mirror on disk and the catalogue built from it (see Vault+Catalogue). */
-    let mirror: Mirror?
+    /* The tree mirror on disk and the catalogue built from it (see Vault+Catalogue); a test sets its own. */
+    var mirror: Mirror?
+    /* Rows asked of the change feed per page; the server serves at most 500. */
+    var feedPage = 500
+    /* The mirror's turn (`withFeedTurn`): whether a pull or a read of it holds it, and who waits, in order. */
+    var feedBusy = false
+    var feedWaiting: [CheckedContinuation<Void, Never>] = []
+    /* A catalogue was filed this session: building one again tells what differs from it (see `rebuildCatalogue`). */
+    var catalogueFiled = false
+    /* What builds over a filed catalogue found different, until a sync returns it (Vault+Catalogue `takeOwed`). */
+    var catalogueOwed: Set<String> = []
     public var catalogueState: CatalogueState = .idle
     /* The catalogue holds what the server sent this session, not only what the phone had: a node missing from it is gone. */
     var cataloguePulled = false

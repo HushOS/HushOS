@@ -14,29 +14,65 @@ public enum CatalogueState: Equatable, Sendable {
     case failed(String)
 }
 
-extension Vault {
-    private static let feedPage = 500
+/* What a pull brought, and whether the catalogue is filed again from the mirror: the pull started from nothing, or cleared it (`resync`). */
+struct PulledFeed: Sendable {
+    var changes: [NodeChange]
+    var reset: Bool
+}
 
-    /* Pulls the feed from the mirror's cursor to the head, committing each page; returns what arrived. */
-    private func pullFeed(_ workspaceId: String) async throws -> [NodeChange] {
-        guard let mirror else { return [] }
-        var arrived: [NodeChange] = []
-        var cursor = mirror.cursor(workspaceId)
-        while true {
-            let page = try await api.changes(workspaceId: workspaceId, since: cursor, limit: Self.feedPage)
-            if page.resync {
-                // The cursor predates what the server still remembers: start over from nothing.
-                mirror.clear(workspaceId)
-                cursor = 0
-                continue
+struct FiledRow: Equatable, Sendable {
+    var parent: String?
+    var seq: Int?
+    var trashed: String?
+}
+
+extension Vault {
+    /*
+     * The mirror one pull (or read of it) at a time in this process. Pulls run on one actor but
+     * interleave at every request: a page another pull applied after a `resync` cleared the mirror
+     * would move its cursor past rows the refill had not brought back, and no later pull or build
+     * would ever bring them.
+     */
+    func withFeedTurn<T>(_ body: () async throws -> T) async throws -> T {
+        if feedBusy { await withCheckedContinuation { feedWaiting.append($0) } } else { feedBusy = true }
+        defer { if feedWaiting.isEmpty { feedBusy = false } else { feedWaiting.removeFirst().resume() } }
+        return try await body()
+    }
+
+    /*
+     * Pulls the feed from the mirror's cursor (or from nothing) to the head, committing each page;
+     * returns what arrived. `resync` speaks of the cursor a pull starts from (the web client's
+     * rule): the later pages of a refill sit below the server's dropped tombstones by nature, and
+     * heeding it there would start the refill over for ever.
+     */
+    private func pullFeed(_ workspaceId: String, fromNothing: Bool = false) async throws -> PulledFeed {
+        guard let mirror else { return PulledFeed(changes: [], reset: false) }
+        return try await withFeedTurn {
+            if fromNothing { mirror.clear(workspaceId) }
+            var arrived: [NodeChange] = []
+            var cursor = mirror.cursor(workspaceId)
+            // From nothing, a pull names no deletion: what a catalogue held is filed again from the rows.
+            var reset = cursor == 0
+            var first = true
+            while true {
+                let page = try await api.changes(workspaceId: workspaceId, since: cursor, limit: feedPage)
+                if first && page.resync && cursor > 0 {
+                    // The cursor predates what the server still remembers: start over from nothing.
+                    mirror.clear(workspaceId)
+                    arrived = []
+                    cursor = 0
+                    reset = true
+                    continue
+                }
+                first = false
+                mirror.apply(workspaceId, changes: page.changes, nextCursor: page.nextCursor)
+                arrived += page.changes
+                cursor = page.nextCursor
+                if !page.hasMore { break }
             }
-            mirror.apply(workspaceId, changes: page.changes, nextCursor: page.nextCursor)
-            arrived += page.changes
-            cursor = page.nextCursor
-            if !page.hasMore { break }
+            cataloguePulled = true
+            return PulledFeed(changes: arrived, reset: reset)
         }
-        cataloguePulled = true
-        return arrived
     }
 
     /* Rows in an order every parent precedes its children; rows whose parent is missing come back separately. */
@@ -105,7 +141,12 @@ extension Vault {
         return pulled
     }
 
-    private func performBuild() async -> Bool {
+    /*
+     * `pulled`: the caller's pull just reached the head, so the build files from the mirror as it
+     * stands rather than asking again (a second request failing would leave the catalogue on what
+     * the refill dropped).
+     */
+    private func performBuild(pulled already: Bool = false) async -> Bool {
         guard let mirror else { return false }
         catalogueState = .building
         let workspaceId: String
@@ -117,21 +158,28 @@ extension Vault {
             // One workspace per device: another account's tree is not kept beside this one.
             for other in mirror.workspaces() where other != workspaceId { mirror.clear(other) }
             var pulled = true
-            do { _ = try await pullFeed(workspaceId) } catch DriveAPIError.transport(let message) {
-                // No network: the tree already on this phone opens as it was; the next sync catches up.
-                if mirror.cursor(workspaceId) == 0 { throw DriveAPIError.transport(message) }
-                pulled = false
+            if !already {
+                do { _ = try await pullFeed(workspaceId) } catch DriveAPIError.transport(let message) {
+                    // No network: the tree already on this phone opens as it was; the next sync catches up.
+                    if mirror.cursor(workspaceId) == 0 { throw DriveAPIError.transport(message) }
+                    pulled = false
+                }
             }
-            var (ordered, orphans) = parentsFirst(mirror.rows(workspaceId))
-            if !orphans.isEmpty && pulled {
+            // The rows with the cursor they stand at, read in the mirror's turn so no refill is halfway through them.
+            var (rows, cursor) = try await withFeedTurn { (mirror.rows(workspaceId), mirror.cursor(workspaceId)) }
+            if !parentsFirst(rows).orphans.isEmpty && pulled {
                 // A row without its parent is a page this device missed: start over once.
-                mirror.clear(workspaceId)
-                _ = try await pullFeed(workspaceId)
-                (ordered, orphans) = parentsFirst(mirror.rows(workspaceId))
+                _ = try await pullFeed(workspaceId, fromNothing: true)
+                (rows, cursor) = try await withFeedTurn { (mirror.rows(workspaceId), mirror.cursor(workspaceId)) }
             }
+            // Over a catalogue already filed, what differs is owed to the next sync (`takeOwed`): its cursor is at the head by then.
+            let before = catalogueFiled ? filedRows() : nil
+            letGo(of: rows, at: cursor, in: workspaceId)
             catalogueChildren = [:]
-            file(ordered)
+            file(parentsFirst(rows).ordered)
+            if let before { catalogueOwed.formUnion(differing(before, filedRows())) }
             catalogueState = .ready
+            catalogueFiled = true
             return pulled
         } catch {
             catalogueState = .failed(ErrorWords.say(error) ?? ErrorWords.generic)
@@ -147,12 +195,19 @@ extension Vault {
     @discardableResult
     public func sync() async throws -> Set<String>? {
         guard catalogueState == .ready, let mirror else {
+            // Built again over one already filed (rows under a folder never seen, keys rotated, a build that failed):
+            // what differs is told, or it would stay unsaid, the cursor being at the head by then.
+            if catalogueFiled { return await rebuildCatalogue() }
             return await buildCatalogue() ? [] : nil
         }
         let workspaceId = try await loadWorkspace().workspaceId
-        let changes = try await pullFeed(workspaceId)
-        if changes.isEmpty { return [] }
-        var touched: Set<String> = []
+        let pulled = try await pullFeed(workspaceId)
+        // A refill names no deletion: the catalogue is filed again from the mirror, and what left it is told.
+        if pulled.reset { return await rebuildCatalogue(pulled: true) }
+        let changes = pulled.changes
+        // What a build over the filed catalogue found and no sync returned yet goes with this one.
+        var touched = takeOwed()
+        if changes.isEmpty { return touched }
         var rows: [NodeView] = []
         for change in changes {
             switch change.kind {
@@ -178,6 +233,65 @@ extension Vault {
         // A row under a folder this device never saw: the next build fills the gap.
         if !orphans.isEmpty || !mirror.hasRows(workspaceId) { catalogueState = .idle }
         return touched
+    }
+
+    /*
+     * The catalogue built again inside a sync, over the one filed: from the mirror as the sync's
+     * pull left it (`pulled`), or with a pull of its own. Returns what differs (`catalogueOwed`),
+     * or nil when the build did not reach the server; what it owes then waits for the next sync.
+     */
+    private func rebuildCatalogue(pulled already: Bool = false) async -> Set<String>? {
+        catalogueState = .idle
+        let pulled: Bool
+        if already {
+            // A build already running didn't see this refill: it finishes first, then the refill is filed.
+            if let running = catalogueBuilding { _ = await running.value }
+            let build = Task { await self.performBuild(pulled: true) }
+            catalogueBuilding = build
+            pulled = await build.value
+            catalogueBuilding = nil
+        } else {
+            pulled = await buildCatalogue()
+        }
+        guard catalogueState == .ready, pulled else { return nil }
+        return takeOwed()
+    }
+
+    /* What builds over a filed catalogue found different and no sync has returned yet; returned once. */
+    private func takeOwed() -> Set<String> {
+        defer { catalogueOwed = [] }
+        return catalogueOwed
+    }
+
+    /* Each own row's place and sequence, as the catalogue holds them: what a build over it compares. */
+    private func filedRows() -> [String: FiledRow] {
+        guard let ws = workspace?.workspaceId else { return [:] }
+        return opened.values(in: ws).mapValues { FiledRow(parent: $0.node.parentId, seq: $0.node.changeSeq, trashed: $0.node.trashedAt) }
+    }
+
+    /* The ids whose row came, went, moved or changed between two filings, with the folders they left and entered. */
+    private func differing(_ before: [String: FiledRow], _ after: [String: FiledRow]) -> Set<String> {
+        var touched: Set<String> = []
+        for id in Set(before.keys).union(after.keys) where before[id] != after[id] {
+            touched.insert(id)
+            if let parent = before[id]?.parent { touched.insert(parent) }
+            if let parent = after[id]?.parent { touched.insert(parent) }
+        }
+        return touched
+    }
+
+    /*
+     * Rows of this workspace the mirror no longer holds, though the feed has passed where they last
+     * changed, are gone: a refill names no deletion, so they leave as a tombstone would take them
+     * (`remove`). A row changed after the cursor (a write landing meanwhile), or without a
+     * sequence, stays. The mirror holds every live row up to its cursor: pages commit with it.
+     */
+    private func letGo(of rows: [NodeView], at cursor: Int, in workspaceId: String) {
+        let held = Set(rows.map { $0.id.lowercased() })
+        for (id, item) in opened.values(in: workspaceId) where !held.contains(id) {
+            guard let seq = item.node.changeSeq, seq <= cursor else { continue }
+            remove(id, in: workspaceId)
+        }
     }
 
     private func descendants(of ids: [String], except: Set<String>) -> [NodeView] {
