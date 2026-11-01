@@ -111,6 +111,10 @@ extension FamilySync {
             case .notAdmitted:
                 code = .notAdmitted
             }
+        } catch let error as GroupsAPIError where error.isNotMember {
+            // Its own read of the member list: a not-member here is a removal, let go of and shown as a sync's.
+            let removed = await removedNow(summary.id)
+            return CheckStart(state: removed, code: nil, problem: Self.checkProblem(removed))
         } catch {
             if endsSession(error) { throw error }
             return CheckStart(state: state, code: nil, problem: FamilyWords.error(error))
@@ -141,7 +145,14 @@ extension FamilySync {
         // Read first, so the ledger holds the settings pin of them it compares with.
         _ = try await vault.familyPin(groupId)
         let held = try await vault.contactGuardState(member.userId)
-        let served = try await fetchServed(groupId, after: 0)
+        let served: ServedChain
+        do {
+            served = try await fetchServed(groupId, after: 0)
+        } catch let error as GroupsAPIError where error.isNotMember {
+            // A removal: let go of as a sync's, and passed on so the sheet shows the family wiped.
+            _ = await removedNow(groupId)
+            throw error
+        }
         let match = try ledger.pairMatch(me: try await vault.ownIdentities(), groupId: groupId, otherUserId: member.userId.lowercased(),
                                          rosters: served.rosters, rosterVersion: rosterVersion, code: code, guard: held.state,
                                          checkedAt: Self.checkTime(now()))

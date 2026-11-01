@@ -949,6 +949,8 @@ final class FamilyServer: @unchecked Sendable {
     var rostersFail = false
     /* Route 3 answers not-member while route 5 still serves: removed between the two. */
     var detailNotMember = false
+    /* Route 5 from version 1 answers not-member (a member check's own read), while a continuation still serves. */
+    var notMemberFromStart = false
     var unauthorized = false
     /* Route 2's state for the member: `accepted` (waiting to be let in) or `active`. */
     var groupState = "active"
@@ -1195,8 +1197,9 @@ final class FamilyServer: @unchecked Sendable {
         case ("GET", "/api/groups/\(f.groupId)/rosters"):
             if notMember { return (404, ["code": "not-member", "message": "You are not in this group."]) }
             if lock.withLock({ rostersFail }) { return (503, ["message": "Drive is temporarily unavailable. Please try again."]) }
-            onRosters?()
             let after = Int(query.first { $0.name == "after" }?.value ?? "0") ?? 0
+            if after == 0, lock.withLock({ notMemberFromStart }) { return (404, ["code": "not-member", "message": "You are not in this group."]) }
+            onRosters?()
             let answer: (Int, Any) = lock.withLock {
                 let rosters = chain.enumerated().filter { ignoringAfter || $0.offset + 1 > after }.map { wire($0.element, version: $0.offset + 1) }
                 return (200, ["rosters": rosters, "successions": [Any](),

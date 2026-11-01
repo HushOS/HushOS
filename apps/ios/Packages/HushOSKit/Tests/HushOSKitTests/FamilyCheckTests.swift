@@ -112,6 +112,40 @@ extension OnFakeDrive {
             #expect(start.code == nil && start.problem != nil)
         }
 
+        /*
+         * A member check's own read of the member list (after its sync accepted) answers not-member,
+         * and so does They match's on another phone of the account. Either is a removal: the family
+         * is let go of in two phases and shown wiped, not only an error. Fails if the check's reads
+         * treat not-member as any failure.
+         */
+        @Test func aNotMemberDuringAMemberCheckWipesTheFamily() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let other = try await family.phone(server)
+            defer { other.done() }
+            guard case .accepted = await phone.sync.sync(family.summary), case .accepted = await other.sync.sync(family.summary) else {
+                Issue.record("not accepted")
+                return
+            }
+            // Each sync continues from its record; the check's own read starts at version 1, and that one says not-member.
+            server.notMemberFromStart = true
+            let start = try await phone.sync.checkCode(family.summary, with: family.creator.userId)
+            #expect(start.state == .wiped)
+            #expect(start.problem == FamilyFailure.notInFamily.message)
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId) == nil)
+            #expect(await phone.vault.item(family.rootId) == nil)
+
+            do {
+                _ = try await other.sync.checkMatch(family.groupId, member: creator(family), rosterVersion: 2, code: Array(repeating: "word", count: 12))
+                Issue.record("They match went on without the member list")
+            } catch let error as GroupsAPIError {
+                #expect(error.isNotMember)
+            }
+            #expect(other.records.read(userId: family.member.userId, groupId: family.groupId) == nil)
+        }
+
         /* They match over words that aren't this phone's (another family, a misread list): nothing is saved, and the member stays not verified. */
         @Test func wordsThatDontMatchHereSaveNothing() async throws {
             let family = try FamilyFixture()

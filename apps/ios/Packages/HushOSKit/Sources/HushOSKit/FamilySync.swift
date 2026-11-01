@@ -534,6 +534,23 @@ public actor FamilySync: FamilyJudge {
         await forgetOpened(groupId)
     }
 
+    /*
+     * The server said not-member outside a sync (a member check's own read of the member list): let
+     * go of in two phases as a sync's removal is, after any sync of it; a guard the wipe can't store
+     * leaves the family refused instead.
+     */
+    func removedNow(_ groupId: String) async -> FamilyState {
+        await exclusive(groupId) {
+            do {
+                try await self.wipe(groupId)
+                return .wiped
+            } catch {
+                await self.refuse(groupId)
+                return .failed(FamilyWords.error(error))
+            }
+        }
+    }
+
     /* The family folders this process or the device record knows of. */
     /*
      * Everything opened of a family on this phone goes (a not-member wipe, a fork, a refusal, a
