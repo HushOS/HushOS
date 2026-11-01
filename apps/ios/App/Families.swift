@@ -137,19 +137,30 @@ extension DriveStore {
             familiesSyncedAt = Date()
         }
         guard let summary = familyList?.first(where: { $0.id == groupId }) else {
-            familyStates[groupId] = state
+            publishFamily(state, of: groupId)
             return
         }
         await show(state, of: summary, previous: familyStates[groupId])
     }
 
-    /* A sync's outcome a screen ran itself (Check it's Sam's "Getting the latest"), shown as any sync's is. */
-    func adopt(_ state: FamilyState, of summary: GroupSummary) async {
+    /*
+     * A sync's outcome a screen ran itself (Check it's Sam's "Getting the latest"), shown as any
+     * sync's is, unless the family was shown anew since the screen started it (`since`): an older
+     * acceptance never covers a fork or a removal found meanwhile. A fork or removal always shows.
+     */
+    func adopt(_ state: FamilyState, of summary: GroupSummary, since: UInt64) async {
+        guard familyGenerations.admits(state, of: summary.id, since: since) else { return }
         await show(state, of: summary, previous: familyStates[summary.id])
     }
 
+    /* Every family state shown goes through here, so each publication is counted (`familyGenerations`). */
+    func publishFamily(_ state: FamilyState, of groupId: String) {
+        familyStates[groupId] = state
+        familyGenerations.published(groupId)
+    }
+
     private func show(_ state: FamilyState, of summary: GroupSummary, previous: FamilyState?) async {
-        familyStates[summary.id] = state
+        publishFamily(state, of: summary.id)
         familyCheckedAt[summary.id] = Date()
         familyRefreshed[summary.id, default: 0] += 1
         for (area, groupId) in await families.familyAreas() { familyAreaGroups[area] = groupId }
@@ -188,7 +199,7 @@ extension DriveStore {
         var roots: [String] = []
         if case .accepted(let view)? = familyStates[groupId] { roots = view.areas.compactMap { $0.root?.id } }
         roots += familyRoots.filter { $0.value == groupId }.map(\.key)
-        familyStates[groupId] = .wiped
+        publishFamily(.wiped, of: groupId)
         familyCheckedAt[groupId] = Date()
         clearFamily(groupId, roots: roots, details: true, problem: .removed)
         BackgroundTransfers.shared.endFamily(groupId)

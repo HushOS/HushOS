@@ -111,6 +111,8 @@ final class DriveStore {
      */
     var familyList: [GroupSummary]?
     var familyStates: [String: FamilyState] = [:]
+    /* How many times each family's state was published (`publishFamily`): a screen's own sync shown only over none newer. */
+    @ObservationIgnored var familyGenerations = FamilyGenerations()
     /* Each family's name as route 2 last listed it, kept after it stops listing one (a removal's page names it). */
     var familyNames: [String: String] = [:]
     /*

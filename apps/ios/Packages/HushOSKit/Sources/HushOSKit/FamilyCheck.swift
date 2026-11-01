@@ -94,13 +94,7 @@ extension FamilySync {
      */
     public func checkCode(_ summary: GroupSummary, with memberId: String) async throws -> CheckStart {
         let state = await sync(summary)
-        switch state {
-        case .accepted: break
-        case .fork: return CheckStart(state: state, code: nil, problem: "This family looks different on this device. Check it from the family page.")
-        case .failed(let words): return CheckStart(state: state, code: nil, problem: words)
-        case .wiped: return CheckStart(state: state, code: nil, problem: FamilyFailure.notInFamily.message)
-        case .waiting, .unchecked: return CheckStart(state: state, code: nil, problem: GuardWords.unreadable)
-        }
+        if let problem = Self.checkProblem(state) { return CheckStart(state: state, code: nil, problem: problem) }
         guard let chain = acceptedChain(summary.id) else { return CheckStart(state: state, code: nil, problem: GuardWords.unreadable) }
         let served = try await fetchServed(summary.id, after: 0)
         let code: FamilyCheckCode
@@ -115,6 +109,17 @@ extension FamilySync {
             code = .notAdmitted
         }
         return CheckStart(state: state, code: code, problem: nil)
+    }
+
+    /* Why Check it's Sam shows no words while the family stands as `state`; nil when it is accepted and they can show. */
+    public static func checkProblem(_ state: FamilyState) -> String? {
+        switch state {
+        case .accepted: return nil
+        case .fork: return "This family looks different on this device. Check it from the family page."
+        case .failed(let words): return words
+        case .wiped: return FamilyFailure.notInFamily.message
+        case .waiting, .unchecked: return GuardWords.unreadable
+        }
     }
 
     /*
@@ -202,5 +207,28 @@ extension Vault {
         clearChange(contactId)
         forgetLookups(of: contactId)
         return true
+    }
+}
+
+/*
+ * Each family's published state as a count of publications (every sync, refresh, removal or
+ * check a screen adopted). A screen that ran a sync of its own (Check it's Sam's "Getting the
+ * latest") notes the count when it starts; what it found may be shown only if nothing was
+ * published since, unless it is a fork or a removal, which always win: an older acceptance must
+ * never cover a warning or a removal found meanwhile.
+ */
+public struct FamilyGenerations: Sendable {
+    private var counts: [String: UInt64] = [:]
+    public init() {}
+
+    public func current(_ groupId: String) -> UInt64 { counts[groupId.lowercased(), default: 0] }
+
+    public mutating func published(_ groupId: String) { counts[groupId.lowercased(), default: 0] += 1 }
+
+    public func admits(_ state: FamilyState, of groupId: String, since: UInt64) -> Bool {
+        switch state {
+        case .fork, .wiped: return true
+        default: return current(groupId) == since
+        }
     }
 }

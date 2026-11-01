@@ -177,3 +177,48 @@ extension OnFakeDrive {
         }
     }
 }
+
+/*
+ * Check it's Sam syncs, then fetches the member lists for the words; meanwhile the live sync may
+ * find a fork or a removal and show it. What the check found when it started must not cover that
+ * afterwards, and its words must not show for a family no longer accepted. Fails if an older
+ * acceptance is shown over a newer warning or removal, or a fork or removal it found is dropped.
+ */
+@Suite struct FamilyCheckRaceTests {
+    let group = "0a427e6e-a934-4366-aea3-b09f70984781"
+    var accepted: FamilyState {
+        .accepted(FamilyView(groupId: group, rosterVersion: 2, rosterDigest: "d", groupKeyVersion: 1, members: [], areas: [],
+                             recordReset: false, ownEntryWrong: false, ownEntryBehind: false, foreign: []))
+    }
+    var fork: FamilyState { .fork(FamilyFork(memberList: true, version: 2, sides: [])) }
+
+    @Test func aCheckThatStartedBeforeAWarningCannotCoverIt() {
+        var book = FamilyGenerations()
+        book.published(group)
+        let started = book.current(group)
+        // The live sync finds the fork while the check waits on the member lists, and shows it.
+        book.published(group)
+        #expect(!book.admits(accepted, of: group, since: started))
+        #expect(!book.admits(.failed("Couldn’t check"), of: group, since: started))
+        // A fork or removal the check itself found is always shown.
+        #expect(book.admits(fork, of: group, since: started))
+        #expect(book.admits(.wiped, of: group, since: started))
+    }
+
+    @Test func aCheckWithNothingShownMeanwhileIsShown() {
+        var book = FamilyGenerations()
+        let started = book.current(group)
+        #expect(book.admits(accepted, of: group, since: started))
+        // Counted per family: another family's news doesn't hold this one back.
+        book.published("1b427e6e-a934-4366-aea3-b09f70984781")
+        #expect(book.admits(accepted, of: group.uppercased(), since: started))
+    }
+
+    @Test func wordsShowOnlyForAnAcceptedFamily() {
+        #expect(FamilySync.checkProblem(accepted) == nil)
+        #expect(FamilySync.checkProblem(fork) != nil)
+        #expect(FamilySync.checkProblem(.wiped) == FamilyFailure.notInFamily.message)
+        #expect(FamilySync.checkProblem(.failed("Couldn’t check")) == "Couldn’t check")
+        #expect(FamilySync.checkProblem(.waiting) != nil)
+    }
+}

@@ -141,10 +141,16 @@ struct FamilyCheckView: View {
         failure = nil
         code = nil
         do {
+            let since = store.familyGenerations.current(summary.id)
             let start = try await store.families.checkCode(summary, with: member.userId)
-            // The sync it ran is the family's latest: the page behind adopts it (a warning, a removal), as after any sync.
-            await store.adopt(start.state, of: summary)
-            if let problem = start.problem { failure = problem } else { code = start.code }
+            // The sync it ran is shown as after any sync (a warning, a removal), unless the family was shown anew meanwhile.
+            await store.adopt(start.state, of: summary, since: since)
+            // The family as it is shown now decides: words worked out over a chain it has since left don't show.
+            if let problem = start.problem ?? FamilySync.checkProblem(store.familyStates[summary.id] ?? start.state) {
+                failure = problem
+            } else {
+                code = start.code
+            }
         } catch {
             if endsSession(error) { store.report(error); done(); return }
             failure = FamilyWords.error(error)
