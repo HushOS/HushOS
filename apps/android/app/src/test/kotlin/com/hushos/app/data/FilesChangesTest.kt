@@ -116,6 +116,35 @@ class FilesChangesTest {
         assertTrue("the provider's listing has it", provider.listChildren(a).any { it.id == added })
     }
 
+    /*
+     * The provider fell behind and the server has dropped tombstones since: its pull starts over, clearing the shared
+     * mirror, and the connection drops after the first page. The app was current; its next sync must not move the
+     * mirror's cursor past rows the refill never restored, or every later cold build leaves those files out for good.
+     */
+    @Test
+    fun aRefillThatFailsPartwayIsFinishedBeforeAnyoneMovesTheMirrorPastIt() {
+        val app = vault()
+        val provider = vault()
+        app.buildCatalogue()
+        provider.buildCatalogue()
+        val later = (1..4).map { server.file(b, "later-$it.txt", ByteArray(8)) }
+        app.sync()
+        server.tombstonesDroppedThrough = app.catalogueCursor
+        server.changesPage = 2
+        server.changePagesLeft = 1
+        assertTrue("the provider's refill fails partway", runCatching { provider.sync() }.isFailure)
+        server.changePagesLeft = null
+
+        app.sync()
+
+        // The next process: a vault built cold from what the mirror holds.
+        val cold = vault()
+        cold.buildCatalogue()
+        val listed = cold.catalogueAll().map { it.id }.toSet()
+        for (id in listOf(a, f, b, g) + later) assertTrue("$id is in the cold catalogue", id in listed)
+        assertEquals(setOf(g) + later, cold.catalogueChildren(b)!!.map { it.id }.toSet())
+    }
+
     @Test
     fun aSyncTellsTheFolderAMoveLeftAsWellAsTheOneItEntered() {
         val app = vault()

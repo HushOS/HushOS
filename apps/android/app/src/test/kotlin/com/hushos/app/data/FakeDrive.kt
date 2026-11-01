@@ -106,6 +106,13 @@ class FakeDrive : AutoCloseable {
     /* The rotation sends (counted from 1) refused with a 500, as a dropped connection leaves them. */
     var failRotationSends: Set<Int> = emptySet()
     private var rotationSends = 0
+    /* The feed as the server pages it: at most this many changes a page (null: all at once). */
+    var changesPage: Int? = null
+    /* Cursors from 1 below this predate a dropped tombstone: the feed answers `resync`, as the server does. */
+    var tombstonesDroppedThrough = 0
+    /* Feed pages still answered before each one fails with a 500 (null: all are answered). */
+    var changePagesLeft: Int? = null
+    private var changesServed = 0
 
     /* `id` goes to the Trash, as the server keeps it: its parent's listing leaves it out, the trash listing has it. */
     fun trash(id: String) = synchronized(lock) { node(id).trashedAt = "2026-10-30T00:00:00Z"; bump(node(id)) }
@@ -429,10 +436,18 @@ class FakeDrive : AutoCloseable {
             get && at("drive", "workspace") -> ok(JSONObject().put("workspaceId", workspace).put("changeSeq", changeSeq).put("grant", grant).put("root", node(root).json()))
             // The feed is state, not a log: each node changed since the cursor once, as it is now.
             get && at("drive", "workspaces", "*", "changes") -> {
+                // A client paging the feed in a loop fails here rather than hanging the test.
+                if (++changesServed > 500) return 500 to JSONObject().put("message", "Too many feed requests")
+                if (changePagesLeft == 0) return 500 to JSONObject().put("message", "The connection dropped")
+                changePagesLeft?.let { changePagesLeft = it - 1 }
                 val since = query.getValue("since").toInt()
+                val limit = minOf(query.getValue("limit").toInt(), changesPage ?: Int.MAX_VALUE)
                 val changed = nodes.values.filter { it.workspaceId == segments[2] && it.changeSeq > since }.sortedBy { it.changeSeq }
-                ok(JSONObject().put("changes", JSONArray(changed.map { JSONObject().put("kind", "node").put("changeSeq", it.changeSeq).put("node", it.json()) }))
-                    .put("nextCursor", changed.maxOfOrNull { it.changeSeq } ?: since).put("hasMore", false))
+                val page = changed.take(limit)
+                ok(JSONObject().put("changes", JSONArray(page.map { JSONObject().put("kind", "node").put("changeSeq", it.changeSeq).put("node", it.json()) }))
+                    .put("nextCursor", page.maxOfOrNull { it.changeSeq } ?: since).put("hasMore", changed.size > page.size)
+                    // As the server answers a cursor older than the newest tombstone it dropped; zero is starting over already.
+                    .put("resync", since in 1 until tombstonesDroppedThrough))
             }
             post && at("drive", "nodes", "*", "parent") -> {
                 val node = node(segments[2])

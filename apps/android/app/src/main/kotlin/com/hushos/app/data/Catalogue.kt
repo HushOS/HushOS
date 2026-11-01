@@ -14,32 +14,54 @@ enum class CatalogueState { IDLE, BUILDING, READY, FAILED }
 
 private const val FEED_PAGE = 500
 
+/* This vault's own cursor no longer describes the mirror (cleared since, or mid-refill): its catalogue is built again. */
+private class StaleCursor : Exception()
+
+/* What a pull brought, and whether it had to clear the mirror and start over (a `resync`). */
+private class Pulled(val changes: List<NodeChange>, val reset: Boolean)
+
 /*
- * Pulls the feed from `from` to the head, committing each page to the mirror; returns what arrived, and leaves this
- * vault's own cursor at the head. The app, the provider and the transfer jobs each hold a Vault over the one mirror:
- * a sync starts from where this vault's catalogue stands, never from the mirror's cursor, which another vault may
- * have moved past changes this catalogue never filed (applying a page twice is harmless: rows are replaced, the
- * cursor only moves forward).
+ * Pulls the feed to the head, committing each page to the mirror, and leaves this vault's own cursor (and the mirror
+ * generation it belongs to) at the head. The app, the provider and the transfer jobs each hold a Vault over the one
+ * mirror. A sync starts from `own`, where this vault's catalogue stands, not the mirror's cursor, which another vault
+ * may have moved past changes this catalogue never filed (applying a page twice is harmless: rows are replaced, the
+ * cursor only moves forward). That holds only within one generation of a whole mirror: after a clear, or while the
+ * refill after one is unfinished (it failed partway), a cursor of its own would move the mirror's past rows it never
+ * got back, and every later cold build would leave them out. Then `own` throws StaleCursor and the caller rebuilds,
+ * pulling from the mirror's cursor (null), which carries the refill on. Held under the mirror's feed lock throughout.
  */
-private fun Vault.pullFeed(workspaceId: String, from: Int): List<NodeChange> {
+private fun Vault.pullFeed(workspaceId: String, own: Int?): Pulled = synchronized(mirror.feedLock) {
+    val state = mirror.state(workspaceId)
+    if (own != null && (state.generation != catalogueGeneration || state.refilling)) throw StaleCursor()
     val arrived = ArrayList<NodeChange>()
-    var cursor = from
+    var cursor = own ?: state.cursor
+    var refilling = state.refilling
+    var reset = false
+    var first = true
     while (true) {
         val page = api.changes(workspaceId, cursor, FEED_PAGE)
-        if (page.resync) {
-            // The cursor predates what the server still remembers: start over from nothing.
+        // `resync` speaks of the cursor a pull starts from (the web client's rule): the later pages of a refill sit below
+        // the server's dropped tombstones by nature, and heeding it there would start the refill over for ever.
+        if (first && page.resync && cursor > 0) {
+            // The cursor predates what the server still remembers: start over from nothing, in a new generation.
             mirror.clear(workspaceId)
+            arrived.clear()
             cursor = 0
+            refilling = true
+            reset = true
             continue
         }
         mirror.apply(workspaceId, page.changes, page.nextCursor)
         arrived.addAll(page.changes)
+        first = false
         cursor = page.nextCursor
         if (!page.hasMore) break
     }
+    if (refilling) mirror.refilled(workspaceId)
     catalogueCursor = cursor
+    catalogueGeneration = mirror.state(workspaceId).generation
     cataloguePulled = true
-    return arrived
+    Pulled(arrived, reset)
 }
 
 /* Rows in an order every parent precedes its children; rows whose parent is missing come back separately. */
@@ -94,18 +116,19 @@ fun Vault.buildCatalogue(): Boolean = synchronized(syncLock) {
         // One workspace per device: another account's tree is not kept beside this one.
         for (other in mirror.workspaces()) if (other != workspaceId) mirror.clear(other)
         // No network: the tree already on this phone opens as it was; the next sync catches up.
-        val pulled = try { pullFeed(workspaceId, mirror.cursor(workspaceId)); true } catch (error: Unreachable) { if (mirror.cursor(workspaceId) == 0) throw error; false }
-        // The cursor before the rows: whatever another vault adds between the two is pulled again by the next sync.
-        var at = mirror.cursor(workspaceId)
-        var (ordered, orphans) = parentsFirst(mirror.rows(workspaceId))
+        val pulled = try { pullFeed(workspaceId, null); true } catch (error: Unreachable) { if (mirror.cursor(workspaceId) == 0) throw error; false }
+        // Where the mirror stands read with its rows, so the cursor this catalogue keeps is the one those rows are at.
+        var (held, at) = synchronized(mirror.feedLock) { mirror.rows(workspaceId) to mirror.state(workspaceId) }
+        var (ordered, orphans) = parentsFirst(held)
         if (orphans.isNotEmpty() && pulled) {
             // A row without its parent is a page this device missed: start over once.
-            mirror.clear(workspaceId)
-            pullFeed(workspaceId, 0)
-            at = mirror.cursor(workspaceId)
-            parentsFirst(mirror.rows(workspaceId)).let { ordered = it.first }
+            synchronized(mirror.feedLock) { mirror.clear(workspaceId) }
+            pullFeed(workspaceId, null)
+            synchronized(mirror.feedLock) { held = mirror.rows(workspaceId); at = mirror.state(workspaceId) }
+            ordered = parentsFirst(held).first
         }
-        catalogueCursor = at
+        catalogueCursor = at.cursor
+        catalogueGeneration = at.generation
         catalogueChildren.clear()
         file(ordered, workspaceId)
         catalogueState = CatalogueState.READY
@@ -125,7 +148,10 @@ fun Vault.buildCatalogue(): Boolean = synchronized(syncLock) {
 fun Vault.sync(): Set<String>? = synchronized(syncLock) {
     if (catalogueState != CatalogueState.READY) return if (buildCatalogue()) emptySet() else null
     val workspaceId = loadWorkspace().workspaceId
-    val changes = pullFeed(workspaceId, catalogueCursor)
+    val pulled = try { pullFeed(workspaceId, catalogueCursor) } catch (stale: StaleCursor) { null }
+    // The mirror was cleared (by this pull's resync or another vault's) or is mid-refill: the catalogue starts again from it.
+    if (pulled == null || pulled.reset) return rebuildCatalogue(workspaceId)
+    val changes = pulled.changes
     if (changes.isEmpty()) return emptySet()
     val touched = HashSet<String>()
     val rows = ArrayList<NodeView>()
@@ -168,6 +194,34 @@ fun Vault.sync(): Set<String>? = synchronized(syncLock) {
     foldersChanged(FilesRoots.foldersOf(touched, parentOf = { id -> nodes.row(workspaceId, id)?.node?.parentId ?: parents[id] },
         isFile = { id -> nodes.row(workspaceId, id)?.isFolder == false }))
     return touched
+}
+
+/*
+ * The catalogue built again from the mirror, the refill carried on first, inside a sync: returns what differs from the
+ * catalogue it replaces (as a sync's touched set: the nodes, the folders they left and entered), or null when the
+ * server was out of reach, and tells Files of those folders.
+ */
+private fun Vault.rebuildCatalogue(workspaceId: String): Set<String>? {
+    fun filed(): Map<String, Pair<String, Int?>> {
+        val out = HashMap<String, Pair<String, Int?>>()
+        for ((parent, children) in catalogueChildren) for (child in children) nodes.row(workspaceId, child)?.let { out[child] = parent to it.node.changeSeq }
+        return out
+    }
+    val before = filed()
+    catalogueState = CatalogueState.IDLE
+    val pulled = buildCatalogue()
+    val after = filed()
+    val touched = HashSet<String>()
+    for (id in before.keys + after.keys) {
+        val was = before[id]
+        val now = after[id]
+        if (was == now) continue
+        touched.add(id)
+        was?.let { touched.add(it.first) }
+        now?.let { touched.add(it.first) }
+    }
+    foldersChanged(FilesRoots.foldersOf(touched, parentOf = { id -> after[id]?.first ?: before[id]?.first }, isFile = { id -> nodes.row(workspaceId, id)?.isFolder == false }))
+    return if (pulled) touched else null
 }
 
 /* This folder's children from the catalogue, or null when the catalogue cannot answer for it. */
