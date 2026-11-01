@@ -438,8 +438,8 @@ struct FamilyPage: View {
 
     private var joining: Bool { state == .waiting || state == .unchecked }
 
-    /* Who this person checked in the family, on this phone (3.8): nil until read, or when it couldn't be (no labels then). */
-    @State private var standings: [String: MemberStanding]?
+    /* Who this person checked in the family, on this phone (3.8), as read for one member list and trust load: nil until read, or when it couldn't be (no labels then). */
+    @State private var labels: MemberLabels?
     /* Whom this person's family check was with: their own words check them once their keys changed since (6.10). */
     @State private var checkedWith: String?
     /* Moved after every check, so the labels are read again. */
@@ -490,7 +490,8 @@ struct FamilyPage: View {
         // reload and every check made here: a pin changed on another device never leaves someone shown Verified.
         .task(id: "\(view?.rosterDigest ?? "")-\(checks)-\(store.familyRefreshed[groupId] ?? 0)-\(store.trustGeneration)") {
             guard let view else { return }
-            standings = try? await store.families.memberStandings(view)
+            let trust = store.trustGeneration
+            labels = (try? await store.families.memberStandings(view)).map { MemberLabels($0, of: view, trust: trust) }
             checkedWith = await store.families.checkedFamilyWith(groupId)
         }
         .sheet(item: $checking) { check in
@@ -602,7 +603,7 @@ struct FamilyPage: View {
                 if member.userId.lowercased() == me {
                     memberRow(member, you: true).alpineRow()
                 } else {
-                    let standing = standings?[member.userId.lowercased()]
+                    let standing = label(member, in: view)
                     let who = served(member.userId)
                     let ref = FamilyMemberRef(userId: member.userId, email: who?.email ?? "", name: who?.name ?? "Someone")
                     Menu {
@@ -624,10 +625,15 @@ struct FamilyPage: View {
         }
     }
 
+    /* A member's label as the list on screen and the trust loaded now stand: none while it is read again (MemberLabels). */
+    private func label(_ member: FamilyMember, in view: Accepted) -> MemberStanding? {
+        labels?.label(of: member, in: view, trust: store.trustGeneration)
+    }
+
     private func memberRow(_ member: FamilyMember, you: Bool) -> some View {
         let served = served(member.userId)
         let name = served?.name ?? "Someone"
-        let standing = standings?[member.userId.lowercased()]
+        let standing = view.flatMap { label(member, in: $0) }
         return HStack(spacing: Alpine.Space.s3) {
             PersonAvatar(name: name, seed: member.userId)
             VStack(alignment: .leading, spacing: 2) {

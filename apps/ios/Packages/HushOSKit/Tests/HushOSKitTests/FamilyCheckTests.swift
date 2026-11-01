@@ -257,3 +257,37 @@ extension OnFakeDrive {
     }
 }
 
+/*
+ * The member list's labels after a sync accepted a newer list or trust was loaded again, while
+ * they are read again. Fails if a member whose entry changed, or anyone under an older trust load,
+ * can still read Verified from labels read before.
+ */
+@Suite struct MemberLabelsTests {
+    let sam = "1b427e6e-a934-4366-aea3-b09f70984781"
+    let ana = "2c427e6e-a934-4366-aea3-b09f70984781"
+
+    func view(_ digest: String, sam samKeys: String, ana anaKeys: String) -> FamilyView {
+        FamilyView(groupId: "g", rosterVersion: 2, rosterDigest: digest, groupKeyVersion: 1,
+                   members: [FamilyMember(userId: sam, roles: [], commitment: samKeys), FamilyMember(userId: ana, roles: [], commitment: anaKeys)],
+                   areas: [], recordReset: false, ownEntryWrong: false, ownEntryBehind: false, foreign: [])
+    }
+
+    @Test func aMemberWhoseEntryChangedShowsNoLabelUntilReadAgain() {
+        let before = view("r2", sam: "sam-1", ana: "ana-1")
+        let labels = MemberLabels([sam: .verified, ana: .verified], of: before, trust: 4)
+        #expect(labels.label(of: before.members[0], in: before, trust: 4) == .verified)
+
+        // Roster 3 gives Sam other keys; Ana's entry is as it was.
+        let after = view("r3", sam: "sam-2", ana: "ana-1")
+        #expect(labels.label(of: after.members[0], in: after, trust: 4) == nil)
+        #expect(labels.label(of: after.members[1], in: after, trust: 4) == .verified)
+    }
+
+    @Test func verifiedFromAnOlderTrustLoadIsNotShown() {
+        let current = view("r2", sam: "sam-1", ana: "ana-1")
+        let labels = MemberLabels([sam: .verified, ana: .notVerified], of: current, trust: 4)
+        // A pin saved on another device was loaded since: Verified waits for the new read; Not verified may stay.
+        #expect(labels.label(of: current.members[0], in: current, trust: 5) == nil)
+        #expect(labels.label(of: current.members[1], in: current, trust: 5) == .notVerified)
+    }
+}

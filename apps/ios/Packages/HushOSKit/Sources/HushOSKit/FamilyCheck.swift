@@ -245,3 +245,35 @@ public struct FamilyGenerations: Sendable {
     }
 }
 
+/*
+ * The member labels as read for one accepted member list (by its digest) and one load of whom
+ * this person trusts (`trust`, the store's generation). While they are read again after either
+ * moved, a label never outlives what it was read for: a member whose entry changed in the newer
+ * list shows none, and Verified from an older trust load shows none, until the new read lands.
+ */
+public struct MemberLabels: Sendable, Equatable {
+    public let rosterDigest: String
+    public let trust: Int
+    private let commitments: [String: String]
+    private let standings: [String: MemberStanding]
+
+    public init(_ standings: [String: MemberStanding], of view: FamilyView, trust: Int) {
+        rosterDigest = view.rosterDigest
+        self.trust = trust
+        self.standings = standings
+        var commitments: [String: String] = [:]
+        for member in view.members { if let commitment = member.commitment { commitments[member.userId.lowercased()] = commitment } }
+        self.commitments = commitments
+    }
+
+    /* `member`'s label as `view` and `trust` stand now; nil while it is being read again. */
+    public func label(of member: FamilyMember, in view: FamilyView, trust: Int) -> MemberStanding? {
+        let id = member.userId.lowercased()
+        guard let standing = standings[id] else { return nil }
+        // Another list: only an entry with the very keys it had when read keeps its label.
+        if view.rosterDigest != rosterDigest, commitments[id] == nil || commitments[id] != member.commitment { return nil }
+        // Another trust load: whom this person verified may have moved on another device.
+        if trust != self.trust, standing == .verified { return nil }
+        return standing
+    }
+}
