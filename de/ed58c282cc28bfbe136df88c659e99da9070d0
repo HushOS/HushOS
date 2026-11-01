@@ -1,0 +1,21 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_be7646687612be 449,460-468
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_566b8e0c4467a4::t_1ef61a25477642 115-116,120,126,129-134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "deed58c282cc28bfbe136df88c659e99da9070d0",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
