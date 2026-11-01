@@ -24,7 +24,7 @@ extension DriveStore {
 
     /* Whether a folder on screen is in a family folder: its own row, or a family folder's top. */
     func isFamilyFolder(_ id: String) -> Bool {
-        if familyRoots[id.lowercased()] != nil { return true }
+        if familyRoots[id.lowercased()] != nil || familyFolders[id.lowercased()] != nil { return true }
         if let item = known(id) { return isFamily(item) }
         return false
     }
@@ -203,6 +203,8 @@ extension DriveStore {
             if !family.isEmpty { ids.insert(folderId) }
         }
         ids.formUnion(roots)
+        // Their rows go below; which family each was in stays, for the removal to stay said on a refresh.
+        for id in ids { familyFolders[id.lowercased()] = groupId }
         for id in ids {
             folders[id] = nil
             // Said in the folder's place, never as an empty folder.
@@ -218,8 +220,16 @@ extension DriveStore {
 
     /* Which family a folder on screen belongs to: a top folder by route 25, anything else by its workspace. */
     func familyGroup(ofFolder id: String) -> String? {
-        if let group = familyRoots[id.lowercased()] { return group }
+        if let group = familyRoots[id.lowercased()] ?? familyFolders[id.lowercased()] { return group }
         return known(id).flatMap { familyAreaGroups[$0.node.workspaceId.lowercased()] }
+    }
+
+    /* A folder listed, and the folders in it, kept against their family for the session (see `familyFolders`). */
+    func noteFamilyFolders(_ id: String, children: [Opened]) {
+        if let groupId = familyGroup(ofFolder: id) { familyFolders[id.lowercased()] = groupId }
+        for child in children where child.node.isFolder {
+            if let groupId = familyAreaGroups[child.node.workspaceId.lowercased()] { familyFolders[child.id.lowercased()] = groupId }
+        }
     }
 
     /* A family folder on screen checks its family again when the last check is older than `maxAge`. */

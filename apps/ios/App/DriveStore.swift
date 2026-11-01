@@ -134,6 +134,8 @@ final class DriveStore {
     var familyShown: [String: FamilyView] = [:]
     /* Every family folder's top folder this session opened: only grows, so a later failed check never makes one writable-looking. */
     var familyRoots: [String: String] = [:]
+    /* Every folder this session saw in a family folder, to its family: only grows, and clearing a family leaves it, so a folder whose listing was dropped still knows its family. */
+    @ObservationIgnored var familyFolders: [String: String] = [:]
     /* When each family was last checked on this phone: a family folder on screen checks again when it is old. */
     @ObservationIgnored var familyCheckedAt: [String: Date] = [:]
     @ObservationIgnored var familiesSyncedAt: Date?
@@ -708,6 +710,7 @@ final class DriveStore {
             let children = try await vault.children(of: id)
             folders[id] = children
             folderProblems[id] = nil
+            noteFamilyFolders(id, children: children)
             // A received share's item missing from its folder listed afresh closes Info (there is no feed for
             // their drive); the vault keeps its row, so nothing a close decides changes what it holds.
             if var follow = infoBeside, isReceived(follow.item) {
