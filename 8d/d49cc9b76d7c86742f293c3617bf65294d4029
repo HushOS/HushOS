@@ -1,0 +1,31 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_566b8e0c4467a4::t_a144249afe7621 494
+apps/android/app/src/main/kotlin/com/hushos/app/data/Resumable.kt
+  s_566b8e0c4467a4::t_2a8bdfe8d43f9f 92-94,97,99-105,107,109-110,114-117
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_9c28c6ef67cb14 175-181,1127-1128,1130-1154
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_566b8e0c4467a4::t_be29fcb5f10e02 133-138,145-158
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_990741eb8bde5d 17-18,2109-2112,2127-2132
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_566b8e0c4467a4::t_159735d896ef4f 137-140,166-171,175-178,206-213
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_566b8e0c4467a4::t_23cf0867ea4621 186-220
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8dd49cc9b76d7c86742f293c3617bf65294d4029",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
