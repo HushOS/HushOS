@@ -1846,8 +1846,23 @@ final class DriveStore {
                                      familyWorkspace: isFamily(item) ? item.node.workspaceId : nil)
     }
 
-    /* As `download`, but the failure comes back to the caller (the viewer and Send a copy say it in place). */
-    func fetch(_ item: Opened, version: VersionListView? = nil) async throws -> URL {
+    /*
+     * Where the current version of `row` is copied (its own folder, made under `gate`): a copy made
+     * again for a newer row than the one asked for (Vault.downloadCurrent) goes to that row's path.
+     */
+    private func copyPath(_ row: Opened, gate: FamilyCopyGate) throws -> URL {
+        guard let directory = openedFolder(row, version: nil) else { throw CocoaError(.fileWriteInvalidFileName) }
+        try gate.perform { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
+        return directory.appendingPathComponent(row.name)
+    }
+
+    /*
+     * As `download`, but the failure comes back to the caller (the viewer and Send a copy say it in
+     * place). When the vault learned a newer version than `item` shows, that version comes down
+     * instead, once, and `adopted` hears of the row it is of, so the viewer shows the newer content
+     * rather than a refusal on every Try again.
+     */
+    func fetch(_ item: Opened, version: VersionListView? = nil, adopted: ((Opened) -> Void)? = nil) async throws -> URL {
         if version == nil, let kept = Offline.localCopy(of: item) { return kept }
         guard let directory = openedFolder(item, version: version) else { throw CocoaError(.fileWriteInvalidFileName) }
         // A family file's copy is kept to the family as it stands now: a wipe while it comes down leaves nothing.
@@ -1865,10 +1880,16 @@ final class DriveStore {
             releaseBackground()
         }
         do {
-            // The version the path is named after, and no other.
-            try await vault.download(item.id, version: version, expectedVersionId: version == nil ? item.node.currentVersion?.id : nil, to: file, gate: gate) { fraction in
-                Task { @MainActor in self.opening[item.id] = fraction }
+            if version == nil {
+                // The version the path is named after, and no other; a newer one the vault holds comes down to its own path.
+                let (row, copied) = try await vault.downloadCurrent(item, gate: gate, to: { row in try await self.copyPath(row, gate: gate) }) { fraction in
+                    Task { @MainActor in self.opening[item.id] = fraction }
+                }
+                try gate.check()
+                if row.node != item.node { adopted?(row) }
+                return copied
             }
+            try await vault.download(item.id, version: version, to: file, gate: gate) { fraction in Task { @MainActor in self.opening[item.id] = fraction } }
             // Nothing is handed on (the viewer, Send a copy, Open in) once its family was forgotten.
             try gate.check()
         } catch {
@@ -1901,9 +1922,14 @@ final class DriveStore {
             releaseBackground()
         }
         do {
-            try await vault.download(item.id, version: version, expectedVersionId: version == nil ? item.node.currentVersion?.id : nil, to: file, gate: gate) { fraction in
-                Task { @MainActor in self.opening[item.id] = fraction }
+            if version == nil {
+                let (_, copied) = try await vault.downloadCurrent(item, gate: gate, to: { row in try await self.copyPath(row, gate: gate) }) { fraction in
+                    Task { @MainActor in self.opening[item.id] = fraction }
+                }
+                try gate.check()
+                return copied
             }
+            try await vault.download(item.id, version: version, to: file, gate: gate) { fraction in Task { @MainActor in self.opening[item.id] = fraction } }
             try gate.check()
             return file
         } catch {

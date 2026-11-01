@@ -678,6 +678,31 @@ public actor Vault {
 
     /* Downloads and decrypts a file's version to `destination`, chunk by chunk. */
     /*
+     * The current version of `item`, at the path `destination` names for a row (made under its
+     * gate by the caller). When the row held here is newer than `item` (the vault learned a newer
+     * version while the screen showed the older), the copy is made once more for that row, so the
+     * newer content shows instead of a refusal on every Try again. Returns the row the copy is of.
+     * A held row older than `item`, or a second mismatch, is the refusal (VersionChanged).
+     */
+    public func downloadCurrent(_ item: Opened, gate: FamilyCopyGate? = nil, to destination: @Sendable (Opened) async throws -> URL,
+                                progress: @Sendable (Double) -> Void = { _ in }) async throws -> (item: Opened, file: URL) {
+        var item = item
+        for attempt in 0 ..< 2 {
+            let file = try await destination(item)
+            if FileManager.default.fileExists(atPath: file.path) { return (item, file) }
+            do {
+                try await download(item.id, expectedVersionId: item.node.currentVersion?.id, to: file, gate: gate, progress: progress)
+                return (item, file)
+            } catch is VersionChanged where attempt == 0 {
+                guard let held = opened[item.ref], held.node.currentVersion?.id != item.node.currentVersion?.id,
+                      !held.node.isOlder(than: item.node) else { throw VersionChanged() }
+                item = held
+            }
+        }
+        throw VersionChanged()
+    }
+
+    /*
      * `expectedVersionId`: the version the destination's path is named after (the row on screen).
      * The row held here may name another (an older answer kept out, a newer one since): then nothing
      * is written, so a copy's path never holds another version's content.

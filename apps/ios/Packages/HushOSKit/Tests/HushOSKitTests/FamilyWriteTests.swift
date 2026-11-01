@@ -104,6 +104,17 @@ extension OnFakeDrive {
             await #expect(throws: VersionChanged.self) { try await vault.download(family.photo.id, expectedVersionId: first.id, to: old) }
             #expect(!FileManager.default.fileExists(atPath: old.path))
             #expect(!FileManager.default.fileExists(atPath: old.appendingPathExtension("part").path))
+
+            // The viewer still shows the old row and asks again: the copy is made for the row held now, at its own path.
+            let held = try #require(await vault.item(family.photo.id))
+            let shownOld = Opened(node: family.photo, metadata: held.metadata, nodeKey: nil)
+            let (copied, file) = try await vault.downloadCurrent(shownOld) { row in
+                folder.appendingPathComponent(try #require(row.node.currentVersion).id)
+            }
+            #expect(copied.node.currentVersion?.id == second.id)
+            #expect(file.lastPathComponent == second.id)
+            #expect(try Data(contentsOf: file) == bytes)
+            #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent(first.id).path))
         }
 
         /* `bytes` sealed as a new version of `nodeId` in the family folder, under the photo's key, signed by the creator. */

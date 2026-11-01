@@ -105,8 +105,9 @@ struct FileViewer: View {
         .onChange(of: store.route) { _, link in if link != nil { dismiss() } }
         .task(id: "\(current.id)-\(attempt)") {
             url = nil
-            // Paged past before it came down: the next page's task is the one that counts.
-            do { url = try await store.fetch(current, version: version) } catch where !ErrorWords.isCancellation(error) { failed = true } catch {}
+            // Paged past before it came down: the next page's task is the one that counts. A newer version the vault learned
+            // comes down instead, and the viewer shows that row.
+            do { url = try await store.fetch(current, version: version, adopted: { current = $0 }) } catch where !ErrorWords.isCancellation(error) { failed = true } catch {}
         }
         .onChange(of: listedHere, initial: true) { _, id in
             if let id { seenListed = id }
