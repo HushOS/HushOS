@@ -1,0 +1,29 @@
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_566b8e0c4467a4::t_e8452262de0272 66-67
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_4e9d2509b34e48 164-180
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyLines.kt
+  s_566b8e0c4467a4::t_99e6b9c84d763b 88-93,97,341,344-360
+  s_566b8e0c4467a4::t_3634a251fd3607 361
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyJoinTest.kt
+  s_566b8e0c4467a4::t_1b8d91901ea41d 68-82
+  s_566b8e0c4467a4::t_1a09c41565998b 67
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_566b8e0c4467a4::t_e9b504de7fa23a 670-680,703,713-714,716
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b6deb46c0c006e470cd95f103af73ecdef4b735b",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
