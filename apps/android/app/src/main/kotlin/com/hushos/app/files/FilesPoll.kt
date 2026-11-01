@@ -19,8 +19,8 @@ import android.os.PowerManager
  * nothing but its id.
  */
 object FilesPoll {
-    const val INTERVAL_MS = 10_000L
-    const val WINDOW_MS = 5 * 60_000L
+    const val INTERVAL_MS = 30_000L
+    const val WINDOW_MS = 2 * 60_000L
 
     /* Fixed, far above the ids WorkManager hands out from 0 up for the transfer jobs. */
     private const val JOB_ID = 0x48_46_50_4C
