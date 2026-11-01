@@ -1,0 +1,33 @@
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_ebf2c81b5b3960 142-143,444,446-447,761-763,769,790,886-887,890,1371-1373,1812-1814,1816-1819,1827-1829,1838-1842,1848-1849,1851,1860-1861
+apps/ios/App/Families.swift
+  s_566b8e0c4467a4::t_1df5f0491edd3e 235-237,336-337
+apps/ios/App/Viewer.swift
+  s_566b8e0c4467a4::t_5e803b1e5d2d6c 110-111
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Resumable.swift
+  s_566b8e0c4467a4::t_bf0d16bfe8877c 106-107,111,113-116,129,138-141
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SessionGate.swift
+  s_566b8e0c4467a4::t_7207f685dbf76e 125-133,140-176
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Unbacked.swift
+  s_566b8e0c4467a4::t_f4a9f036d396bf 252-256,259-265,269-278,304-326
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_566b8e0c4467a4::t_25396fd87b3164 663-664,677
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SessionGateTests.swift
+  s_566b8e0c4467a4::t_1b051548325b58 204-298
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ce4f000b8a98bdce7f734fd6d2835b822f7124f8",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
