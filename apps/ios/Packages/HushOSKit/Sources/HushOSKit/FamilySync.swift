@@ -601,10 +601,25 @@ public actor FamilySync: FamilyJudge {
         let known = groupsOf.filter { $0.value.lowercased() == key }.map(\.key)
         var out: [String] = []
         for area in Set((known + (areasOf[groupId] ?? []) + (records.read(userId: userId, groupId: groupId)?.areas ?? [])).map { $0.lowercased() }) {
-            if let owner = groupsOf[area], owner.lowercased() != key { continue }
-            if await vault.mayForget(area, with: groupId) { out.append(area) }
+            if await owned(area, by: groupId) { out.append(area) }
         }
         return out.sorted()
+    }
+
+    /* Whether a folder may be let go of with `groupId`: never one proven another family's, never the own drive. */
+    private func owned(_ area: String, by groupId: String) async -> Bool {
+        if let owner = groupsOf[area.lowercased()], owner.lowercased() != groupId.lowercased() { return false }
+        return await vault.mayForget(area, with: groupId)
+    }
+
+    /*
+     * The folders a device record keeps after an acceptance: every one it already holds (a folder
+     * leaves the record only once its copies are forgotten, in openAreas) and those of the chain's
+     * proven this family's. Merged, never replaced: after a relaunch nothing is proven yet.
+     */
+    func keptAreas(_ groupId: String, of chainAreas: [String]) -> [String] {
+        let held = records.read(userId: userId, groupId: groupId)?.areas ?? []
+        return Array(Set((held + provenAreas(groupId, of: chainAreas)).map { $0.lowercased() })).sorted()
     }
 
     /* The folders a device record keeps for `groupId`: of the chain's, only those proven this family's (opened under it). */
@@ -683,8 +698,9 @@ public actor FamilySync: FamilyJudge {
                 // later acceptance stores it; one with nothing new to store (the held guard covers it) releases it.
                 if let guardPin { try await vault.keepFamilyGuard(groupId, guardPin) }
                 await vault.familyGuardKept(groupId)
-                // Only folders proven this family's (opened under it before): a roster's word never names another's for cleanup.
-                let areas = provenAreas(groupId, of: Array(chain.areaKeys().keys))
+                // What it held and the folders proven this family's (opened under it before): a roster's word never names
+                // another's for cleanup, and nothing it held is let go of here.
+                let areas = keptAreas(groupId, of: Array(chain.areaKeys().keys))
                 try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: record, rosterVersion: chain.roster().rosterVersion, areas: areas))
                 noteAccepted(groupId, chain)
                 return .accepted(chain, pin)
@@ -753,13 +769,28 @@ public actor FamilySync: FamilyJudge {
             guard let seed = area.idSeed else { return false }
             return (try? checkId(kind: .workspace, scopeId: groupId, seed: seed, id: area.workspaceId)) != nil
         }
+        let proven = family.map { $0.workspaceId.lowercased() }.sorted()
+        // A folder the family no longer lists (deleted elsewhere, maybe while the app was closed): its rows, keys and copies
+        // go before anything lets go of the tie between it and the family, so no plaintext of it outlives the last place a
+        // cleanup would find it. An ended session forgets nothing, and so lets go of nothing.
+        let row = records.read(userId: userId, groupId: groupId)
+        var dropped: [String] = []
+        for area in Set(((areasOf[groupId] ?? []) + (row?.areas ?? [])).map { $0.lowercased() }) where !proven.contains(area) {
+            if await owned(area, by: groupId) { dropped.append(area) }
+        }
+        var forgotten: Set<String> = []
+        if !dropped.isEmpty {
+            await vault.forgetWorkspaces(dropped)
+            if TemporaryCopies.forgetFamily(dropped, in: temporary, session: session) { forgotten = Set(dropped) }
+        }
         areasOf[groupId] = family.map(\.workspaceId)
         await note(family.map(\.workspaceId), of: groupId)
-        // The record keeps the folders proven this family's now, for a cleanup after a relaunch.
-        if let row = records.read(userId: userId, groupId: groupId) {
-            let proven = family.map { $0.workspaceId.lowercased() }.sorted()
-            if row.areas != proven {
-                try? records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: row.envelope, rosterVersion: row.rosterVersion, areas: proven))
+        // The record keeps what it held and the folders proven this family's now, less those just forgotten: merged, never
+        // replaced, so a folder deleted while the app was closed is still found after a relaunch.
+        if let row {
+            let kept = Array(Set(row.areas.map { $0.lowercased() } + proven)).filter { !forgotten.contains($0) }.sorted()
+            if kept != row.areas.map({ $0.lowercased() }).sorted() {
+                try? records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: row.envelope, rosterVersion: row.rosterVersion, areas: kept))
             }
         }
         let served = try await fetchIdentities(groupId)

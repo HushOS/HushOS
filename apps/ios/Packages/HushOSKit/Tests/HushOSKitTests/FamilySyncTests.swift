@@ -154,6 +154,36 @@ extension OnFakeDrive {
         }
 
         /*
+         * A family file was opened, then its folder deleted elsewhere while the app was closed. After
+         * the relaunch the sync finds the folder gone: its copy goes then, before the record lets go of
+         * it, and a later removal leaves no copy anywhere. Fails if a relaunch's acceptance replaces
+         * the record's folders (nothing is proven yet), or a folder leaves the record before its copies.
+         */
+        @Test func aFolderDeletedWhileTheAppWasClosedLeavesNoCopy() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let first = try await family.phone(server)
+            guard case .accepted = await first.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            _ = try await first.vault.children(of: family.rootId)
+            let folder = try #require(TemporaryCopies.openedFolder(itemId: family.fileId, version: "v1", familyWorkspace: family.workspaceId, in: first.temporary))
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let copy = folder.appendingPathComponent("Recipes.txt")
+            try Data("Pancakes".utf8).write(to: copy)
+            first.done()
+
+            // Deleted elsewhere while the app was closed; relaunched over the same records, guard and temporary folder.
+            server.areaListed = false
+            let later = try await family.phone(server, records: first.records, guards: first.guards)
+            defer { later.done() }
+            guard case .accepted = await later.sync.sync(family.summary) else { Issue.record("not accepted after the relaunch"); return }
+            #expect(!FileManager.default.fileExists(atPath: copy.path), "the deleted folder's copy outlived it")
+            #expect(later.records.read(userId: family.member.userId, groupId: family.groupId)?.areas == [])
+            server.notMember = true
+            #expect(await later.sync.sync(family.summary) == .wiped)
+            #expect(!FileManager.default.fileExists(atPath: folder.path))
+        }
+
+        /*
          * A sync of the last session answers not-member after the account signed in again (its session
          * ended; its task can't be cancelled). Its wipe deletes nothing the new session wrote: not the
          * copy it opened, not the record it saved. Fails if an ended session's cleanup reaches the
@@ -1043,6 +1073,8 @@ final class FamilyServer: @unchecked Sendable {
     var rostersFail = false
     /* Route 3 answers not-member while route 5 still serves: removed between the two. */
     var detailNotMember = false
+    /* Route 25 lists the family's folder (false: it was deleted, and the family's space lists no folder). */
+    var areaListed = true
     /* Route 25 (the account's spaces) answers with a 503: a family accepted but its folders not opened yet. */
     var spacesFail = false
     /* Route 5 from version 1 answers not-member (a member check's own read), while a continuation still serves. */
@@ -1338,7 +1370,7 @@ final class FamilyServer: @unchecked Sendable {
             return lock.withLock {
                 (200, ["spaces": [
                     ["space": ["kind": "personal"], "areas": [["workspaceId": f.personal, "workspaceKeyVersion": 1, "changeSeq": 0, "root": NSNull(), "rotation": NSNull()]]],
-                    ["space": ["kind": "group", "groupId": f.groupId, "name": "Lindqvist family"], "areas": [[
+                    ["space": ["kind": "group", "groupId": f.groupId, "name": "Lindqvist family"], "areas": !areaListed ? [] : [[
                         "workspaceId": f.workspaceId, "idSeed": f.workspaceSeed, "workspaceKeyVersion": areaVersion, "changeSeq": 2,
                         "root": tree[servedRootId ?? f.rootId].map(json) ?? NSNull(), "rotation": NSNull(),
                         "grant": ["workspaceKeyVersion": areaVersion, "granteeKeyVersion": f.member.keys.keyVersion, "granterUserId": f.creator.userId,

@@ -254,17 +254,20 @@ public enum TemporaryCopies {
      * aren't UUIDs name none. Under the lock every family copy's writes take (`FamilyCopyGate`), and
      * each folder's forget generation moves: a download begun before never writes after.
      */
-    public static func forgetFamily(_ workspaces: [String], in temporary: URL = FileManager.default.temporaryDirectory, session: CopySession? = nil) {
+    /* True when it ran; false, and nothing deleted, when `session` ended. */
+    @discardableResult
+    public static func forgetFamily(_ workspaces: [String], in temporary: URL = FileManager.default.temporaryDirectory, session: CopySession? = nil) -> Bool {
         let family = temporary.appendingPathComponent("opened", isDirectory: true).appendingPathComponent(familyFolder, isDirectory: true)
-        forgetLock.withLock {
+        return forgetLock.withLock {
             // An ended session's cleanup touches nothing: the copies there now may be the next session's.
-            if let session, !session.open { return }
+            if let session, !session.open { return false }
             for id in workspaces {
                 guard let workspace = UUID(uuidString: id) else { continue }
                 let key = workspace.uuidString.lowercased()
                 forgotten[key, default: 0] += 1
                 try? FileManager.default.removeItem(at: family.appendingPathComponent(key, isDirectory: true))
             }
+            return true
         }
     }
 
