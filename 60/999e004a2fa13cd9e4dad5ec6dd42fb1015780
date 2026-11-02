@@ -1,0 +1,55 @@
+apps/android/AGENTS.md
+  s_7109f9e804230a::t_b447457e96e81f 84
+apps/android/app/src/main/kotlin/com/hushos/app/data/Reservations.kt
+  s_7a0feae029183a::t_574660c7c97e1b 176-189
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferNotices.kt
+  s_566b8e0c4467a4::t_cde70c469e09c3 225-226
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_ec12ebe02de5ff::t_36249bd8197cc2 113-115,120-123,131-139
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_ec12ebe02de5ff::t_d918bd0377f2b7 1889-1895
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_29e8fc3d7f1f82 428-429,431-432
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyUploadsTest.kt
+  s_566b8e0c4467a4::t_d478aaa2e3f6ec 603-672
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "60999e004a2fa13cd9e4dad5ec6dd42fb1015780",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_7109f9e804230a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a16011-997d-7320-af40-963b74d6a049",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_7a0feae029183a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a19d36-2271-70d3-92e2-fa4ea1524fe2",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_ec12ebe02de5ff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3f79b7e-f7a1-4c9c-9a58-b7059252bcae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
