@@ -217,6 +217,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     }
     override fun walkSoon() = com.hushos.app.data.FamilyWalkWork.soon(context)
     override fun notice(text: String, untilRead: Boolean) = if (untilRead) notifyUntilRead(text) else notify(text)
+    override fun accountChanged() { refreshAccount(); refreshStorage() }
     private val thumbnailTasks = HashSet<String>()
     /* Who can open what (`access`): one request at a time, and one more after it for anything asked meanwhile. */
     private val sharingLoads = SharingRefresh(viewModelScope) { loadAccess() }

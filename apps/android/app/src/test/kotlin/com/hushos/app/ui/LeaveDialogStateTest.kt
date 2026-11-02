@@ -50,6 +50,8 @@ class LeaveDialogStateTest {
         override fun updateState(change: (DriveState) -> DriveState) = state.update(change)
         override fun lostSession() {}
         override fun notice(text: String, untilRead: Boolean) { notices.add(text) }
+        @Volatile var accountReloads = 0
+        override fun accountChanged() { accountReloads++ }
     }
 
     @Before
@@ -86,6 +88,8 @@ class LeaveDialogStateTest {
         assertTrue(model.confirmLeave("Lindqvist family"))
         settled(model)
         assertEquals(LeaveAsk(family.groupId, error = FamilySync.ORGANIZER_FIRST), model.leaving)
+        // Still in the family: its plan and pool are still the account's.
+        assertEquals(0, host.accountReloads)
 
         // A lapsed plan named: kept for the next press, which confirms it by id.
         family.leaveRefusal = 409 to JSONObject().put("code", "ends-lapsed").put("message", "You pay for a lapsed plan.")
@@ -115,5 +119,7 @@ class LeaveDialogStateTest {
         assertNull(model.leaving)
         assertEquals(family.groupId, model.leftFamily)
         assertEquals("You left Lindqvist family", host.notices.last())
+        // Out of the family: the account's storage and plan are read again, so Account stops showing the family's.
+        assertEquals(1, host.accountReloads)
     }
 }

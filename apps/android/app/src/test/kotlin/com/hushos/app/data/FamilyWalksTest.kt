@@ -176,6 +176,28 @@ class FamilyWalksTest {
     }
 
     /*
+     * The folder's change feed is long (here a row a page, the trashed subfolder's row after more than 256 pages): finding
+     * the subfolder follows the feed to its end, so the walk finishes rather than rescanning the same prefix on every
+     * retry. Fails if the feed is followed only so far.
+     */
+    @Test
+    fun aTrashedParentPastAnyPageBoundIsFound() {
+        val bulk = server.folder(family.rootId, "Bulk")
+        repeat(270) { server.folder(bulk, "f$it") }
+        val phone = opened()
+        server.trash(sub)
+        // A target above every epoch the fake handed out for those folders: none is taken for already re-keyed.
+        family.replaceKeys(target = 1000L)
+        server.rekeyedElsewhere(family.rootId, sub)
+        server.changesPage = 1
+        val next = family.phone(phone.folder)
+        val target = accepted(next).areas.single().walkTarget()!!
+        assertEquals(WalkEnd.WALKED, next.sync.walk(family.groupId, target))
+        assertFalse(server.running(family.rootId))
+        assertEquals("Packing.txt", server.record(deep).name)
+    }
+
+    /*
      * A batch that doesn't land (the connection drops) leaves no fresh key pending, so the same phone's next walk sends
      * those nodes again under keys of its own; and a batch that landed with its answer lost, then the process killed, is
      * finished by a fresh process that lists the re-keyed folder through its ledger. Fails if a stopped batch's keys stay

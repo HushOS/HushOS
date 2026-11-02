@@ -205,8 +205,25 @@ internal fun Vault.openWalkParent(ws: String, parentId: String) {
         if (error is NotAuthenticated || error is Unreachable) throw error
     }
     val rows = HashMap<String, NodeView>()
+    // The parent, then each folder above it, until one whose own parent the ledger holds at the epoch it is wrapped under;
+    // null while a row of that line is still to come.
+    fun chain(): List<NodeView>? {
+        val out = ArrayList<NodeView>()
+        var at: String = parentId
+        while (out.size < 4096) {
+            val row = rows[at.lowercase()] ?: return null
+            out.add(row)
+            val above = row.parentId?.takeIf { !it.equals(ws, ignoreCase = true) } ?: return out
+            if (areaLedger.nodeKey(ws, above)?.epoch == row.parentKeyEpoch) return out
+            at = above
+        }
+        return out
+    }
+    // The feed followed to its end, however long, stopping as soon as the whole line is in: a bound would leave a parent
+    // past it out of reach on every retry, which would start from cursor 0 again.
     var cursor = 0
-    for (page in 0 until 256) {
+    var found: List<NodeView>? = null
+    while (found == null) {
         val feed = try {
             api.changes(ws, cursor)
         } catch (error: Exception) {
@@ -214,20 +231,11 @@ internal fun Vault.openWalkParent(ws: String, parentId: String) {
             return
         }
         for (change in feed.changes) change.node?.takeIf { it.workspaceId.equals(ws, ignoreCase = true) }?.let { rows[it.id.lowercase()] = it }
+        found = chain()
         if (!feed.hasMore || feed.nextCursor <= cursor) break
         cursor = feed.nextCursor
     }
-    // The parent, then each folder above it, until one whose own parent the ledger holds at the epoch it is wrapped under.
-    val chain = ArrayList<NodeView>()
-    var at: String? = parentId
-    while (at != null && chain.size < 256) {
-        val row = rows[at.lowercase()] ?: break
-        chain.add(row)
-        val above = row.parentId?.takeIf { !it.equals(ws, ignoreCase = true) } ?: break
-        if (areaLedger.nodeKey(ws, above)?.epoch == row.parentKeyEpoch) break
-        at = above
-    }
-    for (row in chain.asReversed()) runCatching { open(row, replace = true) }
+    for (row in (found ?: chain() ?: return).asReversed()) runCatching { open(row, replace = true) }
 }
 
 /* A node of the work as the ledger's walk takes it: its parent's key at the target, or the top folder's own. */

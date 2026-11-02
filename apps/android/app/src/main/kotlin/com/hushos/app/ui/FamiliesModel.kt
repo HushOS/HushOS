@@ -121,6 +121,8 @@ interface FamilyHost {
     fun walkSoon() {}
     /* A line for the person (a leave that landed): briefly, or until read. */
     fun notice(text: String, untilRead: Boolean) {}
+    /* The account's storage and plan changed (a leave ended the family's pool and plan for it): read them again. */
+    fun accountChanged() {}
 }
 
 /*
@@ -207,6 +209,8 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                     if (outcome.removed.state == FamilyState.Wiped) model.notice("You left $family", untilRead = false)
                     else model.notice("You left $family, but this device kept some of it. HushOS couldn’t clear the family’s keys and saved records on this device. Sign out to clear them.", untilRead = true)
                     leftFamily = ask.groupId
+                    // Its storage and plan are its own again: Account's card and Plan and storage read them afresh.
+                    model.accountChanged()
                 }
             }
         }
