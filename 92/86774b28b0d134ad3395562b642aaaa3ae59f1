@@ -1,0 +1,37 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_ca05e21f005f2e 84
+apps/android/app/src/main/kotlin/com/hushos/app/data/FailedTransfers.kt
+  s_566b8e0c4467a4::t_43f34b5cc85a57 21-22,24-26,54,59
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_6bee3dcdb78ce5::t_630c36e0b4e8f2 101,106,110,114,128-130,135,137,146-147,149,214-216,223-224,230,232,350,368-369,376-377,381,385,406,413-416,421,434
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_dbbc0685a36b5b 366
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyUploadsTest.kt
+  s_566b8e0c4467a4::t_ddfa9adae2473f 639-641,643
+apps/android/app/src/test/kotlin/com/hushos/app/data/UploadWorkerTest.kt
+  s_566b8e0c4467a4::t_292fbb3f22bb8c 206-207,209,269-356
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9286774b28b0d134ad3395562b642aaaa3ae59f1",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_6bee3dcdb78ce5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a19d4e-6f76-77d0-98d1-2bd641a40239",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
