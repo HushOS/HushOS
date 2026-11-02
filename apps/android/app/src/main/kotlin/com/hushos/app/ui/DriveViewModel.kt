@@ -381,9 +381,14 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                 val names = withContext(Dispatchers.IO) { jobNames.all() }
                 val nameOf = { info: androidx.work.WorkInfo -> names[info.id.toString()] ?: info.tags.firstOrNull { it.startsWith("name:") }?.removePrefix("name:") ?: "File" }
                 // Failures from before the app kept its own record go on it now, while WorkManager still has them.
+                // Only this account's jobs, and only while it is still the one here: each row lands before a wipe or not at all.
+                val generation = vault?.ledgerGeneration
                 withContext(Dispatchers.IO) {
-                    infos.filter { it.state == androidx.work.WorkInfo.State.FAILED && it.id !in hidden && !records.has(it.id.toString()) }.forEach { info ->
-                        records.record(com.hushos.app.data.FailedTransfer.fromWork(info, nameOf(info)))
+                    infos.filter { it.state == androidx.work.WorkInfo.State.FAILED && it.id !in hidden && !records.has(it.id.toString()) &&
+                        com.hushos.app.data.TransferQueue.sessionCurrent(context, it.tags) }.forEach { info ->
+                        if (generation != null) com.hushos.app.data.Reservations.whileAccount(generation) {
+                            if (com.hushos.app.data.TransferQueue.sessionCurrent(context, info.tags)) records.record(com.hushos.app.data.FailedTransfer.fromWork(info, nameOf(info)))
+                        }
                     }
                     com.hushos.app.data.TransferQueue.sweep(context, inUse)
                     jobNames.retain(infos.map { it.id.toString() }.toSet())

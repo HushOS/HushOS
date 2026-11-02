@@ -88,15 +88,24 @@ object TransferQueue {
                   abort: (uploadId: String, workspaceId: String) -> Reservations.Abort) =
         endFamily(context, groupId, session, except, still, abort) { WorkManager.getInstance(context).cancelWorkById(it) }
 
-    /* The session's tag on each upload it queues: a digest, as the family walks' (FamilyWalkWork.sessionKey). */
-    internal fun sessionTag(session: Shared.Session) = "session:" + FamilyWalkWork.sessionKey(session)
+    /*
+     * The account's tag on each job it queues: a digest of its user id (no name, nothing the id can be read back from).
+     * The account's, not the session's: the same account signing in again (its files kept, AccountStore.claim) finds its
+     * jobs its own; another account never runs, ends or shows them.
+     */
+    internal fun accountTag(session: Shared.Session) = "account:" +
+        java.security.MessageDigest.getInstance("SHA-256").digest(("hushos-account|" + session.userId.lowercase()).toByteArray())
+            .take(12).joinToString("") { "%02x".format(it) }
 
-    /* Whether the job tagged `tags` belongs to the session signed in now (an untagged one: whether anyone is). */
+    /* Whether the job tagged `tags` belongs to the account signed in now (an untagged one: whether anyone is). */
     internal fun sessionCurrent(context: Context, tags: Set<String>): Boolean {
         val now = Shared.session(context) ?: return false
-        val tag = tags.firstOrNull { it.startsWith("session:") } ?: return true
-        return tag == sessionTag(now)
+        val tag = tags.firstOrNull { it.startsWith("account:") } ?: return true
+        return tag == accountTag(now)
     }
+
+    /* Tests: runs inside a cleanup's guarded write, right before it writes (a sign-out landing there). */
+    @Volatile internal var beforeCleanupWrite: (() -> Unit)? = null
 
     /* Whether `session` is still the one signed in on this phone. */
     private fun signedIn(context: Context, session: Shared.Session) =
@@ -108,16 +117,24 @@ object TransferQueue {
     /* As above; `cancel` ends a queued job in WorkManager (a test sees what is written by then). */
     internal fun endFamily(context: Context, groupId: String, session: Shared.Session, except: UUID?, still: () -> Boolean,
                            abort: (uploadId: String, workspaceId: String) -> Reservations.Abort, cancel: (UUID) -> Unit) {
+        // The account generation it started in: every write of a row is made under the lock a wipe moves it in, only while
+        // nothing was wiped since and its session is still the one signed in, so it lands before a wipe or not at all.
+        val generation = Reservations.generation
         fun current() { if (!still() || !signedIn(context, session)) throw SessionMoved() }
+        fun write(body: () -> Unit) {
+            Reservations.whileAccount(generation) {
+                if (!still() || !signedIn(context, session)) null else { beforeCleanupWrite?.invoke(); body(); Unit }
+            } ?: throw SessionMoved()
+        }
         try {
             current()
-            endFamilyOf(context, groupId, sessionTag(session), except, ::current, abort, cancel)
+            endFamilyOf(context, groupId, accountTag(session), except, ::current, ::write, abort, cancel)
         } catch (_: SessionMoved) {
             // Another session's now (or the caller stopped): its jobs and rows are not this cleanup's to touch.
         }
     }
 
-    private fun endFamilyOf(context: Context, groupId: String, tag: String, except: UUID?, current: () -> Unit,
+    private fun endFamilyOf(context: Context, groupId: String, tag: String, except: UUID?, current: () -> Unit, write: (() -> Unit) -> Unit,
                             abort: (uploadId: String, workspaceId: String) -> Reservations.Abort, cancel: (UUID) -> Unit) {
         val work = WorkManager.getInstance(context)
         val records = FailedTransfers.of(context)
@@ -129,15 +146,14 @@ object TransferQueue {
             dropJob(context, job, dir?.takeIf { it.parentFile == queue }, abort)
             current()
         }
-        // Only this session's jobs (its tag): another account's upload into the same family is never ended here.
+        // Only this account's jobs (its tag): another account's upload into the same family is never ended here.
         val infos = runCatching { work.getWorkInfosByTag("family:${groupId.lowercase()}").get() }.getOrDefault(emptyList()).filter { tag in it.tags }
         current()
         val ending = infos.filter { !it.state.isFinished && it.id != except }
         fun ledgerOf(info: androidx.work.WorkInfo) = info.tags.firstOrNull { it.startsWith("ledger:") }?.removePrefix("ledger:") ?: info.id.toString()
         try {
             // Each queued one's row first, so a cancellation the panel hears already has its reason.
-            for (info in ending) {
-                current()
+            for (info in ending) write {
                 records.record(FailedTransfer(info.id.toString(), UPLOAD, JobNames.of(context).get(info.id.toString()) ?: "File", FamilyWords.NOT_IN_FAMILY,
                     System.currentTimeMillis(), family = groupId.lowercase(), ledger = ledgerOf(info)))
             }
@@ -150,7 +166,7 @@ object TransferQueue {
             current()
             for (failed in records.all().filter { it.family.equals(groupId, ignoreCase = true) }) {
                 drop(failed.ledgerKey, failed.file)
-                records.record(failed.copy(file = null, reason = FamilyWords.NOT_IN_FAMILY))
+                write { records.record(failed.copy(file = null, reason = FamilyWords.NOT_IN_FAMILY)) }
             }
             KeyChangeWaits.of(context).forgetAll(infos.map { it.id.toString() })
         } finally {
@@ -253,7 +269,7 @@ object TransferQueue {
 
     private fun enqueueUpload(context: Context, id: UUID, file: File, name: String, mime: String?, folderId: String, replacingId: String?, family: Family? = null,
                               ledger: String = id.toString()): UUID {
-        val request = uploadRequest(id, file, mime, folderId, replacingId, family, ledger, Shared.session(context)?.let(::sessionTag))
+        val request = uploadRequest(id, file, mime, folderId, replacingId, family, ledger, Shared.session(context)?.let(::accountTag))
         JobNames.of(context).put(id.toString(), name)
         WorkManager.getInstance(context).enqueueUniqueWork("upload-$id", ExistingWorkPolicy.KEEP, request)
         return id
@@ -272,7 +288,7 @@ object TransferQueue {
             // The panel reads these: a job's input is not visible once it is queued. The name is the app's (JobNames).
             .addTag(TAG).addTag("kind:$UPLOAD").addTag("file:${file.path}").addTag("ledger:$ledger")
             .apply { if (family != null) addTag("family:${family.groupId.lowercase()}") }
-            // The session that queued it (TransferQueue.sessionTag): a removal's cleanup ends only its own session's jobs.
+            // The account that queued it (TransferQueue.accountTag): only that account runs it, ends it or shows it.
             .apply { if (session != null) addTag(session) }
             .build()
 
@@ -282,7 +298,7 @@ object TransferQueue {
      * run under way (which may have missed the change) rather than being dropped.
      */
     fun keep(context: Context, nodeId: String, name: String, folder: Boolean = false, again: Boolean = false, shareRoot: String? = null) {
-        val request = keepRequest(nodeId, folder, shareRoot, Shared.session(context)?.let(::sessionTag))
+        val request = keepRequest(nodeId, folder, shareRoot, Shared.session(context)?.let(::accountTag))
         // Kept by the app, never in WorkManager's database, which sign-out can't empty (JobNames).
         JobNames.of(context).put(request.id.toString(), name)
         WorkManager.getInstance(context).enqueueUniqueWork("keep-$nodeId", if (again) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP, request)
@@ -423,9 +439,9 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         // A rerun of a run that landed after its stop: already uploaded and said; its copy is gone, so nothing else is looked at.
         if (LandedJobs.of(applicationContext).take(id.toString())) return Result.success()
         // The account it runs for: the one signed in when it started (the generation every later write is checked against).
-        // A job another session queued does nothing and writes nothing here.
+        // A job another account queued does nothing and writes nothing here; its output keeps what a Retry needs.
         val generation = Reservations.generation
-        if (!TransferQueue.sessionCurrent(applicationContext, tags)) return Result.failure()
+        if (!TransferQueue.sessionCurrent(applicationContext, tags)) return Result.failure(inputData)
         // Whose reservations this job holds: its own id, or the first job's that a Retry carried.
         val ledger = inputData.getString("ledger") ?: id.toString()
         val file = File(inputData.getString("file") ?: return failed("The file isn’t there any more. Pick it again.", generation = generation))
@@ -536,9 +552,9 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     private suspend fun work(): Result {
         // A rerun of a run that kept the item after its stop: done already. The next keep queued behind it runs as usual.
         if (LandedJobs.of(applicationContext).take(id.toString())) return Result.success()
-        // As an upload's: the account it runs for, and nothing done or written for another session's job.
+        // As an upload's: the account it runs for, and nothing done or written for another account's job.
         val generation = Reservations.generation
-        if (!TransferQueue.sessionCurrent(applicationContext, tags)) return Result.failure()
+        if (!TransferQueue.sessionCurrent(applicationContext, tags)) return Result.failure(inputData)
         // Refused from the background (Android denies it there): the job runs as an ordinary one. A stop goes on.
         attempt { setForeground(getForegroundInfo()) }
         val vault = jobVault(applicationContext) ?: return failed("Sign in again to finish this.", generation = generation)

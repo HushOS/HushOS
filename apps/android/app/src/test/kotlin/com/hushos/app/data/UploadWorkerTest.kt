@@ -62,7 +62,7 @@ class UploadWorkerTest {
 
     /* The job as WorkManager would start it: its id, input and tags from the request TransferQueue queues. */
     private fun worker(id: UUID, file: File): UploadWorker {
-        val request = TransferQueue.uploadRequest(id, file, "text/plain", family.rootId, null, familyOf)
+        val request = TransferQueue.uploadRequest(id, file, "text/plain", family.rootId, null, familyOf, session = TransferQueue.accountTag(Shared.session(app)!!))
         JobNames.of(app).put(id.toString(), "Notes.txt")
         return TestListenableWorkerBuilder<UploadWorker>(app).setId(id).setInputData(request.workSpec.input).setTags(request.tags.toList()).build()
     }
@@ -207,7 +207,7 @@ class UploadWorkerTest {
         assertEquals(listOf(id.toString()), records().map { it.job })
         // Run as WorkManager would start it: the request Retry queued (its tags as stored), the failed job's copy and folder.
         val expected = TransferQueue.uploadRequest(queued, File(failed.file!!), failed.mime, failed.folder!!, failed.replacing, familyOf, failed.ledgerKey,
-            TransferQueue.sessionTag(Shared.session(app)!!))
+            TransferQueue.accountTag(Shared.session(app)!!))
         assertEquals(expected.tags, WorkManager.getInstance(app).getWorkInfoById(queued).get()!!.tags)
         val retried = TestListenableWorkerBuilder<UploadWorker>(app).setId(queued).setInputData(expected.workSpec.input).setTags(expected.tags.toList()).build()
         val reserved = begins()
@@ -271,7 +271,7 @@ class UploadWorkerTest {
     /* A job as WorkManager starts the one a Retry queued: the request it built (checked against the tags it stored). */
     private fun queuedRetry(queued: UUID, failed: FailedTransfer): UploadWorker {
         val expected = TransferQueue.uploadRequest(queued, File(failed.file!!), failed.mime, failed.folder!!, failed.replacing, familyOf, failed.ledgerKey,
-            TransferQueue.sessionTag(Shared.session(app)!!))
+            TransferQueue.accountTag(Shared.session(app)!!))
         assertEquals(expected.tags, WorkManager.getInstance(app).getWorkInfoById(queued).get()!!.tags)
         return TestListenableWorkerBuilder<UploadWorker>(app).setId(queued).setInputData(expected.workSpec.input).setTags(expected.tags.toList()).build()
     }
@@ -415,13 +415,13 @@ class UploadWorkerTest {
     }
 
     /*
-     * As above, for a job another session queued (still in WorkManager): a removal ends only its own session's jobs. Fails
-     * if a cleanup lists the family's jobs without their session.
+     * As above, for a job another account queued (still in WorkManager): a removal ends only its own account's jobs. Fails
+     * if a cleanup lists the family's jobs without their account.
      */
     @Test
-    fun aRemovalEndsOnlyItsOwnSessionsJobs() {
+    fun aRemovalEndsOnlyItsOwnAccountsJobs() {
         val first = Shared.session(app)!!
-        Shared.writeSession(app, first.copy(token = "an-earlier-token"))
+        Shared.writeSession(app, first.copy(token = "another-token", userId = UUID.randomUUID().toString()))
         val earlier = TransferQueue.upload(app, File(app.cacheDir, "earlier.txt").apply { writeText("plan") }, "Plan.txt", "text/plain", family.rootId, null, familyOf)
         Shared.writeSession(app, first)
         TransferQueue.endFamily(app, family.groupId, first) { _, _ -> Reservations.Abort.RELEASED }
@@ -503,5 +503,86 @@ class UploadWorkerTest {
         assertEquals("the old account's job wrote a row for the new one", emptyList<FailedTransfer>(), FailedTransfers.of(app).all())
         assertEquals("the old account's job posted a notice to the new one", before, notices.allNotifications.size)
         assertFalse(File(app.filesDir, TransferNotices.OUTCOMES).exists())
+    }
+
+    /*
+     * #251 final check, P1: the account signs out while a removal's cleanup is writing a row. The write finishes before
+     * the wipe or doesn't happen: once the sign-out is through, no failed-transfers file is left. Fails if a cleanup writes
+     * a row outside the lock a wipe holds.
+     */
+    @Test
+    fun aSignOutDuringACleanupsWriteLeavesNoFile() {
+        val session = Shared.session(app)!!
+        TransferQueue.upload(app, File(app.cacheDir, "menu.txt").apply { writeText("menu") }, "Menu.txt", "text/plain", family.rootId, null, familyOf)
+        var signingOut: Thread? = null
+        TransferQueue.beforeCleanupWrite = {
+            if (signingOut == null) signingOut = Thread {
+                Shared.clearSession(app)
+                AccountStore(app.filesDir, app.cacheDir, app.noBackupFilesDir).wipe()
+            }.apply { start(); join(500) }
+        }
+        try {
+            TransferQueue.endFamily(app, family.groupId, session) { _, _ -> Reservations.Abort.RELEASED }
+        } finally {
+            TransferQueue.beforeCleanupWrite = null
+        }
+        signingOut!!.join(10_000)
+        assertFalse("a cleanup's row outlived the sign-out", File(app.filesDir, FailedTransfers.FILE).exists())
+    }
+
+    /*
+     * #251 final check, P2: the account's session ends and the same account signs in again (its files kept). Its queued
+     * job is still its own and lands. Another account's sign-in never runs it: the job does nothing, and its output keeps
+     * what a Retry needs. Fails if a job is tied to the session rather than the account, or a refusal drops its inputs.
+     */
+    @Test
+    fun aJobRunsForItsAccountAfterItSignsInAgainAndNeverForAnother() {
+        val first = Shared.session(app)!!
+        val id = UUID.randomUUID()
+        val job = worker(id, staged(id))
+        server.renewed.add("renewed-token")
+        Shared.writeSession(app, first.copy(token = "renewed-token"))
+        assertEquals("the same account's job didn't run after it signed in again", ListenableWorker.Result.success(), run(job))
+        assertEquals(1, begins())
+        val other = UUID.randomUUID()
+        val theirs = worker(other, staged(other))
+        Shared.writeSession(app, first.copy(token = "another-token", userId = UUID.randomUUID().toString()))
+        val refused = run(theirs)
+        assertTrue(refused is ListenableWorker.Result.Failure)
+        assertEquals("another account ran the job", 1, begins())
+        val output = (refused as ListenableWorker.Result.Failure).outputData
+        assertEquals(family.rootId, output.getString("folder"))
+        assertEquals(family.workspaceId.lowercase(), output.getString("familyWorkspace"))
+        assertEquals(other.toString(), output.getString("ledger"))
+        assertTrue(FailedTransfers.of(app).all().none { it.id == other.toString() })
+    }
+
+    /*
+     * #251 final check, P3: the written ledger can't be moved over the old one. The old one stays exactly as it was and
+     * the write fails. A ledger with a line that doesn't parse (a write torn some other way) reads as unreadable, never
+     * as fewer records. Fails if a refused move copies over the live ledger, or a torn line is skipped.
+     */
+    @Test
+    fun aLedgerIsReplacedWholeOrNotAtAll() {
+        val now = System.currentTimeMillis()
+        Reservations.reserved(app, "00000000-0000-4000-8000-0000000000e1", family.workspaceId, "a", now, null)
+        Reservations.reserved(app, "00000000-0000-4000-8000-0000000000e2", family.workspaceId, "b", now, null)
+        Reservations.idle("00000000-0000-4000-8000-0000000000e1")
+        Reservations.idle("00000000-0000-4000-8000-0000000000e2")
+        val ledger = File(app.filesDir, Reservations.FILE)
+        val before = ledger.readText()
+        Reservations.rename = { _, _ -> false }
+        try {
+            assertThrows(java.io.IOException::class.java) {
+                Reservations.reserved(app, "00000000-0000-4000-8000-0000000000e3", family.workspaceId, "c", now, null)
+            }
+            Reservations.settled(app, "00000000-0000-4000-8000-0000000000e2")
+            assertEquals("a refused move changed the live ledger", before, ledger.readText())
+        } finally {
+            Reservations.rename = { from, to -> from.renameTo(to) }
+            Reservations.forgetHeld()
+        }
+        ledger.appendText("00000000-0000-4000-8000-0000000000e4\t" + family.workspaceId)
+        assertThrows(Reservations.LedgerUnreadable::class.java) { Reservations.all(app) }
     }
 }

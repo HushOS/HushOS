@@ -65,6 +65,8 @@ class FakeDrive : AutoCloseable {
     private val grant: JSONObject = account.getJSONObject("grant")
     val workspace: String = grant.getString("workspaceId")
     val token = "session-" + UUID.randomUUID()
+    /* Later sessions of the same account (signed in again after one ended): their tokens are answered too. */
+    val renewed: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     /* An account whose identity the server serves: its own (opened under the fixture's account key) and Grace's. */
     class Person(val id: String, val envelope: IdentityEnvelope, val keys: IdentityKeys) {
@@ -515,7 +517,8 @@ class FakeDrive : AutoCloseable {
             if (path.startsWith("/store/")) return store(exchange, method, path, raw)
             val body = if (raw.isEmpty()) JSONObject() else runCatching { JSONObject(String(raw)) }.getOrDefault(JSONObject())
             val public = path.startsWith("/api/drive/links/")
-            if (!public && exchange.requestHeaders.getFirst("Cookie") != "hushos-session=$token") return send(exchange, 401, JSONObject().put("message", "Sign in"))
+            val cookie = exchange.requestHeaders.getFirst("Cookie")
+            if (!public && cookie != "hushos-session=$token" && renewed.none { cookie == "hushos-session=$it" }) return send(exchange, 401, JSONObject().put("message", "Sign in"))
             val reply = route(method, path.removePrefix("/api"), query, body, exchange.requestHeaders.getFirst(LINK_TOKEN_HEADER))
             if (dropReply?.invoke(method, path.removePrefix("/api/")) == true) { exchange.close(); return }
             if (reply == null) {

@@ -48,6 +48,9 @@ object Reservations {
      */
     const val GRACE_MS = 2 * 60 * 60 * 1000L
 
+    /* Moves the written ledger over the old one (tests refuse it). */
+    @Volatile internal var rename: (File, File) -> Boolean = { from, to -> from.renameTo(to) }
+
     /* The clock records' expiries are read against; a test moves it. */
     @Volatile internal var now: () -> Long = System::currentTimeMillis
 
@@ -94,10 +97,13 @@ object Reservations {
         } catch (error: Exception) {
             throw LedgerUnreadable(error)
         }
-        val stored = lines.mapNotNull { line ->
-            line.split("\t").takeIf { it.size == 5 && it[0].isNotBlank() }?.let {
-                Record(it[0], it[1], it[2], it[3].toLongOrNull() ?: 0L, it[4] == "landed")
-            }
+        // Every line whole, or the ledger is unreadable (fail closed): never a record skipped silently.
+        val stored = lines.map { line ->
+            val fields = line.split("\t")
+            val expires = fields.getOrNull(3)?.toLongOrNull()
+            if (fields.size != 5 || fields[0].isBlank() || expires == null || fields[4] !in setOf("landed", "reserved"))
+                throw LedgerUnreadable(java.io.IOException("A ledger line doesn't parse."))
+            Record(fields[0], fields[1], fields[2], expires, fields[4] == "landed")
         }
         stored + unwritten.values.filter { held -> stored.none { it.uploadId == held.uploadId } }
     }
@@ -112,7 +118,8 @@ object Reservations {
             next.writeText(records.joinToString("") {
                 "${it.uploadId}\t${it.workspaceId}\t${it.job}\t${it.expiresAt}\t${if (it.landed) "landed" else "reserved"}\n"
             })
-            if (!next.renameTo(target)) { target.writeText(next.readText()); next.delete() }
+            // Moved over whole or not at all: a refused move leaves the ledger as it was, and the write fails.
+            if (!rename(next, target)) { next.delete(); throw java.io.IOException("The upload ledger wasn't replaced.") }
         }
         unwritten.clear()
     }
