@@ -185,11 +185,19 @@ internal fun callWords(answer: CallAnswer, first: String?, family: String = "thi
  * are sent again a few times, then kept for the next open; grants a call is owed are posted first and the same bytes
  * sent again; `stale`, membership moves and refusals drop it; not-member lets go of the family as every removal does.
  * `only`: an admission of that person, else `Other` and nothing is touched. `names` gives a person's first name.
+ * `told` is handed every outcome that drops the entry before the entry is deleted: what a call came to is never lost
+ * with its entry (a page left meanwhile, a later entry that throws).
  */
-internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept, only: String? = null, names: (String) -> String? = { null }): CallEnd {
+internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept, only: String? = null, names: (String) -> String? = { null },
+    told: (CallEnd) -> Unit = {}): CallEnd {
     val groupId = summary.id
     var resends = 0
     var fixes = 0
+    fun finish(end: CallEnd): CallEnd {
+        told(end)
+        outbox.delete(userId, groupId, kept.outboxId)
+        return end
+    }
     while (true) {
         // The settings read afresh first: the core judges an admission against this account's pin of them now. A read
         // that fails sends nothing (the ledger still holds the last settings, whose pin another device may have
@@ -204,22 +212,23 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
             ledger.outboxOpen(groupId, kept.outboxId, userId, kept.entry)
         } catch (sealed: CoreException.Sealed) {
             // Not an entry of this account's any more (sealed before a master-key change): never sent, deleted, said lost.
-            outbox.delete(userId, groupId, kept.outboxId)
-            return CallEnd.Refused("A change to ${summary.name} hadn’t reached the server and couldn’t be opened on this device. Make it again.")
+            return finish(CallEnd.Refused("A change to ${summary.name} hadn’t reached the server and couldn’t be opened on this device. Make it again."))
         }
         val admits = (read.route() as? ChainRoute.Admit)?.userId
         if (only != null && (admits == null || !admits.equals(only, ignoreCase = true))) return CallEnd.Other
         val first = admits?.let(names)
         val (route, body) = when (read) {
             is OutboxCall.Send -> read.route to read.body
+            // AwaitingCheck and Committed are the web's own entries (an earlier web version's held-back admission, a
+            // creation); a phone's outbox holds only what it staged, so only OtherKeys is met here.
             is OutboxCall.Hold -> return if (read.reason == OutboxHold.OTHER_KEYS) CallEnd.OtherKeys else CallEnd.Pending("Kept on this device.")
-            is OutboxCall.Landed -> { outbox.delete(userId, groupId, kept.outboxId); syncRevised(summary); return CallEnd.Landed }
-            is OutboxCall.Superseded -> { outbox.delete(userId, groupId, kept.outboxId); return CallEnd.Stale }
+            is OutboxCall.Landed -> { finish(CallEnd.Landed); syncRevised(summary); return CallEnd.Landed }
+            is OutboxCall.Superseded -> return finish(CallEnd.Stale)
         }
         val answer = api.sendCall(groupId, route, body)
         when (outboxStep(answer.status.toUShort(), answer.code)) {
             OutboxStep.LANDED -> {
-                outbox.delete(userId, groupId, kept.outboxId)
+                finish(CallEnd.Landed)
                 syncRevised(summary)
                 return CallEnd.Landed
             }
@@ -237,19 +246,19 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
                 }
             }
             OutboxStep.STALE -> {
-                outbox.delete(userId, groupId, kept.outboxId)
+                finish(CallEnd.Stale)
                 syncRevised(summary)
                 return CallEnd.Stale
             }
             OutboxStep.MEMBERSHIP_MOVED -> {
-                outbox.delete(userId, groupId, kept.outboxId)
+                val end = finish(CallEnd.Refused(callWords(answer, first, summary.name)))
                 syncRevised(summary)
-                return CallEnd.Refused(callWords(answer, first, summary.name))
+                return end
             }
             OutboxStep.REFUSED -> {
-                outbox.delete(userId, groupId, kept.outboxId)
+                val end = finish(CallEnd.Refused(callWords(answer, first, summary.name)))
                 if (answer.code == "forbidden") syncRevised(summary)
-                return CallEnd.Refused(callWords(answer, first, summary.name))
+                return end
             }
             OutboxStep.WIPED -> {
                 // As every not-member: two-phase, its outcome (finished, or refused with a guard not stored) published.
@@ -325,11 +334,11 @@ private fun FamilySync.sendGrants(summary: GroupSummary, data: JSONObject?): Gra
  * account manages: a send that got no answer before a lock, a kill or a relaunch finishes here, never signed again.
  * Each entry's end, by its outbox id.
  */
-fun FamilySync.resumeOutbox(summary: GroupSummary, names: (String) -> String? = { null }): Map<String, CallEnd> = exclusive(summary.id) {
+fun FamilySync.resumeOutbox(summary: GroupSummary, names: (String) -> String? = { null }, told: (CallEnd) -> Unit = {}): Map<String, CallEnd> = exclusive(summary.id) {
     val ends = LinkedHashMap<String, CallEnd>()
     notMemberLetsGo(summary.id, { ends }) {
         for (kept in outbox.list(userId, summary.id)) {
-            val end = sendKept(summary, kept, names = names)
+            val end = sendKept(summary, kept, names = names, told = told)
             ends[kept.outboxId] = end
             if (end == CallEnd.Wiped) break
         }

@@ -101,6 +101,8 @@ class FakeDrive : AutoCloseable {
     val clients = java.util.Collections.synchronizedList(ArrayList<Pair<String, String?>>())
     /* Every settings read fails with a 503 while set (the server or the connection down for that route). */
     @Volatile var failSettingsReads = false
+    /* Every settings read answered with this while set (a refusal, not a server down). */
+    @Volatile var settingsReadAnswer: Pair<Int, JSONObject>? = null
     /* People besides Grace that `lookup` answers for, by address (lowercase): their keys and name. */
     val others = java.util.concurrent.ConcurrentHashMap<String, Pair<Person, String>>()
     fun another(email: String, name: String): Person = person(UUID.randomUUID().toString(), randomBytes(32u)).also { others[email.lowercase()] = it to name }
@@ -579,6 +581,7 @@ class FakeDrive : AutoCloseable {
             get && at("auth", "settings") -> {
                 if (failSettingsOnceWorkListed && workListed) return 500 to JSONObject().put("message", "Settings are unavailable")
                 if (failSettingsReads) return 503 to JSONObject().put("message", "Drive is temporarily unavailable. Please try again.")
+                settingsReadAnswer?.let { return it }
                 val answer = settingsJson()
                 onNextSettingsGet?.let { hook -> onNextSettingsGet = null; hook() }
                 ok(answer)

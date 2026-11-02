@@ -15,6 +15,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.After
@@ -83,6 +86,7 @@ class FamilyManageModelTest {
 
     @After
     fun close() {
+        pageThread.close()
         server.close()
         assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
     }
@@ -230,5 +234,98 @@ class FamilyManageModelTest {
         family.invitationsAnswer = 401 to JSONObject().put("message", "Sign in again.")
         runBlocking { model.loadManaged(family.groupId) }
         assertEquals(1, host.lostSessions)
+    }
+
+    private fun answers(n: Int, status: Int, code: String? = null) = repeat(n) {
+        family.admitAnswers.add { _ -> status to JSONObject().put("message", "Not now.").apply { code?.let { put("code", it) } } }
+    }
+
+    private val pageThread = java.util.concurrent.Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+
+    private val grace get() = family.pendingRows.map(PendingPerson::from).single { it.userId.equals(server.grace.id, ignoreCase = true) }
+
+    /*
+     * The page, as Compose runs its effect: a scope of its own that leaving the page cancels, on a thread of its own as
+     * Main is (on IO itself, the work's withContext wouldn't dispatch and would never see the cancellation).
+     */
+    private fun leaveMidResume(): java.util.concurrent.CountDownLatch {
+        val arrived = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        server.beforeAnswer = { method, path ->
+            if (method == "POST" && path.endsWith("/admit") && arrived.count > 0) { arrived.countDown(); release.await(10, java.util.concurrent.TimeUnit.SECONDS) }
+        }
+        val page = kotlinx.coroutines.CoroutineScope(pageThread + kotlinx.coroutines.Job())
+        page.launch { model.loadManaged(family.groupId) }
+        assertTrue(arrived.await(10, java.util.concurrent.TimeUnit.SECONDS))
+        page.cancel()
+        return release
+    }
+
+    /*
+     * The page is left while its resume is sending a kept Let them in, which the server then refuses: the refusal still
+     * reaches the person, though its entry is gone. Fails if what a resume met is dropped with the page.
+     */
+    @Test
+    fun aRefusalMetAfterThePageIsLeftStillShows() {
+        answers(3, 503)
+        assertTrue(host.vault.families.letIn(family.summary, grace) is LetIn.Pending)
+        answers(1, 409, "not-pending")
+        leaveMidResume().countDown()
+        until("the refusal reached the person") { host.shown != null }
+        server.beforeAnswer = null
+        assertEquals(listOf("Grace isn’t waiting to join any more."), host.read())
+    }
+
+    /*
+     * The page is left while its resume is sending a kept Let them in, which then lands: the lists are still read again,
+     * so Grace stops showing as waiting. Fails if the resume's work after the send runs in the page's scope.
+     */
+    @Test
+    fun aKeptCallThatLandsAfterThePageIsLeftStillUpdatesTheLists() {
+        answers(3, 503)
+        assertTrue(host.vault.families.letIn(family.summary, grace) is LetIn.Pending)
+        leaveMidResume().countDown()
+        until("who waits was read again") { model.waiting[family.groupId]?.isEmpty() == true }
+        server.beforeAnswer = null
+    }
+
+    /*
+     * Two kept calls: the first is refused, then the second throws (its settings can't be read). The first's refusal still
+     * reaches the person, and the second is still kept. Fails if one failure throws away what earlier calls came to.
+     */
+    @Test
+    fun aLaterCallThatThrowsKeepsWhatEarlierOnesCameTo() {
+        answers(3, 503)
+        assertTrue(host.vault.families.letIn(family.summary, grace) is LetIn.Pending)
+        val outbox = FamilyOutbox.of(RuntimeEnvironment.getApplication())
+        val graceEntry = outbox.list(family.member.id, family.groupId).single()
+        val ada = server.another("ada@example.org", "Ada Lovelace")
+        family.waiting(ada, "ada@example.org", "Ada Lovelace")
+        val adaWaiting = family.pendingRows.map(PendingPerson::from).single { it.userId.equals(ada.id, ignoreCase = true) }
+        answers(3, 503)
+        assertTrue(host.vault.families.letIn(family.summary, adaWaiting) is LetIn.Pending)
+        // Grace's is the older: sent first.
+        val folder = java.io.File(java.io.File(RuntimeEnvironment.getApplication().noBackupFilesDir, com.hushos.app.data.FamilyRecords.FOLDER), "outbox")
+        folder.listFiles()!!.single { it.name.contains(graceEntry.outboxId) }.setLastModified(System.currentTimeMillis() - 60_000)
+        family.admitAnswers.add { _ ->
+            server.settingsReadAnswer = 400 to JSONObject().put("message", "Bad request.")
+            409 to JSONObject().put("code", "not-pending").put("message", "Not waiting.")
+        }
+        runBlocking { model.loadManaged(family.groupId) }
+        server.settingsReadAnswer = null
+        assertTrue(host.read().contains("Grace isn’t waiting to join any more."))
+        assertEquals(1, outbox.list(family.member.id, family.groupId).size)
+    }
+
+    /*
+     * Let them in kept because the server said it's been tried too often: the person is told it is saved here and why,
+     * in the rate limit's words, never that the server couldn't be reached or that they will be let in.
+     */
+    @Test
+    fun aRateLimitedLetInSaysWhyItIsKept() {
+        answers(3, 429, "rate-limited")
+        model.letIn(family.groupId, grace)
+        until("Let them in finished") { model.waitingRow(family.groupId, grace.userId).busy == null && host.shown != null }
+        assertEquals(listOf("Saved on this device. That’s been tried too often. Wait a little, then try again."), host.read())
     }
 }

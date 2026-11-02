@@ -33,6 +33,7 @@ import com.hushos.app.data.dropKeptAdmission
 import com.hushos.app.data.walkTarget
 import com.hushos.app.data.rethrowIfCancelled
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.io.File
@@ -208,28 +209,35 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
 
     /*
      * A manager's family page: whatever the outbox kept for the family sent again first (a Let them in that got no answer
-     * before a lock or a relaunch), then who waits and the invitations still open read again.
+     * before a lock or a relaunch), then who waits and the invitations still open read again. In the families' scope,
+     * never the caller's: a page left mid-resume (its effect cancelled) still has what each kept call came to said and the
+     * lists read, since a refused call's entry is deleted once its words are handed over. The caller waits for it.
      */
     suspend fun loadManaged(groupId: String, session: FamilySession? = null) {
         val s = session ?: begin() ?: return
+        model.familyScope.async { resumeManaged(groupId, s) }.await()
+    }
+
+    private suspend fun resumeManaged(groupId: String, s: FamilySession) {
         val summary = list?.firstOrNull { it.id == groupId } ?: return
         if (!manages(groupId)) return
         val known = waiting[groupId].orEmpty()
         val names = { userId: String -> known.firstOrNull { it.userId.equals(userId, ignoreCase = true) }?.let { com.hushos.app.data.firstNameOf(it.name) } }
-        val resumed = gate.run(s) { s.owner.families.resumeOutbox(summary, names) } ?: return
+        // Each refusal is all that's left of its call: said as the outbox hands it over, before its entry is deleted
+        // (so a later entry that throws can't take it along), until read, one after another.
+        val told = { end: com.hushos.app.data.CallEnd ->
+            if (end is com.hushos.app.data.CallEnd.Refused && gate.current(s)) model.notice(end.words, untilRead = true)
+        }
+        val resumed = gate.run(s) { s.owner.families.resumeOutbox(summary, names, told) } ?: return
         if (!gate.current(s)) return
-        // What the kept sends came to, said before the lists are read again: a refusal (the server's, or an entry this
-        // phone can no longer open) in its words; one that landed shows the family as it is now. A removal is published
-        // by the sync (removedNow) and shown from there; no answer stays kept and says nothing.
+        // One that landed shows the family as it is now. A removal is published by the sync (removedNow) and shown from
+        // there; no answer stays kept and says nothing. A failure part way says why; what came before it was said already.
         val ends = resumed.getOrElse { error ->
             error.rethrowIfCancelled()
             if (error is NotAuthenticated) { model.lostSession(); return }
             if (!FamilySync.unanswered(error)) model.notice(FamilyWords.error(error), untilRead = false)
             emptyMap()
         }
-        // Each refusal is all that's left of its call (the entry is gone): until read, one after another, never one
-        // replacing the last.
-        for (end in ends.values) if (end is com.hushos.app.data.CallEnd.Refused) model.notice(end.words, untilRead = true)
         if (ends.values.any { it == com.hushos.app.data.CallEnd.Wiped }) return
         if (ends.values.any { it == com.hushos.app.data.CallEnd.Landed || it == com.hushos.app.data.CallEnd.Stale }) refreshFamily(summary, session = s)
         reloadManaged(groupId, s)
@@ -306,8 +314,8 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                     reloadManaged(groupId, s)
                     refreshFamily(summary, session = s)
                 }
-                is com.hushos.app.data.LetIn.Pending ->
-                    model.notice("Saved on this device. HushOS couldn’t reach the server. $first is let in once it can.", untilRead = false)
+                // Kept, and why it hasn't gone yet (no answer, a rate limit, grants still owed), never a promise.
+                is com.hushos.app.data.LetIn.Pending -> model.notice("Saved on this device. ${outcome.reason}", untilRead = false)
                 is com.hushos.app.data.LetIn.Refused -> waitingRows[key] = WaitingRow(error = outcome.words)
                 is com.hushos.app.data.LetIn.Changed -> model.accountChangedFor(outcome.change)
                 com.hushos.app.data.LetIn.KeptOther -> waitingRows[key] = WaitingRow(keptOther = true)
