@@ -1,0 +1,43 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_bbdca219e1fa3b 84
+apps/android/app/src/main/kotlin/com/hushos/app/data/DriveApi.kt
+  s_c80633581612c4::t_2613b8429a237c 11-20,186
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_c80633581612c4::t_e04af53fbc3bd6 196-206
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyUploads.kt
+  s_c80633581612c4::t_5ea6231925081e 25-26,34,54-56
+apps/android/app/src/main/kotlin/com/hushos/app/data/Reservations.kt
+  s_c80633581612c4::t_48678e90871d57 111-123,135,175-180
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_566b8e0c4467a4::t_299c570f3dcc37 381-382,389-390
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_c80633581612c4::t_8b5a6401060d5e 1886,1910-1911,1920-1921,1964-1971,1973-2003
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyUploadsTest.kt
+  s_566b8e0c4467a4::t_115af778d8f641 53-56,303,360,426-522
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_46d3db50552e0d 217
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6d7e1fb2ac0600c8d95f2aa2243af6214ad06eae",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c80633581612c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e00940c8-2043-4d1f-9c0c-dd2cb74b2aed",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
