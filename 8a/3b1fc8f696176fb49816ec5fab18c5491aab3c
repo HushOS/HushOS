@@ -1,0 +1,48 @@
+packages/drive/src/catalogue.ts
+  s_566b8e0c4467a4::t_182ae958b46d8f 276-285,287,289-292
+  s_566b8e0c4467a4::t_c7e911a7f89b3b 60-111
+apps/android/app/src/main/kotlin/com/hushos/app/data/Catalogue.kt
+  s_566b8e0c4467a4::t_fb2fd3ddf620f7 268,270,272-273
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_4bab559a57decf 88-92,94-122,1393-1399,1413,1415
+apps/android/app/src/main/kotlin/com/hushos/app/files/HushOSDocumentsProvider.kt
+  s_566b8e0c4467a4::t_df664465724114 279-281
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_8f31aedba540e7 778-779,1087,1091-1110
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HomeScreen.kt
+  s_566b8e0c4467a4::t_fe156228d32c62 145-146
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_906a9d1a6b4266 23-28,378,421,794,800-813,909
+apps/ios/App/NodeRow.swift
+  s_566b8e0c4467a4::t_e3782db75dd109 117
+apps/ios/App/RecentsView.swift
+  s_566b8e0c4467a4::t_b560a59c72c93d 11,124-125
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Catalogue.swift
+  s_566b8e0c4467a4::t_c0944e82a34fc4 338-342,344-345
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_566b8e0c4467a4::t_573a68ba439b58 717-723,729-730,740,742,762-765,772-811
+apps/web/src/components/drive/home-view.tsx
+  s_566b8e0c4467a4::t_2f2520a49f232c 119-121,125-127,130
+packages/drive/src/catalogue.test.ts
+  s_566b8e0c4467a4::t_dd0751f8aa9b85 55-56,60-66,79
+packages/drive/src/client.catalogue.test.ts
+  s_566b8e0c4467a4::t_95039e7d36c2ba 528,533-544
+packages/drive/src/client.ts
+  s_566b8e0c4467a4::t_29dfe15c0f3e52 18,870-878,880-884
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8a3b1fc8f696176fb49816ec5fab18c5491aab3c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
