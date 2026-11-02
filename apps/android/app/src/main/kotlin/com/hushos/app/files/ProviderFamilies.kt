@@ -16,7 +16,6 @@ import com.hushos.app.data.NotAuthenticated
 import com.hushos.app.data.Opened
 import com.hushos.app.data.SessionEnded
 import com.hushos.app.data.TransferQueue
-import com.hushos.app.data.requireGuardKept
 import com.hushos.app.data.Vault
 import com.hushos.app.data.familyWordsSince
 import com.hushos.app.data.familyEpoch
@@ -167,13 +166,14 @@ class ProviderFamilies internal constructor(
     }
 
     /*
-     * The family's root, checked again first when a family appeared or went elsewhere since the last load (a leave or a
-     * removal the app found): never answered from a family this phone let go of. Refused once the session ended.
+     * The family's root, checked again first whenever the roots are due (a family appeared or went elsewhere since the
+     * last load, or the last load is old): never answered from a family this phone let go of, and a root kept read only
+     * after no answer turns writable again once a load accepts it, even when Files reopens a document it remembered
+     * without asking for roots or a listing. Refused once the session ended.
      */
     fun require(groupId: String): FamilyRoot {
         if (vault.closed) throw SessionEnded()
-        val held = snapshot
-        if (held == null || held.signal != FamilyRootsSignal.now()) load()
+        if (due()) load()
         return roots.firstOrNull { it.groupId.equals(groupId, ignoreCase = true) } ?: throw FileNotFoundException(FamilyWords.NOT_IN_FAMILY)
     }
 
@@ -336,14 +336,32 @@ class ProviderFamilies internal constructor(
      * The current version's plaintext under the family folder's copies (opened/family/<workspace>/files/<node>/<version>),
      * downloaded under the folder's invalidation: a removal meanwhile writes nothing, and deletes what was there.
      */
-    fun readCopy(doc: FamilyDoc.Node): File {
+    fun readCopy(doc: FamilyDoc.Node, strict: Boolean = false): File {
         val (_, folder) = folderOf(doc)
-        val item = node(doc)
+        val item = current(doc, strict)
         val version = item.node.currentVersion?.id ?: throw FileNotFoundException("This file has no content yet.")
         val copies = FamilyCopies.folder(vault.context.cacheDir, folder.workspaceId) ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
         val file = File(copies, "files/${item.id.lowercase()}/$version")
         if (!file.exists()) vault.download(item.id, file, expectedVersionId = version, workspaceId = folder.workspaceId)
         return file
+    }
+
+    /*
+     * A file as its folder holds it now: the folder listed again through the ledger, so a version that landed since (another
+     * member's, or a write-back the queue sent from another vault) is the one read and built on, never the row this vault
+     * opened before. Without an answer, the row held, unless `strict` (an edit that keeps the contents: built on a version
+     * that can't be checked, it could replace a newer one).
+     */
+    private fun current(doc: FamilyDoc.Node, strict: Boolean): Opened {
+        val held = node(doc)
+        val parent = held.node.parentId ?: return held
+        try {
+            vault.listChildren(parent, doc.workspaceId)
+        } catch (error: Exception) {
+            if (strict || error is NotAuthenticated) throw error
+            return held
+        }
+        return vault.item(doc.workspaceId, doc.nodeId) ?: throw FileNotFoundException("This item no longer exists.")
     }
 
     /*
@@ -357,7 +375,7 @@ class ProviderFamilies internal constructor(
 
     fun editCopy(doc: FamilyDoc.Node, keepContents: Boolean): File {
         val (folder, item) = writable(doc)
-        val source = if (keepContents) readCopy(doc) else null
+        val source = if (keepContents) readCopy(doc, strict = true) else null
         val epoch = vault.familyEpoch(folder.workspaceId)
         val edits = FamilyCopies.edits(vault.context.cacheDir, folder.workspaceId) ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
         val edit = File(edits, "${item.id.lowercase()}/${java.util.UUID.randomUUID()}")
@@ -375,15 +393,18 @@ class ProviderFamilies internal constructor(
      * opens the family in its own vault, sends through the family write path and its gates, keeps its reservation on the
      * ledger (Reservations) from begin until settled, waits out a key change, and is retried by WorkManager until it lands
      * or the family lets the account go (endFamily), so a write-back that fails or whose process dies is never dropped.
-     * Checked here first, nothing queued: the family again if anything moved since (a leave or a removal elsewhere), the
-     * folder writable, the family's guard kept. The edit moves into the queue's own folder. The job's id.
+     * Refused here only when the family let go of it (checked again if anything moved since: a removal or a leave, or a
+     * refusal such as a fork, each of which deletes the family's copies and edits) or the session ended. Anything that
+     * blocks a write only for now (no answer, so the root is read only; a guard owed; keys still being checked) is the
+     * job's to wait out with its own gates: queued, never dropped. The edit moves into the queue's own folder. The job's id.
      */
     fun writeBack(doc: FamilyDoc.Node, edit: File): java.util.UUID {
         if (!edit.exists()) throw FileNotFoundException(FamilyWords.OPEN_AGAIN)
-        val (folder, item) = writable(doc)
-        vault.requireGuardKept(folder.workspaceId)
+        if (vault.closed) throw SessionEnded()
+        require(doc.groupId)
+        val item = vault.item(doc.workspaceId, doc.nodeId) ?: throw FileNotFoundException(FamilyWords.OPEN_AGAIN)
         val parent = item.node.parentId ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
-        return queue(edit, item.name, item.metadata.mime, parent, item.id, TransferQueue.Family(doc.groupId.lowercase(), folder.workspaceId.lowercase()))
+        return queue(edit, item.name, item.metadata.mime, parent, item.id, TransferQueue.Family(doc.groupId.lowercase(), doc.workspaceId.lowercase()))
     }
 
     /* Tests: what queues a write-back (TransferQueue.upload), so a test can run the job it queued. */

@@ -17,6 +17,7 @@ import com.hushos.app.data.GuardUnsaved
 import com.hushos.app.data.SessionEnded
 import com.hushos.app.data.Shared
 import com.hushos.app.data.Vault
+import com.hushos.app.data.familyGuardKept
 import com.hushos.app.data.FamilyUploads
 import com.hushos.app.data.Reservations
 import com.hushos.app.data.TransferQueue
@@ -304,21 +305,29 @@ class ProviderFamiliesTest {
     }
 
     /*
-     * The write barrier: while the family's guard is owed, Files writes nothing into its folders. Fails if a provider
-     * write passes without the guard kept.
+     * The write barrier: while the family's guard is owed, Files writes nothing into its folders. A direct write is
+     * refused; an edit another app already wrote is not dropped but queued, and its job sends nothing until the guard is
+     * kept, then lands. Fails if a write passes without the guard kept, or an edit is lost to a barrier that only holds
+     * for now.
      */
     @Test
     fun filesWritesNothingWhileTheGuardIsOwed() {
         val provider = provider()
         rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
         val families = familiesOf(provider).also(::watchQueue)
-        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, keepContents = false).apply { writeText("not sent") }
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        val edit = families.editCopy(doc, keepContents = false).apply { writeText("held behind the guard") }
         val sent = server.requests.size
-        families.vault.oweFamilyGuard(family.groupId)
+        val debt = families.vault.oweFamilyGuard(family.groupId)
         assertThrows(FileNotFoundException::class.java) { provider.createDocument(folder, Document.MIME_TYPE_DIR, "Trips") }
-        assertThrows(GuardUnsaved::class.java) { families.writeBack(FamilyDoc.of(file) as FamilyDoc.Node, edit) }
-        assertEquals(emptyList<String>(), driveWritesSince(sent))
-        assertEquals("a write-back was queued under an owed guard", 0, queued().size)
+        val job = families.writeBack(doc, edit)
+        assertTrue("the edit wasn't kept for its job", File(app.filesDir, "queue/$job/content").exists())
+        assertTrue(runJob(job) != ListenableWorker.Result.success())
+        assertEquals("a write went out under an owed guard", emptyList<String>(), driveWritesSince(sent))
+        families.vault.familyGuardKept(debt)
+        assertEquals(ListenableWorker.Result.success(), runJob(job))
+        families.children(FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId))
+        assertEquals("held behind the guard", families.readCopy(doc).readText())
     }
 
     /*
@@ -576,6 +585,86 @@ class ProviderFamiliesTest {
         assertTrue(provider.pollOnce())
         assertEquals(before + 1, told())
         assertTrue("Budget.txt" in rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DISPLAY_NAME))
+    }
+
+    /*
+     * An editor holds a family file open when the family's check gets no answer (the root goes read only): what it wrote is
+     * queued, not deleted, its job waits while the family can't be checked, and it lands once the family is accepted
+     * again. Fails if a transient refusal drops the only edited copy.
+     */
+    @Test
+    fun anEditOpenWhenTheFamilyGetsNoAnswerLandsOnceAcceptedAgain() {
+        var now = 0L
+        val vault = Vault(app, DriveApi(Shared.session(app)!!))
+        val families = ProviderFamilies(vault, FamilySync(vault, sweeps = false, tellsFiles = false)) { now }.also(::watchQueue)
+        families.load()
+        val top = FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId)
+        val doc = FamilyDoc.Node(family.groupId, family.workspaceId, family.fileId)
+        families.children(top)
+        val edit = families.editFor(doc, "w").apply { writeText("saved while offline") }
+        server.beforeAnswer = { _, path -> if (path.startsWith("groups/") && path.endsWith("/rosters")) throw IllegalStateException("dropped") }
+        now += 6 * 60_000L
+        val job = families.writeBack(doc, edit)
+        assertTrue(families.roots.single().unanswered)
+        assertEquals("saved while offline", File(app.filesDir, "queue/$job/content").readText())
+        assertEquals(ListenableWorker.Result.retry(), runJob(job))
+        server.beforeAnswer = null
+        assertEquals(ListenableWorker.Result.success(), runJob(job))
+        val other = family.phone()
+        assertTrue(other.sync.sync(family.summary) is FamilyState.Accepted)
+        val out = File(app.cacheDir, "read-${System.nanoTime()}")
+        other.vault.listChildren(family.rootId, family.workspaceId)
+        other.vault.download(family.fileId, out, workspaceId = family.workspaceId)
+        assertEquals("saved while offline", out.readText())
+    }
+
+    /*
+     * A write-back the queue landed (in its job's own vault), then the editor opens the file again: it reads the new bytes,
+     * and an append builds on them, never on the version this vault opened before. Fails if a reopen answers from the
+     * provider's stale row (old bytes read, and an append that drops the save).
+     */
+    @Test
+    fun aReopenAfterAQueuedWriteBackReadsAndBuildsOnTheNewVersion() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider).also(::watchQueue)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        val first = families.editFor(doc, "w").apply { writeText("saved") }
+        assertEquals(ListenableWorker.Result.success(), runJob(families.writeBack(doc, first)))
+        assertEquals("saved", ParcelFileDescriptor.AutoCloseInputStream(provider.openDocument(file, "r", null)).use { it.readBytes().decodeToString() })
+        val append = families.editFor(doc, "wa")
+        assertEquals("saved", append.readText())
+        writeAs("wa", append, " and more")
+        assertEquals(ListenableWorker.Result.success(), runJob(families.writeBack(doc, append)))
+        val other = family.phone()
+        assertTrue(other.sync.sync(family.summary) is FamilyState.Accepted)
+        val out = File(app.cacheDir, "read-${System.nanoTime()}")
+        other.vault.listChildren(family.rootId, family.workspaceId)
+        other.vault.download(family.fileId, out, workspaceId = family.workspaceId)
+        assertEquals("saved and more", out.readText())
+    }
+
+    /*
+     * A document Files remembered, opened directly (no roots or listing asked first) after the roots went old: the family
+     * is checked again before the answer, so a root kept read only after no answer is writable again once the family
+     * answers. Fails if a direct request answers from roots past their expiry.
+     */
+    @Test
+    fun aDirectRequestChecksRootsThatWentOld() {
+        var now = 0L
+        val vault = Vault(app, DriveApi(Shared.session(app)!!))
+        val families = ProviderFamilies(vault, FamilySync(vault, sweeps = false, tellsFiles = false)) { now }
+        families.load()
+        val top = FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId)
+        server.beforeAnswer = { _, path -> if (path.startsWith("groups/") && path.endsWith("/rosters")) throw IllegalStateException("dropped") }
+        now += 6 * 60_000L
+        families.load()
+        assertThrows(FileNotFoundException::class.java) { families.create(top, Document.MIME_TYPE_DIR, "Trips") }
+        server.beforeAnswer = null
+        now += 60_000L
+        // No load asked for: the direct request itself checks the family again.
+        val made = FamilyDoc.of(families.create(top, Document.MIME_TYPE_DIR, "Trips")) as FamilyDoc.Node
+        assertEquals("Trips", server.record(made.nodeId).name)
     }
 
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =
