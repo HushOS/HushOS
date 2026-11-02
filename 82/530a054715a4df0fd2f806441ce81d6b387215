@@ -1,0 +1,29 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_9f003a1f820b5f 84
+apps/android/app/src/main/kotlin/com/hushos/app/data/LandedJobs.kt
+  s_566b8e0c4467a4::t_675dca0b158927 29-31
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_566b8e0c4467a4::t_513a531d54bb5a 142-143,147,149,151-152,160-170,173,177,179-183,260-261,263-267,270,537-541
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Families.kt
+  s_566b8e0c4467a4::t_a81ed21858675e 207-208,219
+apps/android/app/src/test/kotlin/com/hushos/app/data/UploadWorkerTest.kt
+  s_566b8e0c4467a4::t_29fdc6858b3aca 588-667
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_4b09628df3f7cf 219
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "82530a054715a4df0fd2f806441ce81d6b387215",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
