@@ -183,9 +183,25 @@ export function CustomColour({
     const [hsv, setHsv] = useState<Hsv>(() => hexToHsv(value));
     const [typed, setTyped] = useState(value);
     const hex = hsvToHex(hsv);
+    /*
+     * The colour as the caller last gave it, and the last one chosen here. A value arriving
+     * from outside (a save coming back, Custom resetting it) moves the square, hue and field
+     * to it; one this editor chose, or the one it shows, leaves them where they are.
+     */
+    const [given, setGiven] = useState(value);
+    const [sent, setSent] = useState<string | null>(null);
+    if (value !== given) {
+        setGiven(value);
+        const lower = value.toLowerCase();
+        if (lower !== sent && lower !== hex.toLowerCase()) {
+            setHsv(hexToHsv(value));
+            setTyped(value);
+        }
+    }
     const commit = (next: Hsv) => {
         setHsv(next);
         setTyped(hsvToHex(next));
+        setSent(hsvToHex(next).toLowerCase());
         onChoose(hsvToHex(next) as TagColour);
     };
     /* A press anywhere on a surface sets it; a drag keeps setting; the release chooses. */
