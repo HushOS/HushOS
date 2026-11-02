@@ -40,6 +40,9 @@ class FilesWriteModesTest {
 
     @Before
     fun signIn() {
+        // The mirror is one per process and Robolectric keeps statics between tests: each test starts from an empty one.
+        com.hushos.app.data.Mirror::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)
+        app.deleteDatabase("mirror.db")
         FamilyFixture.signIn(server, "files-write-modes-test")
         WorkManagerTestInitHelper.initializeTestWorkManager(app, Configuration.Builder().setExecutor(SynchronousExecutor()).setTaskExecutor(SynchronousExecutor()).build())
     }
@@ -135,5 +138,82 @@ class FilesWriteModesTest {
         val out = File(app.cacheDir, "read-${System.nanoTime()}")
         Vault(app, DriveApi(Shared.session(app)!!)).apply { listChildren(server.root) }.download(notes, out)
         assertEquals("saved draft and more", out.readText())
+    }
+
+    /* The provider's vault (the one its requests use). */
+    private fun vaultOf(provider: HushOSDocumentsProvider) =
+        HushOSDocumentsProvider::class.java.getDeclaredField("vault").apply { isAccessible = true }.get(provider) as Vault
+
+    /* The provider's own upload of every write-back fails (no begin answered) while `drop` is set. */
+    private fun dropBegins(drop: Boolean) {
+        server.beforeAnswer = if (!drop) null else { method, path -> if (method == "POST" && path == "drive/uploads") throw IllegalStateException("dropped") }
+    }
+
+    /* The write-backs queued for `notes`, oldest first. */
+    private fun queuedFor(notes: String, vault: Vault): List<androidx.work.WorkInfo> {
+        val chain = com.hushos.app.data.WriteBacks.chainOf(vault.resolve(notes).node.workspaceId, notes)
+        return androidx.work.WorkManager.getInstance(app).getWorkInfosForUniqueWork(chain).get()
+            .sortedBy { info -> info.tags.first { it.startsWith("order:") }.removePrefix("order:").toLong() }
+    }
+
+    /* A queued write-back's job, run as WorkManager starts it: its request rebuilt as TransferQueue queued it (its tags checked against WorkManager's). */
+    private fun runJob(info: androidx.work.WorkInfo, notes: String, folder: String): ListenableWorker.Result {
+        val request = TransferQueue.uploadRequest(info.id, File(app.filesDir, "queue/${info.id}/content"), "text/plain", folder, notes,
+            session = TransferQueue.accountTag(Shared.session(app)!!), extraTags = info.tags.filter { it.startsWith("chain:") || it.startsWith("order:") })
+        assertEquals(request.tags, info.tags)
+        val worker = TestListenableWorkerBuilder<UploadWorker>(app).setId(info.id).setInputData(request.workSpec.input).setTags(request.tags.toList()).build()
+        return runBlocking { worker.doWork() }
+    }
+
+    private fun serverText(notes: String): String {
+        val out = File(app.cacheDir, "read-${System.nanoTime()}")
+        Vault(app, DriveApi(Shared.session(app)!!)).apply { listChildren(server.root) }.download(notes, out)
+        return out.readText()
+    }
+
+    /*
+     * An app saves twice while the first save's upload is failing (queued, retrying): the second never goes ahead of it,
+     * neither straight to the server nor as a job that could run first (it waits behind the first in the document's
+     * chain), and the version left is the second save. Fails if a later save can land before an earlier one that then
+     * replaces it.
+     */
+    @Test
+    fun twoSavesOfOneDocumentLandInTheOrderTheyWereMade() {
+        val notes = server.file(server.root, "Notes.txt", "original".toByteArray())
+        val provider = provider()
+        provider.queryChildDocuments("root", null, null as String?).close()
+        val vault = vaultOf(provider)
+        dropBegins(true)
+        provider.personalWriteBack(vault, notes, notes, provider.personalEdit(vault, notes, "w").apply { writeText("first save") })
+        dropBegins(false)
+        provider.personalWriteBack(vault, notes, notes, provider.personalEdit(vault, notes, "w").apply { writeText("second save") })
+        assertEquals("a later save went ahead of a queued one", "original", serverText(notes))
+        val (first, second) = queuedFor(notes, vault)
+        assertEquals(androidx.work.WorkInfo.State.BLOCKED, second.state)
+        assertEquals(ListenableWorker.Result.success(), runJob(first, notes, server.root))
+        assertEquals(ListenableWorker.Result.success(), runJob(second, notes, server.root))
+        assertEquals("second save", serverText(notes))
+    }
+
+    /*
+     * An app saves (queued: its upload failed), then opens the file again to append before that save lands: the append
+     * starts from the save, never from the server's older version, and the version left holds both. Fails if a
+     * contents-keeping edit starts from the server while a save of it is still queued (the save would be lost).
+     */
+    @Test
+    fun anAppendBeforeAQueuedSaveLandsBuildsOnTheSave() {
+        val notes = server.file(server.root, "Notes.txt", "original".toByteArray())
+        val provider = provider()
+        provider.queryChildDocuments("root", null, null as String?).close()
+        val vault = vaultOf(provider)
+        dropBegins(true)
+        provider.personalWriteBack(vault, notes, notes, provider.personalEdit(vault, notes, "w").apply { writeText("first save") })
+        dropBegins(false)
+        val append = provider.personalEdit(vault, notes, "wa")
+        assertEquals("first save", append.readText())
+        writeAs("wa", append, " then more")
+        provider.personalWriteBack(vault, notes, notes, append)
+        for (job in queuedFor(notes, vault)) assertEquals(ListenableWorker.Result.success(), runJob(job, notes, server.root))
+        assertEquals("first save then more", serverText(notes))
     }
 }
