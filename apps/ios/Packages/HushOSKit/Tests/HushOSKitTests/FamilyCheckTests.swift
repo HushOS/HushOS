@@ -212,10 +212,36 @@ extension OnFakeDrive {
             do {
                 _ = try await other.sync.checkMatch(family.groupId, member: creator(family), rosterVersion: 2, code: Array(repeating: "word", count: 12))
                 Issue.record("They match went on without the member list")
-            } catch let error as GroupsAPIError {
-                #expect(error.isNotMember)
+            } catch let removed as FamilyRemovedNow {
+                #expect(removed.cause.isNotMember)
+                #expect(removed.removed.state == .wiped)
             }
             #expect(other.records.read(userId: family.member.userId, groupId: family.groupId) == nil)
+        }
+
+        /*
+         * They match meets not-member while the guard the wipe hands back can't be stored: nothing is
+         * cleared and the record stays, so the check hands back the refusal with its storage words and
+         * its revision, never "not in this family". Fails if a failed wipe is passed on as a removal.
+         */
+        @Test func aNotMemberDuringTheyMatchWhoseWipeFailsSaysSoAndKeepsTheRecord() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let writes = GuardSwitch()
+            let phone = try await family.phone(server, guards: familyGuards(family.member, writes: writes))
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            server.notMemberFromStart = true
+            writes.writable = false
+            do {
+                _ = try await phone.sync.checkMatch(family.groupId, member: creator(family), rosterVersion: 2, code: Array(repeating: "word", count: 12))
+                Issue.record("They match went on without the member list")
+            } catch let removed as FamilyRemovedNow {
+                guard case .failed(let words) = removed.removed.state else { Issue.record("a failed wipe was passed on as \(removed.removed.state)"); return }
+                #expect(words == GuardWords.unsaved)
+                #expect(removed.removed.revision > 0)
+            }
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId) != nil, "a wipe that couldn't finish deleted the record")
         }
 
         /*

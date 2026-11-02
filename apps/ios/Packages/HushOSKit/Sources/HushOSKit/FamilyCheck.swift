@@ -154,9 +154,9 @@ extension FamilySync {
         do {
             served = try await fetchServed(groupId, after: 0)
         } catch let error as GroupsAPIError where error.isNotMember {
-            // A removal: let go of as a sync's, and passed on so the sheet shows the family wiped.
-            _ = await removedNow(groupId)
-            throw error
+            // A removal: let go of as a sync's, and passed on with what it left (Wiped, or refused with the storage words and the
+            // record kept when its guard couldn't be stored) and its revision, so the sheet shows that.
+            throw FamilyRemovedNow(removed: await removedNow(groupId), cause: error)
         }
         let match = try ledger.pairMatch(me: try await vault.ownIdentities(), groupId: groupId, otherUserId: member.userId.lowercased(),
                                          rosters: served.rosters, rosterVersion: rosterVersion, code: code, guard: held.state,
@@ -311,5 +311,19 @@ public struct MemberLabels: Sendable, Equatable {
         // Another trust load: whom this person verified may have moved on another device.
         if trust != self.trust, standing == .verified { return nil }
         return standing
+    }
+}
+
+/*
+ * A member check's own read of the member list answered not-member: the removal as removedNow left
+ * it, Wiped, or refused with the storage words (the record kept) when the wipe couldn't finish.
+ * Shown as that, in its revision's order, never as Wiped when it isn't.
+ */
+public struct FamilyRemovedNow: Error, LocalizedError {
+    public let removed: FamilySync.Revised
+    public let cause: GroupsAPIError
+    public var errorDescription: String? {
+        if case .failed(let words) = removed.state { return words }
+        return FamilyFailure.notInFamily.message
     }
 }

@@ -183,10 +183,17 @@ struct FamilyCheckView: View {
                 Task { await store.refreshSigners(); await store.rejudgeFamilies(summary.id) }
                 checked()
                 done()
-            } catch let removed as GroupsAPIError where removed.isNotMember {
-                // Removed meanwhile: the check let the family go (checkMatch's wipe); the page behind shows it as a sync finds it.
-                self.error = FamilyWords.notInFamily
-                Task { await store.refreshFamily(summary) }
+            } catch let removed as FamilyRemovedNow {
+                // Removed meanwhile: the family shows what checkMatch's removal left, in its order (a later look stands). Wiped: out
+                // of the family. Refused with the storage words (its guard couldn't be stored, nothing cleared): said with Try again.
+                if let session = store.beginSession() {
+                    await store.adopt(removed.removed.state, of: summary, revision: removed.removed.revision, session: session)
+                }
+                if case .failed(let words) = removed.removed.state {
+                    failure = words
+                } else {
+                    self.error = FamilyWords.notInFamily
+                }
             } catch {
                 if endsSession(error) { store.report(error); done(); return }
                 self.error = ErrorWords.say(error, otherwise: "That wasn’t saved. Try again.") ?? ""
