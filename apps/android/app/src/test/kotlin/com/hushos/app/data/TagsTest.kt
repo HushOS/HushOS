@@ -31,6 +31,18 @@ class TagsTest {
     private fun members(json: JSONObject, id: String) = json.getJSONObject("items").getJSONArray(id).let { a -> (0 until a.length()).map { a.getString(it) } }
 
     @Test
+    fun newTagsTakeTheFolderSwatchesInTurnAndOldPresetsAreKept() {
+        val registry = TagRegistry.parse(document)
+        assertEquals("blue", registry.tags.first { it.id == work }.colour)
+        val colours = (0..TagRegistry.OFFERED.size).map { registry.add("Tag $it").colour }
+        // Two tags are there already, so the cycle starts at the third swatch and comes round.
+        assertEquals((0..TagRegistry.OFFERED.size).map { TagRegistry.OFFERED[(it + 2) % TagRegistry.OFFERED.size] }, colours)
+        assertEquals("Pink", TagRegistry.colourName("#e488be"))
+        assertEquals("Teal", TagRegistry.colourName("teal"))
+        assertEquals("Custom colour", TagRegistry.colourName("#123456"))
+    }
+
+    @Test
     fun unknownFieldsSurviveAddRenameRemoveAndAssign() {
         val registry = TagRegistry.parse(document)
         val added = registry.add("Taxes", "coral")

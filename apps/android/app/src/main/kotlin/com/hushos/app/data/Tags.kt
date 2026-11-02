@@ -27,9 +27,17 @@ class TagRegistry(val tags: MutableList<Tag>, val items: MutableMap<String, Muta
     private val known: MutableSet<String> = tags.mapTo(HashSet()) { it.id }
 
     companion object {
+        /* The Ledger colours tags were first given, still read wherever a tag has one. */
         val PRESETS = listOf("blue", "ink", "yellow", "teal", "coral")
-        /* The presets the web offers for new tags, in its order (apps/web/src/lib/tags.ts OFFERED_COLOURS). */
-        val OFFERED = listOf("blue", "ink", "yellow", "teal", "coral")
+        /*
+         * The swatches offered for a tag and the colours new tags cycle through: the ones folders offer, as their
+         * hex, in the web's order and with its names (packages/drive/src/colour.ts FOLDER_COLOURS, COLOUR_NAMES).
+         */
+        val OFFERED = listOf("#70adfb", "#53c48e", "#f28881", "#aa9cf7", "#00c3cb", "#e488be", "#8fbb5f", "#e99355")
+        private val NAMES = OFFERED.zip(listOf("Blue", "Mint", "Coral", "Violet", "Teal", "Pink", "Lime", "Orange")).toMap()
+        /* A tag colour's name: an offered swatch's, an older tag's preset, or "Custom colour". */
+        fun colourName(colour: String): String =
+            NAMES[colour] ?: if (colour in PRESETS) colour.replaceFirstChar { it.uppercase() } else "Custom colour"
         fun empty() = TagRegistry(mutableListOf(), mutableMapOf())
 
         fun parse(json: String): TagRegistry {

@@ -1,10 +1,11 @@
 package com.hushos.app.ui
 
-import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.foundation.selection.selectable
 import com.hushos.core.folderSwatches
 import com.hushos.core.folderColour
 import com.hushos.core.swatchArgb
@@ -843,6 +844,7 @@ private fun Fact(label: String, value: String, primary: Boolean = false, onClick
  * Tags for one item or several: a find-or-add field, each tag with a box (mixed
  * when only some of the items carry it), and Manage tags for the whole list.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ItemTagsSheet(model: DriveViewModel, state: DriveState, items: List<Opened>, dismiss: () -> Unit) {
     val alpine = Alpine.colors
@@ -883,7 +885,7 @@ fun ItemTagsSheet(model: DriveViewModel, state: DriveState, items: List<Opened>,
                 FilledTonalButton(enabled = typed.isNotEmpty(), onClick = add, modifier = Modifier.padding(start = AlpineSpace.S2).height(FieldHeight)) { Text("Add") }
             }
             // The colour a new tag gets.
-            Row(Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+            FlowRow(Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S1)) {
                 for (c in OFFERED_TAG_COLOURS) Swatch(c, selected = colour == c) { colour = c }
             }
             if (shown.none { it.name.equals(typed, ignoreCase = true) } && typed.isNotEmpty()) SheetRow("Add “$typed”", Icons.Outlined.Add) { add() }
@@ -930,7 +932,8 @@ fun Swatch(colour: String, selected: Boolean, size: androidx.compose.ui.unit.Dp 
     val alpine = Alpine.colors
     Box(
         Modifier.size(size).then(if (selected) Modifier.border(2.dp, alpine.ink, CircleShape) else Modifier).padding(4.dp)
-            .clip(CircleShape).background(tagColour(colour)).clickable(role = Role.RadioButton, onClickLabel = colour, onClick = onClick),
+            .clip(CircleShape).background(tagColour(colour)).clickable(role = Role.RadioButton, onClick = onClick)
+            .semantics { contentDescription = com.hushos.app.data.TagRegistry.colourName(colour); this.selected = selected },
         contentAlignment = Alignment.Center,
     ) { if (selected) Icon(Icons.Outlined.Check, null, tint = onTagColour(colour), modifier = Modifier.size(size * 0.45f)) }
 }
@@ -979,7 +982,7 @@ fun tagColour(value: String): Color {
     }
 }
 
-/* The colours a tag can be given here, as the web offers them; anything else is a custom colour. */
+/* The colours a tag can be given here, the folder swatches as the web offers them; anything else is a custom colour. */
 val OFFERED_TAG_COLOURS = com.hushos.app.data.TagRegistry.OFFERED
 
 /* What a file is, the way people say it: "PNG image", "PDF document", not a MIME type. */

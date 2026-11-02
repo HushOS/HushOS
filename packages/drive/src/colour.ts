@@ -25,6 +25,18 @@ export const FOLDER_COLOURS = [
     '#e99355',
 ] as const;
 
+/* The swatches' names, in FOLDER_COLOURS' order, for the pickers and screen readers. */
+export const COLOUR_NAMES: Record<(typeof FOLDER_COLOURS)[number], string> = {
+    '#70adfb': 'Blue',
+    '#53c48e': 'Mint',
+    '#f28881': 'Coral',
+    '#aa9cf7': 'Violet',
+    '#00c3cb': 'Teal',
+    '#e488be': 'Pink',
+    '#8fbb5f': 'Lime',
+    '#e99355': 'Orange',
+};
+
 const COLOUR = /^#[0-9a-f]{6}$/;
 
 export function isColour(value: unknown): value is string {

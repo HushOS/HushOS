@@ -460,7 +460,7 @@ struct TrashView: View {
 
 /* Every tag in the workspace: rename, recolour, delete, and how many items each names. */
 /*
- * Manage tags: every tag in the list. Tap a dot for the five presets or a custom colour,
+ * Manage tags: every tag in the list. Tap a dot for the eight swatches or a custom colour,
  * tap a name or swipe to rename, swipe to remove. Removing says how many items lose the
  * tag and asks once; the items themselves are never touched.
  */
@@ -488,7 +488,7 @@ struct TagManagerSheet: View {
                         HStack(spacing: Alpine.Space.s3) {
                             Menu {
                                 Section("Colour for \(tag.name)") {
-                                    ForEach(TagRegistry.presets, id: \.self) { preset in
+                                    ForEach(TagRegistry.offered, id: \.self) { preset in
                                         Button { Task { await store.editTags { registry in registry.recolour(tag.id, to: preset) } } } label: {
                                             if tag.colour == preset { Label(TagColour.label(preset), systemImage: "checkmark") } else { Text(TagColour.label(preset)) }
                                         }
