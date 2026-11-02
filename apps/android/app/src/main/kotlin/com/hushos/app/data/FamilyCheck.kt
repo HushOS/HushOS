@@ -32,6 +32,12 @@ sealed interface FamilyCheckCode {
 data class FamilyMemberRef(val userId: String, val email: String, val name: String)
 
 /* What opening Check it's Sam found: the family as its sync left it, and the words, or why there are none. */
+/*
+ * A member check's own read of the member list answered not-member: the removal as removedNow left it, Wiped, or
+ * refused with the storage words (and the record kept) when the wipe couldn't finish. Shown as that, never as Wiped.
+ */
+class FamilyRemovedNow(val removed: FamilySync.Revised, cause: GroupsApiError) : Exception(cause.message, cause)
+
 data class CheckStart(val state: FamilyState, val code: FamilyCheckCode?, val problem: String?, val revision: Long? = null)
 
 /*
@@ -90,11 +96,12 @@ fun FamilySync.checkMatch(groupId: String, member: FamilyMemberRef, rosterVersio
     // Read first, so the ledger holds the settings pin of them it compares with.
     vault.familyPin(groupId)
     val (held, revision) = vault.contactGuardState(member.userId)
-    // A not-member here is a removal: let go of as a sync's, and passed on so the sheet shows the family wiped.
+    // A not-member here is a removal: let go of as a sync's, and passed on with what it left (Wiped, or refused when
+    // its guard couldn't be stored) and its revision, so the sheet shows that.
     val served = try {
         fetchServed(groupId, 0uL)
     } catch (error: GroupsApiError) {
-        if (error.isNotMember) removedNow(groupId)
+        if (error.isNotMember) throw FamilyRemovedNow(removedNow(groupId), error)
         throw error
     }
     val match = ledger.pairMatch(vault.ownIdentities(), groupId, member.userId.lowercase(), served.rosters, rosterVersion, code, held, FamilySync.checkTime(now()))

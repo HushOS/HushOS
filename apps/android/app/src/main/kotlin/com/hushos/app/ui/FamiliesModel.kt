@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.hushos.app.data.FamilyRemovedNow
 import com.hushos.app.data.FamilyState
 import com.hushos.app.data.FamilySync
 import com.hushos.app.data.FamilyVerdict
@@ -305,6 +306,15 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
      * later look at the family than what is on screen (its revision, taken inside the family's turn): a check queued
      * behind a background check shows what it found after it. A fork or a removal always shows. False when nothing was.
      */
+    /*
+     * They match met a removal (FamilyRemovedNow): the family shows what the removal left under its revision, and the
+     * sheet gets the words to show with Try again when it couldn't finish (null when the family was wiped).
+     */
+    suspend fun removedDuringCheck(removed: FamilyRemovedNow, summary: GroupSummary, session: FamilySession): String? {
+        adopt(removed.removed.state, summary, session, removed.removed.revision)
+        return (removed.removed.state as? FamilyState.Failed)?.words
+    }
+
     suspend fun adopt(state: FamilyState, summary: GroupSummary, session: FamilySession, revision: Long?): Boolean {
         if (!gate.current(session)) return false
         return show(state, summary, session, revision)

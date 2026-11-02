@@ -6,6 +6,7 @@ import com.hushos.app.data.FamilyFixture
 import com.hushos.app.data.FamilyState
 import com.hushos.app.data.FamilyWords
 import com.hushos.app.data.checkCode
+import com.hushos.app.data.checkMatch
 import com.hushos.app.data.Opened
 import com.hushos.app.data.Shared
 import com.hushos.app.data.Vault
@@ -71,6 +72,40 @@ class FamiliesModelRacesTest {
             if (System.currentTimeMillis() > until) throw AssertionError(what)
             Thread.sleep(20)
         }
+    }
+
+    /*
+     * #247 check, round 8: They match reads the member list and the server answers not-member while the family guard
+     * can't be read, so the removal can't finish. The family shows the failure with its storage words (the sheet's Try
+     * again), never Wiped, and the device record stays. Fails if the sheet's removal is published as Wiped whatever the
+     * wipe left.
+     */
+    @Test
+    fun theyMatchMeetingARemovalWhoseWipeFailsShowsTheFailureNotWiped() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val vault = vault()
+        val host = Host(vault)
+        val model = FamiliesModel(host)
+        runBlocking { model.refreshFamilies() }
+        assertTrue(model.states[family.groupId] is FamilyState.Accepted)
+        val sam = com.hushos.app.data.FamilyMemberRef(family.creator.id, "sam@example.org", "Sam Lindqvist")
+        family.notMember = true
+        val folder = vault.familyGuard.file.parentFile!!
+        val words = try {
+            assertTrue(folder.setExecutable(false, false) && folder.setReadable(false, false))
+            runBlocking {
+                val session = model.begin()!!
+                val failed = model.run(session) { it.checkMatch(family.groupId, sam, 2uL, List(12) { "word" }) }!!.exceptionOrNull()
+                model.removedDuringCheck(failed as com.hushos.app.data.FamilyRemovedNow, family.summary, session)
+            }
+        } finally {
+            folder.setExecutable(true, false)
+            folder.setReadable(true, false)
+        }
+        val state = model.states[family.groupId]
+        assertTrue("a removal whose wipe failed was shown as $state", state is FamilyState.Failed)
+        assertEquals((state as FamilyState.Failed).words, words)
+        assertTrue(vault.families.records.read(family.member.id, family.groupId) != null)
     }
 
     /*

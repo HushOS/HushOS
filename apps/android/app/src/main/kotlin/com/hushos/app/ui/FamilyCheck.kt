@@ -32,8 +32,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.hushos.app.data.FamilyCheckCode
 import com.hushos.app.data.FamilyMemberRef
+import com.hushos.app.data.FamilyRemovedNow
 import com.hushos.app.data.FamilyWords
-import com.hushos.app.data.FamilyState
 import com.hushos.app.data.FamilySync
 import com.hushos.app.data.GroupSummary
 import com.hushos.app.data.NotAuthenticated
@@ -144,10 +144,14 @@ private fun FamilyCheckContent(model: DriveViewModel, check: MemberCheck, done: 
                         val session = model.families.begin()
                         val saved = session?.let { model.families.run(it) { sync -> sync.checkMatch(check.summary.id, member, shown.rosterVersion, shown.code) } }
                         if (saved == null) { saving = false; return@launch }
-                        saved.onFailure { error ->
-                            // Removed meanwhile: the family is let go of (checkMatch wiped it); the page says so.
-                            if (error is com.hushos.app.data.GroupsApiError && error.isNotMember && session != null) {
-                                model.families.adopt(FamilyState.Wiped, check.summary, session, null)
+                        // Removed meanwhile: the family shows what checkMatch's removal left (wiped, or refused with the
+                        // storage words when its guard couldn't be stored), and a failure here keeps Try again.
+                        val removed = saved.exceptionOrNull() as? FamilyRemovedNow
+                        if (removed != null && session != null) {
+                            model.families.removedDuringCheck(removed, check.summary, session)?.let { words ->
+                                failure = words
+                                saving = false
+                                return@launch
                             }
                         }
                         saved.onSuccess { (checked, verified) ->

@@ -852,10 +852,11 @@ class FamilySyncTest {
                 404 to JSONObject().put("code", "not-member").put("message", "You are not in this group.")
             else inner(method, segments, query, body)
         }
-        val refused = assertThrows(GroupsApiError::class.java) {
+        val refused = assertThrows(FamilyRemovedNow::class.java) {
             other.sync.checkMatch(family.groupId, FamilyMemberRef(family.creator.id, "sam@example.org", "Sam Lindqvist"), 2uL, List(12) { "word" })
         }
-        assertTrue(refused.isNotMember)
+        assertTrue((refused.cause as GroupsApiError).isNotMember)
+        assertEquals(FamilyState.Wiped, refused.removed.state)
         assertNull(other.records.read(family.member.id, family.groupId))
     }
 
