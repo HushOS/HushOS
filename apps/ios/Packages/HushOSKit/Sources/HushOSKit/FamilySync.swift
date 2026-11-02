@@ -625,7 +625,9 @@ public actor FamilySync: FamilyJudge {
         let key = groupId.lowercased()
         let known = groupsOf.filter { $0.value.lowercased() == key }.map(\.key)
         var out: [String] = []
-        for area in Set((known + (areasOf[groupId] ?? []) + (records.read(userId: userId, groupId: groupId)?.areas ?? [])).map { $0.lowercased() }) {
+        // A record an earlier version wrote names folders on a member list's word alone (a received share's maybe): hints, never
+        // let go of with the family (FamilyRecords.Row.ownedAreas).
+        for area in Set((known + (areasOf[groupId] ?? []) + (records.read(userId: userId, groupId: groupId)?.ownedAreas ?? [])).map { $0.lowercased() }) {
             if await owned(area, by: groupId) { out.append(area) }
         }
         return out.sorted()
@@ -643,7 +645,7 @@ public actor FamilySync: FamilyJudge {
      * proven this family's. Merged, never replaced: after a relaunch nothing is proven yet.
      */
     func keptAreas(_ groupId: String, of chainAreas: [String]) -> [String] {
-        let held = records.read(userId: userId, groupId: groupId)?.areas ?? []
+        let held = records.read(userId: userId, groupId: groupId)?.ownedAreas ?? []
         return Array(Set((held + provenAreas(groupId, of: chainAreas)).map { $0.lowercased() })).sorted()
     }
 
@@ -726,7 +728,8 @@ public actor FamilySync: FamilyJudge {
                 // What it held and the folders proven this family's (opened under it before): a roster's word never names
                 // another's for cleanup, and nothing it held is let go of here.
                 let areas = keptAreas(groupId, of: Array(chain.areaKeys().keys))
-                try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: record, rosterVersion: chain.roster().rosterVersion, areas: areas))
+                try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: record, rosterVersion: chain.roster().rosterVersion, areas: areas,
+                                                                                    areasProven: true))
                 noteAccepted(groupId, chain)
                 return .accepted(chain, pin)
             case .fork(let of, let version, let sides):
@@ -800,7 +803,7 @@ public actor FamilySync: FamilyJudge {
         // cleanup would find it. An ended session forgets nothing, and so lets go of nothing.
         let row = records.read(userId: userId, groupId: groupId)
         var dropped: [String] = []
-        for area in Set(((areasOf[groupId] ?? []) + (row?.areas ?? [])).map { $0.lowercased() }) where !proven.contains(area) {
+        for area in Set(((areasOf[groupId] ?? []) + (row?.ownedAreas ?? [])).map { $0.lowercased() }) where !proven.contains(area) {
             if await owned(area, by: groupId) { dropped.append(area) }
         }
         var forgotten: Set<String> = []
@@ -812,11 +815,13 @@ public actor FamilySync: FamilyJudge {
         await note(family.map(\.workspaceId), of: groupId)
         // The record keeps what it held and the folders proven this family's now, less those just forgotten: merged, never
         // replaced, so a folder deleted while the app was closed is still found after a relaunch.
+        // An earlier version's record is rewritten with the proven folders alone: its other areas were a member list's word.
         if let row {
-            let kept = Array(Set(row.areas.map { $0.lowercased() } + proven)).filter { !forgotten.contains($0) }.sorted()
+            let kept = Array(Set(row.ownedAreas.map { $0.lowercased() } + proven)).filter { !forgotten.contains($0) }.sorted()
             // Passed on: folders whose ids couldn't be kept are not opened, so no copy of them is made either.
-            if kept != row.areas.map({ $0.lowercased() }).sorted(),
-               !(try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: row.envelope, rosterVersion: row.rosterVersion, areas: kept))) {
+            if kept != row.ownedAreas.map({ $0.lowercased() }).sorted() || row.areasProven != true,
+               !(try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: row.envelope, rosterVersion: row.rosterVersion, areas: kept,
+                                                                                     areasProven: true))) {
                 throw FamilyRecords.RecordsError.busy
             }
         }

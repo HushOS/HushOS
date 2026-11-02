@@ -282,7 +282,8 @@ extension FamilySync {
                     if let guardPin { try await vault.keepFamilyGuard(groupId, guardPin) }
                     await vault.familyGuardKept(groupId)
                     try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: record, rosterVersion: chain.roster().rosterVersion,
-                                                                                        areas: keptAreas(groupId, of: Array(chain.areaKeys().keys))))
+                                                                                        areas: keptAreas(groupId, of: Array(chain.areaKeys().keys)),
+                                                                                        areasProven: true))
                 } catch {
                     // A wipe the core refuses keeps its floor; the store's error is the answer.
                     _ = try? await forgetInCore(groupId)

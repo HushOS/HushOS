@@ -564,6 +564,41 @@ extension OnFakeDrive {
         }
 
         /*
+         * A device record an earlier version wrote saved every folder the member list named, a received
+         * share's among them. Those areas are hints: a sync never clears that share's rows or keys, never
+         * lets go of its workspace, and its mounts go on; nor does a refusal of the family. Fails if a
+         * record's area counts as proof a family owns the folder without route 25 and its id.
+         */
+        @Test func aLegacyRecordNamingAReceivedSharesWorkspaceLeavesTheShareMounted() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let theirs = UUID().uuidString.lowercased()
+            let (shared, sKey) = try eveShare(in: theirs, family, server)
+            try await vault.admitShare(share(into: theirs, shared))
+            let mounted = try await vault.adopt(shared, nodeKey: sKey, metadata: NodeMetadata(name: "Shared", mime: nil, size: nil, modified: nil, attributes: [:]),
+                                                in: theirs, fromShare: true)
+            // The record as an earlier version left it: the share's workspace among its areas, and no mark that they were proven.
+            let row = try #require(phone.records.read(userId: family.member.userId, groupId: family.groupId))
+            try phone.records.put(userId: family.member.userId, groupId: family.groupId,
+                                  FamilyRecords.Row(envelope: row.envelope, rosterVersion: row.rosterVersion, areas: row.areas + [theirs]))
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted again"); return }
+            #expect(await vault.item(shared.ref) != nil, "a legacy record's area cleared a share")
+            #expect(await vault.nodeKey(of: mounted) == sKey)
+            try await vault.admitShare(share(into: theirs, shared))
+            #expect(try await vault.children(of: shared.id).map(\.name) == ["Plan.txt"])
+            let rewritten = try #require(phone.records.read(userId: family.member.userId, groupId: family.groupId))
+            #expect(rewritten.areasProven == true && !rewritten.areas.contains(theirs))
+            // A refusal of the family lets go of its own folders only.
+            await phone.sync.refuse(family.groupId)
+            #expect(await vault.item(shared.ref) != nil)
+            try await vault.admitShare(share(into: theirs, shared))
+        }
+
+        /*
          * A share into a folder that route 25 proves a family's while the share's granter is judged: the
          * mount's check again where it keeps the row refuses it, so nothing of the share is kept, and it
          * is never answered as the ledger's. A write's answer under a key the ledger doesn't hold isn't

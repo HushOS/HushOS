@@ -145,7 +145,7 @@ extension OnFakeDrive {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             try Data("Pancakes".utf8).write(to: copy)
             let other = try newId(kind: .group, scopeId: family.creator.userId).id
-            try phone.records.put(userId: family.member.userId, groupId: other, FamilyRecords.Row(envelope: "e30", rosterVersion: 1, areas: [family.workspaceId]))
+            try phone.records.put(userId: family.member.userId, groupId: other, FamilyRecords.Row(envelope: "e30", rosterVersion: 1, areas: [family.workspaceId], areasProven: true))
             await phone.sync.refuse(other)
             try? await phone.sync.wipe(other)
             #expect(FileManager.default.fileExists(atPath: copy.path), "the other family's cleanup deleted this family's copy")
@@ -851,7 +851,7 @@ extension OnFakeDrive {
             let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
             let phone = try await family.phone(server)
             defer { phone.done() }
-            let newer = FamilyRecords.Row(envelope: "sealed-at-roster-3", rosterVersion: 3, areas: [family.workspaceId])
+            let newer = FamilyRecords.Row(envelope: "sealed-at-roster-3", rosterVersion: 3, areas: [family.workspaceId], areasProven: true)
             server.onRosters = { try? phone.records.put(userId: family.member.userId, groupId: family.groupId, newer) }
 
             guard case .accepted(let view) = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }

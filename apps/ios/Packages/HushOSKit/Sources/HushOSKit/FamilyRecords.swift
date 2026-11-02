@@ -20,12 +20,23 @@ public struct FamilyRecords: Sendable {
         public let envelope: String
         public let rosterVersion: UInt64
         public let areas: [String]
+        /*
+         * True when `areas` holds only folders proven this family's (route 25 and the folder id derived
+         * under it). Absent on records an earlier version wrote, which saved every folder a member list
+         * named, a received share's among them: those areas are hints that never clear, block or let
+         * go of anything (`owned`).
+         */
+        public let areasProven: Bool?
 
-        public init(envelope: String, rosterVersion: UInt64, areas: [String]) {
+        public init(envelope: String, rosterVersion: UInt64, areas: [String], areasProven: Bool? = nil) {
             self.envelope = envelope
             self.rosterVersion = rosterVersion
             self.areas = areas
+            self.areasProven = areasProven
         }
+
+        /* The folders this record proves the family's: none from a record an earlier version wrote. */
+        public var ownedAreas: [String] { areasProven == true ? areas : [] }
     }
 
     let folder: URL
