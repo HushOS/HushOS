@@ -272,7 +272,8 @@ internal fun Vault.newNodeKey(id: String, parent: Opened, keyEpoch: ULong, famil
         // The choke point every new family node passes: never a key made under an acceptance whose guard is owed.
         requireGuardKept(ws)
         val made = try {
-            areaLedger.newNodeKey(ws, id, parent.id, parent.node.keyEpoch, keyEpoch)
+            // Never while a walk's batch holds keys pending in this folder: its parent's might be one the server refuses.
+            FamilyKeyLocks.hold(ws) { areaLedger.newNodeKey(ws, id, parent.id, parent.node.keyEpoch, keyEpoch) }
         } catch (refused: com.hushos.core.CoreException) {
             throw FamilyFailure(FamilyWords.keyChangeWords(refused.message.orEmpty()))
         }
@@ -394,7 +395,11 @@ internal fun Vault.forgetWorkspaces(ids: Collection<String>, words: String = Fam
         if (closed) return gone
         for (id in ids) familyEpochs.compute(id.lowercase()) { _, old -> ((old?.first ?: 0L) + 1) to words }
         FamilyCopies.delete(context.cacheDir, ids)
-        for (id in ids) if (!id.equals(ownWorkspaceId, ignoreCase = true)) gone.addAll(nodes.forgetWorkspace(id))
+        for (id in ids) if (!id.equals(ownWorkspaceId, ignoreCase = true)) {
+            // The sealed thumbnails kept of what this session opened there go with the rows that named them.
+            runCatching { mirror.dropThumbnails(nodes.rowsIn(id).mapNotNull { it.node.currentVersion?.id }) }
+            gone.addAll(nodes.forgetWorkspace(id))
+        }
     }
     forgetParents(gone)
     return gone

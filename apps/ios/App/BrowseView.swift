@@ -628,6 +628,8 @@ private struct SelectBar: View {
                     .disabled(one == nil)
                 Button("Tags", systemImage: "tag") { if let one { action = .tags(one) }; done() }
                     .disabled(one == nil || family)
+                Button("Colour", systemImage: "paintpalette") { action = .colour(items); done() }
+                    .disabled(items.contains { !$0.isFolder || store.role(of: $0) == .viewer })
             } label: {
                 label("More", "ellipsis")
             }

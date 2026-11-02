@@ -3,8 +3,10 @@ import { createCryptoSession, type CryptoRequests, type CryptoResults } from '@h
 import { createDeviceKey, rememberAccountKey } from '@hushos/crypto/device';
 import { createIdentity } from '@hushos/crypto/identity';
 import { createWorkspaceGrant } from '../../crypto/src/workspace';
-import type { DriveApi, NodeView, RotateNodeWire, RotationWorkNode } from './api';
-import { createDriveClient, type Rpc } from './client';
+import type { DriveApi, NodeView, RotateNodeWire, RotationWorkNode, UploadNodeInput } from './api';
+import { DriveApiError } from './api';
+import { createDriveClient, type DriveNode, type Rpc } from './client';
+import { createTransferManager } from './transfers';
 
 /*
  * Two devices of one account walk the same rotation, and the server judges
@@ -23,8 +25,10 @@ const USER = '11111111-1111-4111-8111-111111111111';
 const WS = '22222222-2222-4222-8222-222222222222';
 const uuid = (c: string) =>
     `${c.repeat(8)}-${c.repeat(4)}-4${c.repeat(3)}-8${c.repeat(3)}-${c.repeat(12)}`;
-// ROOT ─ S (rotated) ─ P ─ C ─ D, and S ─ Q beside P.
-const [ROOT, S, P, Q, C, D] = ['a', 'b', 'c', 'd', 'e', 'f'].map(uuid) as [
+// ROOT ─ S (rotated) ─ P ─ C ─ D, and S ─ Q beside P; ROOT ─ M beside S, made since the
+// rotation began (its key epoch above the target), which a move takes into P.
+const [ROOT, S, P, Q, C, D, M] = ['a', 'b', 'c', 'd', 'e', 'f', '9'].map(uuid) as [
+    string,
     string,
     string,
     string,
@@ -39,6 +43,7 @@ const NAMES: Record<string, string> = {
     [Q]: 'Q',
     [C]: 'C',
     [D]: 'D',
+    [M]: 'M',
 };
 const TREE: [id: string, parent: string | null, epoch: number][] = [
     [ROOT, null, 1],
@@ -47,6 +52,7 @@ const TREE: [id: string, parent: string | null, epoch: number][] = [
     [Q, S, 4],
     [C, P, 5],
     [D, C, 6],
+    [M, ROOT, 50],
 ];
 const TARGET = 10;
 
@@ -227,6 +233,44 @@ async function setup() {
         await other('driveRotateCommit', { workspaceId: WS, nodeIds: [id] });
     };
 
+    /*
+     * This tab's worker as the Drive client and the transfer engine share it: the real session,
+     * but for the store's PUTs, which land at once. Every operation is noted as it is asked.
+     */
+    const asked: string[] = [];
+    let askedNext: ((operation: string) => void) | null = null;
+    const tab = (async (operation: string, input: unknown) => {
+        asked.push(operation);
+        askedNext?.(operation);
+        if (operation === 'driveUploadSend')
+            return { ok: true, etag: `etag-${(input as { index: number }).index}`, bytes: 0 };
+        return (mine as (operation: string, input: unknown) => Promise<unknown>)(operation, input);
+    }) as Rpc;
+    /* Resolves true once the tab asks the worker for `operation`, false if it has not after `ms`. */
+    const asks = (operation: string, ms: number) =>
+        new Promise<boolean>((resolve) => {
+            const timer = setTimeout(() => {
+                askedNext = null;
+                resolve(false);
+            }, ms);
+            askedNext = (asked) => {
+                if (asked !== operation) return;
+                clearTimeout(timer);
+                askedNext = null;
+                resolve(true);
+            };
+        });
+
+    /* The parent a write names must be at the epoch the write was wrapped under, as the server checks. */
+    const judgeParent = (parentId: string, parentKeyEpoch: number) => {
+        if (row(parentId).keyEpoch !== parentKeyEpoch)
+            throw new DriveApiError('This folder changed.', 'stale', 409);
+    };
+    let epochs = 100;
+    const uploads = new Map<
+        string,
+        { node: UploadNodeInput; version: NodeView['currentVersion'] }
+    >();
     const batches: string[][] = [];
     /* Runs as each node of a batch comes up, before the server judges it: another device's transaction landing first. */
     let beforeNode: (id: string) => Promise<void> = async () => {};
@@ -294,14 +338,118 @@ async function setup() {
             }
             return { results };
         },
+        allocateEpochs: async (_ws: string, count: number) => {
+            const from = epochs;
+            epochs += count;
+            return { from, to: from + count - 1 };
+        },
+        move: async (
+            _ws: string,
+            nodeId: string,
+            input: { parentId: string; parentKeyEpoch: number; keyEnvelope: string },
+        ) => {
+            judgeParent(input.parentId, input.parentKeyEpoch);
+            rows.set(nodeId, {
+                ...row(nodeId),
+                parentId: input.parentId,
+                parentKeyEpoch: input.parentKeyEpoch,
+                keyEnvelope: input.keyEnvelope,
+                changeSeq: seq++,
+            });
+            return { node: row(nodeId) };
+        },
+        // A new file's node is taken at begin, judged against its folder as it is then.
+        beginUpload: async (_ws: string, input: Parameters<DriveApi['beginUpload']>[1]) => {
+            const node = input.node;
+            if (node.existing) throw new Error('only new files here');
+            judgeParent(node.parentId, node.parentKeyEpoch);
+            const id = `upload-${uploads.size + 1}`;
+            uploads.set(id, {
+                node,
+                version: {
+                    id: input.versionId,
+                    objectId: input.objectId,
+                    contentKeyEnvelope: input.contentKeyEnvelope,
+                    contentSuite: input.contentSuite,
+                } as NodeView['currentVersion'],
+            });
+            const expiresAt = '2099-01-01T00:00:00.000Z';
+            return {
+                upload: {
+                    id,
+                    nodeId: node.id,
+                    versionId: input.versionId,
+                    objectId: input.objectId,
+                    status: 'open' as const,
+                    chunkCount: input.chunkCount,
+                    ciphertextSize: input.ciphertextSize,
+                    expiresAt,
+                },
+                parts: Array.from({ length: input.chunkCount }, (_, i) => ({
+                    partNumber: i + 1,
+                    length: 0,
+                    url: `https://store.test/${id}/${i + 1}`,
+                })),
+                urlExpiresAt: expiresAt,
+            };
+        },
+        // Completed where begin put it.
+        completeUpload: async (_ws: string, uploadId: string) => {
+            const { node, version } = uploads.get(uploadId)!;
+            if (node.existing) throw new Error('only new files here');
+            rows.set(node.id, {
+                ...row(ROOT),
+                id: node.id,
+                parentId: node.parentId,
+                kind: 'file',
+                keyEpoch: node.keyEpoch,
+                parentKeyEpoch: node.parentKeyEpoch,
+                keyEnvelope: node.keyEnvelope,
+                metadataEnvelope: node.metadataEnvelope,
+                metadataSignature: node.metadataSignature ?? null,
+                currentVersion: version,
+                changeSeq: seq++,
+            });
+            return { status: 'completed' as const, node: row(node.id) };
+        },
+        abortUpload: async () => ({ aborted: true }),
     } as unknown as DriveApi;
 
-    const client = createDriveClient(mine as unknown as Rpc, api, {
+    const client = createDriveClient(tab, api, {
         signers: async () => ({}),
     });
     await client.open(USER);
+    const finished = new Map<string, (outcome: string) => void>();
+    const transfers = createTransferManager({
+        rpc: tab,
+        api,
+        onEvent: ({ type, item }) => {
+            if (type === 'done' || type === 'failed')
+                finished.get(item.id)?.(type === 'done' ? type : `failed: ${item.error}`);
+        },
+    });
+    /* Uploads `bytes` as `name` into `parent`; resolves once it is done (or failed). */
+    const upload = (parent: DriveNode, name: string, bytes: Uint8Array) => {
+        const [id] = transfers.enqueue([
+            {
+                parent,
+                file: {
+                    kind: 'memory',
+                    name,
+                    size: bytes.byteLength,
+                    type: 'application/octet-stream',
+                    lastModified: 1_000,
+                    parts: [bytes.slice()],
+                },
+            },
+        ]);
+        return new Promise<string>((resolve) => finished.set(id!, resolve));
+    };
     return {
         client,
+        upload,
+        asks,
+        asked,
         rows,
         batches,
         row,
@@ -351,5 +499,158 @@ describe('two devices walking one rotation', () => {
         for (const batch of h.batches)
             for (const id of batch) expect(batch).not.toContain(h.row(id).parentId);
         expect(h.batches.map((batch) => [...batch].sort())).toEqual([[S], [P, Q].sort(), [C], [D]]);
+    });
+});
+
+/*
+ * The same race, met by a write in this tab rather than by the walk's own
+ * child. While this tab's batch holding P is on its way, the other device
+ * re-keys P first; this tab lists P (the other device's key, at the target)
+ * and writes into it. The worker holds this walk's fresh key for P pending at
+ * that same epoch, and would wrap the write under it; the server takes the
+ * write (P is at the target), refuses this walk's P as stale, and the key is
+ * dropped: the write would open for nobody. So a write waits out the batch
+ * holding its folder and is wrapped under the key the server kept.
+ */
+async function writeDuringBatch(
+    h: Awaited<ReturnType<typeof setup>>,
+    operation: 'driveCreateNodes' | 'driveRewrapNode',
+    write: (listed: DriveNode) => Promise<unknown>,
+) {
+    let theirs: string | null = null;
+    let wrote: Promise<{ value?: unknown; error?: unknown }> | null = null;
+    // Whether the write had its key made while the batch holding P was still on its way.
+    let madeDuringBatch: boolean | null = null;
+    h.setBeforeNode(async (id) => {
+        if (id === P && theirs === null && h.row(S).keyEpoch === TARGET) {
+            await h.rekeyedElsewhere(P);
+            theirs = h.row(P).keyEnvelope;
+            const { folder } = await h.client.listFolder(P);
+            expect(folder.keyEpoch).toBe(TARGET);
+            const asked = h.asks(operation, 500);
+            wrote = write(folder).then(
+                (value) => ({ value }),
+                (error: unknown) => ({ error }),
+            );
+            madeDuringBatch = await asked;
+        }
+    });
+    await h.client.rotate(h.row(S) as never);
+    expect(wrote).not.toBeNull();
+    const outcome = await wrote!;
+    // The other device won P, and its key is the one the server kept.
+    expect(theirs).not.toBeNull();
+    expect(h.row(P).keyEnvelope).toBe(theirs);
+    for (const id of [S, P, Q, C, D]) expect(h.row(id).keyEpoch).toBe(TARGET);
+    return { outcome, madeDuringBatch };
+}
+
+describe('a write in this tab while its walk holds a folder', () => {
+    test('an upload into a folder the other device re-keyed first opens for a device that never saw it', async () => {
+        const h = await setup();
+        const bytes = new TextEncoder().encode('kept under the key the server kept');
+        const { outcome, madeDuringBatch } = await writeDuringBatch(
+            h,
+            'driveCreateNodes',
+            (folder) => h.upload(folder, 'notes.txt', bytes),
+        );
+        expect(outcome).toEqual({ value: 'done' });
+        const file = [...h.rows.values()].find((r) => r.kind === 'file')!;
+        // Taken by the server under P at the walk's target: the epoch this walk's key had too.
+        expect(file.parentId).toBe(P);
+        expect(file.parentKeyEpoch).toBe(TARGET);
+
+        const fresh = await h.open('fresh-device');
+        const { nodes } = await fresh('driveOpenNodes', {
+            workspaceId: WS,
+            nodes: [...[ROOT, S, P].map((id) => h.row(id)), file].map(envelopesOf),
+        });
+        expect(nodes.map((n) => n.error ?? n.metadata?.name)).toEqual([
+            'Files',
+            'S',
+            'P',
+            'notes.txt',
+        ]);
+        const version = file.currentVersion!;
+        const { versions } = await fresh('driveOpenVersions', {
+            workspaceId: WS,
+            nodeId: file.id,
+            versions: [
+                {
+                    id: version.id,
+                    objectId: version.objectId,
+                    contentKeyEnvelope: version.contentKeyEnvelope,
+                    contentSuite: version.contentSuite,
+                    plaintextSize: null,
+                },
+            ],
+        });
+        expect(versions).toEqual([
+            expect.objectContaining({ id: version.id, plaintextSize: bytes.byteLength }),
+        ]);
+        // It waited for the batch rather than taking the key the batch held.
+        expect(madeDuringBatch).toBe(false);
+    });
+
+    test('a move into a folder the other device re-keyed first opens for a device that never saw it', async () => {
+        const h = await setup();
+        const { children } = await h.client.listFolder(ROOT);
+        const moving = children.find((n) => n.id === M)!;
+        const { outcome, madeDuringBatch } = await writeDuringBatch(
+            h,
+            'driveRewrapNode',
+            (folder) => h.client.move(moving, folder),
+        );
+        expect(outcome.error).toBeUndefined();
+        expect(h.row(M).parentId).toBe(P);
+        expect(h.row(M).parentKeyEpoch).toBe(TARGET);
+
+        const fresh = await h.open('fresh-device');
+        const { nodes } = await fresh('driveOpenNodes', {
+            workspaceId: WS,
+            nodes: [ROOT, S, P, M].map((id) => envelopesOf(h.row(id))),
+        });
+        expect(nodes.map((n) => n.error ?? n.metadata?.name)).toEqual(['Files', 'S', 'P', 'M']);
+        expect(madeDuringBatch).toBe(false);
+    });
+
+    test('an upload into the folder at its earlier epoch goes at once and is re-keyed with the rest', async () => {
+        const h = await setup();
+        // P as this tab listed it before the walk: at its own epoch, not the target.
+        const { folder: before } = await h.client.listFolder(P);
+        expect(before.keyEpoch).toBe(3);
+        const bytes = new TextEncoder().encode('made under the key the walk replaces');
+        let outcome: Promise<string> | null = null;
+        let tookBeforeBatch: boolean | null = null;
+        h.setBeforeNode(async (id) => {
+            if (id === P && outcome === null && h.row(S).keyEpoch === TARGET) {
+                outcome = h.upload(before, 'early.txt', bytes);
+                // Never wrapped under the pending key, so nothing holds it: the server takes it
+                // while P is still at its own epoch. Held back, it would come after the batch
+                // re-keyed P and be refused as stale.
+                tookBeforeBatch = await Promise.race([
+                    outcome.then((o) => o === 'done'),
+                    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3_000)),
+                ]);
+            }
+        });
+        await h.client.rotate(h.row(S) as never);
+        expect(outcome).not.toBeNull();
+        expect(await outcome!).toBe('done');
+        expect(tookBeforeBatch).toBe(true);
+        const file = [...h.rows.values()].find((r) => r.kind === 'file')!;
+        // Re-keyed by the walk like everything else beneath S.
+        expect(file.parentKeyEpoch).toBe(TARGET);
+        const fresh = await h.open('fresh-device');
+        const { nodes } = await fresh('driveOpenNodes', {
+            workspaceId: WS,
+            nodes: [...[ROOT, S, P].map((id) => h.row(id)), file].map(envelopesOf),
+        });
+        expect(nodes.map((n) => n.error ?? n.metadata?.name)).toEqual([
+            'Files',
+            'S',
+            'P',
+            'early.txt',
+        ]);
     });
 });

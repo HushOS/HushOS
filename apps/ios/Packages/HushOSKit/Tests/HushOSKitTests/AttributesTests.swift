@@ -50,6 +50,34 @@ extension OnFakeDrive {
         #expect(renamed.attributes == FakeDrive.attributes["A"])
     }
 
+    @Test func aColourChangeKeepsTheNameAndEveryOtherAttribute() async throws {
+        let server = try FakeDrive(attributed: true)
+        let vault = try await readyVault(server)
+        let before = try #require(FakeDrive.attributes["A"])
+        _ = try await vault.recolour(server.a, to: " #7C5CBF ")
+        let coloured = try await record(server.a, server, vault)
+        #expect(coloured.name == "A")
+        var expected = before
+        expected["colour"] = "#7c5cbf"
+        #expect(coloured.attributes == expected)
+        // Back to the plain folder colour: only the colour goes.
+        _ = try await vault.recolour(server.a, to: nil)
+        expected["colour"] = nil
+        #expect(try await record(server.a, server, vault).attributes == expected)
+    }
+
+    @Test func aColourThatIsNotOneOrAFileIsRefusedBeforeAnythingIsWritten() async throws {
+        let server = try FakeDrive(attributed: true)
+        let vault = try await readyVault(server)
+        let version = try #require(server.nodes[server.a]?.metadataVersion)
+        for bad in ["#fff", "purple", ""] {
+            await #expect(throws: (any Error).self) { _ = try await vault.recolour(server.a, to: bad) }
+        }
+        await #expect(throws: (any Error).self) { _ = try await vault.recolour(server.g, to: "#123456") }
+        #expect(server.nodes[server.a]?.metadataVersion == version)
+        #expect(try await record(server.a, server, vault).attributes == FakeDrive.attributes["A"])
+    }
+
     @Test func aCopyOfAFileOrAFolderKeepsEachSourcesAttributes() async throws {
         let server = try FakeDrive(attributed: true)
         let vault = try await readyVault(server)
