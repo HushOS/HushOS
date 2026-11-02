@@ -177,6 +177,8 @@ class FamilyManageTest {
     @Test
     fun anAdmissionKeptForOtherKeysIsHeld() {
         val phone = phone()
+        // Grace's row as the screen drew it before her account changed: every press below is on it, never reloaded.
+        val grace = grace
         answer(3, 503)
         assertTrue(phone.sync.letIn(summary, grace) is LetIn.Pending)
         val sends = family.callBodies.size
@@ -285,5 +287,63 @@ class FamilyManageTest {
         // Dropping Ada's kept admissions leaves Grace's.
         phone.sync.dropKeptAdmission(family.groupId, ada.id)
         assertEquals(listOf(graceKept), kept(phone))
+    }
+
+    /*
+     * Sam changes the member list after this phone's last sync, the page still open: Let them in syncs first and builds
+     * over his roster, and lands. Fails if the admission is built over the chain this phone held, named at the server's
+     * newer revision (refused as not following the head, and every later press the same).
+     */
+    @Test
+    fun aChangeSinceTheLastSyncIsSyncedBeforeLettingIn() {
+        val phone = phone()
+        family.samChangesTheList()
+        assertEquals(LetIn.Landed, phone.sync.letIn(summary, grace))
+        assertEquals(1, family.callBodies.size)
+        assertEquals(5, family.chain.size)
+    }
+
+    /*
+     * Grace's account changes while her row is on screen; Let them in on that row says so, Continue follows her new keys,
+     * and the next press on the same row lets her in over them, reading her keys afresh. Fails if the admission is built
+     * from the row's old identity, which the pin no longer names.
+     */
+    @Test
+    fun aChangedAccountIsLetInAfterContinueWithoutReloadingTheRow() {
+        val phone = phone()
+        val drawn = grace
+        // Pinned at her old keys (an earlier contact, or a Let them in that got no further).
+        assertTrue(phone.vault.addContact("grace@example.org", writer = server.grace.id, firstSeen = "family") is Added.New)
+        server.startOverGrace()
+        family.pendingRows.clear()
+        family.waiting(server.grace, "grace@example.org", "Grace Hopper")
+        val changed = phone.sync.letIn(summary, drawn)
+        assertTrue("$changed", changed is LetIn.Changed)
+        phone.vault.continueWith((changed as LetIn.Changed).change)
+        assertEquals(LetIn.Landed, phone.sync.letIn(summary, drawn))
+        assertTrue(family.pendingRows.isEmpty())
+    }
+
+    /*
+     * Sam's change lands between this phone's sync and its read of the head (route 3), once the family's key is opened
+     * (the first round only opens it, and the next one syncs anyway): the head no longer matches the chain just accepted,
+     * so the family is synced again and the admission built over his roster. Fails if a head read after the sync is
+     * trusted to name the chain the sync accepted (built over the old chain at the new revision, refused as not following).
+     */
+    @Test
+    fun aChangeBetweenTheSyncAndTheHeadReadIsSyncedAgain() {
+        val phone = phone()
+        var keyOpened = false
+        var once = true
+        server.beforeAnswer = { method, path ->
+            if (method == "GET" && path == "groups/${family.groupId}/key-seal") keyOpened = true
+            // The sync's own read of route 3 comes after its rosters: the change lands after the sync saw them.
+            if (keyOpened && once && method == "GET" && path == "groups/${family.groupId}") { once = false; family.samChangesTheList() }
+        }
+        assertEquals(LetIn.Landed, phone.sync.letIn(summary, grace))
+        server.beforeAnswer = null
+        assertTrue("the change landed mid-staging", !once)
+        assertEquals(1, family.callBodies.size)
+        assertEquals(5, family.chain.size)
     }
 }

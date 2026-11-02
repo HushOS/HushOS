@@ -123,14 +123,14 @@ data class GroupSummary(val id: String, val kind: String, val name: String, val 
  * Route 3: the family's members as the server names them (rosters carry no names), and the head's revision a roster call
  * is built against (0 when the server sent none).
  */
-data class GroupDetail(val members: List<Member>, val revision: Long = 0L) {
+data class GroupDetail(val members: List<Member>, val revision: Long = 0L, val headVersion: Long = 0L) {
     data class Member(val userId: String, val name: String, val email: String?, val state: String, val roles: List<String>)
 
     companion object {
         fun from(json: JSONObject) = GroupDetail(json.getJSONArray("members").objects().map {
             Member(it.getString("userId"), it.optString("name"), if (it.isNull("email")) null else it.optString("email").ifEmpty { null },
                 it.getString("state"), it.optJSONArray("roles").strings())
-        }, json.optJSONObject("head")?.optLong("revision") ?: 0L)
+        }, json.optJSONObject("head")?.optLong("revision") ?: 0L, json.optJSONObject("head")?.optLong("version") ?: 0L)
     }
 }
 

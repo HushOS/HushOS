@@ -267,18 +267,17 @@ private fun <T> FamilySync.notMemberLetsGo(groupId: String, wiped: () -> T, body
 fun FamilySync.letIn(summary: GroupSummary, person: PendingPerson): LetIn {
     val groupId = summary.id
     val first = firstNameOf(person.name)
-    val served = person.identity ?: return LetIn.Refused("$first isn’t waiting to join any more.")
     // Pinned first, outside the family's turn (it saves the settings): first-seen, or the pin held already.
     when (val added = vault.addContact(person.email, writer = person.userId, firstSeen = "family")) {
         is Added.Changed -> return LetIn.Changed(added.change)
         else -> {}
     }
     return exclusive(groupId) {
-        notMemberLetsGo(groupId, { LetIn.Wiped }) { admitInTurn(summary, person, served, first) }
+        notMemberLetsGo(groupId, { LetIn.Wiped }) { admitInTurn(summary, person, first) }
     }
 }
 
-private fun FamilySync.admitInTurn(summary: GroupSummary, person: PendingPerson, served: com.hushos.core.PublicIdentity, first: String): LetIn {
+private fun FamilySync.admitInTurn(summary: GroupSummary, person: PendingPerson, first: String): LetIn {
     val groupId = summary.id
     // An earlier Let them in for them, kept: sent as it is, or held, before anything new is signed. Only a definite
     // `stale` (or its roster overtaken) lets a new one be signed; one still unanswered stays the only one.
@@ -293,8 +292,9 @@ private fun FamilySync.admitInTurn(summary: GroupSummary, person: PendingPerson,
         }
     }
     repeat(3) {
-        when (val built = stageAdmit(summary, person.userId, served)) {
+        when (val built = stageAdmit(summary, person.userId, first)) {
             is Staged.Refused -> return LetIn.Refused(built.words)
+            Staged.Wiped -> return LetIn.Wiped
             is Staged.Call -> when (val end = sendKept(summary, built.kept, names = { first })) {
                 CallEnd.Landed -> return LetIn.Landed
                 is CallEnd.Pending -> return LetIn.Pending(end.reason)
@@ -318,25 +318,36 @@ private fun FamilySync.names(groupId: String): String = runCatching { list().fir
 private sealed interface Staged {
     class Call(val kept: FamilyOutbox.Kept) : Staged
     class Refused(val words: String) : Staged
+    data object Wiped : Staged
 }
 
 /*
- * The admission built by the core, with what it asks first done here: the family synced (its committed chain and its
- * folders open), the group key's seal opened (route 8), every member's ML-KEM key (route 6), and the head's revision
- * (route 3). Kept in the outbox before anything is sent.
+ * The admission built by the core (the web's stageLocked): the family synced first in this turn, so the call builds on
+ * the head the server has, and route 3's head checked against the chain that sync accepted (another manager's change
+ * since: synced and staged again). Then their keys as route 16 serves them now (a row drawn before their account changed
+ * and this phone's Continue holds the old ones), every member's ML-KEM key (route 6), the group key's seal opened when the
+ * core asks (route 8), and the head's revision. Kept in the outbox before anything is sent.
  */
-private fun FamilySync.stageAdmit(summary: GroupSummary, userId: String, served: com.hushos.core.PublicIdentity): Staged {
+private fun FamilySync.stageAdmit(summary: GroupSummary, userId: String, first: String): Staged {
     val groupId = summary.id
-    var synced = false
     var keyOpened = false
     repeat(4) {
+        val view = when (val state = syncRevised(summary).state) {
+            is FamilyState.Accepted -> state.view
+            FamilyState.Wiped -> return Staged.Wiped
+            is FamilyState.Failed -> return Staged.Refused(state.words)
+            else -> return Staged.Refused("Couldn’t check ${summary.name}. Try again.")
+        }
+        val head = api.group(groupId)
+        if (head.headVersion != view.rosterVersion.toLong()) return@repeat
+        val served = api.pending(groupId).firstOrNull { it.userId.equals(userId, ignoreCase = true) }?.identity
+            ?: return Staged.Refused("$first isn’t waiting to join any more.")
         // The ledger reads this account's contact pin of them from the settings it was handed last.
         vault.familyPin(groupId)
-        val revision = api.group(groupId).revision.toULong()
         val identities = fetchIdentities(groupId)
         val kems = identities.mapNotNull { (id, member) -> member.identity?.kemPublicKey?.let { id to it } }.toMap()
         val call = try {
-            ledger.admitBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, revision, userId.lowercase(), served,
+            ledger.admitBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, head.revision.toULong(), userId.lowercase(), served,
                 emptyList(), kems)
         } catch (refused: CoreException) {
             return Staged.Refused(FamilyWords.error(refused))
@@ -346,11 +357,8 @@ private fun FamilySync.stageAdmit(summary: GroupSummary, userId: String, served:
                 outbox.put(this.userId, groupId, call.call.outboxId, call.call.entry)
                 return Staged.Call(FamilyOutbox.Kept(call.call.outboxId, call.call.entry))
             }
-            RosterCall.SyncFirst, RosterCall.OpenFoldersFirst -> {
-                if (synced) return Staged.Refused("Couldn’t check ${summary.name}. Try again.")
-                synced = true
-                if (syncRevised(summary).state !is FamilyState.Accepted) return Staged.Refused("Couldn’t check ${summary.name}. Try again.")
-            }
+            // Synced at the top of the next round.
+            RosterCall.SyncFirst, RosterCall.OpenFoldersFirst -> {}
             RosterCall.OpenKeyFirst -> {
                 if (keyOpened) return Staged.Refused("Another manager needs to open the family before you can change it. Try again later.")
                 keyOpened = true
@@ -358,7 +366,7 @@ private fun FamilySync.stageAdmit(summary: GroupSummary, userId: String, served:
             }
         }
     }
-    return Staged.Refused("Couldn’t check ${summary.name}. Try again.")
+    return Staged.Refused("${summary.name} keeps changing. Try again in a moment.")
 }
 
 /* Route 8's seal of the family's group key, opened by the ledger and kept there: the seed never leaves it. */

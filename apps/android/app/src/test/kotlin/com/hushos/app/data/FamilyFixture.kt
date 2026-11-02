@@ -291,7 +291,11 @@ class FamilyFixture(val server: FakeDrive) {
     fun apply(body: JSONObject, userId: String): Pair<Int, JSONObject> {
         if (body.optLong("expectedRevision", -1) != chain.size.toLong())
             return 409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
-        chain = chain + signedOf(body.getJSONObject("roster"))
+        val next = signedOf(body.getJSONObject("roster"))
+        // The roster must follow the head it names (the server's verify; `invalid`/`roster-chain` otherwise).
+        if (runCatching { creatorChain(chain + next) }.isFailure)
+            return 400 to JSONObject().put("code", "invalid").put("message", "The change was refused.").put("data", JSONObject().put("reason", "roster-chain"))
+        chain = chain + next
         pendingRows.removeIf { it.optString("userId").equals(userId, ignoreCase = true) }
         return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", chain.size))
     }
