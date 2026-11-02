@@ -293,13 +293,39 @@ class HushOSDocumentsProvider : DocumentsProvider() {
 
     override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean = guarded {
         val vault = requireVault()
-        var current: String? = nodeId(documentId, vault)
-        val parent = nodeId(parentDocumentId, vault)
-        while (current != null) {
-            if (current == parent) return@guarded true
-            current = runCatching { vault.resolve(current!!).node.parentId }.getOrNull()
+        isUnder(vault, nodeId(parentDocumentId, vault), nodeId(documentId, vault))
+    }
+
+    /*
+     * Whether `id` sits under `parent` now, as the server says, before a tree grant is honoured: this account's own drive
+     * brought to the feed's head first (Vault.sync), so a node another device moved out of the tree since is where it is
+     * now, never where the cache last saw it. The provider lists only this account's own drive, so a node of any other
+     * workspace is outside every tree, as is anything that can't be confirmed (no answer, a node the drive doesn't hold).
+     */
+    private fun isUnder(vault: Vault, parent: String, id: String): Boolean {
+        val own = vault.ownWorkspaceId
+        var synced = false
+        var current: String? = id
+        repeat(MAX_TREE_DEPTH) {
+            val at = current ?: return false
+            if (at == parent) return true
+            current = try {
+                val held = vault.resolve(at)
+                val ws = held.node.workspaceId
+                if (ws.equals(own, ignoreCase = true)) {
+                    if (!synced) {
+                        if (vault.sync() == null) return false
+                        synced = true
+                    }
+                    vault.resolve(at).node.parentId
+                } else return false
+            } catch (error: NotAuthenticated) {
+                throw error
+            } catch (_: Exception) {
+                return false
+            }
         }
-        false
+        return false
     }
 
     /* Per version, so a download resumed after a replacement never mixes two versions' bytes. */
@@ -422,5 +448,6 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         private const val TRUST_TTL_MS = 5 * 60_000L
         private const val TRUST_RETRY_MS = 30_000L
         private const val REFRESH_WAIT_MS = 5_000L
+        private const val MAX_TREE_DEPTH = 256
     }
 }
