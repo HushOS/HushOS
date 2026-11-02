@@ -22,7 +22,8 @@ object FamilyUploads {
 
     /*
      * Whether `error` is a key change not finished yet rather than a failure (iOS's KeyChangeWait.meets): the ledger's
-     * key-change refusals (said or raw), the server's 409 `rotating`, and its 409 `stale` once the upload has waited.
+     * key-change refusals (said or raw), the server's 409 `rotating`, a completion refused because a key change reached the
+     * file while it went up (KeyChangeConflict), and its 409 `stale` once the upload has waited. Never a landed upload.
      */
     fun waits(error: Throwable, waited: Boolean): Boolean {
         val message = error.message.orEmpty()
@@ -30,6 +31,7 @@ object FamilyUploads {
             return message == FamilyWords.keyChangeWords(KEY_CHANGE_PENDING) || message == KEY_CHANGE_PENDING ||
                 message == OLDER_WORKSPACE_KEY || message == OLDER_FOLDER_KEY
         }
+        if (error is KeyChangeConflict) return true
         if (error is ApiError && error.status == 409) return error.code == "rotating" || (error.code == "stale" && waited)
         return false
     }
@@ -49,6 +51,9 @@ object FamilyUploads {
             // without a not-member answer is no answer yet: the job runs again later.
             val (_, gone) = transient { sync.listReconciling() }
             if (gone.any { it.groupId.equals(groupId, ignoreCase = true) && it.state == FamilyState.Wiped }) throw FamilyFailure.notInFamily
+            // The queued family itself, record or not: a process that died between the family's wipe and the end of its
+            // uploads left no record for listReconciling to ask about, and the job would wait for ever.
+            if (transient { sync.notMember(groupId) }) throw FamilyFailure.notInFamily
             throw Unreachable()
         }
         when (val state = sync.sync(summary)) {

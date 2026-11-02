@@ -1883,7 +1883,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             if (earlier != Reservations.Settle.CLEAR) madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
             if (earlier == Reservations.Settle.PENDING) throw Unreachable()
             // It completed after all: the file is there, so this one is never sent again.
-            if (earlier == Reservations.Settle.LANDED) throw Reservations.LandedEarlier()
+            if (earlier == Reservations.Settle.LANDED) throw Reservations.Landed()
         }
         val beganAt = Reservations.now()
         val begun = try {
@@ -1907,7 +1907,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
             throw error
         }
         try {
-            return uploadReserved(file, mime, ws, nodeId, nodeKey, metadata, replacing, keptName, madeKey, begun, layout, content, thumbnail, thumbnailBytes, size, modified, progress)
+            return uploadReserved(file, mime, ws, nodeId, nodeKey, metadata, replacing, keptName, madeKey, begun, layout, content, thumbnail, thumbnailBytes, size, modified,
+                family, job, progress)
         } finally {
             Reservations.idle(begun.uploadId)
         }
@@ -1916,7 +1917,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
     /* The upload after its reservation is on record: parts, completion, the name of a new version. */
     private fun uploadReserved(file: File, mime: String?, ws: String, nodeId: String, nodeKey: ByteArray, metadata: NodeMetadata, replacing: Opened?,
                                keptName: Integrity?, madeKey: String?, begun: UploadBegun, layout: com.hushos.core.ContentLayout, content: Content,
-                               thumbnail: ByteArray?, thumbnailBytes: UInt, size: ULong, modified: String, progress: (Float) -> Unit): Opened {
+                               thumbnail: ByteArray?, thumbnailBytes: UInt, size: ULong, modified: String, family: Boolean, job: String,
+                               progress: (Float) -> Unit): Opened {
         val urls = HashMap<Int, String>()
         for (part in begun.parts) urls[part.partNumber] = part.url
         val etags = JSONArray()
@@ -1959,9 +1961,46 @@ class Vault(internal val context: Context, val api: DriveApi) {
         } catch (refused: UploadFinish.RefusedHere) {
             madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
             throw refused.cause!!
+        } catch (conflict: ApiError) {
+            // A key change reached the file or its folder while the parts went up: aborted (UploadFinish), sealed afresh
+            // after the wait. Someone else's newer version of a replaced file stays the conflict it is.
+            if (family && keyChangedWhileUploading(conflict, replacing)) {
+                madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
+                throw KeyChangeConflict(conflict)
+            }
+            throw conflict
         } ?: throw ApiError(500, "Upload completed without a node")
-        // Completed: the reservation became the file.
-        Reservations.settled(context, begun.uploadId)
+        // Completed: the reservation became the file (a queued job's record its landed row). From here nothing sends the
+        // file again: in a queued job, whatever fails after this point is Landed, never a reason to upload it again.
+        Reservations.completed(context, begun.uploadId)
+        if (job.isEmpty()) return finishLanded(node, ws, nodeId, nodeKey, metadata, replacing, keptName, mime, size, modified)
+        try {
+            return finishLanded(node, ws, nodeId, nodeKey, metadata, replacing, keptName, mime, size, modified)
+        } catch (error: Exception) {
+            throw Reservations.Landed(error)
+        }
+    }
+
+    /*
+     * 409 `conflict` with `data.conflicted` from a completion (packages/drive/src/server.ts completeUpload over
+     * packages/db/src/drive.ts finishCompleting): for a new file only a key epoch can have moved (its own, or its parent's);
+     * for a new version, the key moved when the version the server holds is still the one replaced. Without the server's
+     * `currentVersionId` (a repeated completion of an upload already conflicted) a new version can't be told apart: kept a
+     * conflict.
+     */
+    private fun keyChangedWhileUploading(conflict: ApiError, replacing: Opened?): Boolean {
+        val data = conflict.data ?: return false
+        if (conflict.status != 409 || conflict.code != "conflict" || !data.optBoolean("conflicted")) return false
+        if (replacing == null) return true
+        if (!data.has("currentVersionId")) return false
+        val current = if (data.isNull("currentVersionId")) null else data.getString("currentVersionId")
+        return current == replacing.node.currentVersion?.id
+    }
+
+    /* What follows a landed completion: the node checked, a new version's name signed again, the row adopted. */
+    private fun finishLanded(landed: NodeView, ws: String, nodeId: String, nodeKey: ByteArray, metadata: NodeMetadata, replacing: Opened?,
+                             keptName: Integrity?, mime: String?, size: ULong, modified: String): Opened {
+        var node = landed
         checkWritten(node, ws, nodeId)
         var final = metadata
         if (replacing != null) {

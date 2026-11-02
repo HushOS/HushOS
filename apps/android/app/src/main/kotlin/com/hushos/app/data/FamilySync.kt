@@ -193,6 +193,17 @@ class FamilySync(
         return listed to wiped
     }
 
+    /*
+     * Route 5 asked about `groupId` directly (a queued upload's family route 2 doesn't list): true only on the server's
+     * not-member, false while it still serves the family; any other answer, a dropped route included, is thrown.
+     */
+    fun notMember(groupId: String): Boolean = try {
+        api.rosters(groupId, 0)
+        false
+    } catch (error: GroupsApiError) {
+        if (error.isNotMember) true else throw error
+    }
+
     private fun askUnlisted(groupId: String): FamilyState? {
         val after = records.read(userId, groupId)?.rosterVersion?.toInt() ?: 0
         return try {

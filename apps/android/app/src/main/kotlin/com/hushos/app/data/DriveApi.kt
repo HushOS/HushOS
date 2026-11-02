@@ -8,7 +8,16 @@ import java.net.URL
 import java.net.URLEncoder
 
 class NotAuthenticated : Exception("Sign in to HushOS to see your files.")
-class ApiError(val status: Int, message: String, val code: String? = null) : Exception(message)
+/* `data`: the structured part of the server's refusal (its `data`), e.g. a completion's `conflicted` and `currentVersionId`. */
+open class ApiError(val status: Int, message: String, val code: String? = null, val data: JSONObject? = null) : Exception(message)
+
+/*
+ * A family upload's completion refused because a key change reached the file or its folder while the parts went up
+ * (packages/db/src/drive.ts finishCompleting: the node's or the parent's key epoch moved, answered as 409 `conflict` with
+ * `data.conflicted`): the upload is aborted, the family opened again, and the file sealed afresh (iOS's
+ * DriveAPIError.conflicted). A newer version someone else made stays an ordinary conflict.
+ */
+class KeyChangeConflict(conflict: ApiError) : ApiError(conflict.status, conflict.message ?: "", conflict.code, conflict.data)
 class NotFound(message: String) : Exception(message)
 class Unreachable : Exception("Could not reach HushOS. Check your connection.")
 
@@ -174,7 +183,7 @@ class DriveApi(val session: Shared.Session) : RootApi {
             val code = body?.optString("code")?.ifEmpty { null }
             if (status == 404) throw NotFound(if (message.isNullOrEmpty()) "This item no longer exists." else message)
             if (code == "bad-signature") onBadSignature()
-            throw ApiError(status, if (message.isNullOrEmpty()) "Request failed" else message, code)
+            throw ApiError(status, if (message.isNullOrEmpty()) "Request failed" else message, code, body?.optJSONObject("data"))
         }
         return if (text.isEmpty()) JSONObject() else JSONObject(text)
     }

@@ -108,6 +108,19 @@ object Reservations {
         Unit
     }
 
+    /*
+     * It completed (its completion answered, or an abort heard "already finished"): settled. A queued job's record becomes
+     * that job's landed row in the same write, so nothing after it (a name signed again, a process dying) sends the file
+     * again. False when the disk refused the write: the record stays, to be asked again (its abort then says completed).
+     */
+    fun completed(context: Context, uploadId: String): Boolean = synchronized(lock) {
+        val record = all(context).firstOrNull { it.uploadId == uploadId }
+        if (record == null || record.job.isEmpty()) { settled(context, uploadId); return true }
+        unwritten.remove(uploadId)
+        try { write(context, all(context).filter { it.uploadId != uploadId } + record.copy(landed = true)) } catch (_: Exception) { unwritten[uploadId] = record; return false }
+        true
+    }
+
     /* The upload that made it isn't running any more in this process (landed, failed, stopped): a later settle may take it. */
     fun idle(uploadId: String) { active.remove(uploadId) }
 
@@ -119,14 +132,7 @@ object Reservations {
         val record = all(context).firstOrNull { it.uploadId == uploadId }
         when (answer) {
             Abort.RELEASED -> { settled(context, uploadId); true }
-            Abort.COMPLETED -> {
-                if (record != null && record.job.isNotEmpty()) {
-                    unwritten.remove(uploadId)
-                    val rest = all(context).filter { it.uploadId != uploadId } + record.copy(landed = true)
-                    try { write(context, rest) } catch (_: Exception) { unwritten[uploadId] = record; return false }
-                } else settled(context, uploadId)
-                true
-            }
+            Abort.COMPLETED -> completed(context, uploadId)
             Abort.GONE -> if (record == null || now() >= record.expiresAt + GRACE_MS) { settled(context, uploadId); true } else false
             Abort.PENDING -> false
         }
@@ -166,8 +172,12 @@ object Reservations {
         Unit
     }
 
-    /* A queued job's file that landed in an earlier run whose completion answer was lost: done, not sent again. */
-    class LandedEarlier : Exception("Uploaded.")
+    /*
+     * A queued job's file landed: in an earlier run whose completion answer was lost, or in this one with a step after the
+     * completion failing (`cause`: the name signed again refused, a key change, a check). Done, never sent again; the
+     * landed version's name re-sign is the deferred landed-version name repair (docs/groups-mobile-plan.md).
+     */
+    class Landed(cause: Throwable? = null) : Exception("Uploaded.", cause)
 
     /* Settles every record no upload in this process is still running (another job's leftovers, a dead process's). */
     fun settleAll(context: Context, abort: (uploadId: String, workspaceId: String) -> Abort) {

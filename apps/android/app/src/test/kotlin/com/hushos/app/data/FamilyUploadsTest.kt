@@ -50,8 +50,10 @@ class FamilyUploadsTest {
 
     private fun local(name: String, text: String) = File(app.cacheDir, "local-${System.nanoTime()}/$name").apply { parentFile!!.mkdirs(); writeText(text) }
 
-    private fun upload(vault: Vault, job: String = UUID.randomUUID().toString(), progress: (Float) -> Unit = {}): Opened =
-        FamilyUploads.upload(vault, family.groupId, family.workspaceId, local("Notes.txt", "packing list"), "Notes.txt", "text/plain", family.rootId, null, job, progress)
+    /* As the transfer job runs it: a job that lands forgets its landed row (the worker's Done). */
+    private fun upload(vault: Vault, job: String = UUID.randomUUID().toString(), replacingId: String? = null, progress: (Float) -> Unit = {}): Opened =
+        FamilyUploads.upload(vault, family.groupId, family.workspaceId, local("Notes.txt", "packing list"), "Notes.txt", "text/plain", family.rootId, replacingId, job, progress)
+            .also { Reservations.forgetLanded(app, job) }
 
     private fun records() = Reservations.all(app)
     private fun begins() = server.requests.count { it == "POST /api/drive/uploads" }
@@ -298,7 +300,7 @@ class FamilyUploadsTest {
         assertEquals("a completing upload's abort was counted as settled", listOf(leftover), records().map { it.uploadId })
         assertEquals(reserved, begins())
         answer = DriveApi.ALREADY_FINISHED
-        assertTrue(runCatching { upload(job(), job) }.exceptionOrNull() is Reservations.LandedEarlier)
+        assertTrue(runCatching { upload(job(), job) }.exceptionOrNull() is Reservations.Landed)
         assertEquals("a finished upload was sent again", reserved, begins())
         // The reservation is settled; the job's landed row stays until the worker has ended it as uploaded.
         assertEquals(listOf(true), records().map { it.landed })
@@ -355,7 +357,7 @@ class FamilyUploadsTest {
         Reservations.settleAll(app) { id, ws -> job().api.abortUpload(id, ws) }
         assertTrue("the sweep's \"completed\" forgot that the job landed", Reservations.landed(app, job))
         val reserved = begins()
-        assertTrue(runCatching { upload(job(), job) }.exceptionOrNull() is Reservations.LandedEarlier)
+        assertTrue(runCatching { upload(job(), job) }.exceptionOrNull() is Reservations.Landed)
         assertEquals("a landed file was sent again", reserved, begins())
         assertEquals("the folder holds the file twice", before + 1, server.children(family.rootId).size)
     }
@@ -419,6 +421,103 @@ class FamilyUploadsTest {
         Reservations.settleAll(app) { id, ws -> job().api.abortUpload(id, ws) }
         assertEquals("a refused write left its reservation marked running", emptyList<Reservations.Record>(), records())
         assertTrue(aborted().contains("POST /api/drive/uploads/$held/abort"))
+    }
+
+    /* A family upload's `waitingOutKeyChanges` as the job runs it, on a clock that only the pauses move. */
+    private fun <T> waitingOut(pauses: MutableList<Long>, attempt: () -> T): T {
+        var since: Long? = null
+        var clock = 0L
+        return FamilyUploads.waitingOutKeyChanges({ since }, { since = it }, { clock }, { ms -> pauses.add(ms); clock += ms }, {}, attempt)
+    }
+
+    /* Answers the next requests matching `matches` with `answer` (`times` of them), the rest as the fake does. */
+    private fun answering(times: Int, matches: (String, List<String>) -> Boolean, answer: () -> Pair<Int, org.json.JSONObject>) {
+        val inner = server.extraRoutes!!
+        var left = times
+        server.extraRoutes = { method, segments, query, body ->
+            if (left > 0 && matches(method, segments)) { left--; answer() } else inner(method, segments, query, body)
+        }
+    }
+
+    /*
+     * #251 review 6, item 1: a new version lands, then its name signed again (new size and date) meets a key change (409
+     * `rotating`). The upload is landed: never sent again, inside the wait or by a run after the process died there. Fails
+     * if anything after the completion restarts the upload.
+     */
+    @Test
+    fun aLandedNewVersionIsNeverSentAgainWhenWhatFollowsItsCompletionFails() {
+        val vault = job()
+        val original = upload(vault)
+        val job = UUID.randomUUID().toString()
+        answering(1, { method, segments -> method != "GET" && segments.size >= 2 && segments[segments.size - 2] == original.id && segments.last() == "metadata" }) {
+            409 to org.json.JSONObject().put("code", "rotating").put("message", "This folder’s keys are changing. Try again in a moment.")
+        }
+        val reserved = begins()
+        val pauses = ArrayList<Long>()
+        val error = runCatching { waitingOut(pauses) { upload(vault, job, original.id) } }.exceptionOrNull()
+        assertTrue("a refused name after the completion wasn't landed: $error", error is Reservations.Landed)
+        assertEquals("the landed version was uploaded again", reserved + 1, begins())
+        assertEquals(emptyList<Long>(), pauses)
+        // A process dying right after the completion: the job's next run ends as uploaded, sending nothing.
+        assertTrue(Reservations.landed(app, job))
+        assertTrue(runCatching { upload(job(), job, original.id) }.exceptionOrNull() is Reservations.Landed)
+        assertEquals(reserved + 1, begins())
+        assertEquals(2, completed().size)
+    }
+
+    /*
+     * #251 review 6, item 2: a key change reaches the folder while the parts go up, and the server refuses the completion
+     * as packages/drive/src/server.ts completeUpload does (409 `conflict`, `data.conflicted`). The upload is aborted, the
+     * wait pauses once, and it is sealed afresh and lands. A new version whose file someone else changed meanwhile (the
+     * server's current version isn't the one replaced) stays a conflict: no wait. Fails if the key change fails the upload,
+     * or an ordinary conflict is waited out.
+     */
+    @Test
+    fun aKeyChangeThatReachedTheFileWhileItWentUpIsWaitedOutAndSealedAfresh() {
+        val vault = job()
+        fun conflicted(current: Any) = 409 to org.json.JSONObject().put("code", "conflict").put("message", "This file changed while it was uploading.")
+            .put("data", org.json.JSONObject().put("conflicted", true).put("currentVersionId", current))
+        val completing = { method: String, segments: List<String> -> method == "POST" && segments.lastOrNull() == "complete" }
+        answering(1, completing) { conflicted(org.json.JSONObject.NULL) }
+        val pauses = ArrayList<Long>()
+        val reserved = begins()
+        val landed = waitingOut(pauses) { upload(vault) }
+        assertNotNull(landed)
+        assertEquals("the key change wasn't waited out", listOf(FamilyUploads.PAUSE_MS), pauses)
+        assertEquals(reserved + 2, begins())
+        assertEquals(1, aborted().size)
+        assertEquals(emptyList<Reservations.Record>(), records())
+        answering(1, completing) { conflicted(UUID.randomUUID().toString()) }
+        val moved = runCatching { waitingOut(pauses) { upload(vault, replacingId = landed.id) } }.exceptionOrNull()
+        assertTrue("someone else's newer version was waited out: $moved", moved is ApiError && moved !is KeyChangeConflict && moved.code == "conflict")
+        assertEquals(listOf(FamilyUploads.PAUSE_MS), pauses)
+    }
+
+    /*
+     * #251 review 6, item 3: the app's sync wiped the family, then the process died before the family's queued uploads
+     * ended, so no device record is left and route 2 no longer lists it. The job asks route 5 about its family directly: a
+     * dropped route is the network's, not-member ends the upload as a removal, and its reservation settles through the
+     * ledger. Fails if such a job waits for ever.
+     */
+    @Test
+    fun aQueuedFamilyWithNoRecordLeftIsAskedAboutDirectly() {
+        val wiping = job()
+        upload(wiping)
+        val job = UUID.randomUUID().toString()
+        assertThrows(Killed::class.java) { upload(job(), job) { throw Killed() } }
+        family.listed = false
+        family.notMember = true
+        wiping.jobFamilies.wipe(family.groupId)
+        family.notMember = false
+        family.rostersFail = true
+        val dropped = runCatching { upload(job(), job) }.exceptionOrNull()
+        assertTrue("a dropped route 5 wasn't the network's: $dropped", dropped is Unreachable)
+        family.rostersFail = false
+        family.notMember = true
+        val removed = runCatching { upload(job(), job) }.exceptionOrNull()
+        assertTrue("a family gone with no record left wasn't a removal: $removed", removed != null && FamilyUploads.removed(removed))
+        TransferQueue.dropJob(app, job, null) { id, ws -> job().api.abortUpload(id, ws) }
+        assertEquals(emptyList<Reservations.Record>(), records())
     }
 
     /*

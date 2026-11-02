@@ -378,13 +378,16 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                     waits.forget(this@UploadWorker.id.toString())
                     file.parentFile?.deleteRecursively()
                     TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = folder))
+                    // Its landed row (written at the completion) goes last: a death before here ends a rerun as uploaded.
+                    Reservations.forgetLanded(applicationContext, this@UploadWorker.id.toString())
                     Result.success()
                 }
                 // Nothing said, nothing recorded: WorkManager drops a cancelled job and reschedules one whose constraint went.
                 JobEnd.Stopped -> Result.retry()
                 is JobEnd.Failed -> when {
                     // An earlier run's completion landed after all (its answer lost): done, said, its copy gone.
-                    end.error is Reservations.LandedEarlier -> landedEarlier()
+                    // Landed: an earlier run's completion whose answer was lost, or a step after this run's completion failed.
+                    end.error is Reservations.Landed -> landedEarlier()
                     // Not in the family any more: this upload and every other queued into the family end, copies deleted.
                     family != null && FamilyUploads.removed(end.error) -> {
                         TransferQueue.endFamily(applicationContext, family, except = this@UploadWorker.id) { uploadId, workspaceId -> vault.api.abortUpload(uploadId, workspaceId) }
