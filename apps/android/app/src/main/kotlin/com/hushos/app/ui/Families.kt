@@ -186,6 +186,7 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
                                 else if (summary != null) families.checking = MemberCheck(summary, ref, served(me)?.name?.let(::firstNameOf) ?: "you", organizer)
                             }
                         }
+                        FamilyPlanSection(model, groupId)
                         TechnicalDetailsRow(view)
                         Leaving(model, groupId, me)
                     }

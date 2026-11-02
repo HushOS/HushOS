@@ -41,6 +41,8 @@ import java.io.FileNotFoundException
 class HushOSDocumentsProvider : DocumentsProvider() {
     /* Read on any thread; replaced only under vaultLock, one Vault per session. */
     @Volatile private var vault: Vault? = null
+    /* The families Files shows for that vault's session (one root each), made and dropped with it under vaultLock. */
+    @Volatile private var families: ProviderFamilies? = null
     private val vaultLock = Any()
 
     override fun onCreate(): Boolean {
@@ -64,6 +66,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             // Another request may have replaced it while this one waited: then it is that one.
             vault?.let { if (session != null && it.api.session == session && !it.closed) return it }
             vault = null
+            families = null
             // A load begun for the vault dropped here neither lands nor is joined by the next one's requests.
             trustLoad.reset(null) { trust = TrustState.Loading }
             session ?: throw authenticationRequired()
@@ -71,6 +74,8 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             // The tree on the phone first: listings answer from it, and without a network they still answer.
             runCatching { created.buildCatalogue() }
             trustLoad.reset(created)
+            // Its own area ledger, filled by its own family sync: one per session, never the app's.
+            families = ProviderFamilies(created)
             vault = created
             created
         }
@@ -79,6 +84,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     /* The session is gone: the vault goes, and nothing loaded for it lands. */
     private fun dropVault() = synchronized(vaultLock) {
         vault = null
+        families = null
         trustLoad.reset(null) { trust = TrustState.Loading }
     }
 
@@ -155,7 +161,58 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             // The account it opens, as the board has it; signed out, the way in.
             .add(Root.COLUMN_SUMMARY, Shared.session(ctx)?.let { it.email.ifEmpty { null } } ?: if (Shared.session(ctx) == null) "Sign in to HushOS" else null)
             .add(Root.COLUMN_DOCUMENT_ID, "root")
+        // One root per family this vault's own ledger accepted, titled the family's name. No recents: Recent is the
+        // personal drive's, as on the web.
+        if (Shared.session(ctx) != null) for (family in familyRootsNow()) cursor.newRow()
+            .add(Root.COLUMN_ROOT_ID, family.rootId)
+            .add(Root.COLUMN_FLAGS, Root.FLAG_SUPPORTS_IS_CHILD or if (family.folders.any { it.writable }) Root.FLAG_SUPPORTS_CREATE else 0)
+            .add(Root.COLUMN_ICON, ctx.applicationInfo.icon)
+            .add(Root.COLUMN_TITLE, family.name)
+            .add(Root.COLUMN_DOCUMENT_ID, family.documentId)
         return cursor
+    }
+
+    /* Family loads, off the binder thread, one queued at a time. */
+    private val familyLoads = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val familyLoadQueued = java.util.concurrent.atomic.AtomicBoolean()
+    /* Tests: runs a family load on the calling thread. */
+    internal var runFamilyLoad: ((Runnable) -> Unit)? = null
+
+    /*
+     * The family roots as last loaded for the session signed in now; a load is queued when none was made yet, a family
+     * appeared or went elsewhere, or the last is old. It tells Files when the roots changed (ProviderFamilies.load).
+     */
+    private fun familyRootsNow(): List<FamilyRoot> {
+        fun held() = liveVault()?.takeIf { !it.closed }?.let { families?.takeIf { f -> f.vault === it } }
+        if (held()?.due() != false) loadFamiliesLater()
+        return held()?.roots.orEmpty()
+    }
+
+    private fun loadFamiliesLater() {
+        if (!familyLoadQueued.compareAndSet(false, true)) return
+        val load = Runnable {
+            try {
+                runCatching { requireVault(); families?.load() }
+            } finally {
+                familyLoadQueued.set(false)
+            }
+        }
+        runFamilyLoad?.invoke(load) ?: familyLoads.execute(load)
+    }
+
+    /* The families of the session's vault, made with it. */
+    private fun familiesOf(vault: Vault): ProviderFamilies =
+        families?.takeIf { it.vault === vault } ?: throw FileNotFoundException(com.hushos.app.data.FamilyWords.OPEN_AGAIN)
+
+    private fun familyCursor(cursor: MatrixCursor, row: FamilyRow) {
+        cursor.newRow()
+            .add(Document.COLUMN_DOCUMENT_ID, row.documentId)
+            .add(Document.COLUMN_MIME_TYPE, row.mime)
+            .add(Document.COLUMN_DISPLAY_NAME, row.name)
+            .add(Document.COLUMN_LAST_MODIFIED, row.modified)
+            .add(Document.COLUMN_FLAGS, row.flags)
+            .add(Document.COLUMN_SIZE, row.size)
+            .add(Document.COLUMN_SUMMARY, row.summary)
     }
 
     private fun docId(id: String, vault: Vault) = FilesRoots.documentId(id, vault.rootId)
@@ -195,6 +252,10 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             return@guarded cursor
         }
         val vault = requireVault()
+        FamilyDoc.of(documentId)?.let { doc ->
+            familyCursor(cursor, familiesOf(vault).document(doc))
+            return@guarded cursor
+        }
         val id = nodeId(documentId, vault)
         val item = if (id == vault.rootId) { vault.listChildren(id); vault.item(id)!! } else vault.resolve(id)
         addRow(cursor, item, vault)
@@ -204,6 +265,15 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     override fun queryChildDocuments(parentDocumentId: String, projection: Array<out String>?, sortOrder: String?): Cursor = guarded {
         val vault = requireVault()
         val cursor = MatrixCursor(projection ?: documentColumns)
+        FamilyDoc.of(parentDocumentId)?.let { doc ->
+            for (row in familiesOf(vault).children(doc)) familyCursor(cursor, row)
+            // A family folder's writes tell its node id (Vault.foldersChanged); the family's top, its own id.
+            val told = if (doc is FamilyDoc.Node) doc.nodeId else doc.id
+            cursor.setNotificationUri(context!!.contentResolver, DocumentsContract.buildChildDocumentsUri(authority, told))
+            listedAt = android.os.SystemClock.elapsedRealtime()
+            FilesPoll.start(context!!)
+            return@guarded cursor
+        }
         val trust = trustFor(vault)
         for (child in vault.listChildren(nodeId(parentDocumentId, vault))) addRow(cursor, child, vault, trust)
         cursor.setNotificationUri(context!!.contentResolver, DocumentsContract.buildChildDocumentsUri(authority, parentDocumentId))
@@ -239,6 +309,8 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         if (listedAt == 0L || android.os.SystemClock.elapsedRealtime() - listedAt >= FilesPoll.WINDOW_MS) return false
         val vault = liveVault() ?: return false
         runCatching { vault.sync() }
+        // The family roots as well, when due: a family that went disappears from Files while it looks.
+        if (families?.takeIf { it.vault === vault }?.due() != false) loadFamiliesLater()
         return true
     }
 
@@ -250,6 +322,8 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     override fun refresh(uri: android.net.Uri, extras: android.os.Bundle?, cancellationSignal: CancellationSignal?): Boolean = runCatching {
         val ctx = context ?: return false
         val documentId = runCatching { DocumentsContract.getDocumentId(uri) }.getOrNull() ?: return false
+        // A family folder lists from the server each time: false, and Files reloads it itself.
+        if (FamilyDoc.of(documentId) != null) return false
         val vault = liveVault() ?: return false
         val rootId = vault.rootId
         val folder = FilesRoots.nodeId(documentId, rootId)
@@ -273,8 +347,10 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     }
 
     override fun queryRecentDocuments(rootId: String, projection: Array<out String>?): Cursor = guarded {
-        val vault = requireVault()
         val cursor = MatrixCursor(projection ?: documentColumns)
+        // Recent is the personal drive's only, as on the web: a family root has none.
+        if (rootId != "hushos") return@guarded cursor
+        val vault = requireVault()
         val trust = trustFor(vault)
         // Files only: DocumentsUI's Recent drops folders from what a provider returns (its RecentsLoader
         // rejects the directory type), so a folder standing in for what it holds would hide its files.
@@ -284,6 +360,10 @@ class HushOSDocumentsProvider : DocumentsProvider() {
 
     override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean = guarded {
         val vault = requireVault()
+        val familyParent = FamilyDoc.of(parentDocumentId)
+        val familyDoc = FamilyDoc.of(documentId)
+        // Never across a family's root and the drive, or two families.
+        if (familyParent != null || familyDoc != null) return@guarded familyParent != null && familyDoc != null && familiesOf(vault).isChild(familyParent, familyDoc)
         var current: String? = nodeId(documentId, vault)
         val parent = nodeId(parentDocumentId, vault)
         while (current != null) {
@@ -298,6 +378,8 @@ class HushOSDocumentsProvider : DocumentsProvider() {
 
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor = guarded {
         val vault = requireVault()
+        (FamilyDoc.of(documentId) as? FamilyDoc.Node)?.let { return@guarded openFamily(familiesOf(vault), it, documentId, mode) }
+        if (FamilyDoc.of(documentId) != null) throw FileNotFoundException("Choose a file.")
         val id = nodeId(documentId, vault)
         val item = vault.resolve(id)
         val file = cacheFile(id, item.node.currentVersion?.id)
@@ -333,11 +415,32 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         }
     }
 
+    /*
+     * A family file: read from the family folder's copies; written into an edit of its own there, which goes up as a new
+     * version through the family write path when the other app closes it. A failed write-back is not queued (on this
+     * build the transfer queue opens no family): its edit is deleted, as the family's plaintext never outlives the try.
+     */
+    private fun openFamily(families: ProviderFamilies, doc: FamilyDoc.Node, documentId: String, mode: String): ParcelFileDescriptor {
+        if (mode.contains("r") && !mode.contains("w")) return ParcelFileDescriptor.open(families.readCopy(doc), ParcelFileDescriptor.MODE_READ_ONLY)
+        val edit = families.editCopy(doc, reads = mode.contains("r"))
+        val handler = Handler(Looper.getMainLooper())
+        return ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), handler) { error ->
+            if (error != null) { edit.delete(); return@open }
+            Thread {
+                runCatching { families.writeBack(doc, edit) }
+                    .onSuccess { context?.contentResolver?.notifyChange(DocumentsContract.buildDocumentUri(authority, documentId), null) }
+                    .onFailure { android.util.Log.w("HushOSFiles", "family write-back failed: ${it.javaClass.name}") }
+                edit.delete()
+            }.start()
+        }
+    }
+
     /* Through a pipe, never a plaintext file in the cache: the decrypted JPEG exists only in memory and in transit. */
     override fun openDocumentThumbnail(documentId: String, sizeHint: Point, signal: CancellationSignal?): AssetFileDescriptor = guarded {
         val vault = requireVault()
-        val id = nodeId(documentId, vault)
-        val bytes = vault.thumbnail(id) ?: throw FileNotFoundException("no thumbnail")
+        val family = FamilyDoc.of(documentId)
+        val bytes = if (family != null) (family as? FamilyDoc.Node)?.let { familiesOf(vault).thumbnail(it) } ?: throw FileNotFoundException("no thumbnail")
+            else vault.thumbnail(nodeId(documentId, vault)) ?: throw FileNotFoundException("no thumbnail")
         val (read, write) = ParcelFileDescriptor.createReliablePipe()
         // At most 64 KiB, about a pipe's buffer: written on its own thread so a slow reader never holds the binder thread.
         Thread {
@@ -350,6 +453,10 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         // Another app's name for what it saves: made well formed, so a lone surrogate never reaches the core.
         val displayName = com.hushos.app.data.wellFormed(given)
         val vault = requireVault()
+        FamilyDoc.of(parentDocumentId)?.let { doc ->
+            val node = doc as? FamilyDoc.Node ?: throw FileNotFoundException("Choose a family folder.")
+            return@guarded familiesOf(vault).create(node, mimeType, displayName)
+        }
         val parent = nodeId(parentDocumentId, vault)
         if (mimeType == Document.MIME_TYPE_DIR) return@guarded vault.createFolder(parent, displayName).id
         // An empty file first; the bytes follow through openDocument in write mode.
@@ -363,18 +470,34 @@ class HushOSDocumentsProvider : DocumentsProvider() {
 
     override fun renameDocument(documentId: String, displayName: String): String? = guarded {
         val vault = requireVault()
+        FamilyDoc.of(documentId)?.let { doc ->
+            familiesOf(vault).rename(doc as? FamilyDoc.Node ?: throw FileNotFoundException(com.hushos.app.data.FamilyWords.UNAVAILABLE), com.hushos.app.data.wellFormed(displayName))
+            return@guarded null
+        }
         vault.rename(nodeId(documentId, vault), displayName)
         null
     }
 
     override fun moveDocument(sourceDocumentId: String, sourceParentDocumentId: String, targetParentDocumentId: String): String? = guarded {
         val vault = requireVault()
+        val source = FamilyDoc.of(sourceDocumentId)
+        val target = FamilyDoc.of(targetParentDocumentId)
+        if (source != null || target != null) {
+            // Within one family folder only: never into or out of the drive, another folder or another family.
+            if (source !is FamilyDoc.Node || target !is FamilyDoc.Node) throw FileNotFoundException(com.hushos.app.data.FamilyWords.UNAVAILABLE)
+            familiesOf(vault).move(source, target)
+            return@guarded null
+        }
         vault.move(nodeId(sourceDocumentId, vault), nodeId(targetParentDocumentId, vault))
         null
     }
 
     override fun deleteDocument(documentId: String) = guarded {
         val vault = requireVault()
+        FamilyDoc.of(documentId)?.let { doc ->
+            familiesOf(vault).delete(doc as? FamilyDoc.Node ?: throw FileNotFoundException(com.hushos.app.data.FamilyWords.UNAVAILABLE))
+            return@guarded
+        }
         vault.trash(nodeId(documentId, vault))
     }
 

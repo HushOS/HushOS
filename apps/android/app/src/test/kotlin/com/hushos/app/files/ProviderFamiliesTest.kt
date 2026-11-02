@@ -1,0 +1,355 @@
+package com.hushos.app.files
+
+import android.content.pm.ProviderInfo
+import android.database.Cursor
+import android.os.ParcelFileDescriptor
+import android.provider.DocumentsContract
+import android.provider.DocumentsContract.Document
+import android.provider.DocumentsContract.Root
+import com.hushos.app.data.DriveApi
+import com.hushos.app.data.FakeDrive
+import com.hushos.app.data.FamilyCopies
+import com.hushos.app.data.FamilyFixture
+import com.hushos.app.data.FamilyFailure
+import com.hushos.app.data.FamilyState
+import com.hushos.app.data.FamilySync
+import com.hushos.app.data.GuardUnsaved
+import com.hushos.app.data.SessionEnded
+import com.hushos.app.data.Shared
+import com.hushos.app.data.Vault
+import com.hushos.app.data.oweFamilyGuard
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.Robolectric
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
+import java.io.File
+import java.io.FileNotFoundException
+
+/*
+ * Families in the Files app (Android 6): the real HushOSDocumentsProvider and its own vault, ledger and family sync,
+ * against FakeDrive serving rosters the core signs (FamilyFixture). A root is a family the provider's own ledger accepted,
+ * holding the folders route 25 proved; it goes, its copies with it, when the family is left or the account removed; and
+ * every write from Files goes through the family write path, refused before anything is sent while the guard is owed,
+ * once the family went elsewhere, when it goes while the write is on its way, and once the session ended.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
+class ProviderFamiliesTest {
+    private val server = FakeDrive()
+    private lateinit var family: FamilyFixture
+    private val app get() = RuntimeEnvironment.getApplication()
+    private val authority get() = "${app.packageName}.documents"
+
+    @Before
+    fun signIn() {
+        FamilyFixture.signIn(server, "provider-families-test")
+        family = FamilyFixture(server)
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+    }
+
+    @After
+    fun close() {
+        server.close()
+        assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
+    }
+
+    /* The provider as the system makes it, with family loads run on the calling thread. */
+    private fun provider(): HushOSDocumentsProvider {
+        val info = ProviderInfo().apply {
+            authority = this@ProviderFamiliesTest.authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = android.Manifest.permission.MANAGE_DOCUMENTS
+            writePermission = android.Manifest.permission.MANAGE_DOCUMENTS
+        }
+        return Robolectric.buildContentProvider(HushOSDocumentsProvider::class.java).create(info).get().also { it.runFamilyLoad = { load -> load.run() } }
+    }
+
+    private fun rows(cursor: Cursor, column: String): List<String?> = cursor.use { c ->
+        val index = c.getColumnIndexOrThrow(column)
+        generateSequence { if (c.moveToNext()) c.getString(index) else null }.toList()
+    }
+
+    private fun familyRoots(provider: HushOSDocumentsProvider) = rows(provider.queryRoots(null), Root.COLUMN_ROOT_ID).filter { it != "hushos" }
+
+    private val top get() = FamilyDoc.Top(family.groupId).id
+    private val folder get() = FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId).id
+    private val file get() = FamilyDoc.Node(family.groupId, family.workspaceId, family.fileId).id
+
+    private fun read(provider: HushOSDocumentsProvider, documentId: String): String =
+        ParcelFileDescriptor.AutoCloseInputStream(provider.openDocument(documentId, "r", null)).use { it.readBytes().decodeToString() }
+
+    private fun driveWritesSince(count: Int) = server.requests.drop(count).filter { !it.startsWith("GET") && "/drive/" in it }
+
+    private val rootsUri get() = DocumentsContract.buildRootsUri(authority)
+    private fun rootsTold() = shadowOf(app.contentResolver).notifiedUris.count { it.uri == rootsUri }
+
+    /*
+     * The family's root: `family:<groupId>`, titled the family's name, its one folder the family's top folder opened
+     * through the provider's ledger, Sam's file listed and read byte for byte into the family folder's copies. Fails if
+     * the provider shows no family, names it otherwise, lists the folder or file under any other id, or reads them other
+     * than through its own ledger.
+     */
+    @Test
+    fun aFamilyItsLedgerAcceptedIsARootWithItsFolder() {
+        val provider = provider()
+        assertEquals(listOf("family:${family.groupId}"), familyRoots(provider))
+        val titles = provider.queryRoots(null).use { c ->
+            generateSequence { if (c.moveToNext()) c.getString(c.getColumnIndexOrThrow(Root.COLUMN_ROOT_ID)) to c.getString(c.getColumnIndexOrThrow(Root.COLUMN_TITLE)) else null }.toMap()
+        }
+        assertEquals("Lindqvist family", titles["family:${family.groupId}"])
+        assertEquals(listOf(folder), rows(provider.queryChildDocuments(top, null, null as String?), Document.COLUMN_DOCUMENT_ID))
+        assertEquals(listOf("Photos"), rows(provider.queryChildDocuments(top, null, null as String?), Document.COLUMN_DISPLAY_NAME))
+        assertEquals(listOf(file), rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID))
+        assertEquals("marker-family", read(provider, file))
+        assertTrue(FamilyCopies.folder(app.cacheDir, family.workspaceId)!!.walkTopDown().any { it.isFile })
+        assertTrue(provider.isChildDocument(top, file))
+        assertFalse(provider.isChildDocument("root", file))
+    }
+
+    /*
+     * A family not let in yet (accepted the invitation, waiting) and one whose member list was shown differently have no
+     * root, and nothing of them opens through the provider. Fails if a family route 2 lists but the ledger didn't accept
+     * is shown.
+     */
+    @Test
+    fun aFamilyWaitingOrShownDifferentlyHasNoRoot() {
+        family.groupState = "accepted"
+        val waiting = provider()
+        assertEquals(emptyList<String>(), familyRoots(waiting))
+        assertThrows(FileNotFoundException::class.java) { waiting.queryChildDocuments(top, null, null as String?) }
+        // Let in, but the server shows another roster 2 than the one this account's pin holds: a fork.
+        family.groupState = "active"
+        family.chain = listOf(family.r1, family.r2Other)
+        val forked = Vault(app, DriveApi(Shared.session(app)!!))
+        val families = ProviderFamilies(forked)
+        assertEquals(emptyList<FamilyRoot>(), families.load())
+        assertTrue(families.sync.sync(family.summary) is FamilyState.Fork)
+        assertThrows(FileNotFoundException::class.java) { families.children(FamilyDoc.Top(family.groupId)) }
+    }
+
+    /*
+     * Left on the app (another vault of the session): Files is told at once, and the provider's next answer checks the
+     * family again: its root is gone, its own ledger let go of the folder, and the copies it read and the edit it was
+     * writing are deleted. Fails if the app's leave doesn't tell Files, if the provider answers from the roots it loaded
+     * before, or keeps the family's keys, copies or edits.
+     */
+    @Test
+    fun aFamilyLeftOnTheAppLeavesFilesWithItsCopies() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        assertEquals("marker-family", read(provider, file))
+        val copies = FamilyCopies.folder(app.cacheDir, family.workspaceId)!!
+        assertTrue(copies.exists())
+        val edit = familiesOf(provider).editCopy(FamilyDoc.of(file) as FamilyDoc.Node, reads = true)
+        val phone = family.phone()
+        assertTrue(phone.sync.sync(family.summary) is FamilyState.Accepted)
+        // The app's acceptance told Files too; the provider looked since, and still shows the family.
+        assertEquals(listOf("family:${family.groupId}"), familyRoots(provider))
+        val told = rootsTold()
+        assertTrue(phone.sync.leave(family.groupId) is FamilySync.Leaving.Left)
+        assertTrue("Files wasn't told", rootsTold() > told)
+        assertEquals(emptyList<String>(), familyRoots(provider))
+        assertThrows(FileNotFoundException::class.java) { provider.queryChildDocuments(folder, null, null as String?) }
+        assertFalse(copies.exists())
+        assertFalse(edit.exists())
+    }
+
+    /*
+     * Removed by the server while nothing else on the phone looked (the app closed): the provider's own load, once its
+     * roots are old, asks about the family route 2 stopped listing, wipes it in its own ledger, deletes its copies and
+     * tells Files. Fails if the provider keeps a root, a key or a copy of a family the server said it isn't in.
+     */
+    @Test
+    fun aRemovalTheProviderFindsItselfTakesTheRootKeysAndCopies() {
+        var now = 0L
+        val vault = Vault(app, DriveApi(Shared.session(app)!!))
+        val families = ProviderFamilies(vault, FamilySync(vault, sweeps = false, tellsFiles = false)) { now }
+        assertEquals(listOf(family.groupId), families.load().map { it.groupId })
+        val doc = FamilyDoc.Node(family.groupId, family.workspaceId, family.fileId)
+        families.children(FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId))
+        val copy = families.readCopy(doc)
+        assertEquals("marker-family", copy.readText())
+        family.notMember = true
+        family.listed = false
+        // Not due yet: what it showed stands until its roots are old.
+        assertFalse(families.due())
+        now += 6 * 60_000L
+        assertTrue(families.due())
+        val told = rootsTold()
+        assertEquals(emptyList<FamilyRoot>(), families.load())
+        assertTrue(rootsTold() > told)
+        assertFalse(vault.areaLedger.isArea(family.workspaceId))
+        assertFalse(copy.exists())
+        assertThrows(FileNotFoundException::class.java) { families.readCopy(doc) }
+    }
+
+    /*
+     * A family Files showed whose member list the server now shows differently (a fork), or that the server says this
+     * account isn't in while route 2 still lists it: its root goes at the provider's next load, its ledger refuses it and
+     * its copies go. Fails if a root outlives its family's acceptance.
+     */
+    @Test
+    fun aRootGoesWhenItsFamilyIsShownDifferentlyOrNotThisAccountsAnyMore() {
+        var now = 0L
+        family.chain = listOf(family.r1, family.r2, family.r3)
+        val vault = Vault(app, DriveApi(Shared.session(app)!!))
+        val families = ProviderFamilies(vault, FamilySync(vault, sweeps = false, tellsFiles = false)) { now }
+        assertEquals(listOf(family.groupId), families.load().map { it.groupId })
+        families.children(FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId))
+        val copy = families.readCopy(FamilyDoc.Node(family.groupId, family.workspaceId, family.fileId))
+        // Another history from roster 3 than the one accepted.
+        family.chain = listOf(family.r1, family.r2, family.r3Fork, family.r4Fork)
+        now += 6 * 60_000L
+        assertEquals(emptyList<FamilyRoot>(), families.load())
+        assertFalse(copy.exists())
+        assertThrows(FileNotFoundException::class.java) { families.children(FamilyDoc.Top(family.groupId)) }
+        // A fresh session's provider on a family shown as it was, then the server says this account isn't in it while
+        // route 2 still lists it.
+        vault.close()
+        family.chain = listOf(family.r1, family.r2, family.r3)
+        FamilyFixture.signIn(server, "provider-families-test-2")
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val again = Vault(app, DriveApi(Shared.session(app)!!))
+        val other = ProviderFamilies(again, FamilySync(again, sweeps = false, tellsFiles = false)) { now }
+        assertEquals(listOf(family.groupId), other.load().map { it.groupId })
+        family.notMember = true
+        now += 6 * 60_000L
+        assertEquals(emptyList<FamilyRoot>(), other.load())
+        assertFalse(again.areaLedger.isArea(family.workspaceId))
+    }
+
+    /*
+     * Files writes in a family folder: a new folder, a file written back as a new version, a rename and Move to Trash, all
+     * through the provider's ledger, and another phone of the account reads the new bytes. Fails if any of them goes
+     * another way than the family write path (keys the ledger made or holds), or lands anything but what Files wrote.
+     */
+    @Test
+    fun filesWritesLandThroughTheFamilyWritePath() {
+        val provider = provider()
+        val made = provider.createDocument(folder, Document.MIME_TYPE_DIR, "Trips")
+        val trips = FamilyDoc.of(made) as FamilyDoc.Node
+        assertEquals(family.workspaceId, trips.workspaceId)
+        assertEquals("Trips", server.record(trips.nodeId).name)
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, reads = true)
+        assertTrue(edit.path.startsWith(FamilyCopies.edits(app.cacheDir, family.workspaceId)!!.path))
+        assertEquals("marker-family", edit.readText())
+        edit.writeText("edited in another app")
+        families.writeBack(FamilyDoc.of(file) as FamilyDoc.Node, edit)
+        provider.renameDocument(made, "Trips 2026")
+        assertEquals("Trips 2026", server.record(trips.nodeId).name)
+        provider.deleteDocument(made)
+        assertTrue(server.node(trips.nodeId).trashedAt != null)
+        // Another phone of the account, its own ledger: the bytes Files wrote.
+        val other = family.phone()
+        assertTrue(other.sync.sync(family.summary) is FamilyState.Accepted)
+        val recipes = other.vault.listChildren(family.rootId, family.workspaceId).single { it.id == family.fileId }
+        val out = File(app.cacheDir, "read-${System.nanoTime()}")
+        other.vault.download(recipes.id, out, workspaceId = family.workspaceId)
+        assertEquals("edited in another app", out.readText())
+        // Never out of the family folder, into another, or into the drive.
+        assertThrows(FileNotFoundException::class.java) { provider.moveDocument(file, folder, "root") }
+    }
+
+    /*
+     * The write barrier: while the family's guard is owed, Files writes nothing into its folders. Fails if a provider
+     * write passes without the guard kept.
+     */
+    @Test
+    fun filesWritesNothingWhileTheGuardIsOwed() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, reads = false).apply { writeText("not sent") }
+        val sent = server.requests.size
+        families.vault.oweFamilyGuard(family.groupId)
+        assertThrows(FileNotFoundException::class.java) { provider.createDocument(folder, Document.MIME_TYPE_DIR, "Trips") }
+        assertThrows(GuardUnsaved::class.java) { families.writeBack(FamilyDoc.of(file) as FamilyDoc.Node, edit) }
+        assertEquals(emptyList<String>(), driveWritesSince(sent))
+    }
+
+    /*
+     * Left elsewhere after Files opened the file and before it wrote it back: the write-back checks the family again
+     * first and sends nothing. Fails if a write-back goes out on the roots the provider loaded before the leave.
+     */
+    @Test
+    fun aWriteBackAfterTheFamilyWentElsewhereSendsNothing() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, reads = false).apply { writeText("not sent") }
+        val phone = family.phone()
+        assertTrue(phone.sync.sync(family.summary) is FamilyState.Accepted)
+        assertEquals(listOf("family:${family.groupId}"), familyRoots(provider))
+        assertTrue(phone.sync.leave(family.groupId) is FamilySync.Leaving.Left)
+        // The leave deleted the family's copies, the edit among them; as if this one had outlived it, so only the
+        // provider's own check of the family stands between it and the server.
+        edit.parentFile!!.mkdirs()
+        edit.writeText("not sent")
+        val sent = server.requests.size
+        assertThrows(FileNotFoundException::class.java) { families.writeBack(FamilyDoc.of(file) as FamilyDoc.Node, edit) }
+        assertEquals(emptyList<String>(), driveWritesSince(sent))
+    }
+
+    /*
+     * Left elsewhere while the write-back is on its way (between its entry and its send): the final gate refuses it in the
+     * family's words. Fails if the final gate doesn't check whether the folder was let go of since the write began.
+     */
+    @Test
+    fun aWriteBackTheFamilyLeavesMidwayIsNotSent() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, reads = false).apply { writeText("not sent") }
+        val phone = family.phone()
+        assertTrue(phone.sync.sync(family.summary) is FamilyState.Accepted)
+        // Another vault's first sweep (the app starting while Files writes) leaves an edit under way alone.
+        assertTrue(edit.exists())
+        val version = server.node(family.fileId).version
+        var sent = 0
+        families.vault.beforeWriteGate = {
+            families.vault.beforeWriteGate = null
+            assertTrue(phone.sync.leave(family.groupId) is FamilySync.Leaving.Left)
+            sent = server.requests.size
+        }
+        assertThrows(FamilyFailure::class.java) { families.writeBack(FamilyDoc.of(file) as FamilyDoc.Node, edit) }
+        assertEquals(emptyList<String>(), driveWritesSince(sent))
+        assertEquals(version, server.node(family.fileId).version)
+    }
+
+    /*
+     * The session ended (a sign-out) while the write-back was on its way: nothing goes. Fails if the final gate lets a
+     * closed session's write through while the provider's ledger still holds the family.
+     */
+    @Test
+    fun aWriteBackFromASessionThatEndedSendsNothing() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, reads = false).apply { writeText("not sent") }
+        val version = server.node(family.fileId).version
+        var sent = 0
+        families.vault.beforeWriteGate = {
+            families.vault.beforeWriteGate = null
+            families.vault.close()
+            sent = server.requests.size
+        }
+        assertThrows(SessionEnded::class.java) { families.writeBack(FamilyDoc.of(file) as FamilyDoc.Node, edit) }
+        assertEquals(emptyList<String>(), driveWritesSince(sent))
+        assertEquals(version, server.node(family.fileId).version)
+    }
+
+    private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =
+        HushOSDocumentsProvider::class.java.getDeclaredField("families").apply { isAccessible = true }.get(provider) as ProviderFamilies
+}
