@@ -249,7 +249,9 @@ extension DriveStore {
         let shownAs = familyGenerations.current(summary.id)
         func stillShown() -> Bool { current(session) && familyGenerations.current(summary.id) == shownAs }
         familyCheckedAt[summary.id] = Date()
-        familyRefreshed[summary.id, default: 0] += 1
+        // Moved once this showing is done, its folders listed again (or a newer showing took over): a family page reads its
+        // labels again on it, and a viewer whose file failed while the family wasn't open asks again.
+        defer { familyRefreshed[summary.id, default: 0] += 1 }
         // Every family sync that found something moves its trust generation: a judgement from before it never publishes
         // after it. No answer says nothing new, so the marks already judged stay (the rows are still shown, read only).
         if FamilyVerdictBook.moves(after: state) { familyBook.moved(summary.id) }

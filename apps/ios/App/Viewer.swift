@@ -112,7 +112,8 @@ struct FileViewer: View {
             do { url = try await store.fetch(current, version: version, adopted: { current = $0 }) } catch where !ErrorWords.isCancellation(error) { failed = true } catch {}
         }
         // A family's file that failed while its family wasn't open yet (a new session's vault, before the family is checked
-        // again): asked again once the family has been shown anew.
+        // again): asked again once the family has been shown anew. The fetch lists the file's folder itself when the vault
+        // doesn't hold its row (Vault.holdForCopy), so the retry doesn't wait on the screens' listings.
         .onChange(of: familyShown) { _, _ in
             if failed { failed = false; attempt += 1 }
         }

@@ -165,7 +165,7 @@ final class DriveStore {
     @ObservationIgnored var familyFolders: [String: String] = [:]
     /* When each family was last checked on this phone: a family folder on screen checks again when it is old. */
     @ObservationIgnored var familyCheckedAt: [String: Date] = [:]
-    /* Moved by every finished check of a family, whatever it found: what a family page reads its labels again on. */
+    /* Moved as every showing of a family's check finishes (its folders listed again), whatever it found: what a family page reads its labels again on. */
     var familyRefreshed: [String: Int] = [:]
     /* Moved by every trust reload (refreshSigners): pins saved or changed on another device are read again on it. */
     var trustGeneration = 0
@@ -1932,6 +1932,9 @@ final class DriveStore {
             releaseBackground()
         }
         do {
+            // A family's or a share's file the vault doesn't hold yet (on screen from the last session's vault): its folder is
+            // listed first under this one, so a retry once its family is back finds the row whenever the screens' listings land.
+            try await vault.holdForCopy(item)
             if version == nil {
                 // The version the path is named after, and no other; a newer one the vault holds comes down to its own path.
                 let (row, copied) = try await vault.downloadCurrent(item, gate: gate, to: { row in try await self.copyPath(row, gate: gate) }) { fraction in

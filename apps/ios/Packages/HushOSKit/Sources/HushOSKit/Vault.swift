@@ -859,6 +859,19 @@ public actor Vault {
      * restoring an earlier version moves neither key epoch nor metadata version), the row held is
      * the one the latest listing returned, and it is trusted.
      */
+    /*
+     * A row of another workspace this vault doesn't hold (a family's or a share's file still on
+     * screen from the session's last vault, the same account signed in again): its folder is listed
+     * under this vault first, so a copy of it finds its row rather than failing until some listing
+     * lands. Nothing for a row held, the own drive's (found by id), or one with no folder. The listing
+     * refuses as any would, a family not checked again yet included.
+     */
+    public func holdForCopy(_ item: Opened) async throws {
+        guard opened[item.ref] == nil, let parent = item.node.parentId,
+              item.ref.workspaceId != (try await loadWorkspace()).workspaceId.lowercased() else { return }
+        _ = try await children(of: parent)
+    }
+
     public func downloadCurrent(_ item: Opened, gate: FamilyCopyGate? = nil, to destination: @Sendable (Opened) async throws -> URL,
                                 progress: @Sendable (Double) -> Void = { _ in }) async throws -> (item: Opened, file: URL) {
         var item = item

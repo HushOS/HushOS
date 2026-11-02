@@ -146,6 +146,38 @@ extension OnFakeDrive {
             #expect(FamilySync.shared(for: later.vault) === held, "an earlier vault took the later one's sync")
         }
 
+        /*
+         * A family photo open in the viewer when the same account signs in again from Files: once the
+         * family is checked again under the new vault, the photo comes down before any listing of its
+         * folder lands, since the fetch lists that folder under the new vault itself. Fails if a copy of
+         * a row the new vault doesn't hold waits on the screens' listings (the viewer stays on its error).
+         */
+        @Test func aFamilyFileOnScreenComesDownUnderTheNewVaultWithoutWaitingForAListing() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            server.put(family.photo)
+            let version = try #require(family.photo.currentVersion)
+            server.objects[version.id] = family.photoObject
+            let account = CopyEpoch()
+            let old = try await family.phone(server, account: account)
+            defer { old.done(); FamilySync.forget() }
+            guard case .accepted = await old.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            _ = try await old.vault.children(of: family.rootId)
+            // The viewer's row, from the last session's vault.
+            let shown = try #require(await old.vault.item(family.photo.ref))
+            SessionChange.closeLastSession(account: account)
+            let now = try await family.phone(server, records: old.records, guards: old.guards, account: account)
+            guard case .accepted = await now.sync.sync(family.summary) else { Issue.record("not accepted again"); return }
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("held-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            // As DriveStore.fetch asks: held first, then the copy.
+            try await now.vault.holdForCopy(shown)
+            let (copied, file) = try await now.vault.downloadCurrent(shown) { _ in folder.appendingPathComponent("photo") }
+            #expect(copied.ref == family.photo.ref)
+            #expect(try Data(contentsOf: file) == family.photoBytes, "the photo didn't come down under the new vault")
+        }
+
         @Test func theSameSessionKeepsItsFamily() async throws {
             guard let (family, phone) = try await accepted() else { return }
             defer { phone.done(); FamilySync.forget() }
