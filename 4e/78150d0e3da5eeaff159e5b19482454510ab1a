@@ -1,0 +1,25 @@
+packages/crypto/fuzz/seeds.ts
+  s_566b8e0c4467a4::t_4343b1d192af97 591-614
+crates/hushos-core/fuzz/src/targets.rs
+  s_566b8e0c4467a4::t_883fe108feabc3 1077-1078,1208-1212,1214,2129-2178
+packages/crypto/fuzz/oracles.test.ts
+  s_566b8e0c4467a4::t_0fba9998a49498 3,54-88
+packages/crypto/fuzz/verdicts.ts
+  s_566b8e0c4467a4::t_2dd19d94443cc9 1505,1548-1549,1681-1686
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4e78150d0e3da5eeaff159e5b19482454510ab1a",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
