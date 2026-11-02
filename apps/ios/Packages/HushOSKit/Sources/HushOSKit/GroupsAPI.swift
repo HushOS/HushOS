@@ -264,7 +264,7 @@ public final class GroupsAPI: Sendable {
         } catch DriveAPIError.transport {
             throw GroupsAPIError(status: 0, code: nil, message: GroupsAPIError.noAnswer)
         }
-        if status == 401 { throw DriveAPIError.notAuthenticated }
+        if status == 401 { throw DriveAPIError.notAuthenticated(session: drive.session.tag) }
         guard (200 ..< 300).contains(status) else { throw GroupsAPIError.refusal(status: status, body: data) }
         return try JSONDecoder().decode(type, from: data)
     }
@@ -281,7 +281,7 @@ public final class GroupsAPI: Sendable {
         } catch DriveAPIError.transport {
             throw GroupsAPIError(status: 0, code: nil, message: GroupsAPIError.noAnswer)
         }
-        if status == 401 { throw DriveAPIError.notAuthenticated }
+        if status == 401 { throw DriveAPIError.notAuthenticated(session: drive.session.tag) }
         guard (200 ..< 300).contains(status) else { throw GroupsAPIError.refusal(status: status, body: data) }
         return try JSONDecoder().decode(type, from: data)
     }
@@ -349,7 +349,7 @@ public final class GroupsAPI: Sendable {
         } catch DriveAPIError.transport {
             throw GroupsAPIError(status: 0, code: nil, message: GroupsAPIError.noAnswer)
         }
-        if status == 401 { throw DriveAPIError.notAuthenticated }
+        if status == 401 { throw DriveAPIError.notAuthenticated(session: drive.session.tag) }
         guard (200 ..< 300).contains(status) else { throw GroupsAPIError.refusal(status: status, body: data) }
     }
 }

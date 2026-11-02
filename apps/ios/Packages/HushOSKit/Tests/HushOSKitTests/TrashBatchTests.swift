@@ -132,7 +132,7 @@ import Testing
 
     @Test func noNetworkOrAnEndedSessionStopsSendingAndTheRestAreNotMoved() async {
         let ids = (1...6).map { "n\($0)" }
-        for (at, error) in [("n3", DriveAPIError.transport("offline")), ("n1", DriveAPIError.notAuthenticated)] {
+        for (at, error) in [("n3", DriveAPIError.transport("offline")), ("n1", DriveAPIError.notAuthenticated())] {
             let sent = Sent()
             let outcomes = await TrashBatch.oneAfterAnother(ids) { id in
                 await sent.add(id)
@@ -190,7 +190,7 @@ import Testing
         #expect(offline.notice == "11 of 13 moved to Trash. You’re offline, so the rest weren’t confirmed.")
         let signedOut = await TrashBatch.trash(thirteen, Recorder().steps { item in
             if item.id == "f2" { throw DriveAPIError.server(409, "x") }
-            if item.id == "f4" { throw DriveAPIError.notAuthenticated }
+            if item.id == "f4" { throw DriveAPIError.notAuthenticated() }
         })
         #expect(signedOut.failure == .signedOut)
     }

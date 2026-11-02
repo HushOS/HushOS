@@ -62,6 +62,25 @@ public enum Offline {
     }
 
     /* The folder stops being kept and every file kept with it goes; files kept on their own stay. */
+    /*
+     * Everything kept on this phone from these workspaces (a share's folder proven a family's, or a
+     * family let go of): the kept folders, the files kept from them (by the workspace each recorded,
+     * or by id for an entry that recorded none) and their plaintext. Returns the file ids that went.
+     */
+    @discardableResult
+    static func forgetWorkspaces(_ workspaces: Set<String>, ids: Set<String>) -> Set<String> {
+        var gone: Set<String> = []
+        for folder in keptFolders() where workspaces.contains(folder.workspaceId.lowercased()) {
+            gone.formUnion(entries(keptWith: folder.id).map(\.id))
+            forgetFolder(folder.id)
+        }
+        for entry in entries() where entry.workspaceId.map({ workspaces.contains($0.lowercased()) }) ?? ids.contains(entry.id.lowercased()) {
+            forget(entry.id)
+            gone.insert(entry.id)
+        }
+        return gone
+    }
+
     public static func forgetFolder(_ id: String) {
         Unbacked.write(keptFolders().filter { $0.id != id }, foldersFile)
         for entry in entries(keptWith: id) { forget(entry.id) }
@@ -225,21 +244,25 @@ extension Vault {
         // Family folders are read only in this version, and nothing of them is kept on the phone.
         try refuseFamilyWrite(item.node.workspaceId)
         guard !item.isFolder, let destination = Offline.file(for: item) else { throw DriveAPIError.server(400, "Only files can be kept downloaded.") }
-        Unbacked.folder(Offline.root())
-        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if !FileManager.default.fileExists(atPath: destination.path) {
+        // The session's: a sign-out while it comes down leaves nothing kept (TemporaryCopies.copyGate).
+        let gate = copyGate(familyWorkspace: nil)
+        let moved = try gate.perform { () -> Bool in
+            Unbacked.folder(Offline.root())
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: destination.path) { return true }
             // Renamed elsewhere: the same version is already here under its old name, so move it rather than fetch it again.
             let folder = destination.deletingLastPathComponent()
             let earlier = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []).first { $0.pathExtension != "part" }
-            let moved = earlier.map { (try? FileManager.default.moveItem(at: $0, to: destination)) != nil } ?? false
-            if !moved {
-                do {
-                    try await download(item.id, to: destination, progress: progress)
-                } catch {
-                    // A first keep that failed is nobody's to resume: its partial goes. A kept file's stays for the next refresh.
-                    if !Offline.isKept(item.id) { try? FileManager.default.removeItem(at: Offline.root().appendingPathComponent(item.id, isDirectory: true)) }
-                    throw error
-                }
+            return earlier.map { (try? FileManager.default.moveItem(at: $0, to: destination)) != nil } ?? false
+        }
+        if !moved {
+            do {
+                // The version the kept path is named after, and no other.
+                try await download(item.id, ref: item.ref, expectedVersionId: item.node.currentVersion?.id, to: destination, gate: gate, progress: progress)
+            } catch {
+                // A first keep that failed is nobody's to resume: its partial goes. A kept file's stays for the next refresh.
+                if !Offline.isKept(item.id) { try? FileManager.default.removeItem(at: Offline.root().appendingPathComponent(item.id, isDirectory: true)) }
+                throw error
             }
         }
         // Older versions of the same file go; only the current one is kept.
@@ -247,7 +270,13 @@ extension Vault {
         for entry in (try? FileManager.default.contentsOfDirectory(at: versions, includingPropertiesForKeys: nil)) ?? [] where entry.lastPathComponent != item.node.currentVersion?.id {
             try? FileManager.default.removeItem(at: entry)
         }
-        Offline.remember(item, folder: folder)
+        // Checked again where it is recorded: a folder proven a family's while this came down keeps nothing of it (its items
+        // open through its ledger alone), and the copy just made goes.
+        if isFamilyWorkspace(item.node.workspaceId) {
+            Offline.forget(item.id)
+            throw FamilyFailure(message: FamilyWords.couldntCheckKeys)
+        }
+        try gate.perform { Offline.remember(item, folder: folder) }
     }
 
     /* Every file in a folder and its subfolders, not in the trash: what keeping the folder keeps. */

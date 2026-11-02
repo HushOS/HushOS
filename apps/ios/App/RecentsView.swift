@@ -121,7 +121,7 @@ struct HomeView: View {
             .fileViewer($viewing, among: rows, store: store)
             .uploadFlow(into: store.rootId, importer: $showingImporter, folder: $showingFolder, photos: $showingPhotos, camera: $showingCamera)
             .sheet(isPresented: $managingTags) { TagManagerSheet().environment(store) }
-            .task {
+            .task(id: store.sessionKey) {
                 if let root = await store.loadRoot(), store.folders[root] == nil { await store.refresh(folder: root) }
                 await store.refreshRecents()
                 await store.refreshTags()
@@ -449,7 +449,7 @@ struct TrashView: View {
             .environment(store)
         }
         .onDisappear { store.restoreProblem = nil }
-        .task {
+        .task(id: store.sessionKey) {
             await store.refreshTrash()
             loaded = true
         }

@@ -507,7 +507,9 @@ enum OpenIn {
     static func present(_ item: Opened, store: DriveStore) {
         Task {
             let file: URL
-            do { file = try await store.fetch(item) } catch {
+            // The row the copy is of: a newer version may have come down instead (a replacement can rename or retype it).
+            var item = item
+            do { file = try await store.fetch(item, adopted: { item = $0 }) } catch {
                 store.notify("Couldn’t open “\(item.name)”. Check your connection and try again.")
                 return
             }
@@ -535,11 +537,14 @@ private struct InfoWatch: Hashable {
     let shares: [String]
     let item: String?
     let cached: Opened?
+    /* The session: Info follows its item again under a new one. */
+    let session: ObjectIdentifier
 
     @MainActor init(store: DriveStore) {
         version = store.catalogueVersion
         shares = store.mountsLoaded ? store.mounts.map(\.share.workspaceId) : []
         item = store.infoBeside?.item.id
         cached = store.infoBeside.flatMap { store.known($0.item.id) }
+        session = store.sessionKey
     }
 }

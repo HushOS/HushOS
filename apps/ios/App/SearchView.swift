@@ -92,7 +92,7 @@ struct SearchView: View {
             }
             .nodeActionSheets(action: $action, store: store)
             .fileViewer($viewing, among: hits, store: store)
-            .task {
+            .task(id: store.sessionKey) {
                 _ = await store.loadRoot()
                 if store.tags.tags.isEmpty { await store.refreshTags() }
             }

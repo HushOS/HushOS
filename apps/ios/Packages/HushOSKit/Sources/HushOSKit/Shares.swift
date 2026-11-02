@@ -114,6 +114,8 @@ extension Vault {
         for share in shares {
             do {
                 try Self.checkReceived(share, ownWorkspace: own)
+                // Never into a family folder: its items open only through its area ledger (admitShare), checked again below.
+                try admitShare(share)
                 let ctx = ShareContext(
                     workspaceId: share.workspaceId, nodeId: share.node.id, keyEpoch: UInt64(share.keyEpoch),
                     granteeUserId: session.userId, granterUserId: share.granter.id
@@ -138,7 +140,11 @@ extension Vault {
                     ctx: MetadataContext(workspaceId: share.node.workspaceId, nodeId: share.node.id, metadataVersion: share.node.metadataVersion),
                     nodeKey: key, envelope: try base64urlDecode(value: share.node.metadataEnvelope)
                 )
-                mounts.append(ShareMount(share: share, root: try adopt(share.node, nodeKey: key, metadata: metadata, in: share.workspaceId), error: nil))
+                // Checked again where it is kept, with nothing awaited between: a family's proof, a forget or a barrier that landed
+                // while the granter was judged gets nothing of the share; and a share's row is never answered as the ledger's.
+                try admitShare(share)
+                let root = try adopt(share.node, nodeKey: key, metadata: metadata, in: share.workspaceId, fromShare: true)
+                mounts.append(ShareMount(share: share, root: root, error: nil))
             } catch {
                 mounts.append(ShareMount(share: share, root: nil, error: ErrorWords.say(error, otherwise: "This couldn’t be opened. Try again.") ?? "This couldn’t be opened. Try again.", trust: error as? GranterTrust))
             }

@@ -175,7 +175,7 @@ extension Vault {
         let started = try await api.startRotation(workspaceId: ws, nodeId: rootId)
         let target = started.targetEpoch
         // The root's chain must be open: its parent key is what the new root key wraps under.
-        if item.isFolder { _ = try await listChildren(of: rootId) } else if let parent = item.node.parentId { _ = try await listChildren(of: parent) }
+        if item.isFolder { _ = try await listChildren(of: rootId, in: ws) } else if let parent = item.node.parentId { _ = try await listChildren(of: parent, in: ws) }
         // The identity, the pins and the ledger are only needed for shares and links: a subtree with none never asks for them.
         var sharing: (keys: IdentityKeys, pins: [String: ContactPin], ledger: SharingLedger)?
         var granteeKeys: [String: (publicKey: Data, kem: Data)] = [:]
@@ -213,7 +213,7 @@ extension Vault {
             }
             let inBatch = Set(work.nodes.map(\.node.id))
             for parentId in Set(work.nodes.compactMap(\.node.parentId)) where !inBatch.contains(parentId) && opened[ref(parentId)] == nil && epochs[parentId] == nil {
-                _ = try? await listChildren(of: parentId)
+                _ = try? await listChildren(of: parentId, in: ws)
                 if let known = opened[ref(parentId)] { epochs[parentId] = known.node.keyEpoch }
             }
             var batch: [[String: Any]] = []

@@ -2,12 +2,12 @@ import HushOSKit
 import SwiftUI
 
 /*
- * Joining a family on the phone (docs/groups-mobile-plan.md, iOS 3), the web's two pages in the
+ * Joining a family on the phone (docs/optional-verification.md 6.8), the web's two pages in the
  * same words: the mailed invitation (/join#invite=<token>, routes/join/route.tsx), opened and
- * accepted here, then the join screen (families/$groupId/join.tsx): read your twelve words to the
- * person letting you in, wait, then compare the join code their screen shows, with two words
- * hidden at positions this phone drew, and type those two as they read them. Every rule is the
- * core's (FamilySync's join steps); this file draws the steps and keeps the person's place.
+ * joined here, then the wait (families/$groupId/join.tsx) until someone who manages the family lets
+ * this person in, when the phone joins on first use and the family's page follows. No words on
+ * either side: checking each other is for later, from the members list. Every rule is the core's
+ * (FamilySync's join steps); this file draws the steps and keeps the person's place.
  */
 
 /* The mailed invitation's token, as a sheet's item; nil is a link whose token was cut off. */
@@ -34,13 +34,21 @@ struct InvitationSheet: View {
         case failed(gone: Bool, words: String)
         case invitation(Invitation)
         case joining(String, family: String)
-        case joined(String)
     }
 
     @State private var step: Step = .opening
     @State private var accepting = false
     @State private var error: GroupsAPIError?
     @State private var problem: String?
+    /* The wait's title, as the step below says it ("Waiting for Sam"): the sheet's own title. */
+    @State private var waitTitle: String?
+    @State private var detent = InvitationSheet.short
+    /* A button's request (Join, Try again): cancelled when the sheet closes, so nothing it answers shows or navigates after. */
+    @State private var working: Task<Void, Never>?
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /* As tall as these steps need: the invitation and the wait are a few lines, so the sheet opens part way up. */
+    static let short = PresentationDetent.fraction(0.5)
 
     var body: some View {
         NavigationStack {
@@ -48,30 +56,49 @@ struct InvitationSheet: View {
                 switch step {
                 case .joining(let groupId, let family):
                     List {
-                        Section {} header: { title("Join \(family)") }
-                        JoinSections(groupId: groupId, family: family) { step = .joined(groupId) }
+                        JoinSections(groupId: groupId, family: family, title: { waitTitle = $0 }) { open(family: groupId) }
                     }
                     .listStyle(.insetGrouped)
                     .alpineGrouped()
-                case .joined(let groupId):
-                    FamilyPage(groupId: groupId)
+                    .navigationTitle(waitTitle ?? "Join \(family)")
+                    .navigationBarTitleDisplayMode(.inline)
                 default:
                     List { invitation }
                         .listStyle(.insetGrouped)
                         .alpineGrouped()
                 }
             }
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            // A family's folders and their subfolders, pushed by value as Account's stack pushes them.
-            .navigationDestination(for: FamilyRoute.self) { route in
-                switch route {
-                case .family(let id): FamilyPage(groupId: id).environment(store)
-                case .folder(let id, let name): FolderView(folderId: id, title: name).environment(store)
+            // The invitation's Not now is the sheet's own close (the web's Not now link); every other step closes with Done.
+            .toolbar {
+                if showsInvitation {
+                    ToolbarItem(placement: .cancellationAction) { Button("Not now") { dismiss() }.disabled(accepting) }
+                } else {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
                 }
             }
-            .navigationDestination(for: Opened.self) { folder in FolderView(folderId: folder.id, title: folder.name).environment(store) }
         }
+        // Part way up for these few lines; the whole height at the largest text sizes, and always one drag away.
+        .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [Self.short, .large], selection: $detent)
+        .onChange(of: typeSize, initial: true) { _, size in if size.isAccessibilitySize { detent = .large } }
         .task { if step == .opening { await open() } }
+        .onDisappear { working?.cancel() }
+    }
+
+    /* A button's request, tied to the sheet: closed meanwhile, it shows and closes nothing. */
+    private func run(_ request: @escaping @MainActor () async -> Void) {
+        working?.cancel()
+        working = Task { await request() }
+    }
+
+    /* The family's page, pushed in Account where its row is (never inside this sheet), once in or already in. */
+    private func open(family groupId: String) {
+        store.familyToOpen = groupId
+        dismiss()
+    }
+
+    private var showsInvitation: Bool {
+        if case .invitation = step { return true }
+        return false
     }
 
     private func title(_ text: String) -> some View {
@@ -96,7 +123,7 @@ struct InvitationSheet: View {
                 Text(gone ? "It was used, cancelled, or it ran out. Ask the person who invited you for a new one." : words)
                     .font(Theme.Text.callout).foregroundStyle(Alpine.ink).alpineRow()
                 if !gone {
-                    Button("Try again") { Task { await open() } }.foregroundStyle(Alpine.primary).alpineRow()
+                    Button("Try again") { run { await open() } }.foregroundStyle(Alpine.primary).alpineRow()
                 }
             } footer: { signedInAs }
         case .invitation(let invitation):
@@ -109,48 +136,54 @@ struct InvitationSheet: View {
     @ViewBuilder private func loaded(_ invitation: Invitation) -> some View {
         let inviter = invitation.inviter
         let notice = InvitationNotice.of(invitation, refusal: error, email: model.user?.email)
-        // No answer, or something other than a refusal: said as such, and Accept stays to try again.
+        // No answer, or something other than a refusal: said as such, and Join stays to try again.
         let note = notice.note ?? problem.map { InvitationNotice.Note.problem($0) }
+        // Names are the server's word (D10): the address goes beside the inviter's.
+        let invited = inviter.map { inviter in
+            let email = inviter.email.flatMap { $0.isEmpty ? nil : $0 }
+            return "\(inviter.name)\(email.map { " (\($0))" } ?? "") invited you."
+        } ?? "You’re invited."
         Section {} header: {
             VStack(alignment: .leading, spacing: Alpine.Space.s1) {
-                title(inviter.map { "\($0.name) invited you to \(invitation.name)" } ?? "You’re invited to \(invitation.name)")
-                if let email = inviter?.email, !email.isEmpty {
-                    Text("From \(email)").font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
-                }
+                title("Join \(invitation.name)")
+                Text("\(invited) Family folders are shared with everyone in the family.")
+                    .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
             }
         }
-        Section {
-            switch note {
-            case .inFamily(let words, let yours):
-                VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                    Text(words).font(Theme.Text.callout).foregroundStyle(Alpine.ink)
-                    NavigationLink(value: FamilyRoute.family(yours.groupId)) {
-                        Text("Open \(yours.name)").font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
+        if let note {
+            Section {
+                switch note {
+                case .inFamily(let words, let yours):
+                    VStack(alignment: .leading, spacing: Alpine.Space.s2) {
+                        Text(words).font(Theme.Text.callout).foregroundStyle(Alpine.ink)
+                        Button { open(family: yours.groupId) } label: {
+                            Text("Open \(yours.name)").font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
+                        }
+                        .buttonStyle(.borderless)
                     }
-                }
-                .padding(.vertical, Alpine.Space.s1)
-                .listRowBackground(Alpine.tint)
-            case .alreadyMember:
-                VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                    Text("You’re already in this family").font(Theme.Text.headline).foregroundStyle(Alpine.ink)
-                    NavigationLink(value: FamilyRoute.family(invitation.groupId)) {
-                        Text("Open \(invitation.name)").font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
+                    .padding(.vertical, Alpine.Space.s1)
+                    .listRowBackground(Alpine.tint)
+                case .alreadyMember:
+                    VStack(alignment: .leading, spacing: Alpine.Space.s2) {
+                        Text("You’re already in this family").font(Theme.Text.headline).foregroundStyle(Alpine.ink)
+                        Button { open(family: invitation.groupId) } label: {
+                            Text("Open \(invitation.name)").font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
+                        }
+                        .buttonStyle(.borderless)
                     }
+                    .padding(.vertical, Alpine.Space.s1)
+                    .listRowBackground(Alpine.tint)
+                case .problem(let words):
+                    Text(words).font(Theme.Text.callout).foregroundStyle(Alpine.danger).listRowBackground(Alpine.dangerSoft)
                 }
-                .padding(.vertical, Alpine.Space.s1)
-                .listRowBackground(Alpine.tint)
-            case .problem(let words):
-                Text(words).font(Theme.Text.callout).foregroundStyle(Alpine.danger).listRowBackground(Alpine.dangerSoft)
-            case nil:
-                let them = inviter.map { firstName($0.name) } ?? "they"
-                Text("After you accept, you and \(them) check it’s really each other, on a call or in person. Then you’re let in.")
-                    .font(Theme.Text.callout).foregroundStyle(Alpine.ink).alpineRow()
-            }
-        } footer: { signedInAs }
+            } footer: { signedInAs }
+        }
         Section {
-            Button { Task { await accept(invitation) } } label: { Text(accepting ? "Accepting" : "Accept").frame(maxWidth: .infinity) }
+            Button { run { await accept(invitation) } } label: { Text(accepting ? "Joining" : "Join").frame(maxWidth: .infinity) }
                 .buttonStyle(PrimaryCapsuleStyle())
                 .disabled(accepting || !notice.canAccept)
+        } footer: {
+            if note == nil { signedInAs }
         }
         .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
     }
@@ -172,7 +205,12 @@ struct InvitationSheet: View {
         }
         step = .opening
         do {
-            step = .invitation(try await store.families.openInvitation(token))
+            // Nil: dropped, its session ended (the sheet closes) or the sheet closed already (nothing more to do).
+            guard let invitation = try await store.inFamily(nil, { try await $0.openInvitation(token) }) else {
+                if !Task.isCancelled { dismiss() }
+                return
+            }
+            step = .invitation(invitation)
         } catch let error as GroupsAPIError where error.code == "gone" {
             step = .failed(gone: true, words: "")
         } catch {
@@ -188,8 +226,16 @@ struct InvitationSheet: View {
         error = nil
         problem = nil
         do {
-            let groupId = try await store.families.acceptInvitation(token)
-            await store.refreshFamilies(force: true)
+            // Accepted: the families are read again for the session whether or not this sheet is still open (inFamilyLanding).
+            let store = store
+            guard let groupId = try await store.inFamilyLanding(nil, { try await $0.acceptInvitation(token) }, land: { result in
+                if case .success = result { await store.refreshFamilies(force: true) }
+            }) else {
+                if !Task.isCancelled { dismiss() }
+                return
+            }
+            // Closed meanwhile: no join screen opens from a closed sheet.
+            guard !Task.isCancelled else { return }
             step = .joining(groupId, family: invitation.name)
         } catch let refused as GroupsAPIError where refused.status != 0 {
             // Said under the invitation in the web's words (InvitationNotice), Accept off where it can't help.
@@ -210,54 +256,43 @@ struct InvitationSheet: View {
 }
 
 /*
- * The join screen's steps, as sections of the list it sits in (the family page, or the
- * invitation sheet after Accept): waiting (your twelve words, then the wait), the code to compare
- * with two words to type, the alarm, or the hard warning. It owns the family while it is open: the
- * family's background check waits until it closes.
+ * The newcomer's side after Join (6.8), as sections of the list it sits in (the family page, or
+ * the invitation sheet after Join): waiting until someone who manages the family lets them in,
+ * route 2 polled meanwhile; then the phone joins on first use and the family's page follows. The
+ * hard warning when this person's own marks disagree with what is served. It owns the family while
+ * it is open: the family's background check waits until it closes.
  */
 struct JoinSections: View {
     @Environment(DriveStore.self) private var store
     let groupId: String
     let family: String
+    /* The wait's title ("Waiting for Sam"), for the screen it sits in to show as its own title; nil while not waiting. */
+    var title: ((String?) -> Void)? = nil
     var onJoined: (() -> Void)? = nil
 
     private enum Step: Equatable {
         case loading
         /* `n` tells one entry into waiting from the next, so polling starts again each time. */
         case waiting(Int)
-        case compare(JoinShowing, changed: Bool, wrong: Bool)
-        case mismatch
         case fork(FamilyFork)
     }
 
     @State private var step: Step = .loading
-    @State private var typed = ["", ""]
-    @State private var busy = false
     @State private var error: String?
     @State private var managers: [GroupDetail.Member] = []
-    @State private var ownWords: String?
-    @State private var ownWordsError: String?
-    @FocusState private var focused: Int?
+    /* Try again's count: each starts the step check again as the screen's own task, cancelled when the screen goes. */
+    @State private var attempt = 0
 
-    private var only: GroupDetail.Member? { managers.count == 1 ? managers[0] : nil }
-    private var them: String { only.map { firstName($0.name) } ?? "the person letting you in" }
-    /* Names are the server's word: the first time one is shown, its address goes beside it. */
-    private var themFull: String {
-        guard let only else { return "the person letting you in" }
-        return only.email.map { $0.isEmpty ? only.name : "\(only.name) (\($0))" } ?? only.name
-    }
+    /* One manager is named; with more, whoever manages the family lets them in. */
+    private var only: String? { managers.count == 1 ? firstName(managers[0].name) : nil }
 
     var body: some View {
         Group {
-            Section {} header: {
-                Text("Do this with \(themFull) on a call or in person. It takes a minute.")
-                    .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).textCase(nil)
-            }
             if let error {
                 Section {
                     Text(error).font(Theme.Text.callout).foregroundStyle(Alpine.ink).listRowBackground(Alpine.warningSoft)
                     if step == .loading {
-                        Button { Task { await resume() } } label: { Label("Try again", systemImage: "arrow.counterclockwise") }
+                        Button { attempt += 1 } label: { Label("Try again", systemImage: "arrow.counterclockwise") }
                             .foregroundStyle(Alpine.primary).alpineRow()
                     }
                 }
@@ -275,36 +310,35 @@ struct JoinSections: View {
                 }
             case .waiting:
                 waiting
-            case .compare(let shown, let changed, let wrong):
-                compare(shown, changed: changed, wrong: wrong)
-            case .mismatch:
-                mismatch
             case .fork(let fork):
                 FamilyForkSection(name: family, fork: fork)
             }
         }
-        .task {
-            store.openJoin(groupId)
-            await resume()
-        }
+        .task { store.openJoin(groupId) }
+        // Keyed on the session's vault too: a new session (the same account signed in again from Files) drops what the last
+        // one asked, and the screen asks again under the new one rather than staying where it was.
+        .task(id: "\(ObjectIdentifier(store.vault).hashValue)-\(attempt)") { await resume() }
         .onDisappear { store.closeJoin(groupId) }
+        .onChange(of: "\(waitingEntry != 0)-\(waitingTitle)", initial: true) { _, _ in title?(waitingEntry != 0 ? waitingTitle : nil) }
         // Route 3 answers someone who accepted: who manages the family, read again every few seconds.
         .task(id: groupId) {
             while !Task.isCancelled {
-                if let detail = try? await store.families.members(groupId) {
+                if let detail = try? await store.inFamily(nil, { try await $0.members(groupId) }) {
                     managers = detail.members.filter { $0.state == "active" && $0.roles.contains("members") }
                 }
                 try? await Task.sleep(for: .seconds(5))
             }
         }
         // Waiting: route 2 polled through the join status until the person is let in.
-        .task(id: waitingEntry) {
+        // Keyed on the session's vault too: a poll the last session's end dropped starts again under the new one.
+        .task(id: "\(waitingEntry)-\(ObjectIdentifier(store.vault).hashValue)") {
             guard waitingEntry != 0 else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(3))
                 if Task.isCancelled { return }
                 do {
-                    let outcome = try await store.families.joinStatus(groupId)
+                    // Dropped when the session it began in ended: the screen goes with it.
+                    guard let outcome = try await nextStep() else { return }
                     if outcome != .waiting { show(outcome); return }
                     error = nil
                 } catch {
@@ -322,142 +356,53 @@ struct JoinSections: View {
 
     // MARK: Steps
 
+    private var waitingTitle: String { only.map { "Waiting for \($0)" } ?? "Waiting to be let in" }
+
+    /* The web's waiting screen: the title is the screen's, then one line of what happens, with a spinner beside it. */
     @ViewBuilder private var waiting: some View {
+        let words = only.map { "\($0) lets you in from the family’s page. This page updates when you’re in." }
+            ?? "Someone who manages \(family) lets you in from the family’s page. This page updates when you’re in."
         Section {
-            if let ownWords {
-                FingerprintWordsView(fingerprint: ownWords).padding(.vertical, Alpine.Space.s2).alpineRow()
-            } else if let ownWordsError {
-                Text(ownWordsError).foregroundStyle(Alpine.danger).alpineRow()
-            } else {
-                ProgressView().accessibilityLabel("Opening your words").alpineRow()
-            }
-        } header: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Read your twelve words to \(them)").font(Theme.Text.headline).foregroundStyle(Alpine.ink).accessibilityAddTraits(.isHeader)
-                Text("They check them against what their screen shows for you.").font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
-            }
-            .textCase(nil)
-        } footer: {
-            guidance
-        }
-        .task {
-            guard ownWords == nil else { return }
-            do { ownWords = try await store.vault.currentOwnFingerprint() } catch {
-                if endsSession(error) { store.report(error); return }
-                ownWordsError = FamilyWords.error(error)
-            }
-        }
-        Section {
-            VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                HStack(spacing: Alpine.Space.s2) {
-                    ProgressView()
-                    Text("Waiting for \(them) to let you in").font(Theme.Text.headline).foregroundStyle(Alpine.ink)
-                }
-                Text("Keep this page open. When \(them)’s screen shows a join code, they’ll read it to you. Check the words match and type the two that are hidden.")
-                    .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
+            HStack(alignment: .firstTextBaseline, spacing: Alpine.Space.s2) {
+                ProgressView().accessibilityHidden(true)
+                Text(words).font(Theme.Text.callout).foregroundStyle(Alpine.ink)
             }
             .padding(.vertical, Alpine.Space.s1)
             .alpineRow()
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(waitingTitle). \(words)")
         }
-    }
-
-    @ViewBuilder private func compare(_ shown: JoinShowing, changed: Bool, wrong: Bool) -> some View {
-        if changed {
-            Section {
-                Text("\(family)’s member list changed since the code you compared. Compare this one with \(them).")
-                    .font(Theme.Text.callout).foregroundStyle(Alpine.ink).listRowBackground(Alpine.warningSoft)
-            }
-        }
-        Section {
-            HiddenCode(shown: shown, typed: $typed, wrong: wrong, focused: $focused) {
-                if case .compare(let current, let changed, true) = step { step = .compare(current, changed: changed, wrong: false) }
-            }
-            .padding(.vertical, Alpine.Space.s2)
-            .alpineRow()
-            if wrong {
-                // The calm retry: a typo is likely, so a line by the fields, never the alarm.
-                Text(JoinWords.checkMessage(again: false, them: them)).font(Theme.Text.callout).foregroundStyle(Alpine.danger).alpineRow()
-            }
-        } header: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Compare the join code").font(Theme.Text.headline).foregroundStyle(Alpine.ink).accessibilityAddTraits(.isHeader)
-                Text("\(them.prefix(1).uppercased() + them.dropFirst())’s screen shows the join code now. Ask them to read it to you, check the words match, and type the two that are hidden.")
-                    .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
-            }
-            .textCase(nil)
-        } footer: {
-            guidance
-        }
-        Section {
-            VStack(spacing: Alpine.Space.s2) {
-                Button { Task { await match(shown) } } label: { Label(busy ? "Joining" : "They match", systemImage: "checkmark.shield").frame(maxWidth: .infinity) }
-                    .buttonStyle(PrimaryCapsuleStyle())
-                    .disabled(busy || typed.contains { $0.trimmingCharacters(in: .whitespaces).isEmpty })
-                Button { step = .mismatch } label: { Text("They don’t match").frame(maxWidth: .infinity) }
-                    .buttonStyle(SecondaryCapsuleStyle())
-                    .disabled(busy)
-            }
-        }
-        .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
-    }
-
-    @ViewBuilder private var mismatch: some View {
-        Section {
-            VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                Label("Don’t use \(family) yet", systemImage: "exclamationmark.triangle.fill")
-                    .font(Theme.Text.headline).foregroundStyle(Alpine.danger).accessibilityAddTraits(.isHeader)
-                Text(JoinWords.checkMessage(again: true, them: them)).font(Theme.Text.callout).foregroundStyle(Alpine.ink)
-                Text("First check that \(them) is reading your join code, not someone else’s, and that you typed the two hidden words as they read them. Then compare again: nothing was saved on this device.")
-                    .font(Theme.Text.callout).foregroundStyle(Alpine.ink)
-                Button("Compare again") {
-                    step = .loading
-                    Task { await resume() }
-                }
-                .font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary).buttonStyle(.borderless)
-            }
-            .padding(.vertical, Alpine.Space.s1)
-            .listRowBackground(Alpine.dangerSoft)
-        }
-    }
-
-    private var guidance: some View {
-        Text("Compare these in person or on a call through another app, never in a message sent through HushOS.")
-            .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
     }
 
     // MARK: Actions
 
-    /* Each answer from the join steps, as a step. */
+    /*
+     * The join's next step. What it found for the session (in, its state published; already a
+     * member, the family checked) lands whether or not this screen is still open (inFamilyLanding,
+     * DriveStore.landJoin); the step reaches the screen only while it is.
+     */
+    private func nextStep() async throws -> JoinOutcome? {
+        let groupId = groupId
+        let store = store
+        return try await store.inFamilyLanding(nil, { try await $0.joinStatusRevised(groupId) }, land: { result in
+            if case .success(let found) = result { await store.landJoin(groupId, found.outcome, revision: found.revision) }
+        })?.outcome
+    }
+
+    /* Each answer from the join steps, as the screen shows it: never from a closed screen (the session took what it found). */
     private func show(_ outcome: JoinOutcome) {
+        guard !Task.isCancelled else { return }
         error = nil
         switch outcome {
-        case .joined(let state):
+        case .joined:
             store.notify("You’re in \(family)")
-            Task {
-                await store.joined(groupId, state)
-                onJoined?()
-            }
+            onJoined?()
         case .member:
-            // This phone already holds the family: nothing to join. Checked as a member, from this screen.
-            Task {
-                if let summary = try? await store.families.list().first(where: { $0.id == groupId }) {
-                    await store.refreshFamily(summary, fromJoin: true)
-                }
-                onJoined?()
-            }
+            // This phone already holds the family: nothing to join. Checked as a member (landJoin), from this screen.
+            onJoined?()
         case .waiting:
             if case .waiting = step { return }
             step = .waiting(Int(Date().timeIntervalSince1970 * 1000))
-        case .compare(let shown, let changed):
-            typed = ["", ""]
-            step = .compare(shown, changed: changed, wrong: false)
-            // The first word field takes the keyboard once the fields are on screen (HiddenCode), every showing alike.
-        case .wrongWords:
-            // Most likely misheard: the same showing stays, both words to be read again.
-            if case .compare(let shown, let changed, _) = step { step = .compare(shown, changed: changed, wrong: true) }
-        case .mismatch:
-            // Wrong again: the alarm, not a typo.
-            step = .mismatch
         case .fork(let fork):
             step = .fork(fork)
         }
@@ -466,79 +411,13 @@ struct JoinSections: View {
     private func resume() async {
         error = nil
         do {
-            show(try await store.families.joinStatus(groupId))
+            guard let outcome = try await nextStep() else { return }
+            show(outcome)
         } catch {
             if endsSession(error) { store.report(error); return }
             // The retry belongs to the loading step, whatever step this came from.
             step = .loading
             self.error = FamilyWords.error(error)
-        }
-    }
-
-    private func match(_ shown: JoinShowing) async {
-        busy = true
-        defer { busy = false }
-        error = nil
-        do {
-            show(try await store.families.confirmJoin(groupId, shown, typed: typed))
-        } catch {
-            if endsSession(error) { store.report(error); return }
-            self.error = FamilyWords.error(error)
-        }
-    }
-}
-
-/*
- * The join code with two words hidden: a field for each, typed as the person letting you in reads
- * them. The hidden words are not on screen at all. The fields read nothing back to the keyboard:
- * no autocorrection, predictions or Writing Tools (as the recovery phrase's entry).
- */
-private struct HiddenCode: View {
-    let shown: JoinShowing
-    @Binding var typed: [String]
-    let wrong: Bool
-    var focused: FocusState<Int?>.Binding
-    let onType: () -> Void
-    @Environment(\.dynamicTypeSize) private var typeSize
-
-    var body: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: typeSize.isAccessibilitySize ? 1 : 2), alignment: .leading, spacing: Alpine.Space.s2) {
-            ForEach(shown.code.indices, id: \.self) { at in
-                let slot = shown.hidden.firstIndex(of: at)
-                HStack(spacing: 6) {
-                    Text("\(at + 1)").font(.caption.monospacedDigit()).foregroundStyle(Alpine.inkMuted).frame(width: 18, alignment: .trailing)
-                        .accessibilityHidden(true)
-                    if let slot {
-                        TextField("Word \(at + 1)", text: Binding(get: { typed[slot] }, set: { typed[slot] = $0; onType() }))
-                            .font(.body.weight(.medium))
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .keyboardType(.asciiCapable)
-                            .textContentType(nil)
-                            .writingToolsBehavior(.disabled)
-                            .submitLabel(slot == 0 ? .next : .done)
-                            .focused(focused, equals: slot)
-                            .onSubmit { focused.wrappedValue = slot == 0 ? 1 : nil }
-                            .accessibilityLabel("Word \(at + 1)")
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Alpine.surface, in: RoundedRectangle(cornerRadius: Alpine.Radius.control - 2))
-                            .overlay(RoundedRectangle(cornerRadius: Alpine.Radius.control - 2).stroke(wrong ? Alpine.danger : Alpine.rule, lineWidth: 1))
-                    } else {
-                        Text(shown.code[at]).font(.body.weight(.medium)).foregroundStyle(Alpine.ink)
-                    }
-                }
-                .padding(.horizontal, Alpine.Space.s2).padding(.vertical, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Alpine.ground, in: RoundedRectangle(cornerRadius: Alpine.Radius.control))
-            }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Join code")
-        // Each showing (the first, Compare again, a changed code) puts the keyboard in its first field. Set once the
-        // field exists: focus set in the same update that brings the step on screen was dropped after Compare again.
-        .task(id: shown.hidden.map(String.init).joined(separator: ",") + shown.code.joined(separator: " ")) {
-            await Task.yield()
-            focused.wrappedValue = 0
         }
     }
 }

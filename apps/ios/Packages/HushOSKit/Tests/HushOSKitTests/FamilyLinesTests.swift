@@ -23,6 +23,29 @@ import Testing
         FamilyJudged(record: record, verdict: verdict, via: via, signer: signer, note: note)
     }
 
+    /*
+     * Someone nobody checked (a family taken on first use): no mark, and Info names who added the
+     * content (the version's writer before the name's), as the family serves them. Fails if the
+     * writer goes unnamed, if the name's writer stands in for the content's, or if one is named
+     * where a mark speaks, where the family vouches, or for this account's own records.
+     */
+    @Test func anUncheckedWriterIsNamedOnlyWhenNothingElseSpeaks() {
+        let added = FamilySync.verdict([judged(.seen, by: sam), judged(.seen, by: maya, .version)], names: names, groupId: group)
+        #expect(added.mark == nil)
+        #expect(added.seen == FamilySeen(name: "Maya Lindqvist", userId: maya, email: "maya@example.com"))
+        #expect(FamilySync.verdict([judged(.seen, by: sam)], names: names, groupId: group).seen?.userId == sam)
+
+        // A mark speaks instead: no "Added by" beside it.
+        let marked = FamilySync.verdict([judged(.seen, by: sam), judged(.formerMember, by: maya, .version)], names: names, groupId: group)
+        #expect(marked.mark != nil && marked.seen == nil)
+        // Vouched for by the family, this account's own, a re-key, or someone nobody can name: none.
+        #expect(FamilySync.verdict([judged(.verified, by: sam, via: group)], names: names, groupId: group).seen == nil)
+        #expect(FamilySync.verdict([judged(.seen, by: me)], names: names, groupId: group).seen == nil)
+        #expect(FamilySync.verdict([judged(.seen, by: "00000009-abcd-4abc-8abc-abcdefabcdef")], names: names, groupId: group).seen == nil)
+        let rekey = RekeyNote(writer: maya, by: sam, integrity: .seen, bound: true)
+        #expect(FamilySync.verdict([judged(.seen, by: sam, note: rekey)], names: names, groupId: group).seen == nil)
+    }
+
     /* A removed member's file: Unverified, said as the mark says it, never "Verified by" the family. */
     @Test func aFormerMembersFileIsUnverifiedAndNamedAsTheServerNamesThem() {
         let verdict = FamilySync.verdict([judged(.formerMember, by: sam), judged(.formerMember, by: sam, .version)], names: names, groupId: group)
