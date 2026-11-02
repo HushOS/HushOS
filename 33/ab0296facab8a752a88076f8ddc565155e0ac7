@@ -1,0 +1,68 @@
+apps/ios/App/FamilyWalkTasks.swift
+  s_566b8e0c4467a4::t_26238b362e8e73 1-108
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyLeave.swift
+  s_566b8e0c4467a4::t_2a8fa09fcf0830 1-175
+  s_566b8e0c4467a4::t_760c9af6b9a2f0 176
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyWalkWork.swift
+  s_566b8e0c4467a4::t_7dc3577d749ed0 1-133
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyWalkTests.swift
+  s_566b8e0c4467a4::t_8f86ea8e4acbce 1-73
+  s_566b8e0c4467a4::t_19dd11de3bc5a5 74-396
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyWalks.swift
+  s_566b8e0c4467a4::t_2d74df734a7c80 1-367
+  s_566b8e0c4467a4::t_3ec19660929e03 368-371
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyRotationStub.swift
+  s_566b8e0c4467a4::t_aa300cdaf08818 1-373
+  s_566b8e0c4467a4::t_0f7d565ceb41a4 374-390
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyLeaveTests.swift
+  s_566b8e0c4467a4::t_24d9dc9a5702f4 1-137
+  s_566b8e0c4467a4::t_9a0fce5b596d01 138-145
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_fa4f4db5f7adc2 135
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_2df67720046fa2 147-148
+apps/ios/App/AppModel.swift
+  s_566b8e0c4467a4::t_a4496cf324111a 224-225
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_4e63458f91aaad 177-187,360,385
+apps/ios/App/Families.swift
+  s_566b8e0c4467a4::t_d3cbda512fdf09 343-345,504-675,839,845-846,871-880,907,935-979,1112-1170
+apps/ios/App/HushOSApp.swift
+  s_566b8e0c4467a4::t_8b81bb022155da 19
+apps/ios/App/Info.plist
+  s_566b8e0c4467a4::t_521ae1a69a3c96 8
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyJoin.swift
+  s_566b8e0c4467a4::t_7b4764ef8fa073 202,300-308,320-322
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_566b8e0c4467a4::t_305eb7ef7d9024 39-40,43-59,253-261,374-379,382-384,423,479-481,647-649,884,1225,1230
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/GroupsAPI.swift
+  s_566b8e0c4467a4::t_c651a61e364084 26-27,40-41,239-246,310-321
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Rotation.swift
+  s_566b8e0c4467a4::t_e7dd4050de1d08 32-33
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_566b8e0c4467a4::t_61938816956483 34,60,63-71,117,124-129,181,236,390,537
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyJoinTests.swift
+  s_566b8e0c4467a4::t_255bb5f5f830f2 75-93
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilySyncTests.swift
+  s_566b8e0c4467a4::t_10df3a8feaa04c 1183-1186,1384-1385,1433,1503,1672-1680
+apps/ios/project.yml
+  s_566b8e0c4467a4::t_cd2ae12b749c76 114-115
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_38f08b5bb11f99 180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "33ab0296facab8a752a88076f8ddc565155e0ac7",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
