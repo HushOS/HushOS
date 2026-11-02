@@ -1,0 +1,73 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_17aa3c7dc91615 31,84
+apps/android/app/build.gradle.kts
+  s_566b8e0c4467a4::t_69d167aeec1daa 158-159
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_566b8e0c4467a4::t_b29f53e613aee8 45-46,67-72
+apps/android/app/src/main/kotlin/com/hushos/app/data/DriveApi.kt
+  s_566b8e0c4467a4::t_878c0ea2b517ee 11-20,118-119,140-144,186,439-441,451-471
+apps/android/app/src/main/kotlin/com/hushos/app/data/FailedTransfers.kt
+  s_566b8e0c4467a4::t_3f3c8ccd7d6465 3,19-22,24-42,70,75,83-91
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyJoin.kt
+  s_566b8e0c4467a4::t_8b6782ac926990 176,180,183,203-210
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySessions.kt
+  s_566b8e0c4467a4::t_0ad249d2f00cad 18-23,33-41
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_566b8e0c4467a4::t_ab7d65ee3241db 151-155,205-215,396,536,545,548,554-563,759-760
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyUploads.kt
+  s_566b8e0c4467a4::t_644440da1c066e 1-110
+apps/android/app/src/main/kotlin/com/hushos/app/data/Reservations.kt
+  s_566b8e0c4467a4::t_840e9dae257080 1-240
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferNotices.kt
+  s_566b8e0c4467a4::t_b8454b972370ec 225-226
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_566b8e0c4467a4::t_37a2c7e9ceb882 68-70,72,77-175,182-184,189-192,200-206,210,213-214,218-254,270-272,279-281,286-287,289-292,301,308,314,385-393,402,412,414-419,424,426,441-465,468-470,475,485-488,492-502,507-524,530-544,555-557,560,596,598,603
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_91cf8f9be73744 252-254,277-283,1836-1839,1841-1842,1845-1848,1850,1906-1921,1932-1954,1985,1993,1997-2004,2006-2036
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_566b8e0c4467a4::t_0fdf1ebfa0eeb4 179-181,483-485,487-516
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_5106b25d30d574 18,84-85,218-234,337,373-374,378,384-385,387-391,400-401,418,454-455,457-458,476-483,514,531,1455,1950-1952,1954
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_2d0452d508eeb1 118-119,493,604
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_566b8e0c4467a4::t_80e82dbaf1484f 593-595
+apps/android/app/src/test/kotlin/com/hushos/app/data/AccountStoreTest.kt
+  s_566b8e0c4467a4::t_cff5f4f6181ecd 35-36
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_566b8e0c4467a4::t_11997bce1e3511 68-69,167-168,455-459,520-521,523,710,718-723,725-727,746
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_566b8e0c4467a4::t_a6bd4b01ce2ad0 483,486,504,507
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyUploadsTest.kt
+  s_566b8e0c4467a4::t_0e3a0489ea0fdf 1-716
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyWritesTest.kt
+  s_566b8e0c4467a4::t_cd402fa411e4cf 109,113
+apps/android/app/src/test/kotlin/com/hushos/app/data/UploadWorkerTest.kt
+  s_566b8e0c4467a4::t_c61d18364ed726 1-588
+apps/android/gradle/libs.versions.toml
+  s_566b8e0c4467a4::t_7068e62ab84844 30
+apps/web/src/components/drive/folder-view.tsx
+  s_566b8e0c4467a4::t_39c927fa8b83db 32,99,858-859,861-862,864-888,890-912,914-939,943-957,1012,1270,1400,1425-1428,1631-1633,1645,1652,1655-1656,1662,1664-1668,1670-1686
+apps/web/src/components/folder-mark.tsx
+  s_566b8e0c4467a4::t_c6471b55e16068 19,23,25,41-57
+apps/web/src/styles.css
+  s_566b8e0c4467a4::t_c3cd5a012f309f 533-603
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_1c9241d0aca8ae 216-217
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "32d75b081cfe5068030e6c03880ea108564a40bd",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
