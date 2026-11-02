@@ -206,9 +206,13 @@ extension Vault {
     func holdAsFamilyWorkspaces(_ ids: [String], of groupId: String) async {
         _ = try? await loadWorkspace()
         let own = workspace?.workspaceId.lowercased()
-        for id in ids.map({ $0.lowercased() }) where id != own {
-            if heldAreaGroup[id] == nil, familyAreaGroup[id] == nil { heldAreaGroup[id] = groupId.lowercased() }
-        }
+        // Held for every family that named it: a first member list's word never keeps another family's barrier off it.
+        for id in ids.map({ $0.lowercased() }) where id != own { heldAreaGroups[id, default: []].insert(groupId.lowercased()) }
+    }
+
+    /* Held by a family whose guard is still owed: the barrier is up over it. Never past the guard's store, never ownership. */
+    func heldUnderOwedGuard(_ workspaceId: String) -> Bool {
+        heldAreaGroups[workspaceId.lowercased()]?.contains { familyGuardOwed.contains($0) } == true
     }
 
     /* Whether a folder may be let go of with `groupId`: never this account's own drive, never one known as another family's. */
@@ -226,7 +230,7 @@ extension Vault {
         // Newly proven a family folder: whatever this phone held of it came some other way (a share mount), never through
         // the family's ledger, and goes with its keys and its place in the parent index.
         let newly = family.filter { !familyWorkspaces.contains($0) }
-        if !newly.isEmpty { forgetWorkspaces(newly) }
+        if !newly.isEmpty { forgetWorkspaces(newly, lettingGo: false) }
         familyWorkspaces.formUnion(family)
         for id in family { familyAreaGroup[id] = groupId.lowercased() }
     }
@@ -254,13 +258,15 @@ extension Vault {
      * the screens to drop what they drew and decrypted.
      */
     @discardableResult
-    func forgetWorkspaces(_ ids: [String]) -> Set<String> {
+    func forgetWorkspaces(_ ids: [String], lettingGo: Bool = true) -> Set<String> {
         var gone: Set<String> = []
         // Every folder the family names (the device record's too, not only those this session opened), never this
         // account's own drive, whatever a member list names. On this actor nothing runs between the clearing and an
         // open, which asks the core for the key as it runs: one that resumes after a fork or removal is refused there.
         let own = workspace?.workspaceId.lowercased()
         for id in ids.map({ $0.lowercased() }) where id != own {
+            // Let go of by this session (its family refused, forked or wiped): no share refills it (admitShare).
+            if lettingGo { letGoWorkspaces.insert(id) }
             for nodeId in nodeKeys.values(in: id).keys { nodeKeys[NodeRef(workspaceId: id, nodeId: nodeId)] = nil; gone.insert(nodeId) }
             for nodeId in opened.values(in: id).keys { opened[NodeRef(workspaceId: id, nodeId: nodeId)] = nil; gone.insert(nodeId) }
             ledgerOpened = ledgerOpened.filter { $0.workspaceId != id }
@@ -304,7 +310,15 @@ extension Vault {
     func requireGuardKept(_ workspaceId: String) throws {
         guard !familyGuardOwed.isEmpty else { return }
         let id = workspaceId.lowercased()
-        guard let groupId = familyAreaGroup[id] ?? heldAreaGroup[id], !familyGuardOwed.contains(groupId) else { throw GuardError.unsaved }
+        // Any family that named it and still owes its guard holds it, the proven family's or not.
+        if heldUnderOwedGuard(id) { throw GuardError.unsaved }
+        if let groupId = familyAreaGroup[id] {
+            if familyGuardOwed.contains(groupId) { throw GuardError.unsaved }
+            return
+        }
+        // Named only by families whose guards are stored: written as what it is. Known to none: held while any guard is owed.
+        if heldAreaGroups[id] != nil { return }
+        throw GuardError.unsaved
     }
 
     /*
@@ -313,7 +327,7 @@ extension Vault {
      */
     func sendingIntoFamily(_ workspaceId: String) throws {
         // A folder a member list named but not proven a family's (a share, maybe) waits for the guard too, as a family folder.
-        if isFamilyWorkspace(workspaceId) || heldAreaGroup[workspaceId.lowercased()] != nil { try requireGuardKept(workspaceId) }
+        if isFamilyWorkspace(workspaceId) || heldAreaGroups[workspaceId.lowercased()] != nil { try requireGuardKept(workspaceId) }
     }
 
     /* Raised before an acceptance of `groupId` commits; whether it was raised already (an earlier guard still owed). */

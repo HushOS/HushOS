@@ -138,7 +138,12 @@ public actor Vault {
      * Folders an accepted member list named, held for the write barrier only (holdAsFamilyWorkspaces):
      * never how a node opens or writes, which only folders proven a family's decide (familyWorkspaces).
      */
-    var heldAreaGroup: [String: String] = [:]
+    var heldAreaGroups: [String: Set<String>] = [:]
+    /*
+     * Family folders this vault let go of (a refusal, a fork, a wipe, a folder the family stopped
+     * listing): a share never refills one. This session's own, never another account's or session's.
+     */
+    var letGoWorkspaces: Set<String> = []
     /*
      * The rows (and keys) a family's area ledger opened. A family folder's row and key are served
      * only when they came this way: one a share mount (or any write's answer) left there is never
@@ -574,13 +579,15 @@ public actor Vault {
     }
 
     /*
-     * Whether a received share may be mounted here: never into a family folder (proven, held by its
-     * barrier, or one this process let go of), whose items open only through its area ledger and
-     * never under a key a share hands over. A share refresh can't refill a family a fork cleared.
+     * Whether a received share may be mounted here: never into a family folder (proven by route 25
+     * and its id, or one this session let go of), whose items open only through its area ledger and
+     * never under a key a share hands over, nor into one a member list named while that family's
+     * guard is still owed. A member list's word alone outlasts nothing: once that guard is stored, a
+     * share it named mounts as any other. A share refresh can't refill a family a fork cleared.
      */
     func admitShare(_ share: SharedWithMeView) throws {
         let target = share.workspaceId.lowercased()
-        if isFamilyWorkspace(target) || heldAreaGroup[target] != nil || TemporaryCopies.wasForgotten(target) {
+        if isFamilyWorkspace(target) || letGoWorkspaces.contains(target) || heldUnderOwedGuard(target) {
             throw FamilyFailure(message: FamilyWords.couldntCheckKeys)
         }
     }

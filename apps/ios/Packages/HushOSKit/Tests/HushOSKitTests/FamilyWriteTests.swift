@@ -473,6 +473,85 @@ extension OnFakeDrive {
             #expect(await vault.nodeKey(of: file) == nil, "a key the ledger didn't give stayed after the ledger was asked")
         }
 
+        /*
+         * The member list names a received share's workspace. While that family's guard is owed the
+         * barrier holds it, so the share isn't mounted; once the guard is stored the list's word
+         * counts for nothing, and the share mounts and lists as any other. Fails if the barrier's
+         * hold outlasts the guard, or counts as proof a family owns the folder.
+         */
+        @Test func aShareARosterNamedIsRefusedOnlyWhileItsGuardIsOwed() async throws {
+            let theirs = UUID().uuidString.lowercased()
+            let family = try await onLargeStack { try FamilyFixture.$naming.withValue(theirs) { try FamilyFixture() } }
+            let writes = GuardSwitch()
+            writes.writable = false
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server, guards: familyGuards(family.member, writes: writes))
+            defer { phone.done() }
+            let vault = phone.vault
+            let sKey = try randomBytes(length: 32)
+            let shared = try FamilyFixture.node(id: try newId(kind: .node, scopeId: theirs).id, in: theirs, parent: nil, parentKey: try randomBytes(length: 32), key: sKey,
+                                                kind: .folder, name: "Shared", writer: family.creator)
+            let plan = try FamilyFixture.node(id: try newId(kind: .node, scopeId: theirs).id, in: theirs, parent: shared.id, parentKey: sKey,
+                                              key: try randomBytes(length: 32), kind: .file, name: "Plan.txt", writer: family.creator)
+            server.put(shared, plan)
+            #expect(await phone.sync.sync(family.summary) == .failed(GuardWords.unsaved))
+            await #expect(throws: FamilyFailure.self) { try await vault.admitShare(share(into: theirs, shared)) }
+            writes.writable = true
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted once the guard stored"); return }
+            try await vault.admitShare(share(into: theirs, shared))
+            _ = try await vault.adopt(shared, nodeKey: sKey, metadata: NodeMetadata(name: "Shared", mime: nil, size: nil, modified: nil, attributes: [:]), in: theirs)
+            #expect(try await vault.children(of: shared.id).map(\.name) == ["Plan.txt"])
+        }
+
+        /*
+         * Two families' member lists name the same workspace. Each family's barrier holds it while
+         * that family's guard is owed, whichever named it first. Fails if only the first family's
+         * word is kept.
+         */
+        @Test func aWorkspaceTwoFamiliesNameIsHeldByEachFamilysBarrier() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            let (named, first, second) = (UUID().uuidString.lowercased(), UUID().uuidString.lowercased(), UUID().uuidString.lowercased())
+            await vault.holdAsFamilyWorkspaces([named], of: first)
+            await vault.holdAsFamilyWorkspaces([named], of: second)
+            await vault.oweFamilyGuard(second)
+            await #expect(throws: GuardError.unsaved) { try await vault.sendingIntoFamily(named) }
+            await vault.familyGuardKept(second)
+            await vault.oweFamilyGuard(first)
+            await #expect(throws: GuardError.unsaved) { try await vault.sendingIntoFamily(named) }
+            await vault.familyGuardKept(first)
+            try await vault.sendingIntoFamily(named)
+        }
+
+        /*
+         * The first account let go of its family's folder (refused), then signed out; another account
+         * signs in in the same process. The first account's record of what it let go of is its own:
+         * the second account's share into that workspace mounts. Fails if what one session let go of
+         * refuses another's shares.
+         */
+        @Test func anotherAccountsLetGoRecordNeverRefusesThisAccountsShare() async throws {
+            let first = try FamilyFixture()
+            let account = CopyEpoch()
+            let server = first.server(chain: [first.r1, first.r2], pin: try first.pin(through: [first.r1, first.r2]))
+            let phone = try await first.phone(server, account: account)
+            guard case .accepted = await phone.sync.sync(first.summary) else { Issue.record("not accepted"); phone.done(); return }
+            await phone.sync.refuse(first.groupId)
+            phone.done()
+            TemporaryCopies.endAccount(account)
+
+            let second = try FamilyFixture()
+            let otherServer = second.server(chain: [second.r1, second.r2], pin: try second.pin(through: [second.r1, second.r2]))
+            let next = try await second.phone(otherServer)
+            defer { next.done() }
+            let node = try FamilyFixture.node(id: try newId(kind: .node, scopeId: first.workspaceId).id, in: first.workspaceId, parent: nil,
+                                              parentKey: try randomBytes(length: 32), key: try randomBytes(length: 32), kind: .folder, name: "Shared",
+                                              writer: second.creator)
+            try await next.vault.admitShare(share(into: first.workspaceId, node))
+        }
+
         /* An own-drive row with `id`, under the member's top folder. */
         private func ownRow(_ id: String, _ family: FamilyFixture, kind: NodeKind, name: String) throws -> NodeView {
             try FamilyFixture.node(id: id, in: family.personal, parent: family.personalRoot.id, parentKey: family.personalRootKey,

@@ -296,10 +296,6 @@ public enum TemporaryCopies {
     static let forgetLock = NSLock()
     nonisolated(unsafe) static var forgotten: [String: UInt64] = [:]
 
-    /* Whether this process let go of a family folder's copies (a removal, a fork, a sweep): a share never refills it. */
-    public static func wasForgotten(_ workspaceId: String) -> Bool {
-        forgetLock.withLock { (forgotten[workspaceId.lowercased()] ?? 0) > 0 }
-    }
 
     /*
      * A copy about to be made of an item, kept to the account's session now and, for a family
