@@ -272,6 +272,43 @@ extension OnFakeDrive {
         }
 
         /*
+         * The creator is pinned first-seen and this phone's contact guard took their keys, the ones
+         * the member list serves. Another device then saves the creator first-seen with other keys
+         * (Continue over a change there); this phone's guard still holds the member list's. Judging
+         * goes by the pins the guard allows, so the creator's files read as they did, never "Keys
+         * don't match". Fails if a judgement takes the settings' pins over the guard's.
+         */
+        @Test func aPinAnotherDeviceChangedNeverJudgesAgainstThisPhonesGuard() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            func firstSeen(_ keys: IdentityKeys) throws -> ContactPin {
+                let served = ServedKeys(keyVersion: keys.keyVersion, encryptionPublicKey: keys.encryptionPublicKey, signingPublicKey: keys.signingPublicKey,
+                                        mlDsaPublicKey: keys.mlDsaPublicKey!, kemPublicKey: keys.kemPublicKey!)
+                return ContactPin(userId: family.creator.userId, email: "sam@example.com", name: "Sam", keys: try pinOfServed(served: served, verified: false),
+                                  pinnedAt: "2026-10-28T00:00:00.000Z", firstSeen: "family")
+            }
+            try server.editSettings { $0.setPin(try firstSeen(family.creator.keys)) }
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            // This phone's guard takes the creator's keys on first use.
+            #expect(try await phone.vault.effectivePins().contains { $0.userId == family.creator.userId })
+            let before = try #require(await phone.sync.verdicts(of: [family.file], groupId: family.groupId).first)
+            #expect(before.mark?.label != "Keys don’t match")
+
+            // Another device's save: the creator first-seen under other keys. This phone's guard is untouched.
+            let other = try FamilyPerson()
+            try server.editSettings { $0.setPin(try firstSeen(other.keys)) }
+            await phone.vault.forgetSigners()
+            // Read again (the settings come with the guard's view), so the settings' pin is the other device's now.
+            _ = try await phone.vault.effectivePins()
+            #expect(await phone.vault.knownPins()[family.creator.userId]?.signingPublicKey == other.keys.signingPublicKey)
+            let after = try #require(await phone.sync.verdicts(of: [family.file], groupId: family.groupId).first)
+            #expect(after.mark?.label != "Keys don’t match", "the creator's file was judged against keys this phone's guard never accepted")
+            #expect(after == before)
+        }
+
+        /*
          * A family opened on this phone, then the server shows another history from version 3:
          * the hard warning, and what was opened of its folders is gone, so nothing in them opens.
          */

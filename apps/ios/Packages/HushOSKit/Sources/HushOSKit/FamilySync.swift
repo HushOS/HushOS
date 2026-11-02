@@ -1027,6 +1027,7 @@ public actor FamilySync: FamilyJudge {
      * is never judged by the one before. This account's own records go by its own keys.
      */
     func groupWriters(_ served: [String: MemberIdentity], signers: TrustedSigners, pins: [String: ContactPin], groupId: String) -> [GroupWriter] {
+        // `pins`: judgingPins(), never the settings' own (a pin another device saved that this phone's guard didn't accept).
         let me = userId.lowercased()
         func pinned(_ id: String) -> WriterPin? {
             guard let pin = pins[id.lowercased()], let digest = pin.mlDsaPublicKeyHash else { return nil }
@@ -1045,6 +1046,17 @@ public actor FamilySync: FamilyJudge {
             out[id] = GroupWriter(userId: id, pinned: pinned(id), served: nil, links: nil, personal: personal(id))
         }
         return Array(out.values)
+    }
+
+    /*
+     * The pins every judgement goes by: as this phone's contact guard allows them (Vault.effectivePins,
+     * 2.8). A pin another device saved with keys the guard doesn't hold vouches for nothing, and the
+     * guard's keys stand in (never verified), so the member list is compared with keys this phone
+     * accepted, both for an item's mark and for what a write of it is judged to be. Throws when the
+     * guard can't be read.
+     */
+    func judgingPins() async throws -> [String: ContactPin] {
+        Dictionary(try await vault.effectivePins().map { ($0.userId.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
     }
 
     /* Who lines can name: this account, its checked contacts, pins on a family's word, and route 3's members (D10). */
@@ -1066,10 +1078,10 @@ public actor FamilySync: FamilyJudge {
      * (FamilyLines). Without the writers or the reader every record is "Couldn't check", never clean.
      */
     public func verdicts(of nodes: [NodeView], groupId: String) async -> [FamilyVerdict] {
-        guard let served = identities[groupId], let signers = try? await vault.signers(), let reader = try? await reader() else {
+        guard let served = identities[groupId], let signers = try? await vault.signers(), let reader = try? await reader(),
+              let pins = try? await judgingPins() else {
             return nodes.map { _ in .unchecked }
         }
-        let pins = await vault.knownPins()
         let writers = groupWriters(served, signers: signers, pins: pins, groupId: groupId)
         let names = names(groupId, pins: pins)
         let checked = familyChecked(groupId)
@@ -1102,7 +1114,7 @@ public actor FamilySync: FamilyJudge {
         }
         let signers = try await vault.signers()
         let reader = try await reader()
-        let pins = await vault.knownPins()
+        let pins = try await judgingPins()
         return try ledger.copyForm(groupId: groupId, reader: reader, writers: groupWriters(served, signers: signers, pins: pins, groupId: groupId), record: record, cache: nil)
     }
 
