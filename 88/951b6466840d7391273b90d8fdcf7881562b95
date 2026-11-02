@@ -1,0 +1,21 @@
+apps/android/app/src/test/kotlin/com/hushos/app/files/FilesTreeGrantsTest.kt
+  s_566b8e0c4467a4::t_5409b8af89a741 1-81
+apps/android/app/src/main/kotlin/com/hushos/app/files/HushOSDocumentsProvider.kt
+  s_566b8e0c4467a4::t_922ec9653a6e59 296-326,328,451
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "88951b6466840d7391273b90d8fdcf7881562b95",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
