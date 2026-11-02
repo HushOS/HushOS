@@ -230,16 +230,6 @@ internal fun Vault.openWalkParent(ws: String, parentId: String) {
     for (row in chain.asReversed()) runCatching { open(row, replace = true) }
 }
 
-/*
- * The nodes of a batch that may be sealed now: none whose parent is in the same batch (its fresh key would still be
- * pending, so the server could take the child and refuse the parent). Parents come first in the work, so a later batch
- * brings each deferred child once its parent's key is confirmed.
- */
-internal fun deferChildren(nodes: List<RotationWorkNode>): List<RotationWorkNode> {
-    val inBatch = nodes.map { it.node.id.lowercase() }.toSet()
-    return nodes.filter { entry -> entry.node.parentId?.lowercase()?.let { it in inBatch } != true }
-}
-
 /* A node of the work as the ledger's walk takes it: its parent's key at the target, or the top folder's own. */
 private fun rotating(entry: RotationWorkNode, rootId: String, target: ULong, ws: String): RotatingNode {
     val node = entry.node

@@ -460,10 +460,11 @@ class FakeDrive : AutoCloseable {
     }
 
     /*
-     * Another device walking the run from `runRoot` re-keys `id` first, as its own batch would: a fresh key wrapped under its
-     * parent's key at the target, its name sealed again under it and signed by `by`. Its children stay where they were.
+     * Another device of the owner, walking the run from `runRoot`, re-keys `id` first, as its own batch would: a fresh key
+     * wrapped under its parent's key (at the target below the run's top, as it is for the top), its name sealed again
+     * under it and signed by the owner. Its children stay where they were, under its key before.
      */
-    fun walkedElsewhere(runRoot: String, id: String, by: Person) = synchronized(lock) {
+    fun rekeyedElsewhere(runRoot: String, id: String) = synchronized(lock) {
         val rotation = rotations.getValue(runRoot)
         val node = node(id)
         val ws = node.workspaceId
@@ -471,14 +472,17 @@ class FakeDrive : AutoCloseable {
         previousKeys[id to node.keyEpoch] = old
         if (node.previous == null) node.previous = Triple(node.keyEnvelope, node.keyEpoch, node.parentKeyEpoch)
         val fresh = randomBytes(32u)
+        val parentEpoch = if (id == runRoot) node.parentKeyEpoch else rotation.target
         val metadata = metadataOpen(MetadataContext(ws, id, node.metadataVersion.toULong()), old, base64urlDecode(node.metadataEnvelope))
         val sealed = metadataSeal(MetadataContext(ws, id, node.metadataVersion.toULong()), fresh, metadata)
-        node.keyEnvelope = base64urlEncode(nodeWrap(NodeKeyContext(ws, id, node.parentId!!, rotation.target.toULong(), rotation.target.toULong()), keyOf(node.parentId!!), fresh))
-        node.parentKeyEpoch = rotation.target
+        node.keyEnvelope = base64urlEncode(nodeWrap(NodeKeyContext(ws, id, node.parentId ?: ws, parentEpoch.toULong(), rotation.target.toULong()),
+            node.parentId?.let { keyAt(it, parentEpoch) } ?: workspaceKeys.getValue(ws), fresh))
+        node.parentKeyEpoch = parentEpoch
         node.keyEpoch = rotation.target
         node.metadataEnvelope = base64urlEncode(sealed)
-        node.signature = base64urlEncode(metadataSign(by.keys.signingSeed, MetadataStatement(ws, id, if (node.kind == "folder") NodeKind.FOLDER else NodeKind.FILE, node.metadataVersion.toULong()), sealed))
-        node.signer = by.id
+        node.signature = base64urlEncode(metadataSign(owners.getValue(ws).keys.signingSeed,
+            MetadataStatement(ws, id, if (node.kind == "folder") NodeKind.FOLDER else NodeKind.FILE, node.metadataVersion.toULong()), sealed))
+        node.signer = owners.getValue(ws).id
         node.metadataRekey = null
         bump(node)
         rotation.applied.add(id)

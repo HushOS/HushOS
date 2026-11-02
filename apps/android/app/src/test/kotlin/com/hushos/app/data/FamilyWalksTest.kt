@@ -119,7 +119,7 @@ class FamilyWalksTest {
         server.beforeRotationSend = { ids ->
             if (!raced && sub in ids) {
                 raced = true
-                server.walkedElsewhere(family.rootId, sub, family.creator)
+                server.rekeyedElsewhere(family.rootId, sub)
             }
         }
         assertEquals(WalkEnd.WALKED, phone.sync.walk(family.groupId, target))
@@ -140,7 +140,7 @@ class FamilyWalksTest {
         val phone = opened()
         server.trash(sub)
         family.replaceKeys()
-        server.walkedElsewhere(family.rootId, sub, family.creator)
+        server.rekeyedElsewhere(family.rootId, sub)
         // A fresh process: a vault and ledger that never opened the subfolder at its new key.
         val next = family.phone(phone.folder)
         val target = accepted(next).areas.single().walkTarget()!!
@@ -164,8 +164,8 @@ class FamilyWalksTest {
         val phone = opened()
         server.trash(sub)
         family.replaceKeys()
-        server.walkedElsewhere(family.rootId, sub, family.creator)
-        server.walkedElsewhere(family.rootId, nested, family.creator)
+        server.rekeyedElsewhere(family.rootId, sub)
+        server.rekeyedElsewhere(family.rootId, nested)
         val next = family.phone(phone.folder)
         val target = accepted(next).areas.single().walkTarget()!!
         assertEquals(WalkEnd.WALKED, next.sync.walk(family.groupId, target))

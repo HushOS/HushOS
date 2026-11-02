@@ -351,7 +351,7 @@ struct FileMark: View {
                         }
                     }
             } else if item.isFolder {
-                FolderGlyph().frame(width: box * 0.9, height: box * 0.9 * 46 / 56)
+                FolderGlyph(folder: item).frame(width: box * 0.9, height: box * 0.9 * 46 / 56)
             } else {
                 PageGlyph(label: Self.label(for: item)).frame(width: box * 0.66, height: box * 0.66 * 54 / 44)
             }
@@ -377,6 +377,23 @@ func formatQuota(_ value: Int64) -> String {
 /* Space beside a quota: like the quota from 1 GB up ("2 GB", never "2.0 GB"), formatBytes below it. */
 func formatSpace(_ value: Int64) -> String {
     value >= 1_073_741_824 ? formatQuota(value) : formatBytes(value)
+}
+
+/*
+ * A folder in its own colour: the shades the Rust core works out from its `colour`
+ * attribute, or the plain folder colour when it has none (the web's FolderMark draws the same).
+ */
+extension FolderGlyph {
+    init(folder item: Opened) {
+        guard let shades = folderShades(attributes: item.metadata.attributes) else {
+            self.init()
+            return
+        }
+        self.init(
+            front: Color(alpineLight: shades.lightFront, dark: shades.darkFront, lightHigh: shades.lightHighFront, darkHigh: shades.darkHighFront),
+            back: Color(alpineLight: shades.lightBack, dark: shades.darkBack, lightHigh: shades.lightHighBack, darkHigh: shades.darkHighBack)
+        )
+    }
 }
 
 extension View {

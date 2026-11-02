@@ -170,7 +170,7 @@ function hsvToHex({ h, s, v }: Hsv) {
 }
 const clamp = (value: number) => Math.min(1, Math.max(0, value));
 
-function CustomColour({
+export function CustomColour({
     value,
     disabled,
     onChoose,
