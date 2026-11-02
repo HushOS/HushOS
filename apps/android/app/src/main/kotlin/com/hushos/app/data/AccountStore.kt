@@ -42,6 +42,8 @@ class AccountStore(private val files: File, private val cache: File, private val
 
     /* Sign-out and account deletion: every account file, decrypted or not, and the owner. */
     fun wipe(keepRecoveryFor: String? = null) {
+        // The upload ledger under its own lock first: an upload still on its way adds nothing back after this.
+        Reservations.wipe(files)
         for (name in ACCOUNT_FILES) File(files, name).deleteRecursively()
         // The rollback marks, sealed, and the plaintext file earlier versions kept across sign-outs: a phone signed back
         // in trusts the server as a new device does, the cost the web accepted too (docs/integrity-design.md).
@@ -62,8 +64,12 @@ class AccountStore(private val files: File, private val cache: File, private val
     }
 
     companion object {
-        /* Under filesDir: kept files, the upload queue's copies, the node-to-parent index, failed transfers and the ones awaiting a notification. */
-        private val ACCOUNT_FILES = listOf("offline", "queue", "files-parents.json", FailedTransfers.FILE, TransferNotices.OUTCOMES, ShareSeals.FILE, PendingRotations.FILE, LandedJobs.DIR, JobNames.FILE, JobNames.STAGED)
+        /*
+         * Under filesDir: kept files, the upload queue's copies, the node-to-parent index, failed transfers and the ones
+         * awaiting a notification, and the upload reservations ledger: another account's session can't settle them (a
+         * workspace's 404 would read as released), so they go with the account, and the server's expiry releases them.
+         */
+        private val ACCOUNT_FILES = listOf("offline", "queue", "files-parents.json", FailedTransfers.FILE, TransferNotices.OUTCOMES, ShareSeals.FILE, PendingRotations.FILE, LandedJobs.DIR, JobNames.FILE, JobNames.STAGED, Reservations.FILE, Reservations.NEXT)
 
         fun of(context: Context): AccountStore = AccountStore(context.filesDir, context.cacheDir, context.noBackupFilesDir) {
             // Jobs queued for that account would run under the next one's session.

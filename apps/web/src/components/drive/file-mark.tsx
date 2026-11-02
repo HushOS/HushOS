@@ -1,5 +1,6 @@
-import { folderColour, type DriveNode } from '@hushos/drive/client';
+import { fileTypeHue, folderColour, type DriveNode } from '@hushos/drive/client';
 import { cn } from 'cn';
+import type { CSSProperties } from 'react';
 import { FolderMark } from '@/components/folder-mark';
 import { extensionOf, previewKind } from '@/lib/previews';
 import { useThumbnail } from '@/lib/thumbnails';
@@ -41,8 +42,9 @@ export function FileMark({ node, kind, name, size = 'row', className }: FileMark
             />
         );
     const preview = node ? previewKind(node) : 'none';
+    const hue = fileTypeHue(node?.name ?? name ?? '');
     if (thumbnail && preview === 'pdf')
-        return <PageMark box={box} src={thumbnail} className={className} />;
+        return <PageMark box={box} src={thumbnail} hue={hue} className={className} />;
     if (thumbnail)
         return (
             <span
@@ -70,31 +72,52 @@ export function FileMark({ node, kind, name, size = 'row', className }: FileMark
             label={extensionOf(node?.name ?? name ?? '')
                 .slice(0, 4)
                 .toUpperCase()}
+            hue={hue}
             className={className}
         />
     );
 }
 
-/* A white sheet with a turned corner, and the file's type on a dark label when it has one. */
-function SheetMark({ box, label, className }: { box: number; label: string; className?: string }) {
+/* A file's type colour on its mark (styles.css [data-file-hue]); none keeps the plain sheet. */
+function hueProps(hue: number | null) {
+    return hue === null ? {} : { 'data-file-hue': '', style: { '--th': hue } as CSSProperties };
+}
+
+/*
+ * A white sheet with a turned corner, and the file's type on a label when it has one:
+ * in the type's colour, the sheet faintly tinted to match, or ink for a type with none.
+ */
+function SheetMark({
+    box,
+    label,
+    hue,
+    className,
+}: {
+    box: number;
+    label: string;
+    hue: number | null;
+    className?: string;
+}) {
     const width = box * 0.78;
+    const tint = hueProps(hue);
     return (
         <span
             aria-hidden="true"
+            data-file-hue={tint['data-file-hue']}
             className={cn('flex shrink-0 items-center justify-center', className)}
-            style={{ width: box, height: box }}
+            style={{ width: box, height: box, ...tint.style }}
         >
             <svg width={width} height={width * 1.23} viewBox="0 0 44 54">
                 <path
                     d="M4 1h25.6L43 14.4V50a3 3 0 0 1-3 3H4a3 3 0 0 1-3-3V4a3 3 0 0 1 3-3Z"
-                    fill="var(--surface)"
-                    stroke="var(--field)"
+                    fill="var(--sheet-fill, var(--surface))"
+                    stroke="var(--sheet-edge, var(--field))"
                     strokeWidth="2"
                 />
                 <path
                     d="M29.5 1v10a3.5 3.5 0 0 0 3.5 3.5h10"
                     fill="none"
-                    stroke="var(--field)"
+                    stroke="var(--sheet-edge, var(--field))"
                     strokeWidth="2"
                 />
                 {label ? (
@@ -105,7 +128,7 @@ function SheetMark({ box, label, className }: { box: number; label: string; clas
                             width={label.length > 3 ? 32 : 27}
                             height="13"
                             rx="3"
-                            fill="var(--ink)"
+                            fill="var(--sheet-label, var(--ink))"
                         />
                         <text
                             x={label.length > 3 ? 21 : 18.5}
@@ -130,13 +153,25 @@ function SheetMark({ box, label, className }: { box: number; label: string; clas
     );
 }
 
-/* A PDF's first page, as the app rendered it at upload, with a small type badge. */
-function PageMark({ box, src, className }: { box: number; src: string; className?: string }) {
+/* A PDF's first page, as the app rendered it at upload, with a small type badge in its type's colour. */
+function PageMark({
+    box,
+    src,
+    hue,
+    className,
+}: {
+    box: number;
+    src: string;
+    hue: number | null;
+    className?: string;
+}) {
+    const tint = hueProps(hue);
     return (
         <span
             aria-hidden="true"
+            data-file-hue={tint['data-file-hue']}
             className={cn('relative flex shrink-0 items-center justify-center', className)}
-            style={{ width: box, height: box }}
+            style={{ width: box, height: box, ...tint.style }}
         >
             <span
                 className="overflow-hidden rounded-[8%] border border-rule bg-card shadow-sm"
@@ -151,7 +186,7 @@ function PageMark({ box, src, className }: { box: number; src: string; className
             </span>
             {box >= 32 && (
                 <span
-                    className="absolute bottom-[8%] rounded-[3px] bg-ink px-[4%] font-bold text-card"
+                    className="absolute bottom-[8%] rounded-[3px] bg-[var(--sheet-label,var(--ink))] px-[4%] font-bold text-card"
                     style={{
                         left: box * 0.06,
                         fontSize: Math.max(7, box * 0.16),

@@ -173,14 +173,14 @@ private fun FamilySync.acceptJoin(groupId: String, first: ServedChain, matched: 
     var overtaken = 0
     while (true) {
         // The write barrier, as for a sync's acceptance.
-        val owedBefore = vault.oweFamilyGuard(groupId)
+        val debt = vault.oweFamilyGuard(groupId)
         val result = try {
             ledger.acceptJoining(me, groupId, records.read(userId, groupId)?.envelope, served, matched, vault.heldFamilyGuard(groupId))
         } catch (error: Exception) {
-            if (!owedBefore) vault.familyGuardKept(groupId)
+            vault.familyGuardKept(debt)
             throw error
         }
-        if (result !is JoinAcceptance.Accepted && !owedBefore) vault.familyGuardKept(groupId)
+        if (result !is JoinAcceptance.Accepted) vault.familyGuardKept(debt)
         when (result) {
             is JoinAcceptance.RecordUnreadable -> { vault.forgetWorkspaces(knownAreas(groupId)); records.delete(userId, groupId); sweepCopies() }
             is JoinAcceptance.Overtaken -> {
@@ -199,10 +199,15 @@ private fun FamilySync.acceptJoin(groupId: String, first: ServedChain, matched: 
             is JoinAcceptance.Accepted -> {
                 // Its folders held for the barrier before the guard is stored, as a sync's acceptance holds them: a guard
                 // that can't be stored keeps writes into them (a share mounted there) refused. Never a family folder by it.
-                vault.holdAsFamilyWorkspaces(result.chain.areaKeys().keys, groupId)
                 try {
-                    result.guard?.let { vault.keepFamilyGuard(groupId, it) }
-                    vault.familyGuardKept(groupId)
+                    try {
+                        vault.holdAsFamilyWorkspaces(result.chain.areaKeys().keys, groupId)
+                        result.guard?.let { vault.keepFamilyGuard(groupId, it) }
+                    } catch (error: Exception) {
+                        result.guard?.let { vault.familyGuardLeft(debt, it) } ?: vault.familyGuardKept(debt)
+                        throw error
+                    }
+                    vault.familyGuardKept(debt)
                     records.put(userId, groupId, FamilyRecords.Row(result.record, result.chain.roster().rosterVersion, keptAreas(groupId, result.chain.areaKeys().keys)))
                 } catch (error: Exception) {
                     // A wipe the core refuses keeps its floor; the store's error is the answer.
