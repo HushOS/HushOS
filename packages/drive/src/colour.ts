@@ -127,5 +127,7 @@ const FILE_TYPE_HUES: Record<string, number> = {
 export function fileTypeHue(name: string): number | null {
     const dot = name.lastIndexOf('.');
     if (dot <= 0) return null;
-    return FILE_TYPE_HUES[name.slice(dot + 1).toLowerCase()] ?? null;
+    const extension = name.slice(dot + 1).toLowerCase();
+    // Own entries only: `file.constructor` is no type.
+    return Object.hasOwn(FILE_TYPE_HUES, extension) ? FILE_TYPE_HUES[extension]! : null;
 }

@@ -59,10 +59,14 @@ describe('a file’s type colour', () => {
         expect(fileTypeHue(name)).toBe(hue);
     });
 
-    test.each([['README'], ['.env'], ['archive.unknownext'], ['trailing.']])(
-        '%s has no type colour, so it keeps the plain label',
-        (name) => {
-            expect(fileTypeHue(name)).toBeNull();
-        },
-    );
+    test.each([
+        ['README'],
+        ['.env'],
+        ['archive.unknownext'],
+        ['trailing.'],
+        ['file.constructor'],
+        ['a.__proto__'],
+    ])('%s has no type colour, so it keeps the plain label', (name) => {
+        expect(fileTypeHue(name)).toBeNull();
+    });
 });

@@ -147,7 +147,7 @@ pub struct SheetShades {
 pub fn sheet_shades(name: String) -> Option<SheetShades> {
     let hue = file_type_hue(&name)?;
     Some(SheetShades {
-        light_label: argb(0.55, 0.17, hue),
+        light_label: argb(0.5, 0.15, hue),
         dark_label: argb(0.74, 0.136, hue),
         light_high_label: argb(0.42, 0.15, hue),
         dark_high_label: argb(0.84, 0.11, hue),
@@ -263,6 +263,31 @@ mod tests {
         theirs.sort_by(|a, b| a.0.cmp(&b.0));
         ours.sort_by(|a, b| a.0.cmp(&b.0));
         assert_eq!(ours, theirs);
+    }
+
+    /// WCAG contrast between two opaque ARGB colours.
+    fn contrast(a: u32, b: u32) -> f64 {
+        let (x, y) = (luminance(a), luminance(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    #[test]
+    fn every_type_label_meets_contrast_for_its_text_in_every_scheme() {
+        // The label's text is the surface: white in light, #1c1c1e (#2c2c2e in an iOS sheet) in dark,
+        // #0a0a0b in dark high contrast. AA in the standard schemes, AAA in high contrast (DESIGN.md Colors).
+        for &(ext, _) in &FILE_TYPE_HUES {
+            let s = sheet_shades(format!("a.{ext}")).unwrap();
+            for (label, text, need, scheme) in [
+                (s.light_label, 0xFFFF_FFFF, 4.5, "light"),
+                (s.dark_label, 0xFF1C_1C1E, 4.5, "dark"),
+                (s.dark_label, 0xFF2C_2C2E, 4.5, "dark, in a sheet"),
+                (s.light_high_label, 0xFFFF_FFFF, 7.0, "light high contrast"),
+                (s.dark_high_label, 0xFF0A_0A0B, 7.0, "dark high contrast"),
+            ] {
+                let ratio = contrast(label, text);
+                assert!(ratio >= need, "{ext} in {scheme}: {ratio:.2}");
+            }
+        }
     }
 
     #[test]
