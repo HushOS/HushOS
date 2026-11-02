@@ -1,0 +1,47 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_ac0bfa63400440 86
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyWalks.kt
+  s_ec12ebe02de5ff::t_e0d6e6f2be8fc8 193-198,207-213,216-230
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_d16a1611ddce1a 219
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Families.kt
+  s_566b8e0c4467a4::t_b030636259a64d 159-167,190,196,243,258,264-267,269,271-275,277,287-288
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_384d36f4f6e68e 122-123,126-132,173-215,707
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyWalksTest.kt
+  s_c80633581612c4::t_36824d2cf7cbfa 154-177
+apps/android/app/src/test/kotlin/com/hushos/app/ui/LeaveDialogStateTest.kt
+  s_566b8e0c4467a4::t_5b48911b9fd208 1-119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fb230a1a6fedaf0f6333bccd8392fd950720e8c3",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c80633581612c4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e00940c8-2043-4d1f-9c0c-dd2cb74b2aed",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_ec12ebe02de5ff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3f79b7e-f7a1-4c9c-9a58-b7059252bcae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
