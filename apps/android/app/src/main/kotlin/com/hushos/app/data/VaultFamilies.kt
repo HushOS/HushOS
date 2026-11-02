@@ -7,7 +7,13 @@ import com.hushos.core.IdentityEnvelope
 import com.hushos.core.OwnIdentities
 import com.hushos.core.ServedKeys
 import com.hushos.core.ServedNodeKey
+import com.hushos.core.Integrity
+import com.hushos.core.NodeKeyContext
+import com.hushos.core.ServedRecord
 import com.hushos.core.base64urlDecode
+import com.hushos.core.nodeWrap
+import com.hushos.core.randomBytes
+import kotlinx.coroutines.asContextElement
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -156,12 +162,137 @@ fun Vault.drainFamilyPurged(): Set<String> {
 }
 
 /*
- * Every write's last word, right before it is sent (DriveApi.beforeWrite), under the lock a family's proof takes: a
- * folder proven a family's since the write began is read only, and one whose family's guard is owed waits for it.
+ * Every write's last word, right before it is sent (DriveApi.beforeWrite), under the lock a family's proof takes (iOS's
+ * finalGate): never into a workspace a family whose guard is owed holds, and into a family folder only a write that
+ * decided at its entry to write as the family's (familyTarget, under the ledger's keys), still writable now. A write
+ * begun on a share's or this account's path (sealed under their keys) into a folder proven a family's since is refused,
+ * as is any write that declared nothing.
  */
 internal fun Vault.finalWriteGate(workspaceId: String) {
     beforeWriteGate?.invoke(workspaceId)
-    synchronized(familyCopiesLock) { refuseFamilyWrite(workspaceId) }
+    synchronized(familyCopiesLock) {
+        // A session that ended (a sign-out, another sign-in) writes nothing more, from any of its vaults.
+        if (closed) throw SessionEnded()
+        if (heldUnderOwedGuard(workspaceId)) throw GuardUnsaved()
+        if (!isFamilyWorkspace(workspaceId)) return
+        if (WriteIntent.decision(workspaceId) != true) throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
+        familyTarget(workspaceId)
+    }
+}
+
+/*
+ * What a write decided at its entry for each workspace it writes into (iOS's WriteIntent): the first decision stands,
+ * whatever a check run later finds. Carried to the final gate on the write's thread, and across a suspended write's
+ * dispatchers (writingSuspend).
+ */
+internal class WriteEntry {
+    private val decided = ConcurrentHashMap<String, Boolean>()
+    private val epochs = ConcurrentHashMap<String, Long>()
+    fun record(workspaceId: String, family: Boolean, epoch: Long = 0L) {
+        if (decided.putIfAbsent(workspaceId.lowercase(), family) == null && family) epochs[workspaceId.lowercase()] = epoch
+    }
+    fun decision(workspaceId: String): Boolean? = decided[workspaceId.lowercase()]
+    fun epoch(workspaceId: String): Long? = epochs[workspaceId.lowercase()]
+}
+
+internal object WriteIntent {
+    val current = ThreadLocal<WriteEntry?>()
+    fun record(workspaceId: String, family: Boolean, epoch: Long = 0L) { current.get()?.record(workspaceId, family, epoch) }
+    fun decision(workspaceId: String): Boolean? = current.get()?.decision(workspaceId)
+    /* The family folder's invalidation count when the write decided to write as the family's: an answer kept only while it stands. */
+    fun epoch(workspaceId: String): Long? = current.get()?.epoch(workspaceId)
+}
+
+/* A write's body with its own record of what it decided at entry; a write inside another (a copy's folder) shares it. */
+internal fun <T> writing(body: () -> T): T {
+    if (WriteIntent.current.get() != null) return body()
+    WriteIntent.current.set(WriteEntry())
+    try {
+        return body()
+    } finally {
+        WriteIntent.current.remove()
+    }
+}
+
+/* The same for a write that suspends: its record follows it onto every thread it resumes on. */
+internal suspend fun <T> writingSuspend(body: suspend () -> T): T {
+    val entry = WriteIntent.current.get() ?: WriteEntry()
+    return kotlinx.coroutines.withContext(WriteIntent.current.asContextElement(entry)) { body() }
+}
+
+/*
+ * Whether a write lands in a family folder, and if so whether it may be written now (iOS's familyTarget): the ledger's
+ * `require_writable` (not checked against a committed chain, keys changed, no root seen at the write version: refused
+ * in the core's words). A folder proven a family's that the ledger doesn't hold (its family not open in this vault: a
+ * job's, the Files app's, or one let go of) takes nothing until the family is opened again; it never falls back to the
+ * personal key path. Records the decision for the final gate.
+ */
+internal fun Vault.familyTarget(workspaceId: String): Boolean {
+    heldBarrier(workspaceId)
+    if (!isFamilyWorkspace(workspaceId)) {
+        WriteIntent.record(workspaceId, false)
+        return false
+    }
+    if (!areaLedger.isArea(workspaceId)) throw FamilyFailure(FamilyWords.OPEN_AGAIN)
+    requireGuardKept(workspaceId)
+    try {
+        areaLedger.requireWritable(workspaceId)
+    } catch (refused: com.hushos.core.CoreException) {
+        throw FamilyFailure(FamilyWords.keyChangeWords(refused.message.orEmpty()))
+    }
+    // The folder's invalidation count as the write begins: a removal, a fork or a refusal while it is on its way moves it,
+    // and its answer is then never kept (Vault.adopt), as an open begun before a forget keeps nothing.
+    WriteIntent.record(workspaceId, true, familyEpoch(workspaceId))
+    return true
+}
+
+/*
+ * The key of a family folder node a write puts something under (its metadata, a version), at the epoch it was opened
+ * at: the ledger's writable key only, never one reached through a key a key change replaces.
+ */
+internal fun Vault.writableKey(item: Opened): ByteArray {
+    requireGuardKept(item.node.workspaceId)
+    val held = try {
+        areaLedger.writableNodeKey(item.node.workspaceId, item.id)
+    } catch (refused: com.hushos.core.CoreException) {
+        throw FamilyFailure(FamilyWords.keyChangeWords(refused.message.orEmpty()))
+    } ?: throw ApiError(500, "Open the containing folder first.")
+    if (held.epoch != item.node.keyEpoch) throw Refused("Nothing was changed", "This item changed since it was opened. Refresh and retry.")
+    return held.key
+}
+
+/*
+ * A new node's key and its envelope under `parent`: in a family folder made and wrapped by the ledger (never under a
+ * parent key it doesn't hold rooted at the folder's write version); in any other drive under the parent's key as this
+ * vault opened it.
+ */
+internal fun Vault.newNodeKey(id: String, parent: Opened, keyEpoch: ULong, family: Boolean): Pair<ByteArray, ByteArray> {
+    val ws = parent.node.workspaceId
+    if (family) {
+        // The choke point every new family node passes: never a key made under an acceptance whose guard is owed.
+        requireGuardKept(ws)
+        val made = try {
+            areaLedger.newNodeKey(ws, id, parent.id, parent.node.keyEpoch, keyEpoch)
+        } catch (refused: com.hushos.core.CoreException) {
+            throw FamilyFailure(FamilyWords.keyChangeWords(refused.message.orEmpty()))
+        }
+        return made.key to made.keyEnvelope
+    }
+    val parentKey = nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
+    val key = randomBytes(32u)
+    return key to nodeWrap(NodeKeyContext(ws, id, parent.id, parent.node.keyEpoch, keyEpoch), parentKey, key)
+}
+
+/*
+ * The form a family folder record is signed again with (a rename's, a replacement's name): as the family's member list
+ * judges it (FamilySync.prior, the core's copy_form), never the personal trust set. A refusal is final; no answer is the
+ * network's.
+ */
+internal fun Vault.familyPrior(record: ServedRecord, workspaceId: String): Integrity = try {
+    (familyJudge ?: throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)).prior(record, workspaceId)
+} catch (error: Exception) {
+    if (error is Unreachable || error is NotAuthenticated) throw error
+    throw Refused("Nothing was changed", "HushOS couldn’t check who wrote this, so it wasn’t changed. Try again later.")
 }
 
 /*
@@ -310,12 +441,15 @@ internal fun Vault.requireFamilyEpoch(workspaceId: String, epoch: Long) {
     familyWordsSince(workspaceId, epoch)?.let { throw FamilyFailure(it) }
 }
 
-/* What family folders don't take on Android yet: refused before anything is sent, after the write barrier. */
+/* What family folders don't offer (sharing, links, reports, keeping, versions, copies): refused before anything is sent. */
 internal fun Vault.refuseFamilyWrite(workspaceId: String) {
     heldBarrier(workspaceId)
-    if (!isFamilyWorkspace(workspaceId)) return
+    if (!isFamilyWorkspace(workspaceId)) {
+        WriteIntent.record(workspaceId, false)
+        return
+    }
     requireGuardKept(workspaceId)
-    throw FamilyReadOnly()
+    throw FamilyUnavailable()
 }
 
 /* A folder only held for a family's barrier: refused while that family's guard is owed, and otherwise left alone. */

@@ -264,6 +264,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
     /* The family guard (FamilyGuard.kt), sealed under the settings key as the contact guard is. */
     internal val familyGuard: FamilyGuardStore
         get() = FamilyGuardStore.of(context, api.session, familyGuardWrites) { kept, create -> marksKey(kept, create, served = null) }
+    /*
+     * The family sync that last synced through this vault (it registers itself on every sync, iOS's familyJudge): what a
+     * family folder's write asks for the form a record is signed again with. Never made here for a write, so a job's or
+     * the Files app's vault, which syncs no family, judges nothing and writes nothing into a family folder.
+     */
+    @Volatile internal var familyJudge: FamilySync? = null
     /* This session's family sync: one per vault, so one per session in this process. */
     val families: FamilySync by lazy { FamilySync(this) }
 
@@ -1009,6 +1015,28 @@ class Vault(internal val context: Context, val api: DriveApi) {
         }
     }
 
+    /*
+     * The one gate a family write's reply passes before it touches the cache, the ledger's rows or the screens (creates,
+     * uploads, new versions and their name, renames, moves, restores and Undo), in this order: the write's own count (its
+     * folder let go of since it began: a removal, a fork, a refusal, route 25 no longer listing it, said in the family's
+     * words), then the session (ended: nothing more lands). Callers then apply the newer-row rule and only then open, keep
+     * or show anything. Under familyCopiesLock, the lock a forget takes.
+     */
+    private fun requireWriteStands(workspaceId: String) {
+        if (!isFamilyWorkspace(workspaceId) || WriteIntent.decision(workspaceId) != true) return
+        val began = WriteIntent.epoch(workspaceId) ?: throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
+        familyWordsSince(workspaceId, began)?.let { throw FamilyFailure(it) }
+        if (closed) throw SessionEnded()
+    }
+
+    /* A write's own refusal before anything was sent (the final gate's), told apart from the network's. */
+    private fun <T> refusedHere(body: () -> T): T = try {
+        body()
+    } catch (refused: Exception) {
+        if (refused is GuardUnsaved || refused is FamilyFailure || refused is FamilyUnavailable || refused is SessionEnded) throw UploadFinish.RefusedHere(refused)
+        throw refused
+    }
+
     /* Whether this phone still holds this vault's account: a session for it, and its data recorded as its. */
     private fun stillThisAccount(): Boolean =
         Shared.session(context)?.token == api.session.token &&
@@ -1155,7 +1183,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * `replace` (a listing's own rows): a row of this drive or a share served differently from the one held, and not older,
      * is opened afresh and kept in its place once it opened; until then, and if it can't be opened, the held one stays.
      */
-    fun open(node: NodeView, replace: Boolean = false): Opened {
+    fun open(node: NodeView, replace: Boolean = false, writeEpoch: Long? = null): Opened {
         checkSuite(node.envelopeSuite)
         val family = isFamilyWorkspace(node.workspaceId)
         nodes.row(node.workspaceId, node.id)?.let { held ->
@@ -1180,7 +1208,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
         if (!family && others.any { isFamilyWorkspace(it) }) throw Refused("Couldn’t open", "This item couldn’t be checked. Try again later.")
         // A family folder's node opens only through the area ledger, under keys its member list vouches for, never the personal path.
         // Its folder's invalidation before the ledger is asked: a forget meanwhile (a removal, a fork) keeps what opened out of the cache.
-        val epoch = if (family) familyEpoch(node.workspaceId) else 0L
+        // A family write's reply opened again (an Undo's row) goes by the write's own count: a forget since it began keeps nothing.
+        val epoch = if (family) writeEpoch ?: familyEpoch(node.workspaceId) else 0L
         val key = if (family) {
             familyNodes[node.id] = node.workspaceId
             areaLedger.openListedNode(node.workspaceId, servedKey(node)).also { afterFamilyOpen?.invoke() }
@@ -1216,10 +1245,28 @@ class Vault(internal val context: Context, val api: DriveApi) {
     private fun adopt(node: NodeView, key: ByteArray, metadata: NodeMetadata): Opened {
         checkSuite(node.envelopeSuite)
         val result = openedRow(node, metadata, key)
-        // A write's answer into a folder proven a family's while it was sent is not kept: the ledger opens it when listed.
+        // A write's answer into a folder proven a family's is kept only when the write decided at its entry to write as
+        // the family's (its key the ledger's): then as the ledger's own row. One begun on another path is not kept: the
+        // ledger opens it when listed.
+        var newer: Opened? = null
         val kept = synchronized(familyCopiesLock) {
-            !isFamilyWorkspace(node.workspaceId) && run { nodes.put(result, key); true }
+            if (!isFamilyWorkspace(node.workspaceId)) run { nodes.put(result, key); true }
+            else if (WriteIntent.decision(node.workspaceId) == true) run {
+                // The family write's reply gate first (its own count, then the session), then the newer-row rule, then kept.
+                requireWriteStands(node.workspaceId)
+                // Never over a newer row the ledger opened (a listing that landed first, another member's rename since): an
+                // older answer keeps it, as open() does.
+                val held = nodes.row(node.workspaceId, node.id)
+                if (held != null && nodes.viaLedger(node.workspaceId, node.id) && node.olderThan(held.node)) {
+                    newer = held
+                    return@run false
+                }
+                nodes.put(result, key, viaLedger = true)
+                familyNodes[node.id] = node.workspaceId
+                true
+            } else false
         }
+        newer?.let { return it }
         if (!kept) return result
         fileWritten(node)
         node.parentId?.let { rememberParent(node.id, it) }
@@ -1439,63 +1486,80 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * `copy`: set when the name comes from a record that existed before (a copy, a save from a link); see Prior.
      * `attributes`: a copied folder's source's, carried whole (keys this app doesn't know included); none for a new one.
      */
-    fun createFolder(parentId: String, name: String, copy: Prior? = null, attributes: Map<String, String> = emptyMap()): Opened {
+    fun createFolder(parentId: String, name: String, copy: Prior? = null, attributes: Map<String, String> = emptyMap()): Opened = writing {
         // Shared folders belong to the granter's workspace; an editor writes there, and the id is minted there.
         val parent = resolve(parentId)
         val ws = parent.node.workspaceId
-        refuseFamilyWrite(ws)
-        val parentKey = nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
+        // A family folder takes a new folder through its ledger; a copy into one isn't offered.
+        val family = if (copy != null) { refuseFamilyWrite(ws); false } else familyTarget(ws)
+        if (!family) nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
         val epoch = api.allocateEpoch(ws)
         val made = IdField.NODE.mint(ws)
         val id = made.id
-        val key = randomBytes(32u)
-        val wrapped = nodeWrap(NodeKeyContext(ws, id, parent.id, parent.node.keyEpoch, epoch), parentKey, key)
-        val metadata = NodeMetadata(typedName(name), null, null, null, attributes)
-        val sealed = metadataSeal(MetadataContext(ws, id, 1uL), key, metadata)
-        val signature = if (copy != null) signCopiedMetadata(ws, id, NodeKind.FOLDER, sealed, copy) else signMetadata(ws, id, NodeKind.FOLDER, 1uL, sealed)
-        sendingIntoFamily(ws)
-        val node = api.createFolder(ws, JSONObject().putId(made).put("parentId", parent.id).put("keyEpoch", epoch.toLong())
-            .put("parentKeyEpoch", parent.node.keyEpoch.toLong()).put("keyEnvelope", base64urlEncode(wrapped)).put("metadataEnvelope", base64urlEncode(sealed))
-            .put("metadataSignature", signature))
-        return adoptWritten(node, key, metadata, ws, id).also { foldersChanged(listOf(parent.id)) }
+        val (key, wrapped) = newNodeKey(id, parent, epoch, family)
+        try {
+            val metadata = NodeMetadata(typedName(name), null, null, null, attributes)
+            val sealed = metadataSeal(MetadataContext(ws, id, 1uL), key, metadata)
+            val signature = if (copy != null) signCopiedMetadata(ws, id, NodeKind.FOLDER, sealed, copy) else signMetadata(ws, id, NodeKind.FOLDER, 1uL, sealed)
+            sendingIntoFamily(ws)
+            val node = api.createFolder(ws, JSONObject().putId(made).put("parentId", parent.id).put("keyEpoch", epoch.toLong())
+                .put("parentKeyEpoch", parent.node.keyEpoch.toLong()).put("keyEnvelope", base64urlEncode(wrapped)).put("metadataEnvelope", base64urlEncode(sealed))
+                .put("metadataSignature", signature))
+            adoptWritten(node, key, metadata, ws, id).also { foldersChanged(listOf(parent.id)) }
+        } catch (error: Exception) {
+            // The server didn't take it: the key the ledger made for it goes (the web's forgetNodeKey).
+            if (family) areaLedger.forgetNodeKey(ws, id)
+            throw error
+        }
     }
 
-    fun rename(id: String, name: String): Opened {
+    fun rename(id: String, name: String): Opened = writing {
         val item = resolve(id)
-        refuseFamilyWrite(item.node.workspaceId)
-        val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
+        val family = familyTarget(item.node.workspaceId)
+        // In a family folder only the ledger's writable key, at the epoch it was opened at.
+        val key = if (family) writableKey(item) else nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val metadata = item.metadata.copy(name = typedName(name))
         val next = item.node.metadataVersion + 1uL
-        // The type, size and date are carried over into the re-signed record: signed as it checked, never vouched for blind.
-        val prior = replacedNamePrior(item)
+        // The type, size and date are carried over into the re-signed record: signed as it checked, never vouched for blind;
+        // in a family folder as its member list judges it.
+        val prior = if (family) familyPrior(FamilySync.metadataRecord(item.node), item.node.workspaceId) else replacedNamePrior(item)
         val sealed = metadataSeal(MetadataContext(item.node.workspaceId, id, next), key, metadata)
         sendingIntoFamily(item.node.workspaceId)
         val node = api.rename(id, item.node.workspaceId, item.node.metadataVersion, item.node.keyEpoch, base64urlEncode(sealed),
             signMetadata(item.node.workspaceId, id, if (item.isFolder) NodeKind.FOLDER else NodeKind.FILE, next, sealed, prior))
-        return adoptWritten(node, key, metadata, item.node.workspaceId, id).also { foldersChanged(listOf(item.node.parentId, it.node.parentId)) }
+        adoptWritten(node, key, metadata, item.node.workspaceId, id).also { foldersChanged(listOf(item.node.parentId, it.node.parentId)) }
     }
 
     /* A node's key wrapped under a new parent's; both in one workspace, or the envelope would name the wrong one. */
     private fun rewrap(item: Opened, parent: Opened): String {
-        if (parent.node.workspaceId != item.node.workspaceId) throw ApiError(400, "Move it within one drive.")
-        // The key choke point of a move: never a family folder's key wrapped outside the ledger.
-        refuseFamilyWrite(item.node.workspaceId)
+        if (!parent.node.workspaceId.equals(item.node.workspaceId, ignoreCase = true)) throw ApiError(400, "Move it within one drive.")
+        // The key choke point of a move: a family folder's item is re-wrapped by the ledger, under a parent rooted at the
+        // folder's current key only; never a family folder's key wrapped outside it.
+        if (familyTarget(item.node.workspaceId)) {
+            requireGuardKept(parent.node.workspaceId)
+            return try {
+                base64urlEncode(areaLedger.rewrapNode(item.node.workspaceId, item.id, parent.id, parent.node.keyEpoch, item.node.keyEpoch))
+            } catch (refused: com.hushos.core.CoreException) {
+                throw FamilyFailure(FamilyWords.keyChangeWords(refused.message.orEmpty()))
+            }
+        }
         val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val parentKey = nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
         return base64urlEncode(nodeWrap(NodeKeyContext(item.node.workspaceId, item.id, parent.id, parent.node.keyEpoch, item.node.keyEpoch), parentKey, key))
     }
 
-    fun move(id: String, parentId: String): Opened {
+    fun move(id: String, parentId: String): Opened = writing {
         val item = resolve(id)
         val parent = resolve(parentId)
-        refuseFamilyWrite(item.node.workspaceId)
-        refuseFamilyWrite(parent.node.workspaceId)
+        // Within one family folder through the ledger (rewrap); across spaces nothing moves.
+        familyTarget(item.node.workspaceId)
+        familyTarget(parent.node.workspaceId)
         val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val wrapped = rewrap(item, parent)
         sendingIntoFamily(item.node.workspaceId)
         val node = api.move(id, item.node.workspaceId, parent.id, parent.node.keyEpoch, wrapped)
         // Both listings change: the folder it left and the one it entered.
-        return adoptWritten(node, key, item.metadata, item.node.workspaceId, id).also { foldersChanged(listOf(item.node.parentId, parent.id)) }
+        adoptWritten(node, key, item.metadata, item.node.workspaceId, id).also { foldersChanged(listOf(item.node.parentId, parent.id)) }
     }
 
     /*
@@ -1504,7 +1568,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * statement where its source verified, the saved one where it was saved from a link, re-sealed otherwise. Without
      * a trust set nothing is copied.
      */
-    fun copy(id: String, parentId: String, name: String? = null, trust: Trust? = null): Opened {
+    fun copy(id: String, parentId: String, name: String? = null, trust: Trust? = null): Opened = writing { copyInside(id, parentId, name, trust) }
+
+    private fun copyInside(id: String, parentId: String, name: String? = null, trust: Trust? = null): Opened {
         val source = resolve(id)
         val parent = resolve(parentId)
         val ws = parent.node.workspaceId
@@ -1545,7 +1611,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         return adoptWritten(node, key, metadata, ws, newId).also { foldersChanged(listOf(parent.id)) }
     }
 
-    fun trash(id: String) {
+    fun trash(id: String) = writing {
         val parent = resolve(id).node.parentId
         val workspace = sendTrash(id)
         remove(workspace, id)
@@ -1555,7 +1621,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
     /* The single route's trash, without forgetting the row: its workspace, for the caller to forget it once the lists let go. */
     private fun sendTrash(id: String): String {
         val item = resolve(id)
-        refuseFamilyWrite(item.node.workspaceId)
+        // Nothing is sealed, but a family folder takes it only while this device may write there.
+        familyTarget(item.node.workspaceId)
         sendingIntoFamily(item.node.workspaceId)
         api.trash(id, item.node.workspaceId)
         return item.node.workspaceId
@@ -1567,13 +1634,16 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * request and a request per workspace (TrashBatches.kt); one request an item on a server
      * without it. What moved leaves this device's rows at once.
      */
-    suspend fun trashMany(ids: List<String>, moved: (List<String>) -> Unit = {}): List<Result<TrashMove>> {
-        val items = ids.map { id -> id to (nodes.find(id)?.node?.workspaceId ?: runCatching { resolve(id).node.workspaceId }.getOrDefault(workspaceId)) }
-        items.forEach { (_, ws) -> refuseFamilyWrite(ws) }
+    suspend fun trashMany(ids: List<String>, moved: (List<String>) -> Unit = {}): List<Result<TrashMove>> = writingSuspend {
+        val all = ids.map { id -> id to (nodes.find(id)?.node?.workspaceId ?: runCatching { resolve(id).node.workspaceId }.getOrDefault(workspaceId)) }
+        // A family folder takes it only while this device may write there: a refusal (a guard owed, keys changed) is each
+        // of its items' failure, said as any batch's, and the rest go on.
+        val refused = refusedWorkspaces(all.map { it.second })
+        val items = all.filter { it.second.lowercase() !in refused }
         val workspaces = items.toMap()
         // Read before the rows are forgotten: the folders whose listings lose what moved.
         val parentsOf = ids.associateWith { id -> nodes.find(id)?.node?.parentId ?: parents[id] }
-        return trashInBatches(
+        trashInBatches(
             items,
             send = { ws, chunk -> api.trashBatch(ws, chunk) },
             // One request an item: each row leaves the lists, then this device forgets it, as for a batch.
@@ -1585,7 +1655,26 @@ class Vault(internal val context: Context, val api: DriveApi) {
             // Called after `moved`: the row leaves the lists first, then this device forgets it.
             forget = { landed -> for (id in landed) workspaces[id]?.let { remove(it, id) } },
             moved = { landed -> moved(landed.map { it.first }) },
-        ).also { outcomes -> foldersChanged(ids.filterIndexed { index, _ -> outcomes[index].isSuccess }.map { parentsOf[it] }.distinct()) }
+        ).also { outcomes -> foldersChanged(items.filterIndexed { index, _ -> outcomes[index].isSuccess }.map { parentsOf[it.first] }.distinct()) }
+            .let { outcomes -> mergeRefused(all.map { it.second }, refused, outcomes) }
+    }
+
+    /* The workspaces of a batch whose family folders may not be written now, each with its refusal (an ended session ends the batch). */
+    private fun refusedWorkspaces(workspaces: List<String>): Map<String, Exception> {
+        val refused = HashMap<String, Exception>()
+        for (ws in workspaces.distinct()) try {
+            familyTarget(ws)
+        } catch (error: Exception) {
+            if (error is NotAuthenticated) throw error
+            refused[ws.lowercase()] = error
+        }
+        return refused
+    }
+
+    /* A batch's outcomes in its items' order: a refused workspace's items failed with its refusal, the rest as sent. */
+    private fun <T> mergeRefused(workspaces: List<String>, refused: Map<String, Exception>, sent: List<Result<T>>): List<Result<T>> {
+        val outcomes = sent.iterator()
+        return workspaces.map { ws -> refused[ws.lowercase()]?.let { Result.failure(it) } ?: outcomes.next() }
     }
 
     /*
@@ -1594,8 +1683,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * server without it. One outcome per item in order, the restored row on success; `back` hears
      * each row as it lands.
      */
-    suspend fun restoreMany(items: List<Opened>, back: (Opened) -> Unit = {}): List<Result<Opened>> {
-        items.forEach { refuseFamilyWrite(it.node.workspaceId) }
+    suspend fun restoreMany(asked: List<Opened>, back: (Opened) -> Unit = {}): List<Result<Opened>> = writingSuspend {
+        // Back in place (a trash's Undo), in a family folder only while this device may write there: a refusal is each of
+        // its items' failure, said as any Undo's, and the rest come back.
+        val refused = refusedWorkspaces(asked.map { it.node.workspaceId })
+        val items = asked.filter { it.node.workspaceId.lowercase() !in refused }
         val given = items.associateBy { it.id }
         val rows = java.util.concurrent.ConcurrentHashMap<String, Opened>()
         val outcomes = restoreInBatches(
@@ -1608,7 +1700,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             back = { id -> rows[id]?.let(back) },
         )
         foldersChanged(rows.values.map { it.node.parentId }.distinct())
-        return items.mapIndexed { index, item -> outcomes[index].map { rows.getValue(item.id) } }
+        mergeRefused(asked.map { it.node.workspaceId }, refused, items.mapIndexed { index, item -> outcomes[index].map { rows.getValue(item.id) } })
     }
 
     /* The folders above an item, nearest first, as far as this device knows them. */
@@ -1624,19 +1716,27 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     /* A row the batch put back: the one this device holds, out of the trash, with the server's change number. */
     private fun restoredRow(item: Opened, changeSeq: Int): Opened {
-        val row = nodes.row(item.node.workspaceId, item.id) ?: runCatching { open(item.node) }.getOrNull() ?: item
+        val ws = item.node.workspaceId
+        val family = isFamilyWorkspace(ws) && WriteIntent.decision(ws) == true
+        // A family Undo's reply passes the write's reply gate before anything is opened, kept or shown, and its row is
+        // opened again under the write's own count, so a forget since it began keeps nothing and shows nothing.
+        if (family) synchronized(familyCopiesLock) { requireWriteStands(ws) }
+        val row = nodes.row(ws, item.id) ?: (if (family) open(item.node, writeEpoch = WriteIntent.epoch(ws)) else runCatching { open(item.node) }.getOrNull()) ?: item
         val key = nodes.key(row) ?: return row.copy(node = row.node.copy(trashedAt = null, changeSeq = changeSeq))
         return adopt(row.node.copy(trashedAt = null, changeSeq = changeSeq), key, row.metadata)
     }
 
-    fun restore(entry: TrashItem): Opened {
-        refuseFamilyWrite(entry.item.node.workspaceId)
+    fun restore(entry: TrashItem): Opened = writing {
+        // In a family folder only back where it was (a trash's Undo): under the top folder would re-wrap under the
+        // account's own root, which no family folder's item can be.
+        if (isFamilyWorkspace(entry.item.node.workspaceId) && entry.parentTrashed) throw FamilyUnavailable()
+        familyTarget(entry.item.node.workspaceId)
         val item = nodes.row(entry.item.node.workspaceId, entry.item.id) ?: open(entry.item.node)
         val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val toRoot = if (entry.parentTrashed) resolve(rootId).let { root -> root.node.keyEpoch to rewrap(item, root) } else null
         sendingIntoFamily(item.node.workspaceId)
         val node = api.restore(item.id, item.node.workspaceId, toRoot)
-        return adoptWritten(node, key, item.metadata, item.node.workspaceId, item.id).also { foldersChanged(listOf(it.node.parentId)) }
+        adoptWritten(node, key, item.metadata, item.node.workspaceId, item.id).also { foldersChanged(listOf(it.node.parentId)) }
     }
 
     fun purge(id: String) {
@@ -1703,13 +1803,20 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * source's, for a new node; a new version keeps the replaced file's whatever is passed.
      */
     fun upload(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray? = null, copy: Prior? = null,
-               attributes: Map<String, String> = emptyMap(), progress: (Float) -> Unit = {}): Opened {
+               attributes: Map<String, String> = emptyMap(), progress: (Float) -> Unit = {}): Opened = writing {
+        uploadInside(file, name, mime, parentId, replacing, thumbnail, copy, attributes, progress)
+    }
+
+    private fun uploadInside(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray?, copy: Prior?,
+                             attributes: Map<String, String>, progress: (Float) -> Unit): Opened {
         // The workspace written to: the replaced file's, or the folder's (a share's subtree is the granter's).
         val ws = replacing?.node?.workspaceId ?: resolve(parentId).node.workspaceId
-        refuseFamilyWrite(ws)
+        // A family folder takes a file or a new version through its ledger; a copy into one isn't offered.
+        val family = if (copy != null) { refuseFamilyWrite(ws); false } else familyTarget(ws)
         // A new version carries the old name over into metadata signed again: checked before any byte goes up, so an
-        // unverified name is re-sealed rather than vouched for, and nothing is uploaded when the check can't run.
-        val keptName = replacing?.let { replacedNamePrior(it) }
+        // unverified name is re-sealed rather than vouched for, and nothing is uploaded when the check can't run. In a
+        // family folder as its member list judges it.
+        val keptName = replacing?.let { if (family) familyPrior(FamilySync.metadataRecord(it.node), ws) else replacedNamePrior(it) }
         val size = file.length().toULong()
         val modified = Instant.ofEpochMilli(file.lastModified()).toString()
         val madeVersion = IdField.VERSION.mint(ws)
@@ -1721,23 +1828,28 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val thumbnailBytes = (thumbnail?.size ?: 0).toUInt()
         val nodeId: String
         val nodeKey: ByteArray
+        // A new family node's key the ledger made: dropped if the server never takes the node.
+        var madeKey: String? = null
         val nodeInput: JSONObject
         val metadata: NodeMetadata
         if (replacing != null) {
             nodeId = replacing.id
-            nodeKey = nodes.key(replacing) ?: throw ApiError(500, "Node not opened")
+            // In a family folder the version goes under the ledger's writable key only, at the epoch it was opened at.
+            nodeKey = if (family) writableKey(replacing) else nodes.key(replacing) ?: throw ApiError(500, "Node not opened")
             nodeInput = JSONObject().put("existing", true).put("id", nodeId).put("keyEpoch", replacing.node.keyEpoch.toLong())
                 .put("expectedVersionId", replacing.node.currentVersion?.id ?: JSONObject.NULL)
             metadata = replacing.metadata
         } else {
             val parent = resolve(parentId)
             if (parent.node.workspaceId != ws) throw ApiError(400, "Upload it within one drive.")
-            val parentKey = nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
+            if (!family) nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
             val epoch = api.allocateEpoch(ws)
             val madeNode = IdField.NODE.mint(ws)
             nodeId = madeNode.id
-            nodeKey = randomBytes(32u)
-            val wrapped = nodeWrap(NodeKeyContext(ws, nodeId, parent.id, parent.node.keyEpoch, epoch), parentKey, nodeKey)
+            val made = newNodeKey(nodeId, parent, epoch, family)
+            madeKey = nodeId.takeIf { family }
+            nodeKey = made.first
+            val wrapped = made.second
             metadata = newFileMetadata(name, mime, size, modified, attributes)
             val sealed = metadataSeal(MetadataContext(ws, nodeId, 1uL), nodeKey, metadata)
             val signature = if (copy != null) signCopiedMetadata(ws, nodeId, NodeKind.FILE, sealed, copy) else signMetadata(ws, nodeId, NodeKind.FILE, 1uL, sealed)
@@ -1752,11 +1864,16 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val layout = version.layout
         val versionSignature = if (copy != null) signCopiedVersion(ws, nodeId, versionId, objectId, suite, version.envelope, copy)
             else signVersion(ws, nodeId, versionId, objectId, suite, version.envelope)
-        val begun = api.beginUpload(ws, JSONObject().put("node", nodeInput).putId(madeVersion).putId(madeObject)
+        val begun = try {
+            api.beginUpload(ws, JSONObject().put("node", nodeInput).putId(madeVersion).putId(madeObject)
             .put("contentKeyEnvelope", base64urlEncode(version.envelope)).put("contentNonce", base64urlEncode(contentNonce))
             .put("versionSignature", versionSignature)
             .put("contentSuite", suite.toInt()).put("chunkCount", layout.chunkCount.toLong()).put("ciphertextSize", layout.ciphertextSize.toString())
             .also { sendingIntoFamily(ws) })
+        } catch (error: Exception) {
+            madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
+            throw error
+        }
         val urls = HashMap<Int, String>()
         for (part in begun.parts) urls[part.partNumber] = part.url
         val etags = JSONArray()
@@ -1788,14 +1905,23 @@ class Vault(internal val context: Context, val api: DriveApi) {
             }
         } catch (error: Exception) {
             api.abortUpload(begun.uploadId, ws)
+            madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
             throw error
         }
         // Refused: aborted, so its reserved room is released now. Unknown: asked again, never aborted blind (UploadFinish).
-        var node = UploadFinish.complete({ sendingIntoFamily(ws); api.completeUpload(begun.uploadId, ws, etags) }, { api.abortUpload(begun.uploadId, ws) })
-            ?: throw ApiError(500, "Upload completed without a node")
+        // A completion the final gate refuses here (a guard owed, the folder no longer writable, the session ended) was never
+        // sent: a definite answer, so the upload is aborted and its room released, and a new node's ledger key goes.
+        var node = try {
+            UploadFinish.complete({ refusedHere { api.completeUpload(begun.uploadId, ws, etags) } }, { api.abortUpload(begun.uploadId, ws) })
+        } catch (refused: UploadFinish.RefusedHere) {
+            madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
+            throw refused.cause!!
+        } ?: throw ApiError(500, "Upload completed without a node")
         checkWritten(node, ws, nodeId)
         var final = metadata
         if (replacing != null) {
+            // The name is signed again only while the family write still stands (its reply gate, before anything is sealed).
+            synchronized(familyCopiesLock) { requireWriteStands(ws) }
             // A new version has a new size and date; the sealed metadata says so too, as the lists read it.
             final = metadata.copy(mime = mime ?: metadata.mime, size = size, modified = modified)
             val next = node.metadataVersion + 1uL

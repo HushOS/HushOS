@@ -20,7 +20,7 @@ import java.util.UUID
  * Family spaces read only (Android 1; iOS's FamilySyncTests) through the real Vault, GroupsApi and the core's area ledger
  * against FakeDrive serving rosters the core signs: a member's folder opens and its creator's file is verified by the
  * family; a chain short of what this phone accepted is refused; a fork opens nothing; not-member wipes but keeps the
- * settings pin; every change in a family folder is refused before anything is sent; and removal on another device is
+ * settings pin; what family folders don't offer is refused before anything is sent; and removal on another device is
  * found by asking route 5, never by a list that failed.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -337,7 +337,7 @@ class FamilySyncTest {
         assertNotNull("a job's keep went on after the app's vault proved the folder a family's", failure)
         assertFalse(Offline.isKept(app, family.fileId))
         assertFalse("a job's partial copy stayed", File(Offline.root(app), family.fileId).exists())
-        assertThrows(FamilyReadOnly::class.java) { job.keepDownloaded(root) }
+        assertThrows(FamilyUnavailable::class.java) { job.keepDownloaded(root) }
         val out = File(app.cacheDir, "opened/${family.fileId}/v/Recipes.txt")
         assertThrows(FamilyFailure::class.java) { job.download(family.fileId, out, workspaceId = family.workspaceId) }
         assertFalse(out.exists())
@@ -389,7 +389,8 @@ class FamilySyncTest {
         assertNull(phone.vault.mountShares().single().error)
         val before = server.node(family.fileId).metadataVersion
         proveAtTheGate(phone)
-        assertThrows(FamilyReadOnly::class.java) { phone.vault.rename(family.fileId, "Renamed.txt") }
+        // Begun on the share's path (its keys): refused at the final gate, never sent as the family's.
+        assertThrows(FamilyFailure::class.java) { phone.vault.rename(family.fileId, "Renamed.txt") }
         assertEquals("a rename was sent into a folder proven a family's", before, server.node(family.fileId).metadataVersion)
     }
 
@@ -407,7 +408,7 @@ class FamilySyncTest {
         val root = phone.vault.mountShares().single().root!!
         val grace = server.settings().pinOf(server.grace.id)!!
         proveAtTheGate(phone)
-        assertThrows(FamilyReadOnly::class.java) { phone.vault.share(root, grace, "viewer") }
+        assertThrows(FamilyFailure::class.java) { phone.vault.share(root, grace, "viewer") }
         assertEquals("a share was made in a folder proven a family's", 0, server.sharesMade.size)
     }
 
@@ -1075,11 +1076,12 @@ class FamilySyncTest {
     }
 
     /*
-     * Family folders are read only on Android until 6c: every change there is refused before anything is sent, after a
-     * sync accepted the family (so the ledger would hand out keys). Fails if any write path misses the gate.
+     * 6c: what family folders don't offer (iOS's list: sharing, links, reports, keeping on this phone, copies in or out,
+     * a walk of its keys, and a restore under the account's own top folder) is refused before anything is sent, after a
+     * sync accepted the family (so the ledger would hand out keys). Fails if any of them reaches the server.
      */
     @Test
-    fun everyChangeInAFamilyFolderIsRefusedBeforeAnythingIsSent() {
+    fun whatFamilyFoldersDontOfferIsRefusedBeforeAnythingIsSent() {
         family.storePin(family.pin(listOf(family.r1, family.r2)))
         val phone = family.phone()
         accepted(phone)
@@ -1087,18 +1089,14 @@ class FamilySyncTest {
         val file = vault.listChildren(family.rootId).single()
         val root = vault.resolve(family.rootId)
         val sent = server.requests.size
-        val local = File.createTempFile("photo", ".jpg").apply { writeText("bytes") }
         val writes: List<() -> Unit> = listOf(
-            { vault.createFolder(family.rootId, "New") }, { vault.rename(file.id, "Other.txt") }, { vault.trash(file.id) },
-            { vault.move(file.id, family.rootId) }, { vault.copy(file.id, family.rootId) }, { vault.copy(file.id, server.root) },
-            { vault.copyAcross(file.id, server.root) }, { vault.upload(local, "photo.jpg", "image/jpeg", family.rootId, null) },
-            { vault.upload(local, "Recipes.txt", "text/plain", family.rootId, file) }, { vault.keepDownloaded(file) }, { vault.keepFolder(root) },
+            { vault.copy(file.id, family.rootId) }, { vault.copy(file.id, server.root) }, { vault.copyAcross(file.id, server.root) },
+            { vault.keepDownloaded(file) }, { vault.keepFolder(root) },
             { vault.createLink(file, null, null) }, { vault.report(file, "spam", "", null) }, { vault.rotate(root) },
             { vault.share(file, ContactPin.of(family.creator.id, "sam@example.org", "Sam", com.hushos.core.PinKeys(1uL, "a", "b", null, null, ""), "", null), "viewer") },
-            { kotlinx.coroutines.runBlocking { vault.trashMany(listOf(file.id)) } },
-            { vault.restore(TrashItem(file, false)) },
+            { vault.restore(TrashItem(file, true)) },
         )
-        for (write in writes) assertThrows(FamilyReadOnly::class.java) { write() }
+        for (write in writes) assertThrows(FamilyUnavailable::class.java) { write() }
         assertEquals("nothing was sent", emptyList<String>(), server.requests.drop(sent).filter { !it.startsWith("GET") })
     }
 

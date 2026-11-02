@@ -10,6 +10,7 @@ import com.hushos.core.GroupPin
 import com.hushos.core.GroupRole
 import com.hushos.core.GroupVerdict
 import com.hushos.core.GroupWriter
+import com.hushos.core.Integrity
 import com.hushos.core.IdKind
 import com.hushos.core.MarkSide
 import com.hushos.core.MarkSource
@@ -259,6 +260,8 @@ class FamilySync(
 
     /* One sync's work, inside the family's turn. */
     internal fun run(summary: GroupSummary): FamilyState {
+        // The vault's writes into family folders ask this sync for the form records are signed again with.
+        vault.familyJudge = this
         val groupId = summary.id
         if (!FamilyRecords.valid(groupId)) return FamilyState.Failed("Please try again.")
         // Accepted but not let in: the join's to finish, never a sync's. A device record means the join finished (a list read before it).
@@ -328,6 +331,7 @@ class FamilySync(
     }
 
     init {
+        vault.familyJudge = this
         sweepCopies()
     }
 
@@ -712,6 +716,21 @@ class FamilySync(
             if (!checked) judged = judged.map { FamilyLines.asFirstUse(it, groupId) }
             FamilyLines.verdict(judged, lineNames, groupId)
         }
+    }
+
+    /*
+     * The form a family folder record is signed again with when a write carries it over (a rename's name, a replacement's
+     * name): the core's `copy_form` over the committed chain, with this account's records by its own keys and everyone
+     * else's by the member list and the pins as this phone's guard allows them (trustAndPins: a pin another device saved
+     * over other keys never stands in for the guard). Verified stays ordinary, saved from a link stays saved, anything
+     * else is re-sealed; unchecked refuses.
+     */
+    fun prior(record: ServedRecord, workspaceId: String): Integrity {
+        val groupId = groupsOf[workspaceId.lowercase()] ?: throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
+        val served = identities[groupId] ?: throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
+        val (trust, pinList) = vault.trustAndPins()
+        val pins = pinList.associateBy { it.userId.lowercase() }
+        return ledger.copyForm(groupId, reader(), groupWriters(served, trust, pins, groupId), record, null)
     }
 
     private fun reader(): RecordReader {
