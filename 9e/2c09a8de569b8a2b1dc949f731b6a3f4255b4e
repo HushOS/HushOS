@@ -1,0 +1,49 @@
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyManageTest.kt
+  s_566b8e0c4467a4::t_29942a1616404a 1-190
+  s_566b8e0c4467a4::t_6225a5ccad998c 191-195
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyManage.kt
+  s_566b8e0c4467a4::t_e140fcf88ce76a 1-330
+  s_566b8e0c4467a4::t_0e0ba6df176b15 331-341
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_6f7bdc3c93be01 87
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_566b8e0c4467a4::t_cc980f94cbb9da 660
+apps/android/app/src/main/kotlin/com/hushos/app/data/GroupsApi.kt
+  s_566b8e0c4467a4::t_7968fc7d8e2567 122-126,133-144,148-161,325-399
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_f9d04863cc29ff 222
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Families.kt
+  s_566b8e0c4467a4::t_569840f091d40d 159-168,187-188,201,305-435
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_836f4b9f802dbb 25-32,134-135,138-143,191-326,871,1023-1034
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyFixture.kt
+  s_566b8e0c4467a4::t_56f4bef2b71bbf 42-44,99-100,125-133,188-189,206-214,284-336
+crates/hushos-core/AGENTS.md
+  s_566b8e0c4467a4::t_384326258d2943 183
+crates/hushos-core/src/roster_calls.rs
+  s_566b8e0c4467a4::t_fb2d8f85f822bd 702-705
+crates/hushos-core/src/roster_calls/tests.rs
+  s_566b8e0c4467a4::t_8c910d802d0b4e 486-487,490-498
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_7cbe94f4218934 220-221
+packages/crypto/src/roster-calls-testkit.ts
+  s_566b8e0c4467a4::t_e41e66dc85c5c2 391
+packages/crypto/src/session-groups.ts
+  s_566b8e0c4467a4::t_80aa5b296e9f81 3258
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9e2c09a8de569b8a2b1dc949f731b6a3f4255b4e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
