@@ -17,6 +17,18 @@ import com.hushos.app.data.GuardUnsaved
 import com.hushos.app.data.SessionEnded
 import com.hushos.app.data.Shared
 import com.hushos.app.data.Vault
+import com.hushos.app.data.FamilyUploads
+import com.hushos.app.data.Reservations
+import com.hushos.app.data.TransferQueue
+import androidx.work.Configuration
+import androidx.work.ListenableWorker
+import androidx.work.testing.TestListenableWorkerBuilder
+import com.hushos.app.data.UploadWorker
+import kotlinx.coroutines.runBlocking
+import androidx.work.WorkManager
+import androidx.work.testing.SynchronousExecutor
+import androidx.work.testing.WorkManagerTestInitHelper
+import java.util.UUID
 import com.hushos.app.data.oweFamilyGuard
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -54,10 +66,12 @@ class ProviderFamiliesTest {
         FamilyFixture.signIn(server, "provider-families-test")
         family = FamilyFixture(server)
         family.storePin(family.pin(listOf(family.r1, family.r2)))
+        WorkManagerTestInitHelper.initializeTestWorkManager(app, Configuration.Builder().setExecutor(SynchronousExecutor()).setTaskExecutor(SynchronousExecutor()).build())
     }
 
     @After
     fun close() {
+        Reservations.forgetHeld()
         server.close()
         assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
     }
@@ -84,6 +98,33 @@ class ProviderFamiliesTest {
     private val top get() = FamilyDoc.Top(family.groupId).id
     private val folder get() = FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId).id
     private val file get() = FamilyDoc.Node(family.groupId, family.workspaceId, family.fileId).id
+
+    /* What each write-back queued, by job: the request TransferQueue made of it, as WorkManager keeps it. */
+    private val requests = HashMap<UUID, androidx.work.OneTimeWorkRequest>()
+
+    private fun watchQueue(families: ProviderFamilies) {
+        val real = families.queue
+        families.queue = { file, name, mime, folder, replacing, fam ->
+            real(file, name, mime, folder, replacing, fam).also { id ->
+                requests[id] = TransferQueue.uploadRequest(id, File(app.filesDir, "queue/$id/content"), mime, folder, replacing, fam,
+                    session = TransferQueue.accountTag(Shared.session(app)!!))
+            }
+        }
+    }
+
+    /*
+     * A queued write-back's job, run as WorkManager starts it: the worker with the request's input and tags, its doWork
+     * called directly as UploadWorkerTest does (a worker run through the synchronous test executor can't ask WorkManager
+     * anything). The tags WorkManager holds are the request's.
+     */
+    private fun runJob(id: UUID): ListenableWorker.Result {
+        val request = requests.getValue(id)
+        assertEquals(request.tags, WorkManager.getInstance(app).getWorkInfoById(id).get()!!.tags)
+        val worker = TestListenableWorkerBuilder<UploadWorker>(app).setId(id).setInputData(request.workSpec.input).setTags(request.tags.toList()).build()
+        return runBlocking { worker.doWork() }
+    }
+
+    private fun queued() = WorkManager.getInstance(app).getWorkInfosByTag(TransferQueue.TAG).get()
 
     private fun read(provider: HushOSDocumentsProvider, documentId: String): String =
         ParcelFileDescriptor.AutoCloseInputStream(provider.openDocument(documentId, "r", null)).use { it.readBytes().decodeToString() }
@@ -241,12 +282,12 @@ class ProviderFamiliesTest {
         assertEquals(family.workspaceId, trips.workspaceId)
         assertEquals("Trips", server.record(trips.nodeId).name)
         rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
-        val families = familiesOf(provider)
+        val families = familiesOf(provider).also(::watchQueue)
         val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, keepContents = true)
         assertTrue(edit.path.startsWith(FamilyCopies.edits(app.cacheDir, family.workspaceId)!!.path))
         assertEquals("marker-family", edit.readText())
         edit.writeText("edited in another app")
-        families.writeBack(FamilyDoc.of(file) as FamilyDoc.Node, edit)
+        assertEquals(ListenableWorker.Result.success(), runJob(families.writeBack(FamilyDoc.of(file) as FamilyDoc.Node, edit)))
         provider.renameDocument(made, "Trips 2026")
         assertEquals("Trips 2026", server.record(trips.nodeId).name)
         provider.deleteDocument(made)
@@ -270,13 +311,14 @@ class ProviderFamiliesTest {
     fun filesWritesNothingWhileTheGuardIsOwed() {
         val provider = provider()
         rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
-        val families = familiesOf(provider)
+        val families = familiesOf(provider).also(::watchQueue)
         val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, keepContents = false).apply { writeText("not sent") }
         val sent = server.requests.size
         families.vault.oweFamilyGuard(family.groupId)
         assertThrows(FileNotFoundException::class.java) { provider.createDocument(folder, Document.MIME_TYPE_DIR, "Trips") }
         assertThrows(GuardUnsaved::class.java) { families.writeBack(FamilyDoc.of(file) as FamilyDoc.Node, edit) }
         assertEquals(emptyList<String>(), driveWritesSince(sent))
+        assertEquals("a write-back was queued under an owed guard", 0, queued().size)
     }
 
     /*
@@ -287,7 +329,7 @@ class ProviderFamiliesTest {
     fun aWriteBackAfterTheFamilyWentElsewhereSendsNothing() {
         val provider = provider()
         rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
-        val families = familiesOf(provider)
+        val families = familiesOf(provider).also(::watchQueue)
         val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, keepContents = false).apply { writeText("not sent") }
         val phone = family.phone()
         assertTrue(phone.sync.sync(family.summary) is FamilyState.Accepted)
@@ -300,54 +342,106 @@ class ProviderFamiliesTest {
         val sent = server.requests.size
         assertThrows(FileNotFoundException::class.java) { families.writeBack(FamilyDoc.of(file) as FamilyDoc.Node, edit) }
         assertEquals(emptyList<String>(), driveWritesSince(sent))
+        assertEquals("a write-back was queued for a family left elsewhere", 0, queued().size)
     }
 
     /*
-     * Left elsewhere while the write-back is on its way (between its entry and its send): the final gate refuses it in the
-     * family's words. Fails if the final gate doesn't check whether the folder was let go of since the write began.
+     * Left elsewhere while a rename from Files is on its way (between its entry and its send): the final gate refuses it in
+     * the family's words. Fails if the final gate doesn't check whether the folder was let go of since the write began.
      */
     @Test
-    fun aWriteBackTheFamilyLeavesMidwayIsNotSent() {
+    fun aRenameTheFamilyLeavesMidwayIsNotSent() {
         val provider = provider()
         rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
-        val families = familiesOf(provider)
-        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, keepContents = false).apply { writeText("not sent") }
+        val families = familiesOf(provider).also(::watchQueue)
         val phone = family.phone()
         assertTrue(phone.sync.sync(family.summary) is FamilyState.Accepted)
-        // Another vault's first sweep (the app starting while Files writes) leaves an edit under way alone.
-        assertTrue(edit.exists())
-        val version = server.node(family.fileId).version
+        val version = server.node(family.fileId).metadataVersion
         var sent = 0
         families.vault.beforeWriteGate = {
             families.vault.beforeWriteGate = null
             assertTrue(phone.sync.leave(family.groupId) is FamilySync.Leaving.Left)
             sent = server.requests.size
         }
-        assertThrows(FamilyFailure::class.java) { families.writeBack(FamilyDoc.of(file) as FamilyDoc.Node, edit) }
+        assertThrows(FamilyFailure::class.java) { families.rename(FamilyDoc.of(file) as FamilyDoc.Node, "Renamed.txt") }
         assertEquals(emptyList<String>(), driveWritesSince(sent))
-        assertEquals(version, server.node(family.fileId).version)
+        assertEquals(version, server.node(family.fileId).metadataVersion)
     }
 
     /*
-     * The session ended (a sign-out) while the write-back was on its way: nothing goes. Fails if the final gate lets a
+     * The session ended (a sign-out) while a rename from Files was on its way: nothing goes. Fails if the final gate lets a
      * closed session's write through while the provider's ledger still holds the family.
      */
     @Test
-    fun aWriteBackFromASessionThatEndedSendsNothing() {
+    fun aRenameFromASessionThatEndedSendsNothing() {
         val provider = provider()
         rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
-        val families = familiesOf(provider)
-        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, keepContents = false).apply { writeText("not sent") }
-        val version = server.node(family.fileId).version
+        val families = familiesOf(provider).also(::watchQueue)
+        val version = server.node(family.fileId).metadataVersion
         var sent = 0
         families.vault.beforeWriteGate = {
             families.vault.beforeWriteGate = null
             families.vault.close()
             sent = server.requests.size
         }
-        assertThrows(SessionEnded::class.java) { families.writeBack(FamilyDoc.of(file) as FamilyDoc.Node, edit) }
+        assertThrows(SessionEnded::class.java) { families.rename(FamilyDoc.of(file) as FamilyDoc.Node, "Renamed.txt") }
         assertEquals(emptyList<String>(), driveWritesSince(sent))
-        assertEquals(version, server.node(family.fileId).version)
+        assertEquals(version, server.node(family.fileId).metadataVersion)
+    }
+
+    /*
+     * A write-back whose first run gets no answer (every begin dropped): the job is retried, not dropped, and its next run
+     * lands the new version with nothing left on the reservation ledger. Fails if a failed write-back is lost.
+     */
+    @Test
+    fun aFailedWriteBackIsRetriedUntilItLands() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider).also(::watchQueue)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        val edit = families.editFor(doc, "w").apply { writeText("written while offline") }
+        val job = families.writeBack(doc, edit)
+        server.beforeAnswer = { method, path -> if (method == "POST" && path == "drive/uploads") throw IllegalStateException("dropped") }
+        assertEquals(ListenableWorker.Result.retry(), runJob(job))
+        assertEquals("marker-family", families.readCopy(doc).readText())
+        server.beforeAnswer = null
+        assertEquals(ListenableWorker.Result.success(), runJob(job))
+        assertEquals(emptyList<Reservations.Record>(), Reservations.all(app))
+        val other = family.phone()
+        assertTrue(other.sync.sync(family.summary) is FamilyState.Accepted)
+        val out = File(app.cacheDir, "read-${System.nanoTime()}")
+        other.vault.download(family.fileId, out, workspaceId = family.workspaceId)
+        assertEquals("written while offline", out.readText())
+    }
+
+    /* The process killed mid-upload, as a test can: nothing after it runs. */
+    private class Killed : Error()
+
+    /*
+     * A write-back's run that died with its upload reserved (the process killed between its begin and its end): the job's
+     * next run first settles that reservation through the ledger (aborted on the server, off the ledger), then sends the
+     * new version afresh. Fails if an interrupted write-back is dropped or leaves its room reserved.
+     */
+    @Test
+    fun anInterruptedWriteBackIsSettledThenSentAgain() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider).also(::watchQueue)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        val edit = families.editFor(doc, "w").apply { writeText("written before the crash") }
+        val job = families.writeBack(doc, edit)
+        // The job's first run, as the worker runs it, killed after its begin.
+        assertThrows(Killed::class.java) {
+            FamilyUploads.upload(Vault.fromShared(app)!!, family.groupId, family.workspaceId, File(app.cacheDir, "killed-$job").apply { writeText("written before the crash") },
+                "Recipes.txt", "text/plain", family.rootId, family.fileId, job.toString()) { throw Killed() }
+        }
+        assertEquals(1, Reservations.all(app).count { it.job == job.toString() })
+        val aborts = server.requests.count { it.startsWith("POST ") && it.endsWith("/abort") }
+        assertEquals(ListenableWorker.Result.success(), runJob(job))
+        assertEquals(aborts + 1, server.requests.count { it.startsWith("POST ") && it.endsWith("/abort") })
+        assertEquals(emptyList<Reservations.Record>(), Reservations.all(app))
+        families.children(FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId))
+        assertEquals("written before the crash", families.readCopy(doc).readText())
     }
 
     /*
@@ -360,14 +454,16 @@ class ProviderFamiliesTest {
     fun eachWriteModeKeepsOrDropsWhatTheFileHeld() {
         val provider = provider()
         rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
-        val families = familiesOf(provider)
+        val families = familiesOf(provider).also(::watchQueue)
         val doc = FamilyDoc.of(file) as FamilyDoc.Node
         for (mode in listOf("wa", "rw", "rwt", "wt", "w")) {
             val before = families.readCopy(doc).readText()
             val wrote = "[$mode]"
             val edit = families.editFor(doc, mode)
             writeAs(mode, edit, wrote)
-            families.writeBack(doc, edit)
+            assertEquals(ListenableWorker.Result.success(), runJob(families.writeBack(doc, edit)))
+            // The job landed it in its own vault: Files lists the folder again, as it does once told.
+            families.children(FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId))
             val expected = when (mode) {
                 "wa" -> before + wrote
                 "rw" -> wrote + before.drop(wrote.length)

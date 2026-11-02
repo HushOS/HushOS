@@ -389,7 +389,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
 
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor = guarded {
         val vault = requireVault()
-        (FamilyDoc.of(documentId) as? FamilyDoc.Node)?.let { return@guarded openFamily(familiesOf(vault), it, documentId, mode) }
+        (FamilyDoc.of(documentId) as? FamilyDoc.Node)?.let { return@guarded openFamily(familiesOf(vault), it, mode) }
         if (FamilyDoc.of(documentId) != null) throw FileNotFoundException("Choose a file.")
         val id = nodeId(documentId, vault)
         val item = vault.resolve(id)
@@ -438,20 +438,20 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     }
 
     /*
-     * A family file: read from the family folder's copies; written into an edit of its own there, which goes up as a new
-     * version through the family write path when the other app closes it. A failed write-back is not queued (on this
-     * build the transfer queue opens no family): its edit is deleted, as the family's plaintext never outlives the try.
+     * A family file: read from the family folder's copies; written into an edit of its own, queued as a new version when
+     * the other app closes it (ProviderFamilies.writeBack: the transfer queue, its ledger and its retries). One the family
+     * refuses before it is queued is deleted, as the family's plaintext never outlives the try.
      */
-    private fun openFamily(families: ProviderFamilies, doc: FamilyDoc.Node, documentId: String, mode: String): ParcelFileDescriptor {
+    private fun openFamily(families: ProviderFamilies, doc: FamilyDoc.Node, mode: String): ParcelFileDescriptor {
         if (mode.contains("r") && !mode.contains("w")) return ParcelFileDescriptor.open(families.readCopy(doc), ParcelFileDescriptor.MODE_READ_ONLY)
         val edit = families.editFor(doc, mode)
         val handler = Handler(Looper.getMainLooper())
         return ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), handler) { error ->
             if (error != null) { edit.delete(); return@open }
             Thread {
+                // Queued: the job tells Files once it lands (Vault.foldersChanged). Refused: nothing goes, and the edit with it.
                 runCatching { families.writeBack(doc, edit) }
-                    .onSuccess { context?.contentResolver?.notifyChange(DocumentsContract.buildDocumentUri(authority, documentId), null) }
-                    .onFailure { android.util.Log.w("HushOSFiles", "family write-back failed: ${it.javaClass.name}") }
+                    .onFailure { android.util.Log.w("HushOSFiles", "family write-back refused: ${it.javaClass.name}") }
                 edit.delete()
             }.start()
         }

@@ -15,6 +15,8 @@ import com.hushos.app.data.FilesRoots
 import com.hushos.app.data.NotAuthenticated
 import com.hushos.app.data.Opened
 import com.hushos.app.data.SessionEnded
+import com.hushos.app.data.TransferQueue
+import com.hushos.app.data.requireGuardKept
 import com.hushos.app.data.Vault
 import com.hushos.app.data.familyWordsSince
 import com.hushos.app.data.familyEpoch
@@ -369,16 +371,24 @@ class ProviderFamilies internal constructor(
     }
 
     /*
-     * What another app wrote, up as a new version through the family write path, once the family is checked again if
-     * anything moved since (a leave or a removal elsewhere ends it here, nothing sent). Not queued when it fails: on this
-     * build the transfer queue opens no family (the queue's family uploads are #251's).
+     * What another app wrote, queued as a new version of the file (TransferQueue.upload with its Family, #251's): the job
+     * opens the family in its own vault, sends through the family write path and its gates, keeps its reservation on the
+     * ledger (Reservations) from begin until settled, waits out a key change, and is retried by WorkManager until it lands
+     * or the family lets the account go (endFamily), so a write-back that fails or whose process dies is never dropped.
+     * Checked here first, nothing queued: the family again if anything moved since (a leave or a removal elsewhere), the
+     * folder writable, the family's guard kept. The edit moves into the queue's own folder. The job's id.
      */
-    fun writeBack(doc: FamilyDoc.Node, edit: File): Opened {
+    fun writeBack(doc: FamilyDoc.Node, edit: File): java.util.UUID {
         if (!edit.exists()) throw FileNotFoundException(FamilyWords.OPEN_AGAIN)
-        val (_, item) = writable(doc)
+        val (folder, item) = writable(doc)
+        vault.requireGuardKept(folder.workspaceId)
         val parent = item.node.parentId ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
-        return vault.upload(edit, item.name, item.metadata.mime, parent, item, vault.makeThumbnail(edit, item.metadata.mime))
+        return queue(edit, item.name, item.metadata.mime, parent, item.id, TransferQueue.Family(doc.groupId.lowercase(), folder.workspaceId.lowercase()))
     }
+
+    /* Tests: what queues a write-back (TransferQueue.upload), so a test can run the job it queued. */
+    internal var queue: (file: File, name: String, mime: String?, folder: String, replacingId: String, family: TransferQueue.Family) -> java.util.UUID =
+        { file, name, mime, folder, replacingId, family -> TransferQueue.upload(vault.context, file, name, mime, folder, replacingId, family) }
 
     /* A new folder, or an empty file whose bytes follow through a write, in a writable family folder. Its document id. */
     fun create(parentDoc: FamilyDoc.Node, mimeType: String, name: String): String {
