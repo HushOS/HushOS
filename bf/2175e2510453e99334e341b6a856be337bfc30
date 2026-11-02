@@ -1,0 +1,21 @@
+apps/web/src/components/drive/folder-colour-dialog.tsx
+  s_ec12ebe02de5ff::t_57367c5912bda5 197-198
+apps/web/src/components/drive/tag-colour.tsx
+  s_ec12ebe02de5ff::t_67ca3fe4bb8579 95-96
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bf2175e2510453e99334e341b6a856be337bfc30",
+  "prompts": {},
+  "sessions": {
+    "s_ec12ebe02de5ff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3f79b7e-f7a1-4c9c-9a58-b7059252bcae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
