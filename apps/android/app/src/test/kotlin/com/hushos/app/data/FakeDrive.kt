@@ -105,6 +105,8 @@ class FakeDrive : AutoCloseable {
     var rotationBatch: Int? = null
     /* The rotation sends (counted from 1) refused with a 500, as a dropped connection leaves them. */
     var failRotationSends: Set<Int> = emptySet()
+    /* The ids each rotation send carried, in order. */
+    val rotationBatches = ArrayList<List<String>>()
     private var rotationSends = 0
     /* The feed as the server pages it: at most this many changes a page (null: all at once). */
     var changesPage: Int? = null
@@ -136,12 +138,18 @@ class FakeDrive : AutoCloseable {
         var keyEnvelope: String, var metadataVersion: Long, var metadataEnvelope: String, var signer: String, var signature: String,
         var version: Version? = null, var changeSeq: Int = 1, var trashedAt: String? = null,
     ) {
+        /* The envelope, key epoch and parent epoch before the node's first re-key in a run (the server's prevKeyEnvelope). */
+        var previous: Triple<String, Long, Long>? = null
+
         fun json(): JSONObject = JSONObject().put("id", id).put("workspaceId", workspaceId).put("parentId", parentId ?: JSONObject.NULL).put("kind", kind)
             .put("keyEpoch", keyEpoch).put("parentKeyEpoch", parentKeyEpoch).put("keyEnvelope", keyEnvelope)
             .put("metadataVersion", metadataVersion).put("metadataEnvelope", metadataEnvelope).put("currentVersion", version?.json() ?: JSONObject.NULL)
             .put("trashedAt", trashedAt ?: JSONObject.NULL).put("createdAt", "2026-10-01T00:00:00Z").put("updatedAt", "2026-10-01T00:00:00Z")
             .put("changeSeq", changeSeq).put("envelopeSuite", ENVELOPE_SUITE)
             .put("metadataSigner", JSONObject().put("id", signer)).put("metadataSignature", signature)
+            .apply {
+                previous?.let { (envelope, epoch, parentEpoch) -> put("prevKeyEnvelope", envelope).put("prevKeyEpoch", epoch).put("prevParentKeyEpoch", parentEpoch) }
+            }
     }
 
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -320,10 +328,16 @@ class FakeDrive : AutoCloseable {
     fun child(parentId: String, name: String): Node = children(parentId).singleOrNull { record(it.id).name == name }
         ?: throw AssertionError("No single “$name” in $parentId: ${children(parentId).map { record(it.id).name }}")
 
+    /* Keys a node had before a re-key in a run, by node and key epoch: what its children not reached yet are wrapped under. */
+    private val previousKeys = HashMap<Pair<String, Long>, ByteArray>()
+
+    /* A node's key at `epoch`: its key now, or the one it had before a re-key. */
+    private fun keyAt(id: String, epoch: Long): ByteArray = if (node(id).keyEpoch == epoch) keyOf(id) else previousKeys[id to epoch] ?: keyOf(id)
+
     /* A node's key, unwrapped from the envelopes the server holds, from its workspace key down. */
     fun keyOf(id: String): ByteArray = synchronized(lock) {
         val node = node(id)
-        val parentKey = node.parentId?.let { keyOf(it) } ?: workspaceKeys.getValue(node.workspaceId)
+        val parentKey = node.parentId?.let { keyAt(it, node.parentKeyEpoch) } ?: workspaceKeys.getValue(node.workspaceId)
         nodeOpen(NodeKeyContext(node.workspaceId, id, node.parentId ?: node.workspaceId, node.parentKeyEpoch.toULong(), node.keyEpoch.toULong()), parentKey,
             base64urlDecode(node.keyEnvelope))
     }
@@ -426,6 +440,37 @@ class FakeDrive : AutoCloseable {
     private val uploads = HashMap<String, Upload>()
     private class Rotation(val ws: String, val target: Long, val applied: HashSet<String> = HashSet(), var finished: Boolean = false)
     private val rotations = HashMap<String, Rotation>()
+
+    /*
+     * Another device of the owner, walking the run from `runRoot`, re-keys `id` first, as its own batch would: a fresh key
+     * wrapped under its parent's key (at the target below the run's top, as it is for the top), its name sealed again
+     * under it and signed by the owner. Its children stay where they were, under its key before.
+     */
+    fun rekeyedElsewhere(runRoot: String, id: String) = synchronized(lock) {
+        val rotation = rotations.getValue(runRoot)
+        val node = node(id)
+        val ws = node.workspaceId
+        val old = keyOf(id)
+        previousKeys[id to node.keyEpoch] = old
+        if (node.previous == null) node.previous = Triple(node.keyEnvelope, node.keyEpoch, node.parentKeyEpoch)
+        val fresh = randomBytes(32u)
+        val parentEpoch = if (id == runRoot) node.parentKeyEpoch else rotation.target
+        val metadata = metadataOpen(MetadataContext(ws, id, node.metadataVersion.toULong()), old, base64urlDecode(node.metadataEnvelope))
+        val sealed = metadataSeal(MetadataContext(ws, id, node.metadataVersion.toULong()), fresh, metadata)
+        node.keyEnvelope = base64urlEncode(nodeWrap(NodeKeyContext(ws, id, node.parentId ?: ws, parentEpoch.toULong(), rotation.target.toULong()),
+            node.parentId?.let { keyAt(it, parentEpoch) } ?: workspaceKeys.getValue(ws), fresh))
+        node.parentKeyEpoch = parentEpoch
+        node.keyEpoch = rotation.target
+        node.metadataEnvelope = base64urlEncode(sealed)
+        node.signature = base64urlEncode(metadataSign(owners.getValue(ws).keys.signingSeed,
+            MetadataStatement(ws, id, if (node.kind == "folder") NodeKind.FOLDER else NodeKind.FILE, node.metadataVersion.toULong()), sealed))
+        node.signer = owners.getValue(ws).id
+        bump(node)
+        rotation.applied.add(id)
+    }
+
+    /* Runs as a rotation send arrives, before anything of it is applied (another device's batch landing first). */
+    @Volatile var beforeRotationSend: ((ids: List<String>) -> Unit)? = null
 
     private fun answer(exchange: HttpExchange) {
         val method = exchange.requestMethod
@@ -677,13 +722,31 @@ class FakeDrive : AutoCloseable {
                     .put("nextCursor", if (batch.size < todo.size) "more" else JSONObject.NULL).put("done", todo.isEmpty()))
             }
             post && at("drive", "nodes", "*", "rotation", "nodes") -> {
-                if (failRotationSend || ++rotationSends in failRotationSends) return 500 to JSONObject().put("message", "The connection dropped")
-                val rotation = rotations.getValue(segments[2])
+                val send = ++rotationSends
                 val wires = body.getJSONArray("nodes")
+                rotationBatches.add((0 until wires.length()).map { wires.getJSONObject(it).getString("id") })
+                if (failRotationSend || send in failRotationSends) return 500 to JSONObject().put("message", "The connection dropped")
+                beforeRotationSend?.invoke(rotationBatches.last())
+                val rotation = rotations.getValue(segments[2])
                 val results = JSONArray()
                 for (i in 0 until wires.length()) {
                     val wire = wires.getJSONObject(i)
                     val node = node(wire.getString("id"))
+                    // A node sent at a change order the server has moved past (another device's walk applied it): stale.
+                    if (!wire.isNull("changeSeq") && wire.optInt("changeSeq") != node.changeSeq) { results.put(JSONObject().put("id", node.id).put("status", "stale")); continue }
+                    // Below the run's top: the parent must be re-keyed already, and at the epoch the node was wrapped under
+                    // (packages/db rotateNodeIn). Each node is judged on its own, so a batch can land in part.
+                    if (node.id != segments[2] && node.parentId != null) {
+                        val parent = node(node.parentId!!)
+                        if (parent.keyEpoch < rotation.target) { results.put(JSONObject().put("id", node.id).put("status", "parent-not-ready")); continue }
+                        if (parent.keyEpoch != wire.getLong("parentKeyEpoch")) { results.put(JSONObject().put("id", node.id).put("status", "stale")); continue }
+                    }
+                    val rotated = wire.optJSONObject("rotated")
+                    // Its key before, kept for the children the walk hasn't reached: they are still wrapped under it.
+                    if (rotated != null) {
+                        previousKeys[node.id to node.keyEpoch] = keyOf(node.id)
+                        if (node.previous == null) node.previous = Triple(node.keyEnvelope, node.keyEpoch, node.parentKeyEpoch)
+                    }
                     node.parentKeyEpoch = wire.getLong("parentKeyEpoch")
                     node.keyEnvelope = wire.getString("keyEnvelope")
                     wire.optJSONObject("rotated")?.let { rotated ->

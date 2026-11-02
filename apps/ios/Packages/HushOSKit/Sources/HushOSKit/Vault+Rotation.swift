@@ -8,7 +8,9 @@ import HushOSCore
  * only to keys a checked pin vouches for) are sealed again under it. Whatever
  * else the server lists is left out, and the server revokes what was not
  * re-sealed. The server hands out the work in depth order and applies each
- * batch; a node whose parent is not ready yet comes back later.
+ * batch; a node whose parent is not ready yet comes back later. A batch never
+ * holds a node beside its parent (`deferChildren`): the children go once the
+ * parent's key is the server's.
  */
 struct RotationView: Codable, Sendable {
     let nodeId: String
@@ -128,6 +130,19 @@ extension RotationWorkNode {
     }
 }
 
+/*
+ * The nodes of a batch that may be sealed now: none whose parent is in the same batch (its fresh key would still be
+ * pending, so the server could take the child and refuse the parent). The server applies each node of a batch on its
+ * own, so another device walking the same rotation can win the parent while this one wins the child, sealed under a
+ * fresh key this device then drops: lost to everyone, and both devices aim at the same epoch, so the server can't tell
+ * the two keys apart. Parents come first in the work, so a later batch brings each deferred child once its parent's key
+ * is confirmed (committed here, or the other device's, read from the server). Siblings still go together.
+ */
+func deferChildren(_ nodes: [RotationWorkNode]) -> [RotationWorkNode] {
+    let inBatch = Set(nodes.map { $0.node.id.lowercased() })
+    return nodes.filter { entry in entry.node.parentId.map { !inBatch.contains($0.lowercased()) } ?? true }
+}
+
 extension DriveAPI {
     func startRotation(workspaceId: String, nodeId: String) async throws -> RotationView {
         try await performPublic(try mutationPublic("/nodes/\(nodeId)/rotation", body: ["workspaceId": workspaceId]), as: RotationStarted.self).rotation
@@ -202,6 +217,30 @@ extension Vault {
             return nil
         }
 
+        // A parent re-keyed at the target with a key this walk never made: another device's batch won it (this one's came
+        // back stale), or another device's run got there first. Its key is the one the server holds, opened from its row
+        // (as the server lists it now), and the one this device held stays beside it for the children still wrapped under it.
+        func adoptServedKey(_ parentId: String, from row: NodeView) {
+            guard row.id.lowercased() == parentId.lowercased(), row.workspaceId.lowercased() == ws.lowercased(), row.keyEpoch == target,
+                  let under = parentKey(row.parentId, at: row.parentKeyEpoch),
+                  let envelope = try? base64urlDecode(value: row.keyEnvelope),
+                  let key = try? nodeOpen(
+                      ctx: NodeKeyContext(workspaceId: ws, nodeId: parentId, parentId: row.parentId ?? ws, parentKeyEpoch: row.parentKeyEpoch, keyEpoch: row.keyEpoch),
+                      parentKey: under, keyEnvelope: envelope
+                  )
+            else { return }
+            if let held = nodeKeys[ref(parentId)], let heldEpoch = epochs[parentId], heldEpoch != target {
+                previous[parentId] = (heldEpoch, held)
+                rotatedKeys[ref(parentId)] = RotatedKey(root: rootId, epoch: target, previousEpoch: heldEpoch, previousKey: held)
+            }
+            nodeKeys[ref(parentId)] = key
+            epochs[parentId] = target
+            // Its row (at the old epoch) is read again; the catalogue lists children through it.
+            opened[ref(parentId)] = nil
+            touched.insert(parentId)
+            catalogueState = .idle
+        }
+
         while true {
             let work = try await api.rotationWork(workspaceId: ws, nodeId: rootId, after: cursor)
             if work.done { break }
@@ -211,10 +250,14 @@ extension Vault {
                 if idle > 3 { throw RotationError.stuck }
                 continue
             }
-            let inBatch = Set(work.nodes.map(\.node.id))
-            for parentId in Set(work.nodes.compactMap(\.node.parentId)) where !inBatch.contains(parentId) && opened[ref(parentId)] == nil && epochs[parentId] == nil {
+            let ready = deferChildren(work.nodes)
+            for parentId in Set(ready.compactMap(\.node.parentId)) where opened[ref(parentId)] == nil && epochs[parentId] == nil {
                 _ = try? await listChildren(of: parentId, in: ws)
                 if let known = opened[ref(parentId)] { epochs[parentId] = known.node.keyEpoch }
+            }
+            for parentId in Set(ready.filter { $0.node.id != rootId }.compactMap(\.node.parentId)) where parentKey(parentId, at: target) == nil {
+                guard let served = try? await api.children(of: parentId, workspaceId: ws, after: nil).folder else { continue }
+                adoptServedKey(parentId, from: served)
             }
             var batch: [[String: Any]] = []
             // What each node of this batch held before it was given a key here: a key becomes the node's own only once the
@@ -236,7 +279,7 @@ extension Vault {
             var sending = false
             var applied = 0
             do {
-            for entry in work.nodes {
+            for entry in ready {
                 let node = entry.node
                 // Work for another workspace is not this subtree's.
                 guard node.workspaceId.lowercased() == ws.lowercased() else { continue }
@@ -391,7 +434,8 @@ extension Vault {
             progress(outcome.rotated)
             idle = applied > 0 ? 0 : idle + 1
             if idle > 3 { throw RotationError.stuck }
-            // Everything applied: continue past the batch; otherwise start over so parents come first.
+            // Everything applied: continue past the batch; otherwise (a refusal, or children held back for a later batch)
+            // start over so parents come first.
             cursor = applied == work.nodes.count ? work.nextCursor : nil
         }
         // Envelopes changed in the subtree: those items are opened again from the server, under

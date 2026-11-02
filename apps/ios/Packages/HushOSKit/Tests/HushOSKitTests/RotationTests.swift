@@ -93,6 +93,45 @@ extension OnFakeDrive {
         #expect(await vault.previousKeysKept(in: server.workspace) == 0)
     }
 
+    /* Whether something happened, from a closure the server runs. */
+    final class Once: @unchecked Sendable { var done = false }
+
+    /*
+     * Two devices of the owner walk the same rotation, and the server judges each node of a batch on its own: the other
+     * device re-keys A just before this phone's batch lands, so the phone's A comes back stale and its fresh key is
+     * dropped. F never went beside A, so it isn't sealed under that key: it goes in the next batch, under the key the other
+     * device put there, and everything reads afterwards from what the server holds. Fails if a child is sent beside its
+     * parent (the server takes F, refuses A, and F is lost to everyone), or if the phone wraps F under anything but the key
+     * the server kept for A.
+     */
+    @Test func aFolderAnotherDeviceReKeysFirstNeverLeavesWhatItHoldsUnderAKeyNobodyKept() async throws {
+        let server = try FakeDrive()
+        let vault = try await readyVault(server)
+        _ = try await vault.listChildren(of: server.root)
+        _ = try await vault.listChildren(of: server.a)
+        let raced = Once()
+        server.beforeRotationSend = { [unowned server] ids in
+            guard ids.contains(server.a), !raced.done else { return }
+            raced.done = true
+            try server.rekeyedElsewhere(server.a)
+        }
+
+        let outcome = try await vault.rotate(try #require(await vault.item(server.a)))
+
+        #expect(raced.done)
+        // Read as another device would, from the envelopes the server holds: nothing is under a key nobody kept.
+        #expect(try server.record(server.a) == "A")
+        #expect(try server.record(server.f) == "f.txt")
+        let target = try #require(server.nodes[server.a]?.keyEpoch)
+        #expect(server.nodes[server.f]?.keyEpoch == target && server.nodes[server.f]?.parentKeyEpoch == target)
+        // The other device's A is the one kept; this phone re-keyed F under it, and lists it.
+        #expect(outcome.rotated == 1)
+        #expect(try await vault.listChildren(of: server.a).children.map(\.id) == [server.f])
+        #expect(await vault.item(server.f)?.name == "f.txt")
+        // Never a node beside its parent in one send.
+        #expect(server.rotationBatches == [[server.a], [server.f]])
+    }
+
     /* Batch 1 landed and the walk then stopped: the folder still lists its child, under the parent's previous key. */
     @Test func aFolderWhoseRotationStoppedHalfWayStillListsWhatItHasNotReached() async throws {
         let server = try FakeDrive()
@@ -245,6 +284,13 @@ final class FakeDrive: @unchecked Sendable {
     /* The rotation sends (counted from 1) that fail as a dropped connection would. */
     var failRotationSends: Set<Int> = []
     private var rotationSends = 0
+    /* The ids each rotation send carried, in order. */
+    var rotationBatches: [[String]] = []
+    /* Runs as a rotation send arrives, before anything of it is applied (another device's batch landing first). */
+    var beforeRotationSend: (([String]) throws -> Void)?
+    /* Each node's key as the server's envelopes hold it now, at its key epoch, and the ones before a re-key by epoch. */
+    private var keys: [String: Data] = [:]
+    private var previousKeys: [String: [UInt64: Data]] = [:]
     /* A rotation still running keeps its target: starting it again resumes it, as the server does. */
     private var running: [String: UInt64] = [:]
     /* Every client-chosen id a create sent, with its kind and seed, in order: what the server derived and compared. */
@@ -269,6 +315,7 @@ final class FakeDrive: @unchecked Sendable {
         let strangerRoot = try randomBytes(length: 32)
         stranger = try identityOpen(userId: strangerId, accountKey: strangerRoot, envelope: try identityCreate(userId: strangerId, accountKey: strangerRoot, keyVersion: 1))
         var keys: [String: Data] = [:]
+        defer { self.keys = keys }
         // Parents first, so each key wraps under its parent's.
         for (id, parent, kind, name) in [(root, nil, "folder", "Files"), (a, root, "folder", "A"), (b, root, "folder", "B"), (f, a, "file", "f.txt"), (g, b, "file", "g.txt")] as [(String, String?, String, String)] {
             let key = try randomBytes(length: 32)
@@ -308,6 +355,52 @@ final class FakeDrive: @unchecked Sendable {
                     metadataEnvelope: metadata))
             }
         }
+    }
+
+    /*
+     * Another device of the owner, walking the run from `id` (its top), re-keys it first, as its own batch would: a fresh
+     * key wrapped under its parent's, its name sealed again under it and signed by the owner. What it holds stays where it
+     * was, under its key before. Called under the server's lock (from `beforeRotationSend`).
+     */
+    func rekeyedElsewhere(_ id: String) throws {
+        guard let old = nodes[id], let key = keys[id] else { return }
+        let parentKey = old.parentId.flatMap { keys[$0] } ?? workspaceKey
+        let fresh = try randomBytes(length: 32)
+        let envelope = try nodeWrap(ctx: NodeKeyContext(workspaceId: workspace, nodeId: id, parentId: old.parentId ?? workspace, parentKeyEpoch: old.parentKeyEpoch, keyEpoch: target),
+                                    parentKey: parentKey, nodeKey: fresh)
+        let ctx = MetadataContext(workspaceId: workspace, nodeId: id, metadataVersion: old.metadataVersion)
+        let sealed = try metadataSeal(ctx: ctx, nodeKey: fresh, metadata: try metadataOpen(ctx: ctx, nodeKey: key, envelope: try base64urlDecode(value: old.metadataEnvelope)))
+        var updated = NodeView(id: old.id, workspaceId: old.workspaceId, parentId: old.parentId, kind: old.kind, keyEpoch: target, parentKeyEpoch: old.parentKeyEpoch,
+                               keyEnvelope: base64urlEncode(bytes: envelope), metadataVersion: old.metadataVersion, metadataEnvelope: base64urlEncode(bytes: sealed),
+                               currentVersion: old.currentVersion, trashedAt: nil, changeSeq: (old.changeSeq ?? 0) + 1, createdAt: nil, updatedAt: nil)
+        updated.metadataSigner = writer
+        updated.metadataSignature = base64urlEncode(bytes: try metadataSign(
+            signingSeed: identity.signingSeed, statement: MetadataStatement(workspaceId: workspace, nodeId: id, kind: old.isFolder ? .folder : .file, metadataVersion: old.metadataVersion),
+            metadataEnvelope: sealed))
+        nodes[id] = updated
+        previousKeys[id, default: [:]][old.keyEpoch] = key
+        keys[id] = fresh
+    }
+
+    /* `id`'s name as another device reads it: its key unwrapped from the envelopes the server holds, from the workspace key down. */
+    func record(_ id: String) throws -> String {
+        guard let node = nodes[id] else { throw DriveAPIError.notFound("No node \(id)") }
+        return try metadataOpen(ctx: MetadataContext(workspaceId: workspace, nodeId: id, metadataVersion: node.metadataVersion), nodeKey: try serverKey(id),
+                                envelope: try base64urlDecode(value: node.metadataEnvelope)).name
+    }
+
+    /* A node's key from the server's envelopes: its parent's key at the epoch it is wrapped under (one before a re-key, kept). */
+    private func serverKey(_ id: String) throws -> Data {
+        guard let node = nodes[id] else { throw DriveAPIError.notFound("No node \(id)") }
+        var parentKey = workspaceKey
+        if let parent = node.parentId, let above = nodes[parent] {
+            if above.keyEpoch == node.parentKeyEpoch { parentKey = try serverKey(parent) } else {
+                guard let kept = previousKeys[parent]?[node.parentKeyEpoch] else { throw DriveAPIError.notFound("No key for \(parent) at \(node.parentKeyEpoch)") }
+                parentKey = kept
+            }
+        }
+        return try nodeOpen(ctx: NodeKeyContext(workspaceId: workspace, nodeId: id, parentId: node.parentId ?? workspace, parentKeyEpoch: node.parentKeyEpoch, keyEpoch: node.keyEpoch),
+                            parentKey: parentKey, keyEnvelope: try base64urlDecode(value: node.keyEnvelope))
     }
 
     /* The owner's own keys: whom the owner trusts, and the only key the server takes signatures under. */
@@ -556,11 +649,30 @@ final class FakeDrive: @unchecked Sendable {
             return (200, ["rotation": ["nodeId": id, "targetEpoch": target], "nodes": work, "nextCursor": next, "done": due.isEmpty])
         case ("POST", ["rotation", "nodes"]):
             rotationSends += 1
-            if failRotationSends.contains(rotationSends) { return (500, ["message": "The connection dropped."]) }
             let sent = (try JSONSerialization.jsonObject(with: body ?? Data()) as? [String: Any])?["nodes"] as? [[String: Any]] ?? []
+            rotationBatches.append(sent.compactMap { $0["id"] as? String })
+            if failRotationSends.contains(rotationSends) { return (500, ["message": "The connection dropped."]) }
+            try beforeRotationSend?(rotationBatches.last ?? [])
             var results: [[String: String]] = []
             for wire in sent {
                 guard let nodeId = wire["id"] as? String, let old = nodes[nodeId] else { continue }
+                // Each node judged on its own, as rotateNodeIn does: a change order the server has moved past (another
+                // device's batch applied it) is stale; below the top, the parent must be at the target already, and at the
+                // epoch the node was wrapped under.
+                if (wire["changeSeq"] as? NSNumber)?.intValue != old.changeSeq {
+                    results.append(["id": nodeId, "status": "stale"])
+                    continue
+                }
+                if nodeId != id, let parentId = old.parentId, let parent = nodes[parentId] {
+                    if parent.keyEpoch < target {
+                        results.append(["id": nodeId, "status": "parent-not-ready"])
+                        continue
+                    }
+                    if parent.keyEpoch != (wire["parentKeyEpoch"] as? NSNumber)?.uint64Value {
+                        results.append(["id": nodeId, "status": "stale"])
+                        continue
+                    }
+                }
                 let rotated = wire["rotated"] as? [String: Any]
                 // As the server does: a re-sealed envelope is stored only under its writer's valid signature, ordinary or re-sealed.
                 var signature: String?
@@ -590,6 +702,8 @@ final class FakeDrive: @unchecked Sendable {
                         continue
                     }
                 }
+                // Its key before, kept for what it holds that the walk hasn't reached: still wrapped under it.
+                if rotated != nil { previousKeys[nodeId, default: [:]][old.keyEpoch] = try serverKey(nodeId) }
                 nodes[nodeId] = NodeView(
                     id: old.id, workspaceId: old.workspaceId, parentId: old.parentId, kind: old.kind,
                     keyEpoch: rotated == nil ? old.keyEpoch : target, parentKeyEpoch: (wire["parentKeyEpoch"] as? NSNumber)?.uint64Value ?? old.parentKeyEpoch,
