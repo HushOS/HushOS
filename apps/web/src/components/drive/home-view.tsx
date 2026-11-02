@@ -16,6 +16,7 @@ import {
     MarqueeBox,
     ROW_FOCUS,
     ROW_FOCUS_WITHIN,
+    reveal,
     RowName,
     SelectableMark,
     SkeletonRows,
@@ -530,7 +531,7 @@ export function HomeView() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {rows.map((node) => {
+                                        {rows.map((node, index) => {
                                             const isSelected = selected.has(node.id);
                                             const entries = entriesFor(node);
                                             return (
@@ -540,6 +541,7 @@ export function HomeView() {
                                                             <tr
                                                                 aria-selected={isSelected}
                                                                 data-node-id={node.id}
+                                                                {...reveal(index)}
                                                                 onDoubleClick={() => open(node)}
                                                                 onContextMenu={(event) => {
                                                                     event.stopPropagation();
