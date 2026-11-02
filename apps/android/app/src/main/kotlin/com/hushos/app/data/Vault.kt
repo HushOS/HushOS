@@ -278,6 +278,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * but never sweeps family copies (the app's are not its to judge). Only a job's vault takes this one.
      */
     internal val jobFamilies: FamilySync by lazy { FamilySync(this, sweeps = false) }
+    /* The upload ledger's generation this vault was made in: once the account is wiped, its uploads add nothing to the ledger. */
+    internal val ledgerGeneration = Reservations.generation
 
     /*
      * The contact guard (ContactGuard.kt), sealed under the settings key as the rollback marks find theirs: the envelope
@@ -1905,7 +1907,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             throw error
         }
         try {
-            Reservations.reserved(context, begun.uploadId, ws, job, beganAt, begun.expiresAt)
+            Reservations.reserved(context, begun.uploadId, ws, job, beganAt, begun.expiresAt, ledgerGeneration)
         } catch (error: Exception) {
             // The ledger couldn't be written (a full disk): the reservation is held in memory and aborted at once. Settled, the
             // write's failure is the job's; not, the job is the network's and reserves nothing more in this process meanwhile.

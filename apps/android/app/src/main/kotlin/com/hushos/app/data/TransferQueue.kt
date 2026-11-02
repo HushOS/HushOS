@@ -133,7 +133,13 @@ object TransferQueue {
         if (failed.sourceGone() || failed.folder == null) return false
         val id = UUID.randomUUID()
         Reservations.moveJob(context, failed.id, id.toString())
-        enqueue(id)
+        try {
+            enqueue(id)
+        } catch (error: Exception) {
+            // Not queued: the rows go back to the failed job, whose row stays, so a later Retry takes them over again.
+            runCatching { Reservations.moveJob(context, id.toString(), failed.id) }
+            throw error
+        }
         return true
     }
 

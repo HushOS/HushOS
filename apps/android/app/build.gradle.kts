@@ -155,6 +155,8 @@ dependencies {
     testImplementation(libs.org.json)
     // Vault against a fake server on loopback (VaultAttributesTest): a real Context for its files, SQLite mirror and preferences.
     testImplementation(libs.robolectric)
+    // The transfer workers run whole in JVM tests (UploadWorkerTest): WorkManager's test executor and drivers.
+    testImplementation(libs.androidx.work.testing)
 }
 
 /*

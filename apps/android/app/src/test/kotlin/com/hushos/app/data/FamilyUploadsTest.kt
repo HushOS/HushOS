@@ -671,6 +671,51 @@ class FamilyUploadsTest {
     }
 
     /*
+     * #251 hole 1: a Retry whose new job couldn't be queued (WorkManager's database refusing it) gives the rows it took over
+     * back to the failed job, whose row stays, so the next Retry takes them over again. Fails if they stay with an id no
+     * job has.
+     */
+    @Test
+    fun aRetryThatCouldNotBeQueuedGivesItsRowsBack() {
+        val failedJob = UUID.randomUUID().toString()
+        assertThrows(Killed::class.java) { upload(job(), failedJob) { throw Killed() } }
+        val kept = records()
+        val failed = FailedTransfer(failedJob, TransferQueue.UPLOAD, "Notes.txt", "The transfer failed.", 0L, file = local("Notes.txt", "packing list").path,
+            mime = "text/plain", folder = family.rootId, family = family.groupId, familyWorkspace = family.workspaceId)
+        assertThrows(IllegalStateException::class.java) { TransferQueue.retryUpload(app, failed) { throw IllegalStateException("not queued") } }
+        assertEquals("a retry that wasn't queued kept the failed job's rows", kept, records())
+    }
+
+    /* A queued family upload as FamilyUploads runs it, its landed row left as the job leaves it. */
+    private fun uploadAsQueued(vault: Vault, job: String): Opened =
+        FamilyUploads.upload(vault, family.groupId, family.workspaceId, local("Notes.txt", "packing list"), "Notes.txt", "text/plain", family.rootId, null, job) {}
+
+    /*
+     * #251 hole 2: the account leaves the phone (AccountStore.wipe) after the server reserved the upload but before its
+     * record is written. Nothing of it is written back: no ledger file is left. Fails if an upload still on its way after
+     * the wipe writes its record.
+     */
+    @Test
+    fun aWipeAfterTheBeginLeavesNoLedger() {
+        val store = AccountStore(app.filesDir, app.cacheDir, app.noBackupFilesDir)
+        server.dropReply = { method, path -> if (method == "POST" && path == "drive/uploads") store.wipe(); false }
+        val error = runCatching { uploadAsQueued(job(), UUID.randomUUID().toString()) }.exceptionOrNull()
+        server.dropReply = null
+        assertTrue("an upload wiped after its begin went on: $error", error is SessionEnded)
+        assertFalse("a ledger was written after the wipe", File(app.filesDir, Reservations.FILE).exists())
+    }
+
+    /* As above, the wipe landing between the completion and its landed row: no row is written back. */
+    @Test
+    fun aWipeAfterTheCompletionLeavesNoLedger() {
+        val store = AccountStore(app.filesDir, app.cacheDir, app.noBackupFilesDir)
+        server.dropReply = { method, path -> if (method == "POST" && path.endsWith("/complete")) store.wipe(); false }
+        runCatching { uploadAsQueued(job(), UUID.randomUUID().toString()) }
+        server.dropReply = null
+        assertFalse("a landed row was written after the wipe", File(app.filesDir, Reservations.FILE).exists())
+    }
+
+    /*
      * What waits out a key change and what fails: the ledger's key-change refusal (said or raw), and the server's
      * `rotating`; its `stale` only once the upload has waited (a walk reaching the folder between a look and a begin), and
      * never a removal or another refusal. Fails if a key change fails the upload or a refusal is retried for half an hour.

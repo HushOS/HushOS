@@ -59,6 +59,23 @@ object Reservations {
 
     private fun file(context: Context) = File(context.filesDir, FILE)
 
+    /*
+     * Moved by every wipe (the account leaving the phone). A vault keeps the one it was made in (Vault.ledgerGeneration):
+     * `reserved`, the one write that adds a record, refuses an older one, so an upload still on its way when the account
+     * left writes nothing of it back. Every other write only rewrites what the ledger holds, empty by then.
+     */
+    @Volatile var generation = 0L
+        private set
+
+    /* The account leaves the phone (AccountStore.wipe): the ledger and what was held go, under the ledger's own lock. */
+    fun wipe(filesDir: File) = synchronized(lock) {
+        generation++
+        unwritten.clear()
+        File(filesDir, FILE).delete()
+        File(filesDir, NEXT).delete()
+        Unit
+    }
+
     /* The ledger couldn't be read (a permission, an I/O failure): nothing is reserved or written over it; the job runs again later. */
     class LedgerUnreadable(cause: Throwable) : java.io.IOException("The upload ledger couldn't be read.", cause)
 
@@ -99,7 +116,9 @@ object Reservations {
      * later of the two expiries is kept, so a clock that differs from the server's never settles one early. Throws when the
      * disk refuses it: the record is then held in memory (never reserved over in this process) and not marked running.
      */
-    fun reserved(context: Context, uploadId: String, workspaceId: String, job: String, beganAt: Long, serverExpiresAt: Long?) = synchronized(lock) {
+    fun reserved(context: Context, uploadId: String, workspaceId: String, job: String, beganAt: Long, serverExpiresAt: Long?,
+                 generation: Long = this.generation) = synchronized(lock) {
+        if (generation != this.generation) throw SessionEnded()
         val record = Record(uploadId, workspaceId, job, maxOf(beganAt + TTL_MS, serverExpiresAt ?: 0L))
         try {
             write(context, all(context).filter { it.uploadId != uploadId } + record)
@@ -125,6 +144,7 @@ object Reservations {
      * again. False when the disk refused the write: the record stays, to be asked again (its abort then says completed).
      */
     fun completed(context: Context, uploadId: String): Boolean = synchronized(lock) {
+        // After a wipe there's no record to turn into a landed row (the wipe took them all, under this lock): nothing is written.
         val record = try { all(context).firstOrNull { it.uploadId == uploadId } } catch (_: LedgerUnreadable) { return false }
         if (record == null || record.job.isEmpty()) { settled(context, uploadId); return true }
         unwritten.remove(uploadId)
