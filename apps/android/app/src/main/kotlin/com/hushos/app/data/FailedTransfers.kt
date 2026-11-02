@@ -15,6 +15,8 @@ data class FailedTransfer(
     val id: String, val kind: String, val name: String, val reason: String, val at: Long,
     val file: String? = null, val mime: String? = null, val folder: String? = null, val replacing: String? = null,
     val node: String? = null, val isFolder: Boolean = false, val shareRoot: String? = null,
+    /* An upload into a family folder: its family and workspace, so a retry opens the family in its job and a removal ends it. */
+    val family: String? = null, val familyWorkspace: String? = null,
 ) {
     /* An upload whose staged copy is gone can't be sent again: the row says to pick it again. */
     fun sourceGone(): Boolean = kind == TransferQueue.UPLOAD && (file == null || !File(file).exists())
@@ -43,11 +45,12 @@ class FailedTransfers(private val store: File) {
 
     private fun encode(t: FailedTransfer) = listOf(
         t.id, t.kind, t.name, t.reason, t.at.toString(), t.file, t.mime, t.folder, t.replacing, t.node, t.isFolder.toString(), t.shareRoot,
+        t.family, t.familyWorkspace,
     ).joinToString("\t") { if (it == null) "-" else "=" + URLEncoder.encode(it, "UTF-8") }
 
     private fun decode(line: String): FailedTransfer? = runCatching {
         val f = line.split("\t").map { if (it == "-") null else URLDecoder.decode(it.removePrefix("="), "UTF-8") }
-        FailedTransfer(f[0]!!, f[1]!!, f[2]!!, f[3]!!, f[4]!!.toLong(), f[5], f[6], f[7], f[8], f[9], f[10] == "true", f[11])
+        FailedTransfer(f[0]!!, f[1]!!, f[2]!!, f[3]!!, f[4]!!.toLong(), f[5], f[6], f[7], f[8], f[9], f[10] == "true", f[11], f.getOrNull(12), f.getOrNull(13))
     }.getOrNull()
 
     companion object {

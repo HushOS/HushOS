@@ -176,6 +176,9 @@ internal fun Vault.finalWriteGate(workspaceId: String) {
         if (heldUnderOwedGuard(workspaceId)) throw GuardUnsaved()
         if (!isFamilyWorkspace(workspaceId)) return
         if (WriteIntent.decision(workspaceId) != true) throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
+        // Never sent once its folder was let go of since the write began (a removal, a fork, a refusal meanwhile, in
+        // another of the session's vaults too): the family's words, before anything leaves.
+        WriteIntent.epoch(workspaceId)?.let { began -> familyWordsSince(workspaceId, began)?.let { throw FamilyFailure(it) } }
         familyTarget(workspaceId)
     }
 }

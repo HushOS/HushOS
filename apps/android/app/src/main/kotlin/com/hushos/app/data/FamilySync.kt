@@ -141,6 +141,11 @@ class FamilySync(
     internal val api: GroupsApi = GroupsApi(vault.api.session),
     records: FamilyRecords = FamilyRecords.of(vault.context),
     internal val now: () -> Instant = { Instant.now() },
+    /*
+     * Whether this sync sweeps family copies (the allowlist sweep): the app's does; a transfer job's (Vault.jobFamilies)
+     * never does, since its keep list holds only the family it opened and would delete the app's copies of the rest.
+     */
+    private val sweeps: Boolean = true,
 ) {
     // Bound to this vault's session: once it is closed, nothing it does writes or deletes a record.
     internal val records: FamilyRecords = records.whileOpen { !vault.closed }
@@ -326,6 +331,7 @@ class FamilySync(
      * whenever a family's folders change.
      */
     internal fun sweepCopies() {
+        if (!sweeps) return
         val keep = groupsOf.filterValues { it.lowercase() in accepted }.keys
         vault.sweepFamilyCopies(keep)
     }

@@ -15,6 +15,7 @@ import com.hushos.app.data.rethrowIfCancelled
 import com.hushos.app.data.Auth
 import com.hushos.app.data.familyEpoch
 import com.hushos.app.data.familyWordsSince
+import com.hushos.app.data.familyOf
 import com.hushos.app.data.isFamilyWorkspace
 import com.hushos.app.data.olderThan
 import com.hushos.app.data.catalogueAll
@@ -80,6 +81,8 @@ data class TransferItem(
     val files: Pair<Int, Int>? = null,
     /* Queued and waiting for a network (or its next try); shown without a bar. */
     val waiting: Boolean = false,
+    /* A family upload waiting out a key change in its folder (KeyChangeWaits): its row says so. */
+    val keyChange: Boolean = false,
     /* Stops a queued transfer; null for the ones that run in the app. */
     val cancel: (() -> Unit)? = null,
     /* Why a transfer failed (the server's words for a refusal). */
@@ -207,6 +210,12 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     override val familyScope get() = viewModelScope
     override fun updateState(change: (DriveState) -> DriveState) = _state.update(change)
     override fun lostSession() = sessionLost()
+    /* Removed from a family: its queued uploads end, their reserved uploads aborted and their copies deleted. */
+    override fun familyEnded(groupId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            com.hushos.app.data.TransferQueue.endFamily(context, groupId) { uploadId, workspaceId -> vault?.api?.abortUpload(uploadId, workspaceId) }
+        }
+    }
     private val thumbnailTasks = HashSet<String>()
     /* Who can open what (`access`): one request at a time, and one more after it for anything asked meanwhile. */
     private val sharingLoads = SharingRefresh(viewModelScope) { loadAccess() }
@@ -341,6 +350,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                 lastInfos = infos
                 val inUse = infos.mapNotNull { info -> info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:")?.let { File(it).parent } }.toSet()
                 val records = com.hushos.app.data.FailedTransfers.of(context)
+                val waits = com.hushos.app.data.KeyChangeWaits.of(context)
                 val jobNames = com.hushos.app.data.JobNames.of(context)
                 // A job's name is the app's (JobNames), or a tag of an older version's job.
                 val names = withContext(Dispatchers.IO) { jobNames.all() }
@@ -361,7 +371,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                 val failedRows = withContext(Dispatchers.IO) { records.all() }.map { failed ->
                     TransferItem(
                         id = failed.id, kind = failed.kind, name = failed.name, fraction = 0f, done = true, failed = true,
-                        message = if (failed.sourceGone()) "The file isn’t there any more. Pick it again." else failed.reason,
+                        // A family upload a removal ended says so (its copy went with it), never "pick it again".
+                        message = if (failed.sourceGone() && failed.reason != com.hushos.app.data.FamilyWords.NOT_IN_FAMILY) "The file isn’t there any more. Pick it again." else failed.reason,
                         dismiss = { viewModelScope.launch(Dispatchers.IO) { com.hushos.app.data.TransferQueue.dismiss(context, failed); failedChanged.value++ } },
                         retry = if (failed.sourceGone()) null else ({ retryRecorded(failed) }),
                         node = failed.node, folder = failed.isFolder,
@@ -378,6 +389,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                         fraction = if (info.state == androidx.work.WorkInfo.State.SUCCEEDED) 1f else info.progress.getFloat("fraction", 0f),
                         done = finished, failed = failed,
                         waiting = info.state == androidx.work.WorkInfo.State.ENQUEUED || info.state == androidx.work.WorkInfo.State.BLOCKED,
+                        keyChange = waits.since(info.id.toString()) != null,
                         cancel = if (finished) null else ({ com.hushos.app.data.TransferQueue.cancel(context, info.id, file) }),
                         message = if (failed) info.outputData.getString("message") ?: "The transfer failed." else null,
                         node = tag("node:"),
@@ -433,6 +445,14 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
 
     /* Whether a folder is in this account's own drive, where the background queue can reach it without the app. */
+    /* The family folder `folderId` is in, as this session proved it (route 25), or null for any other folder. */
+    private fun familyFolderOf(folderId: String): com.hushos.app.data.TransferQueue.Family? {
+        val vault = vault ?: return null
+        val ws = vault.item(folderId)?.node?.workspaceId ?: return null
+        if (!vault.isFamilyWorkspace(ws)) return null
+        return vault.familyOf(ws)?.let { com.hushos.app.data.TransferQueue.Family(it, ws) }
+    }
+
     private fun ownDrive(folderId: String): Boolean {
         val vault = vault ?: return false
         val root = state.value.rootId ?: return false
@@ -1886,9 +1906,11 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         if (ownDrive(folder)) com.hushos.app.data.Places.used(context, folder, if (folder == state.value.rootId) "Files" else vault?.item(folder)?.name ?: "Files")
         for (item in items) {
             val staged = withContext(Dispatchers.IO) { stage(item.uri) } ?: continue
-            if (ownDrive(folder)) {
+            // A family folder's: queued too, its job opening the family itself (FamilyUploads), so it finishes after the app closes.
+            val family = familyFolderOf(folder)
+            if (ownDrive(folder) || family != null) {
                 // Queued: it waits for a network and finishes even if the app is closed; the panel shows it.
-                com.hushos.app.data.TransferQueue.upload(context, staged.first, item.name, staged.third, folder, item.replacing?.id)
+                com.hushos.app.data.TransferQueue.upload(context, staged.first, item.name, staged.third, folder, item.replacing?.id, family)
                 // The queue moved the copy into its own folder; the one it was staged in is empty now.
                 dropStaged(staged.first)
                 continue

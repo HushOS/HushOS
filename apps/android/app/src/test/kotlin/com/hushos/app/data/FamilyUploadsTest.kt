@@ -1,0 +1,180 @@
+package com.hushos.app.data
+
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
+import java.io.File
+import java.util.UUID
+
+/*
+ * Queued uploads into family folders (FamilyUploads, as the transfer job runs them) through the real Vault, GroupsApi and
+ * the core's area ledger against FakeDrive: a job's own vault, which holds no family, accepts the family itself, never
+ * sweeps the app's family copies, and lands the file; a guard owed, a removal or the session ending while it is on its
+ * way sends no completion and aborts the reserved upload; and a run after the process died aborts what the dead run left
+ * reserved and opens the family again before it uploads.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
+class FamilyUploadsTest {
+    private val server = FakeDrive()
+    private lateinit var family: FamilyFixture
+    private val app get() = RuntimeEnvironment.getApplication()
+
+    @Before
+    fun signIn() {
+        FamilyFixture.signIn(server, "family-uploads-test")
+        family = FamilyFixture(server)
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+    }
+
+    @After
+    fun close() {
+        server.close()
+        assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
+    }
+
+    /* A transfer job's vault (jobVault): the session's, a vault of its own with an empty ledger. */
+    private fun job(): Vault = Vault.fromShared(app)!!
+
+    private fun local(name: String, text: String) = File(app.cacheDir, "local-${System.nanoTime()}/$name").apply { parentFile!!.mkdirs(); writeText(text) }
+
+    private fun queueDir() = File(app.filesDir, "queue/${UUID.randomUUID()}").apply { mkdirs() }
+
+    private fun upload(vault: Vault, dir: File = queueDir(), progress: (Float) -> Unit = {}): Opened =
+        QueuedUploads.running(dir) { begun ->
+            FamilyUploads.upload(vault, family.groupId, family.workspaceId, local("Notes.txt", "packing list"), "Notes.txt", "text/plain", family.rootId, null, begun, progress)
+        }
+
+    private fun accepted(phone: FamilyFixture.Phone) =
+        assertTrue(phone.sync.sync(family.summary) is FamilyState.Accepted)
+
+    private fun aborted() = server.requests.filter { it.startsWith("POST ") && it.endsWith("/abort") }
+    private fun completed() = server.requests.filter { it.endsWith("/complete") }
+
+    /*
+     * The app isn't running: a job's vault accepts the family on its own, lists the folder through its ledger and lands the
+     * file, which another phone of the account reads. The app's copies of another family's folder, opened before, are
+     * still there: a job's acceptance never sweeps. Fails if the job doesn't open the family itself, or if its sync sweeps.
+     */
+    @Test
+    fun aJobOpensTheFamilyItselfLandsTheFileAndSweepsNothing() {
+        val other = File(FamilyCopies.folder(app.cacheDir, UUID.randomUUID().toString())!!, "a/v/Photo.jpg").apply { parentFile!!.mkdirs(); writeText("the app's copy") }
+        val landed = upload(job())
+        assertTrue("a job's family sync swept the app's family copies", other.exists())
+        val reader = family.phone()
+        accepted(reader)
+        val row = reader.vault.listChildren(family.rootId, family.workspaceId).single { it.id == landed.id }
+        val out = File(app.cacheDir, "read-${System.nanoTime()}/Notes.txt")
+        reader.vault.download(row.id, out, workspaceId = family.workspaceId)
+        assertEquals("packing list", out.readText())
+    }
+
+    /*
+     * The family's guard becomes owed while the job's upload is on its way (a sync elsewhere that couldn't store it): the
+     * completion isn't sent, the reserved upload is aborted, and nothing of it is kept for a later run. Fails if a refused
+     * completion leaves its room reserved.
+     */
+    @Test
+    fun aGuardOwedMidJobAbortsTheUploadAndSendsNoCompletion() {
+        val vault = job()
+        vault.beforeWriteGate = { if ("POST /api/drive/uploads" in server.requests) vault.oweFamilyGuard(family.groupId) }
+        val dir = queueDir()
+        assertThrows(GuardUnsaved::class.java) { upload(vault, dir) }
+        assertEquals(1, aborted().size)
+        assertEquals(emptyList<String>(), completed())
+        assertFalse(File(dir, "begun").exists())
+    }
+
+    /*
+     * The family removes this account while the job's upload is on its way; the app's sync hears not-member and lets the
+     * family go (in the session's state the job shares). The job sends no completion, aborts the reserved upload, and says
+     * the removal, so the queue ends the family's uploads. Fails if a job's completion goes out after its folder was let go.
+     */
+    @Test
+    fun aRemovalMidJobSendsNoCompletionAndSaysTheRemoval() {
+        val appPhone = family.phone()
+        accepted(appPhone)
+        val vault = job()
+        vault.beforeWriteGate = {
+            if ("POST /api/drive/uploads" in server.requests && family.notMember.not()) {
+                family.notMember = true
+                assertEquals(FamilyState.Wiped, appPhone.sync.sync(family.summary))
+            }
+        }
+        val error = runCatching { upload(vault) }.exceptionOrNull()
+        assertTrue("a removal mid-job wasn't said as one: $error", error != null && FamilyUploads.removed(error))
+        assertEquals(emptyList<String>(), completed())
+        assertEquals(1, aborted().size)
+    }
+
+    /*
+     * The account signs out while the job's upload is on its way (the app closes the session): the job sends no
+     * completion and aborts the reserved upload. Fails if a closed session's job completes its upload.
+     */
+    @Test
+    fun theSessionEndingMidJobSendsNoCompletion() {
+        val appPhone = family.phone()
+        accepted(appPhone)
+        val vault = job()
+        vault.beforeWriteGate = { if ("POST /api/drive/uploads" in server.requests) appPhone.vault.close() }
+        assertThrows(SessionEnded::class.java) { upload(vault) }
+        assertEquals(emptyList<String>(), completed())
+        assertEquals(1, aborted().size)
+    }
+
+    /* The process killed mid-upload, as a test can: nothing after it runs (no catch, no abort). */
+    private class Killed : Error()
+
+    /*
+     * The process dies after the job's upload was reserved and a part went up. The next run (a new process: a fresh
+     * session state and vault, nothing of the family open) aborts what the dead run left reserved, accepts the family
+     * again and lands the file once. Fails if a resumed run leaves the old reservation, or uploads without opening the
+     * family first.
+     */
+    @Test
+    fun aRunAfterTheProcessDiedAbortsTheLeftoverAndOpensTheFamilyAgain() {
+        val dir = queueDir()
+        val first = job()
+        assertThrows(Killed::class.java) { upload(first, dir) { throw Killed() } }
+        val kept = File(dir, "begun")
+        assertTrue("the reservation wasn't kept for the next run", kept.exists())
+        val leftover = kept.readLines().first()
+        assertEquals(emptyList<String>(), aborted())
+        // A new process: the dead one's session state and ledger are gone.
+        first.close()
+        val second = job()
+        assertTrue(second.familyAreas.isEmpty() || !second.areaLedger.isArea(family.workspaceId))
+        QueuedUploads.abortLeftover(dir) { uploadId, workspaceId -> second.api.abortUpload(uploadId, workspaceId) }
+        assertEquals(listOf("POST /api/drive/uploads/$leftover/abort"), aborted())
+        val landed = upload(second, dir)
+        assertNotNull(landed)
+        assertEquals(1, completed().size)
+        assertFalse(kept.exists())
+    }
+
+    /*
+     * What waits out a key change and what fails: the ledger's key-change refusal (said or raw), and the server's
+     * `rotating`; its `stale` only once the upload has waited (a walk reaching the folder between a look and a begin), and
+     * never a removal or another refusal. Fails if a key change fails the upload or a refusal is retried for half an hour.
+     */
+    @Test
+    fun aKeyChangeWaitsAndARefusalDoesNot() {
+        val pending = "This folder’s keys changed: the key change has not reached it yet."
+        assertTrue(FamilyUploads.waits(FamilyFailure(FamilyWords.keyChangeWords(pending)), waited = false))
+        assertTrue(FamilyUploads.waits(ApiError(409, "Keys are being rotated for this folder. Try again in a moment.", "rotating"), waited = false))
+        assertFalse(FamilyUploads.waits(ApiError(409, "This item changed since you last saw it.", "stale"), waited = false))
+        assertTrue(FamilyUploads.waits(ApiError(409, "This item changed since you last saw it.", "stale"), waited = true))
+        assertFalse(FamilyUploads.waits(FamilyFailure.notInFamily, waited = true))
+        assertFalse(FamilyUploads.waits(FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS), waited = true))
+        assertFalse(FamilyUploads.waits(ApiError(409, "conflict", "conflict"), waited = true))
+    }
+}

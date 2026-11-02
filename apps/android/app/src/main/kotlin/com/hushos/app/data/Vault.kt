@@ -272,6 +272,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
     @Volatile internal var familyJudge: FamilySync? = null
     /* This session's family sync: one per vault, so one per session in this process. */
     val families: FamilySync by lazy { FamilySync(this) }
+    /*
+     * A transfer job's own family sync (FamilyUploads): it accepts the family into this vault's ledger as the app's does,
+     * but never sweeps family copies (the app's are not its to judge). Only a job's vault takes this one.
+     */
+    internal val jobFamilies: FamilySync by lazy { FamilySync(this, sweeps = false) }
 
     /*
      * The contact guard (ContactGuard.kt), sealed under the settings key as the rollback marks find theirs: the envelope
@@ -1802,13 +1807,18 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * written to, fresh for each call: an attempt that stops starts over with new ids and seeds. `attributes`: a copy's
      * source's, for a new node; a new version keeps the replaced file's whatever is passed.
      */
+    /*
+     * `begun`: told the server's upload id as soon as it is reserved, so a queued job can abort it after the process died
+     * mid-upload (QueuedUploads); nothing else is kept of it.
+     */
     fun upload(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray? = null, copy: Prior? = null,
-               attributes: Map<String, String> = emptyMap(), progress: (Float) -> Unit = {}): Opened = writing {
-        uploadInside(file, name, mime, parentId, replacing, thumbnail, copy, attributes, progress)
+               attributes: Map<String, String> = emptyMap(), begun: (uploadId: String, workspaceId: String) -> Unit = { _, _ -> },
+               progress: (Float) -> Unit = {}): Opened = writing {
+        uploadInside(file, name, mime, parentId, replacing, thumbnail, copy, attributes, begun, progress)
     }
 
     private fun uploadInside(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray?, copy: Prior?,
-                             attributes: Map<String, String>, progress: (Float) -> Unit): Opened {
+                             attributes: Map<String, String>, reserved: (String, String) -> Unit, progress: (Float) -> Unit): Opened {
         // The workspace written to: the replaced file's, or the folder's (a share's subtree is the granter's).
         val ws = replacing?.node?.workspaceId ?: resolve(parentId).node.workspaceId
         // A family folder takes a file or a new version through its ledger; a copy into one isn't offered.
@@ -1874,6 +1884,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
             throw error
         }
+        reserved(begun.uploadId, ws)
         val urls = HashMap<Int, String>()
         for (part in begun.parts) urls[part.partNumber] = part.url
         val etags = JSONArray()

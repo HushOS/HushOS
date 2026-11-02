@@ -113,6 +113,8 @@ interface FamilyHost {
     fun item(id: String): Opened?
     fun updateState(change: (DriveState) -> DriveState)
     fun lostSession()
+    /* This account isn't in `groupId` any more: what the drive queued into its folders ends (TransferQueue.endFamily). */
+    fun familyEnded(groupId: String) {}
 }
 
 /* The session a families operation began in: every nested call and every step after a suspension checks this one. */
@@ -409,6 +411,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             else -> {
                 val roots = (previous as? FamilyState.Accepted)?.view?.areas?.mapNotNull { it.root?.id }.orEmpty()
                 clear(summary.id, roots, s, details = state == FamilyState.Wiped, problem = if (state == FamilyState.Wiped) FamilyProblem.Removed else FamilyProblem.Words(FamilyWords.OPEN_AGAIN))
+                if (state == FamilyState.Wiped) model.familyEnded(summary.id)
             }
         }
         return true
@@ -423,6 +426,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         checkedAt[groupId] = now()
         refreshed[groupId] = (refreshed[groupId] ?: 0) + 1
         clear(groupId, roots, s, details = true, problem = FamilyProblem.Removed)
+        model.familyEnded(groupId)
     }
 
     /*
