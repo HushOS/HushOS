@@ -1,6 +1,7 @@
 import BackgroundTasks
 import Foundation
 import HushOSKit
+import os
 
 /*
  * The family check while the app is closed (docs/groups-mobile-plan.md iOS 4, owner decision): a
@@ -22,6 +23,8 @@ enum FamilyWalkTasks {
     private static let sessionKey = "familyWalks.session"
     private static let attemptsKey = "familyWalks.attempts"
     private static let hour: TimeInterval = 60 * 60
+    /* What a pass ended as: no names, ids or keys. */
+    private static let log = Logger(subsystem: "com.hushos.app", category: "family-check")
 
     /* Registers the task's handler; before the app finishes launching. */
     static func register() {
@@ -69,7 +72,9 @@ enum FamilyWalkTasks {
         let stop = StopSwitch()
         task.expirationHandler = { stop.flip() }
         Task { @MainActor in
+            log.notice("family check started")
             let (pass, session) = await run(stop: stop)
+            log.notice("family check ended: \(String(describing: pass), privacy: .public)")
             switch pass {
             case .retry, .stopped:
                 if let session {
