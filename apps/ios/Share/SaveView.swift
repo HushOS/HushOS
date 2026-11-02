@@ -46,7 +46,7 @@ struct SaveView: View {
             Section {
                 ForEach(model.items.prefix(6)) { item in
                     HStack(spacing: Alpine.Space.s3) {
-                        PageGlyph(label: Self.label(item.name)).frame(width: Theme.mark * 0.66, height: Theme.mark * 0.66 * 54 / 44)
+                        PageGlyph(label: Self.label(item.name), name: item.name).frame(width: Theme.mark * 0.66, height: Theme.mark * 0.66 * 54 / 44)
                             .frame(width: Theme.mark, height: Theme.mark)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.name).font(Theme.Text.body).foregroundStyle(Alpine.ink).lineLimit(1).truncationMode(.middle)

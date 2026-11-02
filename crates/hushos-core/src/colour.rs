@@ -128,6 +128,94 @@ pub fn swatch_argb(colour: String) -> u32 {
     argb(0.74, 0.13 * strength, hue)
 }
 
+/// A file's type colour as an OKLCH hue, by extension: the twin of `fileTypeHue` in
+/// `packages/drive/src/colour.ts`. A type not listed keeps the plain ink label.
+const FILE_TYPE_HUES: [(&str, f64); 45] = [
+    ("pdf", 25.0),
+    ("doc", 255.0),
+    ("docx", 255.0),
+    ("odt", 255.0),
+    ("rtf", 255.0),
+    ("txt", 255.0),
+    ("md", 255.0),
+    ("pages", 255.0),
+    ("xls", 145.0),
+    ("xlsx", 145.0),
+    ("ods", 145.0),
+    ("csv", 145.0),
+    ("tsv", 145.0),
+    ("numbers", 145.0),
+    ("ppt", 55.0),
+    ("pptx", 55.0),
+    ("odp", 55.0),
+    ("key", 55.0),
+    ("png", 160.0),
+    ("jpg", 160.0),
+    ("jpeg", 160.0),
+    ("heic", 160.0),
+    ("gif", 160.0),
+    ("webp", 160.0),
+    ("svg", 160.0),
+    ("mp4", 345.0),
+    ("mov", 345.0),
+    ("webm", 345.0),
+    ("mkv", 345.0),
+    ("mp3", 290.0),
+    ("m4a", 290.0),
+    ("wav", 290.0),
+    ("flac", 290.0),
+    ("zip", 85.0),
+    ("gz", 85.0),
+    ("tar", 85.0),
+    ("7z", 85.0),
+    ("rar", 85.0),
+    ("json", 200.0),
+    ("js", 200.0),
+    ("ts", 200.0),
+    ("html", 200.0),
+    ("css", 200.0),
+    ("py", 200.0),
+    ("rs", 200.0),
+];
+
+fn file_type_hue(name: &str) -> Option<f64> {
+    let dot = name.rfind('.').filter(|&at| at > 0)?;
+    let extension = name[dot + 1..].to_ascii_lowercase();
+    FILE_TYPE_HUES.iter().find(|(ext, _)| *ext == extension).map(|&(_, hue)| hue)
+}
+
+/// A file's page mark in its type's colour, as ARGB: the label in every scheme, and the
+/// sheet's edge and fill, faintly tinted, in light and dark (high contrast keeps the plain
+/// sheet). The twin of the `--sheet-*` steps in `apps/web/src/styles.css`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct SheetShades {
+    pub light_label: u32,
+    pub dark_label: u32,
+    pub light_high_label: u32,
+    pub dark_high_label: u32,
+    pub light_edge: u32,
+    pub dark_edge: u32,
+    pub light_fill: u32,
+    pub dark_fill: u32,
+}
+
+/// A file's page mark colours from its name, or `None` for a type with no colour of its own.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn sheet_shades(name: String) -> Option<SheetShades> {
+    let hue = file_type_hue(&name)?;
+    Some(SheetShades {
+        light_label: argb(0.5, 0.15, hue),
+        dark_label: argb(0.74, 0.136, hue),
+        light_high_label: argb(0.42, 0.15, hue),
+        dark_high_label: argb(0.84, 0.11, hue),
+        light_edge: argb(0.86, 0.05, hue),
+        dark_edge: argb(0.44, 0.04, hue),
+        light_fill: argb(0.992, 0.012, hue),
+        dark_fill: argb(0.27, 0.015, hue),
+    })
+}
+
 fn to_linear(channel: u8) -> f64 {
     let c = f64::from(channel) / 255.0;
     if c <= 0.04045 {
@@ -227,6 +315,85 @@ mod tests {
         assert!(b > r && b > g, "{r} {g} {b}");
         let (r, g, b) = channels(swatch_argb("nope".into()));
         assert!((r - g).abs() <= 1 && (g - b).abs() <= 1, "{r} {g} {b}");
+    }
+
+    #[test]
+    fn a_file_takes_its_types_hue_as_the_web_does() {
+        // The same names and hues `packages/drive/src/colour.test.ts` pins.
+        for (name, hue) in [
+            ("Report.PDF", 25.0),
+            ("notes.md", 255.0),
+            ("budget.xlsx", 145.0),
+            ("deck.key", 55.0),
+            ("photo.heic", 160.0),
+            ("clip.mov", 345.0),
+            ("song.flac", 290.0),
+            ("backup.tar.gz", 85.0),
+            ("main.rs", 200.0),
+        ] {
+            assert_eq!(file_type_hue(name), Some(hue), "{name}");
+        }
+        for name in ["README", ".env", "archive.unknownext", "trailing."] {
+            assert_eq!(file_type_hue(name), None, "{name}");
+            assert_eq!(sheet_shades(name.into()), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_type_table_is_the_webs_entry_for_entry() {
+        let web = include_str!("../../../packages/drive/src/colour.ts");
+        let start = web.find("const FILE_TYPE_HUES").expect("the web's table");
+        let body = &web[start..start + web[start..].find("};").expect("its end")];
+        let mut theirs: Vec<(String, f64)> = body
+            .lines()
+            .filter_map(|line| line.trim().strip_suffix(','))
+            .filter_map(|entry| entry.split_once(": "))
+            .map(|(ext, hue)| (ext.trim_matches('\'').to_owned(), hue.parse().expect("a hue")))
+            .collect();
+        let mut ours: Vec<(String, f64)> =
+            FILE_TYPE_HUES.iter().map(|&(ext, hue)| (ext.to_owned(), hue)).collect();
+        theirs.sort_by(|a, b| a.0.cmp(&b.0));
+        ours.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(ours, theirs);
+    }
+
+    /// WCAG contrast between two opaque ARGB colours.
+    fn contrast(a: u32, b: u32) -> f64 {
+        let (x, y) = (luminance(a), luminance(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    #[test]
+    fn every_type_label_meets_contrast_for_its_text_in_every_scheme() {
+        // The label's text is the surface: white in light, #1c1c1e (#2c2c2e in an iOS sheet) in dark,
+        // #0a0a0b in dark high contrast. AA in the standard schemes, AAA in high contrast (DESIGN.md Colors).
+        for &(ext, _) in &FILE_TYPE_HUES {
+            let s = sheet_shades(format!("a.{ext}")).unwrap();
+            for (label, text, need, scheme) in [
+                (s.light_label, 0xFFFF_FFFF, 4.5, "light"),
+                (s.dark_label, 0xFF1C_1C1E, 4.5, "dark"),
+                (s.dark_label, 0xFF2C_2C2E, 4.5, "dark, in a sheet"),
+                (s.light_high_label, 0xFFFF_FFFF, 7.0, "light high contrast"),
+                (s.dark_high_label, 0xFF0A_0A0B, 7.0, "dark high contrast"),
+            ] {
+                let ratio = contrast(label, text);
+                assert!(ratio >= need, "{ext} in {scheme}: {ratio:.2}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_type_label_reads_on_its_sheet_and_keeps_its_hue() {
+        let pdf = sheet_shades("a.pdf".into()).unwrap();
+        // White text on the light label and the light high-contrast one; the sheet stays near white.
+        assert!(
+            luminance(pdf.light_label) < 0.25 && luminance(pdf.light_high_label) < luminance(pdf.light_label)
+        );
+        assert!(luminance(pdf.light_fill) > 0.9 && luminance(pdf.dark_fill) < 0.1);
+        let (r, g, b) = channels(pdf.light_label);
+        assert!(r > g && r > b, "coral is red-led: {r} {g} {b}");
+        let (r, g, b) = channels(sheet_shades("a.docx".into()).unwrap().light_label);
+        assert!(b > r && b > g, "a document is blue: {r} {g} {b}");
     }
 
     #[test]
