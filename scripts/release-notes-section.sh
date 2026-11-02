@@ -6,10 +6,11 @@
 #
 #   scripts/release-notes-section.sh v1.2.3 server-images section.md
 #
-# Used by .github/workflows/release.yml (server-images, through scripts/release-images-notes.sh)
-# and apps/android/scripts/release-apk.sh (apps). GH_REPO picks the repository, as for gh.
+# Used by .github/workflows/release.yml (server-images, through scripts/release-images-notes.sh),
+# apps/android/scripts/release-apk.sh (apps: Android) and apps/ios/scripts/release-ipa.sh (ios).
+# GH_REPO picks the repository, as for gh.
 set -euo pipefail
-ORDER=(server-images apps)
+ORDER=(server-images apps ios)
 
 [[ $# -eq 3 ]] || { echo "usage: $0 <vX.Y.Z> <section name: ${ORDER[*]}> <section file>" >&2; exit 1; }
 TAG=$1 NAME=$2 SECTION=$3
