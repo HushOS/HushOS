@@ -1,0 +1,19 @@
+apps/web/src/components/drive/folder-view.tsx
+  s_ec12ebe02de5ff::t_57da77a0bb680f 858-859,864-888,890-939,953,1425-1428
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d8b119786448d9af57e9764bf134870cb82ca0de",
+  "prompts": {},
+  "sessions": {
+    "s_ec12ebe02de5ff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3f79b7e-f7a1-4c9c-9a58-b7059252bcae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
