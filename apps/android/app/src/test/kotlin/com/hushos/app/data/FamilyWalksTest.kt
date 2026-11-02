@@ -152,6 +152,30 @@ class FamilyWalksTest {
     }
 
     /*
+     * A folder nested in the trashed subfolder, both re-keyed by Sam's device before this phone's process stopped: the
+     * nested folder has no `trashedAt` of its own, so the trash listing doesn't name it and the children route refuses it.
+     * A fresh process finds it, and the subfolder above it, in the folder's change feed and re-keys the nested file under
+     * the key Sam's device gave the nested folder. Fails if only the trash listing is asked (the walk then never ends).
+     */
+    @Test
+    fun aResumeUnderATrashedFolderFindsNestedParentsAnotherDeviceRekeyed() {
+        val nested = server.folder(sub, "Day one")
+        val file = server.file(nested, "Tickets.txt", "marker-nested".toByteArray())
+        val phone = opened()
+        server.trash(sub)
+        family.replaceKeys()
+        server.walkedElsewhere(family.rootId, sub, family.creator)
+        server.walkedElsewhere(family.rootId, nested, family.creator)
+        val next = family.phone(phone.folder)
+        val target = accepted(next).areas.single().walkTarget()!!
+        assertEquals(WalkEnd.WALKED, next.sync.walk(family.groupId, target))
+        assertFalse(server.running(family.rootId))
+        assertEquals(100L, server.node(file).keyEpoch)
+        assertEquals("Tickets.txt", server.record(file).name)
+        assertEquals("Packing.txt", server.record(deep).name)
+    }
+
+    /*
      * A batch that doesn't land (the connection drops) leaves no fresh key pending, so the same phone's next walk sends
      * those nodes again under keys of its own; and a batch that landed with its answer lost, then the process killed, is
      * finished by a fresh process that lists the re-keyed folder through its ledger. Fails if a stopped batch's keys stay

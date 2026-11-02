@@ -190,10 +190,12 @@ internal fun Vault.walkFamilyFolder(target: WalkTarget, progress: (Int) -> Unit 
 }
 
 /*
- * A parent of the work's nodes opened through the ledger as the server serves it now (its key at the target, if it was
- * re-keyed by another device or by this one before a stop). Listing it opens it; a trashed folder the children route
- * refuses (409 `trashed`), so it is found in the trash listing with the folders above it and opened from there, as the
- * web's walk finds a file root. Anything else that fails leaves the parent as it was: its children wait.
+ * A parent of the work's nodes opened through the ledger as the server serves it now (its key at the target, if another
+ * device re-keyed it, or this one before a stop). Listing it opens it. Anything in or under a trashed folder the children
+ * route refuses (409 `trashed`), and only folders with a `trashedAt` of their own are in the trash listing, so its row and
+ * every row above it up to one the ledger already holds at the epoch it is served at come from the folder's change feed
+ * (state from cursor 0: every live, trashed or nested row once), and are opened from the top down. A row that won't open
+ * leaves its children to wait.
  */
 internal fun Vault.openWalkParent(ws: String, parentId: String) {
     try {
@@ -202,20 +204,30 @@ internal fun Vault.openWalkParent(ws: String, parentId: String) {
     } catch (error: Exception) {
         if (error is NotAuthenticated || error is Unreachable) throw error
     }
-    var after: String? = null
-    var pages = 0
-    do {
-        val page = runCatching { api.trashListing(ws, after) }.getOrElse { if (it is NotAuthenticated || it is Unreachable) throw it; return }
-        val entry = page.items.firstOrNull { it.node.id.equals(parentId, ignoreCase = true) && it.node.workspaceId.equals(ws, ignoreCase = true) }
-        if (entry != null) {
-            // The folders above it first (root first, in any order that opens), then the parent itself.
-            var pending = entry.ancestors.filter { it.workspaceId.equals(ws, ignoreCase = true) }
-            repeat(pending.size) { pending = pending.filter { runCatching { open(it, replace = true) }.isFailure } }
-            runCatching { open(entry.node, replace = true) }
+    val rows = HashMap<String, NodeView>()
+    var cursor = 0
+    for (page in 0 until 256) {
+        val feed = try {
+            api.changes(ws, cursor)
+        } catch (error: Exception) {
+            if (error is NotAuthenticated || error is Unreachable) throw error
             return
         }
-        after = page.nextCursor
-    } while (after != null && ++pages < 64)
+        for (change in feed.changes) change.node?.takeIf { it.workspaceId.equals(ws, ignoreCase = true) }?.let { rows[it.id.lowercase()] = it }
+        if (!feed.hasMore || feed.nextCursor <= cursor) break
+        cursor = feed.nextCursor
+    }
+    // The parent, then each folder above it, until one whose own parent the ledger holds at the epoch it is wrapped under.
+    val chain = ArrayList<NodeView>()
+    var at: String? = parentId
+    while (at != null && chain.size < 256) {
+        val row = rows[at.lowercase()] ?: break
+        chain.add(row)
+        val above = row.parentId?.takeIf { !it.equals(ws, ignoreCase = true) } ?: break
+        if (areaLedger.nodeKey(ws, above)?.epoch == row.parentKeyEpoch) break
+        at = above
+    }
+    for (row in chain.asReversed()) runCatching { open(row, replace = true) }
 }
 
 /*

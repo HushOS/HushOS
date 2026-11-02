@@ -119,7 +119,16 @@ interface FamilyHost {
     fun familyWork(inFamily: Boolean) {}
     /* A walk is due, or one stopped: the background work runs once soon, so it finishes with the app closed. */
     fun walkSoon() {}
+    /* A line for the person (a leave that landed): briefly, or until read. */
+    fun notice(text: String, untilRead: Boolean) {}
 }
+
+/*
+ * The leave dialog's state, kept by the model so a rotation or a fold redraws it as it was: whose family, a request under
+ * way (a second press sends nothing), the lapsed plans the server named (confirmed by id on the next press), and the
+ * refusal's words.
+ */
+data class LeaveAsk(val groupId: String, val busy: Boolean = false, val plans: List<com.hushos.app.data.FamilyLapsedPlan> = emptyList(), val error: String? = null)
 
 /* A family folder's key change as its family's page shows it: how many items this phone re-keyed, and why it stopped. */
 data class WalkShown(val groupId: String, val done: Int, val error: String?)
@@ -160,6 +169,49 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
     private var ticks = 0
     /* Join screens open per family (a count): while any is open the screen owns the family; background checks wait. */
     private val joining = HashMap<String, Int>()
+
+    /* The leave dialog on screen, if any (LeaveAsk), and the family a leave landed for, until its page has moved on. */
+    var leaving by mutableStateOf<LeaveAsk?>(null)
+        private set
+    var leftFamily by mutableStateOf<String?>(null)
+
+    /* Leave family pressed on the page: the dialog opens (or stays as it is while a request is under way). */
+    fun askLeave(groupId: String) { if (leaving?.busy != true) leaving = LeaveAsk(groupId) }
+
+    /* Cancel: never while a request is under way. */
+    fun dismissLeave() { if (leaving?.busy != true) leaving = null }
+
+    /*
+     * The dialog's Leave family: one request at a time, false (nothing sent) while one is under way. Its answer lands in
+     * the model, whatever happened to the screen meanwhile: the plans or the words stay on the dialog; a leave that landed
+     * closes it, says so, and tells the page to move on (leftFamily).
+     */
+    fun confirmLeave(family: String): Boolean {
+        val ask = leaving ?: return false
+        if (ask.busy) return false
+        leaving = ask.copy(busy = true, error = null)
+        model.familyScope.launch {
+            val result = leave(ask.groupId, ask.plans.map { it.id })
+            if (leaving?.groupId != ask.groupId) return@launch
+            val outcome = result?.getOrElse { failed ->
+                failed.rethrowIfCancelled()
+                leaving = ask.copy(busy = false, error = FamilyWords.error(failed))
+                return@launch
+            } ?: run { leaving = null; return@launch }
+            when (outcome) {
+                is FamilySync.Leaving.EndsLapsed -> leaving = ask.copy(busy = false, plans = outcome.plans)
+                is FamilySync.Leaving.Refused -> leaving = ask.copy(busy = false, error = outcome.words)
+                is FamilySync.Leaving.Left -> {
+                    leaving = null
+                    // The leave landed either way; a wipe that failed is said, not hidden behind it.
+                    if (outcome.removed.state == FamilyState.Wiped) model.notice("You left $family", untilRead = false)
+                    else model.notice("You left $family, but this device kept some of it. HushOS couldn’t clear the family’s keys and saved records on this device. Sign out to clear them.", untilRead = true)
+                    leftFamily = ask.groupId
+                }
+            }
+        }
+        return true
+    }
 
     /* Each family folder's walk on this phone (by lowercase workspace) while it runs or after it stopped. */
     val walks = mutableStateMapOf<String, WalkShown>()
@@ -652,7 +704,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         list = null; served = null; invitation = null; checking = null
         states.clear(); names.clear(); shown.clear(); details.clear(); syncing.clear(); refreshed.clear(); problems.clear(); verdicts.reset()
         checkedAt.clear(); joining.clear(); syncedAt = 0L; folders = FamilyFolders(); held = null; heldStack = emptyMap(); shownRevision.clear()
-        walks.clear(); walking.clear(); walkEnded.clear()
+        walks.clear(); walking.clear(); walkEnded.clear(); leaving = null; leftFamily = null
     }
 
     /*

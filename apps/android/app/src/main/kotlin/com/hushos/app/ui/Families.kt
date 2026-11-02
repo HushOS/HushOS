@@ -156,6 +156,15 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
         standings = read?.getOrNull()
         checkedWith = with.getOrNull()
     }
+    // The leave dialog lives in the model: redrawn as it was after a rotation or a fold, whatever the page shows below it.
+    families.leaving?.takeIf { it.groupId == groupId }?.let { LeaveDialog(model, it, name) }
+    // A leave that landed: the page moves on, once, whichever composition is on screen when it lands.
+    LaunchedEffect(families.leftFamily) {
+        if (families.leftFamily == groupId) {
+            families.leftFamily = null
+            onBack()
+        }
+    }
     Scaffold(contentWindowInsets = WindowInsets(0), containerColor = alpine.ground, topBar = { DestinationBar(if (joining) waitTitle ?: "Join $name" else name, onBack = onBack) }) { padding ->
         PullToRefreshBox(isRefreshing = families.syncing[groupId] == true, onRefresh = { scope.launch { families.refreshFamilies(force = true) } }, modifier = Modifier.padding(padding).fillMaxSize()) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S8)) {
@@ -178,13 +187,13 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
                             }
                         }
                         TechnicalDetailsRow(view)
-                        Leaving(model, groupId, name, me, onBack)
+                        Leaving(model, groupId, me)
                     }
                     else -> {
                         Alerts(model, groupId, name, state, organizer)
                         if (state == null || families.syncing[groupId] == true) Box(Modifier.fillMaxWidth().padding(AlpineSpace.S8), contentAlignment = Alignment.Center) { LoadingIndicator() }
                         // A family this phone couldn't check (or found shown differently) can still be left, as on the web.
-                        else if (summary?.state == "active" && state != FamilyState.Wiped) Leaving(model, groupId, name, me, onBack)
+                        else if (summary?.state == "active" && state != FamilyState.Wiped) Leaving(model, groupId, me)
                     }
                 }
             }
@@ -231,7 +240,7 @@ private fun Info(title: String, body: String) {
  * The server stays the judge: its refusal shows in the dialog, and lapsed plans it names are said and confirmed by id.
  */
 @Composable
-private fun Leaving(model: DriveViewModel, groupId: String, family: String, me: String, onBack: () -> Unit) {
+private fun Leaving(model: DriveViewModel, groupId: String, me: String) {
     val alpine = Alpine.colors
     val families = model.families
     val members = families.details[groupId]?.members
@@ -241,47 +250,31 @@ private fun Leaving(model: DriveViewModel, groupId: String, family: String, me: 
         families.loadMembers(groupId, session)
     }
     val blocker = members?.let { FamilySync.leaveBlocker(me, it) }
-    var asking by remember { mutableStateOf(false) }
     Subheader("Leaving")
     Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = AlpineSpace.S4, end = AlpineSpace.S2, top = AlpineSpace.S2, bottom = AlpineSpace.S2),
         verticalAlignment = Alignment.CenterVertically) {
         Text(blocker ?: "You’ll lose the family folders. Your own files stay yours.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted,
             modifier = Modifier.weight(1f))
-        TextButton(onClick = { asking = true }, enabled = members != null && blocker == null, modifier = Modifier.heightIn(min = 44.dp)) {
+        TextButton(onClick = { families.askLeave(groupId) }, enabled = members != null && blocker == null, modifier = Modifier.heightIn(min = 44.dp)) {
             Text("Leave family", color = if (members != null && blocker == null) alpine.danger else alpine.inkMuted)
         }
     }
-    if (asking) LeaveDialog(model, groupId, family, alone = members?.count { it.state == "active" } == 1, onDismiss = { asking = false }, onLeft = onBack)
 }
 
+/*
+ * The leave dialog, drawn by the family page from the model's LeaveAsk (so a rotation or a fold redraws it with its
+ * request, plans and words), never from the screen's own state.
+ */
 @Composable
-private fun LeaveDialog(model: DriveViewModel, groupId: String, family: String, alone: Boolean, onDismiss: () -> Unit, onLeft: () -> Unit) {
+private fun LeaveDialog(model: DriveViewModel, ask: LeaveAsk, family: String) {
     val alpine = Alpine.colors
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    // The plans the server named when the leave asked (`ends-lapsed`): said, and confirmed by id on the next press.
-    var plans by remember { mutableStateOf<List<com.hushos.app.data.FamilyLapsedPlan>>(emptyList()) }
-    // In the families' scope, not the dialog's: the leave's own wipe redraws the page, which takes this dialog with it.
-    fun leave() = model.familyScope.launch {
-        busy = true
-        error = null
-        val result = model.families.leave(groupId, plans.map { it.id })
-        busy = false
-        val outcome = result?.getOrElse { failed -> error = com.hushos.app.data.FamilyWords.error(failed); return@launch } ?: return@launch
-        when (outcome) {
-            is FamilySync.Leaving.EndsLapsed -> plans = outcome.plans
-            is FamilySync.Leaving.Refused -> error = outcome.words
-            is FamilySync.Leaving.Left -> {
-                // The leave landed either way; a wipe that failed is said, not hidden behind it.
-                if (outcome.removed.state == FamilyState.Wiped) model.notify("You left $family")
-                else model.notifyUntilRead("You left $family, but this device kept some of it. HushOS couldn’t clear the family’s keys and saved records on this device. Sign out to clear them.")
-                onDismiss()
-                onLeft()
-            }
-        }
-    }
+    val families = model.families
+    val alone = families.details[ask.groupId]?.members?.count { it.state == "active" } == 1
+    val busy = ask.busy
+    val plans = ask.plans
+    val error = ask.error
     androidx.compose.material3.AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss() },
+        onDismissRequest = { families.dismissLeave() },
         title = { Text("Leave $family?") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
@@ -291,8 +284,8 @@ private fun LeaveDialog(model: DriveViewModel, groupId: String, family: String, 
                 error?.let { Text(it, color = alpine.danger) }
             }
         },
-        confirmButton = { TextButton(onClick = { leave() }, enabled = !busy) { Text(if (busy) "Leaving" else "Leave family", color = alpine.danger) } },
-        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
+        confirmButton = { TextButton(onClick = { families.confirmLeave(family) }, enabled = !busy) { Text(if (busy) "Leaving" else "Leave family", color = alpine.danger) } },
+        dismissButton = { TextButton(onClick = { families.dismissLeave() }, enabled = !busy) { Text("Cancel") } },
     )
 }
 
