@@ -189,11 +189,19 @@ class FamilySync(
         }
         // Kept for whoever draws the families (FamiliesModel), whichever caller found them: the background work using
         // the app's vault finds a removal as surely as the app does, and the screens must let go of it too.
-        if (wiped.isNotEmpty()) {
-            removals.addAll(wiped)
-            onRemovals?.invoke()
-        }
+        publishRemovals(wiped)
         return listed to wiped
+    }
+
+    /*
+     * Every wipe of a family, whoever ran it (a sync's not-member, route 2's reconciliation, a member check, a join, a
+     * leave), queued for the screens and told: the background work shares the app's vault and must not leave them drawing
+     * what it let go of. A wipe that couldn't finish goes too, as the refusal it leaves.
+     */
+    internal fun publishRemovals(found: List<Revised>) {
+        if (found.isEmpty()) return
+        removals.addAll(found)
+        onRemovals?.invoke()
     }
 
     /* Removals and unfinished wipes found by any caller of listReconciling, until the screens take them. */
@@ -269,7 +277,9 @@ class FamilySync(
      */
     fun syncRevised(summary: GroupSummary): Revised {
         names[summary.id] = summary.name
-        return exclusive(summary.id) { Revised(run(summary), revision.incrementAndGet()) }
+        val revised = exclusive(summary.id) { Revised(run(summary), revision.incrementAndGet(), summary.id) }
+        if (revised.state == FamilyState.Wiped) publishRemovals(listOf(revised))
+        return revised
     }
 
     data class Revised(val state: FamilyState, val revision: Long, val groupId: String? = null)
@@ -409,7 +419,7 @@ class FamilySync(
             refuse(groupId)
             FamilyState.Failed(FamilyWords.error(failed))
         }
-        Revised(state, revision.incrementAndGet())
+        Revised(state, revision.incrementAndGet(), groupId).also { publishRemovals(listOf(it)) }
     }
 
     /*

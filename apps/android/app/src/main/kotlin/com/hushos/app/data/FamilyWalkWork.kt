@@ -46,21 +46,47 @@ object FamilyWalkWork {
 
     private val network = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
 
-    /* While the account is in a family: a check every hour or so, whatever the app does. */
+    private const val SESSION = "session"
+
+    /*
+     * The session a job belongs to, as a tag, a unique name's suffix and the job's input: a digest of the account and the
+     * session token (no name, and nothing the token can be read back from), so one session's pass never cancels or
+     * keeps another's work, and a job left over from an ended session does nothing.
+     */
+    fun sessionKey(session: Shared.Session): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest((session.userId.lowercase() + "|" + session.token).toByteArray())
+            .take(12).joinToString("") { "%02x".format(it) }
+
+    private fun sessionTag(key: String) = "$TAG:$key"
+
+    /* While the account is in a family: a check every hour or so, whatever the app does. For the session signed in now. */
     fun schedule(context: Context) {
-        val request = PeriodicWorkRequestBuilder<FamilyWalkWorker>(1, TimeUnit.HOURS).setConstraints(network).addTag(TAG).build()
-        WorkManager.getInstance(context).enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.KEEP, request)
+        val key = Shared.session(context)?.let(::sessionKey) ?: return
+        val request = PeriodicWorkRequestBuilder<FamilyWalkWorker>(1, TimeUnit.HOURS).setConstraints(network).addTag(TAG).addTag(sessionTag(key))
+            .setInputData(androidx.work.workDataOf(SESSION to key)).build()
+        WorkManager.getInstance(context).enqueueUniquePeriodicWork("$PERIODIC:$key", ExistingPeriodicWorkPolicy.KEEP, request)
     }
 
     /* A walk is due (found by the app, or one that stopped): run once as soon as there is a network, retried with backoff. */
     fun soon(context: Context) {
+        val key = Shared.session(context)?.let(::sessionKey) ?: return
         val request = OneTimeWorkRequestBuilder<FamilyWalkWorker>().setConstraints(network)
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).addTag(TAG).build()
-        WorkManager.getInstance(context).enqueueUniqueWork(SOON, ExistingWorkPolicy.KEEP, request)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).addTag(TAG).addTag(sessionTag(key))
+            .setInputData(androidx.work.workDataOf(SESSION to key)).build()
+        WorkManager.getInstance(context).enqueueUniqueWork("$SOON:$key", ExistingWorkPolicy.KEEP, request)
     }
 
-    /* In no family any more (left, removed), or signed out: nothing is checked in the background. */
+    /* Signed out, the account wiped: nothing of any session is checked in the background. */
     fun cancel(context: Context) { runCatching { WorkManager.getInstance(context).cancelAllWorkByTag(TAG) } }
+
+    /* In no family any more (left, removed): this session's checks stop, and only this session's. */
+    fun cancelSession(context: Context, session: Shared.Session) {
+        runCatching { WorkManager.getInstance(context).cancelAllWorkByTag(sessionTag(sessionKey(session))) }
+    }
+
+    /* Whether `vault` is still the session signed in on this phone, and still open: nothing else is worked or stopped. */
+    fun current(context: Context, vault: Vault): Boolean =
+        !vault.closed && Shared.session(context)?.let { sessionKey(it) == sessionKey(vault.api.session) } == true
 
     /*
      * One pass (the worker's body): route 2 with every family it no longer lists asked about (a removal wipes), each
@@ -71,24 +97,30 @@ object FamilyWalkWork {
     fun run(
         context: Context,
         vault: Vault? = Shared.session(context)?.let { LiveVaults.of(it) ?: Vault.fromShared(context) },
-        /* What lets the background check go (tests watch it). */
-        stop: () -> Unit = { cancel(context) },
+        /* What lets the background check go: only this vault's session's work (tests watch it). */
+        stop: () -> Unit = { vault?.let { cancelSession(context, it.api.session) } },
     ): Outcome {
         val session = vault ?: return Outcome.SIGNED_OUT
+        // Every step only while this vault is the open session signed in now: a pass whose session ended (a sign-out,
+        // another account) does nothing more, and never touches the next session's work.
+        if (!current(context, session)) return Outcome.SIGNED_OUT
         val families = session.families
         return try {
             val (listed, gone) = families.listReconciling()
+            if (!current(context, session)) return Outcome.SIGNED_OUT
             // A removal not settled (no answer to route 5, or a wipe that couldn't finish) is asked about again: its record
             // and copies stay until the server's not-member lets them go.
             val unsettled = families.unsettled(listed)
             var again = unsettled.isNotEmpty() || gone.any { it.state != FamilyState.Wiped }
             for (summary in listed.filter { it.state == "active" }) {
+                if (!current(context, session)) return Outcome.SIGNED_OUT
                 val view = when (val state = families.sync(summary)) {
                     is FamilyState.Accepted -> state.view
                     is FamilyState.Failed -> { if (state.words == FamilyWords.NO_ANSWER) again = true; null }
                     else -> null
                 }
                 for (target in view?.areas.orEmpty().mapNotNull { it.walkTarget() }) {
+                    if (!current(context, session)) return Outcome.SIGNED_OUT
                     try {
                         families.walk(summary.id, target)
                     } catch (error: NotAuthenticated) {
@@ -99,6 +131,7 @@ object FamilyWalkWork {
                 }
             }
             // Nothing left to check only once no family is listed and none is kept on this phone.
+            // Reached only while the session still stands: the pass returned at the first check after it ended.
             if (listed.isEmpty() && unsettled.isEmpty() && !again) stop()
             if (again) Outcome.RETRY else Outcome.DONE
         } catch (_: NotAuthenticated) {
@@ -111,6 +144,9 @@ object FamilyWalkWork {
 
 class FamilyWalkWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        // A job left over from a session that ended does nothing for the one signed in now.
+        val now = Shared.session(applicationContext)?.let(FamilyWalkWork::sessionKey)
+        if (now == null || now != inputData.getString("session")) return@withContext Result.success()
         when (FamilyWalkWork.run(applicationContext)) {
             FamilyWalkWork.Outcome.DONE, FamilyWalkWork.Outcome.SIGNED_OUT -> Result.success()
             FamilyWalkWork.Outcome.RETRY -> Result.retry()

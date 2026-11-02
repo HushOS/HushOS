@@ -305,6 +305,29 @@ class FamilyWalksTest {
     }
 
     /*
+     * A background pass for an account in no family is answered after that session ended (a sign-out) and another
+     * account signed in: it stops there, and never cancels the background checks, which by then are the new account's.
+     * Fails if a pass acts on a session that is no longer the one signed in.
+     */
+    @Test
+    fun aPassThatEndsAfterSignOutLeavesTheNextAccountsWorkAlone() {
+        family.listed = false
+        val vault = Vault.fromShared(app)!!
+        var stopped = 0
+        server.beforeAnswer = { method, path ->
+            if (method == "GET" && path == "groups") {
+                vault.close()
+                Shared.writeSession(app, Shared.Session(server.origin, "another-session", java.util.UUID.randomUUID().toString(), "ana@example.org"))
+            }
+        }
+        assertEquals(FamilyWalkWork.Outcome.SIGNED_OUT, FamilyWalkWork.run(app, vault) { stopped++ })
+        assertEquals("the next account's checks stay", 0, stopped)
+        // Each session's work has its own key: one session never names another's.
+        val one = Shared.Session(server.origin, "a", "u", "e")
+        assertTrue(FamilyWalkWork.sessionKey(one) != FamilyWalkWork.sessionKey(one.copy(token = "b")))
+    }
+
+    /*
      * The app is closed (no live vault): Sam's key change is made meanwhile, and the background work's pass finds it with a
      * vault of its own, from the device record the app left, and walks it to its end; a pass whose walk stops asks to be
      * run again. Fails if the background pass doesn't walk, or calls a stopped walk done.

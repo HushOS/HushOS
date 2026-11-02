@@ -213,7 +213,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     override fun updateState(change: (DriveState) -> DriveState) = _state.update(change)
     override fun lostSession() = sessionLost()
     override fun familyWork(inFamily: Boolean) {
-        if (inFamily) com.hushos.app.data.FamilyWalkWork.schedule(context) else com.hushos.app.data.FamilyWalkWork.cancel(context)
+        if (inFamily) com.hushos.app.data.FamilyWalkWork.schedule(context)
+        else vault?.api?.session?.let { com.hushos.app.data.FamilyWalkWork.cancelSession(context, it) }
     }
     override fun walkSoon() = com.hushos.app.data.FamilyWalkWork.soon(context)
     override fun notice(text: String, untilRead: Boolean) = if (untilRead) notifyUntilRead(text) else notify(text)

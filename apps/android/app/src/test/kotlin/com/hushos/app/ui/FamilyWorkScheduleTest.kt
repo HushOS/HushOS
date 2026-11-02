@@ -95,6 +95,23 @@ class FamilyWorkScheduleTest {
         assertTrue(model.problems.values.any { it == FamilyProblem.Removed })
     }
 
+    /*
+     * Route 2 still lists the family but its member list answers not-member: the background work's own sync wipes it,
+     * and the screens let go of it too. Fails if a wipe from a sync (not only route 2's reconciliation) never reaches them.
+     */
+    @Test
+    fun aRemovalTheBackgroundWorksSyncFindsReachesTheScreens() {
+        val app = RuntimeEnvironment.getApplication()
+        val host = Host(Vault(app, DriveApi(Shared.session(app)!!)))
+        val model = FamiliesModel(host)
+        runBlocking { model.refreshFamilies() }
+        assertTrue(model.states[family.groupId] is FamilyState.Accepted)
+        family.notMember = true
+        com.hushos.app.data.FamilyWalkWork.run(app, host.vault) {}
+        assertEquals(FamilyState.Wiped, model.states[family.groupId])
+        assertTrue(model.problems.values.any { it == FamilyProblem.Removed })
+    }
+
     /* Fails if a join that lands with nothing due leaves the background check unscheduled. */
     @Test
     fun joiningSchedulesTheBackgroundCheck() {
