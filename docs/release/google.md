@@ -144,12 +144,14 @@ Facts: new apps must ship as App Bundles with Play App Signing (https://develope
 
     It writes `apps/android/app/build/outputs/bundle/release/app-release.aab`, signed with the upload key, and prints the key's SHA-256. The version is package.json's and the version code the commit count on main (`scripts/build-number.sh`); nothing is edited.
 
+    The bundle carries the native debug symbols for Play to symbolicate crashes in the Rust core (and JNA): `BUNDLE-METADATA/com.android.tools.build.debugsymbols/<abi>/<lib>.so.sym`, each library's symbol table, matched to the crash by its GNU build ID. AGP extracts them, and strips the libraries the app ships, with the NDK the app pins (`ndkVersion` in `apps/android/app/build.gradle.kts`, the one `bun run core:android` builds the core with). If that NDK isn't installed, AGP says "Unable to strip the following libraries" and the bundle has no symbols: install it in Android Studio's SDK Manager (SDK Tools > NDK, Show Package Details) before building a release. Releases up to 0.11.0 have no symbols to upload: their core has no build ID (their libraries ship their symbol table, so crash frames there are named anyway).
+
 2. Play Console > **Test and release > Testing > Internal testing** > **Testers** tab > **Create email list**: `HushOS team`, add the Gmail or Google Workspace addresses of your testers (yours first) > Save. Tick the list.
 3. **Releases** tab > **Create new release**.
 4. **App integrity / Play App Signing:** on the first release Play asks how the app is signed. Choose **Use Google-generated key** (the default). Your upload key is whatever signed this first bundle. Google now also enrolls new apps in "quantum-ready, hybrid signing".
 5. **App bundles:** **Upload** the `.aab`.
 6. **Release name:** `1.0.0 (1)`. **Release notes:** from store-listing.md.
-7. **Next** > review the warnings (a warning about deobfuscation files is fine, errors are not) > **Save and publish** (or **Start rollout to Internal testing**).
+7. **Next** > review the warnings > **Save and publish** (or **Start rollout to Internal testing**). Errors are not fine. The bundle carries both the R8 mapping and the native debug symbols, so a warning that either is missing means the bundle wasn't built as above (for the symbols: the pinned NDK wasn't installed); rebuild rather than publish it.
 8. **Testers** tab > **Copy link** under "How testers join your test". Each tester opens it on their phone signed in to that Google account, accepts, then installs from Play. Google says a first test link can take a few hours to start working.
 
 ## 6. App links, then the device checks
