@@ -218,12 +218,17 @@ public enum TemporaryCopies {
                 }
             }
             for node in contents(entry) {
-                // opened/family/<workspace>/<node>/<version>/<file>: the same, a workspace at a time.
-                if name == "opened", node.lastPathComponent == familyFolder {
+                // opened/family/<workspace>/<node>/<version>/<file> and opened/share/<workspace>/...: the same, a workspace at a
+                // time; opened/own/<node>/<version>/<file>: as any folder of nodes.
+                if name == "opened", [familyFolder, shareFolder].contains(node.lastPathComponent) {
                     for workspace in contents(node) {
                         sweepNodes(workspace)
                         if contents(workspace).isEmpty { try? files.removeItem(at: workspace) }
                     }
+                    continue
+                }
+                if name == "opened", node.lastPathComponent == ownFolder {
+                    sweepNodes(node)
                     continue
                 }
                 for version in contents(node) where old(version) { try? files.removeItem(at: version) }
@@ -238,15 +243,56 @@ public enum TemporaryCopies {
      * removes every copy of it whatever this session listed. Nil for a family workspace id that
      * isn't a UUID: no copy is made where it couldn't be found again.
      */
-    public static func openedFolder(itemId: String, version: String, familyWorkspace: String?,
+    /*
+     * `shareWorkspace`: a received share's item, under `opened/share/<workspace>/<item>/<version>/`, so
+     * proving that workspace a family's removes every copy of it, after a relaunch too. This account's
+     * own items go under `opened/own/<item>/<version>/`; anything left flat (`opened/<item>`) is an
+     * earlier version's copy, and goes when a vault starts (dropFlatCopies).
+     */
+    public static func openedFolder(itemId: String, version: String, familyWorkspace: String?, shareWorkspace: String? = nil,
                                     in temporary: URL = FileManager.default.temporaryDirectory) -> URL? {
         let opened = temporary.appendingPathComponent("opened", isDirectory: true)
-        if let familyWorkspace {
-            guard let workspace = UUID(uuidString: familyWorkspace) else { return nil }
-            return opened.appendingPathComponent(familyFolder, isDirectory: true).appendingPathComponent(workspace.uuidString.lowercased(), isDirectory: true)
+        if let workspaceId = familyWorkspace ?? shareWorkspace {
+            guard let workspace = UUID(uuidString: workspaceId) else { return nil }
+            return opened.appendingPathComponent(familyWorkspace != nil ? familyFolder : shareFolder, isDirectory: true)
+                .appendingPathComponent(workspace.uuidString.lowercased(), isDirectory: true)
                 .appendingPathComponent(itemId, isDirectory: true).appendingPathComponent(version, isDirectory: true)
         }
-        return opened.appendingPathComponent(itemId, isDirectory: true).appendingPathComponent(version, isDirectory: true)
+        return opened.appendingPathComponent(ownFolder, isDirectory: true).appendingPathComponent(itemId, isDirectory: true)
+            .appendingPathComponent(version, isDirectory: true)
+    }
+
+    /* `opened/share/`: received shares' copies by workspace; `opened/own/`: this account's own items' copies. */
+    static let shareFolder = "share"
+    static let ownFolder = "own"
+
+    /*
+     * Every copy opened from these workspaces' items as a received share's (a workspace proven a
+     * family's, or let go of): the whole `opened/share/<workspace>` folder, under the copies' lock.
+     */
+    public static func forgetShareWorkspaces(_ workspaces: Set<String>, in temporary: URL = FileManager.default.temporaryDirectory) {
+        let shares = temporary.appendingPathComponent("opened", isDirectory: true).appendingPathComponent(shareFolder, isDirectory: true)
+        forgetLock.withLock {
+            for id in workspaces {
+                guard let workspace = UUID(uuidString: id) else { continue }
+                try? FileManager.default.removeItem(at: shares.appendingPathComponent(workspace.uuidString.lowercased(), isDirectory: true))
+            }
+        }
+    }
+
+    /*
+     * Copies an earlier version left flat (`opened/<item>`): which workspace they came from isn't
+     * known, so a share's can't be told from this account's own; all go when a vault starts, which
+     * only costs a download again.
+     */
+    public static func dropFlatCopies(in temporary: URL = FileManager.default.temporaryDirectory) {
+        let opened = temporary.appendingPathComponent("opened", isDirectory: true)
+        forgetLock.withLock {
+            for entry in (try? FileManager.default.contentsOfDirectory(at: opened, includingPropertiesForKeys: nil)) ?? []
+                where UUID(uuidString: entry.lastPathComponent) != nil {
+                try? FileManager.default.removeItem(at: entry)
+            }
+        }
     }
 
     /*
@@ -325,19 +371,6 @@ public enum TemporaryCopies {
     /* The session open now, for cleanup and record writes that must do nothing once it ends (CopySession). */
     public static func session(_ account: CopyEpoch = .process) -> CopySession {
         forgetLock.withLock { CopySession(account: account, epoch: account.value) }
-    }
-
-    /*
-     * The copies opened of these items outside any family's folder (`opened/<item>`): items of a
-     * share whose folder was proven a family's, opened before the proof under the share's keys.
-     */
-    public static func forgetItems(_ ids: Set<String>, in temporary: URL = FileManager.default.temporaryDirectory) {
-        let opened = temporary.appendingPathComponent("opened", isDirectory: true)
-        forgetLock.withLock {
-            for id in ids where UUID(uuidString: id) != nil {
-                try? FileManager.default.removeItem(at: opened.appendingPathComponent(id.lowercased(), isDirectory: true))
-            }
-        }
     }
 
     /* `opened/family/`: family folders' copies by workspace; never an item id (those are UUIDs). */

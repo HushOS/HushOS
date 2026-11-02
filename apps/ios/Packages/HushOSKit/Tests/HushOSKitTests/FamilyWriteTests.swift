@@ -685,7 +685,7 @@ extension OnFakeDrive {
             defer { Offline.forget(photo.id) }
             try await vault.keepDownloaded(photo)
             let kept = try #require(Offline.localCopy(of: photo))
-            let opened = try #require(TemporaryCopies.openedFolder(itemId: photo.id, version: "v1", familyWorkspace: nil))
+            let opened = try #require(TemporaryCopies.openedFolder(itemId: photo.id, version: "v1", familyWorkspace: nil, shareWorkspace: family.workspaceId))
             try FileManager.default.createDirectory(at: opened, withIntermediateDirectories: true)
             try Data("plaintext".utf8).write(to: opened.appendingPathComponent("Beach.jpg"))
             guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
@@ -693,6 +693,38 @@ extension OnFakeDrive {
             #expect(!FileManager.default.fileExists(atPath: kept.path))
             #expect(!FileManager.default.fileExists(atPath: opened.path))
             #expect(await vault.takeEvicted().contains(photo.id))
+        }
+
+        /*
+         * A copy opened from a share's file, then the app starts again (a fresh vault, which holds none of
+         * its rows), then route 25 proves the share's workspace a family's: the copy goes, found by its
+         * workspace, not by ids this process holds. A copy an earlier version left flat goes when the vault
+         * starts; one of this account's own items stays. Fails if a share's copy can only be found by the
+         * ids the vault holds.
+         */
+        @Test func aSharesCopyGoesWhenItsFolderIsProvenAfterARestart() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            func copy(_ folder: URL) throws -> URL {
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                let file = folder.appendingPathComponent("copy")
+                try Data("plaintext".utf8).write(to: file)
+                return file
+            }
+            let shared = try copy(try #require(TemporaryCopies.openedFolder(itemId: family.fileId, version: "v1", familyWorkspace: nil, shareWorkspace: family.workspaceId)))
+            let ownId = UUID().uuidString.lowercased()
+            let own = try copy(try #require(TemporaryCopies.openedFolder(itemId: ownId, version: "v1", familyWorkspace: nil)))
+            defer { try? FileManager.default.removeItem(at: own.deletingLastPathComponent().deletingLastPathComponent()) }
+            let legacy = try copy(FileManager.default.temporaryDirectory.appendingPathComponent("opened/\(UUID().uuidString.lowercased())/v1", isDirectory: true))
+            // The app started again: a fresh vault.
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            #expect(!FileManager.default.fileExists(atPath: legacy.path), "an earlier version's flat copy outlived the start")
+            #expect(FileManager.default.fileExists(atPath: own.path), "the own drive's copy was dropped")
+            #expect(FileManager.default.fileExists(atPath: shared.path))
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(!FileManager.default.fileExists(atPath: shared.path), "a share's copy outlived its folder becoming a family's")
+            #expect(FileManager.default.fileExists(atPath: own.path))
         }
 
         /*

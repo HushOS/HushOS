@@ -212,6 +212,8 @@ public actor Vault {
         self.api = api
         self.session = session
         defer { api.writeGate.set { [weak self] workspaceId in try await self?.finalGate(workspaceId) } }
+        // Copies an earlier version left flat, a share's among them, whose workspace nothing records: gone before any opens.
+        TemporaryCopies.dropFlatCopies()
         // In the group's `local` folder, which is out of backups however these files are rewritten.
         let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedKeychain.accessGroup).map { _ in Unbacked.local }
         indexURL = container?.appendingPathComponent("files-parents.json")

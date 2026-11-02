@@ -1890,8 +1890,12 @@ final class DriveStore {
      * its workspace, so forgetting the family removes every copy of it; nil when that can't be.
      */
     private func openedFolder(_ item: Opened, version: VersionListView?) -> URL? {
-        TemporaryCopies.openedFolder(itemId: item.id, version: version?.id ?? item.node.currentVersion?.id ?? "current",
-                                     familyWorkspace: isFamily(item) ? item.node.workspaceId : nil)
+        // A received share's under its workspace, so proving it a family's removes them (any workspace not known as this
+        // account's own counts as a share's until it is).
+        let own = myWorkspace?.lowercased()
+        let share = !isFamily(item) && item.node.workspaceId.lowercased() != own ? item.node.workspaceId : nil
+        return TemporaryCopies.openedFolder(itemId: item.id, version: version?.id ?? item.node.currentVersion?.id ?? "current",
+                                            familyWorkspace: isFamily(item) ? item.node.workspaceId : nil, shareWorkspace: share)
     }
 
     /*

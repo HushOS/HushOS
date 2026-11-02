@@ -355,7 +355,7 @@ extension DriveStore {
             folderProblems[id] = problem
             names[id] = nil
             thumbnails[id] = nil
-            try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("opened/\(id)", isDirectory: true))
+            try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("opened/own/\(id)", isDirectory: true))
         }
         // Every opened copy of the family's folders, those this session never listed included: never once this session ended.
         TemporaryCopies.forgetFamily(Array(areas), session: FamilySync.shared(for: vault).session)
