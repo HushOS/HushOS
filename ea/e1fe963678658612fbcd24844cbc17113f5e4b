@@ -1,0 +1,43 @@
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyWritesTest.kt
+  s_566b8e0c4467a4::t_b242b938e6034c 1-193
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_4a0931dcb51490 84
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyLines.kt
+  s_566b8e0c4467a4::t_d1d2e1f2255c27 13-14,48-49
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_566b8e0c4467a4::t_f2e202b667c48e 13,263-264,334,721-735
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_9ed85cd8b6a54b 218-223,1176-1178,1180-1185,1406,1410-1412,1416-1430,1433,1435-1437,1440-1442,1447,1452-1462,1468,1471-1473,1479,1488-1490,1531,1541-1542,1554,1556-1557,1561,1582-1584,1597,1618-1622,1628,1695-1700,1703-1704,1706-1708,1720-1721,1726-1727,1734,1738-1741,1756-1757,1762-1765,1797
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_566b8e0c4467a4::t_d8b99a368e2881 10-12,14-16,165-169,173-287,436,439-442,444
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_c119aab6ea8418 197-217
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_566b8e0c4467a4::t_d6f099eb9d420b 149-151,289,307,324-325,339,470
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_566b8e0c4467a4::t_9023dd1febe014 138-139,211-212,218-221,223-228,230-233,353-354,356-358,363
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_566b8e0c4467a4::t_a2665cc4cf5e18 562-568
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyGuardTest.kt
+  s_566b8e0c4467a4::t_b1a1dd11e87002 111
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_566b8e0c4467a4::t_c47f2ad4d6290a 23,340,392-393,411,1079-1081,1084,1093-1094,1097,1099
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_cd9b9ef647e6e4 216
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "eae1fe963678658612fbcd24844cbc17113f5e4b",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
