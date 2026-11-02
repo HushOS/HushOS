@@ -1,0 +1,31 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_a0cacb3ab57fee 86
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyJoin.kt
+  s_566b8e0c4467a4::t_4262c71d9716ed 218-221
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_566b8e0c4467a4::t_88f5ce51948fae 192,196-206,280-282,422
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyWalkWork.kt
+  s_566b8e0c4467a4::t_1ee02785ee0efc 49-62,64-67,72,74-76,79,82-90,100-101,104-106,110,116,123,134,147-149
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_a9b63e1f5b32ad 216-217
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyWalksTest.kt
+  s_566b8e0c4467a4::t_c72f95e6ea3c92 306-328
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyWorkScheduleTest.kt
+  s_566b8e0c4467a4::t_a0750db541bfeb 98-114
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a8ae1cbf44031254c93f388ab615db6fef877649",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
