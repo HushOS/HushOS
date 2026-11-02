@@ -212,6 +212,31 @@ import Testing
     }
 
     /*
+     * The same account signs in again from Files while a request's outcome is landing (the
+     * families read again after an invitation was accepted): the caller, still waiting, gets
+     * nothing, so the sheet never moves on with the replaced session's answer. Fails if the gate
+     * checks only the caller's cancel after landing, not the session.
+     */
+    @Test func aSessionReplacedWhileLandingHandsTheCallerNothing() async {
+        let owner = Owner()
+        let gate = SessionGate<Owner> { owner }
+        let token = try! #require(gate.begin())
+        let landing = Gate()
+        let release = Gate()
+        let caller = Task { @MainActor in
+            await gate.publish(token, { _ in 7 }, land: { _ in
+                landing.open()
+                await Task.detached { await release.wait() }.value
+            })
+        }
+        await landing.wait()
+        gate.reset()
+        release.open()
+        let result = await caller.value
+        #expect(result == nil, "the caller moved on with a replaced session's answer")
+    }
+
+    /*
      * The session is replaced after the gate took the work and before the work got its turn (a
      * sign-in queued on the main actor between them): the work never starts. The session reads as
      * the token's for the token and the run's first check, and as the next session's after. Fails

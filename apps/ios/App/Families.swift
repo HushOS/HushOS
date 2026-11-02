@@ -174,9 +174,11 @@ extension DriveStore {
             guard current(session) else { return }
             let trust = familyBook.capture(groupId)
             let nodes = group.map(\.node)
-            guard let verdicts = try? await inFamily(session, { await $0.verdicts(of: nodes, groupId: groupId) }) else { continue }
-            guard current(session) else { return }
-            familyBook.publish(groupId, trust: trust, zip(group, verdicts).map { ($0.ref, $0.node, $1) })
+            // Published as the session's own work: a screen that stops waiting never leaves its rows without marks.
+            _ = try? await inFamilyLanding(session, { await $0.verdicts(of: nodes, groupId: groupId) }, land: { result in
+                guard case .success(let verdicts) = result, self.current(session) else { return }
+                self.familyBook.publish(groupId, trust: trust, zip(group, verdicts).map { ($0.ref, $0.node, $1) })
+            })
         }
     }
 
@@ -196,25 +198,31 @@ extension DriveStore {
     func refreshFamilies(force: Bool = false, session: Session? = nil) async {
         guard let session = session ?? beginSession(), current(session) else { return }
         if !force, let at = familiesSyncedAt, Date().timeIntervalSince(at) < 60, familyList != nil { return }
-        do {
-            // A family this phone holds that the list no longer names is asked about, and wiped only on the server's
-            // not-member, so an open family page or folder leaves at once rather than at the next launch.
-            guard let (list, gone, unsaved) = try await inFamily(session, { try await $0.listReconciling() }) else { return }
-            for summary in list { familyNames[summary.id] = summary.name }
-            familyList = list
-            familiesServed = true
-            familiesSyncedAt = Date()
-            for groupId in gone { removed(groupId) }
-            for (groupId, words) in unsaved { couldntRemove(groupId, words) }
-            for summary in list {
-                guard current(session) else { return }
-                await refreshFamily(summary, session: session)
+        // A family this phone holds that the list no longer names is asked about, and wiped only on the server's
+        // not-member, so an open family page or folder leaves at once rather than at the next launch. What the list and
+        // the removal check found lands as the session's own work, whoever asked (Account, a family page, the tick) and
+        // whether or not it still waits (SessionGate.publish).
+        let found = try? await inFamilyLanding(session, { try await $0.listReconciling() }, land: { result in
+            switch result {
+            case .success(let found):
+                for summary in found.listed { self.familyNames[summary.id] = summary.name }
+                self.familyList = found.listed
+                self.familiesServed = true
+                self.familiesSyncedAt = Date()
+                for groupId in found.removed { self.removed(groupId) }
+                for (groupId, words) in found.failed { self.couldntRemove(groupId, words) }
+            case .failure(let error as GroupsAPIError) where error.status == 404 || error.status == 501:
+                self.familyList = nil
+                self.familiesServed = false
+            case .failure:
+                // No answer: what was shown stays.
+                break
             }
-        } catch let error as GroupsAPIError where error.status == 404 || error.status == 501 {
-            familyList = nil
-            familiesServed = false
-        } catch {
-            // No answer: what was shown stays.
+        })
+        // Each family checked in turn; a caller that stopped waiting starts no more checks (none of whose outcome is lost).
+        for summary in found?.listed ?? [] {
+            guard current(session), !Task.isCancelled else { return }
+            await refreshFamily(summary, session: session)
         }
     }
 
@@ -229,10 +237,14 @@ extension DriveStore {
         // A reset cleared it already; the next session may be checking the same family by now.
         defer { if current(session) { familySyncing.remove(summary.id) } }
         let previous = familyStates[summary.id]
-        guard let (revised, ended) = try? await inFamily(session, { sync in (await sync.syncRevised(summary), await sync.takeEnded()) }) else { return }
-        // A 401 the sync met is any request's: the app asks whether the session ended.
-        if let ended { report(ended) }
-        await show(revised.state, of: summary, previous: previous, revision: revised.revision, session: session)
+        // What the sync found lands as the session's own work, whoever asked and whether or not it still waits: a fork or
+        // removal found by a sync whose page closed still clears the family's rows, pictures and queued uploads (show).
+        _ = try? await inFamilyLanding(session, { sync in (await sync.syncRevised(summary), await sync.takeEnded()) }, land: { result in
+            guard case .success(let found) = result else { return }
+            // A 401 the sync met is any request's: the app asks whether the session ended.
+            if let ended = found.1 { self.report(ended) }
+            await self.show(found.0.state, of: summary, previous: previous, revision: found.0.revision, session: session)
+        })
     }
 
     /*

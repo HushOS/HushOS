@@ -213,6 +213,44 @@ extension OnFakeDrive {
             #expect(try Data(contentsOf: file) == family.photoBytes, "the nested photo didn't come down under the new vault")
         }
 
+        /*
+         * A family refresh whose caller stops waiting while the sync is out (a family page closed, the
+         * tick's task cancelled), and the server now serves a fork: what the sync found still lands for
+         * the session (DriveStore.refreshFamily lands it through SessionGate.publish, and its showing
+         * clears the family's rows, pictures and queued uploads), and the caller gets nothing. Fails if
+         * a cancelled caller drops a real sync's fork with its own answer.
+         */
+        @MainActor
+        @Test func aRefreshWhoseCallerStopsWaitingStillLandsAFork() async throws {
+            final class Landed: @unchecked Sendable { var state: FamilyState? }
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2, family.r3], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            _ = try await phone.vault.children(of: family.rootId)
+            // Another history from version 3 than the one this device saw.
+            server.serve(chain: [family.r1, family.r2, family.r3Fork, family.r4Fork])
+            let (sync, summary) = (phone.sync, family.summary)
+            let gate = SessionGate<FamilySync> { sync }
+            let token = try #require(gate.begin())
+            let (started, go, landed) = (SessionGateTests.Gate(), SessionGateTests.Gate(), Landed())
+            let caller = Task { @MainActor in
+                await gate.publish(token, { sync -> FamilyState in
+                    started.open()
+                    await Task.detached { await go.wait() }.value
+                    return await sync.syncRevised(summary).state
+                }, land: { result in landed.state = try? result.get() })
+            }
+            await started.wait()
+            caller.cancel()
+            go.open()
+            let result = await caller.value
+            #expect(result == nil, "the caller that stopped waiting was handed the answer")
+            guard case .fork? = landed.state else { Issue.record("the fork the sync found didn't land: \(String(describing: landed.state))"); return }
+            #expect(await phone.vault.item(family.fileId) == nil)
+        }
+
         @Test func theSameSessionKeepsItsFamily() async throws {
             guard let (family, phone) = try await accepted() else { return }
             defer { phone.done(); FamilySync.forget() }
