@@ -15,7 +15,7 @@ import { checkName, DRIVE_ENVELOPE_SUITE } from '@hushos/crypto/drive';
 import { newId } from '@hushos/crypto/ids';
 import { LINK_KDF_VERSION } from '@hushos/crypto/links';
 import { NOT_CARRIED, SHARED_IN_FAMILY } from '@hushos/crypto/protocol';
-import { Catalogue, parentsBefore, parentsFirst } from './catalogue';
+import { Catalogue, collapseRecent, parentsBefore, parentsFirst } from './catalogue';
 import type { TreeMirror } from './mirror';
 import {
     TAGS_DOCUMENT,
@@ -867,11 +867,21 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             ? catalogue.search({ query, limit })
             : [];
     }
-    /* Home's Recent: answers while rows are still opening, like search. */
-    function recent(limit: number, keep?: (node: DriveNode) => boolean) {
+    /*
+     * Home's Recent: answers while rows are still opening, like search, and from `fresher` (rows
+     * ahead of the catalogue) alone before that.
+     */
+    function recent(
+        limit: number,
+        keep: (node: DriveNode) => boolean = () => true,
+        fresher: DriveNode[] = [],
+    ) {
         return catalogueState.phase === 'ready' || catalogueState.phase === 'opening'
-            ? catalogue.recent(limit, keep)
-            : [];
+            ? catalogue.recent(limit, keep, fresher)
+            : collapseRecent(
+                  fresher.filter((node) => node.parentId && !node.trashedAt && keep(node)),
+                  limit,
+              );
     }
     /* Root first, the node's parent last, as far as the catalogue knows. */
     function ancestorsOf(nodeId: string) {

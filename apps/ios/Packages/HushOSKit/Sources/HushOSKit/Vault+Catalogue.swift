@@ -336,11 +336,11 @@ extension Vault {
         return opened.values.filter { $0.node.workspaceId == ws && isLive($0) }
     }
 
-    /* What changed most recently below the top folder, folders included (as the web's Recent), from the catalogue. */
-    public func catalogueRecents(limit: Int = 60) -> [Opened]? {
+    /* What changed most recently below the top folder, folders included (as the web's Recent), from the catalogue (`Recents`). */
+    public func catalogueRecents(limit: Int = 60, keep: (Opened) -> Bool = { _ in true }) -> Recents? {
         guard catalogueState == .ready else { return nil }
-        return catalogueAll().filter { $0.node.parentId != nil && ($0.isFolder || $0.node.currentVersion != nil) }
-            .sorted(by: Opened.byRecent).prefix(limit).map { $0 }
+        let found = catalogueAll().filter { $0.node.parentId != nil && ($0.isFolder || $0.node.currentVersion != nil) }
+        return Recents(found, limit: limit, keep: keep) { own($0)?.node.parentId }
     }
 
     /* Trashed rows, with whether their parent is trashed too; newest first, as the server lists them. */

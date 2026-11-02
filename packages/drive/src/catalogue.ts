@@ -57,6 +57,66 @@ function scoreWord(word: string, tokens: string[], weight: number) {
     return best;
 }
 
+/*
+ * Recent shows a folder once, not again for what it holds, as a window over what changed lately:
+ * nodes are taken newest first by their own time, and one with a kept folder above it (at any
+ * depth) is folded into that folder instead of kept. A folder kept later takes in what was kept
+ * below it, so the topmost recent folder stands in for everything under it. The walk stops once
+ * `limit` rows are kept, so a folder older than that window hides nothing: a file changed today
+ * inside it shows on its own. `parentOf` walks up through folders not among `nodes`; one it
+ * doesn't know ends the walk. Each row carries the newest change it stands for as `recentAt`,
+ * which Recent sorts by and shows.
+ */
+export function collapseRecent(
+    nodes: Iterable<DriveNode>,
+    limit: number,
+    parentOf: (id: string) => string | null | undefined = () => null,
+): RecentNode[] {
+    const held = new Map<string, DriveNode>();
+    for (const node of nodes) held.set(node.id, node);
+    const parent = (id: string) => held.get(id)?.parentId ?? parentOf(id);
+    // Newest first; things changed in the same moment by name, then id, so the order never shuffles.
+    const newer = (a: { node: DriveNode; at: number }, b: { node: DriveNode; at: number }) =>
+        b.at - a.at ||
+        a.node.name.localeCompare(b.node.name) ||
+        (a.node.id < b.node.id ? -1 : a.node.id > b.node.id ? 1 : 0);
+    // Kept rows by id, with the newest change each stands for, as it was written.
+    const kept = new Map<string, { node: DriveNode; at: number; iso: string }>();
+    // The kept folder above an id, if any: on any line of folders at most one is kept.
+    const keptAbove = (id: string) => {
+        const walked = new Set<string>();
+        for (let current = parent(id); current && !walked.has(current); current = parent(current)) {
+            walked.add(current);
+            const row = kept.get(current);
+            if (row) return row;
+        }
+        return undefined;
+    };
+    const order = [...held.values()]
+        .map((node) => ({ node, at: Date.parse(node.updatedAt) || 0 }))
+        .sort(newer);
+    for (const { node, at } of order) {
+        if (kept.size >= limit) break;
+        const above = keptAbove(node.id);
+        if (above) {
+            if (at > above.at) Object.assign(above, { at, iso: node.updatedAt });
+            continue;
+        }
+        const row = { node, at, iso: node.updatedAt };
+        kept.set(node.id, row);
+        if (node.kind === 'folder')
+            for (const [id, below] of kept)
+                if (id !== node.id && keptAbove(id) === row) {
+                    kept.delete(id);
+                    if (below.at > row.at) Object.assign(row, { at: below.at, iso: below.iso });
+                }
+    }
+    return [...kept.values()].sort(newer).map((row) => ({ ...row.node, recentAt: row.iso }));
+}
+
+/* A row of Recent: the node, and when Recent says it changed (`collapseRecent`). */
+export type RecentNode = DriveNode & { recentAt: string };
+
 export class Catalogue {
     private readonly nodes = new Map<string, DriveNode>();
     private readonly children = new Map<string, Set<string>>();
@@ -221,21 +281,23 @@ export class Catalogue {
         return isLive;
     }
 
-    /* What changed lately, newest first: live nodes below the top folder that `keep` lets through. */
-    recent(limit: number, keep: (node: DriveNode) => boolean = () => true) {
+    /*
+     * What changed lately, newest first: live nodes below the top folder that `keep` lets
+     * through, a folder standing in for what it holds (`collapseRecent`). `fresher` rows (a
+     * listing or a restore the catalogue has yet to file) take the place of its own.
+     */
+    recent(
+        limit: number,
+        keep: (node: DriveNode) => boolean = () => true,
+        fresher: Iterable<DriveNode> = [],
+    ) {
         const isLive = this.liveCheck();
-        const found: { node: DriveNode; at: number }[] = [];
+        const found = new Map<string, DriveNode>();
         for (const node of this.nodes.values())
-            if (node.parentId && isLive(node) && keep(node))
-                found.push({ node, at: Date.parse(node.updatedAt) || 0 });
-        // Newest first; things changed in the same moment by name, then id, so the order never shuffles.
-        found.sort(
-            (a, b) =>
-                b.at - a.at ||
-                a.node.name.localeCompare(b.node.name) ||
-                (a.node.id < b.node.id ? -1 : a.node.id > b.node.id ? 1 : 0),
-        );
-        return found.slice(0, limit).map((entry) => entry.node);
+            if (node.parentId && isLive(node) && keep(node)) found.set(node.id, node);
+        for (const node of fresher)
+            if (node.parentId && !node.trashedAt && keep(node)) found.set(node.id, node);
+        return collapseRecent(found.values(), limit, (id) => this.nodes.get(id)?.parentId);
     }
 
     /* How many live nodes carry each tag, for the sidebar. */
