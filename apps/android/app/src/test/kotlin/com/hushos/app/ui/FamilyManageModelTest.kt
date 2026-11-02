@@ -145,4 +145,32 @@ class FamilyManageModelTest {
         assertEquals(listOf(server.grace.id.lowercase()), model.waiting[family.groupId]?.map { it.userId.lowercase() })
         assertTrue(model.managedErrors[family.groupId] != null)
     }
+
+    private fun until(what: String, check: () -> Boolean) {
+        val end = System.currentTimeMillis() + 10_000
+        while (!check() && System.currentTimeMillis() < end) Thread.sleep(20)
+        assertTrue(what, check())
+    }
+
+    /*
+     * The session ends while Invite someone, Not now or Cancel invitation is on its way (a 401): each goes to the
+     * lost-session handling, as Let them in and the lists do, and leaves no dialog or row words behind. Fails if a
+     * sign-out is shown as an ordinary refusal on the dialog or the row.
+     */
+    @Test
+    fun aSessionThatEndsMidActionGoesToTheLostSession() {
+        family.manageAnswer = 401 to JSONObject().put("message", "Sign in again.")
+        model.askInvite(family.groupId)
+        model.typeInvite("ada@example.org")
+        model.sendInvite()
+        until("the invite's 401 went to the lost session") { host.lostSessions == 1 }
+        assertEquals(null, model.inviting)
+        val grace = family.pendingRows.map(PendingPerson::from).single()
+        model.turnDown(family.groupId, grace)
+        until("Not now's 401 went to the lost session") { host.lostSessions == 2 }
+        assertEquals(WaitingRow(), model.waitingRow(family.groupId, grace.userId))
+        model.cancelInvitation(family.groupId, com.hushos.app.data.OpenInvitation(UUID.randomUUID().toString(), "ada@example.org", null, "2026-11-10T00:00:00.000Z"))
+        until("Cancel invitation's 401 went to the lost session") { host.lostSessions == 3 }
+        assertTrue(host.notices.none { it.startsWith("Couldn’t cancel it.") })
+    }
 }

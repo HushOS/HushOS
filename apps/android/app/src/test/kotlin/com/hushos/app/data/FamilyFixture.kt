@@ -130,6 +130,8 @@ class FamilyFixture(val server: FakeDrive) {
     val callBodies = java.util.Collections.synchronizedList(ArrayList<String>())
     /* How route 17 answers each call, in turn (empty: apply it as the server would). Each sees the body. */
     val admitAnswers = java.util.concurrent.ConcurrentLinkedQueue<(JSONObject) -> Pair<Int, JSONObject>?>()
+    /* Routes 11, 13 and 26 (invite, cancel an invitation, turn down): answered with this while set, else taken. */
+    @Volatile var manageAnswer: Pair<Int, JSONObject>? = null
     /* Route 12: the invitations still open, as JSON rows. */
     val invitationRows = java.util.Collections.synchronizedList(ArrayList<JSONObject>())
     /* Route 16's answer instead of the rows (a failure, a lost session), while set. */
@@ -214,6 +216,9 @@ class FamilyFixture(val server: FakeDrive) {
             method == "PUT" && path == "groups/$groupId/areas/$workspaceId/self-grant" -> { selfGrant = body.getJSONObject("grant"); 200 to JSONObject() }
             method == "GET" && path == "groups/$groupId/key-seal" -> keySeal?.let { 200 to it }
                 ?: (409 to JSONObject().put("code", "no-seal").put("message", "Nobody has sealed the current group key to you yet."))
+            method == "POST" && path == "groups/$groupId/invitations" -> manageAnswer ?: (201 to JSONObject())
+            method == "DELETE" && segments.size == 4 && path.startsWith("groups/$groupId/invitations/") -> manageAnswer ?: (200 to JSONObject())
+            method == "POST" && segments.size == 5 && path.startsWith("groups/$groupId/members/") && segments[4] == "decline" -> manageAnswer ?: (200 to JSONObject())
             method == "GET" && path == "groups/$groupId/invitations" -> 200 to JSONObject().put("invitations", JSONArray(invitationRows.toList()))
             method == "GET" && path == "groups/$groupId/pending" -> pendingAnswer ?: (200 to JSONObject().put("pending", JSONArray(pendingRows.toList())))
             method == "POST" && segments.size == 5 && path.startsWith("groups/$groupId/areas/") && segments[4] == "grants" -> {

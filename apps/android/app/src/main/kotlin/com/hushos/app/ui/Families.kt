@@ -401,20 +401,19 @@ private fun dayOf(iso: String): String = runCatching {
 private fun InviteDialog(model: DriveViewModel, ask: InviteAsk) {
     val alpine = Alpine.colors
     val families = model.families
-    var email by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = { families.dismissInvite() },
         title = { Text("Invite someone") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
                 Text("We’ll email them a link. Once they accept, you let them in.")
-                androidx.compose.material3.OutlinedTextField(value = email, onValueChange = { email = it; families.clearInviteError() }, singleLine = true,
+                androidx.compose.material3.OutlinedTextField(value = ask.email, onValueChange = { families.typeInvite(it) }, singleLine = true,
                     label = { Text("Email") }, placeholder = { Text("them@example.com") }, isError = ask.error != null, enabled = !ask.busy,
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Email),
                     supportingText = { Text(ask.error ?: "The invitation is open for 7 days.", color = if (ask.error != null) alpine.danger else alpine.inkMuted) })
             }
         },
-        confirmButton = { TextButton(onClick = { families.sendInvite(email) }, enabled = !ask.busy && email.isNotBlank()) { Text(if (ask.busy) "Sending" else "Send invitation") } },
+        confirmButton = { TextButton(onClick = { families.sendInvite() }, enabled = !ask.busy && ask.email.isNotBlank()) { Text(if (ask.busy) "Sending" else "Send invitation") } },
         dismissButton = { TextButton(onClick = { families.dismissInvite() }, enabled = !ask.busy) { Text("Cancel") } },
     )
 }

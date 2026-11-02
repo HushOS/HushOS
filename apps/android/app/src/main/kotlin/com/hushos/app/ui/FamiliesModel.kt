@@ -136,7 +136,8 @@ interface FamilyHost {
 }
 
 /* Invite someone's dialog, kept by the model so a rotation or a fold redraws it as it was. */
-data class InviteAsk(val groupId: String, val busy: Boolean = false, val error: String? = null)
+/* The address typed is the model's, never the screen's saved state: it goes with the session (reset), never into a bundle. */
+data class InviteAsk(val groupId: String, val busy: Boolean = false, val error: String? = null, val email: String = "")
 
 /* One waiting person's row: Let them in or Not now under way, its words, and an earlier Let them in kept for other keys. */
 data class WaitingRow(val busy: String? = null, val error: String? = null, val keptOther: Boolean = false)
@@ -318,6 +319,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                 reloadManaged(groupId, s)
             }.onFailure { error ->
                 error.rethrowIfCancelled()
+                if (error is NotAuthenticated) { waitingRows.remove(key); model.lostSession(); return@launch }
                 waitingRows[key] = WaitingRow(error = FamilyWords.error(error))
             }
         }
@@ -334,7 +336,11 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             val result = gate.run(s) { s.owner.families.cancelInvitation(groupId, invitation.id) } ?: return@launch
             if (!gate.current(s)) return@launch
             result.onSuccess { model.notice(invitation.email?.let { "Invitation to $it cancelled" } ?: "Invitation cancelled", untilRead = false) }
-                .onFailure { error -> error.rethrowIfCancelled(); model.notice("Couldn’t cancel it. ${FamilyWords.error(error)}", untilRead = false) }
+                .onFailure { error ->
+                    error.rethrowIfCancelled()
+                    if (error is NotAuthenticated) { model.lostSession(); return@launch }
+                    model.notice("Couldn’t cancel it. ${FamilyWords.error(error)}", untilRead = false)
+                }
             reloadManaged(groupId, s)
         }
     }
@@ -342,13 +348,14 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
     /* Invite someone's dialog: opened, closed (never while sending), and sent. */
     fun askInvite(groupId: String) { if (inviting?.busy != true) inviting = InviteAsk(groupId) }
     fun dismissInvite() { if (inviting?.busy != true) inviting = null }
-    fun clearInviteError() { inviting = inviting?.copy(error = null) }
+    /* The address as typed (never while sending), clearing the last refusal. */
+    fun typeInvite(email: String) { inviting = inviting?.takeIf { !it.busy }?.copy(email = email, error = null) ?: inviting }
 
-    fun sendInvite(email: String) {
+    fun sendInvite() {
         val ask = inviting ?: return
-        if (ask.busy || email.isBlank()) return
+        if (ask.busy || ask.email.isBlank()) return
         val s = begin() ?: return
-        val address = email.trim()
+        val address = ask.email.trim()
         inviting = ask.copy(busy = true, error = null)
         model.familyScope.launch {
             val result = gate.run(s) { s.owner.families.invite(ask.groupId, address) } ?: return@launch
@@ -359,6 +366,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                 reloadManaged(ask.groupId, s)
             }.onFailure { error ->
                 error.rethrowIfCancelled()
+                if (error is NotAuthenticated) { inviting = null; model.lostSession(); return@launch }
                 inviting = ask.copy(busy = false, error = inviteWords(error))
             }
         }
