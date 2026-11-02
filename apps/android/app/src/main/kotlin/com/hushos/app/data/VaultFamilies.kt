@@ -10,6 +10,7 @@ import com.hushos.core.ServedNodeKey
 import com.hushos.core.base64urlDecode
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /*
  * The vault's side of families (docs/groups-mobile-plan.md, Android 1; iOS's Vault+Families.swift): the area ledger
@@ -115,13 +116,17 @@ internal fun Vault.noteFamilyWorkspaces(ids: List<String>, groupId: String) {
 }
 
 /*
- * Held for the write barrier (a roster's word, familyHeld): never a family folder by it, and never over a folder already
- * held for another family. Only route 25 with the id check (noteFamilyWorkspaces) makes a workspace a family folder.
+ * Held for the write barrier (a roster's word, familyHeld): never a family folder by it, and held for every family that
+ * named it. Only route 25 with the id check (noteFamilyWorkspaces) makes a workspace a family folder.
  */
 internal fun Vault.holdAsFamilyWorkspaces(ids: Collection<String>, groupId: String) {
     val own = ownWorkspaceId?.lowercase()
-    for (id in ids.map { it.lowercase() }) if (id != own) familyHeld.putIfAbsent(id, groupId.lowercase())
+    for (id in ids.map { it.lowercase() }) if (id != own) familyHeld.computeIfAbsent(id) { ConcurrentHashMap.newKeySet() }.add(groupId.lowercase())
 }
+
+/* Held by a family whose guard is still owed: the barrier is up over it. Never past the guard's store, never ownership. */
+internal fun Vault.heldUnderOwedGuard(workspaceId: String): Boolean =
+    familyHeld[workspaceId.lowercase()]?.any { it in familyGuardOwed } == true
 
 /*
  * Whether a workspace is a family folder, as far as this session knows: proven by route 25 and the id check, once named
@@ -221,8 +226,7 @@ internal fun Vault.refuseFamilyWrite(workspaceId: String) {
 /* A folder only held for a family's barrier: refused while that family's guard is owed, and otherwise left alone. */
 private fun Vault.heldBarrier(workspaceId: String) {
     if (isFamilyWorkspace(workspaceId)) return
-    val held = familyHeld[workspaceId.lowercase()] ?: return
-    if (held in familyGuardOwed) throw GuardUnsaved()
+    if (heldUnderOwedGuard(workspaceId)) throw GuardUnsaved()
 }
 
 /*

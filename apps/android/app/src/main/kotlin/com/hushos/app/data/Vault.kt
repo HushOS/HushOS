@@ -179,9 +179,10 @@ class Vault(internal val context: Context, val api: DriveApi) {
     /*
      * The write barrier's hold, apart from familyAreas: the folders an accepted member list names before route 25 proved
      * them (a guard that can't be stored stops writes into them). Never makes a workspace a family folder: a member list
-     * naming a share's workspace (or any other) only holds that family's writes while its guard is owed.
+     * naming a share's workspace (or any other) only holds that family's writes while its guard is owed. Every family that
+     * named it, so a first roster's word never keeps another family's barrier off it.
      */
-    internal val familyHeld = ConcurrentHashMap<String, String>()
+    internal val familyHeld = ConcurrentHashMap<String, MutableSet<String>>()
     /* Every family folder node this session opened, to its workspace: listed there again after its family let go of it (the core then refuses). */
     internal val familyNodes = ConcurrentHashMap<String, String>()
     /*
@@ -983,10 +984,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
             runCatching {
                 // Before any key is opened: a share into this account's own drive, or for a node of another workspace, is refused.
                 checkShare(share, own)
-                // And one into a family's folder (proven, held by its barrier, or let go of): a family's items open only
-                // through its area ledger, never under a key a share hands over.
+                // And one into a family's folder (proven, let go of, or held by a barrier still up): a family's items open
+                // only through its area ledger, never under a key a share hands over. A member list's word alone outlasts
+                // nothing: once that family's guard is stored, a share it named mounts as any other.
                 val target = share.workspaceId.lowercase()
-                if (isFamilyWorkspace(target) || familyHeld.containsKey(target) || familyEpochs.containsKey(target)) throw ShareRefused("This share could not be checked.")
+                if (isFamilyWorkspace(target) || familyEpochs.containsKey(target) || heldUnderOwedGuard(target)) throw ShareRefused("This share could not be checked.")
                 checkSuite(share.node.envelopeSuite)
                 val name = share.granterName.ifEmpty { share.granterEmail }
                 val granter = try {

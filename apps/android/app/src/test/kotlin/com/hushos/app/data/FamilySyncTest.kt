@@ -14,6 +14,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
+import java.util.UUID
 
 /*
  * Family spaces read only (Android 1; iOS's FamilySyncTests) through the real Vault, GroupsApi and the core's area ledger
@@ -287,6 +288,49 @@ class FamilySyncTest {
         assertEquals(listOf("t.txt"), phone.vault.listChildren(shared).map { it.name })
         phone.vault.refuseFamilyWrite(server.graceWorkspace)
         assertTrue(phone.vault.isFamilyWorkspace(family.workspaceId))
+    }
+
+    /*
+     * #247 check, round 4: a member list names a received share's workspace before the share is mounted. While that
+     * family's guard is owed, the barrier refuses the mount; once the guard is stored, the share mounts, lists and opens
+     * like any other, on every later refresh. Fails if a roster's word keeps refusing the share after the guard is stored.
+     */
+    @Test
+    fun aShareARosterNamedMountsOnceTheGuardIsStored() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        accepted(phone)
+        val shared = server.folder(server.graceRoot, "S")
+        server.file(shared, "t.txt", "theirs".toByteArray())
+        server.shareWithMe(shared)
+        server.pinGrace()
+        // What the accept path holds when the member list names the share's workspace, its guard not yet stored.
+        phone.vault.oweFamilyGuard(family.groupId)
+        phone.vault.holdAsFamilyWorkspaces(listOf(server.graceWorkspace), family.groupId)
+        assertNotNull("a share was mounted under a barrier still up", phone.vault.mountShares().single().error)
+        phone.vault.familyGuardKept(family.groupId)
+        repeat(2) {
+            assertNull("a stored guard's roster still refused the share", phone.vault.mountShares().single().error)
+            assertEquals(listOf("t.txt"), phone.vault.listChildren(shared).map { it.name })
+        }
+        assertFalse(phone.vault.isFamilyWorkspace(server.graceWorkspace))
+    }
+
+    /*
+     * #247 check, round 4: two families' member lists name the same workspace, the first one's guard stored. The second
+     * family's barrier still holds writes into it while its own guard is owed. Fails if the first roster to name a
+     * workspace keeps every later family's barrier off it.
+     */
+    @Test
+    fun aWorkspaceNamedByTwoFamiliesIsHeldByEachBarrier() {
+        val other = UUID.randomUUID().toString()
+        val phone = family.phone()
+        phone.vault.holdAsFamilyWorkspaces(listOf(server.graceWorkspace), other)
+        phone.vault.oweFamilyGuard(family.groupId)
+        phone.vault.holdAsFamilyWorkspaces(listOf(server.graceWorkspace), family.groupId)
+        assertThrows(GuardUnsaved::class.java) { phone.vault.refuseFamilyWrite(server.graceWorkspace) }
+        phone.vault.familyGuardKept(family.groupId)
+        phone.vault.refuseFamilyWrite(server.graceWorkspace)
     }
 
     /*
