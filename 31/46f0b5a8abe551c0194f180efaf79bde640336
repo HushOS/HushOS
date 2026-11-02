@@ -1,0 +1,25 @@
+apps/web/src/styles.css
+  s_ec12ebe02de5ff::t_97e7d91d6d8145 230-231
+crates/hushos-core/src/colour.rs
+  s_ec12ebe02de5ff::t_1e3a93829422f9 150,268-292
+packages/drive/src/colour.test.ts
+  s_ec12ebe02de5ff::t_32e4750dea9f72 62-71
+packages/drive/src/colour.ts
+  s_ec12ebe02de5ff::t_b22fb206c3a08f 130-132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3146f0b5a8abe551c0194f180efaf79bde640336",
+  "prompts": {},
+  "sessions": {
+    "s_ec12ebe02de5ff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3f79b7e-f7a1-4c9c-9a58-b7059252bcae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
