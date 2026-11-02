@@ -331,6 +331,72 @@ extension OnFakeDrive {
             #expect(try Data(contentsOf: file) == Data("earlier".utf8))
         }
 
+        /*
+         * Eve re-keys a folder inside the share (a new folder key, its file rewrapped under it) and
+         * adds a file under the new key. One listing of the folder takes the folder's new key from
+         * its page before its children, so the rewrapped file and the new one both open. Fails if the
+         * children open under the folder key held from before.
+         */
+        @Test func aNestedSharedFolderReKeyedByItsOwnerListsAndOpensAfterOneListing() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            let theirs = UUID().uuidString.lowercased()
+            let (sKey, oldKey, newKey, planKey) = (try randomBytes(length: 32), try randomBytes(length: 32), try randomBytes(length: 32), try randomBytes(length: 32))
+            let shared = try FamilyFixture.node(id: try newId(kind: .node, scopeId: theirs).id, in: theirs, parent: nil, parentKey: try randomBytes(length: 32), key: sKey,
+                                                kind: .folder, name: "Shared", writer: family.creator)
+            let folderId = try newId(kind: .node, scopeId: theirs).id
+            let folder = try FamilyFixture.node(id: folderId, in: theirs, parent: shared.id, parentKey: sKey, key: oldKey, kind: .folder, name: "Trips", writer: family.creator)
+            let planId = try newId(kind: .node, scopeId: theirs).id
+            let plan = try FamilyFixture.node(id: planId, in: theirs, parent: folderId, parentKey: oldKey, key: planKey, kind: .file, name: "Plan.txt", writer: family.creator)
+            server.put(shared, folder, plan)
+            _ = try await vault.adopt(shared, nodeKey: sKey, metadata: NodeMetadata(name: "Shared", mime: nil, size: nil, modified: nil, attributes: [:]), in: theirs)
+            _ = try await vault.children(of: shared.id)
+            #expect(try await vault.children(of: folderId).map(\.name) == ["Plan.txt"])
+
+            // Re-keyed by Eve: the folder at key epoch 2, its file rewrapped under the new key, and a new file under it.
+            let rekeyed = try FamilyFixture.node(id: folderId, in: theirs, parent: shared.id, parentKey: sKey, key: newKey, kind: .folder, name: "Trips",
+                                                 writer: family.creator, keyEpoch: 2).with(version: nil)
+            let rewrapped = try FamilyFixture.node(id: planId, in: theirs, parent: folderId, parentKey: newKey, key: planKey, kind: .file, name: "Plan.txt",
+                                                   writer: family.creator, parentKeyEpoch: 2).with(version: nil)
+            let added = try FamilyFixture.node(id: try newId(kind: .node, scopeId: theirs).id, in: theirs, parent: folderId, parentKey: newKey,
+                                               key: try randomBytes(length: 32), kind: .file, name: "Tickets.txt", writer: family.creator, parentKeyEpoch: 2)
+            server.put(rekeyed, rewrapped, added)
+            #expect(try await vault.children(of: folderId).map(\.name) == ["Plan.txt", "Tickets.txt"], "the folder's children opened under its old key")
+            #expect(await vault.nodeKey(of: try #require(await vault.item(rekeyed.ref))) == newKey)
+            #expect(await vault.item(added.ref) != nil)
+        }
+
+        /*
+         * A share's file is served in a form this version can't open (a later envelope format): the
+         * row held stays, still listed and still opened, rather than dropped and left unopenable.
+         * Fails if a row is let go of before the page's row has opened.
+         */
+        @Test func aSharedRowThatFailsToReopenKeepsTheRowHeld() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            let theirs = UUID().uuidString.lowercased()
+            let (sKey, planKey) = (try randomBytes(length: 32), try randomBytes(length: 32))
+            let shared = try FamilyFixture.node(id: try newId(kind: .node, scopeId: theirs).id, in: theirs, parent: nil, parentKey: try randomBytes(length: 32), key: sKey,
+                                                kind: .folder, name: "Shared", writer: family.creator)
+            let plan = try FamilyFixture.node(id: try newId(kind: .node, scopeId: theirs).id, in: theirs, parent: shared.id, parentKey: sKey, key: planKey,
+                                              kind: .file, name: "Plan.txt", writer: family.creator)
+            server.put(shared, plan)
+            _ = try await vault.adopt(shared, nodeKey: sKey, metadata: NodeMetadata(name: "Shared", mime: nil, size: nil, modified: nil, attributes: [:]), in: theirs)
+            #expect(try await vault.children(of: shared.id).map(\.name) == ["Plan.txt"])
+            var later = plan.with(version: nil)
+            later.envelopeSuite = 2
+            server.put(later)
+            #expect(try await vault.children(of: shared.id).map(\.name) == ["Plan.txt"], "a row that didn't reopen was dropped")
+            #expect(await vault.item(plan.ref)?.node == plan)
+            #expect(await vault.nodeKey(of: try #require(await vault.item(plan.ref))) == planKey)
+        }
+
         /* An own-drive row with `id`, under the member's top folder. */
         private func ownRow(_ id: String, _ family: FamilyFixture, kind: NodeKind, name: String) throws -> NodeView {
             try FamilyFixture.node(id: id, in: family.personal, parent: family.personalRoot.id, parentKey: family.personalRootKey,

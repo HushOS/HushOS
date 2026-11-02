@@ -505,12 +505,19 @@ public actor Vault {
      * rooted at and refuses a top level whose key is not the one the member list committed to.
      */
     @discardableResult
-    public func open(_ node: NodeView) throws -> Opened {
+    public func open(_ node: NodeView) throws -> Opened { try open(node, replacing: false) }
+
+    /*
+     * `replacing`: a row of the own drive or a share served differently from the one held (a page of
+     * a listing, openFromPage) opens afresh; otherwise the held one answers. What is held is replaced
+     * only at the end, once the new row and its key have opened: a row that doesn't open leaves it.
+     */
+    func open(_ node: NodeView, replacing: Bool) throws -> Opened {
         let family = isFamilyWorkspace(node.workspaceId)
         // A family folder row served differently (a walk re-keyed it, its root moved to the next key) opens through the ledger
         // again, so what the ledger holds of its path is what the server serves now, never what this process saw first.
         // An older answer arriving after a newer one (listings out of order) keeps the newer row and key.
-        if let done = opened[node.ref], !family || done.node == node || node.isOlder(than: done.node) { return done }
+        if let done = opened[node.ref], done.node == node || node.isOlder(than: done.node) || (!family && !replacing) { return done }
         try node.checkEnvelopeSuite()
         try admitId(node, family: family)
         let key: Data
@@ -537,14 +544,33 @@ public actor Vault {
         return result
     }
 
+    /*
+     * A listing's page, parents first: its ancestors, then the folder, then the children, each taken
+     * from the page when it is newer than the row held (or the ordering ties and they differ), so a
+     * folder its owner re-keyed opens its children under its new key in the same listing.
+     */
     func openChain(_ listing: Listing) throws {
         // Above a share's root the keys are the granter's; those ancestors stay closed.
-        for ancestor in listing.ancestors { _ = try? open(ancestor) }
-        try open(listing.folder)
+        for ancestor in listing.ancestors { _ = try? openFromPage(ancestor) }
+        try openFromPage(listing.folder)
         // A family row sharing another workspace's id is left out of the listing alone (admitId), never the whole folder.
         for child in listing.children {
-            do { try open(child) } catch is IdCollision { continue }
+            do { try openFromPage(child) } catch is IdCollision { continue }
         }
+    }
+
+    /*
+     * A row from a listing's page: a family row as open has it; a row of the own drive or a share
+     * replaces the one held when the page's is newer, or the ordering ties and they differ (a
+     * share's rows carry no change order; the latest listing is trusted). A page row that doesn't
+     * open (a re-key this page can't follow, a later envelope format, a share root whose parent is
+     * the granter's) leaves the held row as it was.
+     */
+    @discardableResult
+    func openFromPage(_ node: NodeView) throws -> Opened {
+        guard let held = opened[node.ref], !isFamilyWorkspace(node.workspaceId) else { return try open(node) }
+        if held.node == node || node.isOlder(than: held.node) { return held }
+        do { return try open(node, replacing: true) } catch is IdCollision { throw IdCollision() } catch { return held }
     }
 
     /*
@@ -669,32 +695,15 @@ public actor Vault {
         if let fast = catalogueChildren(of: folderId) { return fast }
         let listing = try await listChildren(of: folderId)
         let folder = listing.folder.id.lowercased()
+        // The page already replaced every row it holds newer (openChain): a received share's rows get no feed, so a file
+        // moved on another device is taken from its new folder's listing.
         return listing.children.compactMap { row -> Opened? in
             guard let held = opened[row.ref] else { return nil }
             // The row held is newer than this listing's (another listing, after a move, opened it first): shown here only
             // while it is still in this folder, so a moved file shows in its new folder alone.
             if row.isOlder(than: held.node) { return held.node.parentId?.lowercased() == folder ? held : nil }
-            // Otherwise the listing is trusted, and the row held follows it: a received share's rows get no feed, so a file
-            // moved on another device is taken from its new folder's listing.
-            if held.node != row { return (try? refreshed(row)) ?? held }
             return held
         }.sorted(by: Opened.byName)
-    }
-
-    /* A row of the own drive or a share, opened again from a listing newer than the row held (open keeps what it holds). */
-    private func refreshed(_ row: NodeView) throws -> Opened {
-        guard let held = opened[row.ref], held.node != row, !row.isOlder(than: held.node) else { return try open(row) }
-        if isFamilyWorkspace(row.workspaceId) { return try open(row) }
-        opened[row.ref] = nil
-        do {
-            let fresh = try open(row)
-            if let parent = row.parentId { rememberParent(row.id, parent: parent) }
-            return fresh
-        } catch {
-            // The listing's row didn't open (its parent's key isn't held): the row held stays.
-            opened[row.ref] = held
-            throw error
-        }
     }
 
     /* A node this process has not opened yet: listing the folder it was last seen in opens it and everything above. */
