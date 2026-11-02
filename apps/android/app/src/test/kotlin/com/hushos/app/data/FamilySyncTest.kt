@@ -267,6 +267,40 @@ class FamilySyncTest {
     }
 
     /*
+     * #247 check, round 7: a keep job's own vault (jobVault, a second vault of the session) opened a share of the family's
+     * file and is downloading it when the app's vault proves the folder a family's. The job stops, its partial copy goes,
+     * and it keeps, downloads and mounts nothing of the folder after. Fails if a vault's family state is its own, so a
+     * job never sees what the app's vault learned.
+     */
+    @Test
+    fun aJobsVaultKeepsNothingOnceTheAppsVaultProvesTheShareAFamilysFolder() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        server.shareWithMe(family.fileId)
+        server.pinGrace()
+        val app = org.robolectric.RuntimeEnvironment.getApplication()
+        AccountStore.of(app).adopt(Shared.session(app)!!.userId)
+        val job = Vault.fromShared(app)!!
+        val root = job.mountShares().single().root!!
+        val (waiting, release) = holdVersionUrl()
+        var failure: Throwable? = null
+        val keep = kotlin.concurrent.thread { failure = runCatching { job.keepDownloaded(root) }.exceptionOrNull() }
+        assertTrue("the keep never asked for its address", waiting.await(10, java.util.concurrent.TimeUnit.SECONDS))
+        accepted(phone)
+        release.countDown()
+        keep.join(10_000)
+        server.beforeAnswer = null
+        assertNotNull("a job's keep went on after the app's vault proved the folder a family's", failure)
+        assertFalse(Offline.isKept(app, family.fileId))
+        assertFalse("a job's partial copy stayed", File(Offline.root(app), family.fileId).exists())
+        assertThrows(FamilyReadOnly::class.java) { job.keepDownloaded(root) }
+        val out = File(app.cacheDir, "opened/${family.fileId}/v/Recipes.txt")
+        assertThrows(FamilyFailure::class.java) { job.download(family.fileId, out, workspaceId = family.workspaceId) }
+        assertFalse(out.exists())
+        assertNotNull(job.mountShares().single().error)
+    }
+
+    /*
      * #247 check, round 6: a share of the family's file is kept on this phone and opened in another app before route 25
      * proves its folder. Once proven, the kept file, its entry and the copy opened from it are gone (none of them is under
      * opened/family/<workspace>, where a family's clear looks), and the screens hear which. Fails if becoming a family

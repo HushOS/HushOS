@@ -136,6 +136,42 @@ class FamilyGuardTest {
     }
 
     /*
+     * #247 check, round 7: route 2 stops listing an open family and route 5 answers not-member, but the guard can't be
+     * read, so the two-phase wipe can't finish. The family is refused (nothing of it opens), a failed state is handed
+     * back under a revision, and the guard and the record stay; the next list, with the guard readable, wipes it. Fails if
+     * an unlisted removal whose wipe fails leaves the family open, says nothing, or is never asked about again.
+     */
+    @Test
+    fun anUnlistedRemovalWhoseWipeFailsRefusesTheFamilyAndWipesOnALaterList() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        assertTrue(phone.sync.sync(family.summary) is FamilyState.Accepted)
+        assertEquals(1, phone.vault.listChildren(family.rootId, family.workspaceId).size)
+        family.listed = false
+        family.notMember = true
+        val folder = phone.vault.familyGuard.file.parentFile!!
+        val failed = try {
+            assertTrue(folder.setExecutable(false, false) && folder.setReadable(false, false))
+            phone.sync.listReconciling().second
+        } finally {
+            folder.setExecutable(true, false)
+            folder.setReadable(true, false)
+        }
+        assertEquals(listOf(family.groupId), failed.map { it.groupId })
+        assertTrue("an unlisted removal whose wipe failed said nothing", failed.single().state is FamilyState.Failed)
+        assertNotNull(phone.records.read(family.member.id, family.groupId))
+        assertEquals(2uL, phone.vault.familyGuard.family(family.groupId)?.rosterVersion)
+        assertNull("the family's file stayed open", phone.vault.item(family.fileId))
+        assertNull(phone.vault.nodes.key(family.workspaceId, family.fileId))
+        assertTrue(runCatching { phone.vault.listChildren(family.rootId, family.workspaceId) }.isFailure)
+        // Storage works again: the next list asks again and the wipe finishes.
+        val wiped = phone.sync.listReconciling().second
+        assertEquals(listOf(FamilyState.Wiped), wiped.map { it.state })
+        assertTrue(wiped.single().revision > failed.single().revision)
+        assertNull(phone.records.read(family.member.id, family.groupId))
+    }
+
+    /*
      * Signed out right after the guard was stored, before the device record: the sync that resumes writes no record (and
      * no joins record) into the signed-out phone. Fails if a record write isn't bound to the session it began in.
      */

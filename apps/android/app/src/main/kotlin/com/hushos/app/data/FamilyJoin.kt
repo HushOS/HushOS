@@ -213,8 +213,9 @@ private fun FamilySync.acceptJoin(groupId: String, first: ServedChain, matched: 
                 val state = try {
                     afterAcceptance(groupId, result.chain, result.pin, reset = false)
                 } catch (error: GroupsApiError) {
-                    // Removed between the acceptance and the member list: let go of as a sync's not-member is.
-                    if (error.isNotMember) runCatching { wipe(groupId) }
+                    // Removed between the acceptance and the member list: let go of as a sync's not-member is, and refused
+                    // when the wipe can't finish (its guard not stored), so nothing of it stays open meanwhile.
+                    if (error.isNotMember) runCatching { wipe(groupId) }.onFailure { refuse(groupId) }
                     throw error
                 }
                 if (state is FamilyState.Fork) return JoinOutcome.Fork(state.fork)

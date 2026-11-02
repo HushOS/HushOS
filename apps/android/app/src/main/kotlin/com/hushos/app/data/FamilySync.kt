@@ -171,7 +171,8 @@ class FamilySync(
      * Route 2, and every family this phone holds (a device record, or a chain accepted this session) that it no longer
      * lists asked about once (route 5 from the record's version): only the server's 404 `not-member` wipes one. A family
      * still served (route 2 caught between two states) or no answer changes nothing; a list that didn't load throws here
-     * and nothing is unlisted. The wiped families come back beside the list.
+     * and nothing is unlisted. The wiped families come back beside the list, and so does one whose wipe couldn't finish
+     * (its guard not stored or read): refused, nothing of it open, its words said, and asked again on the next list.
      */
     fun listReconciling(): Pair<List<GroupSummary>, List<Revised>> {
         val listed = list()
@@ -180,28 +181,37 @@ class FamilySync(
         val held = (records.groups(userId) + groupsOf.values.map { it.lowercase() }).toSet() - settledUnlisted - shown
         // Each removal with the revision it took inside the family's turn: an answer from before it never shows after it.
         val wiped = held.sorted().filter(FamilyRecords::valid).mapNotNull { id ->
-            exclusive(id) { if (askUnlisted(id)) Revised(FamilyState.Wiped, revise(), id) else null }
+            exclusive(id) { askUnlisted(id)?.let { Revised(it, revise(), id) } }
         }
         return listed to wiped
     }
 
-    private fun askUnlisted(groupId: String): Boolean {
+    private fun askUnlisted(groupId: String): FamilyState? {
         val after = records.read(userId, groupId)?.rosterVersion?.toInt() ?: 0
         return try {
             api.rosters(groupId, after)
             // Still served: a list caught mid-change, never a removal.
-            false
+            null
         } catch (error: GroupsApiError) {
-            if (!error.isNotMember) return false
-            try { wipe(groupId) } catch (_: Exception) { return false }
+            if (!error.isNotMember) return null
+            try {
+                wipe(groupId)
+            } catch (failed: Exception) {
+                // As run()'s removal: the guard (and so the record) kept for the two-phase wipe, but nothing of the family
+                // opens. Not settled: the next list asks again, until the wipe finishes.
+                refuse(groupId)
+                return FamilyState.Failed(FamilyWords.error(failed))
+            }
+            // A closed vault's wipe lets go of nothing (it waits for this session's next look): not settled either.
+            if (records.read(userId, groupId) != null) return null
             names.remove(groupId)
             settledUnlisted.add(groupId.lowercase())
-            true
+            FamilyState.Wiped
         } catch (error: NotAuthenticated) {
             throw error
         } catch (_: Exception) {
             // No answer, any other failure: nothing is taken away.
-            false
+            null
         }
     }
 

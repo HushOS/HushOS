@@ -174,29 +174,33 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     /* The area ledger: this session's families, their chains and the family folders' keys (FamilySync, VaultFamilies.kt). */
     internal val areaLedger = com.hushos.core.AreaLedger()
+    /*
+     * This session's family state, shared with every other vault of the session in this process (FamilySessions): the
+     * Files app's and each transfer job's see the same proofs, holds, invalidations and end as this one.
+     */
+    internal val familyState: FamilySessionState = FamilySessions.of(api.session)
     /* Each family folder route 25 named this session, lowercase, to its family: never opened under a personal key. */
-    internal val familyAreas = ConcurrentHashMap<String, String>()
+    internal val familyAreas: ConcurrentHashMap<String, String> get() = familyState.areas
     /*
      * The write barrier's hold, apart from familyAreas: the folders an accepted member list names before route 25 proved
      * them (a guard that can't be stored stops writes into them). Never makes a workspace a family folder: a member list
      * naming a share's workspace (or any other) only holds that family's writes while its guard is owed. Every family that
      * named it, so a first roster's word never keeps another family's barrier off it.
      */
-    internal val familyHeld = ConcurrentHashMap<String, MutableSet<String>>()
+    internal val familyHeld: ConcurrentHashMap<String, MutableSet<String>> get() = familyState.held
     /* Every family folder node this session opened, to its workspace: listed there again after its family let go of it (the core then refuses). */
     internal val familyNodes = ConcurrentHashMap<String, String>()
     /*
      * Each family folder's invalidation, lowercase workspace to a count and the family's words: moved by every forget (a
      * removal, a fork, a refusal). A download or a listing begun before it never keeps, writes or shows what it opened.
      */
-    internal val familyEpochs = ConcurrentHashMap<String, Pair<Long, String>>()
+    internal val familyEpochs: ConcurrentHashMap<String, Pair<Long, String>> get() = familyState.epochs
     /* Held while a forget deletes family copies or the session ends, and while a download makes its folder, writes or keeps its file. */
     internal val familyCopiesLock: Any get() = FamilyCopies.LOCK
-    /* Set once this vault's session ended (close): nothing it downloads is written after. */
-    @Volatile internal var closed = false
-        private set
+    /* Set once this vault's session ended (close, by this vault or another of the session): nothing it downloads is written after. */
+    internal val closed: Boolean get() = familyState.closed
     /* Families whose acceptance may hand back a guard not stored yet: nothing is written into them meanwhile (the write barrier). */
-    internal val familyGuardOwed: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    internal val familyGuardOwed: MutableSet<String> get() = familyState.guardOwed
     /* Tests: whether the family guard can be written (a full disk when not), and a stop right after each write, as a crash would. */
     internal var familyGuardWrites: () -> Boolean = { true }
     internal var afterFamilyGuard: (() -> Unit)? = null
@@ -207,7 +211,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     /* Tests: runs as a write reaches its final gate, before it is checked (a sync proving the folder meanwhile). */
     internal var beforeWriteGate: ((workspaceId: String) -> Unit)? = null
     /* Ids whose copies a family's proof deleted (VaultFamilies.purgeShareCopies): the screens drop them (drainFamilyPurged). */
-    internal val familyPurged: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    internal val familyPurged: MutableSet<String> get() = familyState.purged
     /* The family guard (FamilyGuard.kt), sealed under the settings key as the contact guard is. */
     internal val familyGuard: FamilyGuardStore
         get() = FamilyGuardStore.of(context, api.session, familyGuardWrites) { kept, create -> marksKey(kept, create, served = null) }
@@ -233,6 +237,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
         api.onBadSignature = { forgetIdentity() }
         // Every write's last word, right before it is sent, wherever it began (the app, the Files app, a worker).
         api.beforeWrite = { finalWriteGate(it) }
+        // A job's process may start without the app's: the folders this account's device records kept as family folders
+        // are family folders here too, before any sync of this process proves them again.
+        seedFamilyAreas()
     }
 
     companion object {
@@ -1300,7 +1307,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * before this (deletion): what a download wrote between the wipe and now goes too.
      */
     fun close(deleteCopies: Boolean = false) = synchronized(familyCopiesLock) {
-        closed = true
+        // The session's end for every vault of it (the Files app's, a job's): the next vault of the session starts afresh.
+        familyState.closed = true
         for (ws in familyAreas.keys + familyNodes.values.map { it.lowercase() } + familyEpochs.keys)
             familyEpochs.compute(ws) { _, old -> ((old?.first ?: 0L) + 1) to FamilyWords.OPEN_AGAIN }
         if (deleteCopies) for (folder in DecryptedCopies.FOLDERS) File(context.cacheDir, folder).deleteRecursively()

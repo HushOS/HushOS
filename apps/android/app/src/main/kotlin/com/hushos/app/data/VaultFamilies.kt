@@ -162,6 +162,25 @@ internal fun Vault.finalWriteGate(workspaceId: String) {
     synchronized(familyCopiesLock) { refuseFamilyWrite(workspaceId) }
 }
 
+/*
+ * Once per session state: the family folders the device records of this account keep (proven by route 25 in an earlier
+ * session), named family folders, so a vault in a process the app hasn't synced in yet never takes them for shares.
+ */
+internal fun Vault.seedFamilyAreas() {
+    if (familyState.seeded) return
+    synchronized(familyCopiesLock) {
+        if (familyState.seeded) return
+        val records = FamilyRecords.of(context)
+        val user = api.session.userId.lowercase()
+        val own = ownWorkspaceId?.lowercase()
+        for (group in runCatching { records.groups(user) }.getOrDefault(emptyList())) {
+            val areas = runCatching { records.read(user, group)?.areas }.getOrNull().orEmpty()
+            for (id in areas.map { it.lowercase() }) if (id != own) familyAreas.putIfAbsent(id, group.lowercase())
+        }
+        familyState.seeded = true
+    }
+}
+
 /* A share into a family's folder: proven, let go of, or held by a barrier still up. Checked again where it is kept. */
 internal fun Vault.shareIntoFamily(workspaceId: String): Boolean {
     val id = workspaceId.lowercase()

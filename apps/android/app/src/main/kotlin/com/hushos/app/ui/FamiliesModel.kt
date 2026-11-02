@@ -232,7 +232,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             list = listed
             served = true
             syncedAt = now()
-            gone.forEach { removed(it.groupId!!, s, it.revision) }
+            gone.forEach { if (it.state == FamilyState.Wiped) removed(it.groupId!!, s, it.revision) else unlistedFailed(it.groupId!!, it.state, s, it.revision) }
             for (summary in listed) {
                 if (!gate.current(s)) return
                 refreshFamily(summary, session = s)
@@ -392,6 +392,19 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         checkedAt[groupId] = now()
         refreshed[groupId] = (refreshed[groupId] ?: 0) + 1
         clear(groupId, roots, s, details = true, problem = FamilyProblem.Removed)
+    }
+
+    /*
+     * A family the server says this account is no longer in, found while it wasn't listed, whose wipe couldn't finish (its
+     * guard not stored): refused, so what was drawn of it goes and its folders say its words until a later list wipes it.
+     */
+    private fun unlistedFailed(groupId: String, state: FamilyState, s: FamilySession, revision: Long) {
+        if (!later(groupId, state, revision)) return
+        val roots = ((states[groupId] as? FamilyState.Accepted)?.view ?: shown[groupId])?.areas?.mapNotNull { it.root?.id }.orEmpty()
+        states[groupId] = state
+        checkedAt[groupId] = now()
+        refreshed[groupId] = (refreshed[groupId] ?: 0) + 1
+        clear(groupId, roots, s, details = false, problem = FamilyProblem.Words((state as? FamilyState.Failed)?.words ?: FamilyWords.OPEN_AGAIN))
     }
 
     /*
