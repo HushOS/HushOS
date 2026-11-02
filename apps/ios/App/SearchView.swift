@@ -152,7 +152,7 @@ struct SearchView: View {
             title: "No results for “\(query.trimmingCharacters(in: .whitespaces))”",
             message: store.catalogueReady
                 ? "Search looks at names, tags and file types in every folder. Check the spelling, or try fewer words."
-                : "Search looks at names and tags in folders you’ve opened on this phone. Check the spelling, or try fewer words."
+                : "Search looks at names, tags and file types in folders you’ve opened on this phone. Check the spelling, or try fewer words."
         ) {
             if filter != .all {
                 Button("Search all types") { filter = .all }.font(.body.weight(.semibold)).foregroundStyle(Alpine.primary)
