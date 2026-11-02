@@ -346,7 +346,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         if (queueWatch != null) return
         val work = androidx.work.WorkManager.getInstance(context)
         queueWatch = viewModelScope.launch {
-            kotlinx.coroutines.flow.combine(work.getWorkInfosByTagFlow(com.hushos.app.data.TransferQueue.TAG), hiddenWork, failedChanged) { infos, hidden, _ -> infos to hidden }.collectLatest { (infos, hidden) ->
+            kotlinx.coroutines.flow.combine(work.getWorkInfosByTagFlow(com.hushos.app.data.TransferQueue.TAG), hiddenWork, failedChanged,
+                com.hushos.app.data.FailedTransfers.changes) { infos, hidden, _, _ -> infos to hidden }.collectLatest { (infos, hidden) ->
                 lastInfos = infos
                 val inUse = infos.mapNotNull { info -> info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:")?.let { File(it).parent } }.toSet()
                 val records = com.hushos.app.data.FailedTransfers.of(context)

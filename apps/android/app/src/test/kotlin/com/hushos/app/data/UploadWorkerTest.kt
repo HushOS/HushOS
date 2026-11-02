@@ -7,10 +7,14 @@ import androidx.work.WorkManager
 import androidx.work.testing.SynchronousExecutor
 import androidx.work.testing.TestListenableWorkerBuilder
 import androidx.work.testing.WorkManagerTestInitHelper
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -163,7 +167,9 @@ class UploadWorkerTest {
         server.beforeAnswer = { _, path -> if (drop && path.endsWith("/abort")) { drop = false; throw java.io.IOException("dropped") } }
         family.listed = false
         family.notMember = true
+        val told = FailedTransfers.changes.value
         val result = run(worker(id, file))
+        assertTrue("a job's end of the family didn't tell the panel", FailedTransfers.changes.value > told)
         assertTrue("a removal wasn't a failure: $result", result is ListenableWorker.Result.Failure)
         assertEquals(FamilyWords.NOT_IN_FAMILY, result.outputData.getString("message"))
         assertEquals("the job's own reservation wasn't settled", emptyList<Reservations.Record>(), records())
@@ -206,5 +212,57 @@ class UploadWorkerTest {
         assertEquals(ListenableWorker.Result.success(), run(retried))
         assertEquals("a retried upload that had landed was sent again", reserved, begins())
         assertEquals(emptyList<Reservations.Record>(), records())
+    }
+
+    /* What the panel reads when it is told the rows changed: the list as it is at that moment. */
+    private fun readWhenTold(): () -> List<FailedTransfer>? {
+        var seen: List<FailedTransfer>? = null
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined).launch {
+            FailedTransfers.changes.drop(1).first()
+            seen = FailedTransfers.of(app).all()
+        }
+        return { seen }
+    }
+
+    /*
+     * #251 review 9: a family whose only uploads had failed already (their WorkManager jobs pruned) ends. Their copies go
+     * and their rows say the removal, and the panel is told after the rows are written, so it never keeps the old reason
+     * or a Retry with nothing behind it. Fails if the end doesn't tell the panel, or tells it before the rows changed.
+     */
+    @Test
+    fun aFamilyWhoseUploadsHadFailedTellsThePanelOnceItsRowsChanged() {
+        val id = UUID.randomUUID()
+        val copy = staged(id)
+        FailedTransfers.of(app).record(FailedTransfer(id.toString(), TransferQueue.UPLOAD, "Notes.txt", "The transfer failed.", 0L, file = copy.path,
+            mime = "text/plain", folder = family.rootId, family = family.groupId.lowercase(), familyWorkspace = family.workspaceId))
+        val seen = readWhenTold()
+        TransferQueue.endFamily(app, family.groupId) { _, _ -> Reservations.Abort.RELEASED }
+        val told = seen()
+        assertNotNull("the panel wasn't told the family's rows changed", told)
+        val row = told!!.single { it.id == id.toString() }
+        assertEquals(FamilyWords.NOT_IN_FAMILY, row.reason)
+        assertEquals(null, row.file)
+        assertFalse(copy.parentFile!!.exists())
+    }
+
+    /*
+     * #251 review 9: a queued family upload ends; by the time its job is cancelled (what WorkManager tells the panel), its
+     * row already says the removal. Fails if a cancellation can be seen before its row is written.
+     */
+    @Test
+    fun aQueuedFamilyUploadsRowIsWrittenBeforeItsJobIsCancelled() {
+        val other = TransferQueue.upload(app, File(app.cacheDir, "other.txt").apply { writeText("menu") }, "Menu.txt", "text/plain", family.rootId, null, familyOf)
+        Reservations.reserved(app, "00000000-0000-4000-8000-0000000000cc", family.workspaceId, other.toString(), System.currentTimeMillis(), null)
+        Reservations.idle("00000000-0000-4000-8000-0000000000cc")
+        var cancelledWithoutRow = false
+        var cancelled = 0
+        TransferQueue.endFamily(app, family.groupId, null, { _, _ -> Reservations.Abort.RELEASED }) { id ->
+            cancelled++
+            if (FailedTransfers.of(app).all().none { it.id == id.toString() && it.reason == FamilyWords.NOT_IN_FAMILY }) cancelledWithoutRow = true
+            WorkManager.getInstance(app).cancelWorkById(id)
+        }
+        assertEquals(1, cancelled)
+        assertFalse("a job was cancelled before its row said why", cancelledWithoutRow)
+        assertEquals(WorkInfo.State.CANCELLED, WorkManager.getInstance(app).getWorkInfoById(other).get()!!.state)
     }
 }

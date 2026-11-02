@@ -1,5 +1,6 @@
 package com.hushos.app.data
 
+import kotlinx.coroutines.flow.update
 import java.io.File
 import java.net.URLDecoder
 import java.net.URLEncoder
@@ -58,5 +59,14 @@ class FailedTransfers(private val store: File) {
         const val FILE = "transfers-failed.tsv"
 
         fun of(context: android.content.Context) = FailedTransfers(File(context.filesDir, FILE))
+
+        /*
+         * Moved once the list changed outside the panel's own actions (a family's uploads ended, from the app's sync or a
+         * job), after every record is written: the panel reads the list again (DriveViewModel.watchQueue). WorkManager's
+         * updates alone miss a family whose only uploads had failed already (their jobs pruned).
+         */
+        private val changed = kotlinx.coroutines.flow.MutableStateFlow(0L)
+        val changes: kotlinx.coroutines.flow.StateFlow<Long> = changed
+        fun changed() = changed.update { it + 1 }
     }
 }

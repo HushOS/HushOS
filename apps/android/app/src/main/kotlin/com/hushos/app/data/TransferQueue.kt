@@ -82,7 +82,12 @@ object TransferQueue {
      * folders fails at once (iOS's endFamily), its reserved server upload aborted (`abort`), its staged copy deleted, and
      * its row says why; failed ones kept for a retry lose their copies too.
      */
-    fun endFamily(context: Context, groupId: String, except: UUID? = null, abort: (uploadId: String, workspaceId: String) -> Reservations.Abort) {
+    fun endFamily(context: Context, groupId: String, except: UUID? = null, abort: (uploadId: String, workspaceId: String) -> Reservations.Abort) =
+        endFamily(context, groupId, except, abort) { WorkManager.getInstance(context).cancelWorkById(it) }
+
+    /* As above; `cancel` ends a queued job in WorkManager (a test sees what is written by then). */
+    internal fun endFamily(context: Context, groupId: String, except: UUID?, abort: (uploadId: String, workspaceId: String) -> Reservations.Abort,
+                           cancel: (UUID) -> Unit) {
         val work = WorkManager.getInstance(context)
         val records = FailedTransfers.of(context)
         val queue = File(context.filesDir, "queue").canonicalFile
@@ -92,18 +97,27 @@ object TransferQueue {
             dropJob(context, job, dir?.takeIf { it.parentFile == queue }, abort)
         }
         val infos = runCatching { work.getWorkInfosByTag("family:${groupId.lowercase()}").get() }.getOrDefault(emptyList())
-        for (info in infos.filter { !it.state.isFinished && it.id != except }) {
-            work.cancelWorkById(info.id)
-            val file = info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:")
-            drop(info.id.toString(), file)
-            records.record(FailedTransfer(info.id.toString(), UPLOAD, JobNames.of(context).get(info.id.toString()) ?: "File", FamilyWords.NOT_IN_FAMILY,
-                System.currentTimeMillis(), family = groupId.lowercase()))
+        val ending = infos.filter { !it.state.isFinished && it.id != except }
+        try {
+            // Each queued one's row first, so a cancellation the panel hears already has its reason.
+            for (info in ending) {
+                records.record(FailedTransfer(info.id.toString(), UPLOAD, JobNames.of(context).get(info.id.toString()) ?: "File", FamilyWords.NOT_IN_FAMILY,
+                    System.currentTimeMillis(), family = groupId.lowercase()))
+            }
+            for (info in ending) {
+                cancel(info.id)
+                drop(info.id.toString(), info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:"))
+            }
+            // Failed ones kept for a Retry (their jobs perhaps pruned already): their copies go, their rows say why.
+            for (failed in records.all().filter { it.family.equals(groupId, ignoreCase = true) }) {
+                drop(failed.id, failed.file)
+                records.record(failed.copy(file = null, reason = FamilyWords.NOT_IN_FAMILY))
+            }
+            KeyChangeWaits.of(context).forgetAll(infos.map { it.id.toString() })
+        } finally {
+            // Whoever ended it (the app's sync or a job), last: the panel reads the rows again, as written.
+            FailedTransfers.changed()
         }
-        for (failed in records.all().filter { it.family.equals(groupId, ignoreCase = true) }) {
-            drop(failed.id, failed.file)
-            records.record(failed.copy(file = null, reason = FamilyWords.NOT_IN_FAMILY))
-        }
-        KeyChangeWaits.of(context).forgetAll(infos.map { it.id.toString() })
     }
 
 
