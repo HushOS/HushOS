@@ -193,17 +193,6 @@ object Reservations {
         }
     }
 
-    /*
-     * A retried job runs under a new id: every record and landed row of `from` becomes `to`'s in one write, so the new job
-     * settles what the old one reserved before it reserves, or ends as uploaded. Throws when the ledger can't be read or
-     * written: nothing moved (the retry is then not queued).
-     */
-    fun moveJob(context: Context, from: String, to: String) = synchronized(lock) {
-        val records = all(context)
-        if (records.none { it.job == from }) return@synchronized
-        write(context, records.map { if (it.job == from) it.copy(job = to) else it })
-    }
-
     /* Read before any `begin`, whatever the job: a ledger that can't be read reserves nothing (LedgerUnreadable). */
     fun requireReadable(context: Context) { all(context) }
 

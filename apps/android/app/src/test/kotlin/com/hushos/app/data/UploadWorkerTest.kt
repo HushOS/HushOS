@@ -203,9 +203,10 @@ class UploadWorkerTest {
         assertTrue(TransferQueue.retry(app, failed))
         assertTrue(FailedTransfers.of(app).all().none { it.id == id.toString() })
         val queued = WorkManager.getInstance(app).getWorkInfosByTag(TransferQueue.TAG).get().single { it.id != id && !it.state.isFinished }.id
-        assertEquals(listOf(queued.toString()), records().map { it.job })
+        // The reservation stays under the failed job's key, which the queued job carries.
+        assertEquals(listOf(id.toString()), records().map { it.job })
         // Run as WorkManager would start it: the request Retry queued (its tags as stored), the failed job's copy and folder.
-        val expected = TransferQueue.uploadRequest(queued, File(failed.file!!), failed.mime, failed.folder!!, failed.replacing, familyOf)
+        val expected = TransferQueue.uploadRequest(queued, File(failed.file!!), failed.mime, failed.folder!!, failed.replacing, familyOf, failed.ledgerKey)
         assertEquals(expected.tags, WorkManager.getInstance(app).getWorkInfoById(queued).get()!!.tags)
         val retried = TestListenableWorkerBuilder<UploadWorker>(app).setId(queued).setInputData(expected.workSpec.input).setTags(expected.tags.toList()).build()
         val reserved = begins()
@@ -264,5 +265,93 @@ class UploadWorkerTest {
         assertEquals(1, cancelled)
         assertFalse("a job was cancelled before its row said why", cancelledWithoutRow)
         assertEquals(WorkInfo.State.CANCELLED, WorkManager.getInstance(app).getWorkInfoById(other).get()!!.state)
+    }
+
+    /* A job as WorkManager starts the one a Retry queued: the request it built (checked against the tags it stored). */
+    private fun queuedRetry(queued: UUID, failed: FailedTransfer): UploadWorker {
+        val expected = TransferQueue.uploadRequest(queued, File(failed.file!!), failed.mime, failed.folder!!, failed.replacing, familyOf, failed.ledgerKey)
+        assertEquals(expected.tags, WorkManager.getInstance(app).getWorkInfoById(queued).get()!!.tags)
+        return TestListenableWorkerBuilder<UploadWorker>(app).setId(queued).setInputData(expected.workSpec.input).setTags(expected.tags.toList()).build()
+    }
+
+    /*
+     * #251 review 10, item 1: the process dies in a Retry before its job was queued. The row is still there; the next
+     * Retry's job holds the failed job's reservation all the same, and ends as uploaded without sending the file again.
+     * Fails if a Retry that died leaves the reservation where a later Retry doesn't look.
+     */
+    @Test
+    fun aRetryThatDiedBeforeItWasQueuedIsRetriedWithoutSendingTwice() {
+        val id = UUID.randomUUID()
+        val signIn = completionLandsThenSignedOut()
+        assertTrue(run(worker(id, staged(id))) is ListenableWorker.Result.Failure)
+        signIn()
+        val failed = FailedTransfers.of(app).all().single { it.id == id.toString() }
+        assertThrows(Killed::class.java) { TransferQueue.retryUpload(failed) { _, _ -> throw Killed() } }
+        assertTrue(FailedTransfers.of(app).has(id.toString()))
+        assertTrue(TransferQueue.retry(app, failed))
+        val queued = WorkManager.getInstance(app).getWorkInfosByTag(TransferQueue.TAG).get().single { it.id != id && !it.state.isFinished }.id
+        val reserved = begins()
+        assertEquals(ListenableWorker.Result.success(), run(queuedRetry(queued, failed)))
+        assertEquals("a retried upload was sent twice", reserved, begins())
+        assertEquals(emptyList<Reservations.Record>(), records())
+    }
+
+    /*
+     * #251 review 10, item 2: a job ends as uploaded from its landed row (its completion's answer lost), and WorkManager
+     * stops it during that end, so it runs again. The rerun ends as uploaded too, never "pick it again" for the copy the
+     * first end deleted. Fails if that end deletes anything before the success is kept.
+     */
+    @Test
+    fun aLandedEndStoppedPartWayStillEndsTheRerunAsUploaded() {
+        val id = UUID.randomUUID()
+        val file = staged(id)
+        server.dropReply = { method, path -> method == "POST" && path.endsWith("/complete") }
+        assertEquals(ListenableWorker.Result.retry(), run(worker(id, file)))
+        server.dropReply = null
+        assertEquals(ListenableWorker.Result.success(), run(worker(id, file)))
+        val reserved = begins()
+        assertEquals("a rerun after a stop didn't end as uploaded", ListenableWorker.Result.success(), run(worker(id, file)))
+        assertEquals(reserved, begins())
+    }
+
+    /* As above for a clean landing: stopped during its end, the rerun ends as uploaded and sends nothing. */
+    @Test
+    fun aCleanLandingStoppedPartWayStillEndsTheRerunAsUploaded() {
+        val id = UUID.randomUUID()
+        val file = staged(id)
+        assertEquals(ListenableWorker.Result.success(), run(worker(id, file)))
+        assertEquals("a rerun after a stop didn't end as uploaded", ListenableWorker.Result.success(), run(worker(id, file)))
+        assertEquals(1, begins())
+    }
+
+    /*
+     * A retried job that fails again keeps the key it ran under on its row, so the next Retry still holds the first job's
+     * reservation. Fails if a failed row drops the carried key.
+     */
+    @Test
+    fun aFailedRetryKeepsTheFirstJobsKeyOnItsRow() {
+        val first = UUID.randomUUID().toString()
+        val id = UUID.randomUUID()
+        val gone = File(app.filesDir, "queue/$id/content")
+        val request = TransferQueue.uploadRequest(id, gone, "text/plain", family.rootId, null, familyOf, first)
+        val result = runBlocking { TestListenableWorkerBuilder<UploadWorker>(app).setId(id).setInputData(request.workSpec.input).setTags(request.tags.toList()).build().doWork() }
+        assertTrue(result is ListenableWorker.Result.Failure)
+        assertEquals(first, FailedTransfers.of(app).all().single { it.id == id.toString() }.ledgerKey)
+    }
+
+    /*
+     * A family ends while a retried upload of it is queued: the reservation it holds under the first job's key is settled
+     * through the ledger. Fails if endFamily looks under the queued job's own id.
+     */
+    @Test
+    fun aFamilysEndSettlesAQueuedRetrysReservationUnderItsKey() {
+        val first = UUID.randomUUID()
+        leftReserved(first)
+        val failed = FailedTransfer(first.toString(), TransferQueue.UPLOAD, "Notes.txt", "The transfer failed.", 0L,
+            file = File(app.cacheDir, "retry.txt").apply { writeText("packing list") }.path, mime = "text/plain", folder = family.rootId,
+            family = family.groupId.lowercase(), familyWorkspace = family.workspaceId)
+        assertTrue(TransferQueue.retry(app, failed))
+        TransferQueue.endFamily(app, family.groupId) { uploadId, workspaceId -> Vault.fromShared(app)!!.api.abortUpload(uploadId, workspaceId) }
+        assertEquals("a queued retry's reservation was left behind", emptyList<Reservations.Record>(), records())
     }
 }

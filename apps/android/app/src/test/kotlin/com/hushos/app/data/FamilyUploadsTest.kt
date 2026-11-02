@@ -636,13 +636,11 @@ class FamilyUploadsTest {
         }
         val failed = FailedTransfer(failedJob, TransferQueue.UPLOAD, "Notes.txt", "Sign in to HushOS to see your files.", 0L, file = staged.path,
             mime = "text/plain", folder = family.rootId, family = family.groupId, familyWorkspace = family.workspaceId)
-        var queued: String? = null
-        assertTrue(TransferQueue.retryUpload(app, failed) { id ->
-            queued = id.toString()
-            assertEquals("a retry was queued before it took over the failed job's reservation", 1, records().count { it.job == queued })
-        })
+        var ledger: String? = null
+        assertTrue(TransferQueue.retryUpload(failed) { _, key -> ledger = key })
+        assertEquals("a retry didn't keep the failed job's ledger key", failedJob, ledger)
         val reserved = begins()
-        val rerun = runCatching { run(queued!!) }.exceptionOrNull()
+        val rerun = runCatching { run(ledger!!) }.exceptionOrNull()
         assertTrue("a retried upload that had landed wasn't ended as uploaded: $rerun", rerun is Reservations.Landed)
         assertEquals("a retried upload was sent again", reserved, begins())
     }
@@ -668,22 +666,6 @@ class FamilyUploadsTest {
         } finally {
             ledger.setReadable(true)
         }
-    }
-
-    /*
-     * #251 hole 1: a Retry whose new job couldn't be queued (WorkManager's database refusing it) gives the rows it took over
-     * back to the failed job, whose row stays, so the next Retry takes them over again. Fails if they stay with an id no
-     * job has.
-     */
-    @Test
-    fun aRetryThatCouldNotBeQueuedGivesItsRowsBack() {
-        val failedJob = UUID.randomUUID().toString()
-        assertThrows(Killed::class.java) { upload(job(), failedJob) { throw Killed() } }
-        val kept = records()
-        val failed = FailedTransfer(failedJob, TransferQueue.UPLOAD, "Notes.txt", "The transfer failed.", 0L, file = local("Notes.txt", "packing list").path,
-            mime = "text/plain", folder = family.rootId, family = family.groupId, familyWorkspace = family.workspaceId)
-        assertThrows(IllegalStateException::class.java) { TransferQueue.retryUpload(app, failed) { throw IllegalStateException("not queued") } }
-        assertEquals("a retry that wasn't queued kept the failed job's rows", kept, records())
     }
 
     /* A queued family upload as FamilyUploads runs it, its landed row left as the job leaves it. */

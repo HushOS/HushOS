@@ -18,7 +18,12 @@ data class FailedTransfer(
     val node: String? = null, val isFolder: Boolean = false, val shareRoot: String? = null,
     /* An upload into a family folder: its family and workspace, so a retry opens the family in its job and a removal ends it. */
     val family: String? = null, val familyWorkspace: String? = null,
+    /* The upload ledger's key its reservations are kept under (Reservations): the first job's id, carried by every Retry. */
+    val ledger: String? = null,
 ) {
+    /* Whose reservations this row's upload holds: its ledger key, or its own id for a job that carried none. */
+    val ledgerKey: String get() = ledger ?: id
+
     /* An upload whose staged copy is gone can't be sent again: the row says to pick it again. */
     fun sourceGone(): Boolean = kind == TransferQueue.UPLOAD && (file == null || !File(file).exists())
 }
@@ -46,12 +51,12 @@ class FailedTransfers(private val store: File) {
 
     private fun encode(t: FailedTransfer) = listOf(
         t.id, t.kind, t.name, t.reason, t.at.toString(), t.file, t.mime, t.folder, t.replacing, t.node, t.isFolder.toString(), t.shareRoot,
-        t.family, t.familyWorkspace,
+        t.family, t.familyWorkspace, t.ledger,
     ).joinToString("\t") { if (it == null) "-" else "=" + URLEncoder.encode(it, "UTF-8") }
 
     private fun decode(line: String): FailedTransfer? = runCatching {
         val f = line.split("\t").map { if (it == "-") null else URLDecoder.decode(it.removePrefix("="), "UTF-8") }
-        FailedTransfer(f[0]!!, f[1]!!, f[2]!!, f[3]!!, f[4]!!.toLong(), f[5], f[6], f[7], f[8], f[9], f[10] == "true", f[11], f.getOrNull(12), f.getOrNull(13))
+        FailedTransfer(f[0]!!, f[1]!!, f[2]!!, f[3]!!, f[4]!!.toLong(), f[5], f[6], f[7], f[8], f[9], f[10] == "true", f[11], f.getOrNull(12), f.getOrNull(13), f.getOrNull(14))
     }.getOrNull()
 
     companion object {

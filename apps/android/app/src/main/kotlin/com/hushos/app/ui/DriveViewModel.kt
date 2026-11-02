@@ -363,7 +363,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                         val out = info.outputData
                         records.record(com.hushos.app.data.FailedTransfer(info.id.toString(), tag("kind:") ?: "upload", nameOf(info),
                             out.getString("message") ?: "The transfer failed.", System.currentTimeMillis(), out.getString("file") ?: tag("file:"), out.getString("mime"),
-                            out.getString("folder"), out.getString("replacing"), tag("node:"), "folder" in info.tags, out.getString("share")))
+                            out.getString("folder"), out.getString("replacing"), tag("node:"), "folder" in info.tags, out.getString("share"), ledger = tag("ledger:")))
                     }
                     com.hushos.app.data.TransferQueue.sweep(context, inUse)
                     jobNames.retain(infos.map { it.id.toString() }.toSet())
