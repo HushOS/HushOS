@@ -17,6 +17,7 @@ import com.hushos.app.data.NodeView
 import com.hushos.app.data.olderThan
 import com.hushos.app.data.Opened
 import com.hushos.app.data.Vault
+import com.hushos.app.data.drainFamilyPurged
 import com.hushos.app.data.familyEpoch
 import com.hushos.app.data.forgetFamilyCopies
 import com.hushos.app.data.rethrowIfCancelled
@@ -328,6 +329,19 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         return true
     }
 
+    /*
+     * What a family's proof purged (a share's kept files, kept folders and copies in a folder now proven a family's) leaves
+     * the screens: On this phone's rows and the thumbnails drawn from them. The files themselves went with the proof.
+     */
+    private fun dropPurged(vault: Vault) {
+        val purged = vault.drainFamilyPurged().map { it.lowercase() }.toSet()
+        if (purged.isEmpty()) return
+        model.updateState { st ->
+            st.copy(offline = st.offline.filter { it.id.lowercase() !in purged }, keptFolders = st.keptFolders.filter { it.id.lowercase() !in purged },
+                thumbnails = st.thumbnails.filterKeys { thumbnailItem(it).lowercase() !in purged })
+        }
+    }
+
     /* Whether a family folder may be listed in this family state: accepted, or no answer (what was opened stays). Never refused. */
     private fun admits(state: FamilyState?): Boolean =
         state == null || state is FamilyState.Accepted || (state is FamilyState.Failed && state.words == FamilyWords.NO_ANSWER)
@@ -342,6 +356,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         // The trust generation moves only with a sync that changed something: an accepted one (rejudge) or a clear. No
         // answer keeps the rows on screen with the verdicts they had ("Keys don't match" stays said).
         folders.noteAreas(sync.familyAreas())
+        dropPurged(s.owner)
         when {
             state is FamilyState.Accepted -> {
                 shown[summary.id] = state.view

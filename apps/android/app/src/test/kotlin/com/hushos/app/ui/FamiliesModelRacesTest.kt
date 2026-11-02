@@ -74,6 +74,33 @@ class FamiliesModelRacesTest {
     }
 
     /*
+     * #247 check, round 6: a share of the family's file is kept on this phone and listed on On this phone, its thumbnail
+     * drawn, before the family's first sync proves its folder. After that sync, On this phone no longer lists it and its
+     * thumbnail is gone. Fails if the screens keep a purged share's rows.
+     */
+    @Test
+    fun onThisPhoneDropsAShareFileOnceItsFolderIsProven() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        server.shareWithMe(family.fileId)
+        server.pinGrace()
+        val app = RuntimeEnvironment.getApplication()
+        val vault = vault()
+        val root = vault.mountShares().single().root!!
+        // This phone holds the account (a kept file is only this account's to keep).
+        com.hushos.app.data.AccountStore.of(app).adopt(com.hushos.app.data.Shared.session(app)!!.userId)
+        vault.keepDownloaded(root)
+        val host = Host(vault)
+        val thumb = "${family.fileId}@${root.node.currentVersion!!.id}"
+        host.state.update { it.copy(offline = com.hushos.app.data.Offline.entries(app), thumbnails = it.thumbnails + (thumb to byteArrayOf(1))) }
+        assertTrue(host.state.value.offline.any { it.id == family.fileId })
+        val model = FamiliesModel(host)
+        runBlocking { model.refreshFamilies() }
+        assertTrue(model.states[family.groupId] is FamilyState.Accepted)
+        assertFalse("On this phone still lists a share's file in a folder proven a family's", host.state.value.offline.any { it.id == family.fileId })
+        assertFalse(thumb in host.state.value.thumbnails)
+    }
+
+    /*
      * Someone outside the family wrote a file into the folder: its row is marked. The family's next check gets no answer;
      * the rows stay on screen, and so must the mark. Fails if an unanswered check drops the verdicts without judging again.
      */

@@ -267,6 +267,102 @@ class FamilySyncTest {
     }
 
     /*
+     * #247 check, round 6: a share of the family's file is kept on this phone and opened in another app before route 25
+     * proves its folder. Once proven, the kept file, its entry and the copy opened from it are gone (none of them is under
+     * opened/family/<workspace>, where a family's clear looks), and the screens hear which. Fails if becoming a family
+     * folder leaves a share's plaintext on the phone.
+     */
+    @Test
+    fun aShareFileKeptOnThisPhoneGoesWhenItsFolderIsProven() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        server.shareWithMe(family.fileId)
+        server.pinGrace()
+        val root = phone.vault.mountShares().single().root!!
+        val app = org.robolectric.RuntimeEnvironment.getApplication()
+        // This phone holds the account (a kept file is only this account's to keep).
+        AccountStore.of(app).adopt(Shared.session(app)!!.userId)
+        phone.vault.keepDownloaded(root)
+        val kept = Offline.file(app, root)!!
+        assertTrue(Offline.isKept(app, family.fileId))
+        assertTrue(kept.exists())
+        val opened = File(app.cacheDir, "opened/${family.fileId}/${root.node.currentVersion!!.id}/${root.name}")
+        phone.vault.download(family.fileId, opened, workspaceId = family.workspaceId)
+        assertTrue(opened.exists())
+        accepted(phone)
+        assertFalse("a share's kept file outlived its folder becoming a family's", Offline.isKept(app, family.fileId))
+        assertFalse(kept.exists())
+        assertFalse(File(Offline.root(app), family.fileId).exists())
+        assertFalse("a copy opened from the share outlived its folder becoming a family's", opened.exists())
+        assertTrue(family.fileId in phone.vault.drainFamilyPurged())
+    }
+
+    /*
+     * #247 check, round 6: a rename of a share's file starts before route 25 proves its folder; a sync proves it (its
+     * guard stored) as the rename reaches its final gate. The rename is refused as a family folder's and nothing is sent.
+     * Fails if the last check before a write lets a proven family folder through once its guard is stored.
+     */
+    @Test
+    fun aRenameHeldWhileItsFolderIsProvenIsRefusedAndNothingIsSent() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        server.shareWithMe(family.fileId)
+        server.pinGrace()
+        assertNull(phone.vault.mountShares().single().error)
+        val before = server.node(family.fileId).metadataVersion
+        proveAtTheGate(phone)
+        assertThrows(FamilyReadOnly::class.java) { phone.vault.rename(family.fileId, "Renamed.txt") }
+        assertEquals("a rename was sent into a folder proven a family's", before, server.node(family.fileId).metadataVersion)
+    }
+
+    /*
+     * #247 check, round 6: sharing a share's file with Grace; her address is looked up and checked, then a sync proves
+     * the folder before the share is sent. It is refused and the server makes no share. Fails if share() sends without the
+     * final gate after its lookup.
+     */
+    @Test
+    fun aShareSentAfterItsLookupIntoAFolderProvenMeanwhileIsRefused() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        server.shareWithMe(family.fileId)
+        server.pinGrace()
+        val root = phone.vault.mountShares().single().root!!
+        val grace = server.settings().pinOf(server.grace.id)!!
+        proveAtTheGate(phone)
+        assertThrows(FamilyReadOnly::class.java) { phone.vault.share(root, grace, "viewer") }
+        assertEquals("a share was made in a folder proven a family's", 0, server.sharesMade.size)
+    }
+
+    /*
+     * #247 check, round 6: a selection with a share's file goes to the trash while a sync proves its folder. The batch is
+     * refused and the file stays where it is. Fails if a batch write skips the final gate.
+     */
+    @Test
+    fun aBatchIntoAFolderProvenMeanwhileIsRefused() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        server.shareWithMe(family.fileId)
+        server.pinGrace()
+        assertNull(phone.vault.mountShares().single().error)
+        val sent = java.util.Collections.synchronizedList(ArrayList<String>())
+        server.beforeAnswer = { method, path -> if (method != "GET") sent.add(path) }
+        proveAtTheGate(phone)
+        val outcome = kotlinx.coroutines.runBlocking { phone.vault.trashMany(listOf(family.fileId)) }.single()
+        server.beforeAnswer = null
+        assertTrue("a batch went out into a folder proven a family's: $sent", sent.none { "trash" in it })
+        assertTrue(outcome.isFailure)
+        assertNull(server.node(family.fileId).trashedAt)
+    }
+
+    /* The first write into the family's folder that reaches its final gate finds it proven by a sync (its guard stored). */
+    private fun proveAtTheGate(phone: FamilyFixture.Phone) {
+        var proven = false
+        phone.vault.beforeWriteGate = { ws ->
+            if (!proven && ws.equals(family.workspaceId, ignoreCase = true)) { proven = true; accepted(phone) }
+        }
+    }
+
+    /*
      * #247 check, item 1: an accepted member list names a received share's workspace (a hostile roster). The barrier's
      * hold over it never makes it a family folder: the share still opens and lists, a write into it isn't refused as a
      * family's, and the family's own folder, proven by route 25, still is one. Fails if a roster's word classes a

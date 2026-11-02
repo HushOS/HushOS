@@ -115,10 +115,51 @@ internal fun Vault.noteFamilyWorkspaces(ids: List<String>, groupId: String) {
             if (id == own) continue
             // Newly proven a family folder: whatever this phone held of it came some other way (a share mount), never
             // through the family's ledger, and goes.
-            if (familyAreas.put(id, groupId.lowercase()) == null) gone.addAll(nodes.forgetWorkspace(id))
+            if (familyAreas.put(id, groupId.lowercase()) == null) {
+                val held = nodes.forgetWorkspace(id)
+                gone.addAll(held)
+                familyPurged.addAll(purgeShareCopies(id, held))
+            }
         }
     }
     forgetParents(gone)
+}
+
+/*
+ * What this phone kept of a folder before it was proven a family's (a share's): its files kept on this phone, its kept
+ * folders, and the plaintext copies opened from it (opened/, the Files app's files/ and edits/, old thumbnails/), none of
+ * them under opened/family/<workspace> where a family's clear looks. Under the copies lock, with the proof. The ids.
+ */
+private fun Vault.purgeShareCopies(workspaceId: String, held: Set<String>): Set<String> {
+    val ws = workspaceId.lowercase()
+    val folders = Offline.folders(context).filter { it.workspaceId.equals(ws, ignoreCase = true) }
+    for (folder in folders) Offline.forgetFolder(context, folder.id)
+    // An entry kept before its workspace was recorded counts when this phone held its row there.
+    val kept = Offline.entries(context).filter { it.workspaceId?.equals(ws, ignoreCase = true) ?: (it.id in held) }
+    for (entry in kept) Offline.forget(context, entry.id)
+    val ids = held + folders.map { it.id } + kept.map { it.id }
+    // Node ids name folders here only when they are ids (never "family", "..", or a path).
+    for (id in ids.filter { FamilyRecords.valid(it) }) {
+        for (place in listOf("opened", "files", "edits", "thumbnails")) File(File(context.cacheDir, place), id.lowercase()).deleteRecursively()
+        if (id != id.lowercase()) for (place in listOf("opened", "files", "edits", "thumbnails")) File(File(context.cacheDir, place), id).deleteRecursively()
+    }
+    return ids
+}
+
+/* The ids a family's proof purged since the last call: their rows, thumbnails and kept entries leave the screens. */
+fun Vault.drainFamilyPurged(): Set<String> {
+    val out = familyPurged.toSet()
+    familyPurged.removeAll(out)
+    return out
+}
+
+/*
+ * Every write's last word, right before it is sent (DriveApi.beforeWrite), under the lock a family's proof takes: a
+ * folder proven a family's since the write began is read only, and one whose family's guard is owed waits for it.
+ */
+internal fun Vault.finalWriteGate(workspaceId: String) {
+    beforeWriteGate?.invoke(workspaceId)
+    synchronized(familyCopiesLock) { refuseFamilyWrite(workspaceId) }
 }
 
 /* A share into a family's folder: proven, let go of, or held by a barrier still up. Checked again where it is kept. */
@@ -255,10 +296,7 @@ internal fun Vault.requireGuardKept(workspaceId: String) {
 }
 
 /* Right before a write leaves for the server: a sync may have committed and failed to store its guard meanwhile. */
-internal fun Vault.sendingIntoFamily(workspaceId: String) {
-    heldBarrier(workspaceId)
-    if (isFamilyWorkspace(workspaceId)) requireGuardKept(workspaceId)
-}
+internal fun Vault.sendingIntoFamily(workspaceId: String) = finalWriteGate(workspaceId)
 
 /* Raised before an acceptance of `groupId` commits; whether it was raised already (an earlier guard still owed). */
 internal fun Vault.oweFamilyGuard(groupId: String): Boolean = !familyGuardOwed.add(groupId.lowercase())

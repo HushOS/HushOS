@@ -204,6 +204,10 @@ class Vault(internal val context: Context, val api: DriveApi) {
     internal var afterFamilyOpen: (() -> Unit)? = null
     /* Tests: runs right before a row opened by a share's or this account's keys is kept (a family's proof landing there). */
     internal var beforeKept: ((workspaceId: String) -> Unit)? = null
+    /* Tests: runs as a write reaches its final gate, before it is checked (a sync proving the folder meanwhile). */
+    internal var beforeWriteGate: ((workspaceId: String) -> Unit)? = null
+    /* Ids whose copies a family's proof deleted (VaultFamilies.purgeShareCopies): the screens drop them (drainFamilyPurged). */
+    internal val familyPurged: MutableSet<String> = ConcurrentHashMap.newKeySet()
     /* The family guard (FamilyGuard.kt), sealed under the settings key as the contact guard is. */
     internal val familyGuard: FamilyGuardStore
         get() = FamilyGuardStore.of(context, api.session, familyGuardWrites) { kept, create -> marksKey(kept, create, served = null) }
@@ -227,6 +231,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     init {
         api.onBadSignature = { forgetIdentity() }
+        // Every write's last word, right before it is sent, wherever it began (the app, the Files app, a worker).
+        api.beforeWrite = { finalWriteGate(it) }
     }
 
     companion object {
@@ -390,6 +396,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     /* Out of the ledger first (saved before the server hears of it), so no rotation ever seals it again. */
     fun revokeLink(link: LinkView, item: Opened) {
+        refuseFamilyWrite(item.node.workspaceId)
         updateSettings { it.removeLink(link.id) }
         api.revokeLink(link.id, item.node.workspaceId)
     }
@@ -571,6 +578,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     /* Out of the ledger first (saved before the revoke and the rotation after it), so no rotation seals to them again. */
     fun revokeShare(share: OwnedShare, item: Opened) {
+        refuseFamilyWrite(item.node.workspaceId)
         updateSettings { it.removeShare(item.id, share.granteeId) }
         api.revokeShare(share.id, item.node.workspaceId)
     }
@@ -843,7 +851,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
     fun keepFolder(folder: Opened, shareRoot: String? = null, progress: (fraction: Float, done: Int, total: Int) -> Unit = { _, _, _ -> }) {
         refuseFamilyWrite(folder.node.workspaceId)
         if (folder.node.trashedAt != null) { Offline.forgetFolder(context, folder.id); return }
-        Offline.rememberFolder(context, folder, shareRoot)
+        // Recorded under the lock a family's proof purges kept copies under: never after a proof that already ran.
+        synchronized(familyCopiesLock) {
+            refuseFamilyWrite(folder.node.workspaceId)
+            Offline.rememberFolder(context, folder, shareRoot)
+        }
         val files = filesUnder(folder.id)
         val bytes = files.sumOf { it.size ?: 0L }.coerceAtLeast(1L).toDouble()
         var doneBytes = 0L
@@ -912,9 +924,19 @@ class Vault(internal val context: Context, val api: DriveApi) {
             File(Offline.root(context), item.id).deleteRecursively()
             throw NotAuthenticated()
         }
-        // Older versions of the same file go; only the current one is kept.
-        destination.parentFile?.parentFile?.listFiles()?.filter { it.name != item.node.currentVersion?.id }?.forEach { it.deleteRecursively() }
-        Offline.remember(context, item, via)
+        // Recorded under the lock a family's proof purges kept copies under: a folder proven a family's while this came
+        // down (a share's) keeps nothing of it, and a proof after this finds and purges the entry.
+        synchronized(familyCopiesLock) {
+            try {
+                refuseFamilyWrite(item.node.workspaceId)
+            } catch (error: Exception) {
+                File(Offline.root(context), item.id).deleteRecursively()
+                throw error
+            }
+            // Older versions of the same file go; only the current one is kept.
+            destination.parentFile?.parentFile?.listFiles()?.filter { it.name != item.node.currentVersion?.id }?.forEach { it.deleteRecursively() }
+            Offline.remember(context, item, via)
+        }
     }
 
     /* Whether this phone still holds this vault's account: a session for it, and its data recorded as its. */
