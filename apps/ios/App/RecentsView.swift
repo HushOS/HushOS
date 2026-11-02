@@ -739,7 +739,7 @@ struct OnThisPhoneView: View {
             } else {
                 // Kept from a share this session hasn't opened: the name and size are all the phone knows.
                 HStack(spacing: Alpine.Space.s3) {
-                    PageGlyph(label: (entry.name as NSString).pathExtension.uppercased().nilIfEmpty)
+                    PageGlyph(label: (entry.name as NSString).pathExtension.uppercased().nilIfEmpty, name: entry.name)
                         .frame(width: Theme.mark * 0.66, height: Theme.mark * 0.66 * 54 / 44).frame(width: Theme.mark, height: Theme.mark)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(entry.name).font(Theme.Text.body).foregroundStyle(Alpine.ink).lineLimit(1)

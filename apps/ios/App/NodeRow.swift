@@ -353,7 +353,7 @@ struct FileMark: View {
             } else if item.isFolder {
                 FolderGlyph(folder: item).frame(width: box * 0.9, height: box * 0.9 * 46 / 56)
             } else {
-                PageGlyph(label: Self.label(for: item)).frame(width: box * 0.66, height: box * 0.66 * 54 / 44)
+                PageGlyph(label: Self.label(for: item), name: item.name).frame(width: box * 0.66, height: box * 0.66 * 54 / 44)
             }
         }
         .frame(width: box, height: box)

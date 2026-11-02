@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { colourHue, FOLDER_COLOURS, folderColour, toColour } from './colour';
+import { colourHue, fileTypeHue, FOLDER_COLOURS, folderColour, toColour } from './colour';
 
 describe('a folder’s colour', () => {
     test('its own colour is the one it is drawn in', () => {
@@ -42,4 +42,27 @@ describe('a folder’s colour', () => {
         expect(colourHue('#808080').strength).toBeLessThan(0.01);
         expect(colourHue('#ffffff').strength).toBeLessThan(0.01);
     });
+});
+
+describe('a file’s type colour', () => {
+    test.each([
+        ['Report.PDF', 25],
+        ['notes.md', 255],
+        ['budget.xlsx', 145],
+        ['deck.key', 55],
+        ['photo.heic', 160],
+        ['clip.mov', 345],
+        ['song.flac', 290],
+        ['backup.tar.gz', 85],
+        ['main.rs', 200],
+    ])('%s takes its type’s hue', (name, hue) => {
+        expect(fileTypeHue(name)).toBe(hue);
+    });
+
+    test.each([['README'], ['.env'], ['archive.unknownext'], ['trailing.']])(
+        '%s has no type colour, so it keeps the plain label',
+        (name) => {
+            expect(fileTypeHue(name)).toBeNull();
+        },
+    );
 });
