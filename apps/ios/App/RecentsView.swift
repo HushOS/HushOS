@@ -1,35 +1,15 @@
 import HushOSKit
 import QuickLook
 import SwiftUI
-import UniformTypeIdentifiers
-
-/* What a row can be filtered to, as the drives do it: a type, not a folder. */
-enum HomeFilter: String, CaseIterable, Identifiable {
-    case all = "All", folders = "Folders", images = "Images", videos = "Videos", documents = "Documents"
-    var id: String { rawValue }
-
-    nonisolated func matches(_ item: Opened) -> Bool {
-        switch self {
-        case .all: return true
-        case .folders: return item.isFolder
-        case .images: return !item.isFolder && NodeRow.type(for: item).conforms(to: .image)
-        case .videos: return !item.isFolder && NodeRow.type(for: item).conforms(to: .movie)
-        case .documents:
-            let type = NodeRow.type(for: item)
-            return !item.isFolder && (type.conforms(to: .pdf) || type.conforms(to: .text) || type.conforms(to: .presentation) || type.conforms(to: .spreadsheet))
-        }
-    }
-}
 
 /*
  * Home: the title with Add (into the top folder), what is on this phone, then
- * Recent with its type chips and, once a tag exists, the tags row. A folder in
- * Recent opens on top of Home. Search and Account have their own tabs.
+ * Recent with, once a tag exists, the tags row. A folder in Recent opens on top
+ * of Home. Search (which finds things by kind: "photos") and Account have their own tabs.
  */
 struct HomeView: View {
     @Environment(DriveStore.self) private var store
     @State private var loaded = false
-    @State private var filter: HomeFilter = .all
     @State private var tagFilter: String?
     @State private var tagged: [Opened] = []
     @State private var managingTags = false
@@ -42,12 +22,12 @@ struct HomeView: View {
     @State private var showingCamera = false
 
     private var rows: [Opened] {
-        (tagFilter != nil ? tagged : store.recents).filter(filter.matches)
+        tagFilter != nil ? tagged : store.recents
     }
 
     private var heading: String {
         if let tagFilter, let tag = store.tags.tags.first(where: { $0.id == tagFilter }) { return tag.name }
-        return filter == .all ? "Recent" : "Recent \(filter.rawValue.lowercased())"
+        return "Recent"
     }
 
     private var kept: [Offline.Entry] {
@@ -121,8 +101,6 @@ struct HomeView: View {
             .fileViewer($viewing, among: rows, store: store)
             .uploadFlow(into: store.rootId, importer: $showingImporter, folder: $showingFolder, photos: $showingPhotos, camera: $showingCamera)
             .sheet(isPresented: $managingTags) { TagManagerSheet().environment(store) }
-            // Recent is narrowed to the chip before a folder stands in for what it holds.
-            .task(id: filter) { await store.showRecents(filter) }
             .task(id: store.sessionKey) {
                 if let root = await store.loadRoot(), store.folders[root] == nil { await store.refresh(folder: root) }
                 await store.refreshRecents()
@@ -153,13 +131,12 @@ struct HomeView: View {
         }
     }
 
-    /* "Recent" (or "Recent images", or the tag) as a section title, with its own filters under it. */
+    /* "Recent" (or the tag) as a section title, with the tags under it. */
     private var recentHeader: some View {
         VStack(alignment: .leading, spacing: Alpine.Space.s3) {
             Text(heading).font(Theme.Text.title).foregroundStyle(Alpine.ink)
                 .padding(.horizontal, Alpine.Space.s1)
                 .accessibilityAddTraits(.isHeader)
-            TypeChips(value: $filter)
             if !store.tags.tags.isEmpty { tagsRow }
         }
         .textCase(nil)
@@ -206,11 +183,9 @@ struct HomeView: View {
 
     @ViewBuilder private var emptyRecent: some View {
         if let tagFilter, let tag = store.tags.tags.first(where: { $0.id == tagFilter }) {
-            EmptyStateView(title: "Nothing tagged \(tag.name)", message: filter == .all ? "Nothing carries this tag yet." : "No \(filter.rawValue.lowercased()) carry this tag.")
-        } else if filter == .all {
-            EmptyStateView(title: "No recent files yet", message: "Files you add or change show up here.")
+            EmptyStateView(title: "Nothing tagged \(tag.name)", message: "Nothing carries this tag yet.")
         } else {
-            EmptyStateView(title: "No \(filter.rawValue.lowercased()) yet", message: "\(filter.rawValue) you add or change show up here.")
+            EmptyStateView(title: "No recent files yet", message: "Files you add or change show up here.")
         }
     }
 
@@ -231,38 +206,6 @@ struct HomeView: View {
         }
     }
 }
-
-/* All, Folders, Images, Videos, Documents. The chosen one fills with ink and carries a check. */
-struct TypeChips: View {
-    @Binding var value: HomeFilter
-    @Environment(\.colorSchemeContrast) private var contrast
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: Alpine.Space.s2) {
-                ForEach(HomeFilter.allCases) { option in
-                    let on = value == option
-                    Button { value = option } label: {
-                        HStack(spacing: 6) {
-                            if on && option != .all { Image(systemName: "checkmark").font(.caption.weight(.bold)) }
-                            Text(option.rawValue)
-                        }
-                        .font(Theme.Text.callout.weight(.semibold))
-                        .foregroundStyle(on ? Alpine.surface : Alpine.ink)
-                        .padding(.horizontal, Alpine.Space.s4).frame(height: 36)
-                        .background(on ? Alpine.ink : Alpine.surface, in: Capsule())
-                        .overlay { if contrast == .increased && !on { Capsule().strokeBorder(Alpine.rule, lineWidth: 1) } }
-                        .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(on ? .isSelected : [])
-                }
-            }
-        }
-        .chipRowClip()
-    }
-}
-
 
 struct TrashView: View {
     @Environment(DriveStore.self) private var store

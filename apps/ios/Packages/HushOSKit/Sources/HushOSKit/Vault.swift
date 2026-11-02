@@ -999,8 +999,8 @@ public actor Vault {
     }
 
     /* What changed lately (`Recents`); from the tail of the change feed until the catalogue can answer. */
-    public func recents(limit: Int = 60, keep: @Sendable (Opened) -> Bool = { _ in true }) async throws -> Recents {
-        if let fast = catalogueRecents(limit: limit, keep: keep) { return fast }
+    public func recents(limit: Int = 60) async throws -> Recents {
+        if let fast = catalogueRecents(limit: limit) { return fast }
         let workspace = try await loadWorkspace()
         let seq = workspace.changeSeq ?? 0
         let feed = try await api.changes(workspaceId: workspace.workspaceId, since: max(0, seq - 400), limit: 400)
@@ -1019,7 +1019,7 @@ public actor Vault {
             forget(node.id)
             if let opened = try? await resolve(node.id) { items.append(opened) }
         }
-        return Recents(items, limit: limit, keep: keep) { self.opened[$0]?.node.parentId ?? self.parents[$0] }
+        return Recents(items, limit: limit) { self.opened[$0]?.node.parentId ?? self.parents[$0] }
     }
 
     public func versions(of nodeId: String) async throws -> [VersionListView] {
@@ -1030,13 +1030,13 @@ public actor Vault {
 
 /* What changed lately, two ways: as Home's Recent shows it, and as it is, for search. */
 public struct Recents: Sendable {
-    /* Home's rows: what `keep` lets through, a recent folder standing in for what it holds (`Opened.collapsedRecents`). */
+    /* Home's rows: a recent folder standing in for what it holds (`Opened.collapsedRecents`). */
     public let rows: [Opened]
     /* The newest changes of every type with nothing folded in: what search falls back on before the catalogue. */
     public let latest: [Opened]
 
-    init(_ items: [Opened], limit: Int, keep: (Opened) -> Bool, parentOf: (String) -> String?) {
-        rows = Opened.collapsedRecents(items.filter(keep), limit: limit, parentOf: parentOf)
+    init(_ items: [Opened], limit: Int, parentOf: (String) -> String?) {
+        rows = Opened.collapsedRecents(items, limit: limit, parentOf: parentOf)
         latest = Array(items.sorted(by: Opened.byRecent).prefix(limit))
     }
 }

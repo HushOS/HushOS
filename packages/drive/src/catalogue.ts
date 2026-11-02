@@ -11,8 +11,39 @@ import type { TagRegistry } from './tags';
  * next unlock rebuilds it from the mirror on disk.
  */
 
-export type CatalogueQuery = { query: string; limit?: number };
+/*
+ * What a node is, as search's kind words name it. The app decides it (`kindOf`): the split is
+ * what its viewer can show a file as, which this package doesn't know.
+ */
+export type NodeKind = 'folder' | 'image' | 'video' | 'document';
+export type CatalogueQuery = {
+    query: string;
+    limit?: number;
+    kindOf?: (node: DriveNode) => NodeKind | null;
+};
 export type CatalogueHit = { node: DriveNode; score: number; path: string[] };
+
+/*
+ * Query words that name a kind: "photos" finds every image, "folders" every folder. One is
+ * worth an exact extension, so "photos" puts images ahead of what only has it in its path.
+ */
+export const KIND_WORDS: Readonly<Record<string, NodeKind>> = {
+    image: 'image',
+    images: 'image',
+    photo: 'image',
+    photos: 'image',
+    picture: 'image',
+    pictures: 'image',
+    video: 'video',
+    videos: 'video',
+    document: 'document',
+    documents: 'document',
+    doc: 'document',
+    docs: 'document',
+    folder: 'folder',
+    folders: 'folder',
+};
+const folderOnly = (node: DriveNode): NodeKind | null => (node.kind === 'folder' ? 'folder' : null);
 
 /*
  * Search is over words, not strings: a name, a tag, a folder on the path and a
@@ -315,16 +346,22 @@ export class Catalogue {
         return counts;
     }
 
-    /* Every live node every query word lands on (none inside a trashed folder), best first; folders above files at a tie, then by name. */
-    search({ query, limit = 50 }: CatalogueQuery): CatalogueHit[] {
+    /*
+     * Every live node every query word lands on (none inside a trashed folder), best first; folders
+     * above files at a tie, then by name. A word in `KIND_WORDS` also lands on every node of its kind.
+     */
+    search({ query, limit = 50, kindOf = folderOnly }: CatalogueQuery): CatalogueHit[] {
         const words = tokenize(query);
         if (!words.length) return [];
         const hits: CatalogueHit[] = [];
         const isLive = this.liveCheck();
+        const kinds = words.map((word) => KIND_WORDS[word] ?? null);
+        const anyKind = kinds.some((kind) => kind !== null);
         for (const node of this.nodes.values()) {
             if (!node.parentId || !isLive(node)) continue;
             const name = tokenize(node.name);
             const extension = extensionOf(node.name);
+            const kind = anyKind ? kindOf(node) : null;
             const tags = this.tagsOf(node.id).flatMap((id) =>
                 tokenize(this.tagNames.get(id) ?? ''),
             );
@@ -333,10 +370,10 @@ export class Catalogue {
                 ancestor.parentId ? tokenize(ancestor.name) : [],
             );
             let score = 0;
-            for (const word of words) {
+            for (const [index, word] of words.entries()) {
                 const found = Math.max(
                     scoreWord(word, name, 4),
-                    extension === word ? 8 : 0,
+                    extension === word || (kind !== null && kinds[index] === kind) ? 8 : 0,
                     scoreWord(word, tags, 2),
                     scoreWord(word, path, 1),
                 );
