@@ -32,7 +32,12 @@ class FilesTreeGrantsTest {
     private val authority get() = "${app.packageName}.documents"
 
     @Before
-    fun signIn() = FamilyFixture.signIn(server, "files-tree-grants-test")
+    fun signIn() {
+        // The mirror is one per process and Robolectric keeps statics between tests: each test starts from an empty one.
+        com.hushos.app.data.Mirror::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)
+        app.deleteDatabase("mirror.db")
+        FamilyFixture.signIn(server, "files-tree-grants-test")
+    }
 
     @After
     fun close() {

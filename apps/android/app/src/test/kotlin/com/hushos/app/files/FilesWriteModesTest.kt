@@ -17,6 +17,7 @@ import androidx.work.testing.WorkManagerTestInitHelper
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -40,6 +41,9 @@ class FilesWriteModesTest {
 
     @Before
     fun signIn() {
+        // The mirror is one per process and Robolectric keeps statics between tests: each test starts from an empty one.
+        com.hushos.app.data.Mirror::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)
+        app.deleteDatabase("mirror.db")
         FamilyFixture.signIn(server, "files-write-modes-test")
         WorkManagerTestInitHelper.initializeTestWorkManager(app, Configuration.Builder().setExecutor(SynchronousExecutor()).setTaskExecutor(SynchronousExecutor()).build())
     }
@@ -135,5 +139,33 @@ class FilesWriteModesTest {
         val out = File(app.cacheDir, "read-${System.nanoTime()}")
         Vault(app, DriveApi(Shared.session(app)!!)).apply { listChildren(server.root) }.download(notes, out)
         assertEquals("saved draft and more", out.readText())
+    }
+
+    /*
+     * The app closes the file when the provider can't look its row up any more (gone from its cache, and nowhere it knows to
+     * list it again): the edit is queued, as the file was when opened, and its job lands it, never deleted unsent. Fails if
+     * a failed lookup at close drops the only edited copy.
+     */
+    @Test
+    fun anEditWhoseFileCantBeLookedUpAtCloseIsQueuedNotDropped() {
+        val notes = server.file(server.root, "Notes.txt", "original".toByteArray())
+        val provider = provider()
+        provider.queryChildDocuments("root", null, null as String?).close()
+        val vault = HushOSDocumentsProvider::class.java.getDeclaredField("vault").apply { isAccessible = true }.get(provider) as Vault
+        val opened = vault.resolve(notes)
+        val edit = provider.personalEdit(vault, notes, "w").apply { writeText("kept through a failed lookup") }
+        vault.forget(opened.node.workspaceId, notes)
+        vault.parents.remove(notes)
+        assertTrue(runCatching { vault.resolve(notes) }.isFailure)
+        provider.personalWriteBack(vault, notes, notes, edit, opened)
+        val queued = androidx.work.WorkManager.getInstance(app).getWorkInfosByTag(TransferQueue.TAG).get().single()
+        val staged = File(app.filesDir, "queue/${queued.id}/content")
+        assertEquals("kept through a failed lookup", staged.readText())
+        val request = TransferQueue.uploadRequest(queued.id, staged, opened.metadata.mime, server.root, notes, session = TransferQueue.accountTag(Shared.session(app)!!))
+        val worker = TestListenableWorkerBuilder<UploadWorker>(app).setId(queued.id).setInputData(request.workSpec.input).setTags(request.tags.toList()).build()
+        assertEquals(ListenableWorker.Result.success(), runBlocking { worker.doWork() })
+        val out = File(app.cacheDir, "read-${System.nanoTime()}")
+        Vault(app, DriveApi(Shared.session(app)!!)).apply { listChildren(server.root) }.download(notes, out)
+        assertEquals("kept through a failed lookup", out.readText())
     }
 }
