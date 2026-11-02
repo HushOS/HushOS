@@ -651,7 +651,7 @@ public actor Vault {
      * write into `workspaceId` (the parent's): a reply naming another workspace is refused,
      * or a key made for one drive would be filed under the other.
      */
-    func adopt(_ node: NodeView, nodeKey key: Data, metadata: NodeMetadata, in workspaceId: String) throws -> Opened {
+    func adopt(_ node: NodeView, nodeKey key: Data, metadata: NodeMetadata, in workspaceId: String, fromShare: Bool = false) throws -> Opened {
         guard node.workspaceId.lowercased() == workspaceId.lowercased() else {
             throw DriveAPIError.server(500, "HushOS answered for a different drive.")
         }
@@ -659,9 +659,19 @@ public actor Vault {
         try admitId(node, family: isFamilyWorkspace(node.workspaceId))
         // Never over a newer row a family's ledger opened (a late answer's older row).
         if ledgerOpened.contains(node.ref), let held = opened[node.ref], node.isOlder(than: held.node) { return held }
-        // In a family folder only a write's answer reaches here, under the key its ledger gave (familyTarget: writableKey,
-        // newNodeKey, rewrapNode); a share into a family folder is refused before it is adopted (admitShare).
-        if isFamilyWorkspace(node.workspaceId) { ledgerOpened.insert(node.ref) } else { ledgerOpened.remove(node.ref) }
+        if isFamilyWorkspace(node.workspaceId) {
+            // A share's row is never kept in a family folder (its folder proven meanwhile: admitShare, checked again by the mount
+            // with nothing awaited since), and never answered as the ledger's.
+            if fromShare { throw FamilyFailure(message: FamilyWords.couldntCheckKeys) }
+            // A write's answer is kept as the ledger's only under the key the ledger holds for it now: one sealed under a share's
+            // or this account's key while its folder was proven a family's isn't kept (the ledger opens it when listed).
+            guard areaLedger.nodeKey(workspaceId: node.workspaceId, nodeId: node.id)?.key == key else {
+                return Opened(node: node, metadata: metadata, nodeKey: key)
+            }
+            ledgerOpened.insert(node.ref)
+        } else {
+            ledgerOpened.remove(node.ref)
+        }
         let previous = opened[node.ref]?.node.parentId
         nodeKeys[node.ref] = key
         let result = Opened(node: node, metadata: metadata, nodeKey: key)
@@ -848,6 +858,8 @@ public actor Vault {
         if let ref, item.ref != ref { throw DriveAPIError.server(500, "This item has not been seen yet; open its folder first.") }
         let opened = try openVersion(item, version: version)
         if let expectedVersionId, opened.versionId != expectedVersionId { throw VersionChanged() }
+        // Begun as no family's (a share's, maybe): once its folder is proven a family's, nothing more comes down under that key.
+        let beganFamily = isFamilyWorkspace(item.node.workspaceId)
         let url = try await api.versionURL(opened.versionId, workspaceId: item.node.workspaceId)
         guard var objectURL = URL(string: url.url) else { throw DriveAPIError.server(500, "Bad object URL") }
         // Resumable: a dropped chunk is fetched again, an expired address renewed, and a `.part`
@@ -860,10 +872,20 @@ public actor Vault {
             onExpired: { if let fresh = URL(string: (try await api.versionURL(opened.versionId, workspaceId: item.node.workspaceId)).url) { objectURL = fresh } },
             progress: progress, gate: gate
         ) { index in
+            #if DEBUG
+            if let beforeChunk { await beforeChunk(index) }
+            #endif
+            if !beganFamily, isFamilyWorkspace(item.node.workspaceId) { throw FamilyFailure(message: FamilyWords.couldntCheckKeys) }
             let ciphertext = try await api.range(objectURL, try opened.range(index))
             return try chunkDecrypt(content: opened.content, index: index, ciphertext: ciphertext)
         }
     }
+
+    #if DEBUG
+    /* Tests only: runs before each chunk of a download is fetched (a family's proof landing mid-download). */
+    var beforeChunk: (@Sendable (UInt64) async -> Void)?
+    func setBeforeChunk(_ hook: (@Sendable (UInt64) async -> Void)?) { beforeChunk = hook }
+    #endif
 
     /* The sealed thumbnail trailer of a file's current version, decrypted; nil when it has none. */
     public func thumbnail(_ nodeId: String) async throws -> Data? {

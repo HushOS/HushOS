@@ -56,6 +56,25 @@ extension OnFakeDrive {
             #expect(syncShown && !joinShown)
         }
 
+        /*
+         * A join whose guard can't be stored: its member list's folders are held for the barrier before
+         * the store, as a sync's acceptance holds them, so a write into one (a share mounted there) is
+         * refused while the guard is owed. Fails if the join holds nothing before storing the guard.
+         */
+        @Test func aJoinWhoseGuardCantBeStoredHoldsWritesIntoItsFolders() async throws {
+            let family = try FamilyFixture()
+            let server = FamilyServer(family: family)
+            server.serve(chain: [family.r1, family.r2])
+            try server.storeSettings(pin: nil)
+            let writes = GuardSwitch()
+            writes.writable = false
+            let phone = try await family.phone(server, guards: familyGuards(family.member, writes: writes))
+            defer { phone.done() }
+            _ = try? await phone.sync.joinStatus(family.groupId)
+            #expect(!(await phone.vault.isFamilyWorkspace(family.workspaceId)))
+            await #expect(throws: GuardError.unsaved) { try await phone.vault.sendingIntoFamily(family.workspaceId) }
+        }
+
         @Test func theyMatchSavesTheCheckAndAVerifiedPinAndTheMemberReadsVerified() async throws {
             let family = try FamilyFixture()
             let server = FamilyServer(family: family)

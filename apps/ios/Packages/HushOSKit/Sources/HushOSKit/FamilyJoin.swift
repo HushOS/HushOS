@@ -276,6 +276,9 @@ extension FamilySync {
                 return .fork(Self.fork(of: of, version: version, sides: sides))
             case .accepted(let chain, let record, let pin, let guardPin):
                 do {
+                    // Its folders held for the barrier before the guard is stored, as a sync's acceptance holds them: a guard that
+                    // can't be stored keeps writes into them (a share mounted there) refused. Never a family folder by it.
+                    await vault.holdAsFamilyWorkspaces(Array(chain.areaKeys().keys), of: groupId)
                     if let guardPin { try await vault.keepFamilyGuard(groupId, guardPin) }
                     await vault.familyGuardKept(groupId)
                     try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: record, rosterVersion: chain.roster().rosterVersion,

@@ -552,6 +552,79 @@ extension OnFakeDrive {
             try await next.vault.admitShare(share(into: first.workspaceId, node))
         }
 
+        /* Eve's shared folder in her workspace `theirs`, with a file in it, served by `server`. */
+        private func eveShare(in theirs: String, _ family: FamilyFixture, _ server: FamilyServer) throws -> (folder: NodeView, key: Data) {
+            let key = try randomBytes(length: 32)
+            let folder = try FamilyFixture.node(id: try newId(kind: .node, scopeId: theirs).id, in: theirs, parent: nil, parentKey: try randomBytes(length: 32), key: key,
+                                                kind: .folder, name: "Shared", writer: family.creator)
+            let plan = try FamilyFixture.node(id: try newId(kind: .node, scopeId: theirs).id, in: theirs, parent: folder.id, parentKey: key,
+                                              key: try randomBytes(length: 32), kind: .file, name: "Plan.txt", writer: family.creator)
+            server.put(folder, plan)
+            return (folder, key)
+        }
+
+        /*
+         * A share into a folder that route 25 proves a family's while the share's granter is judged: the
+         * mount's check again where it keeps the row refuses it, so nothing of the share is kept, and it
+         * is never answered as the ledger's. A write's answer under a key the ledger doesn't hold isn't
+         * kept as the ledger's either. Fails if the share is kept on the first check alone, or tagged as
+         * the ledger's because its folder is a family's by then.
+         */
+        @Test func aShareWhoseFolderIsProvenBetweenAdmitAndKeepKeepsNothing() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            server.put(family.photo)
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            // Admitted while nothing names the folder a family's...
+            try await vault.admitShare(share(into: family.workspaceId, family.photo))
+            // ...then proven while the granter is judged.
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let metadata = NodeMetadata(name: "Beach.jpg", mime: "image/jpeg", size: nil, modified: nil, attributes: [:])
+            await #expect(throws: FamilyFailure.self) {
+                try await vault.admitShare(share(into: family.workspaceId, family.photo))
+                _ = try await vault.adopt(family.photo, nodeKey: family.photoKey, metadata: metadata, in: family.workspaceId, fromShare: true)
+            }
+            await #expect(throws: FamilyFailure.self) {
+                _ = try await vault.adopt(family.photo, nodeKey: family.photoKey, metadata: metadata, in: family.workspaceId, fromShare: true)
+            }
+            #expect(await vault.item(family.photo.ref) == nil)
+            #expect(!(await vault.ledgerOpened.contains(family.photo.ref)))
+            // A write's answer sealed under a key the ledger doesn't hold for it: not kept as the ledger's.
+            _ = try await vault.adopt(family.photo, nodeKey: try randomBytes(length: 32), metadata: metadata, in: family.workspaceId)
+            #expect(!(await vault.ledgerOpened.contains(family.photo.ref)))
+            #expect(await vault.item(family.photo.ref) == nil)
+        }
+
+        /*
+         * A share's download into a folder nothing names a family's yet begins; before its next chunk,
+         * route 25 proves the folder a family's. Nothing more comes down under the share's key and no
+         * file is left. Fails if a download begun as no family's keeps writing once its folder is proven.
+         */
+        @Test func aShareDownloadStopsWhenItsFolderIsProven() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            server.put(family.photo)
+            let version = try #require(family.photo.currentVersion)
+            server.objects[version.id] = family.photoObject
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            try await vault.admitShare(share(into: family.workspaceId, family.photo))
+            _ = try await vault.adopt(family.photo, nodeKey: family.photoKey, metadata: NodeMetadata(name: "Beach.jpg", mime: "image/jpeg", size: nil, modified: nil, attributes: [:]),
+                                      in: family.workspaceId, fromShare: true)
+            let (sync, summary) = (phone.sync, family.summary)
+            await vault.setBeforeChunk { index in if index == 0 { _ = await sync.sync(summary) } }
+            let out = FileManager.default.temporaryDirectory.appendingPathComponent("proven-\(UUID().uuidString)")
+            await #expect(throws: FamilyFailure.self) { try await vault.download(family.photo.id, ref: family.photo.ref, to: out) }
+            #expect(!FileManager.default.fileExists(atPath: out.path))
+            let part = out.appendingPathExtension("part")
+            let partial = FileManager.default.fileExists(atPath: part.path) ? try Data(contentsOf: part) : Data()
+            #expect(partial.isEmpty, "a chunk came down under the share's key after its folder was proven")
+            await vault.setBeforeChunk(nil)
+        }
+
         /* An own-drive row with `id`, under the member's top folder. */
         private func ownRow(_ id: String, _ family: FamilyFixture, kind: NodeKind, name: String) throws -> NodeView {
             try FamilyFixture.node(id: id, in: family.personal, parent: family.personalRoot.id, parentKey: family.personalRootKey,
