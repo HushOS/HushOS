@@ -1,0 +1,25 @@
+apps/ios/App/FamilyCheck.swift
+  s_566b8e0c4467a4::t_e894505ae455af 57-58,83,140-146,150-151,158-162,165,182,185-186,189,210
+apps/ios/App/Join.swift
+  s_566b8e0c4467a4::t_53b0e71e8ac4b5 46-47,84-90,126,182,208-212,229-232,234-235,280-281,292,317,339,376-382,387-389,392-393,395-396,409
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SessionGate.swift
+  s_566b8e0c4467a4::t_d05e61ff9f1aa2 46-48,63
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SessionGateTests.swift
+  s_566b8e0c4467a4::t_2c48892e41340b 141-168
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "19c4a39a820b0ee9ffa380bba9914b1bc66f37bf",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
