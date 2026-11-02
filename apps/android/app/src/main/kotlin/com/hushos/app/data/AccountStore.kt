@@ -74,6 +74,8 @@ class AccountStore(private val files: File, private val cache: File, private val
         fun of(context: Context): AccountStore = AccountStore(context.filesDir, context.cacheDir, context.noBackupFilesDir) {
             // Jobs queued for that account would run under the next one's session.
             androidx.work.WorkManager.getInstance(context).cancelAllWorkByTag(TransferQueue.TAG)
+            // The family walks too: the next account's session would run them.
+            androidx.work.WorkManager.getInstance(context).cancelAllWorkByTag(FamilyWalkWork.TAG)
             // Finished jobs keep their names in WorkManager's records; failed ones stay on the panel until dealt with,
             // so they go here too, or the next account would see them.
             androidx.work.WorkManager.getInstance(context).pruneWork()

@@ -203,6 +203,11 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     private val _state = MutableStateFlow(DriveState(origin = defaultOrigin()))
     override val state: StateFlow<DriveState> = _state
     private var vault: Vault? = null
+        set(value) {
+            field = value
+            // A family walk WorkManager runs in this process works through this vault while it is the session's.
+            com.hushos.app.data.LiveVaults.app = value
+        }
     /* Families (FamiliesModel.kt): each family's state, page and folders, beside the drive's. */
     val families = FamiliesModel(this)
     override val currentVault: Vault? get() = vault
@@ -212,10 +217,28 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     override fun lostSession() = sessionLost()
     /* Removed from a family: its queued uploads end, their reserved uploads aborted and their copies deleted. */
     override fun familyEnded(groupId: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            com.hushos.app.data.TransferQueue.endFamily(context, groupId) { uploadId, workspaceId -> vault?.api?.abortUpload(uploadId, workspaceId) ?: com.hushos.app.data.Reservations.Abort.PENDING }
+        // Tied to the session that found the removal: its vault's API, and nothing once that vault closed or another
+        // session signed in (endFamily asks before and after each step); cancelled with the vault (endFamilyCleanups).
+        val owner = vault ?: return
+        val job = viewModelScope.launch(Dispatchers.IO) {
+            val cleanup = coroutineContext[kotlinx.coroutines.Job]
+            com.hushos.app.data.TransferQueue.endFamily(context, groupId, owner.api.session, still = { cleanup?.isActive != false && !owner.closed }) { uploadId, workspaceId ->
+                owner.api.abortUpload(uploadId, workspaceId)
+            }
         }
+        familyCleanups.add(job)
+        job.invokeOnCompletion { familyCleanups.remove(job) }
     }
+    /* Removals' cleanups still running, each its session's: cancelled whenever the vault goes (sign-out, a lost or new session). */
+    private val familyCleanups: MutableSet<kotlinx.coroutines.Job> = java.util.Collections.synchronizedSet(HashSet())
+    private fun endFamilyCleanups() = synchronized(familyCleanups) { familyCleanups.toList() }.forEach { it.cancel() }
+    override fun familyWork(inFamily: Boolean) {
+        if (inFamily) com.hushos.app.data.FamilyWalkWork.schedule(context)
+        else vault?.api?.session?.let { com.hushos.app.data.FamilyWalkWork.cancelSession(context, it) }
+    }
+    override fun walkSoon() = com.hushos.app.data.FamilyWalkWork.soon(context)
+    override fun notice(text: String, untilRead: Boolean) = if (untilRead) notifyUntilRead(text) else notify(text)
+    override fun accountChanged() { refreshAccount(); refreshStorage() }
     private val thumbnailTasks = HashSet<String>()
     /* Who can open what (`access`): one request at a time, and one more after it for anything asked meanwhile. */
     private val sharingLoads = SharingRefresh(viewModelScope) { loadAccess() }
@@ -311,6 +334,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         com.hushos.app.data.AccountStore.of(context).adopt(user.id)
         // A new session starts with no families drawn: whatever the last one fetched, or has in flight, is dropped, and
         // no download of the last vault writes again.
+        endFamilyCleanups()
         vault?.close()
         vault?.areaLedger?.clear()
         families.reset()
@@ -359,11 +383,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                 // Failures from before the app kept its own record go on it now, while WorkManager still has them.
                 withContext(Dispatchers.IO) {
                     infos.filter { it.state == androidx.work.WorkInfo.State.FAILED && it.id !in hidden && !records.has(it.id.toString()) }.forEach { info ->
-                        val tag = { prefix: String -> info.tags.firstOrNull { it.startsWith(prefix) }?.removePrefix(prefix) }
-                        val out = info.outputData
-                        records.record(com.hushos.app.data.FailedTransfer(info.id.toString(), tag("kind:") ?: "upload", nameOf(info),
-                            out.getString("message") ?: "The transfer failed.", System.currentTimeMillis(), out.getString("file") ?: tag("file:"), out.getString("mime"),
-                            out.getString("folder"), out.getString("replacing"), tag("node:"), "folder" in info.tags, out.getString("share"), ledger = tag("ledger:")))
+                        records.record(com.hushos.app.data.FailedTransfer.fromWork(info, nameOf(info)))
                     }
                     com.hushos.app.data.TransferQueue.sweep(context, inUse)
                     jobNames.retain(infos.map { it.id.toString() }.toSet())
@@ -481,10 +501,12 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         // Queued transfers belong to the account signing out: stopped now; Auth.signOut removes
         // their copies with every other file of the account (AccountStore).
         androidx.work.WorkManager.getInstance(context).cancelAllWorkByTag(com.hushos.app.data.TransferQueue.TAG)
+        com.hushos.app.data.FamilyWalkWork.cancel(context)
         queueWatch?.cancel(); queueWatch = null
         link = null
         // The session's families go with it: the ledger's keys wiped, nothing of them left drawn, and no download of it
         // writes again (before Auth.signOut wipes the account's copies).
+        endFamilyCleanups()
         vault?.close()
         vault?.areaLedger?.clear()
         vault = null
@@ -501,6 +523,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         contactStep = null
         val ended = Shared.session(context)
         Shared.clearSession(context)
+        endFamilyCleanups()
         vault?.close()
         vault?.areaLedger?.clear()
         vault = null
@@ -1424,6 +1447,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         link = null
         // The deleted account's families go with it, on the main thread where they are drawn. Its copies were wiped
         // already: what a download wrote since goes too, and none writes again.
+        endFamilyCleanups()
         vault?.close(deleteCopies = true)
         vault?.areaLedger?.clear()
         vault = null

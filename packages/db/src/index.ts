@@ -1,4 +1,4 @@
-export { db } from './client';
+export { db, endPools } from './client';
 export * as adminRepository from './admin';
 export * as authRepository from './auth';
 export * as billingRepository from './billing';

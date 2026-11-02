@@ -1030,7 +1030,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * words), then the session (ended: nothing more lands). Callers then apply the newer-row rule and only then open, keep
      * or show anything. Under familyCopiesLock, the lock a forget takes.
      */
-    private fun requireWriteStands(workspaceId: String) {
+    internal fun requireWriteStands(workspaceId: String) {
         if (!isFamilyWorkspace(workspaceId) || WriteIntent.decision(workspaceId) != true) return
         val began = WriteIntent.epoch(workspaceId) ?: throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
         familyWordsSince(workspaceId, began)?.let { throw FamilyFailure(it) }
@@ -1546,7 +1546,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
         if (familyTarget(item.node.workspaceId)) {
             requireGuardKept(parent.node.workspaceId)
             return try {
-                base64urlEncode(areaLedger.rewrapNode(item.node.workspaceId, item.id, parent.id, parent.node.keyEpoch, item.node.keyEpoch))
+                // Never while a walk's batch holds keys pending in this folder (FamilyKeyLocks).
+                base64urlEncode(FamilyKeyLocks.hold(item.node.workspaceId) { areaLedger.rewrapNode(item.node.workspaceId, item.id, parent.id, parent.node.keyEpoch, item.node.keyEpoch) })
             } catch (refused: com.hushos.core.CoreException) {
                 throw FamilyFailure(FamilyWords.keyChangeWords(refused.message.orEmpty()))
             }

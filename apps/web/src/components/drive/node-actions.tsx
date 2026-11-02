@@ -10,12 +10,13 @@ import {
     HistoryIcon,
     InfoIcon,
     ListChecksIcon,
+    type LucideIcon,
+    PaletteIcon,
     PencilIcon,
     Share2Icon,
     TagIcon,
     Trash2Icon,
     UserPlusIcon,
-    type LucideIcon,
 } from 'lucide-react';
 import { RowMenuButton, SelectionAction, SelectionBar } from '@/components/drive/file-list';
 import { keyLabel } from '@/components/drive/shortcuts';
@@ -97,6 +98,8 @@ export type NodeActions = {
     onInfo: (node: DriveNode) => void;
     /* Absent for a node in someone else's workspace: tags are sealed with one's own registry. */
     onTags: ((nodes: DriveNode[]) => void) | null;
+    /* A folder's colour, where its record may be changed (as a rename). */
+    onColour?: ((nodes: DriveNode[]) => void) | null;
     /* Absent for a node in someone else's workspace: only its owner shares it. */
     onShare: ((node: DriveNode) => void) | null;
     /* Present only for a node in someone else's workspace: a re-encrypted copy into one's own. */
@@ -168,6 +171,12 @@ export function nodeEntries(
             icon: TagIcon,
             onSelect: () => onTags(targets),
             shortcut: 'T',
+        });
+    if (actions.onColour && targets.every((target) => target.kind === 'folder'))
+        organise.push({
+            label: 'Colour',
+            icon: PaletteIcon,
+            onSelect: () => actions.onColour?.(targets),
         });
     const about: MenuEntry[] = [];
     if (!many && node.kind === 'file')
@@ -278,6 +287,7 @@ export function NodeSelectionBar({
     onInfo,
     onSelectAll,
     onClear,
+    onColour,
 }: {
     selection: DriveNode[];
     own: boolean;
@@ -297,6 +307,8 @@ export function NodeSelectionBar({
     onInfo: () => void;
     onSelectAll: () => void;
     onClear: () => void;
+    /* Absent where nothing may be changed here. */
+    onColour?: (() => void) | null;
 }) {
     // Rows leave the list as each lands in the trash. The bar keeps what it was acting on until
     // the batch is done: its count and its actions (Share and Rename would appear for the last
@@ -307,8 +319,9 @@ export function NodeSelectionBar({
     const items = trashing ? held.selection : selection;
     const [moreOpen, setMoreOpen] = useState(false);
     const single = items.length === 1 ? items[0]! : null;
-    /* What More holds on a wide screen: Versions, Info, Select all. */
-    const moreWide = items.length === 1 || !allSelected;
+    const canColour = Boolean(onColour) && items.every((node) => node.kind === 'folder');
+    /* What More holds on a wide screen: Colour, Versions, Info, Select all. */
+    const moreWide = canColour || items.length === 1 || !allSelected;
     return (
         <SelectionBar label={`${items.length} selected`} onClear={onClear}>
             {single && own && (
@@ -411,6 +424,11 @@ export function NodeSelectionBar({
                     {own && (
                         <DropdownMenuItem className="sm:hidden" onClick={onTags}>
                             <TagIcon aria-hidden="true" /> Tags
+                        </DropdownMenuItem>
+                    )}
+                    {canColour && (
+                        <DropdownMenuItem onClick={() => onColour?.()}>
+                            <PaletteIcon aria-hidden="true" /> Colour
                         </DropdownMenuItem>
                     )}
                     {single?.kind === 'file' && (

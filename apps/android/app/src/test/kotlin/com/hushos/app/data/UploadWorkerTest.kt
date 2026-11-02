@@ -206,7 +206,8 @@ class UploadWorkerTest {
         // The reservation stays under the failed job's key, which the queued job carries.
         assertEquals(listOf(id.toString()), records().map { it.job })
         // Run as WorkManager would start it: the request Retry queued (its tags as stored), the failed job's copy and folder.
-        val expected = TransferQueue.uploadRequest(queued, File(failed.file!!), failed.mime, failed.folder!!, failed.replacing, familyOf, failed.ledgerKey)
+        val expected = TransferQueue.uploadRequest(queued, File(failed.file!!), failed.mime, failed.folder!!, failed.replacing, familyOf, failed.ledgerKey,
+            TransferQueue.sessionTag(Shared.session(app)!!))
         assertEquals(expected.tags, WorkManager.getInstance(app).getWorkInfoById(queued).get()!!.tags)
         val retried = TestListenableWorkerBuilder<UploadWorker>(app).setId(queued).setInputData(expected.workSpec.input).setTags(expected.tags.toList()).build()
         val reserved = begins()
@@ -237,7 +238,7 @@ class UploadWorkerTest {
         FailedTransfers.of(app).record(FailedTransfer(id.toString(), TransferQueue.UPLOAD, "Notes.txt", "The transfer failed.", 0L, file = copy.path,
             mime = "text/plain", folder = family.rootId, family = family.groupId.lowercase(), familyWorkspace = family.workspaceId))
         val seen = readWhenTold()
-        TransferQueue.endFamily(app, family.groupId) { _, _ -> Reservations.Abort.RELEASED }
+        TransferQueue.endFamily(app, family.groupId, Shared.session(app)!!) { _, _ -> Reservations.Abort.RELEASED }
         val told = seen()
         assertNotNull("the panel wasn't told the family's rows changed", told)
         val row = told!!.single { it.id == id.toString() }
@@ -257,7 +258,7 @@ class UploadWorkerTest {
         Reservations.idle("00000000-0000-4000-8000-0000000000cc")
         var cancelledWithoutRow = false
         var cancelled = 0
-        TransferQueue.endFamily(app, family.groupId, null, { _, _ -> Reservations.Abort.RELEASED }) { id ->
+        TransferQueue.endFamily(app, family.groupId, Shared.session(app)!!, null, { true }, { _, _ -> Reservations.Abort.RELEASED }) { id ->
             cancelled++
             if (FailedTransfers.of(app).all().none { it.id == id.toString() && it.reason == FamilyWords.NOT_IN_FAMILY }) cancelledWithoutRow = true
             WorkManager.getInstance(app).cancelWorkById(id)
@@ -269,7 +270,8 @@ class UploadWorkerTest {
 
     /* A job as WorkManager starts the one a Retry queued: the request it built (checked against the tags it stored). */
     private fun queuedRetry(queued: UUID, failed: FailedTransfer): UploadWorker {
-        val expected = TransferQueue.uploadRequest(queued, File(failed.file!!), failed.mime, failed.folder!!, failed.replacing, familyOf, failed.ledgerKey)
+        val expected = TransferQueue.uploadRequest(queued, File(failed.file!!), failed.mime, failed.folder!!, failed.replacing, familyOf, failed.ledgerKey,
+            TransferQueue.sessionTag(Shared.session(app)!!))
         assertEquals(expected.tags, WorkManager.getInstance(app).getWorkInfoById(queued).get()!!.tags)
         return TestListenableWorkerBuilder<UploadWorker>(app).setId(queued).setInputData(expected.workSpec.input).setTags(expected.tags.toList()).build()
     }
@@ -351,7 +353,103 @@ class UploadWorkerTest {
             file = File(app.cacheDir, "retry.txt").apply { writeText("packing list") }.path, mime = "text/plain", folder = family.rootId,
             family = family.groupId.lowercase(), familyWorkspace = family.workspaceId)
         assertTrue(TransferQueue.retry(app, failed))
-        TransferQueue.endFamily(app, family.groupId) { uploadId, workspaceId -> Vault.fromShared(app)!!.api.abortUpload(uploadId, workspaceId) }
+        TransferQueue.endFamily(app, family.groupId, Shared.session(app)!!) { uploadId, workspaceId -> Vault.fromShared(app)!!.api.abortUpload(uploadId, workspaceId) }
         assertEquals("a queued retry's reservation was left behind", emptyList<Reservations.Record>(), records())
+    }
+
+    /*
+     * #251 final round, item 2: a family upload's job failed and the app has no row of it, so the panel builds one from
+     * what WorkManager kept. That row keeps its family, folder workspace and ledger key: its Retry opens the family, and a
+     * removal of the family finds it. Fails if a rebuilt row loses its family.
+     */
+    @Test
+    fun aRowRebuiltFromAFailedJobKeepsItsFamily() {
+        val id = UUID.randomUUID()
+        val request = TransferQueue.uploadRequest(id, File(app.filesDir, "queue/$id/content"), "text/plain", family.rootId, null, familyOf, "first")
+        val result = runBlocking { TestListenableWorkerBuilder<UploadWorker>(app).setId(id).setInputData(request.workSpec.input).setTags(request.tags.toList()).build().doWork() }
+        val output = (result as ListenableWorker.Result.Failure).outputData
+        FailedTransfers.of(app).forget(id.toString())
+        val rebuilt = FailedTransfer.fromWork(WorkInfo(id, WorkInfo.State.FAILED, request.tags, output), "Notes.txt")
+        assertEquals(family.groupId.lowercase(), rebuilt.family)
+        assertEquals(family.workspaceId.lowercase(), rebuilt.familyWorkspace)
+        assertEquals("first", rebuilt.ledgerKey)
+        FailedTransfers.of(app).record(rebuilt)
+        TransferQueue.endFamily(app, family.groupId, Shared.session(app)!!) { _, _ -> Reservations.Abort.RELEASED }
+        assertEquals("a removal missed the rebuilt row", FamilyWords.NOT_IN_FAMILY, FailedTransfers.of(app).all().single { it.id == id.toString() }.reason)
+    }
+
+    /*
+     * #251 final round, item 3: an account's removal is still cleaning up (blocked on an abort) when another account signs
+     * in and queues an upload into the same family, with a failed one of that family on its panel. The old cleanup stops:
+     * the new account's upload stays queued and its row keeps its words and copy. Fails if a cleanup goes on once its
+     * session is no longer the one signed in.
+     */
+    @Test
+    fun aRemovalStillRunningWhenAnotherAccountSignsInLeavesItsUploadsAlone() {
+        val first = Shared.session(app)!!
+        val mine = TransferQueue.upload(app, File(app.cacheDir, "mine.txt").apply { writeText("menu") }, "Menu.txt", "text/plain", family.rootId, null, familyOf)
+        Reservations.reserved(app, "00000000-0000-4000-8000-0000000000dd", family.workspaceId, mine.toString(), System.currentTimeMillis(), null)
+        Reservations.idle("00000000-0000-4000-8000-0000000000dd")
+        val inAbort = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val cleanup = Thread {
+            TransferQueue.endFamily(app, family.groupId, first) { _, _ ->
+                inAbort.countDown()
+                release.await(10, java.util.concurrent.TimeUnit.SECONDS)
+                Reservations.Abort.RELEASED
+            }
+        }.apply { start() }
+        assertTrue(inAbort.await(10, java.util.concurrent.TimeUnit.SECONDS))
+        // Another account signs in and uses the same family.
+        Shared.writeSession(app, Shared.Session(server.origin, "another-token", UUID.randomUUID().toString(), "sam@example.org"))
+        val theirs = TransferQueue.upload(app, File(app.cacheDir, "theirs.txt").apply { writeText("plan") }, "Plan.txt", "text/plain", family.rootId, null, familyOf)
+        val theirCopy = staged(UUID.randomUUID())
+        val theirFailed = FailedTransfer(UUID.randomUUID().toString(), TransferQueue.UPLOAD, "Trip.txt", "The transfer failed.", 0L, file = theirCopy.path,
+            mime = "text/plain", folder = family.rootId, family = family.groupId.lowercase(), familyWorkspace = family.workspaceId)
+        FailedTransfers.of(app).record(theirFailed)
+        release.countDown()
+        cleanup.join(10_000)
+        assertEquals(WorkInfo.State.ENQUEUED, WorkManager.getInstance(app).getWorkInfoById(theirs).get()!!.state)
+        assertEquals("the old account's removal rewrote the new account's row", theirFailed, FailedTransfers.of(app).all().single { it.id == theirFailed.id })
+        assertTrue("the old account's removal deleted the new account's copy", theirCopy.exists())
+    }
+
+    /*
+     * As above, for a job another session queued (still in WorkManager): a removal ends only its own session's jobs. Fails
+     * if a cleanup lists the family's jobs without their session.
+     */
+    @Test
+    fun aRemovalEndsOnlyItsOwnSessionsJobs() {
+        val first = Shared.session(app)!!
+        Shared.writeSession(app, first.copy(token = "an-earlier-token"))
+        val earlier = TransferQueue.upload(app, File(app.cacheDir, "earlier.txt").apply { writeText("plan") }, "Plan.txt", "text/plain", family.rootId, null, familyOf)
+        Shared.writeSession(app, first)
+        TransferQueue.endFamily(app, family.groupId, first) { _, _ -> Reservations.Abort.RELEASED }
+        assertEquals(WorkInfo.State.ENQUEUED, WorkManager.getInstance(app).getWorkInfoById(earlier).get()!!.state)
+    }
+
+    /*
+     * #251 final round, item 4: a retried upload (the first job's ledger key) meets a key change. Its wait is its own,
+     * under the worker's id as the panel reads it, not the first job's long-expired one: it waits, then lands. Fails if
+     * the wait is kept under the ledger key.
+     */
+    @Test
+    fun aRetriedUploadsKeyChangeWaitIsItsOwn() {
+        val worker = UUID.randomUUID().toString()
+        val waits = KeyChangeWaits.of(app)
+        waits.mark("first", 1L)
+        var refused = false
+        val inner = server.extraRoutes!!
+        server.extraRoutes = { method, segments, query, body ->
+            if (!refused && method == "POST" && segments == listOf("drive", "uploads")) {
+                refused = true
+                409 to org.json.JSONObject().put("code", "rotating").put("message", "This folder’s keys are changing. Try again in a moment.")
+            } else inner(method, segments, query, body)
+        }
+        val landed = TransferQueue.runUpload(app, Vault.fromShared(app)!!, "first", staged(UUID.randomUUID()), "Notes.txt", "text/plain", family.rootId, null,
+            familyOf, waits, pause = {}, waiting = {}, progress = {}, waitKey = worker)
+        assertNotNull(landed)
+        assertTrue(refused)
+        assertNotNull("the wait wasn't the job's own", waits.since(worker))
     }
 }

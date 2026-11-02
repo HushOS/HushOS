@@ -24,6 +24,22 @@ data class FailedTransfer(
     /* Whose reservations this row's upload holds: its ledger key, or its own id for a job that carried none. */
     val ledgerKey: String get() = ledger ?: id
 
+    companion object {
+        /*
+         * The row for a job WorkManager failed that the app has no row of (a failure from before it kept its own record): what
+         * the job's output and tags still say, its family and ledger key included, so its Retry opens the family (never the
+         * account's own path) and a removal of that family finds it.
+         */
+        fun fromWork(info: androidx.work.WorkInfo, name: String): FailedTransfer {
+            val tag = { prefix: String -> info.tags.firstOrNull { it.startsWith(prefix) }?.removePrefix(prefix) }
+            val out = info.outputData
+            return FailedTransfer(info.id.toString(), tag("kind:") ?: TransferQueue.UPLOAD, name, out.getString("message") ?: "The transfer failed.",
+                System.currentTimeMillis(), out.getString("file") ?: tag("file:"), out.getString("mime"), out.getString("folder"), out.getString("replacing"),
+                tag("node:"), "folder" in info.tags, out.getString("share"),
+                family = out.getString("family") ?: tag("family:"), familyWorkspace = out.getString("familyWorkspace"), ledger = out.getString("ledger") ?: tag("ledger:"))
+        }
+    }
+
     /* An upload whose staged copy is gone can't be sent again: the row says to pick it again. */
     fun sourceGone(): Boolean = kind == TransferQueue.UPLOAD && (file == null || !File(file).exists())
 }

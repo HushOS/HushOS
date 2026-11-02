@@ -127,7 +127,7 @@ class FamilyGuardTest {
         assertTrue(phone.sync.sync(family.summary) is FamilyState.Failed)
         assertEquals(2uL, phone.vault.familyGuard.family(family.groupId)?.rosterVersion)
         family.notMember = true
-        assertEquals(FamilyState.Failed(GuardWords.UNSAVED), phone.sync.sync(family.summary))
+        assertEquals(FamilyState.Failed(GuardWords.UNSAVED, removal = true), phone.sync.sync(family.summary))
         assertNotNull(phone.records.read(family.member.id, family.groupId))
         writable = true
         assertEquals(FamilyState.Wiped, phone.sync.sync(family.summary))

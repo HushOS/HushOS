@@ -80,36 +80,67 @@ object TransferQueue {
     /*
      * This account isn't in the family any more (a not-member removal, here or in a job): every upload queued into its
      * folders fails at once (iOS's endFamily), its reserved server upload aborted (`abort`), its staged copy deleted, and
-     * its row says why; failed ones kept for a retry lose their copies too.
+     * its row says why; failed ones kept for a retry lose their copies too. Only `session`'s: its jobs (by their session
+     * tag) and rows, and only while it is still the one signed in and `still` holds, asked before and after every step that
+     * can block, so a removal still running when another account signs in never touches that account's uploads.
      */
-    fun endFamily(context: Context, groupId: String, except: UUID? = null, abort: (uploadId: String, workspaceId: String) -> Reservations.Abort) =
-        endFamily(context, groupId, except, abort) { WorkManager.getInstance(context).cancelWorkById(it) }
+    fun endFamily(context: Context, groupId: String, session: Shared.Session, except: UUID? = null, still: () -> Boolean = { true },
+                  abort: (uploadId: String, workspaceId: String) -> Reservations.Abort) =
+        endFamily(context, groupId, session, except, still, abort) { WorkManager.getInstance(context).cancelWorkById(it) }
+
+    /* The session's tag on each upload it queues: a digest, as the family walks' (FamilyWalkWork.sessionKey). */
+    internal fun sessionTag(session: Shared.Session) = "session:" + FamilyWalkWork.sessionKey(session)
+
+    /* Whether `session` is still the one signed in on this phone. */
+    private fun signedIn(context: Context, session: Shared.Session) =
+        Shared.session(context)?.let { it.token == session.token && it.userId.equals(session.userId, ignoreCase = true) } == true
+
+    /* A removal's cleanup whose session ended (or whose caller stopped): nothing more of it runs. */
+    private class SessionMoved : Exception()
 
     /* As above; `cancel` ends a queued job in WorkManager (a test sees what is written by then). */
-    internal fun endFamily(context: Context, groupId: String, except: UUID?, abort: (uploadId: String, workspaceId: String) -> Reservations.Abort,
-                           cancel: (UUID) -> Unit) {
+    internal fun endFamily(context: Context, groupId: String, session: Shared.Session, except: UUID?, still: () -> Boolean,
+                           abort: (uploadId: String, workspaceId: String) -> Reservations.Abort, cancel: (UUID) -> Unit) {
+        fun current() { if (!still() || !signedIn(context, session)) throw SessionMoved() }
+        try {
+            current()
+            endFamilyOf(context, groupId, sessionTag(session), except, ::current, abort, cancel)
+        } catch (_: SessionMoved) {
+            // Another session's now (or the caller stopped): its jobs and rows are not this cleanup's to touch.
+        }
+    }
+
+    private fun endFamilyOf(context: Context, groupId: String, tag: String, except: UUID?, current: () -> Unit,
+                            abort: (uploadId: String, workspaceId: String) -> Reservations.Abort, cancel: (UUID) -> Unit) {
         val work = WorkManager.getInstance(context)
         val records = FailedTransfers.of(context)
         val queue = File(context.filesDir, "queue").canonicalFile
         fun drop(job: String, path: String?) {
             val dir = path?.let { File(it).parentFile?.canonicalFile }
             // Only a job's own folder in the queue, never anything else a tag might name.
+            current()
             dropJob(context, job, dir?.takeIf { it.parentFile == queue }, abort)
+            current()
         }
-        val infos = runCatching { work.getWorkInfosByTag("family:${groupId.lowercase()}").get() }.getOrDefault(emptyList())
+        // Only this session's jobs (its tag): another account's upload into the same family is never ended here.
+        val infos = runCatching { work.getWorkInfosByTag("family:${groupId.lowercase()}").get() }.getOrDefault(emptyList()).filter { tag in it.tags }
+        current()
         val ending = infos.filter { !it.state.isFinished && it.id != except }
         fun ledgerOf(info: androidx.work.WorkInfo) = info.tags.firstOrNull { it.startsWith("ledger:") }?.removePrefix("ledger:") ?: info.id.toString()
         try {
             // Each queued one's row first, so a cancellation the panel hears already has its reason.
             for (info in ending) {
+                current()
                 records.record(FailedTransfer(info.id.toString(), UPLOAD, JobNames.of(context).get(info.id.toString()) ?: "File", FamilyWords.NOT_IN_FAMILY,
                     System.currentTimeMillis(), family = groupId.lowercase(), ledger = ledgerOf(info)))
             }
             for (info in ending) {
+                current()
                 cancel(info.id)
                 drop(ledgerOf(info), info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:"))
             }
             // Failed ones kept for a Retry (their jobs perhaps pruned already): their copies go, their rows say why.
+            current()
             for (failed in records.all().filter { it.family.equals(groupId, ignoreCase = true) }) {
                 drop(failed.ledgerKey, failed.file)
                 records.record(failed.copy(file = null, reason = FamilyWords.NOT_IN_FAMILY))
@@ -172,11 +203,13 @@ object TransferQueue {
      */
     internal fun runUpload(context: Context, vault: Vault, job: String, file: File, name: String, mime: String?, folder: String, replacingId: String?,
                            family: Family?, waits: KeyChangeWaits, pause: (Long) -> Unit, waiting: () -> Unit, progress: (Float) -> Unit,
-                           now: () -> Long = System::currentTimeMillis): Opened {
+                           now: () -> Long = System::currentTimeMillis, waitKey: String = job): Opened {
         Reservations.settleAll(context) { uploadId, workspaceId -> vault.api.abortUpload(uploadId, workspaceId) }
         if (Reservations.landed(context, job)) throw Reservations.Landed()
         if (family != null) {
-            return FamilyUploads.waitingOutKeyChanges(since = { waits.since(job) }, mark = { waits.mark(job, it) }, now = now, pause = pause, waiting = waiting) {
+            // The wait is this job's own (`waitKey`, the worker's id, as the panel and the job's end read it), never its ledger key's:
+            // a Retry starts its half hour afresh and its row says it is finishing a key change.
+            return FamilyUploads.waitingOutKeyChanges(since = { waits.since(waitKey) }, mark = { waits.mark(waitKey, it) }, now = now, pause = pause, waiting = waiting) {
                 FamilyUploads.upload(vault, family.groupId, family.workspaceId, file, name, mime, folder, replacingId, job, progress)
             }
         }
@@ -213,7 +246,7 @@ object TransferQueue {
 
     private fun enqueueUpload(context: Context, id: UUID, file: File, name: String, mime: String?, folderId: String, replacingId: String?, family: Family? = null,
                               ledger: String = id.toString()): UUID {
-        val request = uploadRequest(id, file, mime, folderId, replacingId, family, ledger)
+        val request = uploadRequest(id, file, mime, folderId, replacingId, family, ledger, Shared.session(context)?.let(::sessionTag))
         JobNames.of(context).put(id.toString(), name)
         WorkManager.getInstance(context).enqueueUniqueWork("upload-$id", ExistingWorkPolicy.KEEP, request)
         return id
@@ -221,7 +254,8 @@ object TransferQueue {
 
     /* An upload's job as WorkManager keeps it: ids and paths only, never the file's name (JobNames holds that). */
     /* `ledger`: the key its reservations are kept under (Reservations), the job's own id unless a Retry carries the first job's. */
-    internal fun uploadRequest(id: UUID, file: File, mime: String?, folderId: String, replacingId: String?, family: Family? = null, ledger: String = id.toString()) =
+    internal fun uploadRequest(id: UUID, file: File, mime: String?, folderId: String, replacingId: String?, family: Family? = null, ledger: String = id.toString(),
+                               session: String? = null) =
         OneTimeWorkRequestBuilder<UploadWorker>()
             .setId(id)
             .setConstraints(constraints())
@@ -231,6 +265,8 @@ object TransferQueue {
             // The panel reads these: a job's input is not visible once it is queued. The name is the app's (JobNames).
             .addTag(TAG).addTag("kind:$UPLOAD").addTag("file:${file.path}").addTag("ledger:$ledger")
             .apply { if (family != null) addTag("family:${family.groupId.lowercase()}") }
+            // The session that queued it (TransferQueue.sessionTag): a removal's cleanup ends only its own session's jobs.
+            .apply { if (session != null) addTag(session) }
             .build()
 
     /*
@@ -406,7 +442,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 TransferQueue.runUpload(applicationContext, vault, ledger, file, name, mime, folder, inputData.getString("replacing"),
                     if (family != null && familyWorkspace != null) TransferQueue.Family(family, familyWorkspace) else null, waits,
                     pause = { ms -> var left = ms; while (left > 0) { checkStop(); Thread.sleep(minOf(left, 1_000L)); left -= 1_000L } },
-                    waiting = { setProgressAsync(workDataOf("fraction" to 0f)) }, progress = progress)
+                    waiting = { setProgressAsync(workDataOf("fraction" to 0f)) }, progress = progress, waitKey = this@UploadWorker.id.toString())
             }
             when (end) {
                 is JobEnd.Done -> {
@@ -429,7 +465,9 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                     end.error is Reservations.Landed -> landedEarlier()
                     // Not in the family any more: this upload and every other queued into the family end, copies deleted.
                     family != null && FamilyUploads.removed(end.error) -> {
-                        TransferQueue.endFamily(applicationContext, family, except = this@UploadWorker.id) { uploadId, workspaceId -> vault.api.abortUpload(uploadId, workspaceId) }
+                        TransferQueue.endFamily(applicationContext, family, vault.api.session, except = this@UploadWorker.id, still = { !isStopped }) { uploadId, workspaceId ->
+                            vault.api.abortUpload(uploadId, workspaceId)
+                        }
                         // Its own end through the same path: what it reserved settled or kept on record, then its folder.
                         TransferQueue.dropJob(applicationContext, ledger, file.parentFile) { uploadId, workspaceId -> vault.api.abortUpload(uploadId, workspaceId) }
                         failed(FamilyWords.NOT_IN_FAMILY, androidx.work.Data.EMPTY)

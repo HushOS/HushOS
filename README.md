@@ -47,7 +47,7 @@ apps/
         src/lib/                    API clients, React Query options, utilities
         src/components/ui/          shadcn Base UI components
         src/lib/api.server.ts       Elysia handlers mounted by src/routes/api/$.ts
-        server/plugins/             Request IDs and database shutdown
+        server/plugins/             Startup env check, request IDs, headers, database shutdown
         nitro.config.ts             Nitro server and logging configuration
 packages/
     auth/                           Registration, sessions, browser auth client
