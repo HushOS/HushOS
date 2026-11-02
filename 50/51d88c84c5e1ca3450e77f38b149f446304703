@@ -1,0 +1,35 @@
+apps/android/app/src/test/kotlin/com/hushos/app/data/UploadWorkerTest.kt
+  s_566b8e0c4467a4::t_1f0a8a50d7b8c8 1-210
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_20465c602ded04 31,84
+apps/android/app/build.gradle.kts
+  s_566b8e0c4467a4::t_804fb9f6a7ad96 158-159
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_566b8e0c4467a4::t_dfbb6a949019a3 45-46
+apps/android/app/src/main/kotlin/com/hushos/app/data/Reservations.kt
+  s_566b8e0c4467a4::t_b78507ed8677ae 62-78,119-121,147
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_566b8e0c4467a4::t_2979308db5a8e2 136-142
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_c0b7da09269e98 281-282,1910
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyUploadsTest.kt
+  s_566b8e0c4467a4::t_f76e1d1cac0f47 673-717
+apps/android/gradle/libs.versions.toml
+  s_566b8e0c4467a4::t_f64e8a6b24a894 30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5051d88c84c5e1ca3450e77f38b149f446304703",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
