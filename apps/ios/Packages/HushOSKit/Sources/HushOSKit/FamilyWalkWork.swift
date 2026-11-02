@@ -27,6 +27,9 @@ public enum FamilyWalkPass: Sendable, Equatable {
     case stopped
 }
 
+/* A pass whose session ended between steps (asked with the task's own stop check). */
+struct SessionEndedMidPass: Error {}
+
 /* What `checkStop` throws when the background task's time is up. */
 public struct FamilyWalkStopped: Error, Sendable {
     public init() {}
@@ -87,6 +90,11 @@ extension FamilySync {
      */
     public func backgroundPass(current: @escaping @Sendable () -> Bool, checkStop: @escaping @Sendable () throws -> Void) async -> FamilyWalkPass {
         guard current() else { return .signedOut }
+        // Between a walk's batches too: a session that ended mid-walk stops it there, as the task's time running out does.
+        let stopOrEnded: @Sendable () throws -> Void = {
+            try checkStop()
+            if !current() { throw SessionEndedMidPass() }
+        }
         do {
             let (listed, _, failed) = try await listReconciling()
             guard current() else { return .signedOut }
@@ -105,8 +113,10 @@ extension FamilySync {
                         try checkStop()
                         guard current() else { return .signedOut }
                         do {
-                            _ = try await walk(summary.id, target, checkStop: checkStop)
+                            _ = try await walk(summary.id, target, checkStop: stopOrEnded)
                         } catch let error as FamilyWalkStopped {
+                            throw error
+                        } catch let error as SessionEndedMidPass {
                             throw error
                         } catch let error as DriveAPIError {
                             if case .notAuthenticated = error { throw error }
@@ -114,13 +124,18 @@ extension FamilySync {
                         } catch {
                             again = true
                         }
+                        guard current() else { return .signedOut }
                     }
                 default:
                     break
                 }
             }
-            if listed.isEmpty, unsettled(listed).isEmpty, !again { familyWork.call(false) }
+            // Ended after the last step: nothing of it is rescheduled or let go of for the next session.
+            guard current() else { return .signedOut }
+            if listed.isEmpty, unsettled(listed).isEmpty, !again { wantWork(false) }
             return again ? .retry : .done
+        } catch is SessionEndedMidPass {
+            return .signedOut
         } catch is FamilyWalkStopped {
             return .stopped
         } catch let error as DriveAPIError {

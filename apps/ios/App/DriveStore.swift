@@ -174,6 +174,8 @@ final class DriveStore {
     @ObservationIgnored var familyFolders: [String: String] = [:]
     /* When each family was last checked on this phone: a family folder on screen checks again when it is old. */
     @ObservationIgnored var familyCheckedAt: [String: Date] = [:]
+    /* The session's family sync this store listens to (attachFamilies): detached when the session ends or is replaced. */
+    @ObservationIgnored weak var listenedFamilies: FamilySync?
     /* The leave dialog, kept here rather than by the page, so a scene change or a redraw keeps it as it was (LeaveDialog). */
     var leaving: LeaveDialog?
     /* A family this person just left: its page goes back to Account once. */

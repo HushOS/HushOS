@@ -84,6 +84,9 @@ extension DriveStore {
      * never read under a personal key, whatever the new session finds.
      */
     func resetFamilies() {
+        // Nothing of the ended session's sync reaches the screens or the scheduler again.
+        listenedFamilies?.detach()
+        listenedFamilies = nil
         sessionGate.reset()
         for groupId in familyStates.keys { familyGenerations.published(groupId) }
         familyRevisions = FamilyRevisions()
@@ -515,9 +518,12 @@ extension DriveStore {
      * whether the background check is wanted reaches its scheduler.
      */
     func attachFamilies() {
+        listenedFamilies?.detach()
         guard let families = FamilySync.shared(for: vault) else { return }
+        listenedFamilies = families
         let session = vault.api.session
-        families.releases.listen { [weak self] in Task { @MainActor [weak self] in self?.applyReleases(families) } }
+        // Handed the sync on each post, never holding it: a replaced session's sync and vault go with it.
+        families.onReleases { [weak self] families in Task { @MainActor [weak self] in self?.applyReleases(families) } }
         families.familyWork.set { wanted in Task { @MainActor in FamilyWalkTasks.wanted(wanted, session: session) } }
         // Anything posted before the store listened (a background pass that ran first).
         applyReleases(families)
@@ -966,14 +972,20 @@ struct FamilyPage: View {
      * already shows the server would refuse it, and while the members aren't loaded.
      */
     @ViewBuilder private var leavingSection: some View {
-        let members = store.familyDetails[groupId]?.members
-        let blocker = members.flatMap { FamilyLeave.blocker(userId: me, members: $0) }
+        let offer = FamilyLeave.offered(userId: me, members: store.familyDetails[groupId]?.members)
         Section {
-            Text(blocker ?? FamilyLeave.whatGoes).font(Theme.Text.callout).foregroundStyle(blocker == nil ? Alpine.inkMuted : Alpine.ink)
+            Text(offer.line).font(Theme.Text.callout).foregroundStyle(offer.enabled ? Alpine.inkMuted : Alpine.ink)
             Button(role: .destructive) { store.askLeave(groupId) } label: { Text("Leave family") }
-                .disabled(members == nil || blocker != nil)
+                .disabled(!offer.enabled)
         } header: {
             Text("Leaving").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+        }
+        // Who is in the family, read for this section even when the family's check didn't accept it (a fork, a failed
+        // check after a cold start), so a refusal the list shows is said up front.
+        .task(id: groupId) {
+            guard store.familyDetails[groupId] == nil else { return }
+            let groupId = groupId
+            if let detail = try? await store.inFamily(nil, { try await $0.members(groupId) }) { store.familyDetails[groupId] = detail }
         }
     }
 

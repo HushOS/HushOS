@@ -199,7 +199,7 @@ extension FamilySync {
         switch await run(summary) {
         case .accepted(let view):
             records.delete(.joins, userId: userId, groupId: summary.id)
-            familyWork.call(true)
+            wantWork(true)
             return .joined(.accepted(view))
         case .fork(let fork):
             return .fork(fork)
@@ -319,7 +319,7 @@ extension FamilySync {
                 records.delete(.holds, userId: userId, groupId: groupId)
                 // In a family now: its background check is scheduled even with nothing due yet, so a key change a removal
                 // leaves later is walked while the app is closed.
-                familyWork.call(true)
+                wantWork(true)
                 return .joined(state)
             }
         }

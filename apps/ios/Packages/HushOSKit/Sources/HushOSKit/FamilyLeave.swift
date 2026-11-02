@@ -68,6 +68,17 @@ public enum FamilyLeave {
         return nil
     }
 
+    /*
+     * Whether Leave family is offered, and what its row says: held back only when the member list
+     * (route 3) shows the server would refuse it. Members not loaded (a family whose check failed
+     * or showed another history, after a cold start) is no reason to hold it back: route 20 decides
+     * and its refusals are worded, so leaving stays possible from a family this phone refused.
+     */
+    public static func offered(userId: String, members: [GroupDetail.Member]?) -> (enabled: Bool, line: String) {
+        guard let members, let reason = blocker(userId: userId, members: members) else { return (true, whatGoes) }
+        return (false, reason)
+    }
+
     /* The dialog's body: the only one left ends the family. */
     public static func body(family: String, alone: Bool) -> String {
         alone ? "You’re the only one in \(family), so leaving ends it. \(whatGoes)" : whatGoes

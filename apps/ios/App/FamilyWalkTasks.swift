@@ -38,6 +38,8 @@ enum FamilyWalkTasks {
      * within the hour, or let go of.
      */
     static func wanted(_ wanted: Bool, session: SharedKeychain.Session) {
+        // A late answer of a session that's no longer the keychain's never touches the current one's schedule.
+        guard current(session) else { return }
         if wanted {
             schedule(after: hour, session: session)
         } else if UserDefaults.standard.string(forKey: sessionKey) == session.tag {
@@ -47,6 +49,7 @@ enum FamilyWalkTasks {
 
     /* A walk found due, or one that stopped: the check asked for soon, waiting longer after each stop. */
     static func soon(session: SharedKeychain.Session) {
+        guard current(session) else { return }
         let attempts = UserDefaults.standard.integer(forKey: attemptsKey)
         schedule(after: min(10 * 60, 30 * pow(2, Double(attempts))), session: session)
     }
@@ -57,6 +60,9 @@ enum FamilyWalkTasks {
         UserDefaults.standard.removeObject(forKey: sessionKey)
         UserDefaults.standard.removeObject(forKey: attemptsKey)
     }
+
+    /* Whether `session` is still the keychain's session. */
+    private static func current(_ session: SharedKeychain.Session) -> Bool { SharedKeychain.session?.tag == session.tag }
 
     private static func schedule(after delay: TimeInterval, session: SharedKeychain.Session) {
         UserDefaults.standard.set(session.tag, forKey: sessionKey)

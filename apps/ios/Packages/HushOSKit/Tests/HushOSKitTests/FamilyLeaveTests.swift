@@ -114,6 +114,22 @@ extension OnFakeDrive {
         }
 
         /*
+         * Leaving stays possible from a family this phone refused: with no member list loaded (a fork
+         * or a failed check after a cold start) Leave family is offered and route 20 decides; only a
+         * list that shows the refusal holds it back. Fails if unknown members hold Leave back.
+         */
+        @Test func leaveIsOfferedWhenTheMembersArentKnown() {
+            let unknown = FamilyLeave.offered(userId: "me", members: nil)
+            #expect(unknown.enabled, "Leave family was held back with no member list")
+            #expect(unknown.line == FamilyLeave.whatGoes)
+            let organizer = FamilyLeave.offered(userId: "me", members: [
+                GroupDetail.Member(userId: "me", name: "Me", email: nil, state: "active", roles: ["billing"]),
+                GroupDetail.Member(userId: "sam", name: "Sam", email: nil, state: "active", roles: []),
+            ])
+            #expect(!organizer.enabled && organizer.line == FamilyLeave.organizerFirst)
+        }
+
+        /*
          * The leave dialog keeps its state (kept by the store, so a scene change keeps it): a second
          * press while a leave is in flight sends nothing; an ends-lapsed answer keeps the plans, and
          * the next press sends their ids; a refusal says why and lets it be pressed again. Fails if a

@@ -260,6 +260,34 @@ public actor FamilySync: FamilyJudge {
     public nonisolated let familyWork = FamilyWorkHook()
 
     /*
+     * The screens' listener for `releases`, handed this sync on each post. It never holds the sync
+     * itself (the sync holds the listener), so a replaced session's sync, its vault and the keys they
+     * cache go with it; `detach` lets go of it at once.
+     */
+    public nonisolated func onReleases(_ handler: @escaping @Sendable (FamilySync) -> Void) {
+        releases.listen { [weak self] in
+            guard let self else { return }
+            handler(self)
+        }
+    }
+
+    /* The session ended or was replaced: nothing of it reaches the screens or the scheduler again. */
+    public nonisolated func detach() {
+        releases.listen(nil)
+        familyWork.set(nil)
+    }
+
+    /*
+     * The background check wanted, or not, for this sync's session only: once that session ended
+     * (another account signed in, a sign-out), a late answer never schedules or cancels the next
+     * session's check.
+     */
+    nonisolated func wantWork(_ wanted: Bool) {
+        guard session.stands else { return }
+        familyWork.call(wanted)
+    }
+
+    /*
      * One per session in this process: the app's screens and any background task share it. None
      * for a vault whose session ended or that a later vault replaced (a family request of the last
      * session that runs after a sign-in): it would take the new session's place.
@@ -381,7 +409,7 @@ public actor FamilySync: FamilyJudge {
         }
         // Still in a family, or one whose removal isn't settled yet: the background check keeps going. Only the background
         // pass, still in its session, lets it go (backgroundPass).
-        if listed.contains(where: { $0.state == "active" }) || !unsettled(listed).isEmpty || !failed.isEmpty { familyWork.call(true) }
+        if listed.contains(where: { $0.state == "active" }) || !unsettled(listed).isEmpty || !failed.isEmpty { wantWork(true) }
         return (wiped, failed)
     }
 

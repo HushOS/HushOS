@@ -350,6 +350,70 @@ extension OnFakeDrive {
         }
 
         /*
+         * A replaced session's family sync, with the screens' listener and the scheduler's hook on
+         * it, goes once nothing else holds it, and its vault (and the keys both cache) with it. Fails
+         * if the listener holds the sync it listens to.
+         */
+        @Test func aReplacedSessionsSyncAndVaultGoAway() async throws {
+            let (family, server, _) = try await Self.walkable()
+            weak var oldSync: FamilySync?
+            weak var oldVault: Vault?
+            do {
+                let phone = try await family.phone(server)
+                guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+                let heard = Calls()
+                phone.sync.onReleases { _ in heard.append(true) }
+                phone.sync.familyWork.set { _ in }
+                oldSync = phone.sync
+                oldVault = phone.vault
+                phone.done()
+            }
+            for _ in 0 ..< 20 where oldSync != nil || oldVault != nil { try await Task.sleep(for: .milliseconds(50)) }
+            #expect(oldSync == nil, "the replaced session's family sync stayed in memory")
+            #expect(oldVault == nil, "the replaced session's vault stayed in memory")
+        }
+
+        /*
+         * The session ends while the background pass walks (another account signed in): the walk
+         * stops at its next batch, nothing more is sent, and the pass ends as signed out, so nothing
+         * of it is rescheduled for the next session. Fails if a pass checks only its time between
+         * batches, or not at all after its last walk.
+         */
+        @Test func aSessionEndedMidWalkStopsThePassAtTheNextBatch() async throws {
+            let (family, server, _) = try await Self.walkable()
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            try server.replaceKeys(target: 100)
+            server.lock.withLock { server.rotations.rotationBatch = 1 }
+            let current: @Sendable () -> Bool = { server.rotationBatches.isEmpty }
+            #expect(await phone.sync.backgroundPass(current: current, checkStop: {}) == .signedOut)
+            #expect(server.rotationBatches.count == 1, "a pass of an ended session went on walking")
+            #expect(phone.vault.areaLedger.rotateDropAll(workspaceId: family.workspaceId) == 0)
+        }
+
+        /*
+         * A late answer of a session that ended (route 2's reconcile, still out when another account
+         * signed in) never asks for the background check: it would take the next session's schedule.
+         * Fails if the hook speaks for an ended session.
+         */
+        @Test func anEndedSessionsLateAnswerNeverSchedulesTheCheck() async throws {
+            let family = try await onLargeStack { try FamilyFixture() }
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let account = CopyEpoch()
+            let phone = try await family.phone(server, account: account)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let work = Calls()
+            phone.sync.familyWork.set { work.append($0) }
+            _ = try await phone.sync.listReconciling()
+            #expect(work.values == [true], "a family the session is in didn't ask for the check")
+            TemporaryCopies.endAccount(account)
+            _ = try await phone.sync.listReconciling()
+            #expect(work.values == [true], "an ended session's answer asked for the check")
+        }
+
+        /*
          * The task's time runs out after the first batch: the pass stops between batches, sends
          * nothing more, leaves no folder locked and no key pending, and the run is still there for
          * the next pass. Fails if a stopped pass sends again, or stops holding a lock or keys.
