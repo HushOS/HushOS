@@ -1,0 +1,21 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyCheck.swift
+  s_566b8e0c4467a4::t_a43123d4b15796 150-151,153,168,198-199,202,205,207,209,219-220,232-236,238,339-354
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyCheckTests.swift
+  s_566b8e0c4467a4::t_3e5274af6f86d8 166-201
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "639c3d4663f107e3c20a6cb816c7e9b16aa3aff8",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
