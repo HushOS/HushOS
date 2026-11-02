@@ -559,6 +559,18 @@ class FakeDrive : AutoCloseable {
                 ok(JSONObject().put("node", node.json()))
             }
             post && at("drive", "nodes", "*", "trash") -> { trash(segments[2]); ok(JSONObject()) }
+            // The batch Undo: each id back where it was.
+            post && at("drive", "workspaces", "*", "restore-batch") -> {
+                val ids = body.getJSONArray("nodeIds")
+                val results = JSONArray()
+                for (i in 0 until ids.length()) {
+                    val node = node(ids.getString(i))
+                    node.trashedAt = null
+                    bump(node)
+                    results.put(JSONObject().put("id", node.id).put("status", "restored").put("changeSeq", node.changeSeq))
+                }
+                ok(JSONObject().put("results", results))
+            }
             // Back where it was (a trash's Undo; no move under the top folder here).
             post && at("drive", "nodes", "*", "restore") -> {
                 val node = node(segments[2])

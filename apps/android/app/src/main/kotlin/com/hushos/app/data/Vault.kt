@@ -1015,6 +1015,20 @@ class Vault(internal val context: Context, val api: DriveApi) {
         }
     }
 
+    /*
+     * The one gate a family write's reply passes before it touches the cache, the ledger's rows or the screens (creates,
+     * uploads, new versions and their name, renames, moves, restores and Undo), in this order: the write's own count (its
+     * folder let go of since it began: a removal, a fork, a refusal, route 25 no longer listing it, said in the family's
+     * words), then the session (ended: nothing more lands). Callers then apply the newer-row rule and only then open, keep
+     * or show anything. Under familyCopiesLock, the lock a forget takes.
+     */
+    private fun requireWriteStands(workspaceId: String) {
+        if (!isFamilyWorkspace(workspaceId) || WriteIntent.decision(workspaceId) != true) return
+        val began = WriteIntent.epoch(workspaceId) ?: throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
+        familyWordsSince(workspaceId, began)?.let { throw FamilyFailure(it) }
+        if (closed) throw SessionEnded()
+    }
+
     /* A write's own refusal before anything was sent (the final gate's), told apart from the network's. */
     private fun <T> refusedHere(body: () -> T): T = try {
         body()
@@ -1169,7 +1183,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * `replace` (a listing's own rows): a row of this drive or a share served differently from the one held, and not older,
      * is opened afresh and kept in its place once it opened; until then, and if it can't be opened, the held one stays.
      */
-    fun open(node: NodeView, replace: Boolean = false): Opened {
+    fun open(node: NodeView, replace: Boolean = false, writeEpoch: Long? = null): Opened {
         checkSuite(node.envelopeSuite)
         val family = isFamilyWorkspace(node.workspaceId)
         nodes.row(node.workspaceId, node.id)?.let { held ->
@@ -1194,7 +1208,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
         if (!family && others.any { isFamilyWorkspace(it) }) throw Refused("Couldn’t open", "This item couldn’t be checked. Try again later.")
         // A family folder's node opens only through the area ledger, under keys its member list vouches for, never the personal path.
         // Its folder's invalidation before the ledger is asked: a forget meanwhile (a removal, a fork) keeps what opened out of the cache.
-        val epoch = if (family) familyEpoch(node.workspaceId) else 0L
+        // A family write's reply opened again (an Undo's row) goes by the write's own count: a forget since it began keeps nothing.
+        val epoch = if (family) writeEpoch ?: familyEpoch(node.workspaceId) else 0L
         val key = if (family) {
             familyNodes[node.id] = node.workspaceId
             areaLedger.openListedNode(node.workspaceId, servedKey(node)).also { afterFamilyOpen?.invoke() }
@@ -1236,9 +1251,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
         var newer: Opened? = null
         val kept = synchronized(familyCopiesLock) {
             if (!isFamilyWorkspace(node.workspaceId)) run { nodes.put(result, key); true }
-            // ...and only while the folder stands as it did when the write began: a removal, a fork or a refusal meanwhile
-            // cleared what this vault held of it, and a late answer never puts a key back.
-            else if (WriteIntent.decision(node.workspaceId) == true && WriteIntent.epoch(node.workspaceId) == familyEpoch(node.workspaceId)) run {
+            else if (WriteIntent.decision(node.workspaceId) == true) run {
+                // The family write's reply gate first (its own count, then the session), then the newer-row rule, then kept.
+                requireWriteStands(node.workspaceId)
                 // Never over a newer row the ledger opened (a listing that landed first, another member's rename since): an
                 // older answer keeps it, as open() does.
                 val held = nodes.row(node.workspaceId, node.id)
@@ -1701,7 +1716,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     /* A row the batch put back: the one this device holds, out of the trash, with the server's change number. */
     private fun restoredRow(item: Opened, changeSeq: Int): Opened {
-        val row = nodes.row(item.node.workspaceId, item.id) ?: runCatching { open(item.node) }.getOrNull() ?: item
+        val ws = item.node.workspaceId
+        val family = isFamilyWorkspace(ws) && WriteIntent.decision(ws) == true
+        // A family Undo's reply passes the write's reply gate before anything is opened, kept or shown, and its row is
+        // opened again under the write's own count, so a forget since it began keeps nothing and shows nothing.
+        if (family) synchronized(familyCopiesLock) { requireWriteStands(ws) }
+        val row = nodes.row(ws, item.id) ?: (if (family) open(item.node, writeEpoch = WriteIntent.epoch(ws)) else runCatching { open(item.node) }.getOrNull()) ?: item
         val key = nodes.key(row) ?: return row.copy(node = row.node.copy(trashedAt = null, changeSeq = changeSeq))
         return adopt(row.node.copy(trashedAt = null, changeSeq = changeSeq), key, row.metadata)
     }
@@ -1900,6 +1920,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
         checkWritten(node, ws, nodeId)
         var final = metadata
         if (replacing != null) {
+            // The name is signed again only while the family write still stands (its reply gate, before anything is sealed).
+            synchronized(familyCopiesLock) { requireWriteStands(ws) }
             // A new version has a new size and date; the sealed metadata says so too, as the lists read it.
             final = metadata.copy(mime = mime ?: metadata.mime, size = size, modified = modified)
             val next = node.metadataVersion + 1uL

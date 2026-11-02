@@ -153,11 +153,57 @@ class FamilyWritesTest {
         server.beforeAnswer = { method, path ->
             if (!cleared && method == "POST" && path == "drive/nodes/${family.fileId}/metadata") { cleared = true; phone.vault.forgetWorkspaces(listOf(family.workspaceId)) }
         }
-        phone.vault.rename(family.fileId, "Renamed.txt")
+        // The reply says the family's words, and lands nowhere.
+        assertThrows(FamilyFailure::class.java) { phone.vault.rename(family.fileId, "Renamed.txt") }
         server.beforeAnswer = null
         assertTrue("the folder was never let go of meanwhile", cleared)
         assertNull("a late answer put the family's row back", phone.vault.nodes.row(family.workspaceId, family.fileId))
         assertNull(phone.vault.nodes.key(family.workspaceId, family.fileId))
+    }
+
+    /*
+     * #249 review: an Undo's batch reply arrives after the family's folder was let go of here (route 25 stopped listing
+     * it: openAreas forgets it, while the ledger still holds its keys). The restored row is never opened again, kept or
+     * handed to the screens: the Undo fails in the family's words, and the cleared cache stays empty. Fails if a restore's
+     * reply opens or keeps anything before checking the write's own count.
+     */
+    @Test
+    fun anUndoReplyAfterItsFolderWasLetGoOfOpensKeepsAndShowsNothing() {
+        val phone = opened()
+        val file = phone.vault.listChildren(family.rootId, family.workspaceId).single { it.id == family.fileId }
+        assertTrue(kotlinx.coroutines.runBlocking { phone.vault.trashMany(listOf(file.id)) }.single().isSuccess)
+        synchronized(server.unknown) { server.unknown.removeAll { it.endsWith("/trash-batch") } }
+        var cleared = false
+        server.beforeAnswer = { method, path ->
+            if (!cleared && method == "POST" && path.endsWith("/restore-batch")) { cleared = true; phone.vault.forgetWorkspaces(listOf(family.workspaceId)) }
+        }
+        val back = kotlinx.coroutines.runBlocking { phone.vault.restoreMany(listOf(file)) }.single()
+        server.beforeAnswer = null
+        assertTrue(cleared)
+        assertTrue("an Undo after its folder was let go of still handed back its row: $back", back.isFailure)
+        assertNull("an Undo's reply refilled the cleared folder", phone.vault.nodes.row(family.workspaceId, family.fileId))
+        assertNull(phone.vault.nodes.key(family.workspaceId, family.fileId))
+    }
+
+    /*
+     * #249 review: a new version's completion answer arrives after the family's folder was let go of here. Its name is
+     * not signed again into that folder (nothing more is sent), and the upload says the family's words. Fails if the
+     * name re-sign after a new version skips the write's reply gate.
+     */
+    @Test
+    fun aNewVersionsNameIsNotSignedAgainAfterItsFolderWasLetGoOf() {
+        val phone = opened()
+        val recipes = phone.vault.listChildren(family.rootId, family.workspaceId).single { it.id == family.fileId }
+        var cleared = false
+        server.beforeAnswer = { method, path ->
+            if (!cleared && method == "POST" && path.endsWith("/complete")) { cleared = true; phone.vault.forgetWorkspaces(listOf(family.workspaceId)) }
+        }
+        val sent = server.requests.size
+        assertThrows(FamilyFailure::class.java) { phone.vault.upload(local("Recipes.txt", "new recipes"), "Recipes.txt", "text/plain", family.rootId, recipes) }
+        server.beforeAnswer = null
+        assertTrue(cleared)
+        assertTrue("a name was signed again into a folder let go of", server.requests.drop(sent).none { it.endsWith("/metadata") })
+        assertNull(phone.vault.nodes.row(family.workspaceId, family.fileId))
     }
 
     /*
