@@ -754,6 +754,22 @@ extension OnFakeDrive {
             await vault.familyGuardKept(family.groupId)
         }
 
+        /*
+         * A family file the vault doesn't hold (a new session's vault before its families are checked
+         * again): a download of it is refused, to be asked again, and never looked for in the own drive.
+         * Fails if a family's row falls through to the own workspace's listing.
+         */
+        @Test func aFamilyFileNotHeldIsNeverLookedForInTheOwnDrive() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            server.clearRequests()
+            let out = FileManager.default.temporaryDirectory.appendingPathComponent("unheld-\(UUID().uuidString)")
+            await #expect(throws: FamilyFailure.self) { try await phone.vault.download(family.fileId, ref: family.file.ref, to: out) }
+            #expect(!server.traffic.contains { $0.url.contains(family.personal) && $0.url.contains("/children") }, "a family file was looked for in the own drive")
+        }
+
         /* An own-drive row with `id`, under the member's top folder. */
         private func ownRow(_ id: String, _ family: FamilyFixture, kind: NodeKind, name: String) throws -> NodeView {
             try FamilyFixture.node(id: id, in: family.personal, parent: family.personalRoot.id, parentKey: family.personalRootKey,

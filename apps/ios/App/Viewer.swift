@@ -111,12 +111,23 @@ struct FileViewer: View {
             // comes down instead, and the viewer shows that row.
             do { url = try await store.fetch(current, version: version, adopted: { current = $0 }) } catch where !ErrorWords.isCancellation(error) { failed = true } catch {}
         }
+        // A family's file that failed while its family wasn't open yet (a new session's vault, before the family is checked
+        // again): asked again once the family has been shown anew.
+        .onChange(of: familyShown) { _, _ in
+            if failed { failed = false; attempt += 1 }
+        }
         .onChange(of: listedHere, initial: true) { _, id in
             if let id { seenListed = id }
         }
         .onChange(of: removed) { _, gone in
             if gone { dismiss() }
         }
+    }
+
+    /* How many times the file's family was shown (FamilySync's checks): nil for a file in no family. */
+    private var familyShown: Int? {
+        guard store.isFamily(current), let groupId = store.familyAreaGroups[current.node.workspaceId.lowercased()] else { return nil }
+        return store.familyRefreshed[groupId] ?? 0
     }
 
     /* The file on screen's id while its folder's loaded listing shows it. */
@@ -126,14 +137,15 @@ struct FileViewer: View {
     }
 
     /*
-     * Whether the file on screen is confirmed gone: its folder's loaded listing showed it and no
-     * longer does (moved to the Trash or elsewhere from the menu), or its family was removed, forked
-     * or refused. A listing that never showed it (a folder not listed, a cached listing older than
-     * the file, paged to) says nothing, nor does a family whose state isn't known yet: the viewer stays.
+     * Whether the file on screen is confirmed gone: its folder's loaded listing showed it and a
+     * loaded listing no longer does (moved to the Trash or elsewhere from the menu), or its family was
+     * removed, forked or refused. A listing that never showed it (a folder not listed, a cached
+     * listing older than the file, paged to) says nothing, nor does a folder whose listing was merely
+     * let go of (a rotation's failure clears them), nor a family whose state isn't known yet.
      */
     private var removed: Bool {
         guard version == nil else { return false }
-        if seenListed == current.id, listedHere == nil { return true }
+        if seenListed == current.id, store.folders[current.node.parentId ?? ""] != nil, listedHere == nil { return true }
         guard store.isFamily(current), let groupId = store.familyAreaGroups[current.node.workspaceId.lowercased()],
               let state = store.familyStates[groupId] else { return false }
         switch state {

@@ -862,7 +862,15 @@ public actor Vault {
         // Taken before anything is awaited: a session that ends while the address comes writes nothing.
         let gate = gate ?? TemporaryCopies.copyGate(familyWorkspace: nil)
         let item: Opened
-        if let ref, let held = opened[ref] { item = held } else { item = try await resolve(nodeId) }
+        if let ref, let held = opened[ref] {
+            item = held
+        } else if let ref, ref.workspaceId != (try await loadWorkspace()).workspaceId.lowercased() {
+            // Another workspace's row this vault doesn't hold (a family's not opened yet, a new session's vault before its families
+            // are checked again): never looked for in the own drive, which would ask for its folder there. Asked again later.
+            throw FamilyFailure(message: FamilyWords.openAgain)
+        } else {
+            item = try await resolve(nodeId)
+        }
         if let ref, item.ref != ref { throw DriveAPIError.server(500, "This item has not been seen yet; open its folder first.") }
         let opened = try openVersion(item, version: version)
         if let expectedVersionId, opened.versionId != expectedVersionId { throw VersionChanged() }
