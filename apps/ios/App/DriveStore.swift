@@ -174,6 +174,17 @@ final class DriveStore {
     @ObservationIgnored var familyFolders: [String: String] = [:]
     /* When each family was last checked on this phone: a family folder on screen checks again when it is old. */
     @ObservationIgnored var familyCheckedAt: [String: Date] = [:]
+    /* The leave dialog, kept here rather than by the page, so a scene change or a redraw keeps it as it was (LeaveDialog). */
+    var leaving: LeaveDialog?
+    /* A family this person just left: its page goes back to Account once. */
+    var leftFamily: String?
+    /* Moved after a leave: Account reads its plan and storage again, so the family's pool and plan stop showing. */
+    var accountGeneration = 0
+    /* Each family's key-change walks on this phone: how many items were done, and why the last one stopped. */
+    var familyWalks: [String: FamilyWalkShown] = [:]
+    /* The folders a walk runs in now, and when each run may be tried again after one stopped. */
+    @ObservationIgnored var walking: Set<String> = []
+    @ObservationIgnored var walkEnded: [String: (attempts: Int, until: Date)] = [:]
     /* Moved as every showing of a family's check finishes (its folders listed again), whatever it found: what a family page reads its labels again on. */
     var familyRefreshed: [String: Int] = [:]
     /* Moved by every trust reload (refreshSigners): pins saved or changed on another device are read again on it. */
@@ -346,6 +357,7 @@ final class DriveStore {
         // old session asked lands in this one.
         resetFamilies()
         BackgroundTransfers.shared.vault = next
+        attachFamilies()
         // Everything below runs in the new session, as one operation: what the old one still has out is dropped.
         guard let session = beginSession() else { return }
         Task { await refreshSigners() }
@@ -370,6 +382,7 @@ final class DriveStore {
         sessionGate.session = { [weak self] in self?.vault }
         // The background queue shares this vault, and a landed transfer redraws the lists.
         BackgroundTransfers.shared.vault = vault
+        attachFamilies()
         BackgroundTransfers.shared.onLanded = { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }

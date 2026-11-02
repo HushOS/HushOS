@@ -72,6 +72,25 @@ extension OnFakeDrive {
          * keeps reading as checked and this one doesn't. Fails if the marker or the `before`
          * records are left for a later save.
          */
+        /*
+         * Joining schedules the family's background check even with nothing due yet, so a key change a
+         * removal leaves later is walked while the app is closed. Fails if a join that lands leaves
+         * the background check unscheduled.
+         */
+        @Test func aJoinSchedulesTheBackgroundCheckWithNothingDue() async throws {
+            let family = try FamilyFixture()
+            let (server, phone) = try await newcomer(family)
+            defer { phone.done() }
+            let work = Calls()
+            phone.sync.familyWork.set { work.append($0) }
+            server.groupState = "accepted"
+            #expect(try await phone.sync.joinStatus(family.groupId) == .waiting)
+            #expect(!work.values.contains(true), "waiting to be let in scheduled the check")
+            server.groupState = "active"
+            _ = try joinedView(try await phone.sync.joinStatus(family.groupId))
+            #expect(work.values.last == true, "a join that landed left the background check unscheduled")
+        }
+
         @Test func aPhoneFirstJoinWritesTheMarkerAndBeforeRecordsInTheSameSaveAsItsPin() async throws {
             let family = try FamilyFixture()
             let older = try FamilyFixture()

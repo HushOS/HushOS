@@ -36,7 +36,26 @@ public struct FamilyArea: Sendable, Equatable, Identifiable {
     public var rootListed = false
     public var rotating = false
     public var write: AreaWrite = .readOnly
+    /* The key change route 25 names running here; one that doesn't read is `rotating` and never walked. */
+    public var rotation: SpaceList.Rotation? = nil
     public var id: String { workspaceId }
+
+    /*
+     * Whether this device has its own reason to walk the folder's key change (the web's
+     * ownReasonToWalk): a member-list key change this device saw re-key the top folder, opened at
+     * the member list's latest key version. A subtree's run, or one the server names on its own
+     * word, is never walked.
+     */
+    public var ownReasonToWalk: Bool {
+        guard let rotation, let root, opened, rootListed else { return false }
+        return rotation.nodeId.lowercased() == root.id.lowercased() && rotation.targetEpoch == root.keyEpoch
+    }
+
+    /* The walk this device has its own reason to run here, or nil. */
+    public var walkTarget: WalkTarget? {
+        guard ownReasonToWalk, let rotation else { return nil }
+        return WalkTarget(workspaceId: workspaceId, rotationId: rotation.id, nodeId: rotation.nodeId, targetEpoch: rotation.targetEpoch)
+    }
 
     /* What its row says under its name, in the web's words (s/$groupId/index.tsx, areaLine). */
     public var line: String {
@@ -232,6 +251,15 @@ public actor FamilySync: FamilyJudge {
     public nonisolated let session: CopySession
 
     /*
+     * Every family this sync let go of (a wipe, a refusal, a fork, a wipe that couldn't finish),
+     * whoever found it: a sync, route 2's reconcile, a leave or member check, a join, the background
+     * pass. The screens take them from here, so none is shown only to whoever asked.
+     */
+    public nonisolated let releases = FamilyReleases()
+    /* Whether this session's families need the background check (FamilyWalkWork), as a join or route 2 finds. */
+    public nonisolated let familyWork = FamilyWorkHook()
+
+    /*
      * One per session in this process: the app's screens and any background task share it. None
      * for a vault whose session ended or that a later vault replaced (a family request of the last
      * session that runs after a sign-in): it would take the new session's place.
@@ -343,10 +371,17 @@ public actor FamilySync: FamilyJudge {
         for groupId in held.subtracting(shown).sorted() where FamilyRecords.valid(groupId) {
             switch await checkUnlisted(groupId) {
             case .kept: break
-            case .wiped: wiped.append(groupId)
-            case .failed(let words): failed[groupId] = words
+            case .wiped:
+                wiped.append(groupId)
+                releases.post(groupId, Revised(state: .wiped, revision: Self.revise()))
+            case .failed(let words):
+                failed[groupId] = words
+                releases.post(groupId, Revised(state: .failed(words), revision: Self.revise()))
             }
         }
+        // Still in a family, or one whose removal isn't settled yet: the background check keeps going. Only the background
+        // pass, still in its session, lets it go (backgroundPass).
+        if listed.contains(where: { $0.state == "active" }) || !unsettled(listed).isEmpty || !failed.isEmpty { familyWork.call(true) }
         return (wiped, failed)
     }
 
@@ -385,7 +420,7 @@ public actor FamilySync: FamilyJudge {
      * unless route 2 lists it again. Its folders stay family folders (`groupsOf`): never opened under
      * a personal key, whatever a server says later.
      */
-    private func forgetSession(_ groupId: String) {
+    func forgetSession(_ groupId: String) {
         summaries[groupId] = nil
         families[groupId] = nil
         settledUnlisted.insert(groupId.lowercased())
@@ -441,7 +476,9 @@ public actor FamilySync: FamilyJudge {
         await vault.useFamilyJudge(self)
         running[summary.id, default: 0] += 1
         defer { running[summary.id, default: 1] -= 1 }
-        return await exclusive(summary.id) { Revised(state: await self.run(summary), revision: Self.revise()) }
+        let revised = await exclusive(summary.id) { Revised(state: await self.run(summary), revision: Self.revise()) }
+        if FamilyReleases.letsGo(revised.state) { releases.post(summary.id, revised) }
+        return revised
     }
 
     /* `body` once every earlier piece of work on the family has finished, and before any queued after it. */
@@ -607,7 +644,9 @@ public actor FamilySync: FamilyJudge {
                 await self.refuse(groupId)
                 state = .failed(FamilyWords.error(error))
             }
-            return Revised(state: state, revision: Self.revise())
+            let revised = Revised(state: state, revision: Self.revise())
+            self.releases.post(groupId, revised)
+            return revised
         }
     }
 
@@ -842,7 +881,7 @@ public actor FamilySync: FamilyJudge {
         var out: [OpenedFolder] = []
         for area in family {
             // The top folder is set only once it proved to be this area's own (below): a refused one is never handed out.
-            var folder = OpenedFolder(area: FamilyArea(workspaceId: area.workspaceId, root: nil, rotating: area.rotation != nil))
+            var folder = OpenedFolder(area: FamilyArea(workspaceId: area.workspaceId, root: nil, rotating: area.rotation != nil, rotation: area.rotation))
             do {
                 guard let seed = area.idSeed else {
                     out.append(folder)
@@ -1183,12 +1222,12 @@ public actor FamilySync: FamilyJudge {
     }
 
     /* Present but unreadable is a signature that cannot hold, as the web reads it. */
-    private static func signature(_ value: String?) -> Data? {
+    static func signature(_ value: String?) -> Data? {
         guard let value else { return nil }
         return (try? base64urlDecode(value: value)) ?? Data()
     }
 
-    private static func rekey(_ view: RekeyView?) -> ServedRekey? {
+    static func rekey(_ view: RekeyView?) -> ServedRekey? {
         guard let view else { return nil }
         return ServedRekey(
             origin: ServedOrigin(envelope: (try? base64urlDecode(value: view.origin.envelope)) ?? Data(), signerId: view.origin.signer?.id,

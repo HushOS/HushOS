@@ -111,7 +111,8 @@ targets:
                       UIApplicationShortcutItemTitle: Search
                       UIApplicationShortcutItemIconSymbolName: magnifyingglass
                 # Background transfers: iOS runs this task with a network to start uploads and keeps queued offline.
-                BGTaskSchedulerPermittedIdentifiers: [com.hushos.app.transfers.start]
+                BGTaskSchedulerPermittedIdentifiers:
+                    [com.hushos.app.transfers.start, com.hushos.app.families.walks]
                 UIBackgroundModes: [processing, fetch]
         settings:
             base:

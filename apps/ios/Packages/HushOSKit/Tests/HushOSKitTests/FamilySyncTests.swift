@@ -1180,8 +1180,10 @@ func familyGuards(_ person: FamilyPerson, writes: GuardSwitch = GuardSwitch()) -
 final class FamilyServer: @unchecked Sendable {
     nonisolated(unsafe) static var current: FamilyServer?
     let family: FamilyFixture
-    private let lock = NSLock()
-    private var chain: [SignedGroupStatement] = []
+    let lock = NSLock()
+    var chain: [SignedGroupStatement] = []
+    /* Key changes, the change feed and route 20 (FamilyRotationStub). */
+    let rotations = RotationStub()
     private var ignoringAfter = false
     var notMember = false
     /* Route 2 lists the family (false: the server stopped listing it); `groupsFail` answers route 2 with a 503. */
@@ -1379,6 +1381,8 @@ final class FamilyServer: @unchecked Sendable {
             guard let folder = tree[id], workspaceId.isEmpty || folder.workspaceId.lowercased() == workspaceId.lowercased() else {
                 return (404, ["message": "This item no longer exists."])
             }
+            // In or under the trash: the server lists none of it.
+            if underTrash(id) { return (409, ["code": "trashed", "message": "This item is in the trash. Restore it first."]) }
             var ancestors: [NodeView] = []
             var cursor = folder.parentId
             while let parent = cursor, let node = tree[parent] { ancestors.insert(node, at: 0); cursor = node.parentId }
@@ -1426,6 +1430,7 @@ final class FamilyServer: @unchecked Sendable {
         }
         // The session ended: every group route answers 401.
         if path.hasPrefix("/api/groups"), lock.withLock({ unauthorized }) { return (401, ["message": "Sign in."]) }
+        if let routed = rotationRoute(method: method, path: path, sent: sent, query: query) { return routed }
         switch (method, path) {
         case ("GET", "/api/auth/settings"):
             return lock.withLock {
@@ -1495,7 +1500,7 @@ final class FamilyServer: @unchecked Sendable {
                     ["space": ["kind": "personal"], "areas": [["workspaceId": f.personal, "workspaceKeyVersion": 1, "changeSeq": 0, "root": NSNull(), "rotation": NSNull()]]],
                     ["space": ["kind": "group", "groupId": f.groupId, "name": "Lindqvist family"], "areas": !areaListed ? [] : [[
                         "workspaceId": f.workspaceId, "idSeed": f.workspaceSeed, "workspaceKeyVersion": areaVersion, "changeSeq": 2,
-                        "root": tree[servedRootId ?? f.rootId].map(json) ?? NSNull(), "rotation": NSNull(),
+                        "root": tree[servedRootId ?? f.rootId].map(json) ?? NSNull(), "rotation": rotationJSON(),
                         "grant": ["workspaceKeyVersion": areaVersion, "granteeKeyVersion": f.member.keys.keyVersion, "granterUserId": f.creator.userId,
                                   "rosterVersion": areaGrant.rosterVersion, "rosterDigest": areaGrant.rosterDigest,
                                   "envelope": malformedGrant ? "not base64url!" : base64urlEncode(bytes: areaGrant.envelope)],
@@ -1664,6 +1669,15 @@ final class FamilyServerProtocol: URLProtocol {
         }
         let server = FamilyServer.current
         let (status, json) = server?.answer(request, body: body) ?? (500, ["message": "No server"])
+        if let server, request.httpMethod == "POST", request.url?.path.hasSuffix("/rotation/nodes") == true,
+           server.lock.withLock({ () -> Bool in defer { server.rotations.holding = false }; return server.rotations.holding }) {
+            server.rotations.arrived.signal()
+            DispatchQueue.global().async {
+                server.rotations.release.wait()
+                self.deliver(status, json)
+            }
+            return
+        }
         if let server, let hold = server.holdEpochs, request.httpMethod == "POST", request.url?.path.hasSuffix("/epochs") == true {
             server.epochsArrived.signal()
             DispatchQueue.global().async {

@@ -221,6 +221,8 @@ final class AppModel {
     private func sessionClosed() {
         // Before the vault goes: no download of the session, family or personal, writes again (TemporaryCopies.endAccount).
         TemporaryCopies.endAccount()
+        // The session's family check goes with it: nothing of it runs for the next one.
+        FamilyWalkTasks.cancel()
         driveStore?.resetFamilies()
         driveStore = nil
     }

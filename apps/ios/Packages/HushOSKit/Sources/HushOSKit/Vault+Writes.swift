@@ -31,7 +31,7 @@ extension Vault {
             let epochs = try await api.allocateEpochs(workspaceId: workspace.workspaceId, count: 1)
             let made = try mint(.node, in: workspace.workspaceId)
             let id = made.id
-            let (key, wrapped) = try newKey(id, under: parent, keyEpoch: epochs.from, family: family)
+            let (key, wrapped) = try await newKey(id, under: parent, keyEpoch: epochs.from, family: family)
             do {
                 let metadata = NodeMetadata(name: name, mime: nil, size: nil, modified: nil, attributes: attributes)
                 let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
@@ -57,13 +57,18 @@ extension Vault {
      * ledger, never under a parent key it doesn't hold rooted at the folder's write version; in
      * any other drive under the parent's key as this process opened it.
      */
-    private func newKey(_ id: String, under parent: Opened, keyEpoch: UInt64, family: Bool) throws -> (key: Data, envelope: Data) {
+    private func newKey(_ id: String, under parent: Opened, keyEpoch: UInt64, family: Bool) async throws -> (key: Data, envelope: Data) {
         let workspaceId = parent.node.workspaceId
         if family {
-            // The choke point every new family node passes: never a key made under an acceptance whose guard is owed.
-            try requireGuardKept(workspaceId)
-            let made = try areaLedger.newNodeKey(workspaceId: workspaceId, nodeId: id, parentId: parent.id, parentKeyEpoch: parent.node.keyEpoch, keyEpoch: keyEpoch)
-            return (made.key, made.keyEnvelope)
+            // Never under a key a walk's batch holds pending (the core wraps under a pending key first): waits for the batch's
+            // commit or drop (FamilyLocks.keys).
+            return try await FamilyLocks.keys.holding(workspaceId) {
+                // The choke point every new family node passes: never a key made under an acceptance whose guard is owed.
+                try requireGuardKept(workspaceId)
+                let made = try areaLedger.newNodeKey(workspaceId: workspaceId, nodeId: id, parentId: parent.id, parentKeyEpoch: parent.node.keyEpoch,
+                                                     keyEpoch: keyEpoch)
+                return (made.key, made.keyEnvelope)
+            }
         }
         guard let parentKey = nodeKey(of: parent) else { throw DriveAPIError.server(500, "Open the containing folder first.") }
         let key = try randomBytes(length: 32)
@@ -109,16 +114,19 @@ extension Vault {
         }
     }
 
-    private func rewrap(_ item: Opened, under parent: Opened) throws -> String {
+    private func rewrap(_ item: Opened, under parent: Opened) async throws -> String {
         // One drive only: the server moves within a workspace, and a key is wrapped under a parent of its own.
         guard item.node.workspaceId.lowercased() == parent.node.workspaceId.lowercased() else {
             throw DriveAPIError.server(400, "Items can only move within one drive.")
         }
         // A family folder's item is re-wrapped by the ledger, under a parent rooted at the folder's current key only.
         if try familyTarget(item.node.workspaceId) {
-            try requireGuardKept(parent.node.workspaceId)
-            return base64urlEncode(bytes: try areaLedger.rewrapNode(workspaceId: item.node.workspaceId, nodeId: item.id, parentId: parent.id,
-                                                                    parentKeyEpoch: parent.node.keyEpoch, keyEpoch: item.node.keyEpoch))
+            // Never under a walk's pending key (see newKey).
+            return try await FamilyLocks.keys.holding(item.node.workspaceId) {
+                try requireGuardKept(parent.node.workspaceId)
+                return base64urlEncode(bytes: try areaLedger.rewrapNode(workspaceId: item.node.workspaceId, nodeId: item.id, parentId: parent.id,
+                                                                        parentKeyEpoch: parent.node.keyEpoch, keyEpoch: item.node.keyEpoch))
+            }
         }
         guard let key = nodeKey(of: item), let parentKey = nodeKey(of: parent) else { throw DriveAPIError.server(500, "Node not opened") }
         let ctx = NodeKeyContext(workspaceId: item.node.workspaceId, nodeId: item.id, parentId: parent.id, parentKeyEpoch: parent.node.keyEpoch, keyEpoch: item.node.keyEpoch)
@@ -170,7 +178,7 @@ extension Vault {
             try sendingIntoFamily(parent.node.workspaceId)
             let node = try await api.move(
                 nodeId: nodeId, workspaceId: item.node.workspaceId, parentId: parent.id,
-                parentKeyEpoch: parent.node.keyEpoch, keyEnvelope: try rewrap(item, under: parent)
+                parentKeyEpoch: parent.node.keyEpoch, keyEnvelope: try await rewrap(item, under: parent)
             )
             return try adopt(node, nodeKey: key, metadata: item.metadata, in: item.node.workspaceId)
         }
@@ -225,7 +233,7 @@ extension Vault {
             let (id, versionId) = (made.id, madeVersion.id)
             let metadataPrior = try await prior(FamilySync.metadataRecord(of: source.node)) { $0.metadata(of: source.node) }
             let versionPrior = try await prior(FamilySync.versionRecord(version, of: source.node)) { $0.version(version, of: source.node) }
-            let (key, keyEnvelope) = try newKey(id, under: parent, keyEpoch: epochs.from, family: family)
+            let (key, keyEnvelope) = try await newKey(id, under: parent, keyEpoch: epochs.from, family: family)
             defer { if family, self.opened[NodeRef(workspaceId: workspace.workspaceId, nodeId: id)] == nil { areaLedger.forgetNodeKey(workspaceId: workspace.workspaceId, nodeId: id) } }
             let metadata = NodeMetadata(name: newName, mime: source.metadata.mime, size: source.metadata.size, modified: source.metadata.modified,
                                         attributes: source.metadata.attributes)
@@ -379,7 +387,7 @@ extension Vault {
             var toRoot: (UInt64, String)? = nil
             if parentTrashed {
                 let root = try await resolve(try rootId())
-                toRoot = (root.node.keyEpoch, try rewrap(item, under: root))
+                toRoot = (root.node.keyEpoch, try await rewrap(item, under: root))
             }
             try sendingIntoFamily(item.node.workspaceId)
             let node = try await api.restore(nodeId: item.id, workspaceId: item.node.workspaceId, toRoot: toRoot)
@@ -526,7 +534,7 @@ extension Vault {
             let made = try mint(.node, in: workspace.workspaceId)
             nodeId = made.id
             let wrapped: Data
-            (nodeKey, wrapped) = try newKey(nodeId, under: parent, keyEpoch: epochs.from, family: family)
+            (nodeKey, wrapped) = try await newKey(nodeId, under: parent, keyEpoch: epochs.from, family: family)
             madeKey = family ? nodeId : nil
             final = NodeMetadata(name: try checkName(name: name), mime: mime, size: plaintextSize, modified: modified, attributes: attributes)
             let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: nodeId, metadataVersion: 1), nodeKey: nodeKey, metadata: final)

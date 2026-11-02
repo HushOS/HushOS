@@ -144,6 +144,8 @@ struct AccountView: View {
                 await load()
                 await store.refreshFamilies()
             }
+            // Left a family: its pool and plan stop showing here.
+            .onChange(of: store.accountGeneration) { _, _ in Task { await load() } }
         }
     }
 
