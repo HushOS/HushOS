@@ -1,0 +1,39 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NodeRow.kt
+  s_ec12ebe02de5ff::t_d08689ec48b3eb 4,306-311,316-320,327-329,340
+apps/ios/App/Glyphs.swift
+  s_ec12ebe02de5ff::t_74fea4d533c895 1,42-45,63-64,70,83,91-113
+apps/ios/App/NodeRow.swift
+  s_ec12ebe02de5ff::t_c105b99a40fc5f 356
+apps/ios/App/Received.swift
+  s_ec12ebe02de5ff::t_6c3c0a2fe55f10 580
+apps/ios/App/RecentsView.swift
+  s_ec12ebe02de5ff::t_383f6a8a299a8c 742
+apps/ios/Share/SaveView.swift
+  s_ec12ebe02de5ff::t_ecd098c8e5d2b1 49
+apps/web/src/components/drive/file-mark.tsx
+  s_ec12ebe02de5ff::t_62f65e2f3435d4 1,3,45,47,75,81-100,102,106,108,113-114,120,131,156-168,172,174,189
+apps/web/src/styles.css
+  s_ec12ebe02de5ff::t_5e77bc4ff568d3 216-218,230-235,247-252,264-269,281-282,295-296,308-309,321-322,334-335,347-367
+crates/hushos-core/src/colour.rs
+  s_ec12ebe02de5ff::t_8d46b856e1a2fb 73-160,228-281
+packages/drive/src/colour.test.ts
+  s_ec12ebe02de5ff::t_8a8f878eec3a37 2,46-68
+packages/drive/src/colour.ts
+  s_ec12ebe02de5ff::t_f05a76b6860a7e 71-131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2214f2303afb4820beae0314ba6b51c3b79bb05e",
+  "prompts": {},
+  "sessions": {
+    "s_ec12ebe02de5ff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3f79b7e-f7a1-4c9c-9a58-b7059252bcae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
