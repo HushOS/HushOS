@@ -39,6 +39,7 @@ import com.hushos.tokens.AlpineSpace
  */
 @Composable
 fun UnverifiedMark(model: DriveViewModel, state: DriveState, item: Opened) {
+    if (model.families.isFamilyItem(item)) { FamilyMarkLabel(model, item); return }
     val unverified = model.unverified(item, state) ?: return
     var open by remember { mutableStateOf(false) }
     val alpine = Alpine.colors
@@ -70,6 +71,40 @@ fun UnverifiedSheet(model: DriveViewModel, item: Opened, unverified: Unverified,
                 dismiss()
             }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (target.pinned) "Check it’s ${firstNameOf(target.name.ifEmpty { target.email })}" else "Check who wrote this") }
             if (unchecked) Button(onClick = { model.retryTrust(); dismiss() }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Try again") }
+        }
+    }
+}
+
+/*
+ * A family folder item's mark (the web's, judged by the family's member list: FamilySync.verdicts): Unverified, Couldn't
+ * check, or Keys don't match in the danger colour, as its words say. Tapping it says why, with Try again or a check.
+ */
+@Composable
+private fun FamilyMarkLabel(model: DriveViewModel, item: Opened) {
+    val mark = model.families.verdict(item)?.mark ?: return
+    var open by remember { mutableStateOf(false) }
+    val alpine = Alpine.colors
+    Text(
+        mark.label, style = MaterialTheme.typography.labelSmall, color = if (mark.danger) alpine.danger else alpine.warning, maxLines = 1,
+        modifier = Modifier
+            .background(if (mark.danger) alpine.dangerSoft else alpine.warningSoft, RoundedCornerShape(4.dp))
+            .clickable(role = Role.Button, onClickLabel = "Why") { open = true }
+            .semantics { contentDescription = "${mark.label}. Why" }
+            .padding(horizontal = 6.dp, vertical = 1.dp),
+    )
+    if (open) Sheet(onDismissRequest = { open = false }) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S6), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
+            Text(mark.label, style = MaterialTheme.typography.titleLarge)
+            Text(item.name, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, maxLines = 1)
+            for (line in mark.lines) Text(line, style = MaterialTheme.typography.bodyLarge, color = alpine.ink)
+            mark.check?.let { writer ->
+                val member = model.families.familyOf(item)?.let { model.families.details[it] }?.members?.firstOrNull { it.userId.equals(writer, ignoreCase = true) }
+                Button(onClick = {
+                    model.contactStep = member?.email?.let { ContactStep.Check(it, member.name) } ?: ContactStep.Add(writer = writer)
+                    open = false
+                }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(member?.let { "Check it’s ${firstNameOf(it.name.ifEmpty { it.email.orEmpty() })}" } ?: "Check who wrote this") }
+            }
+            if (mark.retry) Button(onClick = { model.families.rejudge(model.families.familyOf(item)); open = false }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Try again") }
         }
     }
 }

@@ -128,12 +128,15 @@ fun receivedVia(model: DriveViewModel, state: DriveState, item: Opened): Vault.S
     var steps = 0
     while (cursor != null && steps++ < 256) {
         mounts.firstOrNull { it.root?.id == cursor?.id }?.let { return it }
-        cursor = cursor.node.parentId?.let { model.item(it) }
+        // A parent is in its child's workspace: looked up there, never by id alone.
+        cursor = cursor.node.parentId?.let { model.itemIn(cursor!!.node.workspaceId, it) }
     }
     return null
 }
 
 fun ownerOf(model: DriveViewModel, state: DriveState, item: Opened): Owner {
+    // A family folder's item reads as viewer: read only on Android for now, and never this account's own.
+    if (model.families.isFamilyItem(item)) return Owner.VIEW
     val own = state.rootId?.let { model.item(it) }?.node?.workspaceId
     if (own == null || item.node.workspaceId == own) return Owner.ME
     return if (receivedVia(model, state, item)?.share?.role == "editor") Owner.EDIT else Owner.VIEW
@@ -157,8 +160,8 @@ fun sheetLine(model: DriveViewModel, state: DriveState, item: Opened): String {
 @Composable
 fun ItemHeader(model: DriveViewModel, state: DriveState, item: Opened, subtitle: String? = null, open: Boolean = false) {
     val alpine = Alpine.colors
-    LaunchedEffect(item.id) { model.thumbnail(item) }
-    val thumbnail = state.thumbnails[item.id]
+    LaunchedEffect(thumbnailKey(item)) { model.thumbnail(item) }
+    val thumbnail = state.thumbnails[thumbnailKey(item)]
     val bitmap = remember(thumbnail) { thumbnail?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }
     val line = subtitle ?: sheetLine(model, state, item)
     Row(Modifier.fillMaxWidth().padding(start = AlpineSpace.S6, end = AlpineSpace.S6, bottom = AlpineSpace.S3), verticalAlignment = Alignment.CenterVertically) {
@@ -169,7 +172,7 @@ fun ItemHeader(model: DriveViewModel, state: DriveState, item: Opened, subtitle:
             Text(item.name, style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Normal), maxLines = 2, overflow = TextOverflow.Ellipsis)
             // A sheet's header is a detail, not a list row: plain words, no link icon.
             if (line.isNotEmpty()) Text(line, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (model.unverified(item, state) != null) Box(Modifier.padding(top = AlpineSpace.S1)) { UnverifiedMark(model, state, item) }
+            if (model.marked(item, state)) Box(Modifier.padding(top = AlpineSpace.S1)) { UnverifiedMark(model, state, item) }
         }
     }
 }
@@ -205,8 +208,15 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
     val owner = ownerOf(model, state, item)
     val mine = owner == Owner.ME
     val canEdit = owner != Owner.VIEW
+    // Read only on Android for now (iOS 1's menu): send a copy of a file, or Info; no share, keep, copy, report or change.
+    val family = model.families.isFamilyItem(item)
     when (sheet) {
-        ItemSheet.MENU -> Sheet(onDismissRequest = dismiss) { Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S4)) {
+        ItemSheet.MENU -> if (family) Sheet(onDismissRequest = dismiss) { Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S4)) {
+            ItemHeader(model, state, item)
+            SheetDivider()
+            if (!item.isFolder) SheetRow("Send a copy", Icons.AutoMirrored.Outlined.Send) { sheet = ItemSheet.SEND }
+            SheetRow("Info", Icons.Outlined.Info) { sheet = ItemSheet.INFO }
+        } } else Sheet(onDismissRequest = dismiss) { Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S4)) {
             ItemHeader(model, state, item)
             SheetDivider()
             onSelect?.let { select ->
@@ -441,13 +451,15 @@ fun SendCopy(model: DriveViewModel, state: DriveState, items: List<Opened>, dism
         done = 0
         job = scope.launch {
             val uris = ArrayList<Uri>()
+            // The rows the copies were made from: a file replaced meanwhile is sent as the type and name it is now.
+            val sent = ArrayList<Opened>()
             for (item in items) {
-                val uri = model.download(item, quiet = true)
-                if (uri == null) { failed = item; return@launch }
+                val (uri, opened) = model.downloadOpened(item, quiet = true) ?: run { failed = item; return@launch }
                 uris.add(uri)
+                sent.add(opened)
                 done++
             }
-            send(context, items, uris)
+            send(context, sent, uris)
             dismiss()
         }
     }
@@ -501,7 +513,7 @@ fun VersionsSheet(model: DriveViewModel, state: DriveState, item: Opened, dismis
     var restoring by remember { mutableStateOf<String?>(null) }
     var sending by retain { mutableStateOf<VersionListView?>(null) }
     var reload by remember { mutableStateOf(0) }
-    val current = model.item(item.id) ?: item
+    val current = model.itemIn(item.node.workspaceId, item.id) ?: item
     LaunchedEffect(item.id, reload) {
         versions = model.versions(current)
         // Sizes are sealed in each version's envelope, so they are opened here rather than read off the list.
@@ -629,12 +641,15 @@ fun InfoPane(model: DriveViewModel, state: DriveState, item: Opened, onShare: ()
 @Composable
 private fun InfoBody(model: DriveViewModel, state: DriveState, item: Opened, onShare: () -> Unit, onTags: () -> Unit) {
     val alpine = Alpine.colors
-    LaunchedEffect(item.id) { model.thumbnail(item) }
-    val thumbnail = state.thumbnails[item.id]
+    LaunchedEffect(thumbnailKey(item)) { model.thumbnail(item) }
+    val thumbnail = state.thumbnails[thumbnailKey(item)]
     val bitmap = remember(thumbnail) { thumbnail?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }
     val mine = ownerOf(model, state, item) == Owner.ME
+    val familyName = model.families.familyOf(item)?.let { model.families.name(it) }
+    LaunchedEffect(item.node) { if (familyName != null) model.families.judge(listOf(item)) }
+    val familyVerdict = model.families.verdict(item)
     val created = item.node.createdAt?.let { runCatching { whenText(Instant.parse(it).toEpochMilli()) }.getOrNull() }
-    val folder = item.node.parentId?.let { parent -> if (parent == state.rootId) "Files" else model.item(parent)?.name }
+    val folder = item.node.parentId?.let { parent -> if (parent == state.rootId) "Files" else model.itemIn(item.node.workspaceId, parent)?.name }
     run {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S6)) {
             Column(Modifier.fillMaxWidth().padding(bottom = AlpineSpace.S4), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -644,18 +659,35 @@ private fun InfoBody(model: DriveViewModel, state: DriveState, item: Opened, onS
                 // A copy saved from a link: no mark, only who saved it and what that can't say, in plain muted words.
                 val saved = remember(item.node, state.trust) { savedLineOf(item.node, state.trust) }
                 saved?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = AlpineSpace.S6)) }
+                // A family folder's item as its family's member list reads it (the web's Info): "Verified by Lindqvist family" when every record verified on its word.
+                familyVerdict?.verifiedBy?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = AlpineSpace.S6)) }
+                familyVerdict?.replacedBy?.forEach { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = AlpineSpace.S6)) }
             }
             Fact("Kind", kindOf(item))
             item.size?.let { Fact("Size", formatBytes(it)) }
             whenText(item.modifiedMillis)?.let { Fact("Changed", it) }
             created?.let { Fact("Added", it) }
             folder?.let { Fact("Folder", it, primary = true) }
-            // Written by someone this person's devices first saw and nobody checked (6.4): no mark, and the way to check.
-            remember(item.node, state.trust) { model.seenBy(item, state) }?.let { seen -> AddedBy(model, seen) }
+            familyVerdict?.changedBy?.let { (label, words) -> Fact(label, words) }
+            familyVerdict?.writtenBy?.let { Fact("Written by", it) }
+            // Written by someone this person's devices first saw and nobody checked (6.4): no mark, and the way to check. In a
+            // family taken on first use, the family's verdict names them: a member's check is the family's, anyone else's their own.
+            val familySeen = familyVerdict?.seen
+            if (familySeen != null) {
+                val groupId = model.families.familyOf(item)
+                val me = model.currentVault?.api?.session?.userId.orEmpty()
+                // Named with the address the family serves (D10), so two members named alike are told apart.
+                val named = familySeen.email?.let { "${familySeen.name} ($it)" } ?: familySeen.name
+                AddedBy(model, com.hushos.app.data.SeenBy(familySeen.name, familySeen.userId, familySeen.email), label = named) {
+                    groupId?.let { model.families.memberCheck(it, familySeen.userId, me) }?.let { model.families.checking = it }
+                        ?: familySeen.email?.let { model.contactStep = ContactStep.Check(it, familySeen.name) }
+                }
+            } else if (familyName == null) remember(item.node, state.trust) { model.seenBy(item, state) }?.let { seen -> AddedBy(model, seen) }
             SheetDivider()
             // Who can open it, in words (never "Same as folder"), once it is known; it opens the share sheet.
             // Who can open it, as a whole sentence with you first; it opens the share sheet.
-            whoCanOpenSentence(model, state, item)?.let { who -> Fact("Who can open", who, onClick = if (mine) onShare else null) }
+            if (familyName != null) Fact("Who can open", "Everyone in $familyName can open it.")
+            else whoCanOpenSentence(model, state, item)?.let { who -> Fact("Who can open", who, onClick = if (mine) onShare else null) }
             if (mine) {
                 val tags = state.tags.tagsOf(item.id)
                 Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onTags).padding(horizontal = AlpineSpace.S4), verticalAlignment = Alignment.CenterVertically) {
@@ -673,19 +705,21 @@ private fun InfoBody(model: DriveViewModel, state: DriveState, item: Opened, onS
  * verified" in muted text with Check it's Maya, which the app shows (Main) so it outlives Info's own state.
  */
 @Composable
-private fun AddedBy(model: DriveViewModel, seen: com.hushos.app.data.SeenBy) {
+private fun AddedBy(model: DriveViewModel, seen: com.hushos.app.data.SeenBy, label: String = seen.name, check: (() -> Unit)? = null) {
     val alpine = Alpine.colors
     val first = com.hushos.app.data.firstNameOf(seen.name)
     Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
-        Text("Added by", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-        Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(start = AlpineSpace.S4)) {
-            Text(seen.name, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.End)
+        // The label keeps its width; a long name with its address wraps in the value's column, never the label.
+        Text("Added by", style = MaterialTheme.typography.bodyLarge)
+        Column(horizontalAlignment = Alignment.End, modifier = Modifier.weight(1f).padding(start = AlpineSpace.S4)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.End)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Not verified", fontSize = 13.sp, color = alpine.inkMuted)
                 // The dot goes with the way to check, so a narrow column never strands it.
-                seen.email?.let { email ->
+                val open = check ?: seen.email?.let { email -> { model.contactStep = ContactStep.Check(email, seen.name) } }
+                open?.let { onCheck ->
                     Text(" · Check it’s $first", fontSize = 13.sp, color = alpine.primary, fontWeight = FontWeight.SemiBold, maxLines = 1,
-                        modifier = Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button) { model.contactStep = ContactStep.Check(email, seen.name) }
+                        modifier = Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onCheck)
                             .heightIn(min = 32.dp).padding(vertical = 6.dp))
                 }
             }

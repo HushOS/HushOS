@@ -214,7 +214,7 @@ fun HomeScreen(model: DriveViewModel, state: DriveState, screen: String, go: (St
                         // Offline, a file that isn't on this phone can't open: it dims and says so.
                         val away = state.unreachable && !item.isFolder && item.id !in kept
                         NodeRow(model, state, item, away = away, recent = true,
-                            onClick = { if (item.isFolder) go("folder:${item.id}") else scope.launch { model.download(item)?.let { openWith(context, it, mimeOf(item), model, item.name) } } },
+                            onClick = { if (item.isFolder) go("folder:${item.id}") else scope.launch { model.downloadOpened(item)?.let { (uri, opened) -> openWith(context, uri, mimeOf(opened), model, opened.name) } } },
                             onLongClick = { selected = item }, onMore = { selected = item })
                     }
                 }
@@ -315,7 +315,7 @@ fun SearchScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) {
                 NodeRow(model, state, item, note = "In $where",
                     onClick = {
                         model.rememberSearch(query)
-                        if (item.isFolder) folder = item else scope.launch { model.download(item)?.let { openWith(context, it, mimeOf(item), model, item.name) } }
+                        if (item.isFolder) folder = item else scope.launch { model.downloadOpened(item)?.let { (uri, opened) -> openWith(context, uri, mimeOf(opened), model, opened.name) } }
                     },
                     onLongClick = { selected = item }, onMore = { selected = item })
             }

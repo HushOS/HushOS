@@ -48,6 +48,17 @@ data class VersionView(
     }
 }
 
+/*
+ * Whether `this` is an older version of the same node than `held`: the server's change order first, then key epoch, then
+ * metadata version. Caches and verdicts of family rows keep the newer one when answers arrive out of order.
+ */
+fun NodeView.olderThan(held: NodeView): Boolean {
+    val (a, b) = changeSeq to held.changeSeq
+    if (a != null && b != null && a != b) return a < b
+    if (keyEpoch != held.keyEpoch) return keyEpoch < held.keyEpoch
+    return metadataVersion < held.metadataVersion
+}
+
 data class NodeView(
     val id: String, val workspaceId: String, val parentId: String?, val kind: String,
     val keyEpoch: ULong, val parentKeyEpoch: ULong, val keyEnvelope: String,
@@ -122,6 +133,11 @@ class DriveApi(val session: Shared.Session) : RootApi {
      * identity this device holds is stale (replaced on another device), so it is opened afresh before the next try.
      */
     @Volatile var onBadSignature: () -> Unit = {}
+    /*
+     * The last word on every write into a workspace, right before it is sent (Vault.finalWriteGate): a family folder
+     * proven since the write began, or one whose family's guard is still owed, is refused here and nothing goes out.
+     */
+    @Volatile var beforeWrite: (workspaceId: String) -> Unit = {}
     private val cookie = (if (origin.startsWith("https:")) "__Host-hushos-session" else "hushos-session") + "=" + session.token
 
     private fun open(path: String, method: String): HttpURLConnection {
@@ -168,6 +184,16 @@ class DriveApi(val session: Shared.Session) : RootApi {
         try { connection.outputStream.use { it.write(body.toString().toByteArray()) } } catch (error: java.io.IOException) { throw Unreachable() }
         return finish(connection)
     }
+
+    /* A write into `workspaceId`: the final gate, then the request. */
+    private fun write(workspaceId: String, path: String, body: JSONObject, method: String = "POST"): JSONObject {
+        beforeWrite(workspaceId)
+        return send(path, body, method)
+    }
+
+    /* A write whose body names its workspace (links, shares): refused when it names none, as nothing could gate it. */
+    private fun write(path: String, body: JSONObject, method: String = "POST"): JSONObject =
+        write(body.optString("workspaceId").ifEmpty { throw ApiError(400, "This change names no drive.") }, path, body, method)
 
     private fun q(vararg pairs: Pair<String, String?>) =
         pairs.filter { it.second != null }.joinToString("&", prefix = "?") { "${it.first}=${URLEncoder.encode(it.second, "UTF-8")}" }
@@ -224,7 +250,7 @@ class DriveApi(val session: Shared.Session) : RootApi {
         }
 
     fun putDocument(workspaceId: String, kind: String, version: Int, envelope: String) {
-        send("/workspaces/$workspaceId/documents/$kind", JSONObject().put("version", version).put("envelope", envelope), "PUT")
+        write(workspaceId, "/workspaces/$workspaceId/documents/$kind", JSONObject().put("version", version).put("envelope", envelope), "PUT")
     }
 
     fun sharedWithMe(): List<ShareView> = get("/shares").getJSONArray("shares").objects().map {
@@ -237,18 +263,18 @@ class DriveApi(val session: Shared.Session) : RootApi {
     fun links(nodeId: String, workspaceId: String): List<LinkView> =
         get("/nodes/$nodeId/links" + q("workspaceId" to workspaceId)).getJSONArray("links").objects().map(LinkView::from)
 
-    fun createLink(nodeId: String, body: JSONObject): LinkView = LinkView.from(send("/nodes/$nodeId/links", body).getJSONObject("link"))
+    fun createLink(nodeId: String, body: JSONObject): LinkView = LinkView.from(write("/nodes/$nodeId/links", body).getJSONObject("link"))
 
     /* A new password (sealed again on this device) and or end date for a link; its address stays the same. */
-    fun updateLink(linkId: String, body: JSONObject): LinkView = LinkView.from(send("/links/$linkId", body, "PATCH").getJSONObject("link"))
+    fun updateLink(linkId: String, body: JSONObject): LinkView = LinkView.from(write("/links/$linkId", body, "PATCH").getJSONObject("link"))
 
     /* Deletes an earlier version for good; the current one cannot be. */
     fun discardVersion(versionId: String, workspaceId: String) {
-        send("/versions/$versionId", JSONObject().put("workspaceId", workspaceId), "DELETE")
+        write(workspaceId, "/versions/$versionId", JSONObject().put("workspaceId", workspaceId), "DELETE")
     }
 
     fun revokeLink(linkId: String, workspaceId: String) {
-        send("/links/$linkId", JSONObject().put("workspaceId", workspaceId), "DELETE")
+        write(workspaceId, "/links/$linkId", JSONObject().put("workspaceId", workspaceId), "DELETE")
     }
 
     fun fileReport(body: JSONObject): Boolean = send("/reports", body).optBoolean("duplicate")
@@ -261,7 +287,7 @@ class DriveApi(val session: Shared.Session) : RootApi {
     }
 
     fun startRotation(workspaceId: String, nodeId: String): ULong =
-        send("/nodes/$nodeId/rotation", JSONObject().put("workspaceId", workspaceId)).getJSONObject("rotation").getLong("targetEpoch").toULong()
+        write(workspaceId, "/nodes/$nodeId/rotation", JSONObject().put("workspaceId", workspaceId)).getJSONObject("rotation").getLong("targetEpoch").toULong()
 
     fun rotationWork(workspaceId: String, nodeId: String, after: String?): RotationWork =
         get("/nodes/$nodeId/rotation/work" + q("workspaceId" to workspaceId, "after" to after)).let { json ->
@@ -277,20 +303,20 @@ class DriveApi(val session: Shared.Session) : RootApi {
 
     /* Each node's outcome, by id. */
     fun rotateNodes(workspaceId: String, nodeId: String, nodes: JSONArray): List<Pair<String, String>> =
-        send("/nodes/$nodeId/rotation/nodes", JSONObject().put("workspaceId", workspaceId).put("nodes", nodes)).getJSONArray("results").objects().map { it.optString("id") to it.getString("status") }
+        write(workspaceId, "/nodes/$nodeId/rotation/nodes", JSONObject().put("workspaceId", workspaceId).put("nodes", nodes)).getJSONArray("results").objects().map { it.optString("id") to it.getString("status") }
 
     fun shares(nodeId: String, workspaceId: String): List<OwnedShare> =
         get("/nodes/$nodeId/shares" + q("workspaceId" to workspaceId)).getJSONArray("shares").objects().map(OwnedShare::from)
 
-    fun createShare(nodeId: String, body: JSONObject): OwnedShare = OwnedShare.from(send("/nodes/$nodeId/shares", body).getJSONObject("share"))
+    fun createShare(nodeId: String, body: JSONObject): OwnedShare = OwnedShare.from(write("/nodes/$nodeId/shares", body).getJSONObject("share"))
 
     /* Replaces a live share's envelope at the node's current epoch with a suite 3 one (after this account's keys were replaced). */
     fun resealShare(shareId: String, workspaceId: String, keyEpoch: ULong, envelope: String) {
-        send("/shares/$shareId/envelope", JSONObject().put("workspaceId", workspaceId).put("keyEpoch", keyEpoch.toLong()).put("shareEnvelope", envelope), "PUT")
+        write(workspaceId, "/shares/$shareId/envelope", JSONObject().put("workspaceId", workspaceId).put("keyEpoch", keyEpoch.toLong()).put("shareEnvelope", envelope), "PUT")
     }
 
     fun revokeShare(shareId: String, workspaceId: String) {
-        send("/shares/$shareId", JSONObject().put("workspaceId", workspaceId), "DELETE")
+        write(workspaceId, "/shares/$shareId", JSONObject().put("workspaceId", workspaceId), "DELETE")
     }
 
     fun thumbnailUrl(versionId: String, workspaceId: String): String? {
@@ -325,31 +351,32 @@ class DriveApi(val session: Shared.Session) : RootApi {
     // Writes
 
     override fun allocateEpoch(workspaceId: String): ULong =
-        send("/workspaces/$workspaceId/epochs", JSONObject().put("count", 1)).getLong("from").toULong()
+        write(workspaceId, "/workspaces/$workspaceId/epochs", JSONObject().put("count", 1)).getLong("from").toULong()
 
     override fun createRoot(workspaceId: String, root: RootInput): NodeView =
-        NodeView.from(send("/workspaces/$workspaceId/root", root.body()).getJSONObject("root"))
+        NodeView.from(write(workspaceId, "/workspaces/$workspaceId/root", root.body()).getJSONObject("root"))
 
     fun createFolder(workspaceId: String, folder: JSONObject): NodeView =
-        NodeView.from(send("/folders", JSONObject().put("workspaceId", workspaceId).put("folders", JSONArray().put(folder))).getJSONArray("nodes").getJSONObject(0))
+        NodeView.from(write(workspaceId, "/folders", JSONObject().put("workspaceId", workspaceId).put("folders", JSONArray().put(folder))).getJSONArray("nodes").getJSONObject(0))
 
     /* `metadataSignature` is over `metadataVersion + 1`, the version the server stores. */
     fun rename(nodeId: String, workspaceId: String, metadataVersion: ULong, keyEpoch: ULong, metadataEnvelope: String, metadataSignature: String): NodeView =
-        NodeView.from(send("/nodes/$nodeId/metadata", JSONObject().put("workspaceId", workspaceId).put("metadataVersion", metadataVersion.toLong())
+        NodeView.from(write(workspaceId, "/nodes/$nodeId/metadata", JSONObject().put("workspaceId", workspaceId).put("metadataVersion", metadataVersion.toLong())
             .put("keyEpoch", keyEpoch.toLong()).put("metadataEnvelope", metadataEnvelope).put("metadataSignature", metadataSignature)).getJSONObject("node"))
 
     fun move(nodeId: String, workspaceId: String, parentId: String, parentKeyEpoch: ULong, keyEnvelope: String): NodeView =
-        NodeView.from(send("/nodes/$nodeId/parent", JSONObject().put("workspaceId", workspaceId).put("parentId", parentId)
+        NodeView.from(write(workspaceId, "/nodes/$nodeId/parent", JSONObject().put("workspaceId", workspaceId).put("parentId", parentId)
             .put("parentKeyEpoch", parentKeyEpoch.toLong()).put("keyEnvelope", keyEnvelope)).getJSONObject("node"))
 
     fun copy(sourceNodeId: String, workspaceId: String, body: JSONObject): NodeView =
-        NodeView.from(send("/nodes/$sourceNodeId/copy", body.put("workspaceId", workspaceId)).getJSONObject("node"))
+        NodeView.from(write(workspaceId, "/nodes/$sourceNodeId/copy", body.put("workspaceId", workspaceId)).getJSONObject("node"))
 
     /* One request of a selection to the trash, or back in place (Undo): up to MAX_TRASH_BATCH ids of one workspace. */
-    fun trashBatch(workspaceId: String, ids: List<String>): List<BatchAnswer> = batch("/workspaces/$workspaceId/trash-batch", ids)
-    fun restoreBatch(workspaceId: String, ids: List<String>): List<BatchAnswer> = batch("/workspaces/$workspaceId/restore-batch", ids)
+    fun trashBatch(workspaceId: String, ids: List<String>): List<BatchAnswer> = batch(workspaceId, "/workspaces/$workspaceId/trash-batch", ids)
+    fun restoreBatch(workspaceId: String, ids: List<String>): List<BatchAnswer> = batch(workspaceId, "/workspaces/$workspaceId/restore-batch", ids)
 
-    private fun batch(path: String, ids: List<String>): List<BatchAnswer> {
+    private fun batch(workspaceId: String, path: String, ids: List<String>): List<BatchAnswer> {
+        beforeWrite(workspaceId)
         val connection = open(path, "POST")
         connection.doOutput = true
         connection.setRequestProperty("Content-Type", "application/json")
@@ -369,31 +396,31 @@ class DriveApi(val session: Shared.Session) : RootApi {
     }
 
     fun trash(nodeId: String, workspaceId: String) {
-        send("/nodes/$nodeId/trash", JSONObject().put("workspaceId", workspaceId))
+        write(workspaceId, "/nodes/$nodeId/trash", JSONObject().put("workspaceId", workspaceId))
     }
 
     fun restore(nodeId: String, workspaceId: String, toRoot: Pair<ULong, String>?): NodeView {
         val body = JSONObject().put("workspaceId", workspaceId)
         if (toRoot != null) body.put("toRoot", JSONObject().put("parentKeyEpoch", toRoot.first.toLong()).put("keyEnvelope", toRoot.second))
-        return NodeView.from(send("/nodes/$nodeId/restore", body).getJSONObject("node"))
+        return NodeView.from(write(workspaceId, "/nodes/$nodeId/restore", body).getJSONObject("node"))
     }
 
     fun purge(nodeId: String, workspaceId: String) {
-        send("/nodes/$nodeId", JSONObject().put("workspaceId", workspaceId), "DELETE")
+        write(workspaceId, "/nodes/$nodeId", JSONObject().put("workspaceId", workspaceId), "DELETE")
     }
 
     /* One batch of the trash, as the server takes it; `remaining` says whether to ask again. */
     fun emptyTrash(workspaceId: String): EmptyTrashResult =
-        send("/workspaces/$workspaceId/trash/empty", JSONObject()).let { EmptyTrashResult(it.getInt("purged"), it.getInt("remaining")) }
+        write(workspaceId, "/workspaces/$workspaceId/trash/empty", JSONObject()).let { EmptyTrashResult(it.getInt("purged"), it.getInt("remaining")) }
 
     /* Removes every file's earlier version now, a batch at a time; the same shape as emptying the trash. */
     fun discardSuperseded(workspaceId: String): EmptyTrashResult =
-        send("/workspaces/$workspaceId/versions/discard-superseded", JSONObject()).let { EmptyTrashResult(it.optInt("purged"), it.optInt("remaining")) }
+        write(workspaceId, "/workspaces/$workspaceId/versions/discard-superseded", JSONObject()).let { EmptyTrashResult(it.optInt("purged"), it.optInt("remaining")) }
 
     fun restoreVersion(versionId: String, workspaceId: String): NodeView =
-        NodeView.from(send("/versions/$versionId/restore", JSONObject().put("workspaceId", workspaceId)).getJSONObject("node"))
+        NodeView.from(write(workspaceId, "/versions/$versionId/restore", JSONObject().put("workspaceId", workspaceId)).getJSONObject("node"))
 
-    fun beginUpload(workspaceId: String, body: JSONObject): UploadBegun = send("/uploads", body.put("workspaceId", workspaceId)).let {
+    fun beginUpload(workspaceId: String, body: JSONObject): UploadBegun = write(workspaceId, "/uploads", body.put("workspaceId", workspaceId)).let {
         UploadBegun(it.getJSONObject("upload").getString("id"), it.getJSONArray("parts").objects().map { p -> PartUrl(p.getInt("partNumber"), p.getString("url")) })
     }
 
@@ -402,7 +429,7 @@ class DriveApi(val session: Shared.Session) : RootApi {
             .getJSONArray("parts").objects().map { PartUrl(it.getInt("partNumber"), it.getString("url")) }
 
     fun completeUpload(uploadId: String, workspaceId: String, parts: JSONArray): NodeView? =
-        send("/uploads/$uploadId/complete", JSONObject().put("workspaceId", workspaceId).put("parts", parts)).optJSONObject("node")?.let(NodeView::from)
+        write(workspaceId, "/uploads/$uploadId/complete", JSONObject().put("workspaceId", workspaceId).put("parts", parts)).optJSONObject("node")?.let(NodeView::from)
 
     fun abortUpload(uploadId: String, workspaceId: String) {
         runCatching { send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId)) }

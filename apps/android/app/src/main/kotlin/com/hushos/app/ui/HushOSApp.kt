@@ -197,7 +197,7 @@ private fun Main(model: DriveViewModel, state: DriveState) {
             // These are taken (and cleared) by the screen they open: the link browser, a folder, By me, Trash.
             request.startsWith("link:") || request.startsWith("shared:") -> tab = Tab.SHARED
             request.startsWith("files:") -> tab = Tab.FILES
-            request == "trash" || request == "words" -> tab = Tab.ACCOUNT
+            request == "trash" || request == "words" || request.startsWith("family:") -> tab = Tab.ACCOUNT
             request.startsWith("node:") -> scope.launch {
                 // A file or a folder, whichever it is: a folder opens, a file opens in its folder.
                 model.clearRequest()
@@ -386,6 +386,9 @@ private fun Main(model: DriveViewModel, state: DriveState) {
     LaunchedEffect(Unit) { settled = true }
     if (settled && model.showingOwnWords) OwnWordsSheet(model, state, model::closeOwnWords)
     if (settled) MarkContactStep(model)
+    // The family sheets outlive what started them: the invitation (from a link) and a member's check (from a row).
+    model.families.invitation?.let { token -> InvitationSheet(model, state, token) { model.families.invitation = null } }
+    model.families.checking?.let { check -> MemberCheckSheet(model, check) { model.families.checking = null } }
     BackgroundSheet(active = state.queued.any { !it.done })
     }
 }

@@ -58,10 +58,11 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     private fun requireVault(): Vault {
         val ctx = context ?: throw FileNotFoundException("no context")
         val session = Shared.session(ctx)
-        vault?.let { if (session != null && it.api.session == session) return it }
+        // One whose session ended (the app's vault closed it: a sign-out, another sign-in) is replaced, never answered from.
+        vault?.let { if (session != null && it.api.session == session && !it.closed) return it }
         return synchronized(vaultLock) {
             // Another request may have replaced it while this one waited: then it is that one.
-            vault?.let { if (session != null && it.api.session == session) return it }
+            vault?.let { if (session != null && it.api.session == session && !it.closed) return it }
             vault = null
             // A load begun for the vault dropped here neither lands nor is joined by the next one's requests.
             trustLoad.reset(null) { trust = TrustState.Loading }

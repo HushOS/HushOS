@@ -145,6 +145,10 @@ class FakeDrive : AutoCloseable {
     }
 
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+    /* Runs before a request is answered, outside the server's lock: a test holds one request there while others go on. */
+    @Volatile var beforeAnswer: ((method: String, path: String) -> Unit)? = null
+    private val workers = java.util.concurrent.Executors.newCachedThreadPool()
+
     val origin: String get() = "http://127.0.0.1:${server.address.port}"
 
     private val lock = Any()
@@ -170,11 +174,19 @@ class FakeDrive : AutoCloseable {
         workspaceKeys[graceWorkspace] = randomBytes(32u)
         owners[graceWorkspace] = grace
         graceRoot = seedNode(graceWorkspace, null, "folder", NodeMetadata(ROOT_NAME, null, null, null, emptyMap()), parentEpoch = 1L)
-        server.createContext("/") { exchange -> synchronized(lock) { answer(exchange) } }
+        // A request may be held before it is answered (`beforeAnswer`) while others are answered meanwhile, one at a time.
+        server.executor = workers
+        server.createContext("/") { exchange ->
+            beforeAnswer?.invoke(exchange.requestMethod, exchange.requestURI.path.removePrefix("/api/"))
+            synchronized(lock) { answer(exchange) }
+        }
         server.start()
     }
 
-    override fun close() = server.stop(0)
+    override fun close() {
+        server.stop(0)
+        workers.shutdownNow()
+    }
 
     // Seeding: records another client wrote, signed by the workspace's owner.
 
@@ -185,6 +197,72 @@ class FakeDrive : AutoCloseable {
     fun file(parentId: String, name: String, bytes: ByteArray, attributes: Map<String, String> = emptyMap()): String = synchronized(lock) {
         val ws = node(parentId).workspaceId
         val id = seedNode(ws, parentId, "file", NodeMetadata(name, "text/plain", bytes.size.toULong(), "2026-09-30T12:00:00Z", attributes))
+        newVersion(id, bytes)
+        id
+    }
+
+    /* Its workspace's owner renames `id`, as another member's device would: the name sealed one metadata version up and signed. */
+    fun renameAs(id: String, name: String) = synchronized(lock) {
+        val node = node(id)
+        val ws = node.workspaceId
+        val version = node.metadataVersion + 1
+        val sealed = metadataSeal(MetadataContext(ws, id, version.toULong()), keyOf(id), NodeMetadata(name, "text/plain", null, "2026-10-31T12:00:00Z", emptyMap()))
+        node.metadataEnvelope = base64urlEncode(sealed)
+        node.signature = base64urlEncode(metadataSign(owners.getValue(ws).keys.signingSeed, MetadataStatement(ws, id, NodeKind.FILE, version.toULong()), sealed))
+        node.signer = owners.getValue(ws).id
+        node.metadataVersion = version
+        bump(node)
+    }
+
+    /*
+     * The owner re-keys folder `id` (a revoke-and-rotate): a new key and key epoch, its name sealed and signed again under
+     * it, and each child's key wrapped again under the new key. The children's own keys are unchanged.
+     */
+    fun rekeyFolderAs(id: String) = synchronized(lock) {
+        val node = node(id)
+        val ws = node.workspaceId
+        val oldKey = keyOf(id)
+        val childKeys = children(id).associate { it.id to keyOf(it.id) }
+        val metadata = metadataOpen(MetadataContext(ws, id, node.metadataVersion.toULong()), oldKey, base64urlDecode(node.metadataEnvelope))
+        val newKey = randomBytes(32u)
+        val epoch = nextEpoch++
+        val parentKey = node.parentId?.let { keyOf(it) } ?: workspaceKeys.getValue(ws)
+        node.keyEnvelope = base64urlEncode(nodeWrap(NodeKeyContext(ws, id, node.parentId ?: ws, node.parentKeyEpoch.toULong(), epoch.toULong()), parentKey, newKey))
+        node.keyEpoch = epoch
+        val sealed = metadataSeal(MetadataContext(ws, id, node.metadataVersion.toULong()), newKey, metadata)
+        node.metadataEnvelope = base64urlEncode(sealed)
+        node.signature = base64urlEncode(metadataSign(owners.getValue(ws).keys.signingSeed, MetadataStatement(ws, id, NodeKind.FOLDER, node.metadataVersion.toULong()), sealed))
+        node.signer = owners.getValue(ws).id
+        bump(node)
+        for (child in children(id)) {
+            child.parentKeyEpoch = epoch
+            child.keyEnvelope = base64urlEncode(nodeWrap(NodeKeyContext(ws, child.id, id, epoch.toULong(), child.keyEpoch.toULong()), newKey, childKeys.getValue(child.id)))
+            bump(child)
+        }
+    }
+
+    /* `id` moved under `parentId` by another device: its key wrapped again under the new parent's, as a move is. */
+    fun moveAs(id: String, parentId: String) = synchronized(lock) {
+        val node = node(id)
+        val parent = node(parentId)
+        val wrapped = nodeWrap(NodeKeyContext(node.workspaceId, id, parentId, parent.keyEpoch.toULong(), node.keyEpoch.toULong()), keyOf(parentId), keyOf(id))
+        val moved = Node(id, node.workspaceId, parentId, node.kind, node.keyEpoch, parent.keyEpoch, base64urlEncode(wrapped), node.metadataVersion,
+            node.metadataEnvelope, node.signer, node.signature, node.version, node.changeSeq, node.trashedAt)
+        nodes[id] = moved
+        bump(moved)
+    }
+
+    /* A file in `parentId` signed by `signer` instead of its workspace's owner: someone outside the family wrote it. */
+    fun fileAs(signer: Person, parentId: String, name: String, bytes: ByteArray): String = synchronized(lock) {
+        val ws = node(parentId).workspaceId
+        val owner = owners.getValue(ws)
+        owners[ws] = signer
+        try { file(parentId, name, bytes) } finally { owners[ws] = owner }
+    }
+
+    /* Its workspace's owner uploads new content for `id`: a new current version, sealed and signed as an upload is. */
+    fun newVersion(id: String, bytes: ByteArray, bumped: Boolean = true) = synchronized(lock) {
+        val ws = node(id).workspaceId
         val node = node(id)
         val versionId = UUID.randomUUID().toString()
         val objectId = UUID.randomUUID().toString()
@@ -202,13 +280,24 @@ class FakeDrive : AutoCloseable {
         val signature = versionSign(owners.getValue(ws).keys.signingSeed, VersionStatement(ws, id, versionId, objectId, suite), sealed.envelope)
         node.version = Version(versionId, objectId, base64urlEncode(sealed.envelope), suite, sealed.layout.chunkCount.toLong(), base64urlEncode(nonce),
             owners.getValue(ws).id, base64urlEncode(signature))
-        id
+        if (bumped) bump(node)
     }
 
-    private fun seedNode(ws: String, parentId: String?, kind: String, metadata: NodeMetadata, parentEpoch: Long? = null): String {
-        val id = UUID.randomUUID().toString()
-        val key = randomBytes(32u)
-        val epoch = nextEpoch++
+    /* Another workspace this server holds (a family folder): its key and whose records it holds. */
+    fun seedWorkspace(ws: String, key: ByteArray, owner: Person) = synchronized(lock) { workspaceKeys[ws] = key; owners[ws] = owner }
+
+    /* A node with an id and key the caller chose (a family folder's top folder, whose key the member list commits to). */
+    fun seedNodeWith(ws: String, parentId: String?, kind: String, metadata: NodeMetadata, id: String, key: ByteArray, parentEpoch: Long, epoch: Long): String =
+        synchronized(lock) { seedNode(ws, parentId, kind, metadata, parentEpoch, id, key, epoch) }
+
+    /* Routes another fake answers first (the group routes, FamilyServer): null lets these answer. */
+    var extraRoutes: ((method: String, segments: List<String>, query: Map<String, String>, body: JSONObject) -> Pair<Int, JSONObject>?)? = null
+
+    private fun seedNode(ws: String, parentId: String?, kind: String, metadata: NodeMetadata, parentEpoch: Long? = null, chosenId: String? = null,
+                         chosenKey: ByteArray? = null, chosenEpoch: Long? = null): String {
+        val id = chosenId ?: UUID.randomUUID().toString()
+        val key = chosenKey ?: randomBytes(32u)
+        val epoch = chosenEpoch ?: nextEpoch++
         val parentKeyEpoch = parentEpoch ?: node(parentId!!).keyEpoch
         val parentKey = parentId?.let { keyOf(it) } ?: workspaceKeys.getValue(ws)
         val wrapped = nodeWrap(NodeKeyContext(ws, id, parentId ?: ws, parentKeyEpoch.toULong(), epoch.toULong()), parentKey, key)
@@ -277,6 +366,13 @@ class FakeDrive : AutoCloseable {
         settingsDocument = JSONObject().put("version", sealed.version.toInt()).put("settingsVersion", sealed.settingsVersion.toLong())
             .put("nonce", sealed.nonce).put("ciphertext", sealed.ciphertext)
         settingsVersion = sealed.settingsVersion.toLong()
+    }
+
+    /* What the server holds now, served again when the returned call runs: a server replaying an older copy (a rollback). */
+    fun settingsSnapshot(): () -> Unit = synchronized(lock) {
+        val document = settingsDocument
+        val version = settingsVersion
+        return@synchronized { synchronized(lock) { settingsDocument = document; settingsVersion = version } }
     }
 
     /* The settings as the server holds them now, opened as another device would. */
@@ -392,6 +488,7 @@ class FakeDrive : AutoCloseable {
 
     private fun route(method: String, path: String, query: Map<String, String>, body: JSONObject, linkToken: String?): Pair<Int, JSONObject>? {
         val segments = path.trim('/').split("/")
+        extraRoutes?.invoke(method, segments, query, body)?.let { return it }
         fun at(vararg pattern: String) = segments.size == pattern.size && pattern.indices.all { pattern[it] == "*" || pattern[it] == segments[it] }
         val get = method == "GET"
         val post = method == "POST"

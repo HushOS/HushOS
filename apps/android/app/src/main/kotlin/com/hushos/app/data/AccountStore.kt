@@ -6,7 +6,8 @@ import java.io.File
 /*
  * Everything this phone holds for one account: decrypted files kept on the phone,
  * files opened or fetched for the Files app, decrypted thumbnails, the parents index,
- * the transfer queue's copies, the tree mirror, recent searches, the contact guard. It belongs to the
+ * the transfer queue's copies, the tree mirror, recent searches, the contact and family guards, the families' device
+ * records. It belongs to the
  * account that signed in, recorded by user id, and goes on sign-out, on account
  * deletion, and before a different account signs in, so nothing of one account ever
  * shows to the next (Home, On this phone, search, the Files app).
@@ -53,6 +54,9 @@ class AccountStore(private val files: File, private val cache: File, private val
         // The cache is all account data (opened files, links, the Files app's copies and
         // thumbnails, staged uploads, photos, the recovery kit) except JNA's native library.
         cache.listFiles()?.filterNot { it.name.startsWith("jna") }?.forEach { it.deleteRecursively() }
+        // The families' device records and joins records after the copies they tie to their families: a stop in between
+        // never leaves family copies with nothing that names them. The family guard went with the contact guard's folder.
+        FamilyRecords.deleteAll(noBackup)
         forgetStores()
         ownerFile.delete()
     }

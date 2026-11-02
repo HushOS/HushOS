@@ -371,7 +371,7 @@ The radius scale is chip 6, control 10, card 16, sheet 20, full, and nothing els
 - Don't name keys, codes, fingerprints, lists or versions outside Technical details and the security page, and don't use an alarm colour for routine events such as someone's account changing.
 - Don't draw an actions row above a large title on the phones, or an avatar as the way into Account.
 - Don't show "Same as folder" on every phone row, or a setup nudge on Home.
-- Don't claim anything that is not built: account creation in the apps, managing families, joining one and inviting by email in the apps (the web has them, on servers that offer families; the iOS app only opens a family's folders and members, read only), widgets, the share extension and transfer notifications are not built; Photos is not planned.
+- Don't claim anything that is not built: account creation in the apps, managing families, joining one and inviting by email in the apps (the web has them, on servers that offer families; the iOS app only opens a family's folders and members, read only; the Android app joins a family from its invitation and opens its folders and members, read only), widgets, the share extension and transfer notifications are not built; Photos is not planned.
 
 ## Motion
 
@@ -461,9 +461,12 @@ The voice is plain, calm and specific. Sentence case. Contractions are fine. One
         - Remove from family (asks once: "Remove Sam from Lindqvist family?", "Sam loses the family folders straight away. HushOS replaces their keys, which can take a few minutes.")
         - Leave family (on the family's page under "Technical details and leaving", the row Leaving, quiet danger text; asks once: "You'll lose the family folders. Your own files stay yours."; where the server would refuse, disabled with the reason beside it: "Make someone else the organizer first.", "Let someone else manage the family first."; "Leaving" with a spinner while it works)
         - Replace keys (a family folder's, under Technical details, for managers)
-    - Families (iOS, read only for now; the same words as the web where the web has them):
+    - Families (iOS, read only for now; Android, read only, with the invitation, Waiting for Maya and Check it's Sam; the same words as the web where the web has them):
         - Families (an Account section, a row per family, with "Shown differently" or "Couldn't check" on its row)
-        - "Finish joining Lindqvist family on the web" (a family this phone hasn't checked yet; "Waiting to join" with "Finish joining Lindqvist family on the web." while not let in)
+        - "Finish joining Lindqvist family on the web" (iOS: a family this phone hasn't checked yet; "Waiting to join" with "Finish joining Lindqvist family on the web." while not let in)
+        - Android: the invitation (a sheet from the `/join` link, sized to its content) with Join and Not now, then Waiting for Maya in the same sheet; once let in the phone joins on first use and the family page follows. No words
+        - Android members: "Verified" or "Not verified" at the right, "Account changed" under the address; the row's menu Check it's Sam (Check again once verified), the web's Check it's Sam in a sheet ("Getting the latest", the twelve words, They match, They don't match, Technical details, "This device can't check the family with Sam…" with Check Sam's words)
+        - Android: Lindqvist family looks different on this device (the hard warning, in the warning colours, the web's words); You're not in this family / It may have ended, or someone removed you. (a family folder or page after a removal, with no search or menu)
         - "Family folders are read only in this app for now. Make changes on the web." (any change refused in a family folder)
         - "Open the family again, then try again." (a family folder opened before a check that no longer holds)
         - "Everyone in Lindqvist family can open it." (Who can open, in Info and the viewer, for an item in a family folder)

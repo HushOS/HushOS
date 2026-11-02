@@ -293,6 +293,8 @@ fun Sheet(onDismissRequest: () -> Unit, full: Boolean = false, content: @Composa
     val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = full || belowFold != null)
     androidx.compose.material3.ModalBottomSheet(
         onDismissRequest = onDismissRequest, sheetState = sheetState, containerColor = alpine.surface,
+        // Dark: a deeper backdrop, so a field behind the sheet's top never reads as a second sheet (owner, 2026-11-01).
+        scrimColor = if (alpine.dark) androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.6f) else androidx.compose.material3.BottomSheetDefaults.ScrimColor,
         modifier = Modifier.onSizeChanged { sheetPx = it.height },
     ) {
         val open = WindowInsets.isImeVisible

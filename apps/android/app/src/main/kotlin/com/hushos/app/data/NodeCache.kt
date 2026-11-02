@@ -20,10 +20,22 @@ class NodeCache(private val ownWorkspace: () -> String?) {
      * is another node. Not the rows dropped to be read again (`forget`, `forgetRows`): absence never means gone.
      */
     private val gone = ConcurrentHashMap<String, MutableSet<String>>()
+    /*
+     * The (workspace, node) entries a family's area ledger opened. A family folder's row and key are served only when they
+     * came this way: one a share mount (or anything else) put there is never answered for a family's item.
+     */
+    private val ledgerOpened: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private fun entry(workspaceId: String, nodeId: String) = workspaceId.lowercase() + "|" + nodeId.lowercase()
+
+    /* Whether the row and key held for this entry came through a family's area ledger. */
+    fun viaLedger(workspaceId: String, nodeId: String): Boolean = entry(workspaceId, nodeId) in ledgerOpened
 
     fun key(workspaceId: String, nodeId: String): ByteArray? = keys[nodeId]?.get(workspaceId)
     fun key(item: Opened): ByteArray? = key(item.node.workspaceId, item.id)
     fun row(workspaceId: String, nodeId: String): Opened? = rows[nodeId]?.get(workspaceId)
+
+    /* The workspaces this device holds a row of `nodeId` in. */
+    fun workspacesOf(nodeId: String): Set<String> = rows[nodeId]?.keys?.toSet().orEmpty()
 
     /* By id alone: this account's own row, or another workspace's when this account has none by that id. */
     fun find(nodeId: String): Opened? {
@@ -49,18 +61,22 @@ class NodeCache(private val ownWorkspace: () -> String?) {
         return row
     }
 
+    /* A key alone (a rotation's): never one the ledger opened, so the entry is no longer answered as the ledger's. */
     fun putKey(workspaceId: String, nodeId: String, key: ByteArray) {
         keys.getOrPut(nodeId) { ConcurrentHashMap() }[workspaceId] = key
+        ledgerOpened.remove(entry(workspaceId, nodeId))
     }
 
     /* Drops a key this device held for no row before (a rotation's batch that never reached the server). */
     fun dropKey(workspaceId: String, nodeId: String) {
         keys[nodeId]?.remove(workspaceId)
+        ledgerOpened.remove(entry(workspaceId, nodeId))
     }
 
     /* A row and its key, under the workspace the row says it is in. */
-    fun put(row: Opened, key: ByteArray) {
+    fun put(row: Opened, key: ByteArray, viaLedger: Boolean = false) {
         putKey(row.node.workspaceId, row.id, key)
+        if (viaLedger) ledgerOpened.add(entry(row.node.workspaceId, row.id)) else ledgerOpened.remove(entry(row.node.workspaceId, row.id))
         rows.getOrPut(row.id) { ConcurrentHashMap() }[row.node.workspaceId] = row
         gone[row.id]?.remove(row.node.workspaceId)
     }
@@ -92,6 +108,16 @@ class NodeCache(private val ownWorkspace: () -> String?) {
     }
 
     fun rowsIn(workspaceId: String): List<Opened> = rows.values.mapNotNull { it[workspaceId] }
+
+    /* Every key and row of one workspace dropped (a family folder its family no longer opens here); the node ids. */
+    fun forgetWorkspace(workspaceId: String): Set<String> {
+        val gone = HashSet<String>()
+        for ((id, byWorkspace) in keys) if (byWorkspace.remove(workspaceId) != null) gone.add(id)
+        for ((id, byWorkspace) in rows) if (byWorkspace.remove(workspaceId) != null) gone.add(id)
+        val prefix = workspaceId.lowercase() + "|"
+        ledgerOpened.removeIf { it.startsWith(prefix) }
+        return gone
+    }
 }
 
 /* A refusal written for people: shown as it is, never as "That didn’t work". */

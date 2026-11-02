@@ -73,6 +73,23 @@ class ContactTrustTest {
         assertEquals(grace().encryptionPublicKey, com.hushos.core.base64urlEncode(vault.trustGrantee(grace(), follow = true).first))
     }
 
+    /*
+     * #247 check, round 9: Grace is held first-seen at K1 (a guard entry beside it) and her words are shown from that
+     * lookup. Before They match is saved, another device saves her at K2 (its Continue). They match writes nothing over
+     * K2. Fails if a check is saved over whatever pin it finds then rather than the pin its words were judged over.
+     */
+    @Test
+    fun theyMatchWritesNothingWhenAnotherDeviceMovedThePinSinceTheWordsWereShown() {
+        vault.addContact(email)
+        val found = vault.lookup(email)
+        val other = newPerson()
+        val k2 = ContactPin.of(server.grace.id, email, "Grace", com.hushos.core.pinOfServed(other.servedKeys(), false), "2026-10-31T00:00:00Z", "added")
+        server.editSettings { it.pin(k2) }
+        assertThrows(ContactMoved::class.java) { vault.theyMatch(found) }
+        assertTrue("They match wrote over the other device's pin", ContactPin.sameKeys(stored(), k2))
+        assertEquals(PinTrust.SEEN, stored()!!.trust)
+    }
+
     @Test
     fun anUnsignedChangePausesThemUntilContinueWhichMovesThemAndQueuesTheReSeal() {
         vault.addContact(email)
