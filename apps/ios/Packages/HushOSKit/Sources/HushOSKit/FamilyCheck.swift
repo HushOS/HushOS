@@ -338,10 +338,14 @@ public struct FamilyRemovedNow: Error, LocalizedError {
 }
 
 extension Vault {
-    /* Whether the settings pin of them is the one a decision was made over: the same keys, the same standing, or both absent. */
+    /*
+     * Whether the settings pin of them is the one a decision was made over: the same keys (by key
+     * commitment, or for pins without one, a legacy pin's, by every key field: ContactPin.sameKeys)
+     * and the same standing, or both absent.
+     */
     static func samePin(_ now: ContactPin?, _ then: ContactPin?) -> Bool {
         guard let now, let then else { return now == nil && then == nil }
-        return now.commitment != nil && now.commitment == then.commitment && now.trust == then.trust
+        return ContactPin.sameKeys(now, then) && now.trust == then.trust
     }
 }
 
