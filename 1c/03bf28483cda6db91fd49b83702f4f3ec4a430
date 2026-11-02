@@ -1,0 +1,25 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/UploadFinish.kt
+  s_566b8e0c4467a4::t_940f807c49686b 24-29
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_d18bffcf3c5380 969-976,1189-1191,1811-1818
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_566b8e0c4467a4::t_68f9d59d1a50b1 190-193,195,200,202-203,243-245
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyWritesTest.kt
+  s_566b8e0c4467a4::t_ffead8a1ac3055 144-176
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1c03bf28483cda6db91fd49b83702f4f3ec4a430",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
