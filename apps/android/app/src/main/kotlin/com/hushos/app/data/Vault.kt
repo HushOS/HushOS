@@ -8,6 +8,7 @@ import com.hushos.core.linkReseal
 import com.hushos.core.MetadataContext
 import com.hushos.core.NodeKeyContext
 import com.hushos.core.NodeMetadata
+import com.hushos.core.withFolderColour
 import com.hushos.core.VersionContext
 import com.hushos.core.base64urlDecode
 import com.hushos.core.base64urlEncode
@@ -248,8 +249,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
     internal val familyCopiesLock: Any get() = FamilyCopies.LOCK
     /* Set once this vault's session ended (close, by this vault or another of the session): nothing it downloads is written after. */
     internal val closed: Boolean get() = familyState.closed
-    /* Families whose acceptance may hand back a guard not stored yet: nothing is written into them meanwhile (the write barrier). */
-    internal val familyGuardOwed: MutableSet<String> get() = familyState.guardOwed
+    /* Families with a guard owed (an acceptance's, in any vault of the session): nothing is written into them meanwhile (the write barrier). */
+    internal val familyGuardOwed: Set<String> get() = familyState.guardDebts.filterValues { it.isNotEmpty() }.keys
+    internal val familyGuardDebts: java.util.concurrent.ConcurrentHashMap<String, MutableSet<GuardDebt>> get() = familyState.guardDebts
     /* Tests: whether the family guard can be written (a full disk when not), and a stop right after each write, as a crash would. */
     internal var familyGuardWrites: () -> Boolean = { true }
     internal var afterFamilyGuard: (() -> Unit)? = null
@@ -272,6 +274,13 @@ class Vault(internal val context: Context, val api: DriveApi) {
     @Volatile internal var familyJudge: FamilySync? = null
     /* This session's family sync: one per vault, so one per session in this process. */
     val families: FamilySync by lazy { FamilySync(this) }
+    /*
+     * A transfer job's own family sync (FamilyUploads): it accepts the family into this vault's ledger as the app's does,
+     * but never sweeps family copies (the app's are not its to judge). Only a job's vault takes this one.
+     */
+    internal val jobFamilies: FamilySync by lazy { FamilySync(this, sweeps = false) }
+    /* The upload ledger's generation this vault was made in: once the account is wiped, its uploads add nothing to the ledger. */
+    internal val ledgerGeneration = Reservations.generation
 
     /*
      * The contact guard (ContactGuard.kt), sealed under the settings key as the rollback marks find theirs: the envelope
@@ -1514,11 +1523,32 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     fun rename(id: String, name: String): Opened = writing {
+        val clean = typedName(name)
+        reseal(resolve(id)) { it.copy(name = clean) }
+    }
+
+    /*
+     * Sets a folder's colour (the `colour` attribute, see the core's colour.rs), or with null takes it back to the plain
+     * folder colour: sealed again as a rename seals it, the name and every other attribute carried over.
+     */
+    fun recolour(id: String, colour: String?): Opened = writing {
         val item = resolve(id)
+        if (!item.isFolder) throw ApiError(400, "Only a folder has a colour.")
+        val attributes = try {
+            withFolderColour(item.metadata.attributes, colour)
+        } catch (refused: com.hushos.core.CoreException) {
+            throw ApiError(400, refused.message.orEmpty())
+        }
+        reseal(item) { it.copy(attributes = attributes) }
+    }
+
+    /* A node's record sealed again in place with `change` applied: the path a rename and a colour share. */
+    private fun reseal(item: Opened, change: (NodeMetadata) -> NodeMetadata): Opened {
+        val id = item.id
         val family = familyTarget(item.node.workspaceId)
         // In a family folder only the ledger's writable key, at the epoch it was opened at.
         val key = if (family) writableKey(item) else nodes.key(item) ?: throw ApiError(500, "Node not opened")
-        val metadata = item.metadata.copy(name = typedName(name))
+        val metadata = change(item.metadata)
         val next = item.node.metadataVersion + 1uL
         // The type, size and date are carried over into the re-signed record: signed as it checked, never vouched for blind;
         // in a family folder as its member list judges it.
@@ -1527,7 +1557,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         sendingIntoFamily(item.node.workspaceId)
         val node = api.rename(id, item.node.workspaceId, item.node.metadataVersion, item.node.keyEpoch, base64urlEncode(sealed),
             signMetadata(item.node.workspaceId, id, if (item.isFolder) NodeKind.FOLDER else NodeKind.FILE, next, sealed, prior))
-        adoptWritten(node, key, metadata, item.node.workspaceId, id).also { foldersChanged(listOf(item.node.parentId, it.node.parentId)) }
+        return adoptWritten(node, key, metadata, item.node.workspaceId, id).also { foldersChanged(listOf(item.node.parentId, it.node.parentId)) }
     }
 
     /* A node's key wrapped under a new parent's; both in one workspace, or the envelope would name the wrong one. */
@@ -1803,13 +1833,21 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * written to, fresh for each call: an attempt that stops starts over with new ids and seeds. `attributes`: a copy's
      * source's, for a new node; a new version keeps the replaced file's whatever is passed.
      */
+    /*
+     * Every reservation goes through Reservations: on record from `begin` until definitely settled. `job`: the queued
+     * job this upload runs in ("" outside one); it never reserves while an older record of that job is unsettled.
+     */
     fun upload(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray? = null, copy: Prior? = null,
-               attributes: Map<String, String> = emptyMap(), progress: (Float) -> Unit = {}): Opened = writing {
-        uploadInside(file, name, mime, parentId, replacing, thumbnail, copy, attributes, progress)
+               attributes: Map<String, String> = emptyMap(), job: String = "", progress: (Float) -> Unit = {}): Opened = writing {
+        uploadInside(file, name, mime, parentId, replacing, thumbnail, copy, attributes, job, progress)
     }
 
+    /* An abort of this vault's reservation, applied to the ledger: its record goes only when the answer settled it (true). */
+    private fun abortReserved(uploadId: String, workspaceId: String): Boolean =
+        Reservations.aborted(context, uploadId, api.abortUpload(uploadId, workspaceId))
+
     private fun uploadInside(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray?, copy: Prior?,
-                             attributes: Map<String, String>, progress: (Float) -> Unit): Opened {
+                             attributes: Map<String, String>, job: String, progress: (Float) -> Unit): Opened {
         // The workspace written to: the replaced file's, or the folder's (a share's subtree is the granter's).
         val ws = replacing?.node?.workspaceId ?: resolve(parentId).node.workspaceId
         // A family folder takes a file or a new version through its ledger; a copy into one isn't offered.
@@ -1865,6 +1903,22 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val layout = version.layout
         val versionSignature = if (copy != null) signCopiedVersion(ws, nodeId, versionId, objectId, suite, version.envelope, copy)
             else signVersion(ws, nodeId, versionId, objectId, suite, version.envelope)
+        // A job's earlier reservation first: settled, or nothing new is reserved (the network's: the job runs again later).
+        if (job.isNotEmpty()) {
+            val earlier = Reservations.settleJob(context, job) { id, at -> api.abortUpload(id, at) }
+            if (earlier != Reservations.Settle.CLEAR) madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
+            if (earlier == Reservations.Settle.PENDING) throw Unreachable()
+            // It completed after all: the file is there, so this one is never sent again.
+            if (earlier == Reservations.Settle.LANDED) throw Reservations.Landed()
+        }
+        // Every begin, a queued job's or not (a share's upload, Files writing a file back): only over a ledger that can be read.
+        try {
+            Reservations.requireReadable(context)
+        } catch (error: Exception) {
+            madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
+            throw error
+        }
+        val beganAt = Reservations.now()
         val begun = try {
             api.beginUpload(ws, JSONObject().put("node", nodeInput).putId(madeVersion).putId(madeObject)
             .put("contentKeyEnvelope", base64urlEncode(version.envelope)).put("contentNonce", base64urlEncode(contentNonce))
@@ -1875,6 +1929,29 @@ class Vault(internal val context: Context, val api: DriveApi) {
             madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
             throw error
         }
+        try {
+            Reservations.reserved(context, begun.uploadId, ws, job, beganAt, begun.expiresAt, ledgerGeneration)
+        } catch (error: Exception) {
+            // The ledger couldn't be written (a full disk): the reservation is held in memory and aborted at once. Settled, the
+            // write's failure is the job's; not, the job is the network's and reserves nothing more in this process meanwhile.
+            val settled = runCatching { abortReserved(begun.uploadId, ws) }.getOrDefault(false)
+            madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
+            if (!settled) throw Unreachable()
+            throw error
+        }
+        try {
+            return uploadReserved(file, mime, ws, nodeId, nodeKey, metadata, replacing, keptName, madeKey, begun, layout, content, thumbnail, thumbnailBytes, size, modified,
+                family, job, progress)
+        } finally {
+            Reservations.idle(begun.uploadId)
+        }
+    }
+
+    /* The upload after its reservation is on record: parts, completion, the name of a new version. */
+    private fun uploadReserved(file: File, mime: String?, ws: String, nodeId: String, nodeKey: ByteArray, metadata: NodeMetadata, replacing: Opened?,
+                               keptName: Integrity?, madeKey: String?, begun: UploadBegun, layout: com.hushos.core.ContentLayout, content: Content,
+                               thumbnail: ByteArray?, thumbnailBytes: UInt, size: ULong, modified: String, family: Boolean, job: String,
+                               progress: (Float) -> Unit): Opened {
         val urls = HashMap<Int, String>()
         for (part in begun.parts) urls[part.partNumber] = part.url
         val etags = JSONArray()
@@ -1905,7 +1982,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
                 }
             }
         } catch (error: Exception) {
-            api.abortUpload(begun.uploadId, ws)
+            abortReserved(begun.uploadId, ws)
             madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
             throw error
         }
@@ -1913,11 +1990,50 @@ class Vault(internal val context: Context, val api: DriveApi) {
         // A completion the final gate refuses here (a guard owed, the folder no longer writable, the session ended) was never
         // sent: a definite answer, so the upload is aborted and its room released, and a new node's ledger key goes.
         var node = try {
-            UploadFinish.complete({ refusedHere { api.completeUpload(begun.uploadId, ws, etags) } }, { api.abortUpload(begun.uploadId, ws) })
+            UploadFinish.complete({ refusedHere { api.completeUpload(begun.uploadId, ws, etags) } }, { abortReserved(begun.uploadId, ws) })
         } catch (refused: UploadFinish.RefusedHere) {
             madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
             throw refused.cause!!
+        } catch (conflict: ApiError) {
+            // A key change reached the file or its folder while the parts went up: aborted (UploadFinish), sealed afresh
+            // after the wait. Someone else's newer version of a replaced file stays the conflict it is.
+            if (family && keyChangedWhileUploading(conflict, replacing)) {
+                madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
+                throw KeyChangeConflict(conflict)
+            }
+            throw conflict
         } ?: throw ApiError(500, "Upload completed without a node")
+        // Completed: the reservation became the file (a queued job's record its landed row). From here nothing sends the
+        // file again: in a queued job, whatever fails after this point is Landed, never a reason to upload it again.
+        Reservations.completed(context, begun.uploadId)
+        if (job.isEmpty()) return finishLanded(node, ws, nodeId, nodeKey, metadata, replacing, keptName, mime, size, modified)
+        try {
+            return finishLanded(node, ws, nodeId, nodeKey, metadata, replacing, keptName, mime, size, modified)
+        } catch (error: Exception) {
+            throw Reservations.Landed(error)
+        }
+    }
+
+    /*
+     * 409 `conflict` with `data.conflicted` from a completion (packages/drive/src/server.ts completeUpload over
+     * packages/db/src/drive.ts finishCompleting): for a new file only a key epoch can have moved (its own, or its parent's);
+     * for a new version, the key moved when the version the server holds is still the one replaced. Without the server's
+     * `currentVersionId` (a repeated completion of an upload already conflicted) a new version can't be told apart: kept a
+     * conflict.
+     */
+    private fun keyChangedWhileUploading(conflict: ApiError, replacing: Opened?): Boolean {
+        val data = conflict.data ?: return false
+        if (conflict.status != 409 || conflict.code != "conflict" || !data.optBoolean("conflicted")) return false
+        if (replacing == null) return true
+        if (!data.has("currentVersionId")) return false
+        val current = if (data.isNull("currentVersionId")) null else data.getString("currentVersionId")
+        return current == replacing.node.currentVersion?.id
+    }
+
+    /* What follows a landed completion: the node checked, a new version's name signed again, the row adopted. */
+    private fun finishLanded(landed: NodeView, ws: String, nodeId: String, nodeKey: ByteArray, metadata: NodeMetadata, replacing: Opened?,
+                             keptName: Integrity?, mime: String?, size: ULong, modified: String): Opened {
+        var node = landed
         checkWritten(node, ws, nodeId)
         var final = metadata
         if (replacing != null) {

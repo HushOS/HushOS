@@ -19,6 +19,7 @@ import {
     MarqueeBox,
     ROW_FOCUS,
     ROW_FOCUS_WITHIN,
+    reveal,
     RowName,
     SelectableMark,
     SkeletonRows,
@@ -1204,7 +1205,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {rows.map((node) => {
+                                    {rows.map((node, index) => {
                                         const isSelected = selected.has(node.id);
                                         const entries = entriesFor(node);
                                         return (
@@ -1214,6 +1215,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                         <tr
                                                             aria-selected={isSelected}
                                                             data-node-id={node.id}
+                                                            {...reveal(index)}
                                                             onDoubleClick={() => open(node)}
                                                             onContextMenu={(event) => {
                                                                 event.stopPropagation();
@@ -1333,7 +1335,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                 aria-label={`Contents of ${title || 'folder'}`}
                                 className="grid grid-cols-2 content-start gap-2 px-3 pt-1 pb-6 sm:grid-cols-[repeat(auto-fill,minmax(10.5rem,1fr))] sm:gap-3 sm:px-6"
                             >
-                                {rows.map((node) => {
+                                {rows.map((node, index) => {
                                     const isSelected = selected.has(node.id);
                                     const entries = entriesFor(node);
                                     return (
@@ -1343,6 +1345,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                     <div
                                                         data-node-id={node.id}
                                                         data-selected={isSelected || undefined}
+                                                        {...reveal(index)}
                                                         onContextMenu={(event) => {
                                                             event.stopPropagation();
                                                             if (!isSelected) select(node.id);

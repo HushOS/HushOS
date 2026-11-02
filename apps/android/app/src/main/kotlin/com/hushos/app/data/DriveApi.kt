@@ -8,7 +8,16 @@ import java.net.URL
 import java.net.URLEncoder
 
 class NotAuthenticated : Exception("Sign in to HushOS to see your files.")
-class ApiError(val status: Int, message: String, val code: String? = null) : Exception(message)
+/* `data`: the structured part of the server's refusal (its `data`), e.g. a completion's `conflicted` and `currentVersionId`. */
+open class ApiError(val status: Int, message: String, val code: String? = null, val data: JSONObject? = null) : Exception(message)
+
+/*
+ * A family upload's completion refused because a key change reached the file or its folder while the parts went up
+ * (packages/db/src/drive.ts finishCompleting: the node's or the parent's key epoch moved, answered as 409 `conflict` with
+ * `data.conflicted`): the upload is aborted, the family opened again, and the file sealed afresh (iOS's
+ * DriveAPIError.conflicted). A newer version someone else made stays an ordinary conflict.
+ */
+class KeyChangeConflict(conflict: ApiError) : ApiError(conflict.status, conflict.message ?: "", conflict.code, conflict.data)
 class NotFound(message: String) : Exception(message)
 class Unreachable : Exception("Could not reach HushOS. Check your connection.")
 
@@ -106,7 +115,8 @@ data class TrashListing(val items: List<TrashEntry>, val nextCursor: String?)
 data class NodeChange(val kind: String, val changeSeq: Int, val node: NodeView?, val nodeId: String?)
 data class ChangeFeed(val changes: List<NodeChange>, val resync: Boolean, val nextCursor: Int, val hasMore: Boolean)
 data class PartUrl(val partNumber: Int, val url: String)
-data class UploadBegun(val uploadId: String, val parts: List<PartUrl>)
+/* `expiresAt`: when the server lets the reservation go (epoch ms), as begin's answer says, if it does. */
+data class UploadBegun(val uploadId: String, val parts: List<PartUrl>, val expiresAt: Long? = null)
 data class VersionListView(
     val id: String, val objectId: String, val contentKeyEnvelope: String, val status: String, val contentSuite: UInt,
     val contentNonce: String, val plaintextSize: String?, val current: Boolean, val createdAt: String,
@@ -127,6 +137,11 @@ private fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { get
 
 /* The Drive API over HttpURLConnection with the stored session cookie; every method is one route. */
 class DriveApi(val session: Shared.Session) : RootApi {
+    companion object {
+        /* The server's 409 for an abort of an upload that completed (packages/drive/src/server.ts abortUpload). */
+        const val ALREADY_FINISHED = "This upload already finished."
+    }
+
     private val origin = session.origin
     /*
      * Called when the server could not verify a write's signature against this account's current keys: the
@@ -168,7 +183,7 @@ class DriveApi(val session: Shared.Session) : RootApi {
             val code = body?.optString("code")?.ifEmpty { null }
             if (status == 404) throw NotFound(if (message.isNullOrEmpty()) "This item no longer exists." else message)
             if (code == "bad-signature") onBadSignature()
-            throw ApiError(status, if (message.isNullOrEmpty()) "Request failed" else message, code)
+            throw ApiError(status, if (message.isNullOrEmpty()) "Request failed" else message, code, body?.optJSONObject("data"))
         }
         return if (text.isEmpty()) JSONObject() else JSONObject(text)
     }
@@ -421,7 +436,9 @@ class DriveApi(val session: Shared.Session) : RootApi {
         NodeView.from(write(workspaceId, "/versions/$versionId/restore", JSONObject().put("workspaceId", workspaceId)).getJSONObject("node"))
 
     fun beginUpload(workspaceId: String, body: JSONObject): UploadBegun = write(workspaceId, "/uploads", body.put("workspaceId", workspaceId)).let {
-        UploadBegun(it.getJSONObject("upload").getString("id"), it.getJSONArray("parts").objects().map { p -> PartUrl(p.getInt("partNumber"), p.getString("url")) })
+        val upload = it.getJSONObject("upload")
+        UploadBegun(upload.getString("id"), it.getJSONArray("parts").objects().map { p -> PartUrl(p.getInt("partNumber"), p.getString("url")) },
+            upload.optString("expiresAt").takeIf { at -> at.isNotEmpty() }?.let { at -> runCatching { java.time.Instant.parse(at).toEpochMilli() }.getOrNull() })
     }
 
     fun partUrls(uploadId: String, workspaceId: String, from: Int): List<PartUrl> =
@@ -431,7 +448,26 @@ class DriveApi(val session: Shared.Session) : RootApi {
     fun completeUpload(uploadId: String, workspaceId: String, parts: JSONArray): NodeView? =
         write(workspaceId, "/uploads/$uploadId/complete", JSONObject().put("workspaceId", workspaceId).put("parts", parts)).optJSONObject("node")?.let(NodeView::from)
 
-    fun abortUpload(uploadId: String, workspaceId: String) {
-        runCatching { send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId)) }
+    /*
+     * Releases an upload's reservation, saying exactly what the server's answer means (packages/drive/src/server.ts
+     * abortUpload over packages/db/src/drive.ts): 200 aborted (now or before) is RELEASED; 409 "already finished" is
+     * COMPLETED; a 404 "no longer exists" and a 403 are GONE, since requireUploadAccess answers them before the upload is
+     * looked at when this account can't reach the workspace any more (the upload may still be reserved until it expires);
+     * 409 "finishing" (completing: its bytes stay reserved until it completes or the expiry sweep settles it), any other
+     * answer, no answer and an ended session are PENDING, asked again later.
+     */
+    fun abortUpload(uploadId: String, workspaceId: String): Reservations.Abort = try {
+        send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId))
+        Reservations.Abort.RELEASED
+    } catch (_: NotFound) {
+        Reservations.Abort.GONE
+    } catch (error: ApiError) {
+        when {
+            error.status == 409 && error.message == ALREADY_FINISHED -> Reservations.Abort.COMPLETED
+            error.status == 403 || error.status == 404 -> Reservations.Abort.GONE
+            else -> Reservations.Abort.PENDING
+        }
+    } catch (_: Exception) {
+        Reservations.Abort.PENDING
     }
 }

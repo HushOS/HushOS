@@ -577,7 +577,7 @@ struct LinkBrowserView: View {
             if item.isFolder {
                 FolderGlyph(folder: item).frame(width: Theme.mark * 0.9, height: Theme.mark * 0.9 * 46 / 56).frame(width: Theme.mark, height: Theme.mark)
             } else {
-                PageGlyph(label: FileMark.label(for: item)).frame(width: Theme.mark * 0.66, height: Theme.mark * 0.66 * 54 / 44).frame(width: Theme.mark, height: Theme.mark)
+                PageGlyph(label: FileMark.label(for: item), name: item.name).frame(width: Theme.mark * 0.66, height: Theme.mark * 0.66 * 54 / 44).frame(width: Theme.mark, height: Theme.mark)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name).foregroundStyle(Alpine.ink).lineLimit(1)

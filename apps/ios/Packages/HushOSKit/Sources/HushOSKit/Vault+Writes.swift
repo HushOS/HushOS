@@ -80,33 +80,57 @@ extension Vault {
     public func rename(_ nodeId: String, to name: String) async throws -> Opened {
         return try await writing {
             let item = try await resolve(nodeId)
-            let family = try familyTarget(item.node.workspaceId)
-            let key: Data
-            if family {
-                key = try writableKey(of: item)
-            } else {
-                guard let opened = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
-                key = opened
-            }
             // Everything but the name as it was, attributes this app doesn't know included.
-            let metadata = NodeMetadata(name: name, mime: item.metadata.mime, size: item.metadata.size, modified: item.metadata.modified,
-                                        attributes: item.metadata.attributes)
-            let sealed = try metadataSeal(
-                ctx: MetadataContext(workspaceId: item.node.workspaceId, nodeId: nodeId, metadataVersion: item.node.metadataVersion + 1),
-                nodeKey: key, metadata: metadata
-            )
-            // The new name goes out beside the record's other fields (type, size, date), which this signature vouches for
-            // too: ordinary only when the record verified as it was, re-sealed otherwise, and nothing sent without the check.
-            let prior = try await priorMetadata(of: item.node, family: family)
-            let signature = try await signMetadata(workspaceId: item.node.workspaceId, nodeId: nodeId, kind: item.isFolder ? .folder : .file,
-                                                   version: item.node.metadataVersion + 1, envelope: sealed, signing: .after(prior))
-            try sendingIntoFamily(item.node.workspaceId)
-            let node = try await api.rename(
-                nodeId: nodeId, workspaceId: item.node.workspaceId, metadataVersion: item.node.metadataVersion,
-                keyEpoch: item.node.keyEpoch, metadataEnvelope: base64urlEncode(bytes: sealed), metadataSignature: signature
-            )
-            return try adopt(node, nodeKey: key, metadata: metadata, in: item.node.workspaceId)
+            return try await reseal(item, NodeMetadata(name: name, mime: item.metadata.mime, size: item.metadata.size,
+                                                       modified: item.metadata.modified, attributes: item.metadata.attributes))
         }
+    }
+
+    /*
+     * Sets a folder's colour (the `colour` attribute, see the core's colour.rs), or with nil takes it back to the
+     * plain folder colour: sealed again as a rename seals it, the name and every other attribute carried over.
+     */
+    public func recolour(_ nodeId: String, to colour: String?) async throws -> Opened {
+        return try await writing {
+            let item = try await resolve(nodeId)
+            guard item.isFolder else { throw DriveAPIError.server(400, "Only a folder has a colour.") }
+            let attributes: [String: String]
+            do {
+                attributes = try withFolderColour(attributes: item.metadata.attributes, colour: colour)
+            } catch {
+                throw DriveAPIError.server(400, "Choose a colour.")
+            }
+            return try await reseal(item, NodeMetadata(name: item.metadata.name, mime: item.metadata.mime, size: item.metadata.size,
+                                                       modified: item.metadata.modified, attributes: attributes))
+        }
+    }
+
+    /* A node's record sealed again in place as `metadata`: the path a rename and a colour share. */
+    private func reseal(_ item: Opened, _ metadata: NodeMetadata) async throws -> Opened {
+        let nodeId = item.id
+        let family = try familyTarget(item.node.workspaceId)
+        let key: Data
+        if family {
+            key = try writableKey(of: item)
+        } else {
+            guard let opened = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
+            key = opened
+        }
+        let sealed = try metadataSeal(
+            ctx: MetadataContext(workspaceId: item.node.workspaceId, nodeId: nodeId, metadataVersion: item.node.metadataVersion + 1),
+            nodeKey: key, metadata: metadata
+        )
+        // The record goes out beside its other fields (type, size, date), which this signature vouches for
+        // too: ordinary only when the record verified as it was, re-sealed otherwise, and nothing sent without the check.
+        let prior = try await priorMetadata(of: item.node, family: family)
+        let signature = try await signMetadata(workspaceId: item.node.workspaceId, nodeId: nodeId, kind: item.isFolder ? .folder : .file,
+                                               version: item.node.metadataVersion + 1, envelope: sealed, signing: .after(prior))
+        try sendingIntoFamily(item.node.workspaceId)
+        let node = try await api.rename(
+            nodeId: nodeId, workspaceId: item.node.workspaceId, metadataVersion: item.node.metadataVersion,
+            keyEpoch: item.node.keyEpoch, metadataEnvelope: base64urlEncode(bytes: sealed), metadataSignature: signature
+        )
+        return try adopt(node, nodeKey: key, metadata: metadata, in: item.node.workspaceId)
     }
 
     private func rewrap(_ item: Opened, under parent: Opened) throws -> String {
