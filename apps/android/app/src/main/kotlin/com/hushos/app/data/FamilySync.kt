@@ -454,7 +454,7 @@ class FamilySync(
             val me = vault.ownIdentities()
             val checkedAt = checkTime(now())
             var served = fetchServed(groupId, row?.rosterVersion ?: 0uL)
-            val owedBefore = vault.oweFamilyGuard(groupId)
+            val debt = vault.oweFamilyGuard(groupId)
             val answer = try {
                 var first = ledger.acceptServed(me, groupId, row?.envelope, served, vault.heldFamilyGuard(groupId), checkedAt)
                 if (first is ServedAcceptance.FetchFromVersionOne) {
@@ -463,19 +463,25 @@ class FamilySync(
                 }
                 first
             } catch (error: Exception) {
-                if (!owedBefore) vault.familyGuardKept(groupId)
+                vault.familyGuardKept(debt)
                 throw error
             }
-            if (answer !is ServedAcceptance.Accepted && !owedBefore) vault.familyGuardKept(groupId)
+            if (answer !is ServedAcceptance.Accepted) vault.familyGuardKept(debt)
             when (answer) {
                 is ServedAcceptance.Accepted -> {
                     // Its folders are held as family folders whatever follows: a guard that can't be stored refuses the family
                     // (the core then opens none of them) and the barrier holds writes into them, never taken as personal. Only
                     // for the barrier: a roster's word never makes a folder this family's to clear (ownedBy).
-                    vault.holdAsFamilyWorkspaces(answer.chain.areaKeys().keys, groupId)
-                    // A guard that can't be stored stops everything of this acceptance, and the barrier stays up until a later one stores it.
-                    answer.guard?.let { vault.keepFamilyGuard(groupId, it) }
-                    vault.familyGuardKept(groupId)
+                    // A guard that can't be stored stops everything of this acceptance, and the barrier stays up until a stored
+                    // guard covers it (this acceptance's debt left owed; another's never discharges it).
+                    try {
+                        vault.holdAsFamilyWorkspaces(answer.chain.areaKeys().keys, groupId)
+                        answer.guard?.let { vault.keepFamilyGuard(groupId, it) }
+                    } catch (error: Exception) {
+                        answer.guard?.let { vault.familyGuardLeft(debt, it) } ?: vault.familyGuardKept(debt)
+                        throw error
+                    }
+                    vault.familyGuardKept(debt)
                     records.put(userId, groupId, FamilyRecords.Row(answer.record, answer.chain.roster().rosterVersion, keptAreas(groupId, answer.chain.areaKeys().keys)))
                     noteAccepted(groupId, answer.chain)
                     return Acceptance.Accepted(answer.chain, answer.pin)
@@ -671,8 +677,8 @@ class FamilySync(
         repeat(4) {
             val answer = ledger.forgetGroup(groupId, vault.heldFamilyGuard(groupId), at)
             val pin = answer.guard ?: run {
-                // Let go of in the core: nothing is written under its chains any more, so no guard is owed.
-                vault.familyGuardKept(groupId)
+                // Let go of in the core: nothing is written under its chains any more, so no guard it left is owed.
+                vault.familyGuardsForgotten(groupId)
                 return true
             }
             if (answer.unreadable) throw GuardUnreadable()

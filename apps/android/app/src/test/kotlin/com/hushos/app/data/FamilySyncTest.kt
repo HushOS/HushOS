@@ -480,10 +480,10 @@ class FamilySyncTest {
         server.shareWithMe(shared)
         server.pinGrace()
         // What the accept path holds when the member list names the share's workspace, its guard not yet stored.
-        phone.vault.oweFamilyGuard(family.groupId)
+        val debt = phone.vault.oweFamilyGuard(family.groupId)
         phone.vault.holdAsFamilyWorkspaces(listOf(server.graceWorkspace), family.groupId)
         assertNotNull("a share was mounted under a barrier still up", phone.vault.mountShares().single().error)
-        phone.vault.familyGuardKept(family.groupId)
+        phone.vault.familyGuardKept(debt)
         repeat(2) {
             assertNull("a stored guard's roster still refused the share", phone.vault.mountShares().single().error)
             assertEquals(listOf("t.txt"), phone.vault.listChildren(shared).map { it.name })
@@ -501,10 +501,10 @@ class FamilySyncTest {
         val other = UUID.randomUUID().toString()
         val phone = family.phone()
         phone.vault.holdAsFamilyWorkspaces(listOf(server.graceWorkspace), other)
-        phone.vault.oweFamilyGuard(family.groupId)
+        val debt = phone.vault.oweFamilyGuard(family.groupId)
         phone.vault.holdAsFamilyWorkspaces(listOf(server.graceWorkspace), family.groupId)
         assertThrows(GuardUnsaved::class.java) { phone.vault.refuseFamilyWrite(server.graceWorkspace) }
-        phone.vault.familyGuardKept(family.groupId)
+        phone.vault.familyGuardKept(debt)
         phone.vault.refuseFamilyWrite(server.graceWorkspace)
     }
 

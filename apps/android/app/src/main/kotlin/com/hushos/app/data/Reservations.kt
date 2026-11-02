@@ -59,8 +59,18 @@ object Reservations {
 
     private fun file(context: Context) = File(context.filesDir, FILE)
 
+    /* The ledger couldn't be read (a permission, an I/O failure): nothing is reserved or written over it; the job runs again later. */
+    class LedgerUnreadable(cause: Throwable) : java.io.IOException("The upload ledger couldn't be read.", cause)
+
+    /* Every record. Only a ledger that isn't there is empty: any other failure to read it throws LedgerUnreadable. */
     fun all(context: Context): List<Record> = synchronized(lock) {
-        val stored = runCatching { file(context).readLines() }.getOrDefault(emptyList()).mapNotNull { line ->
+        val target = file(context)
+        val lines = try {
+            if (!target.exists()) emptyList() else target.readLines()
+        } catch (error: Exception) {
+            throw LedgerUnreadable(error)
+        }
+        val stored = lines.mapNotNull { line ->
             line.split("\t").takeIf { it.size == 5 && it[0].isNotBlank() }?.let {
                 Record(it[0], it[1], it[2], it[3].toLongOrNull() ?: 0L, it[4] == "landed")
             }
@@ -102,9 +112,10 @@ object Reservations {
 
     /* Definitely settled (the only way a reservation's record goes). A write the disk refuses leaves it, to be asked again. */
     fun settled(context: Context, uploadId: String) = synchronized(lock) {
-        val rest = all(context).filter { it.uploadId != uploadId }
+        // Unread, nothing is written: the record stays on disk (one held only here goes), to be asked again.
+        val rest = runCatching { all(context).filter { it.uploadId != uploadId } }.getOrNull()
         unwritten.remove(uploadId)
-        runCatching { write(context, rest) }
+        rest?.let { runCatching { write(context, it) } }
         Unit
     }
 
@@ -114,7 +125,7 @@ object Reservations {
      * again. False when the disk refused the write: the record stays, to be asked again (its abort then says completed).
      */
     fun completed(context: Context, uploadId: String): Boolean = synchronized(lock) {
-        val record = all(context).firstOrNull { it.uploadId == uploadId }
+        val record = try { all(context).firstOrNull { it.uploadId == uploadId } } catch (_: LedgerUnreadable) { return false }
         if (record == null || record.job.isEmpty()) { settled(context, uploadId); return true }
         unwritten.remove(uploadId)
         try { write(context, all(context).filter { it.uploadId != uploadId } + record.copy(landed = true)) } catch (_: Exception) { unwritten[uploadId] = record; return false }
@@ -129,7 +140,8 @@ object Reservations {
      * completed settles it too, and a queued job's record becomes that job's landed row in the same write.
      */
     fun aborted(context: Context, uploadId: String, answer: Abort): Boolean = synchronized(lock) {
-        val record = all(context).firstOrNull { it.uploadId == uploadId }
+        // Unread, nothing is decided: the record stays where it is, asked again later.
+        val record = try { all(context).firstOrNull { it.uploadId == uploadId } } catch (_: LedgerUnreadable) { return false }
         when (answer) {
             Abort.RELEASED -> { settled(context, uploadId); true }
             Abort.COMPLETED -> completed(context, uploadId)
@@ -166,7 +178,7 @@ object Reservations {
 
     /* The job ended (as uploaded, or for good): its landed rows go. Never a reservation's record. */
     fun forgetLanded(context: Context, job: String) = synchronized(lock) {
-        val records = all(context)
+        val records = runCatching { all(context) }.getOrNull() ?: return@synchronized
         if (records.none { it.job == job && it.landed }) return@synchronized
         runCatching { write(context, records.filterNot { it.job == job && it.landed }) }
         Unit

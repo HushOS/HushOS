@@ -15,8 +15,12 @@ class FamilySessionState internal constructor(val userId: String) {
     val held = ConcurrentHashMap<String, MutableSet<String>>()
     /* Each family folder's invalidation: a count and the family's words, moved by every forget. */
     val epochs = ConcurrentHashMap<String, Pair<Long, String>>()
-    /* Families whose acceptance may hand back a guard not stored yet. */
-    val guardOwed: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    /*
+     * The guards owed, each acceptance's its own (GuardDebt), by family: the barrier is up over a family while any is
+     * owed. An acceptance discharges only its own; one left owed by a failed store goes only once a stored guard covers
+     * it, or its own vault's core lets the family go. Shared by every vault of the session, whose acceptances run apart.
+     */
+    val guardDebts = ConcurrentHashMap<String, MutableSet<GuardDebt>>()
     /* Ids whose copies a family's proof deleted, until the screens drop them. */
     val purged: MutableSet<String> = ConcurrentHashMap.newKeySet()
     /* The session ended (a sign-out, a lost session, another sign-in): nothing of it is written again, by any of its vaults. */
@@ -24,6 +28,15 @@ class FamilySessionState internal constructor(val userId: String) {
         internal set
     /* Whether the device records' folders were read in (a job's process may start without the app's). */
     @Volatile internal var seeded = false
+}
+
+/*
+ * One acceptance's guard debt: raised before its core commits, by `owner` (the vault whose core it is). `left` is the pin
+ * its core handed back and couldn't be stored: set, the debt outlives the acceptance until a stored guard covers it.
+ */
+class GuardDebt internal constructor(val groupId: String, val owner: Any) {
+    @Volatile var left: com.hushos.core.GroupPin? = null
+        internal set
 }
 
 object FamilySessions {

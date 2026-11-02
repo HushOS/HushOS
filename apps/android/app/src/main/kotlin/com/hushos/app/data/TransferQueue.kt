@@ -139,6 +139,30 @@ object TransferQueue {
     }
 
     /*
+     * A queued upload's run, as UploadWorker runs it inside its stop. Reservations no upload here is running any more (a
+     * dead process's, a dropped job's) are settled first; if that settled one of this job's own as completed (its answer
+     * lost), the job ends as uploaded at once (Reservations.Landed), before its family, folder or file is looked at. Then
+     * a family folder's upload, the family opened in this job's own vault first on every look (FamilyUploads), a key change
+     * not reached yet waited out here, a look every half minute for half an hour from when the wait began (`waits`, kept
+     * across runs), the row saying so (`waiting`); or the account's own. This job's own records are settled again before it
+     * reserves (Vault.upload), or nothing new is reserved.
+     */
+    internal fun runUpload(context: Context, vault: Vault, job: String, file: File, name: String, mime: String?, folder: String, replacingId: String?,
+                           family: Family?, waits: KeyChangeWaits, pause: (Long) -> Unit, waiting: () -> Unit, progress: (Float) -> Unit,
+                           now: () -> Long = System::currentTimeMillis): Opened {
+        Reservations.settleAll(context) { uploadId, workspaceId -> vault.api.abortUpload(uploadId, workspaceId) }
+        if (Reservations.landed(context, job)) throw Reservations.Landed()
+        if (family != null) {
+            return FamilyUploads.waitingOutKeyChanges(since = { waits.since(job) }, mark = { waits.mark(job, it) }, now = now, pause = pause, waiting = waiting) {
+                FamilyUploads.upload(vault, family.groupId, family.workspaceId, file, name, mime, folder, replacingId, job, progress)
+            }
+        }
+        if (vault.item(folder) == null) vault.resolve(folder)
+        val replacing = replacingId?.let { vault.resolve(it) }
+        return vault.upload(file, name, mime, folder, replacing, vault.makeThumbnail(file, mime), job = job, progress = progress)
+    }
+
+    /*
      * A job's end for good (a family's removal, the worker's own included): what it reserved is settled now where the
      * server answers, and stays on record (Reservations) where it doesn't; its folder, copy and all, goes.
      */
@@ -328,7 +352,8 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             Reservations.forgetLanded(applicationContext, this@UploadWorker.id.toString())
             return Result.success()
         }
-        if (Reservations.landed(applicationContext, id.toString())) return landedEarlier()
+        // An unreadable ledger decides nothing: the job runs again later.
+        if (runCatching { Reservations.landed(applicationContext, id.toString()) }.getOrElse { return Result.retry() }) return landedEarlier()
         if (!file.exists()) return failed("The file isn’t there any more. Pick it again.")
         // Refused from the background (Android denies it there): the job runs as an ordinary one. A stop goes on.
         attempt { setForeground(getForegroundInfo()) }
@@ -337,9 +362,6 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         val familyWorkspace = inputData.getString("familyWorkspace")
         return withContext(Dispatchers.IO) {
             val end = stoppable({ isStopped }) { checkStop ->
-                // Reservations no upload here is running any more (a dead process's, a dropped job's) are settled first; this
-                // job's own are settled again before it reserves (Vault.upload), or nothing new is reserved.
-                Reservations.settleAll(applicationContext) { uploadId, workspaceId -> vault.api.abortUpload(uploadId, workspaceId) }
                 val mime = inputData.getString("mime")
                 var shown = 0
                 val progress = { fraction: Float ->
@@ -352,23 +374,10 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                         runCatching { setForegroundAsync(TransferQueue.foreground(applicationContext, id.hashCode(), fraction)) }
                     }
                 }
-                val job = this@UploadWorker.id.toString()
-                run {
-                    if (family != null && familyWorkspace != null) {
-                        // A family folder: the family opened in this job's own vault first, every look (FamilyUploads). A key
-                        // change not reached yet is waited out here, a look every half minute, for half an hour from when the
-                        // wait began (kept across runs), the row saying so.
-                        FamilyUploads.waitingOutKeyChanges(
-                            since = { waits.since(job) }, mark = { waits.mark(job, it) }, now = System::currentTimeMillis,
-                            pause = { ms -> var left = ms; while (left > 0) { checkStop(); Thread.sleep(minOf(left, 1_000L)); left -= 1_000L } },
-                            waiting = { setProgressAsync(workDataOf("fraction" to 0f)) },
-                        ) { FamilyUploads.upload(vault, family, familyWorkspace, file, name, mime, folder, inputData.getString("replacing"), job, progress) }
-                    } else {
-                        if (vault.item(folder) == null) vault.resolve(folder)
-                        val replacing = inputData.getString("replacing")?.let { vault.resolve(it) }
-                        vault.upload(file, name, mime, folder, replacing, vault.makeThumbnail(file, mime), job = job, progress = progress)
-                    }
-                }
+                TransferQueue.runUpload(applicationContext, vault, this@UploadWorker.id.toString(), file, name, mime, folder, inputData.getString("replacing"),
+                    if (family != null && familyWorkspace != null) TransferQueue.Family(family, familyWorkspace) else null, waits,
+                    pause = { ms -> var left = ms; while (left > 0) { checkStop(); Thread.sleep(minOf(left, 1_000L)); left -= 1_000L } },
+                    waiting = { setProgressAsync(workDataOf("fraction" to 0f)) }, progress = progress)
             }
             when (end) {
                 is JobEnd.Done -> {

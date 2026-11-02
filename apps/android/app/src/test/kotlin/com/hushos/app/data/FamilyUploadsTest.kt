@@ -521,6 +521,86 @@ class FamilyUploadsTest {
     }
 
     /*
+     * #251 review 7, P1: two job vaults accept the family at once, each with its own sync and turns. One stores its guard
+     * while the other's acceptance is still in flight, then the other's store fails. The write barrier stays up over the
+     * family the whole time; once a stored guard covers what was left owed (the next acceptance), it comes down. Fails if
+     * one acceptance discharges another's guard debt.
+     */
+    @Test
+    fun oneJobsStoredGuardNeverDischargesAnothersDebt() {
+        val first = job()
+        val second = job()
+        val inStore = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        var blocked = false
+        second.familyGuardWrites = {
+            if (!blocked) { blocked = true; inStore.countDown(); release.await(10, java.util.concurrent.TimeUnit.SECONDS) }
+            false
+        }
+        val racing = Thread { runCatching { second.jobFamilies.sync(family.summary) } }.apply { start() }
+        assertTrue("the second acceptance never reached its guard's store", inStore.await(10, java.util.concurrent.TimeUnit.SECONDS))
+        assertTrue(first.jobFamilies.sync(family.summary) is FamilyState.Accepted)
+        val group = family.groupId.lowercase()
+        assertTrue("one acceptance's stored guard discharged another's debt still in flight", group in first.familyGuardOwed)
+        release.countDown()
+        racing.join(10_000)
+        assertTrue("a failed store's debt was lost", group in first.familyGuardOwed)
+        assertThrows(GuardUnsaved::class.java) { first.requireGuardKept(family.workspaceId) }
+        assertThrows(GuardUnsaved::class.java) { second.requireGuardKept(family.workspaceId) }
+        // The guard stored covers what the failed store owed: the next acceptance brings the barrier down.
+        second.familyGuardWrites = { true }
+        assertTrue(second.jobFamilies.sync(family.summary) is FamilyState.Accepted)
+        assertFalse("a covered debt kept the barrier up", group in first.familyGuardOwed)
+    }
+
+    /*
+     * #251 review 7, P2: the ledger is there but can't be read. A job's run reserves nothing and is the network's, a sweep
+     * writes nothing, and the records are all still there once it reads again. Fails if a read failure counts as an empty
+     * ledger, which the next write would put over the real one.
+     */
+    @Test
+    fun anUnreadableLedgerIsNeverWrittenOverAndNothingIsReserved() {
+        val job = UUID.randomUUID().toString()
+        assertThrows(Killed::class.java) { upload(job(), job) { throw Killed() } }
+        val kept = records()
+        val ledger = File(app.filesDir, Reservations.FILE)
+        assertTrue(ledger.setReadable(false))
+        try {
+            val reserved = begins()
+            val error = runCatching { upload(job(), job) }.exceptionOrNull()
+            assertTrue("an unreadable ledger wasn't the job's to retry: $error", error is Reservations.LedgerUnreadable && Resumable.retryable(error))
+            assertEquals("a reservation was made over an unreadable ledger", reserved, begins())
+            assertThrows(Reservations.LedgerUnreadable::class.java) { Reservations.settleAll(app) { id, ws -> job().api.abortUpload(id, ws) } }
+            assertEquals(emptyList<String>(), aborted())
+        } finally {
+            ledger.setReadable(true)
+        }
+        assertEquals("the ledger's records were written over", kept, records())
+    }
+
+    /*
+     * #251 review 7, P2: a completion whose answer was lost, and before the job runs again its family folder goes (route 25
+     * no longer lists it). The run's first sweep hears "already finished": the job ends as uploaded there, before the
+     * family or the folder is looked at. Fails if a run goes on past a sweep that found its upload landed.
+     */
+    @Test
+    fun aRunEndsAsUploadedRightAfterTheSweepFindsItLanded() {
+        val job = UUID.randomUUID().toString()
+        val waits = KeyChangeWaits.of(app)
+        fun run() = TransferQueue.runUpload(app, job(), job, local("Notes.txt", "packing list"), "Notes.txt", "text/plain", family.rootId, null,
+            TransferQueue.Family(family.groupId, family.workspaceId), waits, pause = {}, waiting = {}, progress = {})
+        server.dropReply = { method, path -> method == "POST" && path.endsWith("/complete") }
+        val lost = runCatching { run() }.exceptionOrNull()
+        server.dropReply = null
+        assertTrue("a lost completion answer wasn't the network's: $lost", lost != null && Resumable.retryable(lost))
+        family.areaListed = false
+        val reserved = begins()
+        val rerun = runCatching { run() }.exceptionOrNull()
+        assertTrue("a run went on past its landed upload: $rerun", rerun is Reservations.Landed)
+        assertEquals(reserved, begins())
+    }
+
+    /*
      * What waits out a key change and what fails: the ledger's key-change refusal (said or raw), and the server's
      * `rotating`; its `stale` only once the upload has waited (a walk reaching the folder between a look and a begin), and
      * never a removal or another refusal. Fails if a key change fails the upload or a refusal is retried for half an hour.

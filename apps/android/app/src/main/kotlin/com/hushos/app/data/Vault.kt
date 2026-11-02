@@ -248,8 +248,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
     internal val familyCopiesLock: Any get() = FamilyCopies.LOCK
     /* Set once this vault's session ended (close, by this vault or another of the session): nothing it downloads is written after. */
     internal val closed: Boolean get() = familyState.closed
-    /* Families whose acceptance may hand back a guard not stored yet: nothing is written into them meanwhile (the write barrier). */
-    internal val familyGuardOwed: MutableSet<String> get() = familyState.guardOwed
+    /* Families with a guard owed (an acceptance's, in any vault of the session): nothing is written into them meanwhile (the write barrier). */
+    internal val familyGuardOwed: Set<String> get() = familyState.guardDebts.filterValues { it.isNotEmpty() }.keys
+    internal val familyGuardDebts: java.util.concurrent.ConcurrentHashMap<String, MutableSet<GuardDebt>> get() = familyState.guardDebts
     /* Tests: whether the family guard can be written (a full disk when not), and a stop right after each write, as a crash would. */
     internal var familyGuardWrites: () -> Boolean = { true }
     internal var afterFamilyGuard: (() -> Unit)? = null

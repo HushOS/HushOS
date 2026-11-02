@@ -106,11 +106,11 @@ class FamilyWritesTest {
     fun noWriteGoesIntoTheFamilyWhileItsGuardIsOwed() {
         val phone = opened()
         val sent = server.requests.size
-        phone.vault.oweFamilyGuard(family.groupId)
+        val debt = phone.vault.oweFamilyGuard(family.groupId)
         assertThrows(GuardUnsaved::class.java) { phone.vault.createFolder(family.rootId, "Trips") }
         assertThrows(GuardUnsaved::class.java) { phone.vault.trash(family.fileId) }
         assertEquals("a write went out under an owed guard", emptyList<String>(), sentSince(sent))
-        phone.vault.familyGuardKept(family.groupId)
+        phone.vault.familyGuardKept(debt)
         val version = server.node(family.fileId).metadataVersion
         // Owed while the rename was on its way: refused at its final gate.
         phone.vault.beforeWriteGate = { phone.vault.oweFamilyGuard(family.groupId) }
