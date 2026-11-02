@@ -340,17 +340,32 @@ class HushOSDocumentsProvider : DocumentsProvider() {
      * Where another app writes a file of the drive: a file of its own that goes up as a new version when it closes, never
      * the version's read copy (if the upload fails, a later read must not show edits the server never got). It starts
      * from the current version whenever the mode keeps the contents (WriteModes): appending, or reading and writing
-     * without truncating.
+     * without truncating. That version is checked with the server first (currentVersion), so an edit never builds on a
+     * version that was replaced since, as one a queued write-back landed from its own vault.
      */
     internal fun personalEdit(vault: Vault, id: String, mode: String): File {
-        val item = vault.resolve(id)
         val edit = File(context!!.cacheDir, "edits/$id/${java.util.UUID.randomUUID()}").also { it.parentFile?.mkdirs() }
         if (WriteModes.keepsContents(mode)) {
+            val item = currentVersion(vault, id)
             val file = cacheFile(id, item.node.currentVersion?.id)
             if (!file.exists()) vault.download(id, file)
             file.copyTo(edit, overwrite = true)
         }
         return edit
+    }
+
+    /*
+     * The file as the server holds it now: this account's own drive brought up to the feed's head (Vault.sync), a share's
+     * folder listed again. A version that landed elsewhere (another device, a transfer job's vault) replaces the row held
+     * here. No answer is refused: an edit built on a version that can't be checked could replace a newer one.
+     */
+    private fun currentVersion(vault: Vault, id: String): com.hushos.app.data.Opened {
+        val held = vault.resolve(id)
+        val ws = held.node.workspaceId
+        if (ws.equals(vault.ownWorkspaceId, ignoreCase = true)) {
+            if (vault.sync() == null) throw FileNotFoundException(com.hushos.app.data.GroupsApiError.NO_ANSWER)
+        } else held.node.parentId?.let { vault.listChildren(it, ws) }
+        return vault.resolve(id)
     }
 
     /* Through a pipe, never a plaintext file in the cache: the decrypted JPEG exists only in memory and in transit. */

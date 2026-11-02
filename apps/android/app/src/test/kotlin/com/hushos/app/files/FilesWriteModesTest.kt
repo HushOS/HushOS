@@ -7,6 +7,14 @@ import com.hushos.app.data.FakeDrive
 import com.hushos.app.data.FamilyFixture
 import com.hushos.app.data.Shared
 import com.hushos.app.data.Vault
+import com.hushos.app.data.TransferQueue
+import com.hushos.app.data.UploadWorker
+import androidx.work.Configuration
+import androidx.work.ListenableWorker
+import androidx.work.testing.SynchronousExecutor
+import androidx.work.testing.TestListenableWorkerBuilder
+import androidx.work.testing.WorkManagerTestInitHelper
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -31,7 +39,10 @@ class FilesWriteModesTest {
     private val app get() = RuntimeEnvironment.getApplication()
 
     @Before
-    fun signIn() = FamilyFixture.signIn(server, "files-write-modes-test")
+    fun signIn() {
+        FamilyFixture.signIn(server, "files-write-modes-test")
+        WorkManagerTestInitHelper.initializeTestWorkManager(app, Configuration.Builder().setExecutor(SynchronousExecutor()).setTaskExecutor(SynchronousExecutor()).build())
+    }
 
     @After
     fun close() {
@@ -92,5 +103,37 @@ class FilesWriteModesTest {
             Vault(app, DriveApi(Shared.session(app)!!)).apply { listChildren(server.root) }.download(notes, out)
             assertEquals("mode $mode", held, out.readText())
         }
+    }
+
+    /*
+     * The provider's own upload of a write-back failed and the transfer queue landed it instead, from the job's own vault:
+     * the provider's row still names the version before. An app that then opens the file to append gets the version that
+     * landed, and its append builds on it. Fails if a contents-keeping edit starts from the provider's stale row (the
+     * append would replace the save with the old bytes plus the new ones).
+     */
+    @Test
+    fun anAppendAfterAQueuedWriteBackBuildsOnTheVersionThatLanded() {
+        val notes = server.file(server.root, "Notes.txt", "first draft".toByteArray())
+        val provider = provider()
+        provider.queryChildDocuments("root", null, null as String?).close()
+        val vault = HushOSDocumentsProvider::class.java.getDeclaredField("vault").apply { isAccessible = true }.get(provider) as Vault
+        val stale = vault.resolve(notes).node.currentVersion!!.id
+        // The write-back the provider couldn't send, queued as its close handler queues it, and run as WorkManager runs it.
+        val saved = provider.personalEdit(vault, notes, "w").apply { writeText("saved draft") }
+        val item = vault.resolve(notes)
+        val job = TransferQueue.upload(app, saved, item.name, item.metadata.mime, item.node.parentId!!, item.id)
+        val request = TransferQueue.uploadRequest(job, File(app.filesDir, "queue/$job/content"), item.metadata.mime, item.node.parentId!!, item.id,
+            session = TransferQueue.accountTag(Shared.session(app)!!))
+        val worker = TestListenableWorkerBuilder<UploadWorker>(app).setId(job).setInputData(request.workSpec.input).setTags(request.tags.toList()).build()
+        assertEquals(ListenableWorker.Result.success(), runBlocking { worker.doWork() })
+        assertEquals("the provider's row moved without a look at the server", stale, vault.item(notes)!!.node.currentVersion!!.id)
+        val append = provider.personalEdit(vault, notes, "wa")
+        assertEquals("saved draft", append.readText())
+        writeAs("wa", append, " and more")
+        val now = vault.resolve(notes)
+        vault.upload(append, now.name, now.metadata.mime, now.node.parentId!!, now)
+        val out = File(app.cacheDir, "read-${System.nanoTime()}")
+        Vault(app, DriveApi(Shared.session(app)!!)).apply { listChildren(server.root) }.download(notes, out)
+        assertEquals("saved draft and more", out.readText())
     }
 }
