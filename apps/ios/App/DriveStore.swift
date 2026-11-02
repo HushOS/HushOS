@@ -19,16 +19,10 @@ final class DriveStore {
     /* Bumped when the catalogue changes what lists show. */
     var catalogueVersion = 0
     var names: [String: String] = [:]
-    /* Home's Recent rows: the chip's type, a recent folder standing in for what it holds. */
+    /* Home's Recent rows: a recent folder standing in for what it holds. */
     var recents: [Opened] = []
     /* The newest changes as they are (every type, nothing folded in): what search falls back on before the catalogue. */
     var latest: [Opened] = []
-    /*
-     * Home's type chip. A recent folder stands in for what it holds (`Opened.collapsedRecents`), so
-     * the chip narrows Recent before that, in the vault: filtered after, images inside a recent
-     * folder would never show.
-     */
-    private(set) var recentsFilter: HomeFilter = .all
     var trash: [(item: Opened, parentTrashed: Bool)] = []
     /* Trash rows being restored or deleted, and the whole trash being emptied: each shows it is under way. */
     var trashWorking: Set<String> = []
@@ -934,23 +928,12 @@ final class DriveStore {
         }
     }
 
-    /* A chip chosen on Home: Recent again from what the phone holds, without a sync. */
-    func showRecents(_ filter: HomeFilter) async {
-        guard filter != recentsFilter else { return }
-        recentsFilter = filter
-        try? await loadRecents(nil)
-    }
-
-    /*
-     * Recent under the chip chosen now, in `session` (the session now when nil, `inSession`): an
-     * answer for a session that ended is dropped, and Home's rows for a chip no longer chosen.
-     */
+    /* Recent in `session` (the session now when nil, `inSession`): an answer for a session that ended is dropped. */
     private func loadRecents(_ session: Session?) async throws {
-        let filter = recentsFilter
-        guard let loaded = try await inSession(session, { try await $0.recents { filter.matches($0) } }) else { return }
+        guard let loaded = try await inSession(session, { try await $0.recents() }) else { return }
         if let session, !current(session) { return }
         latest = loaded.latest
-        if filter == recentsFilter { recents = loaded.rows }
+        recents = loaded.rows
     }
 
     func refreshTrash() async {

@@ -791,10 +791,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         // Family folders are listed through their family (its guards), never merged here.
         val plain = families.relist(folderIds)
         val fresh = withContext(Dispatchers.IO) { plain.associateWith { runCatching { vault.listChildren(it) }.getOrNull() } }
-        val type = recentsType
-        val loaded = withContext(Dispatchers.IO) { runCatching { vault.recents { type.matches(it) } }.getOrNull() }
-        val recents = loaded?.rows?.takeIf { type == recentsType }
-        _state.update { s -> s.copy(folders = s.folders + fresh.filterValues { it != null }.mapValues { it.value!! }, recents = recents ?: s.recents, latest = loaded?.latest ?: s.latest) }
+        val loaded = withContext(Dispatchers.IO) { runCatching { vault.recents() }.getOrNull() }
+        _state.update { s -> s.copy(folders = s.folders + fresh.filterValues { it != null }.mapValues { it.value!! }, recents = loaded?.rows ?: s.recents, latest = loaded?.latest ?: s.latest) }
     }
 
     fun refresh(folderId: String, pulled: Boolean = false) = viewModelScope.launch {
@@ -1105,25 +1103,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         _state.update { it.copy(loading = it.loading - "recents") }
     }
 
-    /*
-     * Home's type chip. A recent folder stands in for what it holds (`collapseRecents`), so the chip
-     * narrows Recent before that, in the vault: filtered after, images inside a recent folder would
-     * never show.
-     */
-    private var recentsType = TypeFilter.ALL
-
-    /* A chip chosen on Home: Recent again from what the phone holds, without a sync. */
-    fun showRecents(type: TypeFilter) = viewModelScope.launch {
-        if (type == recentsType) return@launch
-        recentsType = type
-        loadRecents()
-    }
-
-    /* Recent under the chip chosen now; an answer for a chip no longer chosen is dropped. */
+    /* Home's Recent, a recent folder standing in for what it holds (`collapseRecents`), and the newest changes for search. */
     private suspend fun loadRecents() {
-        val type = recentsType
-        io { vault -> vault.recents { type.matches(it) } }?.let { loaded ->
-            _state.update { it.copy(latest = loaded.latest, recents = if (type == recentsType) loaded.rows else it.recents) }
+        io { vault -> vault.recents() }?.let { loaded ->
+            _state.update { it.copy(latest = loaded.latest, recents = loaded.rows) }
         }
     }
 

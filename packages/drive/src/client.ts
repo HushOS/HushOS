@@ -15,7 +15,7 @@ import { checkName, DRIVE_ENVELOPE_SUITE } from '@hushos/crypto/drive';
 import { newId } from '@hushos/crypto/ids';
 import { LINK_KDF_VERSION } from '@hushos/crypto/links';
 import { NOT_CARRIED, SHARED_IN_FAMILY } from '@hushos/crypto/protocol';
-import { Catalogue, collapseRecent, parentsBefore, parentsFirst } from './catalogue';
+import { Catalogue, collapseRecent, parentsBefore, parentsFirst, type NodeKind } from './catalogue';
 import { COLOUR_ATTRIBUTE, toColour } from './colour';
 import type { TreeMirror } from './mirror';
 import {
@@ -192,7 +192,7 @@ export type CatalogueState = {
 export { checkName };
 /* The catalogue's parts, reachable from the client entry the app already imports. */
 export { createIndexedDbMirror, createMemoryMirror, type TreeMirror } from './mirror';
-export { Catalogue, tokenize, type CatalogueHit } from './catalogue';
+export { Catalogue, tokenize, type CatalogueHit, type NodeKind } from './catalogue';
 export * from './tags';
 export * from './colour';
 
@@ -880,10 +880,13 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     function byTags(tagIds: string[]) {
         return catalogueState.phase === 'ready' ? catalogue.byTags(tagIds) : [];
     }
-    /* Search answers while the build is still opening rows, since a partial answer beats none. */
-    function search(query: string, limit?: number) {
+    /*
+     * Search answers while the build is still opening rows, since a partial answer beats none.
+     * `kindOf` says what each node is for the kind words; without it they find folders only.
+     */
+    function search(query: string, limit?: number, kindOf?: (node: DriveNode) => NodeKind | null) {
         return catalogueState.phase === 'ready' || catalogueState.phase === 'opening'
-            ? catalogue.search({ query, limit })
+            ? catalogue.search({ query, limit, kindOf })
             : [];
     }
     /*
