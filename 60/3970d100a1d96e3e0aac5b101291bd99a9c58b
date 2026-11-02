@@ -1,0 +1,89 @@
+.github/workflows/ci.yml
+  s_ec12ebe02de5ff::t_469d14f17b456e 81,417-418,610,615
+.github/workflows/webkit.yml
+  s_ec12ebe02de5ff::t_46c9208cb982b0 1-200
+CONTRIBUTING.md
+  s_ec12ebe02de5ff::t_ac4450ecb22e87 27,112
+apps/android/AGENTS.md
+  s_ec12ebe02de5ff::t_2bb1028c552e51 86
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_ec12ebe02de5ff::t_4c1e383e6eb552 71-72
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyJoin.kt
+  s_ec12ebe02de5ff::t_ccdcd53c48b262 218-221
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_ec12ebe02de5ff::t_b6e6c7de45fad7 74-76,79,138-143,194-196,200-235,250,291-296,338,346,350,434-452,454-465,615,862-866,889-915,959,961
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyWalkWork.kt
+  s_ec12ebe02de5ff::t_88a8a9922724c2 1-166
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyWalks.kt
+  s_ec12ebe02de5ff::t_fe296218ea6180 1-313
+apps/android/app/src/main/kotlin/com/hushos/app/data/GroupsApi.kt
+  s_ec12ebe02de5ff::t_56404474e27f74 33-34,60,65-92,172-187,190,193-194,200-202,290-296
+apps/android/app/src/main/kotlin/com/hushos/app/data/Mirror.kt
+  s_ec12ebe02de5ff::t_4657134ba1db91 166-172
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_ec12ebe02de5ff::t_3c2b095342a9b8 11,1026,1518-1526,1528-1539,1543,1552,1563-1564
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_ec12ebe02de5ff::t_41a84361e6d33f 275-276,398-402
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_ec12ebe02de5ff::t_5dd50c4f601e72 203-207,215-221,473,1506-1514
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Families.kt
+  s_ec12ebe02de5ff::t_18bf7853a9cce1 159-167,175,190,195-196,204-291
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_ec12ebe02de5ff::t_235d2649c44853 24-25,118-125,128-137,175-225,322-324,329-333,390-391,484,496-591,718,857-869
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_ec12ebe02de5ff::t_35b949520e784f 3,231,309-310,491
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_ec12ebe02de5ff::t_3941762a285c97 7-12,129,237,297,312,324-381
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_ec12ebe02de5ff::t_894ccc6714199e 108-109,131-133,137,147-148,155-156,341-343,454-461,486,494-499,558-559,606-607,656-658,783,785-792,794,799-805,812
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyFixture.kt
+  s_ec12ebe02de5ff::t_3e4897a8b54ad9 31-38,40-41,115-124,192-201,207-211,218-260
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyGuardTest.kt
+  s_ec12ebe02de5ff::t_e1475233115072 130
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyLeaveTest.kt
+  s_ec12ebe02de5ff::t_7ea0961fff88dd 1-138
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyWalksTest.kt
+  s_ec12ebe02de5ff::t_480cadcb040a07 1-448
+apps/android/app/src/test/kotlin/com/hushos/app/data/VaultAttributesTest.kt
+  s_ec12ebe02de5ff::t_5f73c8fcc921e6 109-132
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamiliesModelRacesTest.kt
+  s_ec12ebe02de5ff::t_b635d622c1caa5 158,222-224
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyWorkScheduleTest.kt
+  s_ec12ebe02de5ff::t_20ed5154e64a84 1-174
+apps/android/app/src/test/kotlin/com/hushos/app/ui/LeaveDialogStateTest.kt
+  s_ec12ebe02de5ff::t_a4642431e43ad2 1-125
+apps/ios/App/BrowseView.swift
+  s_ec12ebe02de5ff::t_1ec22080376e86 631-632
+apps/ios/App/DriveStore.swift
+  s_ec12ebe02de5ff::t_ddce93cf388320 1061-1070
+apps/ios/App/FolderColourSheet.swift
+  s_ec12ebe02de5ff::t_17d6af23be4844 1-83
+apps/ios/App/NodeActions.swift
+  s_ec12ebe02de5ff::t_c8dc17ce0591a5 18,29,97,239
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_ec12ebe02de5ff::t_6ac47d00a27706 84-117,119-133
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/AttributesTests.swift
+  s_ec12ebe02de5ff::t_f06daf4dcf0fa1 53-80
+crates/hushos-core/src/colour.rs
+  s_ec12ebe02de5ff::t_d3e4981bbf750d 10-11,18-28,86-130,198-231
+docs/groups-mobile-plan.md
+  s_ec12ebe02de5ff::t_24d39c79acb50b 218-219
+playwright.config.ts
+  s_ec12ebe02de5ff::t_f909d8bed584b1 30-31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "603970d100a1d96e3e0aac5b101291bd99a9c58b",
+  "prompts": {},
+  "sessions": {
+    "s_ec12ebe02de5ff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3f79b7e-f7a1-4c9c-9a58-b7059252bcae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
