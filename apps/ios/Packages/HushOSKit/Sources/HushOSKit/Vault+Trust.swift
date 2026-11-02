@@ -509,6 +509,9 @@ extension Vault {
         let pin = try await withGuardTurn {
             let settings = try await loadSettings()
             let before = settings.pin(of: contact.userId)
+            // Over the pin the words were shown with (the lookup's): another device's Continue or check since moved the settings
+            // pin, not this phone's guard, and is its own act. Compared again.
+            guard Self.samePin(before, found.pinned) else { throw ContactError.moved }
             let (entry, _) = try guardFor(contact.userId, pin: before, at: settings.version)
             let held = base(before, entry, contact.userId)
             let moved = held.map { $0.signing != contact.signingPublicKey } == true
@@ -708,11 +711,20 @@ extension Vault {
      * an account changed. A guard that can't be read fails the whole list: nobody is shown verified.
      */
     public func contactStandings() async throws -> [String: (verified: Bool, changed: Bool)] {
+        try await guardedStandings().mapValues { ($0.verified, $0.changed) }
+    }
+
+    /*
+     * The same standings with the very pin each was judged from, from one read of the settings and
+     * the guard: whatever is compared with a pin's keys afterwards (a member's entry) is compared
+     * with the pin the verdict is about, never with one a later settings read brought.
+     */
+    func guardedStandings() async throws -> [String: (pin: ContactPin, verified: Bool, changed: Bool)] {
         let (pins, entries) = try await guardedView()
-        var out: [String: (verified: Bool, changed: Bool)] = [:]
+        var out: [String: (pin: ContactPin, verified: Bool, changed: Bool)] = [:]
         for pin in pins.values {
             let held = agreement(pin.userId, entries[pin.userId.lowercased()], pin)
-            out[pin.userId.lowercased()] = (held != .changed && pin.trust == .verified, held == .changed)
+            out[pin.userId.lowercased()] = (pin, held != .changed && pin.trust == .verified, held == .changed)
         }
         return out
     }

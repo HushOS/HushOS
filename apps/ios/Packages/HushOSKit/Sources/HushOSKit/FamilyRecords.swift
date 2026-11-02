@@ -20,16 +20,42 @@ public struct FamilyRecords: Sendable {
         public let envelope: String
         public let rosterVersion: UInt64
         public let areas: [String]
+        /*
+         * True when `areas` holds only folders proven this family's (route 25 and the folder id derived
+         * under it). Absent on records an earlier version wrote, which saved every folder a member list
+         * named, a received share's among them: those areas are hints that never clear, block or let
+         * go of anything (`owned`).
+         */
+        public let areasProven: Bool?
 
-        public init(envelope: String, rosterVersion: UInt64, areas: [String]) {
+        public init(envelope: String, rosterVersion: UInt64, areas: [String], areasProven: Bool? = nil) {
             self.envelope = envelope
             self.rosterVersion = rosterVersion
             self.areas = areas
+            self.areasProven = areasProven
         }
+
+        /* The folders this record proves the family's: none from a record an earlier version wrote. */
+        public var ownedAreas: [String] { areasProven == true ? areas : [] }
     }
 
     let folder: URL
     var activity: FileLock.Activity = .system
+    /* The session writes and deletions are kept to: none once it ended (CopySession). Nil: unbound. */
+    var session: CopySession?
+
+    /* The same store, writing and deleting only while `session` stands. */
+    func bound(to session: CopySession) -> FamilyRecords {
+        var bound = self
+        bound.session = session
+        return bound
+    }
+
+    /* `body` while the session stands (under the copies' lock), or always when unbound; nil when it ended. */
+    private func whileOpen<T>(_ body: () throws -> T) rethrows -> T? {
+        guard let session else { return try body() }
+        return try session.whileOpen(body)
+    }
 
     public static var shared: FamilyRecords { FamilyRecords(folder: Unbacked.local.appendingPathComponent("groups", isDirectory: true)) }
 
@@ -66,18 +92,21 @@ public struct FamilyRecords: Sendable {
         // Out of backups like the rest of `local`, made again if a sign-out removed it.
         Unbacked.folder(folder)
         var outcome: Result<Bool, Error> = .failure(RecordsError.busy)
-        FileLock.withLock(lockPath, activity: activity) {
-            if let stored = read(userId: userId, groupId: groupId), stored.rosterVersion > row.rosterVersion {
-                outcome = .success(false)
-                return
+        // An ended session writes nothing: the record there now may be the next session's.
+        guard whileOpen({
+            FileLock.withLock(lockPath, activity: activity) {
+                if let stored = read(userId: userId, groupId: groupId), stored.rosterVersion > row.rosterVersion {
+                    outcome = .success(false)
+                    return
+                }
+                do {
+                    try JSONEncoder().encode(row).write(to: url, options: .atomic)
+                    outcome = .success(true)
+                } catch {
+                    outcome = .failure(error)
+                }
             }
-            do {
-                try JSONEncoder().encode(row).write(to: url, options: .atomic)
-                outcome = .success(true)
-            } catch {
-                outcome = .failure(error)
-            }
-        }
+        }) != nil else { throw RecordsError.busy }
         return try outcome.get()
     }
 
@@ -121,24 +150,32 @@ public struct FamilyRecords: Sendable {
         guard let url = file(userId, groupId, kept) else { throw RecordsError.busy }
         Unbacked.folder(folder)
         var outcome: Result<Void, Error> = .failure(RecordsError.busy)
-        FileLock.withLock(lockPath, activity: activity) {
-            outcome = Result { try Data(value.utf8).write(to: url, options: .atomic) }
-        }
+        guard whileOpen({
+            FileLock.withLock(lockPath, activity: activity) {
+                outcome = Result { try Data(value.utf8).write(to: url, options: .atomic) }
+            }
+        }) != nil else { throw RecordsError.busy }
         try outcome.get()
     }
 
     public func delete(_ kept: Kept, userId: String, groupId: String) {
         guard let url = file(userId, groupId, kept) else { return }
-        if !FileLock.withLock(lockPath, activity: activity, { try? FileManager.default.removeItem(at: url) }) {
-            try? FileManager.default.removeItem(at: url)
+        // An ended session deletes nothing: the file there now may be the next session's.
+        _ = whileOpen {
+            if !FileLock.withLock(lockPath, activity: activity, { try? FileManager.default.removeItem(at: url) }) {
+                try? FileManager.default.removeItem(at: url)
+            }
         }
     }
 
     public func delete(userId: String, groupId: String) {
         guard let url = file(userId, groupId) else { return }
-        // A wipe goes through even when the lock can't be had: nothing it removes is a mark another write needs.
-        if !FileLock.withLock(lockPath, activity: activity, { try? FileManager.default.removeItem(at: url) }) {
-            try? FileManager.default.removeItem(at: url)
+        // A wipe goes through even when the lock can't be had: nothing it removes is a mark another write needs. An ended
+        // session deletes nothing: the record there now may be the next session's.
+        _ = whileOpen {
+            if !FileLock.withLock(lockPath, activity: activity, { try? FileManager.default.removeItem(at: url) }) {
+                try? FileManager.default.removeItem(at: url)
+            }
         }
     }
 

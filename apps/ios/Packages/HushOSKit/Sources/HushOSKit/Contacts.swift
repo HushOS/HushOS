@@ -355,7 +355,8 @@ extension Vault {
     func openAnywhere(_ node: NodeView) async -> Opened? {
         if let done = opened[node.ref] { return done }
         if let parent = node.parentId {
-            _ = try? await listChildren(of: parent)
+            // In the node's own workspace: a share's folder this vault hasn't opened is never looked for in the own drive.
+            _ = try? await listChildren(of: parent, in: node.workspaceId)
         } else if let root = try? await rootId() {
             _ = try? await listChildren(of: root)
         }

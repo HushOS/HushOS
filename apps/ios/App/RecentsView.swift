@@ -123,7 +123,7 @@ struct HomeView: View {
             .sheet(isPresented: $managingTags) { TagManagerSheet().environment(store) }
             // Recent is narrowed to the chip before a folder stands in for what it holds.
             .task(id: filter) { await store.showRecents(filter) }
-            .task {
+            .task(id: store.sessionKey) {
                 if let root = await store.loadRoot(), store.folders[root] == nil { await store.refresh(folder: root) }
                 await store.refreshRecents()
                 await store.refreshTags()
@@ -451,7 +451,7 @@ struct TrashView: View {
             .environment(store)
         }
         .onDisappear { store.restoreProblem = nil }
-        .task {
+        .task(id: store.sessionKey) {
             await store.refreshTrash()
             loaded = true
         }

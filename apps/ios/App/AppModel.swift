@@ -157,10 +157,11 @@ final class AppModel {
         BackgroundTransfers.shared.vault = nil
         self.user = user
         if !user.email.isEmpty { lastEmail = user.email }
-        vault = Vault.fromKeychain()
         owner = AccountOwner.signedIn
-        // Decrypted copies this process kept for another account go before this one opens anything.
+        // Decrypted copies this process kept for another account go before this one opens anything, and before its
+        // vault is made: a claim ends the copies' session, and a vault keeps to the session it was made in.
         TemporaryCopies.claim(owner)
+        vault = Vault.fromKeychain()
         state = .signedIn
         if let owner { Task { await FilesDomain.register(for: owner) } }
     }
@@ -175,7 +176,9 @@ final class AppModel {
         guard state == .signedIn || state == .signedOut, wiping == nil else { return }
         let shown = state == .signedIn ? vault?.api.session : nil
         let change = SessionChange.decide(shown: shown, last: owner ?? lastOwner, stored: SharedKeychain.session, declined: declinedToken)
-        // The last session's family sync, ledger keys and vault go before anything follows the new one.
+        // The last session's family sync, ledger keys and vault go before anything follows the new one, and the last
+        // session is closed as a sign-out closes it (its late syncs delete nothing, its downloads write nothing), the same
+        // account's new session (`adopt`) included.
         change.forgetLastSession()
         switch change {
         case .none:
@@ -196,6 +199,8 @@ final class AppModel {
         case .restart:
             break
         }
+        // Another account, or a start over: the shown session ended.
+        sessionClosed()
         user = nil
         vault = nil
         self.owner = nil
@@ -206,7 +211,22 @@ final class AppModel {
     /* The account shown before the app went to sign-in (a session that ended), whose queue and notices may still be here. */
     private var lastOwner: AccountOwner?
 
+    /*
+     * The signed-in screens' store, while there is one: every end of the session (sign-out, deletion,
+     * a lost session) resets its families and cancels their work in flight (DriveStore.resetFamilies).
+     * Tied to these transitions only: a view leaving the screen (a file opened full screen) is no end.
+     */
+    @ObservationIgnored weak var driveStore: DriveStore?
+
+    private func sessionClosed() {
+        // Before the vault goes: no download of the session, family or personal, writes again (TemporaryCopies.endAccount).
+        TemporaryCopies.endAccount()
+        driveStore?.resetFamilies()
+        driveStore = nil
+    }
+
     func signOut() async {
+        sessionClosed()
         await BackgroundTransfers.shared.cancelAll()
         await Auth.signOut()
         await FilesDomain.remove()
@@ -227,6 +247,7 @@ final class AppModel {
 
     /* After deletion there is nothing left on the server; forget the Files location too, and say so. */
     func deleted() async {
+        sessionClosed()
         await FilesDomain.remove()
         SharedKeychain.delete(SharedKeychain.sessionAccount)
         AccountStore.shared.wipe()
@@ -246,7 +267,14 @@ final class AppModel {
      * left until then. If it died because this phone was removed from the account, everything of
      * the account on the phone goes as well, as on sign-out.
      */
-    func sessionLost() {
+    func sessionLost(ended: SharedKeychain.Session? = nil) {
+        // The session said to have ended is no longer the one stored (a sign-in since replaced it): nothing of the
+        // stored one goes. The account is looked at again instead, which adopts the stored session.
+        if let ended, let stored = SharedKeychain.session, stored != ended {
+            Task { await checkAccount() }
+            return
+        }
+        sessionClosed()
         if let email = user?.email, !email.isEmpty { lastEmail = email }
         lastOwner = owner
         let ended = SharedKeychain.session
@@ -304,6 +332,7 @@ final class AppModel {
      * the phone before stays where it went.
      */
     private func forgetRemovedDevice() async {
+        sessionClosed()
         await BackgroundTransfers.shared.cancelAll()
         await FilesDomain.remove()
         SharedKeychain.delete(SharedKeychain.sessionAccount)

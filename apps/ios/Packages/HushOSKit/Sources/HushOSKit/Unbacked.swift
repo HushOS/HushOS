@@ -185,7 +185,8 @@ public enum LastEmail {
  *   save from a link (`save-*`);
  * - removed after a day: files opened (`opened/`), fetched through a link (`links/`), and the
  *   Files extension's decrypted downloads and their partials (`downloads/`), each
- *   `<node>/<version>/<file>`, which a reopen within the day reuses.
+ *   `<node>/<version>/<file>`, which a reopen within the day reuses; a family folder's opened
+ *   copies are `opened/family/<workspace>/<node>/<version>/<file>` (`openedFolder`).
  */
 public enum TemporaryCopies {
     static let maxAge: TimeInterval = 24 * 3600
@@ -210,12 +211,178 @@ public enum TemporaryCopies {
             }
             guard cachedFolders.contains(name) else { continue }
             // <folder>/<node>/<version>/<file>: a version's folder is as old as the copy in it.
+            func sweepNodes(_ folder: URL) {
+                for node in contents(folder) {
+                    for version in contents(node) where old(version) { try? files.removeItem(at: version) }
+                    if contents(node).isEmpty { try? files.removeItem(at: node) }
+                }
+            }
             for node in contents(entry) {
+                // opened/family/<workspace>/<node>/<version>/<file> and opened/share/<workspace>/...: the same, a workspace at a
+                // time; opened/own/<node>/<version>/<file>: as any folder of nodes.
+                if name == "opened", [familyFolder, shareFolder].contains(node.lastPathComponent) {
+                    for workspace in contents(node) {
+                        sweepNodes(workspace)
+                        if contents(workspace).isEmpty { try? files.removeItem(at: workspace) }
+                    }
+                    continue
+                }
+                if name == "opened", node.lastPathComponent == ownFolder {
+                    sweepNodes(node)
+                    continue
+                }
                 for version in contents(node) where old(version) { try? files.removeItem(at: version) }
                 if contents(node).isEmpty { try? files.removeItem(at: node) }
             }
         }
     }
+
+    /*
+     * Where an opened copy of an item goes: `opened/<item>/<version>/`, and a family folder's item
+     * under its workspace, `opened/family/<workspace>/<item>/<version>/`, so forgetting the family
+     * removes every copy of it whatever this session listed. Nil for a family workspace id that
+     * isn't a UUID: no copy is made where it couldn't be found again.
+     */
+    /*
+     * `shareWorkspace`: a received share's item, under `opened/share/<workspace>/<item>/<version>/`, so
+     * proving that workspace a family's removes every copy of it, after a relaunch too. This account's
+     * own items go under `opened/own/<item>/<version>/`; anything left flat (`opened/<item>`) is an
+     * earlier version's copy, and goes when a vault starts (dropFlatCopies).
+     */
+    public static func openedFolder(itemId: String, version: String, familyWorkspace: String?, shareWorkspace: String? = nil,
+                                    in temporary: URL = FileManager.default.temporaryDirectory) -> URL? {
+        let opened = temporary.appendingPathComponent("opened", isDirectory: true)
+        if let workspaceId = familyWorkspace ?? shareWorkspace {
+            guard let workspace = UUID(uuidString: workspaceId) else { return nil }
+            return opened.appendingPathComponent(familyWorkspace != nil ? familyFolder : shareFolder, isDirectory: true)
+                .appendingPathComponent(workspace.uuidString.lowercased(), isDirectory: true)
+                .appendingPathComponent(itemId, isDirectory: true).appendingPathComponent(version, isDirectory: true)
+        }
+        return opened.appendingPathComponent(ownFolder, isDirectory: true).appendingPathComponent(itemId, isDirectory: true)
+            .appendingPathComponent(version, isDirectory: true)
+    }
+
+    /* `opened/share/`: received shares' copies by workspace; `opened/own/`: this account's own items' copies. */
+    static let shareFolder = "share"
+    static let ownFolder = "own"
+
+    /*
+     * Every copy opened from these workspaces' items as a received share's (a workspace proven a
+     * family's, or let go of): the whole `opened/share/<workspace>` folder, under the copies' lock.
+     * Nothing once `session` ended: the copies there now may be the next session's.
+     */
+    public static func forgetShareWorkspaces(_ workspaces: Set<String>, in temporary: URL = FileManager.default.temporaryDirectory, session: CopySession? = nil) {
+        let shares = temporary.appendingPathComponent("opened", isDirectory: true).appendingPathComponent(shareFolder, isDirectory: true)
+        forgetLock.withLock {
+            if let session, !session.open { return }
+            for id in workspaces {
+                guard let workspace = UUID(uuidString: id) else { continue }
+                try? FileManager.default.removeItem(at: shares.appendingPathComponent(workspace.uuidString.lowercased(), isDirectory: true))
+            }
+        }
+    }
+
+    /*
+     * Copies an earlier version left flat (`opened/<item>`): which workspace they came from isn't
+     * known, so a share's can't be told from this account's own; all go when a vault starts, which
+     * only costs a download again.
+     */
+    public static func dropFlatCopies(in temporary: URL = FileManager.default.temporaryDirectory) {
+        let opened = temporary.appendingPathComponent("opened", isDirectory: true)
+        forgetLock.withLock {
+            for entry in (try? FileManager.default.contentsOfDirectory(at: opened, includingPropertiesForKeys: nil)) ?? []
+                where UUID(uuidString: entry.lastPathComponent) != nil {
+                try? FileManager.default.removeItem(at: entry)
+            }
+        }
+    }
+
+    /*
+     * Every opened copy of these family folders, gone (a family forgotten on this phone): ids that
+     * aren't UUIDs name none. Under the lock every family copy's writes take (`FamilyCopyGate`), and
+     * each folder's forget generation moves: a download begun before never writes after.
+     */
+    /* True when it ran; false, and nothing deleted, when `session` ended. */
+    @discardableResult
+    public static func forgetFamily(_ workspaces: [String], in temporary: URL = FileManager.default.temporaryDirectory, session: CopySession? = nil) -> Bool {
+        let family = temporary.appendingPathComponent("opened", isDirectory: true).appendingPathComponent(familyFolder, isDirectory: true)
+        return forgetLock.withLock {
+            // An ended session's cleanup touches nothing: the copies there now may be the next session's.
+            if let session, !session.open { return false }
+            for id in workspaces {
+                guard let workspace = UUID(uuidString: id) else { continue }
+                let key = workspace.uuidString.lowercased()
+                forgotten[key, default: 0] += 1
+                try? FileManager.default.removeItem(at: family.appendingPathComponent(key, isDirectory: true))
+            }
+            return true
+        }
+    }
+
+    /*
+     * The allowlist sweep: every family copy folder (`opened/family/<workspace>`) whose workspace
+     * isn't in `keeping` goes, its forget generation moved first so no download of it writes after.
+     * Under the copies' lock, and never from an ended session. Copies go whatever any record
+     * remembers; an empty `keeping` (a cold start) deletes them all, which only costs a download.
+     */
+    @discardableResult
+    public static func sweepFamily(keeping: Set<String>, in temporary: URL = FileManager.default.temporaryDirectory, session: CopySession? = nil) -> Bool {
+        let family = temporary.appendingPathComponent("opened", isDirectory: true).appendingPathComponent(familyFolder, isDirectory: true)
+        let kept = Set(keeping.map { $0.lowercased() })
+        return forgetLock.withLock {
+            if let session, !session.open { return false }
+            for folder in (try? FileManager.default.contentsOfDirectory(at: family, includingPropertiesForKeys: nil)) ?? [] {
+                let workspace = folder.lastPathComponent.lowercased()
+                if kept.contains(workspace) { continue }
+                forgotten[workspace, default: 0] += 1
+                try? FileManager.default.removeItem(at: folder)
+            }
+            return true
+        }
+    }
+
+    static let forgetLock = NSLock()
+    nonisolated(unsafe) static var forgotten: [String: UInt64] = [:]
+
+
+    /*
+     * A copy about to be made of an item, kept to the account's session now and, for a family
+     * folder's, the family's forget generation (FamilyCopyGate). Taken before anything is awaited
+     * for it (the version, its address), so a session that ends meanwhile is seen.
+     */
+    public static func copyGate(familyWorkspace: String?, account: CopyEpoch = .process) -> FamilyCopyGate {
+        copyGate(familyWorkspace: familyWorkspace, session: session(account))
+    }
+
+    /* The same, kept to `session` (a vault's own, Vault.copyGate): refused from the start once that session ended. */
+    public static func copyGate(familyWorkspace: String?, session: CopySession) -> FamilyCopyGate {
+        forgetLock.withLock {
+            let account = session.account
+            let epoch = session.epoch
+            guard let familyWorkspace, let workspace = UUID(uuidString: familyWorkspace) else {
+                return FamilyCopyGate(workspace: nil, generation: 0, account: account, epoch: epoch)
+            }
+            let key = workspace.uuidString.lowercased()
+            return FamilyCopyGate(workspace: key, generation: forgotten[key, default: 0], account: account, epoch: epoch)
+        }
+    }
+
+    /*
+     * The account's session ended (sign-out, deletion, a removal, a lost session, another account in):
+     * under the lock every copy's writes take, so a download begun before, family or personal, never
+     * writes again, even one still waiting on its address. Before anything is wiped.
+     */
+    public static func endAccount(_ account: CopyEpoch = .process) {
+        forgetLock.withLock { account.value &+= 1 }
+    }
+
+    /* The session open now, for cleanup and record writes that must do nothing once it ends (CopySession). */
+    public static func session(_ account: CopyEpoch = .process) -> CopySession {
+        forgetLock.withLock { CopySession(account: account, epoch: account.value) }
+    }
+
+    /* `opened/family/`: family folders' copies by workspace; never an item id (those are UUIDs). */
+    static let familyFolder = "family"
 
     static let ownerMarker = "account-owner"
 
@@ -226,11 +393,13 @@ public enum TemporaryCopies {
      * Each process runs it for its own folder: the app at sign-in, the Files extension whenever
      * the account it serves changes. A marker an older version wrote (a bare user id) is no owner.
      */
-    public static func claim(_ owner: AccountOwner?, in temporary: URL = FileManager.default.temporaryDirectory) {
+    public static func claim(_ owner: AccountOwner?, in temporary: URL = FileManager.default.temporaryDirectory, account: CopyEpoch = .process) {
         let files = FileManager.default
         let marker = temporary.appendingPathComponent(ownerMarker)
         let recorded = (try? Data(contentsOf: marker)).flatMap { try? JSONDecoder().decode(AccountOwner.self, from: $0) }
         if let owner, recorded == owner { return }
+        // A download the last account began writes nothing into the folder emptied here.
+        endAccount(account)
         for item in (try? files.contentsOfDirectory(at: temporary, includingPropertiesForKeys: nil)) ?? [] {
             try? files.removeItem(at: item)
         }
@@ -238,4 +407,62 @@ public enum TemporaryCopies {
         try? files.createDirectory(at: temporary, withIntermediateDirectories: true)
         try? data.write(to: marker, options: .atomic)
     }
+}
+
+/*
+ * Which session of the account a copy belongs to: moved under the copies' lock whenever the
+ * session ends (TemporaryCopies.endAccount). The process's own in the app, a test's own in a test.
+ */
+public final class CopyEpoch: @unchecked Sendable {
+    public static let process = CopyEpoch()
+    /* Read and moved only under TemporaryCopies.forgetLock. */
+    var value: UInt64 = 0
+    public init() {}
+}
+
+/*
+ * A session of the account, as cleanup and record writes are kept to it: a sync of an ended
+ * session (its task can't be cancelled, and it may answer late) deletes no copy or record and
+ * writes no record, since the ones there now may be the next session's. Checked under the
+ * copies' lock, which a session's end takes.
+ */
+public struct CopySession: Sendable {
+    let account: CopyEpoch
+    let epoch: UInt64
+
+    /* Whether the session still stands; read under TemporaryCopies.forgetLock. */
+    var open: Bool { account.value == epoch }
+
+    /* Whether the session still stands, taking the copies' lock. */
+    public var stands: Bool { TemporaryCopies.forgetLock.withLock { open } }
+
+    /* `body` under the copies' lock while the session stands; nil, and nothing done, once it ended. */
+    func whileOpen<T>(_ body: () throws -> T) rethrows -> T? {
+        try TemporaryCopies.forgetLock.withLock { open ? try body() : nil }
+    }
+}
+
+/*
+ * An item's plaintext copy, kept to the session it was begun in and, for a family item, the
+ * family it was begun under: making its folder, writing each chunk and moving it into place run
+ * under the lock a sign-out and forgetting a family move under, and only while neither happened
+ * since, so a wipe that lands mid-download leaves nothing behind and nothing is handed on.
+ */
+public struct FamilyCopyGate: Sendable {
+    let workspace: String?
+    let generation: UInt64
+    let account: CopyEpoch
+    let epoch: UInt64
+
+    /* `body` under the copies' lock, while the session and the family stand; refused when either ended since. */
+    public func perform<T>(_ body: () throws -> T) throws -> T {
+        try TemporaryCopies.forgetLock.withLock {
+            guard account.value == epoch else { throw CancellationError() }
+            if let workspace, TemporaryCopies.forgotten[workspace, default: 0] != generation { throw FamilyFailure(message: FamilyWords.openAgain) }
+            return try body()
+        }
+    }
+
+    /* Whether the copy may still be handed on: throws when its family was forgotten since. */
+    public func check() throws { try perform {} }
 }

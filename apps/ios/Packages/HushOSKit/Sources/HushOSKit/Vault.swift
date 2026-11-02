@@ -124,7 +124,41 @@ public actor Vault {
     var afterGuardCommit: (@Sendable () throws -> Void)?
     /* The settings key the guard is sealed under, resolved at the start of each guard turn. */
     var guardKey: MarksKey?
-    /* The guard's turn (`withGuardTurn`): whether an act holds it, and who waits for it, in order. */
+    /* The family guard (FamilyGuard.swift): a test's own, else the app group's for this session. */
+    var familyGuardOverride: FamilyGuardStore?
+    /* Tests: runs right after each family guard write, so a test can stop there as a crash would. */
+    var afterFamilyGuard: (@Sendable () throws -> Void)?
+    /*
+     * Families whose acceptance may hand back a guard not stored yet (the web worker's `guardsOwed`
+     * and `ledger.owes`): raised before an acceptance commits, released once its guard is stored
+     * (or it had none to store). While raised, every write into the family is refused (FamilyGuard.swift).
+     */
+    var familyGuardOwed: Set<String> = []
+    /* Each family folder route 25 named this session, lowercased, to its family. */
+    var familyAreaGroup: [String: String] = [:]
+    /*
+     * Folders an accepted member list named, held for the write barrier only (holdAsFamilyWorkspaces):
+     * never how a node opens or writes, which only folders proven a family's decide (familyWorkspaces).
+     */
+    var heldAreaGroups: [String: Set<String>] = [:]
+    /*
+     * Family folders this vault let go of (a refusal, a fork, a wipe, a folder the family stopped
+     * listing): a share never refills one. This session's own, never another account's or session's.
+     */
+    var letGoWorkspaces: Set<String> = []
+    /* Rows this vault let go of with their workspace (a proof, a forget), for the screens to drop with their pictures. */
+    var evictedRows: Set<String> = []
+    /* What was let go of since the last call: the screens drop those rows and their thumbnails. */
+    public func takeEvicted() -> Set<String> {
+        defer { evictedRows = [] }
+        return evictedRows
+    }
+    /*
+     * The rows (and keys) a family's area ledger opened. A family folder's row and key are served
+     * only when they came this way: one a share mount (or any write's answer) left there is never
+     * answered for a family's item, never decrypted with, and goes when the ledger is asked again.
+     */
+    var ledgerOpened: Set<NodeRef> = []    /* The guard's turn (`withGuardTurn`): whether an act holds it, and who waits for it, in order. */
     var guardBusy = false
     var guardWaiting: [CheckedContinuation<Void, Never>] = []
     /* Contacts looked up for display, by lowercased email, with when (`cachedLookup`). */
@@ -171,12 +205,31 @@ public actor Vault {
     public nonisolated let areaLedger = AreaLedger()
     /* Every family folder route 25 named this session, lowercased: refused by the personal key path whatever the ledger holds. */
     var familyWorkspaces: Set<String> = []
+    /* Tests: runs after a listing page arrives, before it is opened (a forget landing there). */
+    var afterListingPage: (@Sendable () async -> Void)?
     /* The family's sync, for the forms family records are signed again with (weak: it holds this vault). */
     weak var familyJudge: (any FamilyJudge)?
 
-    public init(api: DriveAPI, session: SharedKeychain.Session) {
+    /*
+     * The session of the account this vault was made in (CopySession), taken once, here: every
+     * copy it makes, every sweep and forget of copies, and its family sync's records keep to it,
+     * never to whichever session is open when they run. Once that session ended (a sign-out,
+     * another sign-in), nothing of this vault's writes or deletes a copy or a record, so a late
+     * task of a replaced vault can't touch the next session's.
+     */
+    public nonisolated let copySession: CopySession
+    /* Made in this order in the process: a vault made earlier never takes a later one's place (FamilySync.shared). */
+    nonisolated let serial: UInt64
+
+    /* `account`: the copies' session epoch the vault keeps to (the process's; a test's own in a test). */
+    public init(api: DriveAPI, session: SharedKeychain.Session, account: CopyEpoch = .process) {
         self.api = api
         self.session = session
+        copySession = TemporaryCopies.session(account)
+        serial = Self.made.next()
+        defer { api.writeGate.set { [weak self] workspaceId in try await self?.finalGate(workspaceId) } }
+        // Copies an earlier version left flat, a share's among them, whose workspace nothing records: gone before any opens.
+        TemporaryCopies.dropFlatCopies()
         // In the group's `local` folder, which is out of backups however these files are rewritten.
         let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedKeychain.accessGroup).map { _ in Unbacked.local }
         indexURL = container?.appendingPathComponent("files-parents.json")
@@ -200,6 +253,19 @@ public actor Vault {
         return current.vault(for: session)
     }
 
+    /* A copy of an item, kept to this vault's session (and a family folder's forget generation): FamilyCopyGate. */
+    public nonisolated func copyGate(familyWorkspace: String?) -> FamilyCopyGate {
+        TemporaryCopies.copyGate(familyWorkspace: familyWorkspace, session: copySession)
+    }
+
+    private static let made = Counter()
+
+    final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: UInt64 = 0
+        func next() -> UInt64 { lock.withLock { value &+= 1; return value } }
+    }
+
     /* Sign-out, deletion, a removed device: the session's vault (and the keys it holds) is let go. */
     public static func forgetCurrent() { current.forget() }
 
@@ -211,7 +277,8 @@ public actor Vault {
 
         func vault(for session: SharedKeychain.Session) -> Vault {
             lock.withLock {
-                if let held, held.session == session { return held }
+                // A vault whose session ended (a sign-out or sign-in since) is never handed out again, whatever it holds.
+                if let held, held.session == session, held.copySession.stands { return held }
                 let made = Vault(api: DriveAPI(session: session), session: session)
                 held = made
                 return made
@@ -228,11 +295,13 @@ public actor Vault {
 
     private func remember(_ listing: Listing) {
         var changed = false
-        for child in listing.children where parents[child.id] != listing.folder.id {
+        // A newer row kept over an older one in this listing keeps its own parent (a move this listing doesn't know of).
+        func kept(_ node: NodeView) -> Bool { opened[node.ref].map { !node.isOlder(than: $0.node) } ?? true }
+        for child in listing.children where parents[child.id] != listing.folder.id && kept(child) {
             parents[child.id] = listing.folder.id
             changed = true
         }
-        for node in listing.ancestors + [listing.folder] {
+        for node in listing.ancestors + [listing.folder] where kept(node) {
             if let parent = node.parentId, parents[node.id] != parent {
                 parents[node.id] = parent
                 changed = true
@@ -257,7 +326,7 @@ public actor Vault {
 
     func unlockAccount() throws -> Data {
         if let accountKey { return accountKey }
-        guard let device = try SharedKeychain.device?.open() else { throw DriveAPIError.notAuthenticated }
+        guard let device = try SharedKeychain.device?.open() else { throw DriveAPIError.notAuthenticated(session: api.session.tag) }
         let key = try deviceRestore(bundle: device.bundle, deviceKey: device.key)
         accountKey = key
         return key
@@ -449,6 +518,8 @@ public actor Vault {
 
     /* The workspace a node lives in: a share's subtree belongs to the granter's. */
     public func workspaceId(of nodeId: String) async throws -> String {
+        // An id a family row shared with another workspace's: never guessed (the own drive would answer).
+        if opened.isAmbiguous(nodeId) { throw IdCollision() }
         if let known = opened[nodeId] { return known.node.workspaceId }
         if let hinted = workspaceHints[nodeId] { return hinted }
         return try await loadWorkspace().workspaceId
@@ -456,7 +527,7 @@ public actor Vault {
 
     func parentKey(for node: NodeView) throws -> Data {
         // A family folder's keys come from the area ledger alone (see `open`): never under a key cached here.
-        if areaLedger.isArea(workspaceId: node.workspaceId) || familyWorkspaces.contains(node.workspaceId.lowercased()) {
+        if isFamilyWorkspace(node.workspaceId) {
             throw DriveAPIError.server(500, FamilyWords.openAgain)
         }
         let parentId = node.parentId ?? node.workspaceId
@@ -485,12 +556,28 @@ public actor Vault {
      * rooted at and refuses a top level whose key is not the one the member list committed to.
      */
     @discardableResult
-    public func open(_ node: NodeView) throws -> Opened {
-        let family = areaLedger.isArea(workspaceId: node.workspaceId) || familyWorkspaces.contains(node.workspaceId.lowercased())
+    public func open(_ node: NodeView) throws -> Opened { try open(node, replacing: false) }
+
+    /*
+     * `replacing`: a row of the own drive or a share served differently from the one held (a page of
+     * a listing, openFromPage) opens afresh; otherwise the held one answers. What is held is replaced
+     * only at the end, once the new row and its key have opened: a row that doesn't open leaves it.
+     */
+    func open(_ node: NodeView, replacing: Bool) throws -> Opened {
+        let family = isFamilyWorkspace(node.workspaceId)
         // A family folder row served differently (a walk re-keyed it, its root moved to the next key) opens through the ledger
         // again, so what the ledger holds of its path is what the server serves now, never what this process saw first.
-        if let done = opened[node.ref], !family || done.node == node { return done }
+        // An older answer arriving after a newer one (listings out of order) keeps the newer row and key.
+        // A family folder's row is answered from the cache only when its area ledger opened it: one a share mount left there
+        // goes, with its key, and the ledger is asked.
+        let trusted = !family || ledgerOpened.contains(node.ref)
+        if let done = opened[node.ref], trusted, done.node == node || node.isOlder(than: done.node) || (!family && !replacing) { return done }
+        if family, !trusted {
+            opened[node.ref] = nil
+            nodeKeys[node.ref] = nil
+        }
         try node.checkEnvelopeSuite()
+        try admitId(node, family: family)
         let key: Data
         if family {
             // A family shown differently or refused since: the ledger holds its keys back until it is accepted again.
@@ -502,25 +589,99 @@ public actor Vault {
             )
             key = try nodeOpen(ctx: ctx, parentKey: try parentKey(for: node), keyEnvelope: try base64urlDecode(value: node.keyEnvelope))
         }
-        nodeKeys[node.ref] = key
         let metadata = try metadataOpen(
             ctx: MetadataContext(workspaceId: node.workspaceId, nodeId: node.id, metadataVersion: node.metadataVersion),
             nodeKey: key, envelope: try base64urlDecode(value: node.metadataEnvelope)
         )
+        // Checked again where it is kept: nothing newer is ever replaced by an older row or its key.
+        if let held = opened[node.ref], node.isOlder(than: held.node) { return held }
+        nodeKeys[node.ref] = key
         let result = Opened(node: node, metadata: metadata, nodeKey: key)
         opened[node.ref] = result
+        if family { ledgerOpened.insert(node.ref) } else { ledgerOpened.remove(node.ref) }
         removedRows.remove(node.ref)
         return result
     }
 
-    func openChain(_ listing: Listing) throws {
-        // Above a share's root the keys are the granter's; those ancestors stay closed.
-        for ancestor in listing.ancestors { _ = try? open(ancestor) }
-        try open(listing.folder)
-        for child in listing.children { try open(child) }
+    #if DEBUG
+    /* Tests only: a row and key held as anything but the ledger would leave them (a share mount, before mounts were refused). */
+    func holdUnchecked(_ row: Opened, key: Data) {
+        opened[row.ref] = row
+        nodeKeys[row.ref] = key
+        ledgerOpened.remove(row.ref)
+    }
+    #endif
+
+    /* A row held for a family folder's item only when its ledger opened it; any other row (and the own drive's, a share's) as held. */
+    func trustedRow(_ ref: NodeRef) -> Opened? {
+        guard let row = opened[ref] else { return nil }
+        return !isFamilyWorkspace(ref.workspaceId) || ledgerOpened.contains(ref) ? row : nil
     }
 
-    public func item(_ id: String) -> Opened? { opened[id] }
+    /*
+     * Whether a received share may be mounted here: never into a family folder (proven by route 25
+     * and its id, or one this session let go of), whose items open only through its area ledger and
+     * never under a key a share hands over, nor into one a member list named while that family's
+     * guard is still owed. A member list's word alone outlasts nothing: once that guard is stored, a
+     * share it named mounts as any other. A share refresh can't refill a family a fork cleared.
+     */
+    func admitShare(_ share: SharedWithMeView) throws {
+        let target = share.workspaceId.lowercased()
+        if isFamilyWorkspace(target) || letGoWorkspaces.contains(target) || heldUnderOwedGuard(target) {
+            throw FamilyFailure(message: FamilyWords.couldntCheckKeys)
+        }
+    }
+
+    /*
+     * A listing's page, parents first: its ancestors, then the folder, then the children, each taken
+     * from the page when it is newer than the row held (or the ordering ties and they differ), so a
+     * folder its owner re-keyed opens its children under its new key in the same listing.
+     */
+    func openChain(_ listing: Listing) throws {
+        // Above a share's root the keys are the granter's; those ancestors stay closed.
+        for ancestor in listing.ancestors { _ = try? openFromPage(ancestor) }
+        try openFromPage(listing.folder)
+        // A family row sharing another workspace's id is left out of the listing alone (admitId), never the whole folder.
+        for child in listing.children {
+            do { try openFromPage(child) } catch is IdCollision { continue }
+        }
+    }
+
+    /*
+     * A row from a listing's page: a family row as open has it; a row of the own drive or a share
+     * replaces the one held when the page's is newer, or the ordering ties and they differ (a
+     * share's rows carry no change order; the latest listing is trusted). A page row that doesn't
+     * open (a re-key this page can't follow, a later envelope format, a share root whose parent is
+     * the granter's) leaves the held row as it was.
+     */
+    @discardableResult
+    func openFromPage(_ node: NodeView) throws -> Opened {
+        guard let held = opened[node.ref], !isFamilyWorkspace(node.workspaceId) else { return try open(node) }
+        if held.node == node || node.isOlder(than: held.node) { return held }
+        do { return try open(node, replacing: true) } catch is IdCollision { throw IdCollision() } catch { return held }
+    }
+
+    /*
+     * A family row never shares its id with a row of another workspace held here (the own drive's,
+     * a share's, another family's): most of the app and every write name items by id alone, which
+     * would then answer with the other row (the own drive's first). When one would, the row
+     * arriving second is refused (IdCollision), a family row or not, so an id on the phone belongs
+     * to one side only and the screens' id-keyed state can't mix them; and the id is marked so no
+     * id-only lookup answers for it again this session, even after the held side is forgotten.
+     */
+    func admitId(_ node: NodeView, family: Bool) throws {
+        let others = opened.workspaces(holding: node.id).union(nodeKeys.workspaces(holding: node.id)).subtracting([node.workspaceId.lowercased()])
+        let involvesFamily = family || others.contains { isFamilyWorkspace($0) }
+        guard involvesFamily, !others.isEmpty || opened.isAmbiguous(node.id) else { return }
+        opened.markAmbiguous(node.id)
+        nodeKeys.markAmbiguous(node.id)
+        // A row already held under exactly this workspace stays as it was (a family row the same id named first).
+        if !others.isEmpty || family { throw IdCollision() }
+    }
+
+    public func item(_ id: String) -> Opened? { opened.ref(for: id).flatMap(trustedRow) }
+    /* Exactly this row, in its own workspace: never another workspace's row with the same id, nor a family's not from its ledger. */
+    public func item(_ ref: NodeRef) -> Opened? { trustedRow(ref) }
     public func nodeKey(_ id: String) -> Data? { nodeKeys[id] }
     /* The key of exactly this item, in its own workspace. */
     func nodeKey(of item: Opened) -> Data? { nodeKeys[item.ref] }
@@ -530,11 +691,27 @@ public actor Vault {
      * write into `workspaceId` (the parent's): a reply naming another workspace is refused,
      * or a key made for one drive would be filed under the other.
      */
-    func adopt(_ node: NodeView, nodeKey key: Data, metadata: NodeMetadata, in workspaceId: String) throws -> Opened {
+    func adopt(_ node: NodeView, nodeKey key: Data, metadata: NodeMetadata, in workspaceId: String, fromShare: Bool = false) throws -> Opened {
         guard node.workspaceId.lowercased() == workspaceId.lowercased() else {
             throw DriveAPIError.server(500, "HushOS answered for a different drive.")
         }
         try node.checkEnvelopeSuite()
+        try admitId(node, family: isFamilyWorkspace(node.workspaceId))
+        // Never over a newer row a family's ledger opened (a late answer's older row).
+        if ledgerOpened.contains(node.ref), let held = opened[node.ref], node.isOlder(than: held.node) { return held }
+        if isFamilyWorkspace(node.workspaceId) {
+            // A share's row is never kept in a family folder (its folder proven meanwhile: admitShare, checked again by the mount
+            // with nothing awaited since), and never answered as the ledger's.
+            if fromShare { throw FamilyFailure(message: FamilyWords.couldntCheckKeys) }
+            // A write's answer is kept as the ledger's only under the key the ledger holds for it now: one sealed under a share's
+            // or this account's key while its folder was proven a family's isn't kept (the ledger opens it when listed).
+            guard areaLedger.nodeKey(workspaceId: node.workspaceId, nodeId: node.id)?.key == key else {
+                return Opened(node: node, metadata: metadata, nodeKey: key)
+            }
+            ledgerOpened.insert(node.ref)
+        } else {
+            ledgerOpened.remove(node.ref)
+        }
         let previous = opened[node.ref]?.node.parentId
         nodeKeys[node.ref] = key
         let result = Opened(node: node, metadata: metadata, nodeKey: key)
@@ -597,13 +774,20 @@ public actor Vault {
     }
 
     /* Fetches a folder's listing, opening every key along the way; all pages. */
-    public func listChildren(of folderId: String) async throws -> Listing {
-        let workspaceId = try await workspaceId(of: folderId)
+    /*
+     * `workspace`: the folder's workspace when the caller knows it (a family's or a share's folder
+     * this vault hasn't opened yet): asked there, never where an unknown id is looked for (the own
+     * drive). Without it, the workspace of the row held, a hint, or the own drive.
+     */
+    public func listChildren(of folderId: String, in workspace: String? = nil) async throws -> Listing {
+        let workspaceId: String
+        if let workspace { workspaceId = workspace } else { workspaceId = try await self.workspaceId(of: folderId) }
         var after: String? = nil
         var all: [NodeView] = []
         var first: Listing? = nil
         repeat {
             let page = try await api.children(of: folderId, workspaceId: workspaceId, after: after)
+            if let afterListingPage { await afterListingPage() }
             try openChain(page)
             remember(page)
             all.append(contentsOf: page.children)
@@ -614,12 +798,22 @@ public actor Vault {
         return Listing(folder: base.folder, ancestors: base.ancestors, children: all, nextCursor: nil)
     }
 
-    /* A folder's children, opened and sorted folders first. */
-    public func children(of folderId: String) async throws -> [Opened] {
-        // The catalogue answers first when it can, so a folder draws before the server is asked.
-        if let fast = catalogueChildren(of: folderId) { return fast }
-        let listing = try await listChildren(of: folderId)
-        return listing.children.compactMap { opened[$0.ref] }.sorted(by: Opened.byName)
+    /* A folder's children, opened and sorted folders first; `workspace` as listChildren's. */
+    public func children(of folderId: String, in workspace: String? = nil) async throws -> [Opened] {
+        // The catalogue (the own drive's) answers first when it can, so a folder draws before the server is asked.
+        let own = workspace == nil ? true : workspace?.lowercased() == (try await loadWorkspace()).workspaceId.lowercased()
+        if own, let fast = catalogueChildren(of: folderId) { return fast }
+        let listing = try await listChildren(of: folderId, in: workspace)
+        let folder = listing.folder.id.lowercased()
+        // The page already replaced every row it holds newer (openChain): a received share's rows get no feed, so a file
+        // moved on another device is taken from its new folder's listing.
+        return listing.children.compactMap { row -> Opened? in
+            guard let held = opened[row.ref] else { return nil }
+            // The row held is newer than this listing's (another listing, after a move, opened it first): shown here only
+            // while it is still in this folder, so a moved file shows in its new folder alone.
+            if row.isOlder(than: held.node) { return held.node.parentId?.lowercased() == folder ? held : nil }
+            return held
+        }.sorted(by: Opened.byName)
     }
 
     /* A node this process has not opened yet: listing the folder it was last seen in opens it and everything above. */
@@ -639,6 +833,8 @@ public actor Vault {
 
     /* The content key and sizes of a file's version (the current one by default). */
     public func openVersion(_ item: Opened, version: VersionListView? = nil) throws -> OpenedVersion {
+        // A family's file decrypts only under the key its area ledger opened, never one a share mount left: refused first.
+        if isFamilyWorkspace(item.node.workspaceId), !ledgerOpened.contains(item.ref) { throw FamilyFailure(message: FamilyWords.couldntCheckKeys) }
         guard let nodeKey = nodeKeys[item.ref] else { throw DriveAPIError.server(500, "Node not opened") }
         let id: String, objectId: String, envelope: String, suite: UInt32, nonce: String, rowSize: String?
         if let version {
@@ -660,9 +856,81 @@ public actor Vault {
     }
 
     /* Downloads and decrypts a file's version to `destination`, chunk by chunk. */
-    public func download(_ nodeId: String, version: VersionListView? = nil, to destination: URL, progress: @Sendable (Double) -> Void = { _ in }) async throws {
-        let item = try await resolve(nodeId)
+    /*
+     * The current version of `item`, at the path `destination` names for a row (made under its
+     * gate by the caller). When the row held here is newer than `item` (the vault learned a newer
+     * version while the screen showed the older), the copy is made once more for that row, so the
+     * newer content shows instead of a refusal on every Try again. Returns the row the copy is of.
+     * A held row older than `item`, or a second mismatch, is the refusal (VersionChanged). Rows are
+     * looked up by workspace and id, never by id alone (which answers with the own drive's row
+     * first), a personal file's as much as a family one's. A row held older by the ordering counters
+     * is never taken; when they don't decide (a received share's rows carry no change order, and
+     * restoring an earlier version moves neither key epoch nor metadata version), the row held is
+     * the one the latest listing returned, and it is trusted.
+     */
+    /*
+     * A row of another workspace this vault doesn't hold (a family's or a share's file still on
+     * screen from the session's last vault, the same account signed in again): its folder is listed
+     * under this vault first, in the row's own workspace (never the own drive, where an unknown
+     * folder is looked for), so a copy of it finds its row rather than failing until some listing
+     * lands. The listing brings the folders above it, top first, and opens them on the way down (a
+     * family's through its ledger), so a folder this vault never opened is no obstacle. Nothing for
+     * a row held, the own drive's (found by id), or one with no folder. The listing refuses as any
+     * would, a family not checked again yet included.
+     */
+    public func holdForCopy(_ item: Opened) async throws {
+        guard opened[item.ref] == nil, let parent = item.node.parentId,
+              item.ref.workspaceId != (try await loadWorkspace()).workspaceId.lowercased() else { return }
+        _ = try await listChildren(of: parent, in: item.node.workspaceId)
+    }
+
+    public func downloadCurrent(_ item: Opened, gate: FamilyCopyGate? = nil, to destination: @Sendable (Opened) async throws -> URL,
+                                progress: @Sendable (Double) -> Void = { _ in }) async throws -> (item: Opened, file: URL) {
+        var item = item
+        for attempt in 0 ..< 2 {
+            let file = try await destination(item)
+            if FileManager.default.fileExists(atPath: file.path) { return (item, file) }
+            do {
+                try await download(item.id, ref: item.ref, expectedVersionId: item.node.currentVersion?.id, to: file, gate: gate, progress: progress)
+                return (item, file)
+            } catch is VersionChanged where attempt == 0 {
+                guard let held = opened[item.ref], held.node.currentVersion?.id != item.node.currentVersion?.id,
+                      !held.node.isOlder(than: item.node) else { throw VersionChanged() }
+                item = held
+            }
+        }
+        throw VersionChanged()
+    }
+
+    /*
+     * `expectedVersionId`: the version the destination's path is named after (the row on screen).
+     * The row held here may name another (an older answer kept out, a newer one since): then nothing
+     * is written, so a copy's path never holds another version's content.
+     */
+    /*
+     * `ref`: the row's workspace and id, when the caller holds the row. By id alone the own drive's
+     * row answers first, so a share's or family folder's row with the same id would download the
+     * own file instead; with `ref` only that row is copied, and a row of another workspace is refused.
+     */
+    public func download(_ nodeId: String, ref: NodeRef? = nil, version: VersionListView? = nil, expectedVersionId: String? = nil, to destination: URL,
+                         gate: FamilyCopyGate? = nil, progress: @Sendable (Double) -> Void = { _ in }) async throws {
+        // Taken before anything is awaited: a session that ends while the address comes writes nothing.
+        let gate = gate ?? copyGate(familyWorkspace: nil)
+        let item: Opened
+        if let ref, let held = opened[ref] {
+            item = held
+        } else if let ref, ref.workspaceId != (try await loadWorkspace()).workspaceId.lowercased() {
+            // Another workspace's row this vault doesn't hold (a family's not opened yet, a new session's vault before its families
+            // are checked again): never looked for in the own drive, which would ask for its folder there. Asked again later.
+            throw FamilyFailure(message: FamilyWords.openAgain)
+        } else {
+            item = try await resolve(nodeId)
+        }
+        if let ref, item.ref != ref { throw DriveAPIError.server(500, "This item has not been seen yet; open its folder first.") }
         let opened = try openVersion(item, version: version)
+        if let expectedVersionId, opened.versionId != expectedVersionId { throw VersionChanged() }
+        // Begun as no family's (a share's, maybe): once its folder is proven a family's, nothing more comes down under that key.
+        let beganFamily = isFamilyWorkspace(item.node.workspaceId)
         let url = try await api.versionURL(opened.versionId, workspaceId: item.node.workspaceId)
         guard var objectURL = URL(string: url.url) else { throw DriveAPIError.server(500, "Bad object URL") }
         // Resumable: a dropped chunk is fetched again, an expired address renewed, and a `.part`
@@ -673,12 +941,26 @@ public actor Vault {
         try await Resumable.download(
             to: destination, count: layout.chunkCount, chunkBytes: layout.chunkBytes, size: opened.content.plaintextSize,
             onExpired: { if let fresh = URL(string: (try await api.versionURL(opened.versionId, workspaceId: item.node.workspaceId)).url) { objectURL = fresh } },
-            progress: progress
+            progress: progress, gate: gate
         ) { index in
+            #if DEBUG
+            if let beforeChunk { await beforeChunk(index) }
+            #endif
+            if !beganFamily, isFamilyWorkspace(item.node.workspaceId) { throw FamilyFailure(message: FamilyWords.couldntCheckKeys) }
             let ciphertext = try await api.range(objectURL, try opened.range(index))
             return try chunkDecrypt(content: opened.content, index: index, ciphertext: ciphertext)
         }
     }
+
+    #if DEBUG
+    /* Tests only: runs as a write reaches the final gate, before its checks (a family's proof landing mid-write). */
+    var beforeGate: (@Sendable (String) async -> Void)?
+    func setBeforeGate(_ hook: (@Sendable (String) async -> Void)?) { beforeGate = hook }
+
+    /* Tests only: runs before each chunk of a download is fetched (a family's proof landing mid-download). */
+    var beforeChunk: (@Sendable (UInt64) async -> Void)?
+    func setBeforeChunk(_ hook: (@Sendable (UInt64) async -> Void)?) { beforeChunk = hook }
+    #endif
 
     /* The sealed thumbnail trailer of a file's current version, decrypted; nil when it has none. */
     public func thumbnail(_ nodeId: String) async throws -> Data? {

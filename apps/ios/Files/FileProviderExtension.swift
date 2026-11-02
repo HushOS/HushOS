@@ -55,6 +55,9 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
             // The gate's refusal (signed out, or another account's location) reaches Files as it is.
             if refused.code == .notAuthenticated { SignInPrompt.ask() }
             return refused
+        case DriveAPIError.notAuthenticated where !endsSession(error, current: SharedKeychain.session):
+            // A late 401 of a session no longer stored (signed in again meanwhile): nothing to sign in to; Files tries again.
+            return NSFileProviderError(.cannotSynchronize)
         case DriveAPIError.notAuthenticated:
             SignInPrompt.ask()
             return NSFileProviderError(.notAuthenticated)
@@ -133,16 +136,19 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         let progress = Progress(totalUnitCount: 100)
         let task = Task {
             do {
-                let vault = try requireVault()
+                // The vault first (opening may claim this folder for the account), then the copy's gate, kept to that
+                // vault's session: an account change after it writes nothing, and the claim itself never refuses this download.
+                let vault = try self.gate.open()
+                let copyGate = vault.copyGate(familyWorkspace: nil)
                 let rootId = try await vault.rootId()
                 // Decrypted into the extension's own temporary directory; Files moves it into place. The path is the
                 // item's and its version's, so when Files asks again after a failure the partial is continued, not orphaned.
                 let item = try await vault.resolve(itemIdentifier.rawValue)
                 let directory = FileManager.default.temporaryDirectory
                     .appendingPathComponent("downloads/\(item.id)/\(item.node.currentVersion?.id ?? "none")", isDirectory: true)
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try copyGate.perform { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
                 let file = directory.appendingPathComponent("content")
-                try await vault.download(itemIdentifier.rawValue, to: file) { fraction in
+                try await vault.download(itemIdentifier.rawValue, to: file, gate: copyGate) { fraction in
                     progress.completedUnitCount = Int64(fraction * 100)
                 }
                 let opened = try await vault.resolve(itemIdentifier.rawValue)

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Security
 @_exported import HushOSCore
 
@@ -33,6 +34,14 @@ public enum SharedKeychain {
             self.origin = origin
             self.token = token
             self.userId = userId
+        }
+
+        /*
+         * This session, named without its secret: what a refusal (a 401) carries of the session it
+         * was sent under, so the app can tell the session in use ending from an old one's late answer.
+         */
+        public var tag: String {
+            SHA256.hash(data: Data((origin + "\n" + userId + "\n" + token).utf8)).prefix(12).map { String(format: "%02x", $0) }.joined()
         }
     }
 

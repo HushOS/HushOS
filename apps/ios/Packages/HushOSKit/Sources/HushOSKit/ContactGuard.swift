@@ -45,6 +45,15 @@ public enum GuardError: Error, LocalizedError, Equatable, WordedError {
     }
 }
 
+/* How a guard read failed: missing (nothing stored) only for a confirmed file-not-found. */
+enum GuardFile {
+    static func missing(_ error: Error) -> Bool {
+        if let error = error as? CocoaError, error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile { return true }
+        let ns = error as NSError
+        return ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOENT)
+    }
+}
+
 /*
  * A trust-changing act on its way: the key commitment it moves to, from `revision`, and `base`,
  * the stored settings sequence its save was sent over (the server's compare-and-set lands it
@@ -163,7 +172,9 @@ struct ContactGuardStore: Sendable {
         do {
             data = try Data(contentsOf: file)
         } catch {
-            if !FileManager.default.fileExists(atPath: file.path) { return nil }
+            // Only a file confirmed missing is "nothing stored": a folder that can't be searched or read also makes
+            // `fileExists` say no, and read as none it would be first use for everyone.
+            if GuardFile.missing(error) { return nil }
             throw GuardError.unreadable
         }
         guard let sealed = try? JSONDecoder().decode(Sealed.self, from: data), sealed.v == 2 else { throw GuardError.unreadable }

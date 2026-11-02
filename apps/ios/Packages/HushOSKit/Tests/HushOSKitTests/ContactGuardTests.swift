@@ -316,6 +316,74 @@ extension OnFakeDrive {
             ResealTo.remove([maya])
         }
 
+        /*
+         * The words are shown over the pin looked up; another device saves a pin of her with other keys
+         * (its Continue) before They match is pressed here. That pin is its act: nothing is written and
+         * the words are compared again. Fails if They match decides over the pin as it reads it at the
+         * save rather than the one the words were shown with.
+         */
+        @Test func theyMatchOverAPinAnotherDeviceMovedMeanwhileWritesNothing() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let phone = await phone(server)
+            let first = try await phone.vault.lookup(email: "maya@example.com")
+            _ = try await phone.vault.theyMatch(first)
+            let found = try await phone.vault.lookup(email: "maya@example.com")
+            var document = try server.document(root: root)
+            var contacts = document["contacts"] as? [String: Any] ?? [:]
+            var pin = try #require(contacts[maya] as? [String: Any])
+            pin["signingPublicKey"] = "other-device-signing"
+            pin["encryptionPublicKey"] = "other-device-encryption"
+            pin["fingerprint"] = ""
+            contacts[maya] = pin
+            document["contacts"] = contacts
+            try server.replace(document, root: root)
+            await #expect(throws: ContactError.moved) { _ = try await phone.vault.theyMatch(found) }
+            let stored = try #require((try server.document(root: root)["contacts"] as? [String: Any])?[maya] as? [String: Any])
+            #expect(stored["signingPublicKey"] as? String == "other-device-signing", "They match undid another device's pin")
+        }
+
+        /*
+         * A pin an earlier release wrote (no four-key commitment) while her account now serves other
+         * keys: the lookup says changed and the words are of the new keys. With nothing in between,
+         * They match verifies them; the legacy pin it was shown with is still the one in the settings.
+         * Fails if a pin without a commitment can never be the pin the words were shown with.
+         */
+        @Test func aLegacyContactWhoseKeysChangedIsVerifiedWithTheyMatch() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            var settings = Settings()
+            settings.setPin(pinnedBeforeTheRelease(try pinned(maya, identity.keys, name: "Maya Lind")))
+            try server.replace(try reread(settings), root: root)
+            let fresh = try startOver(server)
+            let found = try await phone.vault.lookup(email: "maya@example.com")
+            #expect(found.changed)
+            let checked = try await phone.vault.theyMatch(found)
+            #expect(checked.trust == .verified && checked.signingPublicKey == fresh.signingPublicKey)
+            ResealTo.remove([maya])
+        }
+
+        /* The same, but another device moved the legacy pin meanwhile (to other legacy keys): refused, its pin kept. */
+        @Test func aLegacyPinAnotherDeviceMovedIsStillRefused() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            var settings = Settings()
+            settings.setPin(pinnedBeforeTheRelease(try pinned(maya, identity.keys, name: "Maya Lind")))
+            try server.replace(try reread(settings), root: root)
+            _ = try startOver(server)
+            let found = try await phone.vault.lookup(email: "maya@example.com")
+            let other = try makeIdentity(maya)
+            var moved = Settings()
+            moved.setPin(pinnedBeforeTheRelease(try pinned(maya, other.keys, name: "Maya Lind")))
+            try server.replace(try reread(moved), root: root)
+            await #expect(throws: ContactError.moved) { _ = try await phone.vault.theyMatch(found) }
+            #expect(try storedPin(server)?["signingPublicKey"] as? String == other.keys.signingPublicKey)
+        }
+
         @Test func settingsReplacedByANewerCopyAreAChangeNeverFirstUse() async throws {
             defer { done() }
             let identity = try makeIdentity(maya)

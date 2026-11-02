@@ -54,7 +54,8 @@ struct NodeRow: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected == true ? .isSelected : [])
-        .task { store.thumbnail(for: item) }
+        // Asked again when the row shows another version (a replaced picture comes back new) or under a new session.
+        .task(id: "\(item.node.currentVersion?.id ?? "")-\(store.sessionKey.hashValue)") { store.thumbnail(for: item) }
     }
 
     /*
@@ -160,13 +161,14 @@ struct NodeTile: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected == true ? .isSelected : [])
-        .task { store.thumbnail(for: item) }
+        // Asked again when the row shows another version (a replaced picture comes back new) or under a new session.
+        .task(id: "\(item.node.currentVersion?.id ?? "")-\(store.sessionKey.hashValue)") { store.thumbnail(for: item) }
     }
 
     /* A photo or a video frame fills the picture; anything else, a PDF included, is its type mark. */
     private var photo: UIImage? {
         let type = NodeRow.type(for: item)
-        guard type.conforms(to: .image) || type.conforms(to: .movie), let data = store.thumbnails[item.id] else { return nil }
+        guard type.conforms(to: .image) || type.conforms(to: .movie), let data = store.thumbnailData(for: item) else { return nil }
         return UIImage(data: data)
     }
 
@@ -337,7 +339,7 @@ struct FileMark: View {
 
     var body: some View {
         Group {
-            if thumbnail, let data = store.thumbnails[item.id], let image = UIImage(data: data) {
+            if thumbnail, let data = store.thumbnailData(for: item), let image = UIImage(data: data) {
                 let shape = RoundedRectangle(cornerRadius: box * 0.22, style: .continuous)
                 Image(uiImage: image).resizable().scaledToFill()
                     .frame(width: box, height: box).clipShape(shape)
