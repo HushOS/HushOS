@@ -1,0 +1,129 @@
+apps/android/AGENTS.md
+  s_ec12ebe02de5ff::t_89f8453c3e5414 86
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_ec12ebe02de5ff::t_2014da366d0ff9 71-72
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyJoin.kt
+  s_ec12ebe02de5ff::t_c0b735546c482b 218-221
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_ec12ebe02de5ff::t_02865434831219 74-76,79,138-143,194-196,200-235,250,291-296,338,346,350,434-452,454-465,615,862-866,889-915,959,961
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyWalkWork.kt
+  s_ec12ebe02de5ff::t_7d1f3e16cf18e2 1-166
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyWalks.kt
+  s_ec12ebe02de5ff::t_c7db764c03907a 1-313
+apps/android/app/src/main/kotlin/com/hushos/app/data/GroupsApi.kt
+  s_ec12ebe02de5ff::t_78e6630df5cb1e 33-34,60,65-92,172-187,190,193-194,200-202,290-296
+apps/android/app/src/main/kotlin/com/hushos/app/data/Mirror.kt
+  s_ec12ebe02de5ff::t_351253265f9996 166-172
+apps/android/app/src/main/kotlin/com/hushos/app/data/Tags.kt
+  s_ec12ebe02de5ff::t_fe900acfc1ab39 30,32-40
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_ec12ebe02de5ff::t_31e28463a8d3e6 11,1026,1518-1526,1528-1539,1543,1552,1563-1564
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_ec12ebe02de5ff::t_12ecc8ceedf56c 275-276,398-402
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_ec12ebe02de5ff::t_a8bf27cb7cf94c 203-207,215-221,473,1506-1514
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Families.kt
+  s_ec12ebe02de5ff::t_45c1ca111c5736 159-167,175,190,195-196,204-291
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_ec12ebe02de5ff::t_45117acbc4a677 24-25,118-125,128-137,175-225,322-324,329-333,390-391,484,496-591,718,857-869
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_ec12ebe02de5ff::t_82df9e8fdaeabf 3,231,309-310,491
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_ec12ebe02de5ff::t_c53f86990fc18a 3-12,129,237,297,312,324-381,847,888,935-936,985
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NodeRow.kt
+  s_ec12ebe02de5ff::t_0757a901ef0b92 4,306-311,316-320,327-329,340
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Screens.kt
+  s_ec12ebe02de5ff::t_e5a022d27db143 3-4,203-204,209-214,221,229,235,237-238
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_ec12ebe02de5ff::t_17d64b465f8494 108-109,131-133,137,147-148,155-156,341-343,454-461,486,494-499,558-559,606-607,656-658,783,785-792,794,799-805,812
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyFixture.kt
+  s_ec12ebe02de5ff::t_240af520c8352d 31-38,40-41,115-124,192-201,207-211,218-260
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyGuardTest.kt
+  s_ec12ebe02de5ff::t_585cfbf05204c0 130
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyLeaveTest.kt
+  s_ec12ebe02de5ff::t_b04eb5f3a07fd8 1-138
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyWalksTest.kt
+  s_ec12ebe02de5ff::t_936b814265a187 1-448
+apps/android/app/src/test/kotlin/com/hushos/app/data/TagsTest.kt
+  s_ec12ebe02de5ff::t_669189ec4b125a 33-44
+apps/android/app/src/test/kotlin/com/hushos/app/data/VaultAttributesTest.kt
+  s_ec12ebe02de5ff::t_8f06d16cae431d 109-132
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamiliesModelRacesTest.kt
+  s_ec12ebe02de5ff::t_ec515298d14f8f 158,222-224
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyWorkScheduleTest.kt
+  s_ec12ebe02de5ff::t_e07b5bd9008b4e 1-174
+apps/android/app/src/test/kotlin/com/hushos/app/ui/LeaveDialogStateTest.kt
+  s_ec12ebe02de5ff::t_c11d817962df23 1-125
+apps/ios/App/BrowseView.swift
+  s_ec12ebe02de5ff::t_62f3142342d323 631-632
+apps/ios/App/DriveStore.swift
+  s_ec12ebe02de5ff::t_ed4ade81bd1e9a 1061-1070
+apps/ios/App/FolderColourSheet.swift
+  s_ec12ebe02de5ff::t_c51ccb53d95f4a 1-83
+apps/ios/App/Glyphs.swift
+  s_ec12ebe02de5ff::t_d6bdc58a94902b 1,42-45,63-64,70,83,91-113
+apps/ios/App/NodeActions.swift
+  s_ec12ebe02de5ff::t_698b8e96dc4698 18,29,97,239,496
+apps/ios/App/NodeRow.swift
+  s_ec12ebe02de5ff::t_65154e50a04018 356
+apps/ios/App/Received.swift
+  s_ec12ebe02de5ff::t_385dcb94c2bffd 580
+apps/ios/App/RecentsView.swift
+  s_ec12ebe02de5ff::t_4026b45e141c1c 463,491,742
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Tags.swift
+  s_ec12ebe02de5ff::t_70d3b864aaf060 37,39-49,106
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_ec12ebe02de5ff::t_c39adca344937a 84-117,119-133
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/AttributesTests.swift
+  s_ec12ebe02de5ff::t_56f79f751ab60b 53-80
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TagsTests.swift
+  s_ec12ebe02de5ff::t_456aa222bebb64 38-51
+apps/ios/Share/SaveView.swift
+  s_ec12ebe02de5ff::t_047f64fafd182a 49
+apps/web/src/components/drive/file-mark.tsx
+  s_ec12ebe02de5ff::t_6b5d5ef4595564 1,3,45,47,75,81-100,102,106,108,113-114,120,131,156-168,172,174,189
+apps/web/src/components/drive/folder-colour-dialog.tsx
+  s_ec12ebe02de5ff::t_4daa3ce26ffd0e 1-7,164,170,197-198,217,219-220
+apps/web/src/components/drive/tag-colour.tsx
+  s_ec12ebe02de5ff::t_a5a46f42159fbb 1,6,36-37,42-43,56,60,67,71,96-97,109,115,119,121-122,124,187-201,205,372-375,379,381
+apps/web/src/lib/tags.ts
+  s_ec12ebe02de5ff::t_d498c24a5f70a6 1-8,31-32,34,37,50,57-64
+apps/web/src/styles.css
+  s_ec12ebe02de5ff::t_e4651e25253426 216-218,230-235,247-252,264-269,281-282,295-296,308-309,321-322,334-335,347-367
+crates/hushos-core/src/colour.rs
+  s_ec12ebe02de5ff::t_754467a1b09230 10-11,18-28,86-218,286-398
+docs/groups-mobile-plan.md
+  s_ec12ebe02de5ff::t_749d8a5b7dfcf4 218-219
+packages/drive/src/client.rotation.test.ts
+  s_ec12ebe02de5ff::t_d1fd9d49ac1121 6-9,28-31,46,55,236-273,341-415,418,422-447,450-452,504-656
+packages/drive/src/client.ts
+  s_ec12ebe02de5ff::t_b49450969b4847 49,1085-1107,1190-1199,1221-1241,1243-1256,1778,1847,1853-1860,1862,1914-1925,2151-2159
+packages/drive/src/colour.test.ts
+  s_ec12ebe02de5ff::t_9fab9739aa5be0 2,46-72
+packages/drive/src/colour.ts
+  s_ec12ebe02de5ff::t_caccb5681b35cc 28-39,83-145
+packages/drive/src/tags.test.ts
+  s_ec12ebe02de5ff::t_743072b8ded797 2,79-97
+packages/drive/src/tags.ts
+  s_ec12ebe02de5ff::t_39ad1ada1687c5 15-20,136-139,141
+packages/drive/src/transfers.ts
+  s_ec12ebe02de5ff::t_e4347a3d953e99 23,1081-1099,1471-1491,1493-1495
+packages/drive/src/walk-holds.ts
+  s_ec12ebe02de5ff::t_221f3407c2550e 1-75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c4dade0275a9c4c467ab0fbccb0f2ad992feb5e3",
+  "prompts": {},
+  "sessions": {
+    "s_ec12ebe02de5ff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3f79b7e-f7a1-4c9c-9a58-b7059252bcae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
