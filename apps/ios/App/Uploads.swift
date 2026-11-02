@@ -191,7 +191,7 @@ private struct UploadFlow: ViewModifier {
             if let known = listings[id] { return known }
             do {
                 let ticket = store.listingOrder.begin()
-                let children = try await store.vault.children(of: id)
+                let children = try await store.vault.children(of: id, in: store.workspace(ofFolder: id))
                 listings[id] = children
                 // A family folder's rows reach the screen only through refresh(folder:), under its guards; any folder's only
                 // when no listing begun since showed first.

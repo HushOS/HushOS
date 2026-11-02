@@ -404,8 +404,8 @@ extension Vault {
     }
 
     /* A family folder listed afresh, so the ledger sees the envelopes the server serves now (a walk may have re-keyed it). */
-    func lookAgain(_ folderId: String) async throws {
-        _ = try await listChildren(of: folderId)
+    func lookAgain(_ folderId: String, in workspaceId: String) async throws {
+        _ = try await listChildren(of: folderId, in: workspaceId)
     }
 }
 

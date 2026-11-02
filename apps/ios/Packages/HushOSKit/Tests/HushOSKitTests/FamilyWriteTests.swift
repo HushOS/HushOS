@@ -1089,7 +1089,7 @@ extension OnFakeDrive {
             let area = try #require(view.areas.first)
             #expect(!area.openable && area.write == .readOnly && area.line == "Couldn’t check this folder’s keys")
             do {
-                _ = try await vault.children(of: family.rootId)
+                _ = try await vault.children(of: family.rootId, in: family.workspaceId)
                 Issue.record("a top folder the member list never committed to listed")
             } catch {
                 #expect(FamilyWords.error(error) == FamilyWords.couldntCheckKeys)

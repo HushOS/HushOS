@@ -178,6 +178,41 @@ extension OnFakeDrive {
             #expect(try Data(contentsOf: file) == family.photoBytes, "the photo didn't come down under the new vault")
         }
 
+        /*
+         * The same, for a photo in a folder inside the family folder: the new vault has opened only the
+         * top folder (the family's sync opens no more), and neither the photo's folder nor anything
+         * under it. The folder is listed in the photo's own workspace, opening it on the way down.
+         * Fails if the listing asks where an unknown folder is looked for (the own drive), which the
+         * server answers with no such folder.
+         */
+        @Test func aNestedFamilyFileComesDownUnderTheNewVaultWithNoListing() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let version = try #require(family.photo.currentVersion)
+            let nested = try FamilyFixture.node(id: family.photo.id, in: family.workspaceId, parent: family.docs.id, parentKey: family.docsKey, key: family.photoKey,
+                                                kind: .file, name: "Beach.jpg", writer: family.creator, keyEpoch: 3, parentKeyEpoch: 2).with(version: version)
+            server.put(family.docs, nested)
+            server.objects[version.id] = family.photoObject
+            let account = CopyEpoch()
+            let old = try await family.phone(server, account: account)
+            defer { old.done(); FamilySync.forget() }
+            guard case .accepted = await old.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            _ = try await old.vault.children(of: family.rootId)
+            _ = try await old.vault.children(of: family.docs.id)
+            let shown = try #require(await old.vault.item(family.photo.ref))
+            #expect(shown.node.parentId == family.docs.id)
+            SessionChange.closeLastSession(account: account)
+            let now = try await family.phone(server, records: old.records, guards: old.guards, account: account)
+            guard case .accepted = await now.sync.sync(family.summary) else { Issue.record("not accepted again"); return }
+            #expect(await now.vault.item(NodeRef(workspaceId: family.workspaceId, nodeId: family.docs.id)) == nil, "the new vault opened the folder already")
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("nested-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try await now.vault.holdForCopy(shown)
+            let (_, file) = try await now.vault.downloadCurrent(shown) { _ in folder.appendingPathComponent("photo") }
+            #expect(try Data(contentsOf: file) == family.photoBytes, "the nested photo didn't come down under the new vault")
+        }
+
         @Test func theSameSessionKeepsItsFamily() async throws {
             guard let (family, phone) = try await accepted() else { return }
             defer { phone.done(); FamilySync.forget() }

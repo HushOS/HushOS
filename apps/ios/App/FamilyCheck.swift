@@ -154,15 +154,16 @@ struct FamilyCheckView: View {
         do {
             // One session for the whole check: if it ends (a sign-out, the same account signed in again), nothing of it shows.
             guard let session = store.beginSession() else { done(); return }
-            let (summary, memberId) = (summary, member.userId)
-            // Nil: dropped, its session ended (the sheet closes) or the sheet closed already (nothing more to do).
-            guard let start = try await store.inFamily(session, { try await $0.checkCode(summary, with: memberId) }) else {
+            let (summary, memberId, store) = (summary, member.userId, store)
+            // The sync it ran is shown as after any sync (a warning, a refusal, a removal) when it is a later look than what is
+            // shown, as the session's own work: a sheet closed meanwhile never leaves a fork's or removal's rows on screen.
+            // Nil: dropped, its session ended (the sheet closes), or the sheet closed already (nothing more of it shows).
+            guard let start = try await store.inFamilyLanding(session, { try await $0.checkCode(summary, with: memberId) }, land: { result in
+                if case .success(let start) = result { await store.adopt(start.state, of: summary, revision: start.revision, session: session) }
+            }) else {
                 if !Task.isCancelled { done() }
                 return
             }
-            // The sync it ran is shown as after any sync (a warning, a refusal, a removal) when it is a later look than what is shown.
-            await store.adopt(start.state, of: summary, revision: start.revision, session: session)
-            guard !Task.isCancelled else { return }
             guard store.current(session) else { done(); return }
             // The family as it is shown now decides: words worked out over a chain it has since left don't show.
             if let problem = start.problem ?? FamilySync.checkProblem(store.familyStates[summary.id] ?? start.state) {
@@ -181,10 +182,25 @@ struct FamilyCheckView: View {
         error = ""
         run {
             do {
-                let (groupId, member) = (summary.id, member)
-                // Nil: dropped with its session (the sheet closes), or the sheet closed already. A match saved meanwhile stays
-                // saved; only nothing of it is said or closed from a closed sheet.
-                guard let saved = try await store.inFamily(nil, { try await $0.checkMatch(groupId, member: member, rosterVersion: rosterVersion, code: words) }) else {
+                let (groupId, member, summary, store) = (summary.id, member, summary, store)
+                // What the save means for the session lands whether or not the sheet is still open: a match moves what this
+                // phone trusts (what is on screen is judged again); a removal meanwhile shows what checkMatch's removal left, in
+                // its order (a later look stands). Nil: dropped with its session (the sheet closes), or the sheet closed already:
+                // nothing of it is said or closed from a closed sheet.
+                guard let saved = try await store.inFamilyLanding(nil, { try await $0.checkMatch(groupId, member: member, rosterVersion: rosterVersion, code: words) },
+                                                                  land: { result in
+                    switch result {
+                    case .success(let saved) where saved.checked:
+                        // Not waited for: the sheet closes on the save, and the marks catch up.
+                        Task { await store.refreshSigners(); await store.rejudgeFamilies(groupId) }
+                    case .failure(let removed as FamilyRemovedNow):
+                        if let session = store.beginSession() {
+                            await store.adopt(removed.removed.state, of: summary, revision: removed.removed.revision, session: session)
+                        }
+                    default:
+                        break
+                    }
+                }) else {
                     saving = false
                     if !Task.isCancelled { done() }
                     return
@@ -197,17 +213,11 @@ struct FamilyCheckView: View {
                     return
                 }
                 store.notify(saved.verified ? "You and \(who) checked each other" : "You and \(who) see the same family")
-                // What this phone trusts moved: what is on screen is judged again now.
-                Task { await store.refreshSigners(); await store.rejudgeFamilies(summary.id) }
                 checked()
                 done()
             } catch let removed as FamilyRemovedNow {
-                // Removed meanwhile: the family shows what checkMatch's removal left, in its order (a later look stands). Wiped: out
-                // of the family. Refused with the storage words (its guard couldn't be stored, nothing cleared): said with Try again.
-                if let session = store.beginSession() {
-                    await store.adopt(removed.removed.state, of: summary, revision: removed.removed.revision, session: session)
-                }
-                guard !Task.isCancelled else { return }
+                // Removed meanwhile (adopted above, as the session's). Wiped: out of the family. Refused with the storage words
+                // (its guard couldn't be stored, nothing cleared): said with Try again.
                 if case .failed(let words) = removed.removed.state {
                     failure = words
                 } else {

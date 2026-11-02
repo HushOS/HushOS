@@ -37,6 +37,47 @@ extension DriveStore {
     }
 
     /*
+     * A family request from a screen whose outcome is the session's, not the screen's: `land` (adopt
+     * what a sync found, clear, end the queue, show a join) runs as the session's own work whether
+     * or not the screen is still open (SessionGate.publish), under the session's rules and each
+     * family's order. The answer reaches the screen only while it waits: a closed sheet says, closes
+     * and opens nothing.
+     */
+    func inFamilyLanding<T: Sendable>(_ session: Session?, _ work: @escaping @Sendable (FamilySync) async throws -> T,
+                                      land: @escaping @MainActor @Sendable (Result<T, Error>) async -> Void) async throws -> T? {
+        guard let session = session ?? beginSession() else { return nil }
+        let result = await sessionGate.publish(session, { vault -> T? in
+            guard let families = FamilySync.shared(for: vault) else { return nil }
+            return try await work(families)
+        }, land: { result in
+            switch result {
+            case .success(let value?): await land(.success(value))
+            case .success(nil): break
+            case .failure(let error): await land(.failure(error))
+            }
+        })
+        return try result?.get() ?? nil
+    }
+
+    /*
+     * What a join's step found, for the session: in, its state published and its family's folders
+     * listed again; already a member, the family checked from here. Waiting and a fork are the join
+     * screen's own to show.
+     */
+    func landJoin(_ groupId: String, _ outcome: JoinOutcome, revision: UInt64?) async {
+        switch outcome {
+        case .joined(let state):
+            await joined(groupId, state, revision: revision)
+        case .member:
+            if let summary = (try? await inFamily(nil, { try await $0.list() }))?.first(where: { $0.id == groupId }) {
+                await refreshFamily(summary, fromJoin: true)
+            }
+        case .waiting, .fork:
+            break
+        }
+    }
+
+    /*
      * The session ended or is replaced (the same account signed in again, a sign-out, a deletion):
      * everything drawn of its families goes, and what it still has out is cancelled and dropped.
      * Which folders are family folders stays (`familyRoots`, `familyAreaGroups`, `familyFolders`):

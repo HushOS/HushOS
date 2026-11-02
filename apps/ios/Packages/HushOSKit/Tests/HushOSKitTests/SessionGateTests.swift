@@ -167,6 +167,51 @@ import Testing
     }
 
     /*
+     * The check sheet closed while its sync was out, and the sync found a fork: what it found still
+     * lands for the session (the rows clear), and only the sheet gets nothing. A session that ended
+     * meanwhile lands nothing. Fails if a closed screen's cancel drops what its work found with its
+     * own words, or if an ended session's answer lands.
+     */
+    @Test func aClosedCallersOutcomeStillLandsForItsSession() async {
+        final class Landed: @unchecked Sendable { var value: Int? }
+        let owner = Owner()
+        let gate = SessionGate<Owner> { owner }
+        let token = try! #require(gate.begin())
+        let started = Gate()
+        let answer = Gate()
+        let landed = Landed()
+        let caller = Task { @MainActor in
+            await gate.publish(token, { _ -> Int in
+                started.open()
+                await Task.detached { await answer.wait() }.value
+                return 7
+            }, land: { result in landed.value = try? result.get() })
+        }
+        await started.wait()
+        caller.cancel()
+        answer.open()
+        let result = await caller.value
+        #expect(result == nil, "the closed sheet was handed the answer")
+        #expect(landed.value == 7, "what the sync found was dropped with the closed sheet")
+
+        // An ended session: its answer lands nowhere.
+        let next = try! #require(gate.begin())
+        let late = Gate()
+        let ended = Landed()
+        let pending = Task { @MainActor in
+            await gate.publish(next, { _ -> Int in
+                await Task.detached { await late.wait() }.value
+                return 8
+            }, land: { result in ended.value = try? result.get() })
+        }
+        await Task.yield()
+        gate.reset()
+        late.open()
+        _ = await pending.value
+        #expect(ended.value == nil, "an ended session's answer landed")
+    }
+
+    /*
      * The session is replaced after the gate took the work and before the work got its turn (a
      * sign-in queued on the main actor between them): the work never starts. The session reads as
      * the token's for the token and the run's first check, and as the next session's after. Fails

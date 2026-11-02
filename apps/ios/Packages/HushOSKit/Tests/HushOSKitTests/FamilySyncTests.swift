@@ -292,9 +292,10 @@ extension OnFakeDrive {
             #expect(!server.requested("/api/drive/spaces"))
             #expect(await phone.vault.item(family.rootId) == nil)
             #expect(await phone.vault.item(family.fileId) == nil)
-            // The core holds the family's keys back after the fork: the listing is refused there, not by the app.
+            // The core holds the family's keys back after the fork: the listing, asked in the family's workspace, is refused
+            // there, not by the app.
             do {
-                _ = try await phone.vault.children(of: family.rootId)
+                _ = try await phone.vault.children(of: family.rootId, in: family.workspaceId)
                 Issue.record("a forked family's folder listed")
             } catch {
                 #expect(FamilyWords.error(error) == FamilyWords.openAgain)
@@ -1332,10 +1333,15 @@ final class FamilyServer: @unchecked Sendable {
                              "mlDsaPublicKey": keys.mlDsaPublicKey!, "kemPublicKey": keys.kemPublicKey!, "keysSignature": ""]]
     }
 
-    /* A folder's listing from the tree: its ancestors top first, and its children not in the trash. */
-    private func listing(_ id: String) -> (Int, Any) {
+    /*
+     * A folder's listing from the tree: its ancestors top first, and its children not in the trash.
+     * Asked in another workspace than the folder's, none, as the server answers (no such node there).
+     */
+    private func listing(_ id: String, in workspaceId: String) -> (Int, Any) {
         lock.withLock {
-            guard let folder = tree[id] else { return (404, ["message": "This item no longer exists."]) }
+            guard let folder = tree[id], workspaceId.isEmpty || folder.workspaceId.lowercased() == workspaceId.lowercased() else {
+                return (404, ["message": "This item no longer exists."])
+            }
             var ancestors: [NodeView] = []
             var cursor = folder.parentId
             while let parent = cursor, let node = tree[parent] { ancestors.insert(node, at: 0); cursor = node.parentId }
@@ -1467,7 +1473,7 @@ final class FamilyServer: @unchecked Sendable {
         let workspaceId = sent["workspaceId"] as? String ?? query.first { $0.name == "workspaceId" }?.value ?? ""
         switch (method, parts.count >= 3 ? Array(parts.dropFirst(2)) : []) {
         case ("GET", let rest) where rest.count == 3 && rest[0] == "nodes" && rest[2] == "children":
-            return listing(rest[1])
+            return listing(rest[1], in: workspaceId)
         case ("POST", let rest) where rest.count == 3 && rest[0] == "workspaces" && rest[2] == "epochs":
             return lock.withLock {
                 let count = (sent["count"] as? NSNumber)?.uint64Value ?? 1

@@ -475,7 +475,7 @@ extension Vault {
         if family {
             // Looked up afresh before a node or a content key is made: the folder (and the file replaced) as the server serves
             // them now, which a walk may have re-keyed since they were listed (the web's openNodes before every seal).
-            try await lookAgain(parentId)
+            try await lookAgain(parentId, in: workspace.workspaceId)
             if let given {
                 guard let fresh = opened[given.ref] else { throw DriveAPIError.notFound("This item no longer exists.") }
                 // A file someone replaced while this upload waited is never overwritten: their version stays current.
@@ -687,7 +687,7 @@ extension Vault {
                 if let published = landed.published {
                     _ = try? await repairLanded(nodeId: begun.nodeId, workspaceId: begun.workspaceId, final: begun.final, published: published)
                 }
-                try? await lookAgain(begun.parentId)
+                try? await lookAgain(begun.parentId, in: begun.workspaceId)
                 guard let item = opened[NodeRef(workspaceId: begun.workspaceId, nodeId: begun.nodeId)] else { throw landed }
                 return item
             }

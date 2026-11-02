@@ -772,8 +772,14 @@ public actor Vault {
     }
 
     /* Fetches a folder's listing, opening every key along the way; all pages. */
-    public func listChildren(of folderId: String) async throws -> Listing {
-        let workspaceId = try await workspaceId(of: folderId)
+    /*
+     * `workspace`: the folder's workspace when the caller knows it (a family's or a share's folder
+     * this vault hasn't opened yet): asked there, never where an unknown id is looked for (the own
+     * drive). Without it, the workspace of the row held, a hint, or the own drive.
+     */
+    public func listChildren(of folderId: String, in workspace: String? = nil) async throws -> Listing {
+        let workspaceId: String
+        if let workspace { workspaceId = workspace } else { workspaceId = try await self.workspaceId(of: folderId) }
         var after: String? = nil
         var all: [NodeView] = []
         var first: Listing? = nil
@@ -790,11 +796,12 @@ public actor Vault {
         return Listing(folder: base.folder, ancestors: base.ancestors, children: all, nextCursor: nil)
     }
 
-    /* A folder's children, opened and sorted folders first. */
-    public func children(of folderId: String) async throws -> [Opened] {
-        // The catalogue answers first when it can, so a folder draws before the server is asked.
-        if let fast = catalogueChildren(of: folderId) { return fast }
-        let listing = try await listChildren(of: folderId)
+    /* A folder's children, opened and sorted folders first; `workspace` as listChildren's. */
+    public func children(of folderId: String, in workspace: String? = nil) async throws -> [Opened] {
+        // The catalogue (the own drive's) answers first when it can, so a folder draws before the server is asked.
+        let own = workspace == nil ? true : workspace?.lowercased() == (try await loadWorkspace()).workspaceId.lowercased()
+        if own, let fast = catalogueChildren(of: folderId) { return fast }
+        let listing = try await listChildren(of: folderId, in: workspace)
         let folder = listing.folder.id.lowercased()
         // The page already replaced every row it holds newer (openChain): a received share's rows get no feed, so a file
         // moved on another device is taken from its new folder's listing.
@@ -862,14 +869,17 @@ public actor Vault {
     /*
      * A row of another workspace this vault doesn't hold (a family's or a share's file still on
      * screen from the session's last vault, the same account signed in again): its folder is listed
-     * under this vault first, so a copy of it finds its row rather than failing until some listing
-     * lands. Nothing for a row held, the own drive's (found by id), or one with no folder. The listing
-     * refuses as any would, a family not checked again yet included.
+     * under this vault first, in the row's own workspace (never the own drive, where an unknown
+     * folder is looked for), so a copy of it finds its row rather than failing until some listing
+     * lands. The listing brings the folders above it, top first, and opens them on the way down (a
+     * family's through its ledger), so a folder this vault never opened is no obstacle. Nothing for
+     * a row held, the own drive's (found by id), or one with no folder. The listing refuses as any
+     * would, a family not checked again yet included.
      */
     public func holdForCopy(_ item: Opened) async throws {
         guard opened[item.ref] == nil, let parent = item.node.parentId,
               item.ref.workspaceId != (try await loadWorkspace()).workspaceId.lowercased() else { return }
-        _ = try await children(of: parent)
+        _ = try await listChildren(of: parent, in: item.node.workspaceId)
     }
 
     public func downloadCurrent(_ item: Opened, gate: FamilyCopyGate? = nil, to destination: @Sendable (Opened) async throws -> URL,

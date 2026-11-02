@@ -63,6 +63,25 @@ public final class SessionGate<Owner: AnyObject & Sendable> {
         return !Task.isCancelled && current(token) ? result : nil
     }
 
+    /*
+     * `work`, then `land` with its answer or failure (what it means for the session: shown, cleared,
+     * its queue ended), as the session's own work: a caller that stops waiting (a sheet closed
+     * mid-sync) never stops what its sync found from landing. Both keep `run`'s session rules (an
+     * ended or replaced session lands nothing). The caller gets the answer only while it still waits,
+     * so a closed screen says, closes and opens nothing. Nothing starts for a caller already cancelled.
+     */
+    public func publish<T: Sendable>(_ token: Token, _ work: @escaping @Sendable (Owner) async throws -> T,
+                                     land: @escaping @MainActor @Sendable (Result<T, Error>) async -> Void) async -> Result<T, Error>? {
+        guard !Task.isCancelled else { return nil }
+        let owned = Task { @MainActor () -> Result<T, Error>? in
+            guard let result = await self.run(token, work) else { return nil }
+            await land(result)
+            return result
+        }
+        let result = await owned.value
+        return Task.isCancelled ? nil : result
+    }
+
     /* `run` for an operation of one step: its session is the one now. */
     public func run<T: Sendable>(_ work: @escaping @Sendable (Owner) async throws -> T) async -> Result<T, Error>? {
         guard let token = begin() else { return nil }

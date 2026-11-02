@@ -423,7 +423,7 @@ final class DriveStore {
         for id in folders.keys where !isFamilyFolder(id) {
             // Numbered as it starts: a listing begun since that showed first is never covered by this one.
             let ticket = listingOrder.begin()
-            if let children = try? await vault.children(of: id), listingOrder.admits(ticket, of: id) { folders[id] = children }
+            if let children = try? await vault.children(of: id, in: workspace(ofFolder: id)), listingOrder.admits(ticket, of: id) { folders[id] = children }
         }
         recents = (try? await vault.recents()) ?? recents
         await reloadCatalogue()
@@ -476,7 +476,8 @@ final class DriveStore {
         for id in folders.keys where !isFamilyFolder(id) && (touched.contains(id) || folders[id]?.contains(where: { touched.contains($0.id) }) == true) {
             let mark = familyListings.mark(familyGroup(ofFolder: id))
             let ticket = listingOrder.begin()
-            guard let listed = try? await inSession(session, { try await $0.children(of: id) }), current(session) else { continue }
+            let within = workspace(ofFolder: id)
+            guard let listed = try? await inSession(session, { try await $0.children(of: id, in: within) }), current(session) else { continue }
             // A family clear that landed meanwhile stands, and a listing begun since that showed first is never covered.
             guard familyListings.admits(mark, states: familyStates), listingOrder.admits(ticket, of: id) else { continue }
             folders[id] = listed
@@ -513,6 +514,17 @@ final class DriveStore {
     }
 
     /* One item by id, from the catalogue or anything listed this session. */
+    /*
+     * The workspace a folder lives in, as what is drawn says: its rows, a family's top folder, or its
+     * own row. Passed to every listing of it, so a share's or a family's folder the vault hasn't
+     * opened (a new session's vault) is asked for there, never in the own drive. Nil when nothing says.
+     */
+    func workspace(ofFolder id: String) -> String? {
+        if let child = folders[id]?.first { return child.node.workspaceId }
+        for view in familyShown.values { if let area = view.areas.first(where: { $0.root?.id == id }) { return area.workspaceId } }
+        return known(id)?.node.workspaceId
+    }
+
     func known(_ id: String) -> Opened? {
         if let item = catalogue[id] { return item }
         for list in folders.values { if let item = list.first(where: { $0.id == id }) { return item } }
@@ -831,7 +843,8 @@ final class DriveStore {
             await sync(session: session)
             guard current(session) else { return }
             // Kept to its session: a listing the last session asked for is never asked of, or answered into, a new one.
-            guard let children = try await inSession(session, { try await $0.children(of: id) }) else { return }
+            let within = workspace(ofFolder: id)
+            guard let children = try await inSession(session, { try await $0.children(of: id, in: within) }) else { return }
             if removed() || cleared() || !listingOrder.admits(ticket, of: id) { return }
             folders[id] = children
             folderProblems[id] = nil
@@ -1458,7 +1471,8 @@ final class DriveStore {
             }
             let mark = familyListings.mark(familyGroup(ofFolder: id))
             let ticket = listingOrder.begin()
-            if let children = try? await inSession(session, { try await $0.children(of: id) }), current(session),
+            let within = workspace(ofFolder: id)
+            if let children = try? await inSession(session, { try await $0.children(of: id, in: within) }), current(session),
                familyListings.admits(mark, states: familyStates), listingOrder.admits(ticket, of: id) {
                 folders[id] = children
                 for child in children { names[child.id] = child.name }

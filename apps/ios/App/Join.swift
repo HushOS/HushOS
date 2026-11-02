@@ -226,12 +226,15 @@ struct InvitationSheet: View {
         error = nil
         problem = nil
         do {
-            guard let groupId = try await store.inFamily(nil, { try await $0.acceptInvitation(token) }) else {
+            // Accepted: the families are read again for the session whether or not this sheet is still open (inFamilyLanding).
+            let store = store
+            guard let groupId = try await store.inFamilyLanding(nil, { try await $0.acceptInvitation(token) }, land: { result in
+                if case .success = result { await store.refreshFamilies(force: true) }
+            }) else {
                 if !Task.isCancelled { dismiss() }
                 return
             }
-            await store.refreshFamilies(force: true)
-            // Closed meanwhile: accepted on the server, which the next sync finishes; no join screen opens from a closed sheet.
+            // Closed meanwhile: no join screen opens from a closed sheet.
             guard !Task.isCancelled else { return }
             step = .joining(groupId, family: invitation.name)
         } catch let refused as GroupsAPIError where refused.status != 0 {
@@ -335,8 +338,8 @@ struct JoinSections: View {
                 if Task.isCancelled { return }
                 do {
                     // Dropped when the session it began in ended: the screen goes with it.
-                    guard let (outcome, revision) = try await store.inFamily(nil, { try await $0.joinStatusRevised(groupId) }) else { return }
-                    if outcome != .waiting { await show(outcome, revision: revision); return }
+                    guard let outcome = try await nextStep() else { return }
+                    if outcome != .waiting { show(outcome); return }
                     error = nil
                 } catch {
                     if endsSession(error) { store.report(error); return }
@@ -374,25 +377,28 @@ struct JoinSections: View {
     // MARK: Actions
 
     /*
-     * Each answer from the join steps, as a step; `revision`: when the join's answer was found, for
-     * the family it left to publish in order. In the screen's task: closed meanwhile, nothing shows
-     * or navigates (a join the server committed is finished by the next sync).
+     * The join's next step. What it found for the session (in, its state published; already a
+     * member, the family checked) lands whether or not this screen is still open (inFamilyLanding,
+     * DriveStore.landJoin); the step reaches the screen only while it is.
      */
-    private func show(_ outcome: JoinOutcome, revision: UInt64? = nil) async {
+    private func nextStep() async throws -> JoinOutcome? {
+        let groupId = groupId
+        let store = store
+        return try await store.inFamilyLanding(nil, { try await $0.joinStatusRevised(groupId) }, land: { result in
+            if case .success(let found) = result { await store.landJoin(groupId, found.outcome, revision: found.revision) }
+        })?.outcome
+    }
+
+    /* Each answer from the join steps, as the screen shows it: never from a closed screen (the session took what it found). */
+    private func show(_ outcome: JoinOutcome) {
         guard !Task.isCancelled else { return }
         error = nil
         switch outcome {
-        case .joined(let state):
+        case .joined:
             store.notify("You’re in \(family)")
-            await store.joined(groupId, state, revision: revision)
-            guard !Task.isCancelled else { return }
             onJoined?()
         case .member:
-            // This phone already holds the family: nothing to join. Checked as a member, from this screen.
-            if let summary = (try? await store.inFamily(nil, { try await $0.list() }))?.first(where: { $0.id == groupId }) {
-                await store.refreshFamily(summary, fromJoin: true)
-            }
-            guard !Task.isCancelled else { return }
+            // This phone already holds the family: nothing to join. Checked as a member (landJoin), from this screen.
             onJoined?()
         case .waiting:
             if case .waiting = step { return }
@@ -405,8 +411,8 @@ struct JoinSections: View {
     private func resume() async {
         error = nil
         do {
-            guard let (outcome, revision) = try await store.inFamily(nil, { try await $0.joinStatusRevised(groupId) }) else { return }
-            await show(outcome, revision: revision)
+            guard let outcome = try await nextStep() else { return }
+            show(outcome)
         } catch {
             if endsSession(error) { store.report(error); return }
             // The retry belongs to the loading step, whatever step this came from.
