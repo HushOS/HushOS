@@ -1,5 +1,15 @@
 package com.hushos.app.ui
 
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.foundation.selection.selectable
+import com.hushos.core.folderSwatches
+import com.hushos.core.folderColour
+import com.hushos.core.swatchArgb
+import com.hushos.core.toColour
 import androidx.compose.runtime.retain.retain
 import android.content.Context
 import android.content.Intent
@@ -116,7 +126,7 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 /* Which part of the item sheet opens first: the menu, or one action straight from the selection bar or Info. */
-enum class ItemSheet { MENU, RENAME, MOVE, VERSIONS, TAGS, INFO, SHARE, SEND, REPORT }
+enum class ItemSheet { MENU, RENAME, MOVE, COLOUR, VERSIONS, TAGS, INFO, SHARE, SEND, REPORT }
 
 /* Whose folder an item sits in: this account's, or someone else's that it can edit or only view. */
 enum class Owner { ME, EDIT, VIEW }
@@ -224,6 +234,7 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
                 SheetDivider()
                 SheetRow("Rename", Icons.Outlined.Edit) { sheet = ItemSheet.RENAME }
                 SheetRow("Move", Icons.AutoMirrored.Outlined.DriveFileMove) { sheet = ItemSheet.MOVE }
+                if (item.isFolder) SheetRow("Colour", Icons.Outlined.Palette) { sheet = ItemSheet.COLOUR }
             }
             SheetDivider()
             SheetRow("Info", Icons.Outlined.Info) { sheet = ItemSheet.INFO }
@@ -283,6 +294,7 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
             if (canEdit) SheetRow("Move", Icons.AutoMirrored.Outlined.DriveFileMove) { sheet = ItemSheet.MOVE }
             SheetRow("Copy", Icons.Outlined.ContentCopy) { model.copy(listOf(item)); dismiss() }
             if (mine) SheetRow("Tags", Icons.AutoMirrored.Outlined.Label) { sheet = ItemSheet.TAGS }
+            if (canEdit && item.isFolder) SheetRow("Colour", Icons.Outlined.Palette) { sheet = ItemSheet.COLOUR }
             SheetDivider()
             if (!item.isFolder && canEdit) SheetRow("Versions", Icons.Outlined.History) { sheet = ItemSheet.VERSIONS }
             SheetRow("Info", Icons.Outlined.Info) { sheet = ItemSheet.INFO }
@@ -297,6 +309,7 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
         } }
         ItemSheet.RENAME -> RenameDialog(model, state, item, dismiss)
         ItemSheet.MOVE -> MovePicker(model, state, listOf(item), dismiss)
+        ItemSheet.COLOUR -> FolderColourDialog(listOf(item), onPick = { model.recolour(listOf(item), it); dismiss() }, onDismiss = dismiss)
         ItemSheet.VERSIONS -> VersionsSheet(model, state, item, dismiss)
         ItemSheet.TAGS -> ItemTagsSheet(model, state, listOf(item), dismiss)
         ItemSheet.SHARE -> ShareSheet(model, state, item, dismiss)
@@ -306,6 +319,64 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
             ?: InfoSheet(model, state, item, onShare = { sheet = ItemSheet.SHARE }, onTags = { sheet = ItemSheet.TAGS }, dismiss = dismiss)
         ItemSheet.REPORT -> ReportSheet(item, model.reportsGoTo(state), dismiss) { category, reason, email -> model.report(item, category, reason, email) }
     }
+}
+
+/*
+ * A folder's colour, as the web's dialog offers it: the plain folder colour every folder starts with, the eight
+ * swatches, or a colour of its own typed as a hex. Choosing only marks the choice; Save writes one signed record
+ * per folder (null for the plain colour).
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun FolderColourDialog(folders: List<Opened>, onPick: (String?) -> Unit, onDismiss: () -> Unit) {
+    val alpine = Alpine.colors
+    val swatches = remember { folderSwatches() }
+    val first = folders.firstOrNull()?.let { folderColour(it.metadata.attributes) }
+    // "" is the plain folder colour: a saveable stand-in for null.
+    var choice by rememberSaveable { mutableStateOf(first.orEmpty()) }
+    var hex by rememberSaveable { mutableStateOf(if (first != null && swatches.none { it.colour == first }) first else "") }
+    val what = folders.singleOrNull()?.let { "“${it.name}”" } ?: "${folders.size} folders"
+    val typedWrong = hex.isNotEmpty() && toColour(hex) == null
+    @Composable
+    fun Swatch(value: String, name: String, fill: Color, check: Color) {
+        val on = value == choice
+        Box(
+            Modifier.size(44.dp)
+                .then(if (on) Modifier.border(2.dp, alpine.ink, CircleShape) else Modifier)
+                .padding(5.dp).background(fill, CircleShape).clip(CircleShape)
+                .selectable(selected = on, role = androidx.compose.ui.semantics.Role.RadioButton) { choice = value; hex = "" }
+                .semantics { contentDescription = name },
+            contentAlignment = Alignment.Center,
+        ) { if (on) Icon(Icons.Outlined.Check, null, tint = check, modifier = Modifier.size(18.dp)) }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Colour for $what") },
+        text = {
+            Column {
+                Text(
+                    if (folders.size == 1) "People who can open this folder see the colour too." else "People who can open these folders see the colour too.",
+                    modifier = Modifier.padding(bottom = 16.dp),
+                )
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Swatch("", "Default", alpine.folderFront, alpine.folderBack)
+                    for (swatch in swatches) Swatch(swatch.colour, swatch.name, Color(swatchArgb(swatch.colour).toInt()), Color.White)
+                }
+                OutlinedTextField(
+                    value = hex, onValueChange = { typed -> hex = typed.trim(); toColour(hex)?.let { choice = it } },
+                    singleLine = true, label = { Text("Custom colour") }, placeholder = { Text("#7c5cbf") },
+                    isError = typedWrong, supportingText = if (typedWrong) ({ Text("Enter a colour like #7c5cbf.") }) else null,
+                    leadingIcon = if (choice.startsWith("#") && swatches.none { it.colour == choice }) {
+                        { Box(Modifier.size(18.dp).background(Color(swatchArgb(choice).toInt()), CircleShape)) }
+                    } else null,
+                    modifier = Modifier.padding(top = 16.dp).fillMaxWidth(),
+                )
+            }
+        },
+        // A custom colour half typed is not saved as the last one that was whole.
+        confirmButton = { TextButton(enabled = !typedWrong, onClick = { onPick(choice.ifEmpty { null }) }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /* Rename: one field, the same clash message as iOS and the web. */
@@ -773,6 +844,7 @@ private fun Fact(label: String, value: String, primary: Boolean = false, onClick
  * Tags for one item or several: a find-or-add field, each tag with a box (mixed
  * when only some of the items carry it), and Manage tags for the whole list.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ItemTagsSheet(model: DriveViewModel, state: DriveState, items: List<Opened>, dismiss: () -> Unit) {
     val alpine = Alpine.colors
@@ -813,7 +885,7 @@ fun ItemTagsSheet(model: DriveViewModel, state: DriveState, items: List<Opened>,
                 FilledTonalButton(enabled = typed.isNotEmpty(), onClick = add, modifier = Modifier.padding(start = AlpineSpace.S2).height(FieldHeight)) { Text("Add") }
             }
             // The colour a new tag gets.
-            Row(Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+            FlowRow(Modifier.padding(horizontal = AlpineSpace.S6, vertical = AlpineSpace.S2), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S1)) {
                 for (c in OFFERED_TAG_COLOURS) Swatch(c, selected = colour == c) { colour = c }
             }
             if (shown.none { it.name.equals(typed, ignoreCase = true) } && typed.isNotEmpty()) SheetRow("Add “$typed”", Icons.Outlined.Add) { add() }
@@ -860,7 +932,8 @@ fun Swatch(colour: String, selected: Boolean, size: androidx.compose.ui.unit.Dp 
     val alpine = Alpine.colors
     Box(
         Modifier.size(size).then(if (selected) Modifier.border(2.dp, alpine.ink, CircleShape) else Modifier).padding(4.dp)
-            .clip(CircleShape).background(tagColour(colour)).clickable(role = Role.RadioButton, onClickLabel = colour, onClick = onClick),
+            .clip(CircleShape).background(tagColour(colour)).clickable(role = Role.RadioButton, onClick = onClick)
+            .semantics { contentDescription = com.hushos.app.data.TagRegistry.colourName(colour); this.selected = selected },
         contentAlignment = Alignment.Center,
     ) { if (selected) Icon(Icons.Outlined.Check, null, tint = onTagColour(colour), modifier = Modifier.size(size * 0.45f)) }
 }
@@ -909,7 +982,7 @@ fun tagColour(value: String): Color {
     }
 }
 
-/* The colours a tag can be given here, as the web offers them; anything else is a custom colour. */
+/* The colours a tag can be given here, the folder swatches as the web offers them; anything else is a custom colour. */
 val OFFERED_TAG_COLOURS = com.hushos.app.data.TagRegistry.OFFERED
 
 /* What a file is, the way people say it: "PNG image", "PDF document", not a MIME type. */

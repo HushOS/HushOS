@@ -21,6 +21,8 @@ import com.hushos.app.data.Vault
 import com.hushos.app.data.drainFamilyPurged
 import com.hushos.app.data.familyEpoch
 import com.hushos.app.data.forgetFamilyCopies
+import com.hushos.app.data.walk
+import com.hushos.app.data.walkTarget
 import com.hushos.app.data.rethrowIfCancelled
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.StateFlow
@@ -113,7 +115,25 @@ interface FamilyHost {
     fun item(id: String): Opened?
     fun updateState(change: (DriveState) -> DriveState)
     fun lostSession()
+    /* Whether the account is in a family now: the background walks (FamilyWalkWork) scheduled, or cancelled. */
+    fun familyWork(inFamily: Boolean) {}
+    /* A walk is due, or one stopped: the background work runs once soon, so it finishes with the app closed. */
+    fun walkSoon() {}
+    /* A line for the person (a leave that landed): briefly, or until read. */
+    fun notice(text: String, untilRead: Boolean) {}
+    /* The account's storage and plan changed (a leave ended the family's pool and plan for it): read them again. */
+    fun accountChanged() {}
 }
+
+/*
+ * The leave dialog's state, kept by the model so a rotation or a fold redraws it as it was: whose family, a request under
+ * way (a second press sends nothing), the lapsed plans the server named (confirmed by id on the next press), and the
+ * refusal's words.
+ */
+data class LeaveAsk(val groupId: String, val busy: Boolean = false, val plans: List<com.hushos.app.data.FamilyLapsedPlan> = emptyList(), val error: String? = null)
+
+/* A family folder's key change as its family's page shows it: how many items this phone re-keyed, and why it stopped. */
+data class WalkShown(val groupId: String, val done: Int, val error: String?)
 
 /* The session a families operation began in: every nested call and every step after a suspension checks this one. */
 typealias FamilySession = SessionToken<Vault>
@@ -151,6 +171,57 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
     private var ticks = 0
     /* Join screens open per family (a count): while any is open the screen owns the family; background checks wait. */
     private val joining = HashMap<String, Int>()
+
+    /* The leave dialog on screen, if any (LeaveAsk), and the family a leave landed for, until its page has moved on. */
+    var leaving by mutableStateOf<LeaveAsk?>(null)
+        private set
+    var leftFamily by mutableStateOf<String?>(null)
+
+    /* Leave family pressed on the page: the dialog opens (or stays as it is while a request is under way). */
+    fun askLeave(groupId: String) { if (leaving?.busy != true) leaving = LeaveAsk(groupId) }
+
+    /* Cancel: never while a request is under way. */
+    fun dismissLeave() { if (leaving?.busy != true) leaving = null }
+
+    /*
+     * The dialog's Leave family: one request at a time, false (nothing sent) while one is under way. Its answer lands in
+     * the model, whatever happened to the screen meanwhile: the plans or the words stay on the dialog; a leave that landed
+     * closes it, says so, and tells the page to move on (leftFamily).
+     */
+    fun confirmLeave(family: String): Boolean {
+        val ask = leaving ?: return false
+        if (ask.busy) return false
+        leaving = ask.copy(busy = true, error = null)
+        model.familyScope.launch {
+            val result = leave(ask.groupId, ask.plans.map { it.id })
+            if (leaving?.groupId != ask.groupId) return@launch
+            val outcome = result?.getOrElse { failed ->
+                failed.rethrowIfCancelled()
+                leaving = ask.copy(busy = false, error = FamilyWords.error(failed))
+                return@launch
+            } ?: run { leaving = null; return@launch }
+            when (outcome) {
+                is FamilySync.Leaving.EndsLapsed -> leaving = ask.copy(busy = false, plans = outcome.plans)
+                is FamilySync.Leaving.Refused -> leaving = ask.copy(busy = false, error = outcome.words)
+                is FamilySync.Leaving.Left -> {
+                    leaving = null
+                    // The leave landed either way; a wipe that failed is said, not hidden behind it.
+                    if (outcome.removed.state == FamilyState.Wiped) model.notice("You left $family", untilRead = false)
+                    else model.notice("You left $family, but this device kept some of it. HushOS couldn’t clear the family’s keys and saved records on this device. Sign out to clear them.", untilRead = true)
+                    leftFamily = ask.groupId
+                    // Its storage and plan are its own again: Account's card and Plan and storage read them afresh.
+                    model.accountChanged()
+                }
+            }
+        }
+        return true
+    }
+
+    /* Each family folder's walk on this phone (by lowercase workspace) while it runs or after it stopped. */
+    val walks = mutableStateMapOf<String, WalkShown>()
+    /* Folders a walk of this model runs in now, and each run's last end with the wait before it is walked again. */
+    private val walking = HashSet<String>()
+    private val walkEnded = HashMap<String, Pair<Int, Long>>()
 
     /* The mailed invitation, as the sheet's own state ("" for a link whose token was cut off), drawn by Main. */
     var invitation by mutableStateOf<String?>(null)
@@ -248,13 +319,18 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
     suspend fun refreshFamilies(force: Boolean = false, maxAgeMs: Long = 60_000, session: FamilySession? = null) {
         val s = session ?: begin() ?: return
         if (!gate.current(s) || !familiesDue(now(), syncedAt, list != null, force, maxAgeMs)) return
-        val result = gate.run(s) { s.owner.families.listReconciling() } ?: return
-        result.onSuccess { (listed, gone) ->
+        listenForRemovals(s)
+        val result = gate.run(s) { s.owner.families.let { sync -> sync.listReconciling().let { (listed, gone) -> Triple(listed, gone, sync.unsettled(listed)) } } } ?: return
+        result.onSuccess { (listed, gone, unsettled) ->
             listed.forEach { names[it.id] = it.name }
             list = listed
             served = true
             syncedAt = now()
-            gone.forEach { if (it.state == FamilyState.Wiped) removed(it.groupId!!, s, it.revision) else unlistedFailed(it.groupId!!, it.state, s, it.revision) }
+            // A family this account is in has its due work checked in the background too, the app closed or not; so does
+            // one this phone still keeps whose removal isn't settled (only a confirmed not-member lets it go).
+            model.familyWork(listed.any { it.state == "active" } || unsettled.isNotEmpty() || gone.any { it.state != FamilyState.Wiped })
+            // Every removal found so far, by this pass or by the background work through the same vault.
+            applyRemovals(s)
             for (summary in listed) {
                 if (!gate.current(s)) return
                 refreshFamily(summary, session = s)
@@ -311,6 +387,8 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             list = listed
             listed.forEach { names[it.id] = it.name }
             syncedAt = now()
+            // In a family now: its due work is checked in the background from here on, whether or not anything is due yet.
+            model.familyWork(listed.any { it.state == "active" })
         }
         if (!gate.current(session)) return
         val summary = list?.firstOrNull { it.id == groupId } ?: run {
@@ -403,6 +481,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                 }
                 if (!gate.current(s)) return true
                 rejudge(summary.id, s)
+                startWalks(summary, state.view, s)
             }
             // No answer: what this phone opened before stays on screen, read only.
             state is FamilyState.Failed && state.words == FamilyWords.NO_ANSWER -> {}
@@ -412,6 +491,102 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             }
         }
         return true
+    }
+
+    /*
+     * The walks a sync found this phone has its own reason to run (ownReasonToWalk), each in the background of the screen,
+     * one per folder: when one ends (walked, ended elsewhere, or stopped) the run waits before it is walked again here, longer
+     * each time (the web's walkRetries), so a run route 25 still names right after it finished never spins walk, sync,
+     * walk. A finished walk checks the family again, so its page stops showing the key change; a stopped one says why and
+     * hands the run to the background work, which tries again with the app closed.
+     */
+    private fun startWalks(summary: GroupSummary, view: FamilyView, s: FamilySession) {
+        val running = view.areas.filter { it.rotating }.map { it.workspaceId.lowercase() }.toSet()
+        walks.keys.filter { walks[it]?.groupId == summary.id && it !in running && it !in walking }.forEach { walks.remove(it) }
+        val due = view.areas.mapNotNull { it.walkTarget() }
+        if (due.isEmpty()) return
+        model.walkSoon()
+        for (target in due) {
+            val ws = target.workspaceId.lowercase()
+            val key = "$ws:" + (target.rotationId ?: "${target.nodeId}@${target.targetEpoch}")
+            if (ws in walking || now() < (walkEnded[key]?.second ?: 0L)) continue
+            walking.add(ws)
+            walks[ws] = WalkShown(summary.id, 0, walks[ws]?.error)
+            model.familyScope.launch {
+                var done = 0
+                val result = gate.run(s) {
+                    s.owner.families.walk(summary.id, target, progress = { count ->
+                        done = count
+                        model.familyScope.launch { if (gate.current(s) && ws in walking) walks[ws] = WalkShown(summary.id, count, null) }
+                    })
+                }
+                walking.remove(ws)
+                if (result == null || !gate.current(s)) return@launch
+                val attempts = (walkEnded[key]?.first ?: 0) + 1
+                walkEnded[key] = attempts to now() + walkWait(attempts)
+                result.onSuccess {
+                    walks.remove(ws)
+                    refreshFamily(summary, session = s)
+                }.onFailure { error ->
+                    error.rethrowIfCancelled()
+                    if (error is NotAuthenticated) { model.lostSession(); return@launch }
+                    walks[ws] = WalkShown(summary.id, done, walkWords(error))
+                    model.walkSoon()
+                }
+            }
+        }
+    }
+
+    /*
+     * Leaving (route 20), then this phone's wipe of the family (FamilySync.leave): on a leave, the family shows as removed
+     * and every folder of it says so, route 2 is read again, and the background walks stop when no family is left. Null
+     * when the session ended meanwhile.
+     */
+    suspend fun leave(groupId: String, endsLapsed: List<String>, session: FamilySession? = null): Result<FamilySync.Leaving>? {
+        val s = session ?: begin() ?: return null
+        val result = gate.run(s) { s.owner.families.leave(groupId, endsLapsed) } ?: return null
+        val left = result.getOrNull() as? FamilySync.Leaving.Left
+        if (left != null && gate.current(s)) {
+            val revised = left.removed
+            if (revised.state == FamilyState.Wiped) removed(groupId, s, revised.revision)
+            else unlistedFailed(groupId, revised.state, s, revised.revision)
+            walks.keys.filter { walks[it]?.groupId == groupId }.forEach { walks.remove(it) }
+            // Route 2 read again on its own: the screen that asked moves on now, never after the list.
+            model.familyScope.launch { refreshFamilies(force = true, session = s) }
+        }
+        if (result.exceptionOrNull() is NotAuthenticated) model.lostSession()
+        return result
+    }
+
+    /* Route 3 read for a family whose check didn't land (Leave family needs its members): kept as a sync's would be. */
+    suspend fun loadMembers(groupId: String, session: FamilySession) {
+        val result = gate.run(session) { session.owner.families.members(groupId) } ?: return
+        result.getOrNull()?.let { if (gate.current(session)) details[groupId] = it }
+    }
+
+    /*
+     * Removals a caller of the session's family sync found (FamilySync.takeRemovals): this model's own pass, or the
+     * background work using the app's vault, which never reaches these screens otherwise. Each shown as a sync's Wiped
+     * is (or, a wipe that couldn't finish, as refused), ordered by its revision.
+     */
+    private suspend fun applyRemovals(s: FamilySession) {
+        if (!gate.current(s)) return
+        for (found in s.owner.families.takeRemovals()) {
+            val groupId = found.groupId ?: continue
+            // A family still listed shows the state as its own sync's would (a fork's warning, a refusal's words, its
+            // rows and marks let go of); one no longer listed as a removal found while unlisted.
+            val summary = list?.firstOrNull { it.id == groupId }
+            when {
+                summary != null -> show(found.state, summary, s, found.revision)
+                found.state == FamilyState.Wiped -> removed(groupId, s, found.revision)
+                else -> unlistedFailed(groupId, found.state, s, found.revision)
+            }
+        }
+    }
+
+    /* The session's family sync tells this model when anyone found a removal: shown on the families' scope. */
+    private fun listenForRemovals(s: FamilySession) {
+        s.owner.families.onRemovals = { model.familyScope.launch { applyRemovals(s) } }
     }
 
     /* A family the server says this account is no longer in, found while it wasn't listed: shown as a sync's Wiped is. */
@@ -540,6 +715,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         list = null; served = null; invitation = null; checking = null
         states.clear(); names.clear(); shown.clear(); details.clear(); syncing.clear(); refreshed.clear(); problems.clear(); verdicts.reset()
         checkedAt.clear(); joining.clear(); syncedAt = 0L; folders = FamilyFolders(); held = null; heldStack = emptyMap(); shownRevision.clear()
+        walks.clear(); walking.clear(); walkEnded.clear(); leaving = null; leftFamily = null
     }
 
     /*
@@ -677,6 +853,19 @@ fun outOfReach(workspaceId: String, own: String?, shares: List<String>?, family:
 /* What search looks through: this drive's rows and the family rows listed this session, each once (the lists key rows by id). */
 fun searchableRows(base: List<Opened>, folders: Map<String, List<Opened>>, family: (Opened) -> Boolean): List<Opened> =
     (base + folders.values.flatten().filter(family)).distinctBy { it.id }
+
+/*
+ * How long a run waits before this screen walks it again after its walk ended (the web's backoffDelay): 30 s, twice as long
+ * each time, never more than ten minutes.
+ */
+fun walkWait(attempts: Int): Long = minOf(10 * 60_000L, 30_000L * (1L shl (attempts - 1).coerceIn(0, 10)))
+
+/* Why a walk stopped, said as the family page says it. */
+fun walkWords(error: Throwable): String = when (error) {
+    is com.hushos.app.data.WalkStopped -> error.message ?: "The rotation could not finish. Try again."
+    is com.hushos.app.data.ApiError -> error.message ?: "The rotation could not finish. Try again."
+    else -> FamilyWords.error(error)
+}
 
 /* How old a families pass may be at the live sync's minute tick: under the minute, so a pass stamped at its end never skips a tick. */
 const val FAMILY_TICK_AGE_MS = 45_000L

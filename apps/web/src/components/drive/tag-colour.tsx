@@ -1,9 +1,9 @@
-import { TAG_PRESETS, type TagColour, type TagPreset } from '@hushos/drive/client';
+import type { TagColour } from '@hushos/drive/client';
 import { CheckIcon, ChevronDownIcon } from 'lucide-react';
 import { cn } from 'cn';
 import { useId, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { OFFERED_COLOURS, swatchProps, TAG_COLOUR_LABEL } from '@/lib/tags';
+import { OFFERED_COLOURS, swatchProps, tagColourLabel } from '@/lib/tags';
 
 /* A tag's colour as a square, whichever way it was chosen. */
 export function Swatch({ colour, className }: { colour: TagColour | null; className?: string }) {
@@ -33,12 +33,14 @@ export function TagColourPicker({
     className,
 }: {
     value: TagColour;
-    onChange: (colour: TagColour) => void;
+    /* `swatch`: chosen by a swatch, not by the custom editor (whose hex may match one). */
+    onChange: (colour: TagColour, swatch: boolean) => void;
     disabled?: boolean;
     className?: string;
 }) {
     const id = useId();
-    const custom = !(TAG_PRESETS as readonly string[]).includes(value);
+    // An older tag's Ledger preset is neither a swatch on offer nor one of its own: nothing is ticked.
+    const custom = value.startsWith('#') && !OFFERED_COLOURS.includes(value);
     const [open, setOpen] = useState(custom);
     const ring = (on: boolean) =>
         cn(
@@ -51,22 +53,22 @@ export function TagColourPicker({
             disabled={disabled}
             className={cn('m-0 flex min-w-0 flex-col gap-2 border-0 p-0', className)}
         >
-            <div className="flex items-center gap-1">
+            <div className="flex flex-wrap items-center gap-1">
                 {OFFERED_COLOURS.map((preset) => (
                     <label
                         key={preset}
-                        title={TAG_COLOUR_LABEL[preset]}
+                        title={tagColourLabel(preset) ?? undefined}
                         className={ring(value === preset)}
                     >
                         <input
                             type="radio"
                             name={id}
                             value={preset}
-                            aria-label={TAG_COLOUR_LABEL[preset]}
+                            aria-label={tagColourLabel(preset) ?? undefined}
                             checked={value === preset}
                             onChange={() => {
                                 setOpen(false);
-                                onChange(preset);
+                                onChange(preset, true);
                             }}
                             className="absolute inset-0 size-full cursor-pointer appearance-none rounded-full"
                         />
@@ -91,8 +93,9 @@ export function TagColourPicker({
                         checked={custom}
                         onChange={() => {
                             // Choosing Custom chooses a colour at once; the square then refines it.
+                            // With the editor already open its colour stands; it reads a value only as it opens.
+                            if (!custom && !open) onChange(FIRST_CUSTOM, false);
                             setOpen(true);
-                            if (!custom) onChange(FIRST_CUSTOM);
                         }}
                         onClick={() => setOpen(true)}
                         className="absolute inset-0 size-full cursor-pointer appearance-none rounded-full"
@@ -103,23 +106,22 @@ export function TagColourPicker({
                         style={{
                             background: custom
                                 ? value
-                                : 'conic-gradient(#b4503b, #c9962b, #23766d, #4a64c8, #7c5cbf, #b4503b)',
+                                : `conic-gradient(${OFFERED_COLOURS.join(', ')}, ${OFFERED_COLOURS[0]})`,
                         }}
                     />
                 </label>
             </div>
             <span className="text-[13px] text-muted-foreground">
-                {custom
-                    ? `Custom colour · ${value.toUpperCase()}`
-                    : (TAG_COLOUR_LABEL[value as TagPreset] ?? '')}
+                {custom ? `Custom colour · ${value.toUpperCase()}` : (tagColourLabel(value) ?? '')}
             </span>
             {open && (
                 <div className="border-t border-rule pt-3">
+                    {/* The editor holds the hex chosen, a swatch's included, so typing one keeps it in place. */}
                     <CustomColour
-                        key={custom ? 'custom' : 'preset'}
-                        value={custom ? value : FIRST_CUSTOM}
+                        key={value.startsWith('#') ? 'hex' : 'preset'}
+                        value={value.startsWith('#') ? value : FIRST_CUSTOM}
                         disabled={disabled}
-                        onChoose={(hex) => onChange(hex)}
+                        onChoose={(hex) => onChange(hex, false)}
                     />
                 </div>
             )}
@@ -182,9 +184,25 @@ export function CustomColour({
     const [hsv, setHsv] = useState<Hsv>(() => hexToHsv(value));
     const [typed, setTyped] = useState(value);
     const hex = hsvToHex(hsv);
+    /*
+     * The colour as the caller last gave it, and the last one chosen here. A value arriving
+     * from outside (a save coming back, Custom resetting it) moves the square, hue and field
+     * to it; one this editor chose, or the one it shows, leaves them where they are.
+     */
+    const [given, setGiven] = useState(value);
+    const [sent, setSent] = useState<string | null>(null);
+    if (value !== given) {
+        setGiven(value);
+        const lower = value.toLowerCase();
+        if (lower !== sent && lower !== hex.toLowerCase()) {
+            setHsv(hexToHsv(value));
+            setTyped(value);
+        }
+    }
     const commit = (next: Hsv) => {
         setHsv(next);
         setTyped(hsvToHex(next));
+        setSent(hsvToHex(next).toLowerCase());
         onChoose(hsvToHex(next) as TagColour);
     };
     /* A press anywhere on a surface sets it; a drag keeps setting; the release chooses. */
@@ -351,13 +369,16 @@ export function TagColourButton({
                 <Swatch colour={value} className="size-[18px] rounded-full" />
                 <ChevronDownIcon className="size-4 text-muted-foreground" aria-hidden="true" />
             </PopoverTrigger>
-            <PopoverContent align="start" className="flex w-[292px] flex-col gap-3 p-4">
+            <PopoverContent
+                align="start"
+                className="flex w-[min(392px,calc(100vw_-_32px))] max-w-none flex-col gap-3 p-4"
+            >
                 <span className="text-sm font-bold">Colour</span>
                 <TagColourPicker
                     value={value}
-                    onChange={(colour) => {
+                    onChange={(colour, swatch) => {
                         onChange(colour);
-                        if ((TAG_PRESETS as readonly string[]).includes(colour)) setOpen(false);
+                        if (swatch) setOpen(false);
                     }}
                 />
             </PopoverContent>

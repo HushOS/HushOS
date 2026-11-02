@@ -460,7 +460,7 @@ struct TrashView: View {
 
 /* Every tag in the workspace: rename, recolour, delete, and how many items each names. */
 /*
- * Manage tags: every tag in the list. Tap a dot for the five presets or a custom colour,
+ * Manage tags: every tag in the list. Tap a dot for the eight swatches or a custom colour,
  * tap a name or swipe to rename, swipe to remove. Removing says how many items lose the
  * tag and asks once; the items themselves are never touched.
  */
@@ -488,7 +488,7 @@ struct TagManagerSheet: View {
                         HStack(spacing: Alpine.Space.s3) {
                             Menu {
                                 Section("Colour for \(tag.name)") {
-                                    ForEach(TagRegistry.presets, id: \.self) { preset in
+                                    ForEach(TagRegistry.offered, id: \.self) { preset in
                                         Button { Task { await store.editTags { registry in registry.recolour(tag.id, to: preset) } } } label: {
                                             if tag.colour == preset { Label(TagColour.label(preset), systemImage: "checkmark") } else { Text(TagColour.label(preset)) }
                                         }
@@ -739,7 +739,7 @@ struct OnThisPhoneView: View {
             } else {
                 // Kept from a share this session hasn't opened: the name and size are all the phone knows.
                 HStack(spacing: Alpine.Space.s3) {
-                    PageGlyph(label: (entry.name as NSString).pathExtension.uppercased().nilIfEmpty)
+                    PageGlyph(label: (entry.name as NSString).pathExtension.uppercased().nilIfEmpty, name: entry.name)
                         .frame(width: Theme.mark * 0.66, height: Theme.mark * 0.66 * 54 / 44).frame(width: Theme.mark, height: Theme.mark)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(entry.name).font(Theme.Text.body).foregroundStyle(Alpine.ink).lineLimit(1)

@@ -71,9 +71,12 @@ data class FamilyArea(
     /* The folder's key opened from a grant the member list vouches for. */
     val opened: Boolean = false,
     /* Its top folder opened through the ledger at the member list's latest key version. */
-    val rootListed: Boolean = false, val rotating: Boolean = false, val write: AreaWrite = AreaWrite.READ_ONLY,
+    val rootListed: Boolean = false,
+    /* The key change route 25 says is running in it (a removal's, a departure's), if any. */
+    val rotation: SpaceRotation? = null, val write: AreaWrite = AreaWrite.READ_ONLY,
 ) {
     val openable: Boolean get() = opened && root != null && name != null
+    val rotating: Boolean get() = rotation != null
 
     /* What its row says under its name, in the web's words (s/$groupId/index.tsx, areaLine). */
     val line: String get() = when {
@@ -132,8 +135,12 @@ sealed interface FamilyState {
     data class Fork(val fork: FamilyFork) : FamilyState
     /* The server said this account is not in the family: what the phone kept of it is gone. */
     data object Wiped : FamilyState
-    /* Couldn't check, in FamilyWords' words. */
-    data class Failed(val words: String) : FamilyState
+    /*
+     * Couldn't check, in FamilyWords' words. `transient`: the failure was the network's or the server's for now (no answer,
+     * 408, 429, 5xx), so a retry may pass. `removal`: the server said this account is not in the family, but this phone
+     * couldn't let go of it yet (its guard not stored or read); the family is refused meanwhile.
+     */
+    data class Failed(val words: String, val transient: Boolean = false, val removal: Boolean = false) : FamilyState
 }
 
 class FamilySync(
@@ -184,7 +191,46 @@ class FamilySync(
         val wiped = held.sorted().filter(FamilyRecords::valid).mapNotNull { id ->
             exclusive(id) { askUnlisted(id)?.let { Revised(it, revise(), id) } }
         }
+        // Kept for whoever draws the families (FamiliesModel), whichever caller found them: the background work using
+        // the app's vault finds a removal as surely as the app does, and the screens must let go of it too.
+        publishRemovals(wiped)
         return listed to wiped
+    }
+
+    /* Whether a sync's state let go of what was open of the family (refuse or wipe ran): everything but accepted and no answer. */
+    private fun letGo(state: FamilyState): Boolean = when (state) {
+        is FamilyState.Accepted -> false
+        is FamilyState.Failed -> state.words != FamilyWords.NO_ANSWER
+        else -> true
+    }
+
+    /*
+     * Every wipe of a family, whoever ran it (a sync's not-member, route 2's reconciliation, a member check, a join, a
+     * leave), queued for the screens and told: the background work shares the app's vault and must not leave them drawing
+     * what it let go of. A wipe that couldn't finish goes too, as the refusal it leaves.
+     */
+    internal fun publishRemovals(found: List<Revised>) {
+        if (found.isEmpty()) return
+        removals.addAll(found)
+        onRemovals?.invoke()
+    }
+
+    /* Removals and unfinished wipes found by any caller of listReconciling, until the screens take them. */
+    private val removals = java.util.concurrent.ConcurrentLinkedQueue<Revised>()
+    /* Told when a caller found some (the background work, say); the screens then take them. */
+    @Volatile var onRemovals: (() -> Unit)? = null
+
+    /* The removals found since the last call, each once, in the order found. */
+    fun takeRemovals(): List<Revised> = generateSequence { removals.poll() }.toList()
+
+    /*
+     * Families this phone still keeps a device record of that `listed` doesn't name: a removal not settled yet (the
+     * server's not-member never came, or the wipe couldn't finish). Only a confirmed not-member lets go of one, so until
+     * this is empty the background check stays scheduled.
+     */
+    fun unsettled(listed: List<GroupSummary>): List<String> {
+        val shown = listed.map { it.id.lowercase() }.toSet()
+        return records.groups(userId).filter { it !in shown }
     }
 
     private fun askUnlisted(groupId: String): FamilyState? {
@@ -201,7 +247,7 @@ class FamilySync(
                 // As run()'s removal: the guard (and so the record) kept for the two-phase wipe, but nothing of the family
                 // opens. Not settled: the next list asks again, until the wipe finishes.
                 refuse(groupId)
-                return FamilyState.Failed(FamilyWords.error(failed))
+                return FamilyState.Failed(FamilyWords.error(failed), removal = true)
             }
             // A closed vault's wipe lets go of nothing (it waits for this session's next look): not settled either.
             if (records.read(userId, groupId) != null) return null
@@ -242,7 +288,12 @@ class FamilySync(
      */
     fun syncRevised(summary: GroupSummary): Revised {
         names[summary.id] = summary.name
-        return exclusive(summary.id) { Revised(run(summary), revision.incrementAndGet()) }
+        val revised = exclusive(summary.id) { Revised(run(summary), revision.incrementAndGet(), summary.id) }
+        // Anything that let go of what was open (a removal finished or not, a fork, an unchecked chain, a rollback or any
+        // other refusal): the screens let go of it too, whoever ran the sync. Only an accepted family, or no answer at all
+        // (which leaves things as they were), isn't published.
+        if (letGo(revised.state)) publishRemovals(listOf(revised))
+        return revised
     }
 
     data class Revised(val state: FamilyState, val revision: Long, val groupId: String? = null)
@@ -284,7 +335,7 @@ class FamilySync(
         } catch (error: NotAuthenticated) {
             throw error
         } catch (error: GroupsApiError) {
-            if (!error.isNotMember) { forgetUnlessUnanswered(groupId, error); return FamilyState.Failed(FamilyWords.error(error)) }
+            if (!error.isNotMember) { forgetUnlessUnanswered(groupId, error); return FamilyState.Failed(FamilyWords.error(error), transient = transient(error)) }
             try {
                 wipe(groupId)
                 FamilyState.Wiped
@@ -292,11 +343,11 @@ class FamilySync(
                 // The guard the wipe hands back couldn't be stored (or read): nothing of the family was let go of, but
                 // nothing of it opens either.
                 refuse(groupId)
-                FamilyState.Failed(FamilyWords.error(failed))
+                FamilyState.Failed(FamilyWords.error(failed), removal = true)
             }
         } catch (error: Exception) {
             forgetUnlessUnanswered(groupId, error)
-            FamilyState.Failed(FamilyWords.error(error))
+            FamilyState.Failed(FamilyWords.error(error), transient = transient(error))
         }
     }
 
@@ -380,9 +431,38 @@ class FamilySync(
             FamilyState.Wiped
         } catch (failed: Exception) {
             refuse(groupId)
-            FamilyState.Failed(FamilyWords.error(failed))
+            FamilyState.Failed(FamilyWords.error(failed), removal = true)
         }
-        Revised(state, revision.incrementAndGet())
+        Revised(state, revision.incrementAndGet(), groupId).also { publishRemovals(listOf(it)) }
+    }
+
+    /*
+     * Leaving (route 20), then this phone's wipe, as a removal's (the web's LeaveDialog then wipeGroup): the family's keys,
+     * its device record, its folders' rows and keys and every copy opened from them go; the settings pin and the family
+     * guard stay as marks, so the family coming back is never first use. A refusal (the organizer, the last manager, the
+     * payer) or no answer keeps everything. A not-member answer is a leave that already happened: the same wipe.
+     */
+    fun leave(groupId: String, endsLapsed: List<String> = emptyList()): Leaving {
+        if (!FamilyRecords.valid(groupId)) return Leaving.Refused("Please try again.")
+        val dissolved = try {
+            api.leave(groupId, endsLapsed)
+        } catch (error: GroupsApiError) {
+            if (error.code == "ends-lapsed" && error.plans.isNotEmpty()) return Leaving.EndsLapsed(error.plans)
+            if (!error.isNotMember) return Leaving.Refused(leaveWords(error))
+            false
+        }
+        val removed = removedNow(groupId)
+        // Not asked about again from route 2's side (it no longer lists the family) unless it lists it again.
+        if (removed.state == FamilyState.Wiped) settledUnlisted.add(groupId.lowercase())
+        return Leaving.Left(removed, dissolved)
+    }
+
+    sealed interface Leaving {
+        /* Left: `removed` is the wipe's outcome (Wiped, or Failed when this phone couldn't let go of everything). */
+        data class Left(val removed: Revised, val dissolved: Boolean) : Leaving
+        data class Refused(val words: String) : Leaving
+        /* Lapsed plans this person pays for end with the leave: said, and confirmed by id on the next press. */
+        data class EndsLapsed(val plans: List<FamilyLapsedPlan>) : Leaving
     }
 
     /* The family folders this process or the device record knows of. */
@@ -532,7 +612,7 @@ class FamilySync(
         val keyVersion = vault.accountKeyVersion()
         return family.map { area ->
             // The top folder is set only once it proved to be this area's own (below): a refused one is never handed out.
-            var folder = FamilyArea(area.workspaceId, rotating = area.rotating)
+            var folder = FamilyArea(area.workspaceId, rotation = area.rotation)
             var pinArea: OpenedArea? = null
             try {
                 val row = area.grant
@@ -779,6 +859,11 @@ class FamilySync(
             else -> FamilyWords.OPEN_AGAIN
         }
 
+        /* The network's or the server's for now (no answer, a timeout, throttling, a server error): a retry may pass. */
+        fun transient(error: Throwable): Boolean = unanswered(error) ||
+            (error is GroupsApiError && (error.status == 408 || error.status == 429 || error.status >= 500)) ||
+            (error is ApiError && (error.status == 408 || error.status == 429 || error.status >= 500))
+
         /* A request that got no answer: nothing was refused, so nothing is taken away. */
         fun unanswered(error: Throwable): Boolean = when (error) {
             is GroupsApiError -> error.status == 0
@@ -799,6 +884,33 @@ class FamilySync(
             val mlDsa = runCatching { digestHex(entry.mlDsaPublicKeyDigest) }.getOrNull() ?: return null
             val kem = runCatching { digestHex(entry.kemPublicKeyDigest) }.getOrNull() ?: return null
             return keyCommitment(PinKeys(entry.keyVersion, entry.encryptionPublicKey, entry.signingPublicKey, mlDsa, kem, ""))
+        }
+
+        /* Why this person can't leave or step back yet: someone else must hold the role first (the web's copy.ts). */
+        const val ORGANIZER_FIRST = "Make someone else the organizer first."
+        const val MANAGER_FIRST = "Let someone else manage the family first."
+
+        /*
+         * Why this person can't leave now, by the rule the server applies (the web's leaveBlocker), from route 3's members, or
+         * null when Leave family can be offered. The last one in a family may always leave: that ends it.
+         */
+        fun leaveBlocker(userId: String, members: List<GroupDetail.Member>): String? {
+            val active = members.filter { it.state == "active" }
+            val me = active.firstOrNull { it.userId.equals(userId, ignoreCase = true) } ?: return null
+            val others = active.filter { it !== me }
+            if (others.isEmpty()) return null
+            fun held(role: String) = others.any { role in it.roles }
+            if ("billing" in me.roles && !held("billing")) return ORGANIZER_FIRST
+            if ("members" in me.roles && !held("members")) return MANAGER_FIRST
+            return null
+        }
+
+        /* A leave the server refused, in the web's words (copy.ts errorCopy); the payer's in the server's own, as it names where. */
+        fun leaveWords(error: GroupsApiError): String = when (error.code) {
+            "organizer" -> ORGANIZER_FIRST
+            "last-holder" -> MANAGER_FIRST
+            "payer" -> error.message ?: error.words
+            else -> error.words
         }
 
         /* The web's names for roles (rolesLine reads `billing` and `members`). */
@@ -844,9 +956,9 @@ class FamilySync(
         }
 
         /* Present but unreadable is a signature that cannot hold, as the web reads it. */
-        private fun signature(value: Any?): ByteArray? = (value as? String)?.let { runCatching { base64urlDecode(it) }.getOrDefault(ByteArray(0)) }
+        internal fun signature(value: Any?): ByteArray? = (value as? String)?.let { runCatching { base64urlDecode(it) }.getOrDefault(ByteArray(0)) }
 
-        private fun rekey(raw: JSONObject?): ServedRekey? {
+        internal fun rekey(raw: JSONObject?): ServedRekey? {
             raw ?: return null
             val origin = raw.optJSONObject("origin") ?: JSONObject()
             fun bytes(name: String) = runCatching { base64urlDecode(origin.getString(name)) }.getOrDefault(ByteArray(0))

@@ -213,8 +213,9 @@
  * without touching the web. The warning values are the ones `open` had, already
  * checked for contrast; the yellow tag carries ink that reads on it at AA, or AAA
  * in high contrast. The folder steps are the lightness and vividness a folder in
- * its own colour is drawn at (FolderMark; the phones' twin is in the Rust core's
- * colour.rs). Same four schemes, selectors and order as @hushos/tokens.
+ * its own colour is drawn at (FolderMark), and the sheet steps those of a file's
+ * type label, edge and fill (SheetMark); the phones' twin of both is in the Rust
+ * core's colour.rs. Same four schemes, selectors and order as @hushos/tokens.
  */
 :root,
 .light {
@@ -226,6 +227,12 @@
     --folder-front-c: 0.11;
     --folder-back-l: 0.66;
     --folder-back-c: 0.132;
+    --sheet-label-l: 0.5;
+    --sheet-label-c: 0.15;
+    --sheet-edge-l: 0.86;
+    --sheet-edge-c: 0.05;
+    --sheet-fill-l: 0.992;
+    --sheet-fill-c: 0.012;
 }
 @media (prefers-color-scheme: dark) {
     :root:not(.light) {
@@ -237,6 +244,12 @@
         --folder-front-c: 0.121;
         --folder-back-l: 0.54;
         --folder-back-c: 0.121;
+        --sheet-label-l: 0.74;
+        --sheet-label-c: 0.136;
+        --sheet-edge-l: 0.44;
+        --sheet-edge-c: 0.04;
+        --sheet-fill-l: 0.27;
+        --sheet-fill-c: 0.015;
     }
 }
 .dark {
@@ -248,6 +261,12 @@
     --folder-front-c: 0.121;
     --folder-back-l: 0.54;
     --folder-back-c: 0.121;
+    --sheet-label-l: 0.74;
+    --sheet-label-c: 0.136;
+    --sheet-edge-l: 0.44;
+    --sheet-edge-c: 0.04;
+    --sheet-fill-l: 0.27;
+    --sheet-fill-c: 0.015;
 }
 @media (prefers-contrast: more) {
     :root:not(.dark) {
@@ -259,6 +278,8 @@
         --folder-front-c: 0.15;
         --folder-back-l: 0.46;
         --folder-back-c: 0.15;
+        --sheet-label-l: 0.42;
+        --sheet-label-c: 0.15;
     }
 }
 @media (prefers-contrast: more) and (prefers-color-scheme: dark) {
@@ -271,6 +292,8 @@
         --folder-front-c: 0.1;
         --folder-back-l: 0.7;
         --folder-back-c: 0.11;
+        --sheet-label-l: 0.84;
+        --sheet-label-c: 0.11;
     }
 }
 .hc:not(.dark) {
@@ -282,6 +305,8 @@
     --folder-front-c: 0.15;
     --folder-back-l: 0.46;
     --folder-back-c: 0.15;
+    --sheet-label-l: 0.42;
+    --sheet-label-c: 0.15;
 }
 @media (prefers-color-scheme: dark) {
     .hc:not(.light) {
@@ -293,6 +318,8 @@
         --folder-front-c: 0.1;
         --folder-back-l: 0.7;
         --folder-back-c: 0.11;
+        --sheet-label-l: 0.84;
+        --sheet-label-c: 0.11;
     }
 }
 .dark.hc {
@@ -304,6 +331,8 @@
     --folder-front-c: 0.1;
     --folder-back-l: 0.7;
     --folder-back-c: 0.11;
+    --sheet-label-l: 0.84;
+    --sheet-label-c: 0.11;
 }
 
 /*
@@ -313,6 +342,27 @@
 [data-folder-colour] {
     --folder-front: oklch(var(--folder-front-l) calc(var(--folder-front-c) * var(--fs)) var(--fh));
     --folder-back: oklch(var(--folder-back-l) calc(var(--folder-back-c) * var(--fs)) var(--fh));
+}
+
+/*
+ * A file in its type's colour (@hushos/drive colour.ts fileTypeHue): the label at
+ * this scheme's sheet steps, and the sheet faintly tinted. High contrast keeps the
+ * plain sheet and edge (the marks fall back to their tokens), so only the label tells.
+ */
+[data-file-hue] {
+    --sheet-label: oklch(var(--sheet-label-l) var(--sheet-label-c) var(--th));
+    --sheet-edge: oklch(var(--sheet-edge-l) var(--sheet-edge-c) var(--th));
+    --sheet-fill: oklch(var(--sheet-fill-l) var(--sheet-fill-c) var(--th));
+}
+@media (prefers-contrast: more) {
+    [data-file-hue] {
+        --sheet-edge: initial;
+        --sheet-fill: initial;
+    }
+}
+.hc [data-file-hue] {
+    --sheet-edge: initial;
+    --sheet-fill: initial;
 }
 
 /*

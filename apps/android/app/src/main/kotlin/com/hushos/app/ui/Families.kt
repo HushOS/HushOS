@@ -156,6 +156,15 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
         standings = read?.getOrNull()
         checkedWith = with.getOrNull()
     }
+    // The leave dialog lives in the model: redrawn as it was after a rotation or a fold, whatever the page shows below it.
+    families.leaving?.takeIf { it.groupId == groupId }?.let { LeaveDialog(model, it, name) }
+    // A leave that landed: the page moves on, once, whichever composition is on screen when it lands.
+    LaunchedEffect(families.leftFamily) {
+        if (families.leftFamily == groupId) {
+            families.leftFamily = null
+            onBack()
+        }
+    }
     Scaffold(contentWindowInsets = WindowInsets(0), containerColor = alpine.ground, topBar = { DestinationBar(if (joining) waitTitle ?: "Join $name" else name, onBack = onBack) }) { padding ->
         PullToRefreshBox(isRefreshing = families.syncing[groupId] == true, onRefresh = { scope.launch { families.refreshFamilies(force = true) } }, modifier = Modifier.padding(padding).fillMaxSize()) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S8)) {
@@ -163,6 +172,7 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
                     joining -> JoinContent(model, groupId, name, title = { waitTitle = it }, onJoined = {})
                     view != null -> {
                         Alerts(model, groupId, name, state, organizer)
+                        KeyChanges(model, groupId, name, view)
                         Folders(view, openFolder)
                         Subheader("Members")
                         for (member in view.members) {
@@ -177,15 +187,106 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
                             }
                         }
                         TechnicalDetailsRow(view)
+                        Leaving(model, groupId, me)
                     }
                     else -> {
                         Alerts(model, groupId, name, state, organizer)
                         if (state == null || families.syncing[groupId] == true) Box(Modifier.fillMaxWidth().padding(AlpineSpace.S8), contentAlignment = Alignment.Center) { LoadingIndicator() }
+                        // A family this phone couldn't check (or found shown differently) can still be left, as on the web.
+                        else if (summary?.state == "active" && state != FamilyState.Wiped) Leaving(model, groupId, me)
                     }
                 }
             }
         }
     }
+}
+
+/*
+ * Key changes on the family page (the web's KeyChangeNotice): while route 25 says a folder's keys are being replaced (a
+ * removal's, a departure's), how far this phone's walk has got; and a walk that stopped, with why and when it is tried
+ * again. Everything in the folders stays readable meanwhile.
+ */
+@Composable
+private fun KeyChanges(model: DriveViewModel, groupId: String, family: String, view: FamilyView) {
+    val running = view.areas.filter { it.rotating }
+    val walks = model.families.walks.filterValues { it.groupId == groupId }
+    fun nameOf(workspaceId: String) = view.areas.firstOrNull { it.workspaceId.equals(workspaceId, ignoreCase = true) }?.name ?: "A family folder"
+    if (running.isNotEmpty()) {
+        val done = walks.values.sumOf { it.done }
+        val what = if (running.size == 1) "${nameOf(running[0].workspaceId)} is getting new keys." else "${running.size} folders are getting new keys."
+        val progress = if (done > 0) " $done ${if (done == 1) "item" else "items"} done so far." else ""
+        Info("Replacing keys in the family folders", "$what$progress Everything stays readable meanwhile.")
+    }
+    for ((workspaceId, walk) in walks) {
+        val error = walk.error ?: continue
+        Notice("Replacing keys in ${nameOf(workspaceId)} stopped", "$error HushOS tries again the next time it checks $family.")
+    }
+}
+
+/* A notice in the calm colours, for what is under way rather than wrong (the web's info alert). */
+@Composable
+private fun Info(title: String, body: String) {
+    val alpine = Alpine.colors
+    Column(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2).background(alpine.tint, RoundedCornerShape(12.dp)).padding(AlpineSpace.S4),
+        verticalArrangement = Arrangement.spacedBy(AlpineSpace.S1)) {
+        Text(title, style = MaterialTheme.typography.titleSmall, color = alpine.ink)
+        Text(body, style = MaterialTheme.typography.bodyMedium, color = alpine.ink)
+    }
+}
+
+/*
+ * Leaving (route 20, the web's Leaving setting and LeaveDialog): Leave family, disabled with the reason when the member list
+ * already shows the server would refuse (the organizer, the last manager), asked once, then this phone forgets the family.
+ * The server stays the judge: its refusal shows in the dialog, and lapsed plans it names are said and confirmed by id.
+ */
+@Composable
+private fun Leaving(model: DriveViewModel, groupId: String, me: String) {
+    val alpine = Alpine.colors
+    val families = model.families
+    val members = families.details[groupId]?.members
+    LaunchedEffect(groupId, members == null) {
+        if (members != null) return@LaunchedEffect
+        val session = families.begin() ?: return@LaunchedEffect
+        families.loadMembers(groupId, session)
+    }
+    val blocker = members?.let { FamilySync.leaveBlocker(me, it) }
+    Subheader("Leaving")
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = AlpineSpace.S4, end = AlpineSpace.S2, top = AlpineSpace.S2, bottom = AlpineSpace.S2),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(blocker ?: "You’ll lose the family folders. Your own files stay yours.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted,
+            modifier = Modifier.weight(1f))
+        TextButton(onClick = { families.askLeave(groupId) }, enabled = members != null && blocker == null, modifier = Modifier.heightIn(min = 44.dp)) {
+            Text("Leave family", color = if (members != null && blocker == null) alpine.danger else alpine.inkMuted)
+        }
+    }
+}
+
+/*
+ * The leave dialog, drawn by the family page from the model's LeaveAsk (so a rotation or a fold redraws it with its
+ * request, plans and words), never from the screen's own state.
+ */
+@Composable
+private fun LeaveDialog(model: DriveViewModel, ask: LeaveAsk, family: String) {
+    val alpine = Alpine.colors
+    val families = model.families
+    val alone = families.details[ask.groupId]?.members?.count { it.state == "active" } == 1
+    val busy = ask.busy
+    val plans = ask.plans
+    val error = ask.error
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { families.dismissLeave() },
+        title = { Text("Leave $family?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
+                Text(if (alone) "You’re the only one in $family, so leaving ends it. You’ll lose the family folders. Your own files stay yours."
+                    else "You’ll lose the family folders. Your own files stay yours.")
+                if (plans.isNotEmpty()) Text(com.hushos.app.data.FamilyLapsedPlan.endsWhenYouLeave(family, plans))
+                error?.let { Text(it, color = alpine.danger) }
+            }
+        },
+        confirmButton = { TextButton(onClick = { families.confirmLeave(family) }, enabled = !busy) { Text(if (busy) "Leaving" else "Leave family", color = alpine.danger) } },
+        dismissButton = { TextButton(onClick = { families.dismissLeave() }, enabled = !busy) { Text("Cancel") } },
+    )
 }
 
 /* A member: avatar, name, address, role, "Account changed"; Verified or Not verified at the right; the row's menu checks them. */

@@ -28,7 +28,17 @@ import com.hushos.core.identityCreate
 import com.hushos.core.identityOpen
 import com.hushos.core.identityUpgrade
 import com.hushos.core.newId
+import com.hushos.core.NodeKeyContext
+import com.hushos.core.MetadataContext
+import com.hushos.core.MetadataStatement
+import com.hushos.core.NodeKind
+import com.hushos.core.metadataOpen
+import com.hushos.core.metadataSeal
+import com.hushos.core.metadataSign
+import com.hushos.core.nodeWrap
 import com.hushos.core.pinAfter
+import com.hushos.core.previousRootKeyWrap
+import com.hushos.core.rosterNext
 import com.hushos.core.randomBytes
 import com.hushos.core.rosterDigest
 import com.hushos.core.rosterFirst
@@ -102,6 +112,16 @@ class FamilyFixture(val server: FakeDrive) {
 
     // The server's side.
     @Volatile var chain: List<SignedGroupStatement> = listOf(r1, r2)
+    /* The family folder's key version route 25 serves, and the grant of it to Maya. */
+    @Volatile private var areaVersion = 1L
+    @Volatile private var grantRow: JSONObject = JSONObject().put("workspaceKeyVersion", 1).put("granteeKeyVersion", member.keys.keyVersion.toLong())
+        .put("granterUserId", creator.id).put("rosterVersion", 2).put("rosterDigest", rosterDigest(r2.statement)).put("envelope", base64urlEncode(grant))
+    /* The key change route 25 names in the folder: its run id, from the top folder, to this epoch. */
+    @Volatile var run: Triple<String, String, Long>? = null
+    /* Route 20's answer: null leaves (and the server then answers not-member), else this refusal. */
+    @Volatile var leaveRefusal: Pair<Int, JSONObject>? = null
+    /* What each leave asked to end (`endsLapsed`). */
+    val leaves = java.util.Collections.synchronizedList(ArrayList<List<String>>())
     @Volatile var notMember = false
     /* Route 25 lists the family folder (false: deleted elsewhere, the family still listed). */
     @Volatile var areaListed = true
@@ -169,19 +189,73 @@ class FamilyFixture(val server: FakeDrive) {
             method == "GET" && path == "groups/$groupId/identities" -> if (notMember) notMemberAnswer() else
                 200 to JSONObject().put("identities", JSONArray().put(identity(creator)).put(identity(member))).put("next", JSONObject.NULL)
             method == "PUT" && path == "groups/$groupId/areas/$workspaceId/self-grant" -> { selfGrant = body.getJSONObject("grant"); 200 to JSONObject() }
+            method == "POST" && path == "groups/$groupId/leave" -> {
+                if (notMember) return notMemberAnswer()
+                val ends = body.optJSONArray("endsLapsed")
+                leaves.add((0 until (ends?.length() ?: 0)).map { ends!!.getString(it) })
+                leaveRefusal?.let { return it }
+                // Left: from now on the server answers not-member and lists the family nowhere.
+                notMember = true
+                listed = false
+                200 to JSONObject().put("state", "left")
+            }
             method == "GET" && path == "drive/spaces" -> 200 to JSONObject().put("spaces", JSONArray()
                 .put(JSONObject().put("space", JSONObject().put("kind", "personal")).put("areas", JSONArray()))
                 .apply {
                     if (!notMember) put(JSONObject().put("space", JSONObject().put("kind", "group").put("groupId", groupId).put("name", "Lindqvist family"))
                         .put("areas", JSONArray().apply {
-                            if (areaListed) put(JSONObject().put("workspaceId", workspaceId).put("idSeed", area.seed).put("workspaceKeyVersion", 1).put("changeSeq", 1)
-                                .put("root", server.node(servedRootId ?: rootId).json()).put("rotation", JSONObject.NULL).put("selfGrant", selfGrant ?: JSONObject.NULL)
-                                .put("grant", JSONObject().put("workspaceKeyVersion", 1).put("granteeKeyVersion", member.keys.keyVersion.toLong()).put("granterUserId", creator.id)
-                                    .put("rosterVersion", 2).put("rosterDigest", rosterDigest(r2.statement)).put("envelope", base64urlEncode(grant))))
+                            if (areaListed) put(JSONObject().put("workspaceId", workspaceId).put("idSeed", area.seed).put("workspaceKeyVersion", areaVersion).put("changeSeq", 1)
+                                .put("root", server.node(servedRootId ?: rootId).json())
+                                .put("rotation", run?.takeIf { server.running(it.second) }?.let { (id, node, target) -> JSONObject().put("id", id).put("nodeId", node).put("targetEpoch", target) } ?: JSONObject.NULL)
+                                .put("selfGrant", selfGrant?.takeIf { it.optLong("workspaceKeyVersion") == areaVersion } ?: JSONObject.NULL)
+                                .put("grant", grantRow))
                         }))
                 })
             else -> null
         }
+    }
+
+    /*
+     * Sam changes the family folder's keys with the member list, as a removal does (groups-server 8, option A): roster 3
+     * lists the folder at key version 2 with its top folder's new key, Maya gets a grant of version 2, and the top folder
+     * is re-keyed at `target` under the new area key, its previous key wrapped under it too; everything below it is still
+     * under the old keys, a key change from the top folder for any member to walk. The new chain.
+     */
+    fun replaceKeys(target: Long = 100L): List<SignedGroupStatement> {
+        val held = chain
+        val accepted = (acceptRosters(groupId, groupPublicKey(groupSeed), GroupAnchor.CREATED, emptyList(), held, emptyList(), signerKeys,
+            OwnIdentities(creator.id, listOf(creator.servedKeys())), null) as RosterChain.Accepted).chain
+        val newArea = randomBytes(32u)
+        val newRoot = randomBytes(32u)
+        val roster = rosterNext(accepted, accepted.roster().members, creator.id, listOf(AreaKey(workspaceId, newArea, newRoot)), null, null)
+        val next = rosterSign(roster, groupSeed, creator.keys)
+        val chain3 = (acceptRosters(groupId, groupPublicKey(groupSeed), GroupAnchor.CREATED, emptyList(), held + next, emptyList(), signerKeys,
+            OwnIdentities(creator.id, listOf(creator.servedKeys())), null) as RosterChain.Accepted).chain
+        val version = roster.rosterVersion.toLong()
+        val envelope = areaGrantSeal(newArea, AreaGrantContext(groupId, workspaceId, 2uL, member.id.lowercase(), member.keys.keyVersion, creator.id, version.toULong(),
+            rosterDigest(next.statement)), chain3, area.seed, base64urlDecode(member.keys.kemPublicKey!!), creator.keys)
+        // The top folder at the new keys, its name sealed again and signed by Sam; the old key kept for its children.
+        val node = server.node(rootId)
+        server.keepPreviousKey(rootId)
+        val oldKey = server.keyOf(rootId)
+        val name = metadataOpen(MetadataContext(workspaceId, rootId, node.metadataVersion.toULong()), oldKey, base64urlDecode(node.metadataEnvelope))
+        val sealed = metadataSeal(MetadataContext(workspaceId, rootId, node.metadataVersion.toULong()), newRoot, name)
+        node.previous = Triple(base64urlEncode(previousRootKeyWrap(NodeKeyContext(workspaceId, rootId, workspaceId, 2uL, node.keyEpoch.toULong()), newArea, oldKey)), node.keyEpoch, 2L)
+        node.keyEnvelope = base64urlEncode(nodeWrap(NodeKeyContext(workspaceId, rootId, workspaceId, 2uL, target.toULong()), newArea, newRoot))
+        node.keyEpoch = target
+        node.parentKeyEpoch = 2L
+        node.metadataEnvelope = base64urlEncode(sealed)
+        node.signature = base64urlEncode(metadataSign(creator.keys.signingSeed, MetadataStatement(workspaceId, rootId, NodeKind.FOLDER, node.metadataVersion.toULong()), sealed))
+        node.signer = creator.id
+        server.seedWorkspace(workspaceId, newArea, creator)
+        server.touch(rootId)
+        server.startRun(rootId, target)
+        areaVersion = 2L
+        grantRow = JSONObject().put("workspaceKeyVersion", 2).put("granteeKeyVersion", member.keys.keyVersion.toLong()).put("granterUserId", creator.id)
+            .put("rosterVersion", version).put("rosterDigest", rosterDigest(next.statement)).put("envelope", base64urlEncode(envelope))
+        run = Triple(UUID.randomUUID().toString(), rootId, target)
+        chain = held + next
+        return chain
     }
 
     /* Maya's phone: a vault signed in to the server, its sync over its own records folder (a relaunch passes the same one). */

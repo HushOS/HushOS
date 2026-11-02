@@ -106,6 +106,30 @@ class VaultAttributesTest {
     }
 
     @Test
+    fun aColourChangeKeepsTheNameAndEveryOtherAttribute() {
+        vault.recolour(a, " #7C5CBF ")
+        val coloured = server.record(a)
+        assertEquals("A", coloured.name)
+        assertEquals(2L, server.node(a).metadataVersion)
+        assertEquals(attrs("A") + ("colour" to "#7c5cbf"), coloured.attributes)
+        // Back to the plain folder colour: only the colour goes.
+        vault.recolour(a, null)
+        assertEquals(3L, server.node(a).metadataVersion)
+        assertEquals(attrs("A") - "colour", server.record(a).attributes)
+    }
+
+    @Test
+    fun aColourThatIsNotOneOrAFileIsRefusedBeforeAnythingIsWritten() {
+        for (bad in listOf("#fff", "purple", "")) {
+            assertThrows(ApiError::class.java) { vault.recolour(a, bad) }
+        }
+        assertThrows(ApiError::class.java) { vault.recolour(g, "#123456") }
+        assertEquals(1L, server.node(a).metadataVersion)
+        assertEquals(1L, server.node(g).metadataVersion)
+        assertEquals(attrs("A"), server.record(a).attributes)
+    }
+
+    @Test
     fun aCopyOfAFileKeepsItsSourcesAttributes() {
         val made = vault.copy(g, a)
         assertNotEquals(g, made.id)
