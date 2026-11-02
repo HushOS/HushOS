@@ -209,7 +209,7 @@ struct MovePicker: View {
 
     private func pickerRow(_ folder: Opened, detail: String?, link: Bool = false) -> some View {
         HStack(spacing: Alpine.Space.s3) {
-            FolderGlyph().frame(width: Theme.mark * 0.9, height: Theme.mark * 0.9 * 46 / 56).frame(width: Theme.mark, height: Theme.mark)
+            FolderGlyph(folder: folder).frame(width: Theme.mark * 0.9, height: Theme.mark * 0.9 * 46 / 56).frame(width: Theme.mark, height: Theme.mark)
             VStack(alignment: .leading, spacing: 2) {
                 Text(folder.name).font(Theme.Text.body).foregroundStyle(Alpine.ink).lineLimit(1)
                 if let detail { AccessText.line(detail, link: link).font(Theme.Text.footnote).lineLimit(1) }

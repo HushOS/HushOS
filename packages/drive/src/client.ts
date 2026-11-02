@@ -16,6 +16,7 @@ import { newId } from '@hushos/crypto/ids';
 import { LINK_KDF_VERSION } from '@hushos/crypto/links';
 import { NOT_CARRIED, SHARED_IN_FAMILY } from '@hushos/crypto/protocol';
 import { Catalogue, collapseRecent, parentsBefore, parentsFirst } from './catalogue';
+import { COLOUR_ATTRIBUTE, toColour } from './colour';
 import type { TreeMirror } from './mirror';
 import {
     TAGS_DOCUMENT,
@@ -192,6 +193,7 @@ export { checkName };
 export { createIndexedDbMirror, createMemoryMirror, type TreeMirror } from './mirror';
 export { Catalogue, tokenize, type CatalogueHit } from './catalogue';
 export * from './tags';
+export * from './colour';
 
 export function splitPath(input: string) {
     return input
@@ -1109,18 +1111,48 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
      * record this person vouches for.
      */
     async function rename(node: DriveNode, name: string) {
-        const ws = node.workspaceId;
         const clean = checkName(name);
+        return reseal(node, (metadata) => ({ ...metadata, name: clean }));
+    }
+
+    /*
+     * Sets a folder's colour (see colour.ts), or with null takes it back to the plain
+     * folder colour: the record is sealed again as a rename seals it, the name and every other attribute carried over, so it is checked and
+     * signed by the same rules and the server sees only a new envelope.
+     */
+    async function recolour(node: DriveNode, colour: string | null) {
+        if (node.kind !== 'folder') throw new Error('Only a folder has a colour.');
+        // Its name would be lost: a folder whose record did not open is renamed first.
+        if (!node.metadata)
+            throw new Error('This folder could not be opened, so it cannot be changed.');
+        const clean = colour === null ? null : toColour(colour);
+        if (colour !== null && !clean) throw new Error('Choose a colour.');
+        const { name } = node.metadata;
+        return reseal(node, ({ attributes, ...metadata }) => {
+            const { [COLOUR_ATTRIBUTE]: _, ...others } = attributes ?? {};
+            const next = clean ? { ...others, [COLOUR_ATTRIBUTE]: clean } : others;
+            // Back to the plain colour with nothing else set leaves no attributes at all.
+            return { ...metadata, name, ...(Object.keys(next).length ? { attributes: next } : {}) };
+        });
+    }
+
+    /*
+     * Seals a node's record again with `change` applied: the path a rename and a colour
+     * share. A record that did not open starts from no type, size or date, which is how a
+     * rename repairs it.
+     */
+    async function reseal(
+        node: DriveNode,
+        change: (metadata: Omit<NodeMetadata, 'name'> & { name?: string }) => NodeMetadata,
+    ) {
+        const ws = node.workspaceId;
         const checked = (await verify([node])).get(node.id);
         const { metadataEnvelope, metadataSignature } = await rpc('driveSealMetadata', {
             workspaceId: ws,
             nodeId: node.id,
             kind: node.kind,
             metadataVersion: node.metadataVersion + 1,
-            metadata: {
-                ...(node.metadata ?? { mime: null, size: null, modified: null }),
-                name: clean,
-            },
+            metadata: change(node.metadata ?? { mime: null, size: null, modified: null }),
             signAs: signatureFormFor(checked?.metadata),
         });
         const result = await api.rename(ws, node.id, {
@@ -2220,6 +2252,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         listFolder,
         createFolderPath,
         rename,
+        recolour,
         move,
         copyFile,
         copyTree,
