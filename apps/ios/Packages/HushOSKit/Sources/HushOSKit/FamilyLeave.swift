@@ -80,8 +80,14 @@ public enum FamilyLeave {
     }
 
     /* The dialog's body: the only one left ends the family. */
-    public static func body(family: String, alone: Bool) -> String {
-        alone ? "You’re the only one in \(family), so leaving ends it. \(whatGoes)" : whatGoes
+    /*
+     * The dialog's body. That leaving ends the family is said only when a member list was read and
+     * names exactly one active member; members not loaded, or a list that failed to load, never
+     * reads as alone.
+     */
+    public static func body(family: String, members: [GroupDetail.Member]?) -> String {
+        guard let members, members.filter({ $0.state == "active" }).count == 1 else { return whatGoes }
+        return "You’re the only one in \(family), so leaving ends it. \(whatGoes)"
     }
 
     /*

@@ -130,6 +130,22 @@ extension OnFakeDrive {
         }
 
         /*
+         * The dialog says leaving ends the family only when a member list was read and names exactly
+         * one active member. Members not loaded (or a list that failed) and a family of two read as
+         * an ordinary leave. Fails if an unknown member list reads as the only one in the family.
+         */
+        @Test func onlyAListWithOneActiveMemberSaysLeavingEndsTheFamily() {
+            func member(_ id: String, state: String = "active") -> GroupDetail.Member {
+                GroupDetail.Member(userId: id, name: id, email: nil, state: state, roles: [])
+            }
+            let ends = "You’re the only one in Lindqvist family, so leaving ends it. \(FamilyLeave.whatGoes)"
+            #expect(FamilyLeave.body(family: "Lindqvist family", members: nil) == FamilyLeave.whatGoes, "an unknown member list read as the only one")
+            #expect(FamilyLeave.body(family: "Lindqvist family", members: [member("me")]) == ends)
+            #expect(FamilyLeave.body(family: "Lindqvist family", members: [member("me"), member("sam")]) == FamilyLeave.whatGoes)
+            #expect(FamilyLeave.body(family: "Lindqvist family", members: [member("me"), member("sam", state: "left")]) == ends, "a member who left counted")
+        }
+
+        /*
          * The leave dialog keeps its state (kept by the store, so a scene change keeps it): a second
          * press while a leave is in flight sends nothing; an ends-lapsed answer keeps the plans, and
          * the next press sends their ids; a refusal says why and lets it be pressed again. Fails if a

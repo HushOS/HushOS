@@ -876,7 +876,7 @@ struct FamilyPage: View {
         }
         // The dialog's state is the store's (a scene change keeps it); Cancel and a swipe do nothing while a leave is in flight.
         .sheet(isPresented: Binding(get: { store.leaving?.groupId == groupId }, set: { if !$0 { store.dismissLeave() } })) {
-            LeaveFamilySheet(name: name, alone: named.count <= 1).environment(store)
+            LeaveFamilySheet(name: name, members: store.familyDetails[groupId]?.members).environment(store)
         }
         // Left: back to Account, once.
         .onChange(of: store.leftFamily, initial: true) { _, left in
@@ -1131,15 +1131,15 @@ struct FamilyPage: View {
 struct LeaveFamilySheet: View {
     @Environment(DriveStore.self) private var store
     let name: String
-    /* The only one in the family: leaving ends it. */
-    let alone: Bool
+    /* Route 3's members, when read: only a list naming one active member says leaving ends the family. */
+    let members: [GroupDetail.Member]?
 
     var body: some View {
         let dialog = store.leaving
         let busy = dialog?.busy == true
         VStack(alignment: .leading, spacing: Alpine.Space.s3) {
             Text("Leave \(name)?").font(Theme.Text.headline).foregroundStyle(Alpine.ink)
-            Text(FamilyLeave.body(family: name, alone: alone)).font(Theme.Text.callout).foregroundStyle(Alpine.ink)
+            Text(FamilyLeave.body(family: name, members: members)).font(Theme.Text.callout).foregroundStyle(Alpine.ink)
             if let plans = dialog?.plans, !plans.isEmpty {
                 Text(FamilyLapsedPlan.endsWhenYouLeave(family: name, plans: plans)).font(Theme.Text.callout).foregroundStyle(Alpine.ink)
             }
