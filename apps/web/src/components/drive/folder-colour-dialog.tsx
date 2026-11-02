@@ -213,9 +213,10 @@ function ColourForm({
                 </div>
                 {customOpen && (
                     <div className="border-t border-rule pt-3">
+                        {/* The editor holds the hex chosen, a swatch's included, so typing one keeps it in place. */}
                         <CustomColour
-                            key={swatch ? 'swatch' : 'custom'}
-                            value={swatch ? FIRST_CUSTOM : value!}
+                            key={value === null ? 'plain' : 'hex'}
+                            value={(value ?? FIRST_CUSTOM) as TagColour}
                             disabled={pending}
                             onChoose={(hex: TagColour) => setValue(hex.toLowerCase())}
                         />

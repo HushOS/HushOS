@@ -114,9 +114,10 @@ export function TagColourPicker({
             </span>
             {open && (
                 <div className="border-t border-rule pt-3">
+                    {/* The editor holds the hex chosen, a swatch's included, so typing one keeps it in place. */}
                     <CustomColour
-                        key={custom ? 'custom' : 'preset'}
-                        value={custom ? value : FIRST_CUSTOM}
+                        key={value.startsWith('#') ? 'hex' : 'preset'}
+                        value={value.startsWith('#') ? value : FIRST_CUSTOM}
                         disabled={disabled}
                         onChoose={(hex) => onChange(hex)}
                     />
