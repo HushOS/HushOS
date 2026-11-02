@@ -1,0 +1,39 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_6514e7f3f4033e 84
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyJoin.kt
+  s_566b8e0c4467a4::t_8b22dc5265153c 176,180,183,203-210
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySessions.kt
+  s_566b8e0c4467a4::t_9b056e176c1bb7 18-23,33-41
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_566b8e0c4467a4::t_0094426cd2fbbc 457,466,469,475-484,680-681
+apps/android/app/src/main/kotlin/com/hushos/app/data/Reservations.kt
+  s_566b8e0c4467a4::t_9d463bc339f232 62-65,67-73,115-116,118,128,143-144,181
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_566b8e0c4467a4::t_505e2a90bce57f 141-164,355-356,377-380
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_263017e605d64c 251-253
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_566b8e0c4467a4::t_9a17e4f0850c7a 478-480,482-511
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_566b8e0c4467a4::t_feaa2321e13f8c 483,486,504,507
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyUploadsTest.kt
+  s_566b8e0c4467a4::t_47a0e19314583b 523-602
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyWritesTest.kt
+  s_566b8e0c4467a4::t_d340220fc7f5d1 109,113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1a9c8ade64ebc70037dc22a0942c2d59416fc53b",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
