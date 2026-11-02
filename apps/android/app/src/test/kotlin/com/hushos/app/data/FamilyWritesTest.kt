@@ -175,6 +175,27 @@ class FamilyWritesTest {
     }
 
     /*
+     * #249 review: the family's guard becomes owed between a Move to Trash and its Undo (a sync meanwhile that couldn't
+     * store it). The Undo, and a Move to Trash after it, refuse each of the family's items as a failure the screens say,
+     * never a throw that escapes the batch (a crash), and send nothing. Fails if a batch's family gate throws.
+     */
+    @Test
+    fun aBatchTheFamilyGateRefusesFailsItsItemsInsteadOfThrowing() {
+        val phone = opened()
+        val file = phone.vault.listChildren(family.rootId, family.workspaceId).single { it.id == family.fileId }
+        assertTrue(kotlinx.coroutines.runBlocking { phone.vault.trashMany(listOf(file.id)) }.single().isSuccess)
+        synchronized(server.unknown) { server.unknown.removeAll { it.endsWith("/trash-batch") } }
+        phone.vault.oweFamilyGuard(family.groupId)
+        val sent = server.requests.size
+        val undo = kotlinx.coroutines.runBlocking { phone.vault.restoreMany(listOf(file)) }.single()
+        assertTrue("an Undo the gate refused didn't fail as an item: $undo", undo.exceptionOrNull() is GuardUnsaved)
+        val again = kotlinx.coroutines.runBlocking { phone.vault.trashMany(listOf(family.rootId)) }.single()
+        assertTrue(again.exceptionOrNull() is GuardUnsaved)
+        assertEquals(emptyList<String>(), sentSince(sent))
+        assertTrue(server.node(file.id).trashedAt != null)
+    }
+
+    /*
      * The ledger refuses writes into the folder (its member list no longer committed here, as after a refusal): a trash,
      * which seals nothing, is refused all the same and sends nothing. Fails if a family write skips require_writable.
      */

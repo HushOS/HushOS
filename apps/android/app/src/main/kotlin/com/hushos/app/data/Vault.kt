@@ -1562,9 +1562,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * without it. What moved leaves this device's rows at once.
      */
     suspend fun trashMany(ids: List<String>, moved: (List<String>) -> Unit = {}): List<Result<TrashMove>> = writingSuspend {
-        val items = ids.map { id -> id to (nodes.find(id)?.node?.workspaceId ?: runCatching { resolve(id).node.workspaceId }.getOrDefault(workspaceId)) }
-        // A family folder takes it only while this device may write there.
-        items.map { it.second }.distinct().forEach { ws -> familyTarget(ws) }
+        val all = ids.map { id -> id to (nodes.find(id)?.node?.workspaceId ?: runCatching { resolve(id).node.workspaceId }.getOrDefault(workspaceId)) }
+        // A family folder takes it only while this device may write there: a refusal (a guard owed, keys changed) is each
+        // of its items' failure, said as any batch's, and the rest go on.
+        val refused = refusedWorkspaces(all.map { it.second })
+        val items = all.filter { it.second.lowercase() !in refused }
         val workspaces = items.toMap()
         // Read before the rows are forgotten: the folders whose listings lose what moved.
         val parentsOf = ids.associateWith { id -> nodes.find(id)?.node?.parentId ?: parents[id] }
@@ -1580,7 +1582,26 @@ class Vault(internal val context: Context, val api: DriveApi) {
             // Called after `moved`: the row leaves the lists first, then this device forgets it.
             forget = { landed -> for (id in landed) workspaces[id]?.let { remove(it, id) } },
             moved = { landed -> moved(landed.map { it.first }) },
-        ).also { outcomes -> foldersChanged(ids.filterIndexed { index, _ -> outcomes[index].isSuccess }.map { parentsOf[it] }.distinct()) }
+        ).also { outcomes -> foldersChanged(items.filterIndexed { index, _ -> outcomes[index].isSuccess }.map { parentsOf[it.first] }.distinct()) }
+            .let { outcomes -> mergeRefused(all.map { it.second }, refused, outcomes) }
+    }
+
+    /* The workspaces of a batch whose family folders may not be written now, each with its refusal (an ended session ends the batch). */
+    private fun refusedWorkspaces(workspaces: List<String>): Map<String, Exception> {
+        val refused = HashMap<String, Exception>()
+        for (ws in workspaces.distinct()) try {
+            familyTarget(ws)
+        } catch (error: Exception) {
+            if (error is NotAuthenticated) throw error
+            refused[ws.lowercase()] = error
+        }
+        return refused
+    }
+
+    /* A batch's outcomes in its items' order: a refused workspace's items failed with its refusal, the rest as sent. */
+    private fun <T> mergeRefused(workspaces: List<String>, refused: Map<String, Exception>, sent: List<Result<T>>): List<Result<T>> {
+        val outcomes = sent.iterator()
+        return workspaces.map { ws -> refused[ws.lowercase()]?.let { Result.failure(it) } ?: outcomes.next() }
     }
 
     /*
@@ -1589,9 +1610,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * server without it. One outcome per item in order, the restored row on success; `back` hears
      * each row as it lands.
      */
-    suspend fun restoreMany(items: List<Opened>, back: (Opened) -> Unit = {}): List<Result<Opened>> = writingSuspend {
-        // Back in place (a trash's Undo), in a family folder only while this device may write there.
-        items.map { it.node.workspaceId }.distinct().forEach { ws -> familyTarget(ws) }
+    suspend fun restoreMany(asked: List<Opened>, back: (Opened) -> Unit = {}): List<Result<Opened>> = writingSuspend {
+        // Back in place (a trash's Undo), in a family folder only while this device may write there: a refusal is each of
+        // its items' failure, said as any Undo's, and the rest come back.
+        val refused = refusedWorkspaces(asked.map { it.node.workspaceId })
+        val items = asked.filter { it.node.workspaceId.lowercase() !in refused }
         val given = items.associateBy { it.id }
         val rows = java.util.concurrent.ConcurrentHashMap<String, Opened>()
         val outcomes = restoreInBatches(
@@ -1604,7 +1627,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             back = { id -> rows[id]?.let(back) },
         )
         foldersChanged(rows.values.map { it.node.parentId }.distinct())
-        items.mapIndexed { index, item -> outcomes[index].map { rows.getValue(item.id) } }
+        mergeRefused(asked.map { it.node.workspaceId }, refused, items.mapIndexed { index, item -> outcomes[index].map { rows.getValue(item.id) } })
     }
 
     /* The folders above an item, nearest first, as far as this device knows them. */
