@@ -15,6 +15,7 @@ enum NodeAction: Identifiable {
     case sendCopy(Opened)
     case versions(Opened)
     case tags(Opened)
+    case colour([Opened])
     case info(Opened)
     case report(Opened)
 
@@ -25,6 +26,7 @@ enum NodeAction: Identifiable {
         case .sendCopy(let item): return "send-\(item.id)"
         case .versions(let item): return "versions-\(item.id)"
         case .tags(let item): return "tags-\(item.id)"
+        case .colour(let items): return "colour-" + items.map(\.id).joined(separator: ",")
         case .info(let item): return "info-\(item.id)"
         case .report(let item): return "report-\(item.id)"
         }
@@ -92,6 +94,7 @@ private struct NodeActionSheets: ViewModifier {
                 case .sendCopy(let item): SendCopySheet(item: item).environment(store)
                 case .versions(let item): VersionsSheet(item: item).environment(store)
                 case .tags(let item): ItemTagsSheet(item: item).environment(store)
+                case .colour(let items): FolderColourSheet(folders: items).environment(store)
                 case .info(let item): InfoSheet(item: item, open: { next in action = next }).environment(store)
                 case .report(let item):
                     ReportSheet(item: item, from: store.mounts.first { $0.share.workspaceId == item.node.workspaceId }?.share.granter.name) { category, reason, email in
@@ -233,6 +236,7 @@ struct NodeMenu: View {
                 if select == nil { store.notify("Copied “\(item.name)”. Open a folder to paste.") }
             }
             if mine { Button("Tags", systemImage: "tag") { action = .tags(item) } }
+            if canEdit && item.isFolder { Button("Colour", systemImage: "paintpalette") { action = .colour([item]) } }
         }
         Section {
             if !item.isFolder && canEdit && !family { Button("Versions", systemImage: "clock.arrow.circlepath") { action = .versions(item) } }

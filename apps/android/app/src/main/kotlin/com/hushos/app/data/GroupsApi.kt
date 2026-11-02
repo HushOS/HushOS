@@ -30,6 +30,8 @@ class GroupsApiError(
     val family: Invitation.Family? = null,
     /* `data.reason` and `data.invitee`. */
     val reason: String? = null, val invitee: Boolean = false,
+    /* The plans an `ends-lapsed` refusal names (`data.plans`): they end at once when this person goes. */
+    val plans: List<FamilyLapsedPlan> = emptyList(),
 ) : Exception(message) {
     val isNotMember: Boolean get() = status == 404 && code == "not-member"
 
@@ -55,8 +57,36 @@ class GroupsApiError(
                 if (id != null && name != null) Invitation.Family(id, name) else null
             }
             return GroupsApiError(status, body?.optString("code")?.ifEmpty { null }, body?.optString("message")?.ifEmpty { null } ?: "Please try again.",
-                family, data?.optString("reason")?.ifEmpty { null }, data?.optBoolean("invitee") == true)
+                family, data?.optString("reason")?.ifEmpty { null }, data?.optBoolean("invitee") == true, FamilyLapsedPlan.listIn(data))
         }
+    }
+}
+
+/* A family plan someone pays for that gives nothing now (the web's LapsedPlanNamed): unpaid, or paused. */
+data class FamilyLapsedPlan(val id: String, val name: String, val paused: Boolean) {
+    companion object {
+        /* `data.plans` of an `ends-lapsed` refusal, each with an id and a name (the web's lapsedPlansIn). */
+        fun listIn(data: JSONObject?): List<FamilyLapsedPlan> = data?.optJSONArray("plans").objects().mapNotNull { plan ->
+            val id = plan.optString("id").ifEmpty { return@mapNotNull null }
+            val name = plan.optString("name").ifEmpty { return@mapNotNull null }
+            FamilyLapsedPlan(id, name, plan.optString("standing") == "paused")
+        }
+
+        /*
+         * What ends when the person who pays for these plans leaves, every plan named (the web's lapsedEndsWords, the
+         * leaver's own case).
+         */
+        fun endsWhenYouLeave(family: String, plans: List<FamilyLapsedPlan>): String {
+            val several = plans.size > 1
+            val names = plans.joinToString(" and ") { word(it.name) } + if (several) " plans" else " plan"
+            val how = if (several) "which give nothing now" else if (plans.firstOrNull()?.paused == true) "which is paused" else "whose payment didn’t go through"
+            val after = if (several) "Nothing of them is refunded: no part of them is in use." else "Nothing of it is refunded: no part of it is in use."
+            return "The $names for $family, which you pay for and $how, ${if (several) "end" else "ends"} at once when you leave. $after"
+        }
+
+        /* "Family Pro (monthly)" is "Family Pro"; "Family plan" is "Family", as "…’s Family plan". */
+        private fun word(productName: String) =
+            productName.replace(Regex("\\s*\\((monthly|yearly|annual)\\)\\s*$", RegexOption.IGNORE_CASE), "").replace(Regex("\\s+plan$", RegexOption.IGNORE_CASE), "")
     }
 }
 
@@ -139,17 +169,37 @@ class MemberIdentity(val userId: String, val identity: ServedKeys?, val links: L
     }
 }
 
+/*
+ * A key change running in a family folder, as route 25 names it: the run's id (absent on older servers), the node it
+ * re-keys from and the key epoch it moves everything to (the web's WalkTarget, less the workspace).
+ */
+data class SpaceRotation(val id: String?, val nodeId: String, val targetEpoch: ULong) {
+    companion object {
+        /* Null for none, and for one whose fields don't read: a run nobody can name is walked by nobody. */
+        fun from(json: JSONObject?): SpaceRotation? {
+            json ?: return null
+            val nodeId = json.optString("nodeId").ifEmpty { return null }
+            val target = json.optLong("targetEpoch", -1L).takeIf { it > 0 } ?: return null
+            return SpaceRotation(if (json.isNull("id")) null else json.optString("id").ifEmpty { null }, nodeId, target.toULong())
+        }
+    }
+}
+
 /* Route 25: one family's areas (the personal space is never read from here). */
 class SpaceArea(
-    val workspaceId: String, val idSeed: String?, val workspaceKeyVersion: ULong, val root: NodeView?, val rotating: Boolean,
+    val workspaceId: String, val idSeed: String?, val workspaceKeyVersion: ULong, val root: NodeView?, val rotation: SpaceRotation?,
     val grant: AreaGrantRow?, val selfGrant: WorkspaceGrant?,
 ) {
+    val rotating: Boolean get() = rotation != null
+
     class AreaGrantRow(val workspaceKeyVersion: ULong, val granteeKeyVersion: ULong, val granterUserId: String, val rosterVersion: ULong, val rosterDigest: String, val envelope: String)
 
     companion object {
         fun from(json: JSONObject) = SpaceArea(
             json.getString("workspaceId"), if (json.isNull("idSeed")) null else json.optString("idSeed").ifEmpty { null },
-            json.getLong("workspaceKeyVersion").toULong(), json.optJSONObject("root")?.let(NodeView::from), json.optJSONObject("rotation") != null,
+            json.getLong("workspaceKeyVersion").toULong(), json.optJSONObject("root")?.let(NodeView::from),
+            // A run present but unreadable still says the folder is changing keys; only a readable one is walked.
+            SpaceRotation.from(json.optJSONObject("rotation")) ?: json.optJSONObject("rotation")?.let { SpaceRotation(null, "", 0uL) },
             json.optJSONObject("grant")?.let { AreaGrantRow(it.getLong("workspaceKeyVersion").toULong(), it.getLong("granteeKeyVersion").toULong(),
                 it.getString("granterUserId"), it.getLong("rosterVersion").toULong(), it.getString("rosterDigest"), it.getString("envelope")) },
             // One that doesn't decode is none: the ledger ignores a bad self-grant anyway, and it must not stop the list loading.
@@ -236,6 +286,13 @@ class GroupsApi(private val session: Shared.Session) {
         }
         return out
     }
+
+    /*
+     * 20: leaving at once. `endsLapsed` names the lapsed plans this person pays for that they confirmed end (ids, as an
+     * `ends-lapsed` refusal named them). Whether the family ended with them (they were its last member).
+     */
+    fun leave(groupId: String, endsLapsed: List<String> = emptyList()): Boolean =
+        call("/groups/${id(groupId)}/leave", "POST", JSONObject().put("endsLapsed", JSONArray(endsLapsed))).optBoolean("dissolved")
 
     /* 23: this account's self-grant of a family folder's current key, as the ledger wrapped it. */
     fun putSelfGrant(groupId: String, workspaceId: String, grant: WorkspaceGrant) {

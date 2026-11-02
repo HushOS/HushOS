@@ -8,6 +8,7 @@ import com.hushos.core.linkReseal
 import com.hushos.core.MetadataContext
 import com.hushos.core.NodeKeyContext
 import com.hushos.core.NodeMetadata
+import com.hushos.core.withFolderColour
 import com.hushos.core.VersionContext
 import com.hushos.core.base64urlDecode
 import com.hushos.core.base64urlEncode
@@ -1022,7 +1023,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * words), then the session (ended: nothing more lands). Callers then apply the newer-row rule and only then open, keep
      * or show anything. Under familyCopiesLock, the lock a forget takes.
      */
-    private fun requireWriteStands(workspaceId: String) {
+    internal fun requireWriteStands(workspaceId: String) {
         if (!isFamilyWorkspace(workspaceId) || WriteIntent.decision(workspaceId) != true) return
         val began = WriteIntent.epoch(workspaceId) ?: throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
         familyWordsSince(workspaceId, began)?.let { throw FamilyFailure(it) }
@@ -1514,11 +1515,32 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     fun rename(id: String, name: String): Opened = writing {
+        val clean = typedName(name)
+        reseal(resolve(id)) { it.copy(name = clean) }
+    }
+
+    /*
+     * Sets a folder's colour (the `colour` attribute, see the core's colour.rs), or with null takes it back to the plain
+     * folder colour: sealed again as a rename seals it, the name and every other attribute carried over.
+     */
+    fun recolour(id: String, colour: String?): Opened = writing {
         val item = resolve(id)
+        if (!item.isFolder) throw ApiError(400, "Only a folder has a colour.")
+        val attributes = try {
+            withFolderColour(item.metadata.attributes, colour)
+        } catch (refused: com.hushos.core.CoreException) {
+            throw ApiError(400, refused.message.orEmpty())
+        }
+        reseal(item) { it.copy(attributes = attributes) }
+    }
+
+    /* A node's record sealed again in place with `change` applied: the path a rename and a colour share. */
+    private fun reseal(item: Opened, change: (NodeMetadata) -> NodeMetadata): Opened {
+        val id = item.id
         val family = familyTarget(item.node.workspaceId)
         // In a family folder only the ledger's writable key, at the epoch it was opened at.
         val key = if (family) writableKey(item) else nodes.key(item) ?: throw ApiError(500, "Node not opened")
-        val metadata = item.metadata.copy(name = typedName(name))
+        val metadata = change(item.metadata)
         val next = item.node.metadataVersion + 1uL
         // The type, size and date are carried over into the re-signed record: signed as it checked, never vouched for blind;
         // in a family folder as its member list judges it.
@@ -1527,7 +1549,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         sendingIntoFamily(item.node.workspaceId)
         val node = api.rename(id, item.node.workspaceId, item.node.metadataVersion, item.node.keyEpoch, base64urlEncode(sealed),
             signMetadata(item.node.workspaceId, id, if (item.isFolder) NodeKind.FOLDER else NodeKind.FILE, next, sealed, prior))
-        adoptWritten(node, key, metadata, item.node.workspaceId, id).also { foldersChanged(listOf(item.node.parentId, it.node.parentId)) }
+        return adoptWritten(node, key, metadata, item.node.workspaceId, id).also { foldersChanged(listOf(item.node.parentId, it.node.parentId)) }
     }
 
     /* A node's key wrapped under a new parent's; both in one workspace, or the envelope would name the wrong one. */
@@ -1538,7 +1560,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
         if (familyTarget(item.node.workspaceId)) {
             requireGuardKept(parent.node.workspaceId)
             return try {
-                base64urlEncode(areaLedger.rewrapNode(item.node.workspaceId, item.id, parent.id, parent.node.keyEpoch, item.node.keyEpoch))
+                // Never while a walk's batch holds keys pending in this folder (FamilyKeyLocks).
+                base64urlEncode(FamilyKeyLocks.hold(item.node.workspaceId) { areaLedger.rewrapNode(item.node.workspaceId, item.id, parent.id, parent.node.keyEpoch, item.node.keyEpoch) })
             } catch (refused: com.hushos.core.CoreException) {
                 throw FamilyFailure(FamilyWords.keyChangeWords(refused.message.orEmpty()))
             }
