@@ -1,0 +1,50 @@
+apps/ios/App/Families.swift
+  s_566b8e0c4467a4::t_d1280eedd49753 91-101,854,856,872-873,877-882
+crates/hushos-core/src/roster_calls/tests.rs
+  s_566b8e0c4467a4::t_fa3d92ca063ca9 486-487,490-498
+apps/ios/App/FamilyManaging.swift
+  s_566b8e0c4467a4::t_08a3a67c96225c 1-409
+crates/hushos-core/AGENTS.md
+  s_566b8e0c4467a4::t_bcc0d9aa2c1ff3 183
+crates/hushos-core/src/roster_calls.rs
+  s_566b8e0c4467a4::t_4c7d3f08706e53 702-705
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyManageTests.swift
+  s_566b8e0c4467a4::t_91f75339bc3b18 1-465,488-555
+  s_566b8e0c4467a4::t_214c4e635b141d 466-487
+  s_566b8e0c4467a4::t_95a0601fd009be 556
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/GroupsAPI+Manage.swift
+  s_566b8e0c4467a4::t_a9261f2413ab81 1-295
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyManageStub.swift
+  s_566b8e0c4467a4::t_344b8285989a4d 163-199
+  s_566b8e0c4467a4::t_faec11f24b94ac 1-162,200
+  s_566b8e0c4467a4::t_d4b9d9dafff2d7 201-252
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilySyncTests.swift
+  s_566b8e0c4467a4::t_dc373c6b294052 977-980,1190-1191,1439,1481,1485-1486,1494-1495
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_9bb2d72d89b25b 189-190
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_e3000f0311cb41 138
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_00b6fddcceeb81 173-188
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_566b8e0c4467a4::t_8278a20e74b459 209,211,220,666-677,679-681,739,1077-1078
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyManage.swift
+  s_566b8e0c4467a4::t_f5b79fda841937 1-539
+  s_566b8e0c4467a4::t_0b5f21081e4bc6 540-553
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1e69caba9cd7b3e849b962104cbf1dd9e9c399cf",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": null
+    }
+  }
+}
