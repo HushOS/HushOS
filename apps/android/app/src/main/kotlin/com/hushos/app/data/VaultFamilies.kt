@@ -176,6 +176,9 @@ internal fun Vault.finalWriteGate(workspaceId: String) {
         if (heldUnderOwedGuard(workspaceId)) throw GuardUnsaved()
         if (!isFamilyWorkspace(workspaceId)) return
         if (WriteIntent.decision(workspaceId) != true) throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
+        // Never sent once its folder was let go of since the write began (a removal, a fork, a refusal meanwhile, in
+        // another of the session's vaults too): the family's words, before anything leaves.
+        WriteIntent.epoch(workspaceId)?.let { began -> familyWordsSince(workspaceId, began)?.let { throw FamilyFailure(it) } }
         familyTarget(workspaceId)
     }
 }
@@ -477,11 +480,40 @@ internal fun Vault.requireGuardKept(workspaceId: String) {
 /* Right before a write leaves for the server: a sync may have committed and failed to store its guard meanwhile. */
 internal fun Vault.sendingIntoFamily(workspaceId: String) = finalWriteGate(workspaceId)
 
-/* Raised before an acceptance of `groupId` commits; whether it was raised already (an earlier guard still owed). */
-internal fun Vault.oweFamilyGuard(groupId: String): Boolean = !familyGuardOwed.add(groupId.lowercase())
+/* Raised before an acceptance of `groupId` commits: this acceptance's own debt, discharged by it alone (familyGuardKept). */
+internal fun Vault.oweFamilyGuard(groupId: String): GuardDebt =
+    GuardDebt(groupId.lowercase(), this).also { debt -> familyGuardDebts.computeIfAbsent(debt.groupId) { ConcurrentHashMap.newKeySet() }.add(debt) }
 
-/* The guard an acceptance handed back is stored (or it had none): writes into the family go on. */
-internal fun Vault.familyGuardKept(groupId: String) { familyGuardOwed.remove(groupId.lowercase()) }
+/*
+ * This acceptance's guard is stored (or it handed none back, or it never committed): its own debt goes, and so does any
+ * left owed (by this vault or another) that the guard now stored covers. Never another acceptance's debt still running.
+ */
+internal fun Vault.familyGuardKept(debt: GuardDebt) {
+    familyGuardDebts[debt.groupId]?.remove(debt)
+    dischargeCoveredGuards(debt.groupId)
+}
+
+/* The guard `debt`'s core handed back couldn't be stored: it stays owed, the barrier up, until a stored guard covers it. */
+internal fun Vault.familyGuardLeft(debt: GuardDebt, pin: GroupPin) { debt.left = pin }
+
+/* This vault's core let go of the family: what it left owed is owed no more (nothing is written under its chains). */
+internal fun Vault.familyGuardsForgotten(groupId: String) {
+    familyGuardDebts[groupId.lowercase()]?.removeIf { it.owner === this && it.left != null }
+}
+
+/* Debts left owed that the guard stored now covers (behind it, or adding nothing to it): gone. Kept when it can't be read. */
+private fun Vault.dischargeCoveredGuards(groupId: String) {
+    val debts = familyGuardDebts[groupId] ?: return
+    if (debts.none { it.left != null }) return
+    val stored = runCatching { familyGuard.family(groupId) }.getOrNull() ?: return
+    debts.removeIf { debt -> debt.left?.let { guardCovers(groupId, stored, it) } == true }
+}
+
+private fun guardCovers(groupId: String, stored: GroupPin, owed: GroupPin): Boolean = when (val merge = com.hushos.core.mergePin(groupId, stored, owed, emptyList())) {
+    is com.hushos.core.PinMerge.Behind -> true
+    is com.hushos.core.PinMerge.Merged -> !com.hushos.core.pinAhead(stored, merge.pin)
+    is com.hushos.core.PinMerge.Conflict -> false
+}
 
 /*
  * The family guard for the core: what this phone holds, or Unreadable when its store could not be read, which the core

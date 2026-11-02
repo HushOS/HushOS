@@ -115,6 +115,8 @@ interface FamilyHost {
     fun item(id: String): Opened?
     fun updateState(change: (DriveState) -> DriveState)
     fun lostSession()
+    /* This account isn't in `groupId` any more: what the drive queued into its folders ends (TransferQueue.endFamily). */
+    fun familyEnded(groupId: String) {}
     /* Whether the account is in a family now: the background walks (FamilyWalkWork) scheduled, or cancelled. */
     fun familyWork(inFamily: Boolean) {}
     /* A walk is due, or one stopped: the background work runs once soon, so it finishes with the app closed. */
@@ -488,6 +490,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             else -> {
                 val roots = (previous as? FamilyState.Accepted)?.view?.areas?.mapNotNull { it.root?.id }.orEmpty()
                 clear(summary.id, roots, s, details = state == FamilyState.Wiped, problem = if (state == FamilyState.Wiped) FamilyProblem.Removed else FamilyProblem.Words(FamilyWords.OPEN_AGAIN))
+                if (state == FamilyState.Wiped) model.familyEnded(summary.id)
             }
         }
         return true
@@ -598,6 +601,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         checkedAt[groupId] = now()
         refreshed[groupId] = (refreshed[groupId] ?: 0) + 1
         clear(groupId, roots, s, details = true, problem = FamilyProblem.Removed)
+        model.familyEnded(groupId)
     }
 
     /*
