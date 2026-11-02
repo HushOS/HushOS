@@ -110,20 +110,30 @@ object TransferQueue {
     /*
      * Sends a failed transfer again from the app's own record: an upload from the copy it
      * staged (false when that copy is gone: pick the file again), a keep by its item. The
-     * record goes once the new job is queued.
+     * record goes once the new job is queued. An upload's new job takes over what the failed one reserved, and its landed
+     * row, before it is queued (Reservations.moveJob): it settles them first, or ends as uploaded, never sending the file
+     * again. A ledger that can't be moved throws, and nothing is queued.
      */
     fun retry(context: Context, failed: FailedTransfer): Boolean {
         val records = FailedTransfers.of(context)
         when (failed.kind) {
-            UPLOAD -> {
-                if (failed.sourceGone() || failed.folder == null) return false
-                enqueueUpload(context, UUID.randomUUID(), File(failed.file!!), failed.name, failed.mime, failed.folder, failed.replacing,
-                    failed.family?.let { group -> failed.familyWorkspace?.let { Family(group, it) } })
-            }
+            UPLOAD -> if (!retryUpload(context, failed) { id ->
+                    enqueueUpload(context, id, File(failed.file!!), failed.name, failed.mime, failed.folder!!, failed.replacing,
+                        failed.family?.let { group -> failed.familyWorkspace?.let { Family(group, it) } })
+                }) return false
             KEEP -> keep(context, failed.node ?: return false, failed.name, folder = failed.isFolder, again = true, shareRoot = failed.shareRoot)
             else -> return false
         }
         records.forget(failed.id)
+        return true
+    }
+
+    /* An upload's retry: its new job takes over the failed one's ledger rows, then is queued (`enqueue`); false when its copy is gone. */
+    internal fun retryUpload(context: Context, failed: FailedTransfer, enqueue: (UUID) -> Unit): Boolean {
+        if (failed.sourceGone() || failed.folder == null) return false
+        val id = UUID.randomUUID()
+        Reservations.moveJob(context, failed.id, id.toString())
+        enqueue(id)
         return true
     }
 

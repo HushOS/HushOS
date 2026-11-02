@@ -1886,6 +1886,13 @@ class Vault(internal val context: Context, val api: DriveApi) {
             // It completed after all: the file is there, so this one is never sent again.
             if (earlier == Reservations.Settle.LANDED) throw Reservations.Landed()
         }
+        // Every begin, a queued job's or not (a share's upload, Files writing a file back): only over a ledger that can be read.
+        try {
+            Reservations.requireReadable(context)
+        } catch (error: Exception) {
+            madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
+            throw error
+        }
         val beganAt = Reservations.now()
         val begun = try {
             api.beginUpload(ws, JSONObject().put("node", nodeInput).putId(madeVersion).putId(madeObject)

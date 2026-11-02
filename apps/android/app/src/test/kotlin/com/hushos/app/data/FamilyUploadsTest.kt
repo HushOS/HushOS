@@ -601,6 +601,76 @@ class FamilyUploadsTest {
     }
 
     /*
+     * #251 review 8, item 1: the completion lands, its answer is lost, the next completion is answered 401 and the job
+     * fails, its record kept. Signed in again, Retry queues a new job: it takes over the failed job's record, so its first
+     * sweep hears "already finished" and it ends as uploaded, sending nothing. Fails if a retry's new id leaves the failed
+     * job's reservation or landed row behind.
+     */
+    @Test
+    fun aRetriedUploadTakesOverItsReservationAndEndsAsUploaded() = retriedAfterALostCompletion(sweptFirst = false)
+
+    /* As above, with another job's sweep reaching the failed job's record before the Retry: its landed row is taken over. */
+    @Test
+    fun aRetriedUploadTakesOverItsLandedRowAndEndsAsUploaded() = retriedAfterALostCompletion(sweptFirst = true)
+
+    private fun retriedAfterALostCompletion(sweptFirst: Boolean) {
+        val waits = KeyChangeWaits.of(app)
+        val staged = local("Notes.txt", "packing list")
+        fun run(job: String) = TransferQueue.runUpload(app, job(), job, staged, "Notes.txt", "text/plain", family.rootId, null,
+            TransferQueue.Family(family.groupId, family.workspaceId), waits, pause = {}, waiting = {}, progress = {})
+        var signedOut = false
+        server.dropReply = { method, path -> (method == "POST" && path.endsWith("/complete") && !signedOut).also { if (it) signedOut = true } }
+        answering(Int.MAX_VALUE, { method, segments -> signedOut && method == "POST" && segments.lastOrNull() == "complete" }) {
+            401 to org.json.JSONObject().put("message", "Sign in")
+        }
+        val failedJob = UUID.randomUUID().toString()
+        val ended = runCatching { run(failedJob) }.exceptionOrNull()
+        assertTrue("the completion's 401 didn't end the job signed out: $ended", ended is NotAuthenticated)
+        assertEquals(1, records().count { it.job == failedJob && !it.landed })
+        // Signed in again; the row's Retry.
+        server.dropReply = null
+        signedOut = false
+        if (sweptFirst) {
+            Reservations.settleAll(app) { id, ws -> job().api.abortUpload(id, ws) }
+            assertTrue(Reservations.landed(app, failedJob))
+        }
+        val failed = FailedTransfer(failedJob, TransferQueue.UPLOAD, "Notes.txt", "Sign in to HushOS to see your files.", 0L, file = staged.path,
+            mime = "text/plain", folder = family.rootId, family = family.groupId, familyWorkspace = family.workspaceId)
+        var queued: String? = null
+        assertTrue(TransferQueue.retryUpload(app, failed) { id ->
+            queued = id.toString()
+            assertEquals("a retry was queued before it took over the failed job's reservation", 1, records().count { it.job == queued })
+        })
+        val reserved = begins()
+        val rerun = runCatching { run(queued!!) }.exceptionOrNull()
+        assertTrue("a retried upload that had landed wasn't ended as uploaded: $rerun", rerun is Reservations.Landed)
+        assertEquals("a retried upload was sent again", reserved, begins())
+    }
+
+    /*
+     * #251 review 8, item 2: an upload outside the queue (a share's upload, Files writing a file back: no job) over a ledger
+     * that is there but can't be read. Nothing is reserved: no begin is sent. Fails if only a queued job reads the ledger
+     * before its begin.
+     */
+    @Test
+    fun anUploadOutsideTheQueueSendsNoBeginOverAnUnreadableLedger() {
+        val job = UUID.randomUUID().toString()
+        assertThrows(Killed::class.java) { upload(job(), job) { throw Killed() } }
+        val vault = job()
+        if (vault.item(server.root) == null) vault.resolve(server.root)
+        val ledger = File(app.filesDir, Reservations.FILE)
+        assertTrue(ledger.setReadable(false))
+        try {
+            val reserved = begins()
+            val error = runCatching { vault.upload(local("Plan.txt", "itinerary"), "Plan.txt", "text/plain", server.root, null) }.exceptionOrNull()
+            assertTrue("an unreadable ledger didn't stop the upload: $error", error is Reservations.LedgerUnreadable)
+            assertEquals("a begin went out over an unreadable ledger", reserved, begins())
+        } finally {
+            ledger.setReadable(true)
+        }
+    }
+
+    /*
      * What waits out a key change and what fails: the ledger's key-change refusal (said or raw), and the server's
      * `rotating`; its `stale` only once the upload has waited (a walk reaching the folder between a look and a begin), and
      * never a removal or another refusal. Fails if a key change fails the upload or a refusal is retried for half an hour.

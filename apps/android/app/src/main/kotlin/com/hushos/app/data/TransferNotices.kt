@@ -222,7 +222,8 @@ class RetryReceiver : BroadcastReceiver() {
         val pending = goAsync()
         Thread {
             try {
-                for (failed in FailedTransfers.of(context).all().filter { it.id in ids && TransferNotices.canRetry(it) }) TransferQueue.retry(context, failed)
+                // One that can't be handed over stays failed, its row on the panel; the rest go on.
+                for (failed in FailedTransfers.of(context).all().filter { it.id in ids && TransferNotices.canRetry(it) }) runCatching { TransferQueue.retry(context, failed) }
                 NotificationManagerCompat.from(context).cancel(intent.getIntExtra("notification", 0))
             } finally {
                 pending.finish()
