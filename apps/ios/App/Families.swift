@@ -84,6 +84,9 @@ extension DriveStore {
      * never read under a personal key, whatever the new session finds.
      */
     func resetFamilies() {
+        // Nothing of the ended session's sync reaches the screens or the scheduler again.
+        listenedFamilies?.detach()
+        listenedFamilies = nil
         sessionGate.reset()
         for groupId in familyStates.keys { familyGenerations.published(groupId) }
         familyRevisions = FamilyRevisions()
@@ -340,6 +343,9 @@ extension DriveStore {
             }
             guard stillShown() else { return }
             await rejudgeFamilies(summary.id, session: session)
+            // A key change this phone saw re-key a top folder: walked from here, as any member's device does.
+            guard stillShown() else { return }
+            startWalks(view, summary: summary, session: session)
         } else if case .failed(let message) = state, message == FamilyWords.noAnswer {
             // No answer: what this phone opened before stays on screen, read only.
         } else {
@@ -497,6 +503,181 @@ enum FamilyRoute: Hashable {
     case family(String)
     case folder(String, String)
 }
+
+/* A family's key-change walks on this phone, as its page says them: items done, and why a folder's walk stopped. */
+struct FamilyWalkShown: Equatable {
+    var done = 0
+    /* By folder (lowercased): the words of the last stop. */
+    var stopped: [String: String] = [:]
+}
+
+extension DriveStore {
+    /*
+     * The store follows the session's family sync: every family it lets go of, from any path (a
+     * sync, route 2's reconcile, a leave, a join, the background pass), reaches the screens; and
+     * whether the background check is wanted reaches its scheduler.
+     */
+    func attachFamilies() {
+        listenedFamilies?.detach()
+        guard let families = FamilySync.shared(for: vault) else { return }
+        listenedFamilies = families
+        let session = vault.api.session
+        // Handed the sync on each post, never holding it: a replaced session's sync and vault go with it.
+        families.onReleases { [weak self] families in Task { @MainActor [weak self] in self?.applyReleases(families) } }
+        families.familyWork.set { wanted in Task { @MainActor in FamilyWalkTasks.wanted(wanted, session: session) } }
+        // Anything posted before the store listened (a background pass that ran first).
+        applyReleases(families)
+    }
+
+    /* What the session's sync let go of, shown as each would be: a family route 2 lists, in its order; one it doesn't, as a removal. */
+    func applyReleases(_ families: FamilySync) {
+        guard FamilySync.shared(for: vault) === families, let session = beginSession() else { return }
+        for release in families.releases.take() {
+            let groupId = release.groupId
+            if let summary = familyList?.first(where: { $0.id.lowercased() == groupId.lowercased() }) {
+                Task { await adopt(release.revised.state, of: summary, revision: release.revised.revision, session: session) }
+            } else if case .wiped = release.revised.state {
+                removed(groupId)
+            } else if case .failed(let words) = release.revised.state {
+                couldntRemove(groupId, words)
+            }
+        }
+    }
+
+    // MARK: Leaving
+
+    /* Leave family pressed: the dialog opens for the family, unless a leave is in flight. */
+    func askLeave(_ groupId: String) {
+        guard leaving?.busy != true else { return }
+        leaving = LeaveDialog(groupId: groupId)
+    }
+
+    /* Cancel: nothing while a leave is in flight. */
+    func dismissLeave() {
+        guard leaving?.busy != true else { return }
+        leaving = nil
+    }
+
+    /*
+     * The dialog's Leave family: route 20 with the plans it named, once. What leaving let go of lands
+     * as the session's own work whether or not the page is still open; the dialog then closes, or
+     * says why it was refused, or names the plans leaving ends for the next press.
+     */
+    func confirmLeave(name: String) {
+        guard var dialog = leaving, let plans = dialog.confirm() else { return }
+        leaving = dialog
+        let groupId = dialog.groupId
+        Task {
+            do {
+                let outcome = try await inFamilyLanding(nil, { try await $0.leave(groupId, endsLapsed: plans) }, land: { result in
+                    if case .success(.left(let removed, _)) = result { await self.landLeave(groupId, removed) }
+                })
+                guard var current = leaving, current.groupId == groupId else { return }
+                // Dropped with its session (a sign-out meanwhile): nothing more is said of it.
+                guard let outcome else {
+                    leaving = nil
+                    return
+                }
+                if current.answered(outcome) {
+                    leaving = nil
+                    if case .left(let removed, _) = outcome { announceLeft(name, removed) }
+                    leftFamily = groupId
+                } else {
+                    leaving = current
+                }
+            } catch {
+                if endsSession(error) {
+                    report(error)
+                    leaving = nil
+                    return
+                }
+                leaving?.failed(FamilyWords.error(error))
+            }
+        }
+    }
+
+    /*
+     * A leave that landed, for the session: the family shown as removed (or as a wipe that couldn't
+     * finish), its walks dropped, route 2 read again, and Account's plan and storage read again so
+     * the family's pool and plan stop showing.
+     */
+    private func landLeave(_ groupId: String, _ removed: FamilySync.Revised) async {
+        if case .wiped = removed.state {
+            self.removed(groupId)
+        } else if case .failed(let words) = removed.state {
+            couldntRemove(groupId, words)
+        }
+        familyWalks[groupId] = nil
+        accountGeneration += 1
+        await refreshFamilies(force: true)
+    }
+
+    private func announceLeft(_ name: String, _ removed: FamilySync.Revised) {
+        if case .wiped = removed.state {
+            notify("You left \(name)")
+        } else {
+            // iOS has no lock: signing out is what clears what this device kept.
+            notify("You left \(name), but this device kept some of it. HushOS couldn’t clear the family’s keys and saved records on this device. Sign out to clear them.",
+                   important: true)
+        }
+    }
+
+    // MARK: Walks
+
+    /*
+     * The key-change walks this phone has its own reason to run in an accepted family
+     * (FamilyArea.walkTarget), one per folder, each to its end in the session's own task. One that
+     * stops says why on the family's page and waits before it's tried again (30 seconds, doubling
+     * to 10 minutes); the background check is asked for soon either way.
+     */
+    func startWalks(_ view: FamilyView, summary: GroupSummary, session: Session) {
+        let groupId = summary.id
+        let rotating = Set(view.areas.filter(\.rotating).map { $0.workspaceId.lowercased() })
+        if var shown = familyWalks[groupId] {
+            shown.stopped = shown.stopped.filter { rotating.contains($0.key) }
+            familyWalks[groupId] = rotating.isEmpty ? nil : shown
+        }
+        let due = view.areas.compactMap(\.walkTarget)
+        if !due.isEmpty { FamilyWalkTasks.soon(session: vault.api.session) }
+        for target in due {
+            let workspace = target.workspaceId.lowercased()
+            if walking.contains(workspace) { continue }
+            if let ended = walkEnded[target.key], Date() < ended.until { continue }
+            walking.insert(workspace)
+            Task {
+                defer { walking.remove(workspace) }
+                do {
+                    let walked = try await inFamily(session) { families in
+                        try await families.walk(groupId, target, progress: { done in
+                            Task { @MainActor [weak self] in self?.familyWalks[groupId, default: FamilyWalkShown()].done = done }
+                        })
+                    }
+                    guard walked != nil else { return }
+                    walkEnded[target.key] = nil
+                    familyWalks[groupId]?.stopped[workspace] = nil
+                    await refreshFamily(summary, session: session)
+                } catch {
+                    if endsSession(error) {
+                        report(error)
+                        return
+                    }
+                    let attempts = (walkEnded[target.key]?.attempts ?? 0) + 1
+                    walkEnded[target.key] = (attempts, Date().addingTimeInterval(min(600, 30 * pow(2, Double(attempts - 1)))))
+                    familyWalks[groupId, default: FamilyWalkShown()].stopped[workspace] = Self.walkWords(error)
+                    FamilyWalkTasks.soon(session: vault.api.session)
+                }
+            }
+        }
+    }
+
+    /* Why a walk stopped, in the web's words. */
+    static func walkWords(_ error: Error) -> String {
+        if let stopped = error as? WalkStopped { return stopped.message }
+        if case DriveAPIError.server(_, let message) = error, !message.isEmpty { return message }
+        return ErrorWords.say(error, otherwise: WalkStopped.couldNotFinish.message) ?? WalkStopped.couldNotFinish.message
+    }
+}
+
 
 /* Account's Families: one row per family, as the web's list draws it. Absent on a server without families, or with none. */
 struct FamiliesSection: View {
@@ -661,11 +842,14 @@ struct FamilyPage: View {
                 folders(view)
                 members(view)
                 technical(view)
+                leavingSection
             } else if state == nil || store.familySyncing.contains(groupId) {
                 alerts
                 Section { ProgressView().frame(maxWidth: .infinity).padding(.vertical, Alpine.Space.s4).bareRow() }
             } else {
                 alerts
+                // A family that couldn't be checked, or that shows another history, can still be left.
+                if summary?.state == "active", state != .wiped { leavingSection }
             }
         }
         .listStyle(.insetGrouped)
@@ -689,6 +873,16 @@ struct FamilyPage: View {
             guard !Task.isCancelled, store.current(session) else { return }
             labels = read
             checkedWith = with
+        }
+        // The dialog's state is the store's (a scene change keeps it); Cancel and a swipe do nothing while a leave is in flight.
+        .sheet(isPresented: Binding(get: { store.leaving?.groupId == groupId }, set: { if !$0 { store.dismissLeave() } })) {
+            LeaveFamilySheet(name: name, members: store.familyDetails[groupId]?.members).environment(store)
+        }
+        // Left: back to Account, once.
+        .onChange(of: store.leftFamily, initial: true) { _, left in
+            guard left == groupId else { return }
+            store.leftFamily = nil
+            dismiss()
         }
         .sheet(item: $checking) { check in
             if let summary {
@@ -716,6 +910,7 @@ struct FamilyPage: View {
             // The join screen takes the page's place (body).
             EmptyView()
         case .accepted(let view):
+            keyChanges(view)
             if view.ownEntryWrong {
                 // The web's words (family-page.tsx), in the warning colours.
                 notice(title: "\(name) has your account wrong on this device", message: "Ask someone who manages the family to check it’s you, from the family’s page.",
@@ -740,6 +935,57 @@ struct FamilyPage: View {
             }
         case nil:
             EmptyView()
+        }
+    }
+
+    /*
+     * A key change running in the family's folders (the web's KeyChanges): what is getting new keys
+     * and how far this phone's walk is, and each folder whose walk stopped, with why and when it is
+     * tried again.
+     */
+    @ViewBuilder private func keyChanges(_ view: Accepted) -> some View {
+        let running = view.areas.filter(\.rotating)
+        let walks = store.familyWalks[groupId]
+        let nameOf: (String) -> String = { workspace in view.areas.first { $0.workspaceId.lowercased() == workspace.lowercased() }?.name ?? "A family folder" }
+        if !running.isEmpty {
+            let what = running.count == 1 ? "\(nameOf(running[0].workspaceId)) is getting new keys." : "\(running.count) folders are getting new keys."
+            let done = walks?.done ?? 0
+            let progress = done > 0 ? "\(done) \(done == 1 ? "item" : "items") done so far. " : ""
+            Section {
+                VStack(alignment: .leading, spacing: Alpine.Space.s2) {
+                    Text("Replacing keys in the family folders").font(Theme.Text.headline).foregroundStyle(Alpine.ink)
+                    Text("\(what) \(progress)Everything stays readable meanwhile; an upload to a folder waits until its new keys reach it.")
+                        .font(Theme.Text.callout).foregroundStyle(Alpine.ink)
+                }
+                .padding(.vertical, Alpine.Space.s1)
+                .listRowBackground(Alpine.tint)
+            }
+        }
+        ForEach((walks?.stopped ?? [:]).sorted { $0.key < $1.key }, id: \.key) { workspace, words in
+            notice(title: "Replacing keys in \(nameOf(workspace)) stopped", message: "\(words) HushOS tries again the next time it checks \(name).",
+                   danger: false) { EmptyView() }
+        }
+    }
+
+    /*
+     * Leaving (the web's family page): Leave family, held back with the reason when the member list
+     * already shows the server would refuse it, and while the members aren't loaded.
+     */
+    @ViewBuilder private var leavingSection: some View {
+        let offer = FamilyLeave.offered(userId: me, members: store.familyDetails[groupId]?.members)
+        Section {
+            Text(offer.line).font(Theme.Text.callout).foregroundStyle(offer.enabled ? Alpine.inkMuted : Alpine.ink)
+            Button(role: .destructive) { store.askLeave(groupId) } label: { Text("Leave family") }
+                .disabled(!offer.enabled)
+        } header: {
+            Text("Leaving").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+        }
+        // Who is in the family, read for this section even when the family's check didn't accept it (a fork, a failed
+        // check after a cold start), so a refusal the list shows is said up front.
+        .task(id: groupId) {
+            guard store.familyDetails[groupId] == nil else { return }
+            let groupId = groupId
+            if let detail = try? await store.inFamily(nil, { try await $0.members(groupId) }) { store.familyDetails[groupId] = detail }
         }
     }
 
@@ -872,6 +1118,65 @@ struct FamilyPage: View {
             Text(label).foregroundStyle(Alpine.inkMuted)
             Spacer()
             Text(value).monospacedDigit().foregroundStyle(Alpine.ink)
+        }
+    }
+}
+
+/*
+ * Leave {family}? (the web's leave dialog): what leaving takes away, the plans an `ends-lapsed`
+ * answer named, a refusal's words, and Leave family, which reads Leaving while route 20 is out.
+ * Its state is the store's (LeaveDialog): a scene change keeps it, and nothing here closes or
+ * sends again while a leave is in flight.
+ */
+struct LeaveFamilySheet: View {
+    @Environment(DriveStore.self) private var store
+    let name: String
+    /* Route 3's members, when read: only a list naming one active member says leaving ends the family. */
+    let members: [GroupDetail.Member]?
+
+    var body: some View {
+        let dialog = store.leaving
+        let busy = dialog?.busy == true
+        VStack(alignment: .leading, spacing: Alpine.Space.s3) {
+            Text("Leave \(name)?").font(Theme.Text.headline).foregroundStyle(Alpine.ink)
+            Text(FamilyLeave.body(family: name, members: members)).font(Theme.Text.callout).foregroundStyle(Alpine.ink)
+            if let plans = dialog?.plans, !plans.isEmpty {
+                Text(FamilyLapsedPlan.endsWhenYouLeave(family: name, plans: plans)).font(Theme.Text.callout).foregroundStyle(Alpine.ink)
+            }
+            if let error = dialog?.error {
+                Text(error).font(Theme.Text.callout).foregroundStyle(Alpine.danger)
+            }
+            Spacer(minLength: 0)
+            VStack(spacing: Alpine.Space.s2) {
+                Button { store.confirmLeave(name: name) } label: { Text(busy ? "Leaving" : "Leave family").frame(maxWidth: .infinity) }
+                    .buttonStyle(DangerCapsuleStyle())
+                    .disabled(busy)
+                Button { store.dismissLeave() } label: { Text("Cancel").frame(maxWidth: .infinity) }
+                    .buttonStyle(SecondaryCapsuleStyle())
+                    .disabled(busy)
+            }
+        }
+        .padding(Alpine.Space.s4)
+        .presentationDetents([.medium, .large])
+        .interactiveDismissDisabled(busy)
+    }
+}
+
+/* The filled capsule of an action that takes something away (Leave family). */
+struct DangerCapsuleStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { Capsule_(configuration: configuration) }
+
+    private struct Capsule_: View {
+        let configuration: Configuration
+        @Environment(\.isEnabled) private var enabled
+
+        var body: some View {
+            configuration.label
+                .font(.body.weight(.semibold))
+                .foregroundStyle(enabled ? Alpine.onPrimary : Alpine.inkMuted)
+                .padding(.horizontal, 20)
+                .frame(minHeight: Theme.control)
+                .background(enabled ? Alpine.danger.opacity(configuration.isPressed ? 0.85 : 1) : Alpine.ink.opacity(0.08), in: Capsule())
         }
     }
 }

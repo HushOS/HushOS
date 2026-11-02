@@ -177,6 +177,7 @@ Leave (route 20, with the organizer and last-holder refusals as the server words
 
 - **Tests:** leaving wipes the family's keys, record and Files domain, and keeps the settings pin; a walk resumes after the app is killed mid-batch (the pending keys are dropped, the batch resent).
 - **Proof:** simulator: leave a family; its folders vanish from the app and Files; the web shows the member as left.
+- **Built (branch feat/ios-family-leave, after Android's #252):** `FamilyLeave.swift` (route 20, `FamilyLeave.blocker`, `FamilyLapsedPlan` confirmed by id, `LeaveDialog` kept by the store), `FamilyWalks.swift` (`FamilyArea.ownReasonToWalk`, `FamilySync.walk`, parent-first batches, the process-wide key lock writes wait on, parents opened through the change feed with no page cap), `FamilyWalkWork.swift` (`FamilySync.backgroundPass`, `releases`, `familyWork`) and `App/FamilyWalkTasks.swift` (the BGProcessingTask). No core change. There is no Files domain per family yet (iOS 6), so a leave has none to remove; iOS has no lock, so a wipe that couldn't finish says "Sign out to clear them." Tests: `FamilyLeaveTests`, `FamilyWalkTests` and a join test, each mutation-checked, against the stub's key changes (`FamilyRotationStub.swift`).
 
 ### iOS 5a: managing members (invite, let in, roles, handover)
 

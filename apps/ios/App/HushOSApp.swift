@@ -16,6 +16,7 @@ struct HushOSApp: App {
         TemporaryCopies.sweep()
         // Before launch finishes, or iOS will not run it.
         BackgroundTransfers.registerTask()
+        FamilyWalkTasks.register()
         // Before launch finishes, so a tap on a transfers notification that launched the app arrives.
         TransferNotices.shared.start()
         Theme.configureAppearance()

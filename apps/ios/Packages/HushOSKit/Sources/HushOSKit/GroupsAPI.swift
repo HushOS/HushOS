@@ -23,6 +23,8 @@ public struct GroupsAPIError: Error, LocalizedError, Equatable, Sendable {
     /* `data.reason` (an `in-family` about the newcomer, a `seats` refusal's why) and `data.invitee` (a `no-plan` for someone invited). */
     public var reason: String? = nil
     public var invitee = false
+    /* Route 20's `ends-lapsed`: the plans this person pays for that leaving ends (`data.plans`), each with an id and a name. */
+    public var plans: [FamilyLapsedPlan] = []
 
     public var isNotMember: Bool { status == 404 && code == "not-member" }
 
@@ -35,7 +37,8 @@ public struct GroupsAPIError: Error, LocalizedError, Equatable, Sendable {
             return Invitation.Family(groupId: groupId, name: name)
         }
         return GroupsAPIError(status: status, code: body?["code"] as? String, message: body?["message"] as? String ?? "Please try again.",
-                              family: family, reason: detail?["reason"] as? String, invitee: detail?["invitee"] as? Bool == true)
+                              family: family, reason: detail?["reason"] as? String, invitee: detail?["invitee"] as? Bool == true,
+                              plans: FamilyLapsedPlan.list(in: detail?["plans"]))
     }
 
     /* What the families screens say, as the web's errorCopy words it for a read. */
@@ -233,7 +236,14 @@ public struct SpaceList: Codable, Sendable {
             workspaceKeyVersion = try c.decode(UInt64.self, forKey: .workspaceKeyVersion)
             changeSeq = try c.decodeIfPresent(Int.self, forKey: .changeSeq)
             root = try c.decodeIfPresent(NodeView.self, forKey: .root)
-            rotation = try c.decodeIfPresent(Rotation.self, forKey: .rotation)
+            // One that doesn't read is still a key change running here (the folder says so), never walked on its word, and never
+            // a reason the whole list doesn't load.
+            if try !c.contains(.rotation) || c.decodeNil(forKey: .rotation) {
+                rotation = nil
+            } else {
+                rotation = (try? c.decode(Rotation.self, forKey: .rotation)).flatMap { $0.nodeId.isEmpty || $0.targetEpoch == 0 ? nil : $0 }
+                    ?? Rotation(id: nil, nodeId: "", targetEpoch: 0)
+            }
             grant = try c.decodeIfPresent(AreaGrant.self, forKey: .grant)
             selfGrant = (try? c.decodeIfPresent(GrantView.self, forKey: .selfGrant)) ?? nil
         }
@@ -297,6 +307,18 @@ public final class GroupsAPI: Sendable {
     }
 
     /* 15: the invitation bound to this account, which must hold the invited address. Lets nobody in: the words and the join code come next. */
+    /*
+     * 20: this account leaves the family. `endsLapsed`: the plans an `ends-lapsed` refusal named, confirmed
+     * by id (always sent, possibly empty). True when leaving ended the family (the last one in it).
+     */
+    public func leave(_ groupId: String, endsLapsed: [String]) async throws -> Bool {
+        struct Reply: Decodable {
+            let state: String
+            var dissolved: Bool? = nil
+        }
+        return try await post("/groups/\(try id(groupId))/leave", body: ["endsLapsed": endsLapsed], as: Reply.self).dissolved == true
+    }
+
     public func acceptInvitation(_ token: String) async throws -> String {
         guard AppLinks.isToken(token) else { throw GroupsAPIError(status: 410, code: "gone", message: "This invitation is no longer open.") }
         struct Reply: Decodable { let groupId: String }
