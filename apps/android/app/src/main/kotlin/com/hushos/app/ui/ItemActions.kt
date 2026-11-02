@@ -335,6 +335,7 @@ fun FolderColourDialog(folders: List<Opened>, onPick: (String?) -> Unit, onDismi
     var choice by rememberSaveable { mutableStateOf(first.orEmpty()) }
     var hex by rememberSaveable { mutableStateOf(if (first != null && swatches.none { it.colour == first }) first else "") }
     val what = folders.singleOrNull()?.let { "“${it.name}”" } ?: "${folders.size} folders"
+    val typedWrong = hex.isNotEmpty() && toColour(hex) == null
     @Composable
     fun Swatch(value: String, name: String, fill: Color, check: Color) {
         val on = value == choice
@@ -363,6 +364,7 @@ fun FolderColourDialog(folders: List<Opened>, onPick: (String?) -> Unit, onDismi
                 OutlinedTextField(
                     value = hex, onValueChange = { typed -> hex = typed.trim(); toColour(hex)?.let { choice = it } },
                     singleLine = true, label = { Text("Custom colour") }, placeholder = { Text("#7c5cbf") },
+                    isError = typedWrong, supportingText = if (typedWrong) ({ Text("Enter a colour like #7c5cbf.") }) else null,
                     leadingIcon = if (choice.startsWith("#") && swatches.none { it.colour == choice }) {
                         { Box(Modifier.size(18.dp).background(Color(swatchArgb(choice).toInt()), CircleShape)) }
                     } else null,
@@ -370,7 +372,8 @@ fun FolderColourDialog(folders: List<Opened>, onPick: (String?) -> Unit, onDismi
                 )
             }
         },
-        confirmButton = { TextButton(onClick = { onPick(choice.ifEmpty { null }) }) { Text("Save") } },
+        // A custom colour half typed is not saved as the last one that was whole.
+        confirmButton = { TextButton(enabled = !typedWrong, onClick = { onPick(choice.ifEmpty { null }) }) { Text("Save") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
