@@ -105,10 +105,12 @@ class ProviderFamiliesTest {
 
     private fun watchQueue(families: ProviderFamilies) {
         val real = families.queue
-        families.queue = { file, name, mime, folder, replacing, fam ->
-            real(file, name, mime, folder, replacing, fam).also { id ->
+        families.queue = { file, name, mime, folder, replacing, fam, chain ->
+            real(file, name, mime, folder, replacing, fam, chain).also { id ->
+                // Its place in the document's chain is the queue's own (WriteBacks.nextOrder): read back from WorkManager.
+                val order = WorkManager.getInstance(app).getWorkInfoById(id).get()!!.tags.filter { it.startsWith("order:") }
                 requests[id] = TransferQueue.uploadRequest(id, File(app.filesDir, "queue/$id/content"), mime, folder, replacing, fam,
-                    session = TransferQueue.accountTag(Shared.session(app)!!))
+                    session = TransferQueue.accountTag(Shared.session(app)!!), extraTags = listOf("chain:$chain") + order)
             }
         }
     }
@@ -736,6 +738,71 @@ class ProviderFamiliesTest {
         now += 60_000L
         assertTrue(families.load().single().folders.single().writable)
         assertEquals(told + 1, rootsTold())
+    }
+
+    /*
+     * An editor saves twice while the first save's upload is retrying: the second save waits behind the first in the
+     * document's chain (never a job that could run first), and the version left is the second. Fails if two saves of one
+     * document are independent jobs, so the older could land last and replace the newer.
+     */
+    @Test
+    fun twoSavesOfAFamilyFileLandInTheOrderTheyWereMade() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider).also(::watchQueue)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        val first = families.writeBack(doc, families.editFor(doc, "w").apply { writeText("first save") })
+        val second = families.writeBack(doc, families.editFor(doc, "w").apply { writeText("second save") })
+        assertEquals(androidx.work.WorkInfo.State.BLOCKED, WorkManager.getInstance(app).getWorkInfoById(second).get()!!.state)
+        server.beforeAnswer = { method, path -> if (method == "POST" && path == "drive/uploads") throw IllegalStateException("dropped") }
+        assertEquals(ListenableWorker.Result.retry(), runJob(first))
+        server.beforeAnswer = null
+        assertEquals(ListenableWorker.Result.success(), runJob(first))
+        assertEquals(ListenableWorker.Result.success(), runJob(second))
+        families.children(FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId))
+        assertEquals("second save", families.readCopy(doc).readText())
+    }
+
+    /*
+     * An editor saves, then opens the file again to append before the queued save ran: the append starts from that save,
+     * not from the server's older version, and the version left holds both edits. Fails if a contents-keeping edit is
+     * seeded from the server while a save of the file is still queued.
+     */
+    @Test
+    fun anAppendBeforeAQueuedFamilySaveLandsBuildsOnTheSave() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider).also(::watchQueue)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        val first = families.writeBack(doc, families.editFor(doc, "w").apply { writeText("first save") })
+        val append = families.editFor(doc, "wa")
+        assertEquals("first save", append.readText())
+        writeAs("wa", append, " then more")
+        val second = families.writeBack(doc, append)
+        assertEquals(ListenableWorker.Result.success(), runJob(first))
+        assertEquals(ListenableWorker.Result.success(), runJob(second))
+        families.children(FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId))
+        assertEquals("first save then more", families.readCopy(doc).readText())
+    }
+
+    /*
+     * Another member's device moves the file into a folder of its own: reopening it finds it where it is now (the feed)
+     * rather than calling it missing because the folder it was in no longer lists it. Fails if a reopen gives up after
+     * relisting the old folder.
+     */
+    @Test
+    fun aFileMovedElsewhereInTheFamilyStillReopens() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        val other = family.phone()
+        assertTrue(other.sync.sync(family.summary) is FamilyState.Accepted)
+        other.vault.listChildren(family.rootId, family.workspaceId)
+        val trips = other.vault.createFolder(family.rootId, "Trips")
+        other.vault.move(family.fileId, trips.id)
+        assertEquals("marker-family", families.readCopy(doc).readText())
+        assertEquals("marker-family", families.editFor(doc, "rw").readText())
     }
 
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =

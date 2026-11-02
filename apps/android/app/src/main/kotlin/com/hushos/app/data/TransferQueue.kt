@@ -68,13 +68,18 @@ object TransferQueue {
     /* A queued upload's family folder: its family and workspace (FamilyUploads opens the family in the job). */
     data class Family(val groupId: String, val workspaceId: String)
 
-    /* Queues `staged` (moved into the queue's own folder) for upload into `folderId`; returns the job's id. */
-    fun upload(context: Context, staged: File, name: String, mime: String?, folderId: String, replacingId: String?, family: Family? = null): UUID {
+    /*
+     * Queues `staged` (moved into the queue's own folder) for upload into `folderId`; returns the job's id. `chain`: a
+     * document's write-backs from the Files app (WriteBacks), appended to its chain so it runs only after the saves queued
+     * before it.
+     */
+    fun upload(context: Context, staged: File, name: String, mime: String?, folderId: String, replacingId: String?, family: Family? = null,
+               chain: String? = null): UUID {
         val id = UUID.randomUUID()
         val dir = File(context.filesDir, "queue/$id").also { it.mkdirs() }
         val file = File(dir, "content")
         if (!staged.renameTo(file)) { staged.copyTo(file, overwrite = true); staged.delete() }
-        return enqueueUpload(context, id, file, name, mime, folderId, replacingId, family)
+        return enqueueUpload(context, id, file, name, mime, folderId, replacingId, family, chain = chain)
     }
 
     /*
@@ -268,17 +273,20 @@ object TransferQueue {
     }
 
     private fun enqueueUpload(context: Context, id: UUID, file: File, name: String, mime: String?, folderId: String, replacingId: String?, family: Family? = null,
-                              ledger: String = id.toString()): UUID {
-        val request = uploadRequest(id, file, mime, folderId, replacingId, family, ledger, Shared.session(context)?.let(::accountTag))
+                              ledger: String = id.toString(), chain: String? = null): UUID {
+        val request = uploadRequest(id, file, mime, folderId, replacingId, family, ledger, Shared.session(context)?.let(::accountTag),
+            chain?.let { WriteBacks.tags(it, WriteBacks.nextOrder()) }.orEmpty())
         JobNames.of(context).put(id.toString(), name)
-        WorkManager.getInstance(context).enqueueUniqueWork("upload-$id", ExistingWorkPolicy.KEEP, request)
+        // A write-back runs behind the saves of its document queued before it (one that ended, however, never holds it up).
+        if (chain != null) WorkManager.getInstance(context).enqueueUniqueWork(chain, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+        else WorkManager.getInstance(context).enqueueUniqueWork("upload-$id", ExistingWorkPolicy.KEEP, request)
         return id
     }
 
     /* An upload's job as WorkManager keeps it: ids and paths only, never the file's name (JobNames holds that). */
     /* `ledger`: the key its reservations are kept under (Reservations), the job's own id unless a Retry carries the first job's. */
     internal fun uploadRequest(id: UUID, file: File, mime: String?, folderId: String, replacingId: String?, family: Family? = null, ledger: String = id.toString(),
-                               session: String? = null) =
+                               session: String? = null, extraTags: List<String> = emptyList()) =
         OneTimeWorkRequestBuilder<UploadWorker>()
             .setId(id)
             .setConstraints(constraints())
@@ -290,6 +298,7 @@ object TransferQueue {
             .apply { if (family != null) addTag("family:${family.groupId.lowercase()}") }
             // The account that queued it (TransferQueue.accountTag): only that account runs it, ends it or shows it.
             .apply { if (session != null) addTag(session) }
+            .apply { for (tag in extraTags) addTag(tag) }
             .build()
 
     /*

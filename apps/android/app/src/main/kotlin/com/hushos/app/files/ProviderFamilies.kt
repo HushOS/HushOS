@@ -16,6 +16,7 @@ import com.hushos.app.data.NotAuthenticated
 import com.hushos.app.data.Opened
 import com.hushos.app.data.SessionEnded
 import com.hushos.app.data.TransferQueue
+import com.hushos.app.data.WriteBacks
 import com.hushos.app.data.Vault
 import com.hushos.app.data.familyWordsSince
 import com.hushos.app.data.familyEpoch
@@ -410,7 +411,8 @@ class ProviderFamilies internal constructor(
             if (strict || error is NotAuthenticated) throw error
             return held
         }
-        return vault.item(doc.workspaceId, doc.nodeId) ?: throw FileNotFoundException("This item no longer exists.")
+        // Moved by another device since: found where the change feed puts it now before it is called missing.
+        return vault.item(doc.workspaceId, doc.nodeId) ?: held(doc.workspaceId, doc.nodeId) ?: throw FileNotFoundException("This item no longer exists.")
     }
 
     /*
@@ -424,7 +426,13 @@ class ProviderFamilies internal constructor(
 
     fun editCopy(doc: FamilyDoc.Node, keepContents: Boolean): File {
         val (folder, item) = writable(doc)
-        val source = if (keepContents) readCopy(doc, strict = true) else null
+        val chain = WriteBacks.chainOf(doc.workspaceId, doc.nodeId)
+        // After a save of it still on its way, never during: the newest one still queued is what the file holds now, and
+        // the server's version is older than it.
+        return WriteBacks.serially(chain) { editCopy(doc, folder, item, if (keepContents) WriteBacks.pending(vault.context, chain) ?: readCopy(doc, strict = true) else null) }
+    }
+
+    private fun editCopy(doc: FamilyDoc.Node, folder: FamilyRoot.Folder, item: Opened, source: File?): File {
         val epoch = vault.familyEpoch(folder.workspaceId)
         val edits = FamilyCopies.edits(vault.context.cacheDir, folder.workspaceId) ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
         val edit = File(edits, "${item.id.lowercase()}/${java.util.UUID.randomUUID()}")
@@ -453,12 +461,16 @@ class ProviderFamilies internal constructor(
         require(doc.groupId)
         val item = vault.item(doc.workspaceId, doc.nodeId) ?: throw FileNotFoundException(FamilyWords.OPEN_AGAIN)
         val parent = item.node.parentId ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
-        return queue(edit, item.name, item.metadata.mime, parent, item.id, TransferQueue.Family(doc.groupId.lowercase(), doc.workspaceId.lowercase()))
+        // In the document's chain (WriteBacks): it runs only after the saves of it queued before, never ahead of them.
+        val chain = WriteBacks.chainOf(doc.workspaceId, doc.nodeId)
+        return WriteBacks.serially(chain) {
+            queue(edit, item.name, item.metadata.mime, parent, item.id, TransferQueue.Family(doc.groupId.lowercase(), doc.workspaceId.lowercase()), chain)
+        }
     }
 
     /* Tests: what queues a write-back (TransferQueue.upload), so a test can run the job it queued. */
-    internal var queue: (file: File, name: String, mime: String?, folder: String, replacingId: String, family: TransferQueue.Family) -> java.util.UUID =
-        { file, name, mime, folder, replacingId, family -> TransferQueue.upload(vault.context, file, name, mime, folder, replacingId, family) }
+    internal var queue: (file: File, name: String, mime: String?, folder: String, replacingId: String, family: TransferQueue.Family, chain: String) -> java.util.UUID =
+        { file, name, mime, folder, replacingId, family, chain -> TransferQueue.upload(vault.context, file, name, mime, folder, replacingId, family, chain = chain) }
 
     /* A new folder, or an empty file whose bytes follow through a write, in a writable family folder. Its document id. */
     fun create(parentDoc: FamilyDoc.Node, mimeType: String, name: String): String {
