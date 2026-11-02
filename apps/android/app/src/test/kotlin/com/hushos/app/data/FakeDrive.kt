@@ -65,6 +65,8 @@ class FakeDrive : AutoCloseable {
     private val grant: JSONObject = account.getJSONObject("grant")
     val workspace: String = grant.getString("workspaceId")
     val token = "session-" + UUID.randomUUID()
+    /* Later sessions of the same account (signed in again after one ended): their tokens are answered too. */
+    val renewed: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     /* An account whose identity the server serves: its own (opened under the fixture's account key) and Grace's. */
     class Person(val id: String, val envelope: IdentityEnvelope, val keys: IdentityKeys) {
@@ -162,6 +164,8 @@ class FakeDrive : AutoCloseable {
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
     /* Runs before a request is answered, outside the server's lock: a test holds one request there while others go on. */
     @Volatile var beforeAnswer: ((method: String, path: String) -> Unit)? = null
+    /* Runs after a request was handled, before its reply: true drops the reply (the work is done, the answer lost). */
+    @Volatile var dropReply: ((method: String, path: String) -> Boolean)? = null
     private val workers = java.util.concurrent.Executors.newCachedThreadPool()
 
     val origin: String get() = "http://127.0.0.1:${server.address.port}"
@@ -448,6 +452,11 @@ class FakeDrive : AutoCloseable {
 
     private class Upload(val ws: String, val body: JSONObject, val parts: HashMap<Int, ByteArray> = HashMap())
     private val uploads = HashMap<String, Upload>()
+    /* Uploads that completed (to their node) or were aborted: the server keeps their rows, and answers by them. */
+    private val completedUploads = HashMap<String, String>()
+    private val abortedUploads = HashSet<String>()
+    /* When begin says an upload expires (packages/drive/src/protocol.ts UPLOAD_TTL_HOURS). */
+    @Volatile var uploadExpiresAt: () -> java.time.Instant = { java.time.Instant.now().plusSeconds(24 * 3600) }
     private class Rotation(val ws: String, val target: Long, val applied: HashSet<String> = HashSet(), var finished: Boolean = false)
     private val rotations = HashMap<String, Rotation>()
 
@@ -508,8 +517,10 @@ class FakeDrive : AutoCloseable {
             if (path.startsWith("/store/")) return store(exchange, method, path, raw)
             val body = if (raw.isEmpty()) JSONObject() else runCatching { JSONObject(String(raw)) }.getOrDefault(JSONObject())
             val public = path.startsWith("/api/drive/links/")
-            if (!public && exchange.requestHeaders.getFirst("Cookie") != "hushos-session=$token") return send(exchange, 401, JSONObject().put("message", "Sign in"))
+            val cookie = exchange.requestHeaders.getFirst("Cookie")
+            if (!public && cookie != "hushos-session=$token" && renewed.none { cookie == "hushos-session=$it" }) return send(exchange, 401, JSONObject().put("message", "Sign in"))
             val reply = route(method, path.removePrefix("/api"), query, body, exchange.requestHeaders.getFirst(LINK_TOKEN_HEADER))
+            if (dropReply?.invoke(method, path.removePrefix("/api/")) == true) { exchange.close(); return }
             if (reply == null) {
                 unknown.add("$method $path")
                 send(exchange, 404, JSONObject().put("message", "No such route here: $method $path"))
@@ -696,7 +707,7 @@ class FakeDrive : AutoCloseable {
                 val id = UUID.randomUUID().toString()
                 uploads[id] = Upload(body.getString("workspaceId"), body)
                 val count = minOf(body.getLong("chunkCount"), 64L).toInt()
-                ok(JSONObject().put("upload", JSONObject().put("id", id))
+                ok(JSONObject().put("upload", JSONObject().put("id", id).put("expiresAt", uploadExpiresAt().toString()))
                     .put("parts", JSONArray((1..count).map { JSONObject().put("partNumber", it).put("url", "$origin/store/parts/$id/$it") })))
             }
             get && at("drive", "uploads", "*", "parts") -> {
@@ -704,9 +715,16 @@ class FakeDrive : AutoCloseable {
                 val last = minOf(uploads.getValue(segments[2]).body.getLong("chunkCount").toInt(), from + 63)
                 ok(JSONObject().put("parts", JSONArray((from..last).map { JSONObject().put("partNumber", it).put("url", "$origin/store/parts/${segments[2]}/$it") })))
             }
-            post && at("drive", "uploads", "*", "abort") -> { uploads.remove(segments[2]); ok(JSONObject()) }
+            // As packages/db/src/drive.ts abortUpload answers: open or aborted → 200, completed → 409, no row → 404.
+            post && at("drive", "uploads", "*", "abort") -> when {
+                uploads.remove(segments[2]) != null || segments[2] in abortedUploads -> { abortedUploads.add(segments[2]); ok(JSONObject().put("aborted", true)) }
+                segments[2] in completedUploads -> 409 to JSONObject().put("message", DriveApi.ALREADY_FINISHED)
+                else -> 404 to JSONObject().put("message", "This upload no longer exists.")
+            }
             post && at("drive", "uploads", "*", "complete") -> {
-                val upload = uploads.remove(segments[2]) ?: return 404 to JSONObject().put("message", "No upload")
+                // A repeated complete is answered with the finished node, as the server does.
+                completedUploads[segments[2]]?.let { return ok(JSONObject().put("node", node(it).json())) }
+                val upload = uploads.remove(segments[2]) ?: return 404 to JSONObject().put("message", "This upload no longer exists.")
                 val b = upload.body
                 val n = b.getJSONObject("node")
                 val listed = body.getJSONArray("parts")
@@ -725,6 +743,7 @@ class FakeDrive : AutoCloseable {
                     n.getString("keyEnvelope"), 1L, n.getString("metadataEnvelope"), userId, n.getString("metadataSignature"), changeSeq = changeSeq++)
                 node.version = version
                 nodes[node.id] = node
+                completedUploads[segments[2]] = node.id
                 ok(JSONObject().put("node", node.json()))
             }
             post && at("drive", "nodes", "*", "rotation") -> {

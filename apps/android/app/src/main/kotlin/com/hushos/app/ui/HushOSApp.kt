@@ -590,6 +590,9 @@ fun transferReason(item: TransferItem): String = com.hushos.app.data.TransferQue
 private fun statusLine(item: TransferItem, offline: Boolean): String = when {
     item.failed -> transferReason(item)
     item.done -> when (direction(item)) { "keep" -> "On this phone"; "down" -> "Downloaded"; else -> "Uploaded" }
+    // A family upload waiting out a key change in its folder (FamilyUploads), as iOS and the web say it.
+    // (queued again, or paused in its run between looks with nothing sent yet).
+    item.keyChange && !offline && (item.waiting || item.fraction <= 0f) -> com.hushos.app.data.FamilyUploads.FINISHING
     item.waiting -> if (offline) "Waiting for a connection" else "Waiting"
     // A kept folder: how many of its files are done, the bar measuring bytes.
     item.files != null -> "${item.files.first} of ${item.files.second} files" + if (item.fraction > 0f) " · ${(item.fraction * 100).toInt()}%" else ""
