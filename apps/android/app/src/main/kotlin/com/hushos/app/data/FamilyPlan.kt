@@ -55,6 +55,9 @@ data class FamilyPlan(
             }
         }
 
+        /* What the section shows after a read: what it read, none included (billing turned off); the plan before only when the read failed. */
+        fun after(previous: FamilyPlan?, read: Result<FamilyPlan?>): FamilyPlan? = read.fold({ it }, { previous })
+
         /* The family's plan, read for `session` (a member of the family). */
         fun read(context: android.content.Context, session: Shared.Session, groupId: String): FamilyPlan? {
             if (!FamilyRecords.valid(groupId.lowercase())) return null

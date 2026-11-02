@@ -72,6 +72,19 @@ class FamilyPlanTest {
     }
 
     /*
+     * A read that answers replaces what the section shows, none included (billing turned off: the section goes); only a
+     * read that failed keeps the plan shown before. Fails if billing turned off leaves the old plan on screen.
+     */
+    @Test
+    fun billingTurnedOffClearsThePlanAndOnlyAFailureKeepsIt() {
+        val shown = FamilyPlan("Family Pro", null, 0, 1L shl 40, null)
+        val next = FamilyPlan("Family Max", null, 0, 1L shl 42, null)
+        assertNull(FamilyPlan.after(shown, Result.success(null)))
+        assertEquals(next, FamilyPlan.after(shown, Result.success(next)))
+        assertEquals(shown, FamilyPlan.after(shown, Result.failure(java.io.IOException("no answer"))))
+    }
+
+    /*
      * No family or account screen holds a way to a billing page: no link, no URL handler, no web address, no checkout,
      * portal or pricing route, and no "upgrade" wording, in any of their sources. Fails as soon as one is added.
      */

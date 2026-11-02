@@ -64,7 +64,7 @@ fun FamilyPlanSection(model: DriveViewModel, groupId: String) {
     LaunchedEffect(groupId, families.refreshed[groupId]) {
         val session = families.begin() ?: return@LaunchedEffect
         val read = families.run(session) { sync -> FamilyPlan.read(sync.vault.context, sync.vault.api.session, groupId) } ?: return@LaunchedEffect
-        read.getOrNull()?.let { plan = it }
+        plan = FamilyPlan.after(plan, read)
     }
     val shown = plan ?: return
     val lines = FamilyPlanLines.of(shown, families.details[groupId]?.members)

@@ -667,6 +667,77 @@ class ProviderFamiliesTest {
         assertEquals("Trips", server.record(made.nodeId).name)
     }
 
+    /*
+     * Another device moves a file out of a folder granted to an app as a tree: the provider never grants it through the old
+     * tree from where it used to be, whether asked at once or after a poll listed the folder again. It is still inside the
+     * family's own top. Fails if tree access is judged from a cached row, or a relisting keeps rows the folder no longer has.
+     */
+    @Test
+    fun aFileMovedOutOfATreeElsewhereIsOutsideItAtOnce() {
+        val provider = provider()
+        val trips = provider.createDocument(folder, Document.MIME_TYPE_DIR, "Trips")
+        val notes = provider.createDocument(trips, "text/plain", "Notes.txt")
+        rows(provider.queryChildDocuments(trips, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        assertTrue(provider.isChildDocument(trips, notes))
+        val other = family.phone()
+        assertTrue(other.sync.sync(family.summary) is FamilyState.Accepted)
+        other.vault.listChildren(family.rootId, family.workspaceId)
+        other.vault.listChildren((FamilyDoc.of(trips) as FamilyDoc.Node).nodeId, family.workspaceId)
+        other.vault.move((FamilyDoc.of(notes) as FamilyDoc.Node).nodeId, family.rootId)
+        assertFalse(provider.isChildDocument(trips, notes))
+        assertTrue(provider.pollOnce())
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, trips)
+        assertThrows(SecurityException::class.java) { provider.openFile(DocumentsContract.buildDocumentUriUsingTree(tree, notes), "r") }
+        assertFalse(provider.isChildDocument(trips, notes))
+        assertTrue(provider.isChildDocument(folder, notes))
+    }
+
+    /*
+     * Route 2 leaves the family out while the server still serves it (a list caught between two states): its root stays,
+     * read only, and an edit open in it reaches the queue; only the server's not-member takes the root. Fails if a family
+     * merely unlisted loses its root, and with it the edit.
+     */
+    @Test
+    fun aFamilyRouteTwoLeavesOutKeepsItsRootUntilTheRemovalIsConfirmed() {
+        var now = 0L
+        val vault = Vault(app, DriveApi(Shared.session(app)!!))
+        val families = ProviderFamilies(vault, FamilySync(vault, sweeps = false, tellsFiles = false)) { now }.also(::watchQueue)
+        families.load()
+        val doc = FamilyDoc.Node(family.groupId, family.workspaceId, family.fileId)
+        families.children(FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId))
+        val edit = families.editFor(doc, "w").apply { writeText("kept while unlisted") }
+        family.listed = false
+        now += 6 * 60_000L
+        val job = families.writeBack(doc, edit)
+        assertFalse(families.roots.single().folders.single().writable)
+        assertEquals("kept while unlisted", File(app.filesDir, "queue/$job/content").readText())
+        family.notMember = true
+        now += 60_000L
+        assertEquals(emptyList<FamilyRoot>(), families.load())
+    }
+
+    /*
+     * A root that stops taking new items (kept read only on no answer) is told to Files, as is one that takes them again:
+     * DocumentsUI keeps each root's flags until told. Fails if only a change of title tells it.
+     */
+    @Test
+    fun aRootsCreateCapabilityChangingTellsFiles() {
+        var now = 0L
+        val vault = Vault(app, DriveApi(Shared.session(app)!!))
+        val families = ProviderFamilies(vault, FamilySync(vault, sweeps = false, tellsFiles = false)) { now }
+        families.load()
+        var told = rootsTold()
+        server.beforeAnswer = { _, path -> if (path.startsWith("groups/") && path.endsWith("/rosters")) throw IllegalStateException("dropped") }
+        now += 6 * 60_000L
+        assertFalse(families.load().single().folders.single().writable)
+        assertEquals(told + 1, rootsTold())
+        told = rootsTold()
+        server.beforeAnswer = null
+        now += 60_000L
+        assertTrue(families.load().single().folders.single().writable)
+        assertEquals(told + 1, rootsTold())
+    }
+
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =
         HushOSDocumentsProvider::class.java.getDeclaredField("families").apply { isAccessible = true }.get(provider) as ProviderFamilies
 }

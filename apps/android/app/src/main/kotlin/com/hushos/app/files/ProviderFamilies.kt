@@ -66,7 +66,7 @@ sealed interface FamilyDoc {
 /* A family's root as Files shows it: its folders the ones route 25 proved and this vault's ledger opened. */
 data class FamilyRoot(
     val groupId: String, val name: String, val folders: List<Folder>,
-    /* Kept from an earlier load because the last sync got no answer: readable, written to only once accepted again. */
+    /* Kept from an earlier load because the family couldn't be checked now (no answer, left out of route 2): readable, written to only once accepted again. */
     val unanswered: Boolean = false,
 ) {
     data class Folder(val workspaceId: String, val rootId: String, val name: String, val writable: Boolean)
@@ -129,8 +129,9 @@ class ProviderFamilies internal constructor(
         val signal = FamilyRootsSignal.now()
         val before = snapshot?.roots
         val kept = before.orEmpty().associateBy { it.groupId.lowercase() }
+        val gone: List<FamilySync.Revised>
         val listed = try {
-            sync.listReconciling().first
+            sync.listReconciling().also { gone = it.second }.first
         } catch (error: NotAuthenticated) {
             throw error
         } catch (_: Exception) {
@@ -147,9 +148,17 @@ class ProviderFamilies internal constructor(
                 else -> null
             }
         }
-        snapshot = Snapshot(next, clock(), signal, failed)
-        tell(before, next)
-        return next
+        // A family route 2 left out that the server hasn't said this account isn't in (a list caught between two states, or
+        // route 5 not answered): its root stays, read only, until a not-member confirms the removal, so an edit open in it
+        // still reaches the queue.
+        val removed = gone.filter { it.state == FamilyState.Wiped || (it.state as? FamilyState.Failed)?.removal == true }.mapNotNull { it.groupId?.lowercase() }.toSet()
+        val shown = listed.map { it.id.lowercase() }.toSet()
+        val pending = before.orEmpty().filter { it.groupId.lowercase() !in shown && it.groupId.lowercase() !in removed }.map { it.readOnly() }
+        if (pending.isNotEmpty()) failed = true
+        val roots = next + pending
+        snapshot = Snapshot(roots, clock(), signal, failed)
+        tell(before, roots)
+        return roots
     }
 
     /* Files asks for the roots again when one appeared, went or was renamed, and for a family's folders when they changed. */
@@ -159,7 +168,9 @@ class ProviderFamilies internal constructor(
         val was = before.orEmpty().associateBy { it.groupId }
         val now = after.associateBy { it.groupId }
         runCatching {
-            if (before == null || was.mapValues { it.value.name } != now.mapValues { it.value.name }) context.contentResolver.notifyChange(DocumentsContract.buildRootsUri(authority), null)
+            // What the roots show: the title, and whether it takes new items (FLAG_SUPPORTS_CREATE), which DocumentsUI keeps.
+            fun shown(roots: Map<String, FamilyRoot>) = roots.mapValues { it.value.name to it.value.folders.any { folder -> folder.writable } }
+            if (before == null || shown(was) != shown(now)) context.contentResolver.notifyChange(DocumentsContract.buildRootsUri(authority), null)
             for (groupId in was.keys + now.keys) if (was[groupId]?.folders != now[groupId]?.folders)
                 context.contentResolver.notifyChange(DocumentsContract.buildChildDocumentsUri(authority, FamilyDoc.Top(groupId).id), null)
         }
@@ -199,10 +210,41 @@ class ProviderFamilies internal constructor(
      */
     private fun held(workspaceId: String, id: String): Opened? {
         vault.item(workspaceId, id)?.let { return it }
-        vault.parents[id]?.let { parent -> runCatching { vault.listChildren(parent, workspaceId) } }
+        vault.parents[id]?.let { parent -> runCatching { relist(workspaceId, parent) } }
         vault.item(workspaceId, id)?.let { return it }
         val parent = parentInFeed(workspaceId, id) ?: return null
-        vault.listChildren(parent, workspaceId)
+        relist(workspaceId, parent)
+        return vault.item(workspaceId, id)
+    }
+
+    /*
+     * A family folder's children listed again through the ledger, and every row this vault held under it that the listing
+     * no longer has (moved elsewhere by another device, trashed, deleted) forgotten: no answer, and no tree check, is ever
+     * made from where a node used to be.
+     */
+    private fun relist(workspaceId: String, folderId: String): List<Opened> {
+        val listed = vault.listChildren(folderId, workspaceId).filter { it.node.workspaceId.equals(workspaceId, ignoreCase = true) }
+        val ids = listed.map { it.id }.toSet()
+        for (row in vault.nodes.rowsIn(workspaceId)) if (row.node.parentId == folderId && row.id !in ids) vault.forget(row.node.workspaceId, row.id)
+        return listed
+    }
+
+    /*
+     * A node's place confirmed with the server now (a tree check): the folder this vault last saw it in listed again,
+     * and kept only when that listing still holds it there; else the folder the change feed now puts it in, listed. Null
+     * when no listing holds it; throws when the server can't be asked. A folder's top has no parent and is the family's
+     * sync's own.
+     */
+    private fun fresh(workspaceId: String, id: String): Opened? {
+        val held = vault.item(workspaceId, id)
+        if (held != null && held.node.parentId == null) return held
+        val parent = held?.node?.parentId ?: vault.parents[id]
+        if (parent != null) {
+            relist(workspaceId, parent)
+            vault.item(workspaceId, id)?.takeIf { it.node.parentId == parent }?.let { return it }
+        }
+        val moved = parentInFeed(workspaceId, id) ?: return null
+        relist(workspaceId, moved)
         return vault.item(workspaceId, id)
     }
 
@@ -243,7 +285,7 @@ class ProviderFamilies internal constructor(
         }
         is FamilyDoc.Node -> {
             val (root, folder) = folderOf(doc)
-            val listed = vault.listChildren(doc.nodeId, folder.workspaceId).filter { it.node.workspaceId.equals(folder.workspaceId, ignoreCase = true) }
+            val listed = relist(folder.workspaceId, doc.nodeId)
             // On display in Files now: polls list it again and tell Files when it changed (refreshShown).
             shown[doc] = clock() to signature(listed)
             val summaries = summaries(root.groupId, listed)
@@ -270,7 +312,7 @@ class ProviderFamilies internal constructor(
             if (now - seen.first >= window) { shown.remove(doc); continue }
             val listed = try {
                 folderOf(doc)
-                vault.listChildren(doc.nodeId, doc.workspaceId).filter { it.node.workspaceId.equals(doc.workspaceId, ignoreCase = true) }
+                relist(doc.workspaceId, doc.nodeId)
             } catch (error: NotAuthenticated) {
                 throw error
             } catch (_: Exception) {
@@ -313,13 +355,20 @@ class ProviderFamilies internal constructor(
         if (parent is FamilyDoc.Top) return true
         parent as FamilyDoc.Node
         if (!parent.workspaceId.equals(folder.workspaceId, ignoreCase = true)) return false
-        // Up its own parents, each found through the ledger when this process doesn't hold it yet (a tree Files kept across
-        // a restart); anything not under the tree's folder is outside it.
+        // Up its own parents, each place confirmed with the server now (fresh: never a cached row another device moved out of
+        // the tree since, nor one this process never held, as after a restart); anything not under the tree's folder, or
+        // whose place can't be confirmed, is outside it.
         var current: String? = doc.nodeId
         repeat(MAX_DEPTH) {
             val id = current ?: return false
             if (id == parent.nodeId) return true
-            current = held(folder.workspaceId, id)?.node?.parentId
+            current = try {
+                fresh(folder.workspaceId, id)?.node?.parentId
+            } catch (error: NotAuthenticated) {
+                throw error
+            } catch (_: Exception) {
+                return false
+            }
         }
         return false
     }
@@ -356,7 +405,7 @@ class ProviderFamilies internal constructor(
         val held = node(doc)
         val parent = held.node.parentId ?: return held
         try {
-            vault.listChildren(parent, doc.workspaceId)
+            relist(doc.workspaceId, parent)
         } catch (error: Exception) {
             if (strict || error is NotAuthenticated) throw error
             return held
