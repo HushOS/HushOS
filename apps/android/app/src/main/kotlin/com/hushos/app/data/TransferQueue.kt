@@ -144,6 +144,8 @@ object TransferQueue {
      */
     internal fun dropJob(context: Context, job: String, dir: File?, abort: (uploadId: String, workspaceId: String) -> Reservations.Abort) {
         runCatching { Reservations.settleJob(context, job, abort) }
+        // The job is over: an outcome kept for its rerun (a landed row) has nobody to tell.
+        Reservations.forgetLanded(context, job)
         dir?.deleteRecursively()
     }
 
@@ -315,15 +317,25 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         // A rerun of a run that landed after its stop: already uploaded and said; its copy is gone, so nothing else is looked at.
         if (LandedJobs.of(applicationContext).take(id.toString())) return Result.success()
         val file = File(inputData.getString("file") ?: return failed("The file isn’t there any more. Pick it again."))
+        val folder = inputData.getString("folder")!!
+        val waits = KeyChangeWaits.of(applicationContext)
+        // An earlier run's completion landed though its answer was lost (Reservations' landed row): done, said, its copy
+        // gone, the row used up last. Looked at first, and again before the job reserves (Vault.upload).
+        fun landedEarlier(): Result {
+            waits.forget(this@UploadWorker.id.toString())
+            file.parentFile?.deleteRecursively()
+            TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = folder))
+            Reservations.forgetLanded(applicationContext, this@UploadWorker.id.toString())
+            return Result.success()
+        }
+        if (Reservations.landed(applicationContext, id.toString())) return landedEarlier()
         if (!file.exists()) return failed("The file isn’t there any more. Pick it again.")
         // Refused from the background (Android denies it there): the job runs as an ordinary one. A stop goes on.
         attempt { setForeground(getForegroundInfo()) }
         val vault = jobVault(applicationContext) ?: return outcome(NotAuthenticated(), inputData)
         val family = inputData.getString("family")
         val familyWorkspace = inputData.getString("familyWorkspace")
-        val waits = KeyChangeWaits.of(applicationContext)
         return withContext(Dispatchers.IO) {
-            val folder = inputData.getString("folder")!!
             val end = stoppable({ isStopped }) { checkStop ->
                 // Reservations no upload here is running any more (a dead process's, a dropped job's) are settled first; this
                 // job's own are settled again before it reserves (Vault.upload), or nothing new is reserved.
@@ -372,12 +384,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 JobEnd.Stopped -> Result.retry()
                 is JobEnd.Failed -> when {
                     // An earlier run's completion landed after all (its answer lost): done, said, its copy gone.
-                    end.error is Reservations.LandedEarlier -> {
-                        waits.forget(this@UploadWorker.id.toString())
-                        file.parentFile?.deleteRecursively()
-                        TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = folder))
-                        Result.success()
-                    }
+                    end.error is Reservations.LandedEarlier -> landedEarlier()
                     // Not in the family any more: this upload and every other queued into the family end, copies deleted.
                     family != null && FamilyUploads.removed(end.error) -> {
                         TransferQueue.endFamily(applicationContext, family, except = this@UploadWorker.id) { uploadId, workspaceId -> vault.api.abortUpload(uploadId, workspaceId) }

@@ -106,7 +106,8 @@ data class TrashListing(val items: List<TrashEntry>, val nextCursor: String?)
 data class NodeChange(val kind: String, val changeSeq: Int, val node: NodeView?, val nodeId: String?)
 data class ChangeFeed(val changes: List<NodeChange>, val resync: Boolean, val nextCursor: Int, val hasMore: Boolean)
 data class PartUrl(val partNumber: Int, val url: String)
-data class UploadBegun(val uploadId: String, val parts: List<PartUrl>)
+/* `expiresAt`: when the server lets the reservation go (epoch ms), as begin's answer says, if it does. */
+data class UploadBegun(val uploadId: String, val parts: List<PartUrl>, val expiresAt: Long? = null)
 data class VersionListView(
     val id: String, val objectId: String, val contentKeyEnvelope: String, val status: String, val contentSuite: UInt,
     val contentNonce: String, val plaintextSize: String?, val current: Boolean, val createdAt: String,
@@ -426,7 +427,9 @@ class DriveApi(val session: Shared.Session) : RootApi {
         NodeView.from(write(workspaceId, "/versions/$versionId/restore", JSONObject().put("workspaceId", workspaceId)).getJSONObject("node"))
 
     fun beginUpload(workspaceId: String, body: JSONObject): UploadBegun = write(workspaceId, "/uploads", body.put("workspaceId", workspaceId)).let {
-        UploadBegun(it.getJSONObject("upload").getString("id"), it.getJSONArray("parts").objects().map { p -> PartUrl(p.getInt("partNumber"), p.getString("url")) })
+        val upload = it.getJSONObject("upload")
+        UploadBegun(upload.getString("id"), it.getJSONArray("parts").objects().map { p -> PartUrl(p.getInt("partNumber"), p.getString("url")) },
+            upload.optString("expiresAt").takeIf { at -> at.isNotEmpty() }?.let { at -> runCatching { java.time.Instant.parse(at).toEpochMilli() }.getOrNull() })
     }
 
     fun partUrls(uploadId: String, workspaceId: String, from: Int): List<PartUrl> =
@@ -438,17 +441,23 @@ class DriveApi(val session: Shared.Session) : RootApi {
 
     /*
      * Releases an upload's reservation, saying exactly what the server's answer means (packages/drive/src/server.ts
-     * abortUpload over packages/db/src/drive.ts): 200 aborted (now or before) and 404 no longer there are RELEASED; 409
-     * "already finished" is COMPLETED; 409 "finishing" (completing: its bytes stay reserved until it completes or the
-     * expiry sweep settles it), any other answer, no answer and an ended session are PENDING, asked again later.
+     * abortUpload over packages/db/src/drive.ts): 200 aborted (now or before) is RELEASED; 409 "already finished" is
+     * COMPLETED; a 404 "no longer exists" and a 403 are GONE, since requireUploadAccess answers them before the upload is
+     * looked at when this account can't reach the workspace any more (the upload may still be reserved until it expires);
+     * 409 "finishing" (completing: its bytes stay reserved until it completes or the expiry sweep settles it), any other
+     * answer, no answer and an ended session are PENDING, asked again later.
      */
     fun abortUpload(uploadId: String, workspaceId: String): Reservations.Abort = try {
         send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId))
         Reservations.Abort.RELEASED
     } catch (_: NotFound) {
-        Reservations.Abort.RELEASED
+        Reservations.Abort.GONE
     } catch (error: ApiError) {
-        if (error.status == 409 && error.message == ALREADY_FINISHED) Reservations.Abort.COMPLETED else Reservations.Abort.PENDING
+        when {
+            error.status == 409 && error.message == ALREADY_FINISHED -> Reservations.Abort.COMPLETED
+            error.status == 403 || error.status == 404 -> Reservations.Abort.GONE
+            else -> Reservations.Abort.PENDING
+        }
     } catch (_: Exception) {
         Reservations.Abort.PENDING
     }

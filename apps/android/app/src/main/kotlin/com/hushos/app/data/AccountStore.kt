@@ -78,6 +78,8 @@ class AccountStore(private val files: File, private val cache: File, private val
             Offline.clear(context)
             // Finished-transfer notifications name the account's files.
             TransferNotices.clear(context)
+            // Upload reservations the disk never took: the ledger file goes with the account's files, these with it.
+            Reservations.forgetHeld()
             // The folder last added to (Save to HushOS and the shortcuts start there).
             Places.forget(context)
             Mirror.shared(context).clear()

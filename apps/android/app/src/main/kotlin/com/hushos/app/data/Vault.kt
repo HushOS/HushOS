@@ -1816,8 +1816,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
         uploadInside(file, name, mime, parentId, replacing, thumbnail, copy, attributes, job, progress)
     }
 
-    /* An abort of this vault's reservation, applied to the ledger: its record goes only when the answer settled it. */
-    private fun abortReserved(uploadId: String, workspaceId: String): Reservations.Abort =
+    /* An abort of this vault's reservation, applied to the ledger: its record goes only when the answer settled it (true). */
+    private fun abortReserved(uploadId: String, workspaceId: String): Boolean =
         Reservations.aborted(context, uploadId, api.abortUpload(uploadId, workspaceId))
 
     private fun uploadInside(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray?, copy: Prior?,
@@ -1885,6 +1885,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             // It completed after all: the file is there, so this one is never sent again.
             if (earlier == Reservations.Settle.LANDED) throw Reservations.LandedEarlier()
         }
+        val beganAt = Reservations.now()
         val begun = try {
             api.beginUpload(ws, JSONObject().put("node", nodeInput).putId(madeVersion).putId(madeObject)
             .put("contentKeyEnvelope", base64urlEncode(version.envelope)).put("contentNonce", base64urlEncode(contentNonce))
@@ -1895,7 +1896,16 @@ class Vault(internal val context: Context, val api: DriveApi) {
             madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
             throw error
         }
-        Reservations.reserved(context, begun.uploadId, ws, job)
+        try {
+            Reservations.reserved(context, begun.uploadId, ws, job, beganAt, begun.expiresAt)
+        } catch (error: Exception) {
+            // The ledger couldn't be written (a full disk): the reservation is held in memory and aborted at once. Settled, the
+            // write's failure is the job's; not, the job is the network's and reserves nothing more in this process meanwhile.
+            val settled = runCatching { abortReserved(begun.uploadId, ws) }.getOrDefault(false)
+            madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
+            if (!settled) throw Unreachable()
+            throw error
+        }
         try {
             return uploadReserved(file, mime, ws, nodeId, nodeKey, metadata, replacing, keptName, madeKey, begun, layout, content, thumbnail, thumbnailBytes, size, modified, progress)
         } finally {
