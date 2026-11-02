@@ -1,0 +1,40 @@
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/AppGroupTests.swift
+  s_566b8e0c4467a4::t_cb09955014b56f 1-61
+apps/ios/scripts/release-ipa.sh
+  s_566b8e0c4467a4::t_a0453de3dd519c 1-142
+  s_566b8e0c4467a4::t_0578fdf64771c4 143-147
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AppGroup.swift
+  s_566b8e0c4467a4::t_1ab22af1ae5324 1-65
+CONTRIBUTING.md
+  s_566b8e0c4467a4::t_947ed77c5ffd3e 147
+apps/android/scripts/release-apk.sh
+  s_566b8e0c4467a4::t_54b493e96613fa 17-18
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_d499f8736ccb90 18-20
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Keychain.swift
+  s_566b8e0c4467a4::t_48fb1bfbed0591 14-16,18
+docs/release/README.md
+  s_566b8e0c4467a4::t_7f03baef4835bd 5-19
+docs/release/apple.md
+  s_566b8e0c4467a4::t_c1526963d55644 249
+package.json
+  s_566b8e0c4467a4::t_e4b53f2fe12eda 43
+scripts/release-notes-section.sh
+  s_566b8e0c4467a4::t_162f2f8d1d140e 9-11,13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "37d98fe432ad4657465d249114a34fde18301c00",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
