@@ -161,6 +161,39 @@ class FamilyWritesTest {
     }
 
     /*
+     * #249 review: a rename's answer arrives late. The server took the rename, then another member put a new version up,
+     * and a listing here opened that newer row through the ledger before the rename's answer came back (the fake answers
+     * the rename with the row as it was when the server took it). The newer row stays; the older answer never replaces
+     * it. Fails if a family write's answer is kept over a newer row the ledger opened.
+     */
+    @Test
+    fun aLateWriteAnswerNeverReplacesANewerRowTheLedgerOpened() {
+        val phone = opened()
+        val answered = server.node(family.fileId).json().apply { put("metadataVersion", getLong("metadataVersion") + 1) }
+        val inner = server.extraRoutes!!
+        server.extraRoutes = { method, segments, query, body ->
+            if (method == "POST" && segments.joinToString("/") == "drive/nodes/${family.fileId}/metadata") 200 to org.json.JSONObject().put("node", answered)
+            else inner(method, segments, query, body)
+        }
+        var listed = false
+        server.beforeAnswer = { method, path ->
+            if (!listed && method == "POST" && path == "drive/nodes/${family.fileId}/metadata") {
+                listed = true
+                server.newVersion(family.fileId, "Sam's newer recipes".toByteArray())
+                phone.vault.listChildren(family.rootId, family.workspaceId)
+            }
+        }
+        val newer = server.node(family.fileId).changeSeq
+        phone.vault.rename(family.fileId, "Renamed.txt")
+        server.beforeAnswer = null
+        assertTrue(listed)
+        val held = phone.vault.nodes.row(family.workspaceId, family.fileId)!!
+        assertTrue("a late answer replaced the newer row the ledger opened", held.node.changeSeq!! > answered.getInt("changeSeq"))
+        assertTrue(held.node.changeSeq!! >= newer)
+        assertTrue(phone.vault.nodes.viaLedger(family.workspaceId, family.fileId))
+    }
+
+    /*
      * #249 review: an upload's parts went up, then the family's guard became owed before its completion was sent. The
      * final gate refuses the completion here, and the upload is aborted (its reserved room released at once, never held
      * for a day) and never completed. Fails if a completion refused on this device is left to expire.

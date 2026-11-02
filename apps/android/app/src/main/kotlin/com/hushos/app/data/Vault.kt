@@ -1233,16 +1233,25 @@ class Vault(internal val context: Context, val api: DriveApi) {
         // A write's answer into a folder proven a family's is kept only when the write decided at its entry to write as
         // the family's (its key the ledger's): then as the ledger's own row. One begun on another path is not kept: the
         // ledger opens it when listed.
+        var newer: Opened? = null
         val kept = synchronized(familyCopiesLock) {
             if (!isFamilyWorkspace(node.workspaceId)) run { nodes.put(result, key); true }
             // ...and only while the folder stands as it did when the write began: a removal, a fork or a refusal meanwhile
             // cleared what this vault held of it, and a late answer never puts a key back.
             else if (WriteIntent.decision(node.workspaceId) == true && WriteIntent.epoch(node.workspaceId) == familyEpoch(node.workspaceId)) run {
+                // Never over a newer row the ledger opened (a listing that landed first, another member's rename since): an
+                // older answer keeps it, as open() does.
+                val held = nodes.row(node.workspaceId, node.id)
+                if (held != null && nodes.viaLedger(node.workspaceId, node.id) && node.olderThan(held.node)) {
+                    newer = held
+                    return@run false
+                }
                 nodes.put(result, key, viaLedger = true)
                 familyNodes[node.id] = node.workspaceId
                 true
             } else false
         }
+        newer?.let { return it }
         if (!kept) return result
         fileWritten(node)
         node.parentId?.let { rememberParent(node.id, it) }
