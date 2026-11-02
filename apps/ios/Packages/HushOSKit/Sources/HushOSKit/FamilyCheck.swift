@@ -147,9 +147,10 @@ extension FamilySync {
      * holds for them, committed as every trust-changing act is (a pending record, the save, the guard).
      */
     public func checkMatch(_ groupId: String, member: FamilyMemberRef, rosterVersion: UInt64, code: [String]) async throws -> FamilyCheckSaved {
-        // Read first, so the ledger holds the settings pin of them it compares with.
-        _ = try await vault.familyPin(groupId)
+        // The guard and the settings pin of them first, then the settings the ledger compares with: whatever the match is
+        // decided over is at least as new as this snapshot, so a pin saved anywhere since shows as moved at the save.
         let held = try await vault.contactGuardState(member.userId)
+        _ = try await vault.familyPin(groupId)
         let served: ServedChain
         do {
             served = try await fetchServed(groupId, after: 0)
@@ -164,7 +165,7 @@ extension FamilySync {
         guard let check = match.check else { return FamilyCheckSaved(checked: false, verified: false) }
         let verified: Bool
         do {
-            verified = try await vault.saveFamilyCheck(groupId, member: member, check: check, keys: match.pin, decidedOver: held.revision)
+            verified = try await vault.saveFamilyCheck(groupId, member: member, check: check, keys: match.pin, decidedOver: held.revision, pinned: held.pin)
         } catch is FamilyCheckMoved {
             // Their pin moved since the match was decided: nothing saved, the words compared again.
             return FamilyCheckSaved(checked: false, verified: false)
@@ -194,16 +195,18 @@ extension Vault {
      * check (`pair_match` takes it), and the revision it is at, to decide the save over. A guard
      * that can't be read is `unreadable` (the core then writes no pin), never none.
      */
-    func contactGuardState(_ contactId: String) async throws -> (state: GuardState, revision: UInt64) {
+    /* The guard's entry for them and the settings pin of them, read together: what a family check is decided and saved over. */
+    func contactGuardState(_ contactId: String) async throws -> (state: GuardState, revision: UInt64, pin: ContactPin?) {
         try await withGuardTurn {
             let settings = try await loadSettings()
+            let pin = settings.pin(of: contactId)
             let entry: GuardEntry?
             do {
-                entry = try guardFor(contactId, pin: settings.pin(of: contactId), at: settings.version).entry
+                entry = try guardFor(contactId, pin: pin, at: settings.version).entry
             } catch GuardError.unreadable {
-                return (.unreadable, 0)
+                return (.unreadable, 0, pin)
             }
-            return (entry.map { .held(entry: $0) } ?? .absent, entry?.revision ?? 0)
+            return (entry.map { .held(entry: $0) } ?? .absent, entry?.revision ?? 0, pin)
         }
     }
 
@@ -213,7 +216,8 @@ extension Vault {
      * match was decided over, the check record in the same save. A guard that moved meanwhile (a
      * Continue or a check since) stops it before anything is saved. True when the pin was written.
      */
-    func saveFamilyCheck(_ groupId: String, member: FamilyMemberRef, check: FamilyCheck, keys: PinKeys?, decidedOver revision: UInt64) async throws -> Bool {
+    func saveFamilyCheck(_ groupId: String, member: FamilyMemberRef, check: FamilyCheck, keys: PinKeys?, decidedOver revision: UInt64,
+                         pinned snapshot: ContactPin?) async throws -> Bool {
         guard let keys else {
             try await updateSettings { $0.setFamilyCheck(groupId, check) }
             return false
@@ -225,8 +229,13 @@ extension Vault {
             let (entry, _) = try guardFor(contactId, pin: before, at: settings.version)
             // Decided over this very entry, or not at all: a Continue or a check since is its own act.
             guard (entry?.revision ?? 0) == revision else { throw ContactError.moved }
+            // Over the very settings pin the match was decided over, guard entry or not: another device's Continue or check moves
+            // the settings pin, never this phone's guard, so the guard's revision alone can't see it. Compared again.
+            guard Self.samePin(before, snapshot) else { throw FamilyCheckMoved() }
+            // The entry this phone holds for them is of the keys compared, or the words compared other keys than it guards.
+            if let entry, entry.commitment == nil || entry.commitment != keyCommitment(pin: keys) { throw FamilyCheckMoved() }
             // With no entry here, the core judged the keys against the settings pin as it read it (pair_match): a pin
-            // saved since with other keys is someone's act, and a family check never moves a pin. Compared again.
+            // of other keys is someone's act, and a family check never moves a pin. Compared again.
             if entry == nil, let before, before.commitment == nil || before.commitment != keyCommitment(pin: keys) { throw FamilyCheckMoved() }
             var target = (before ?? ContactPin(userId: contactId, email: member.email, name: member.name, keys: keys, pinnedAt: "", firstSeen: "family"))
                 .replacing(keys, pinnedAt: ISO8601DateFormatter().string(from: Date()))
@@ -325,5 +334,21 @@ public struct FamilyRemovedNow: Error, LocalizedError {
     public var errorDescription: String? {
         if case .failed(let words) = removed.state { return words }
         return FamilyFailure.notInFamily.message
+    }
+}
+
+extension Vault {
+    /* Whether the settings pin of them is the one a decision was made over: the same keys, the same standing, or both absent. */
+    static func samePin(_ now: ContactPin?, _ then: ContactPin?) -> Bool {
+        guard let now, let then else { return now == nil && then == nil }
+        return now.commitment != nil && now.commitment == then.commitment && now.trust == then.trust
+    }
+}
+
+extension GuardEntry {
+    /* The key commitment over the four keys this entry guards (as a pin's, never the fingerprint). */
+    var commitment: String? {
+        keyCommitment(pin: PinKeys(keyVersion: keyVersion, encryptionPublicKey: encryptionPublicKey, signingPublicKey: signingPublicKey,
+                                   mlDsaPublicKeyHash: mlDsaPublicKeyHash, kemPublicKeyHash: kemPublicKeyHash, fingerprint: ""))
     }
 }

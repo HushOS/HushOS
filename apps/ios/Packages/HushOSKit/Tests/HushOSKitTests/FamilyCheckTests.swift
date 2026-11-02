@@ -164,6 +164,42 @@ extension OnFakeDrive {
         }
 
         /*
+         * This phone's guard holds their keys K1 (a pin of them it read before). Another device's
+         * Continue saves a pin of them with other keys K2 while this one matches the words: that moves
+         * the settings pin, never this phone's guard, so the guard's revision alone can't see it. The
+         * save writes nothing and asks to compare again. Fails if a guard entry lets the check skip the
+         * settings pin it was decided over.
+         */
+        @Test func aContinueOnAnotherDeviceDuringTheyMatchIsKeptWhenAGuardEntryExists() async throws {
+            let family = try FamilyFixture()
+            let server = FamilyServer(family: family)
+            server.serve(chain: [family.r1, family.r2])
+            let k1 = try pinned(family.creator.userId, family.creator.keys, name: "Sam Lindqvist")
+            try server.storeSettings(pin: nil, contacts: [k1])
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            // Read once, so this phone's guard holds K1.
+            _ = try await phone.vault.contactStandings()
+            guard case .joined(.accepted) = try await phone.sync.joinStatus(family.groupId) else { Issue.record("not joined"); return }
+            guard case .code(let version, let words, _) = try await phone.sync.checkCode(family.summary, with: family.creator.userId).code else {
+                Issue.record("no words")
+                return
+            }
+            let k2 = ContactPin(userId: family.creator.userId, email: "sam@example.com", name: "Sam Lindqvist",
+                                keys: PinKeys(keyVersion: 1, encryptionPublicKey: "k2-encryption", signingPublicKey: "k2-signing",
+                                              mlDsaPublicKeyHash: "k2-ml-dsa", kemPublicKeyHash: "k2-kem", fingerprint: ""),
+                                pinnedAt: "2026-11-02T12:00:00.000Z", firstSeen: "added")
+            // Continue on another device, saved while this one fetches the member lists to match against.
+            server.afterRosters = { try? server.editSettings { $0.setPin(k2) } }
+            let saved = try await phone.sync.checkMatch(family.groupId, member: creator(family), rosterVersion: version, code: words)
+            #expect(saved == FamilyCheckSaved(checked: false, verified: false))
+            let document = try #require(try server.storedDocument())
+            let pinRaw = try #require((document["contacts"] as? [String: Any])?[family.creator.userId] as? [String: Any])
+            #expect(pinRaw["signingPublicKey"] as? String == "k2-signing", "the other device's Continue was undone")
+            #expect((document["familyChecks"] as? [String: Any])?[family.groupId] == nil)
+        }
+
+        /*
          * Getting the latest accepts a newer member list, then the words can't be worked out (the
          * member lists don't load again): the accepted family still comes back, for the page to show
          * as after any sync, with the words' failure as the problem. Fails if a failure after an
