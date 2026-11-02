@@ -458,7 +458,7 @@ class FamilyManageTest {
         fun said(status: Int, code: String, data: JSONObject? = null) = callWords(CallAnswer(status, code, data, "server words"), "Grace", family)
         // A list, never a map keyed by the words: two codes said alike must both be checked.
         val cases = listOf(
-            said(409, "pool-full") to "Their files don’t fit in the family’s free space. Free up space or move to a bigger plan, then let them in.",
+            said(409, "pool-full") to "Their files don’t fit in the family’s free space. Free up space, then let them in.",
             said(409, "in-family", JSONObject().put("reason", "newcomer")) to "They’ve joined another family since they accepted. They can join yours once they leave it.",
             said(400, "invalid", JSONObject().put("reason", "roster-chain")) to "Couldn’t save that change. Try again.",
             said(409, "succession-due") to "A manager of Lindqvist family needs to finish an earlier change first. Try again.",
@@ -490,7 +490,7 @@ class FamilyManageTest {
         // End to end: the newcomer's files don't fit, said on Let them in, and nothing is kept to send again.
         val phone = phone()
         this.family.admitAnswers.add { _ -> 409 to JSONObject().put("code", "pool-full").put("message", "Their files don't fit.") }
-        assertEquals(LetIn.Refused("Their files don’t fit in the family’s free space. Free up space or move to a bigger plan, then let them in."),
+        assertEquals(LetIn.Refused("Their files don’t fit in the family’s free space. Free up space, then let them in."),
             phone.sync.letIn(summary, grace))
         assertTrue(kept(phone).isEmpty())
     }

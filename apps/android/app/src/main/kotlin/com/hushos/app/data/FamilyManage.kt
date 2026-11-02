@@ -154,8 +154,9 @@ internal fun callWords(answer: CallAnswer, first: String?, family: String = "thi
     // Let them in: the newcomer's other family is never named to this one.
     "in-family" -> if (answer.data?.optString("reason") == "newcomer") "They’ve joined another family since they accepted. They can join yours once they leave it."
         else "You’re in a family already. Leave it before you create another."
-    // No figure: managers learn only that the newcomer's files are more than what's free.
-    "pool-full" -> "Their files don’t fit in the family’s free space. Free up space or move to a bigger plan, then let them in."
+    // No figure: managers learn only that the newcomer's files are more than what's free. Without the web's
+    // "or move to a bigger plan": a phone's billing is read only (owner, 2026-11-03).
+    "pool-full" -> "Their files don’t fit in the family’s free space. Free up space, then let them in."
     "unsupported" -> "Update HushOS to do this."
     "forbidden" -> "Only someone who manages the family can do that."
     "not-member" -> FamilyWords.NOT_IN_FAMILY

@@ -227,7 +227,9 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             if (!FamilySync.unanswered(error)) model.notice(FamilyWords.error(error), untilRead = false)
             emptyMap()
         }
-        for (end in ends.values) if (end is com.hushos.app.data.CallEnd.Refused) model.notice(end.words, untilRead = false)
+        // Each refusal is all that's left of its call (the entry is gone): until read, one after another, never one
+        // replacing the last.
+        for (end in ends.values) if (end is com.hushos.app.data.CallEnd.Refused) model.notice(end.words, untilRead = true)
         if (ends.values.any { it == com.hushos.app.data.CallEnd.Wiped }) return
         if (ends.values.any { it == com.hushos.app.data.CallEnd.Landed || it == com.hushos.app.data.CallEnd.Stale }) refreshFamily(summary, session = s)
         reloadManaged(groupId, s)

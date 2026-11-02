@@ -44,12 +44,20 @@ class FamilyManageModelTest {
         override val cacheDir: File = RuntimeEnvironment.getApplication().cacheDir
         override val state = MutableStateFlow(DriveState())
         override val familyScope = CoroutineScope(Dispatchers.Unconfined)
-        val notices = java.util.Collections.synchronizedList(ArrayList<String>())
+        /* As the app shows them: one notice on screen (DriveState.notice), until-read ones waiting their turn. */
+        @Volatile var shown: Notice? = null
+        val notices = NoticeQueue { shown = it }
+
+        /* What the person reads now: the notice on screen, then each one after it as OK closes the last. */
+        fun read(): List<String> = generateSequence { shown?.text?.also { notices.dismiss() } }.toList()
         override fun item(id: String): Opened? = vault.item(id)
         override fun updateState(change: (DriveState) -> DriveState) = state.update(change)
         @Volatile var lostSessions = 0
         override fun lostSession() { lostSessions++ }
-        override fun notice(text: String, untilRead: Boolean) { notices.add(text) }
+        override fun notice(text: String, untilRead: Boolean) {
+            val notice = Notice(System.nanoTime(), text, {}, if (untilRead) "OK" else "Undo")
+            if (untilRead) notices.untilRead(notice) else notices.passing(notice)
+        }
     }
 
     private lateinit var host: Host
@@ -94,7 +102,8 @@ class FamilyManageModelTest {
     /*
      * At the page's open, what the kept sends came to is said: an entry this phone can no longer open (sealed before a
      * master-key change) is deleted and said lost, in the web's words; a kept Let them in the server refuses says why,
-     * naming the person. Fails if either is dropped without a word.
+     * naming the person. Both reach the person, one after the other, through the app's single notice. Fails if either is
+     * dropped without a word, or one replaces the other before it is read.
      */
     @Test
     fun whatResumedSendsCameToIsSaid() {
@@ -108,8 +117,10 @@ class FamilyManageModelTest {
         outbox.put(family.member.id, family.groupId, UUID.randomUUID().toString(), "AAAA")
         host.notices.clear()
         runBlocking { model.loadManaged(family.groupId) }
+        val read = host.read()
+        assertEquals(2, read.size)
         assertEquals(setOf("A change to Lindqvist family hadn’t reached the server and couldn’t be opened on this device. Make it again.",
-            "Grace isn’t waiting to join any more."), host.notices.toSet())
+            "Grace isn’t waiting to join any more."), read.toSet())
         assertTrue(outbox.list(family.member.id, family.groupId).isEmpty())
     }
 
@@ -171,7 +182,7 @@ class FamilyManageModelTest {
         assertEquals(WaitingRow(), model.waitingRow(family.groupId, grace.userId))
         model.cancelInvitation(family.groupId, com.hushos.app.data.OpenInvitation(UUID.randomUUID().toString(), "ada@example.org", null, "2026-11-10T00:00:00.000Z"))
         until("Cancel invitation's 401 went to the lost session") { host.lostSessions == 3 }
-        assertTrue(host.notices.none { it.startsWith("Couldn’t cancel it.") })
+        assertTrue(host.read().none { it.startsWith("Couldn’t cancel it.") })
     }
 
     /*
