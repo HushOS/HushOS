@@ -39,6 +39,9 @@ import com.hushos.core.nodeWrap
 import com.hushos.core.pinAfter
 import com.hushos.core.previousRootKeyWrap
 import com.hushos.core.rosterNext
+import com.hushos.core.GroupKeySealContext
+import com.hushos.core.GroupSignature
+import com.hushos.core.groupKeySeal
 import com.hushos.core.randomBytes
 import com.hushos.core.rosterDigest
 import com.hushos.core.rosterFirst
@@ -93,7 +96,8 @@ class FamilyFixture(val server: FakeDrive) {
     /* Another roster 2 on the same roster 1: what a server shows instead of r2. */
     val r2Other = next(r1, 2uL, member.entry(listOf(GroupRole.GUARDIAN), 2uL))
     val r4Fork = next(r3Fork, 4uL, member.entry(emptyList(), 4uL))
-    val signerKeys = mapOf(digest(creator.keys.mlDsaPublicKey!!) to creator.keys.mlDsaPublicKey!!)
+    /* Every signer's ML-DSA key by digest, as route 5 serves them: Sam's, and Maya's once she signs as a manager. */
+    val signerKeys = mapOf(digest(creator.keys.mlDsaPublicKey!!) to creator.keys.mlDsaPublicKey!!, digest(member.keys.mlDsaPublicKey!!) to member.keys.mlDsaPublicKey!!)
     private val grant: ByteArray = run {
         val chain = (acceptRosters(groupId, groupPublicKey(groupSeed), GroupAnchor.CREATED, emptyList(), listOf(r1, r2), emptyList(), signerKeys,
             OwnIdentities(creator.id, listOf(creator.servedKeys())), null) as RosterChain.Accepted).chain
@@ -118,6 +122,31 @@ class FamilyFixture(val server: FakeDrive) {
         .put("granterUserId", creator.id).put("rosterVersion", 2).put("rosterDigest", rosterDigest(r2.statement)).put("envelope", base64urlEncode(grant))
     /* The key change route 25 names in the folder: its run id, from the top folder, to this epoch. */
     @Volatile var run: Triple<String, String, Long>? = null
+    /* Route 8's seal of the group key to Maya (a manager), or none. */
+    @Volatile var keySeal: JSONObject? = null
+    /* Route 16: who waits to be let in, as JSON rows. */
+    val pendingRows = java.util.Collections.synchronizedList(ArrayList<JSONObject>())
+    /* Every body routes 17 and 18 were sent, in order, byte for byte. */
+    val callBodies = java.util.Collections.synchronizedList(ArrayList<String>())
+    /* How route 17 answers each call, in turn (empty: apply it as the server would). Each sees the body. */
+    val admitAnswers = java.util.concurrent.ConcurrentLinkedQueue<(JSONObject) -> Pair<Int, JSONObject>?>()
+    /* Routes 11, 13 and 26 (invite, cancel an invitation, turn down): answered with this while set, else taken. */
+    @Volatile var manageAnswer: Pair<Int, JSONObject>? = null
+    /* Route 12: the invitations still open, as JSON rows; route 13 takes one away. */
+    val invitationRows = java.util.Collections.synchronizedList(ArrayList<JSONObject>())
+    /* Route 12's answer instead of the rows (a failure, a lost session), while set. */
+    @Volatile var invitationsAnswer: Pair<Int, JSONObject>? = null
+    /*
+     * Rows a request answered on this thread reads instead of the current ones: a read made before a change whose answer
+     * arrives after it (set from FakeDrive.beforeAnswer, which runs on the request's own thread).
+     */
+    val readBefore = ThreadLocal<List<JSONObject>?>()
+    /* Route 16's answer instead of the rows (a failure, a lost session), while set. */
+    @Volatile var pendingAnswer: Pair<Int, JSONObject>? = null
+    /* Route 22: each grants post (workspace, body), and how it is answered (null: taken). */
+    val grantPosts = java.util.Collections.synchronizedList(ArrayList<Pair<String, String>>())
+    @Volatile var grantsAnswer: Pair<Int, JSONObject>? = null
+
     /* Route 20's answer: null leaves (and the server then answers not-member), else this refusal. */
     @Volatile var leaveRefusal: Pair<Int, JSONObject>? = null
     /* What each leave asked to end (`endsLapsed`). */
@@ -132,6 +161,8 @@ class FamilyFixture(val server: FakeDrive) {
     @Volatile var groupsFail = false
     @Volatile var rostersFail = false
     @Volatile var groupState = "active"
+    /* Maya's roles as route 2 lists them (`members` once Sam makes her a manager). */
+    @Volatile var listedRoles: List<String> = emptyList()
     /* The member's self-grant as route 23 stored it, served back on route 25. */
     @Volatile var selfGrant: JSONObject? = null
     /* The node route 25 names as the area's top folder (a server's choice): the family's own unless a test names another. */
@@ -170,9 +201,10 @@ class FamilyFixture(val server: FakeDrive) {
                 groupsFail -> 503 to JSONObject().put("message", "Drive is temporarily unavailable. Please try again.")
                 !listed -> 200 to JSONObject().put("groups", JSONArray())
                 else -> 200 to JSONObject().put("groups", JSONArray().put(JSONObject().put("id", groupId).put("kind", "family").put("name", "Lindqvist family")
-                    .put("roles", JSONArray()).put("state", groupState).put("rosterVersion", chain.size).put("groupKeyVersion", 1)))
+                    .put("roles", JSONArray(listedRoles)).put("state", groupState).put("rosterVersion", chain.size).put("groupKeyVersion", 1)))
             }
-            method == "GET" && path == "groups/$groupId" -> if (notMember) notMemberAnswer() else 200 to JSONObject().put("members", JSONArray()
+            method == "GET" && path == "groups/$groupId" -> if (notMember) notMemberAnswer() else 200 to JSONObject()
+                .put("head", JSONObject().put("version", chain.size).put("revision", chain.size)).put("members", JSONArray()
                 .put(JSONObject().put("userId", creator.id).put("name", "Sam Lindqvist").put("email", "sam@example.org").put("state", "active").put("roles", JSONArray().put("billing").put("members")))
                 .put(JSONObject().put("userId", member.id.lowercase()).put("name", "Maya").put("email", "me@example.org").put("state", "active").put("roles", JSONArray())))
             method == "GET" && path == "groups/$groupId/rosters" -> {
@@ -189,6 +221,26 @@ class FamilyFixture(val server: FakeDrive) {
             method == "GET" && path == "groups/$groupId/identities" -> if (notMember) notMemberAnswer() else
                 200 to JSONObject().put("identities", JSONArray().put(identity(creator)).put(identity(member))).put("next", JSONObject.NULL)
             method == "PUT" && path == "groups/$groupId/areas/$workspaceId/self-grant" -> { selfGrant = body.getJSONObject("grant"); 200 to JSONObject() }
+            method == "GET" && path == "groups/$groupId/key-seal" -> keySeal?.let { 200 to it }
+                ?: (409 to JSONObject().put("code", "no-seal").put("message", "Nobody has sealed the current group key to you yet."))
+            method == "POST" && path == "groups/$groupId/invitations" -> manageAnswer ?: (201 to JSONObject())
+            method == "DELETE" && segments.size == 4 && path.startsWith("groups/$groupId/invitations/") -> manageAnswer
+                ?: (200 to JSONObject()).also { invitationRows.removeIf { it.optString("id") == segments[3] } }
+            method == "POST" && segments.size == 5 && path.startsWith("groups/$groupId/members/") && segments[4] == "decline" -> manageAnswer ?: (200 to JSONObject())
+            method == "GET" && path == "groups/$groupId/invitations" -> invitationsAnswer
+                ?: (200 to JSONObject().put("invitations", JSONArray((readBefore.get()?.also { readBefore.remove() } ?: invitationRows).toList())))
+            method == "GET" && path == "groups/$groupId/pending" -> pendingAnswer ?: (200 to JSONObject().put("pending", JSONArray(pendingRows.toList())))
+            method == "POST" && segments.size == 5 && path.startsWith("groups/$groupId/areas/") && segments[4] == "grants" -> {
+                grantPosts.add(segments[3] to body.toString())
+                grantsAnswer ?: (200 to JSONObject())
+            }
+            method == "POST" && segments.size == 5 && path.startsWith("groups/$groupId/members/") && segments[4] == "admit" -> {
+                callBodies.add(body.toString())
+                // A scripted answer first (another manager's win, a lost answer), else applied as the server would.
+                admitAnswers.poll()?.invoke(body)?.let { return it }
+                if (notMember) return notMemberAnswer()
+                apply(body, segments[3])
+            }
             method == "POST" && path == "groups/$groupId/leave" -> {
                 if (notMember) return notMemberAnswer()
                 val ends = body.optJSONArray("endsLapsed")
@@ -256,6 +308,64 @@ class FamilyFixture(val server: FakeDrive) {
         run = Triple(UUID.randomUUID().toString(), rootId, target)
         chain = held + next
         return chain
+    }
+
+    /*
+     * A roster call applied as the server applies it: refused as `stale` unless it was built at the head's revision, then
+     * its roster appended to the chain and the person let in.
+     */
+    fun apply(body: JSONObject, userId: String): Pair<Int, JSONObject> {
+        if (body.optLong("expectedRevision", -1) != chain.size.toLong())
+            return 409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
+        val next = signedOf(body.getJSONObject("roster"))
+        // The roster must follow the head it names (the server's verify; `invalid`/`roster-chain` otherwise).
+        if (runCatching { creatorChain(chain + next) }.isFailure)
+            return 400 to JSONObject().put("code", "invalid").put("message", "The change was refused.").put("data", JSONObject().put("reason", "roster-chain"))
+        chain = chain + next
+        pendingRows.removeIf { it.optString("userId").equals(userId, ignoreCase = true) }
+        return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", chain.size))
+    }
+
+    private fun signedOf(wire: JSONObject): SignedGroupStatement {
+        val signature = wire.getJSONObject("signature")
+        return SignedGroupStatement(base64urlDecode(wire.getString("statement")),
+            GroupSignature(base64urlDecode(signature.getString("ed25519")), base64urlDecode(signature.getString("mlDsa"))),
+            base64urlDecode(wire.getString("signerSignature")))
+    }
+
+    /* The chain as Sam's device accepted it: what his next roster is built over. */
+    fun creatorChain(rosters: List<SignedGroupStatement> = chain): AcceptedRosters =
+        (acceptRosters(groupId, groupPublicKey(groupSeed), GroupAnchor.CREATED, emptyList(), rosters, emptyList(), signerKeys,
+            OwnIdentities(creator.id, listOf(creator.servedKeys())), null) as RosterChain.Accepted).chain
+
+    /*
+     * Sam makes Maya a manager (roster 3, after her admission at 2) and seals the family's key to her: what she needs to
+     * let anyone in. The chain from there.
+     */
+    fun mayaManages(): List<SignedGroupStatement> {
+        val accepted = creatorChain(listOf(r1, r2))
+        val members = accepted.roster().members.map { if (it.userId == member.id.lowercase()) it.copy(roles = listOf(GroupRole.MEMBERS)) else it }
+        val r3m = rosterSign(rosterNext(accepted, members, creator.id, null, null, null), groupSeed, creator.keys)
+        chain = listOf(r1, r2, r3m)
+        listedRoles = listOf("members")
+        val head = creatorChain()
+        val sealed = groupKeySeal(groupSeed, GroupKeySealContext(groupId, 1uL, member.id.lowercase(), member.keys.keyVersion, creator.id, 3uL,
+            rosterDigest(r3m.statement)), head, base64urlDecode(member.keys.kemPublicKey!!), creator.keys)
+        keySeal = JSONObject().put("groupKeyVersion", 1).put("holderKeyVersion", member.keys.keyVersion.toLong()).put("sealerUserId", creator.id)
+            .put("rosterVersion", 3).put("rosterDigest", rosterDigest(r3m.statement)).put("envelope", base64urlEncode(sealed))
+        return chain
+    }
+
+    /* Sam changes the member list himself (a roster that only re-signs it): what another manager's win looks like. */
+    fun samChangesTheList() {
+        val accepted = creatorChain()
+        chain = chain + rosterSign(rosterNext(accepted, accepted.roster().members, creator.id, null, null, null), groupSeed, creator.keys)
+    }
+
+    /* `person` accepted an invitation and waits to be let in (route 16), with the identity HushOS serves for them now. */
+    fun waiting(person: FakeDrive.Person, email: String, name: String) {
+        pendingRows.add(JSONObject().put("userId", person.id.lowercase()).put("name", name).put("email", email).put("roles", JSONArray())
+            .put("acceptedAt", "2026-11-02T10:00:00.000Z").put("identity", person.served.toJson()).put("inFamily", false))
     }
 
     /* Maya's phone: a vault signed in to the server, its sync over its own records folder (a relaunch passes the same one). */

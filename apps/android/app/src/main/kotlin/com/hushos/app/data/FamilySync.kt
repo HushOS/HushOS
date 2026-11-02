@@ -680,7 +680,7 @@ class FamilySync(
     }
 
     /* Route 6, every page: each member's identity and links, by lowercase user id. */
-    private fun fetchIdentities(groupId: String): Map<String, MemberIdentity> {
+    internal fun fetchIdentities(groupId: String): Map<String, MemberIdentity> {
         val out = HashMap<String, MemberIdentity>()
         var after: String? = null
         repeat(64) {
@@ -736,6 +736,9 @@ class FamilySync(
         // Its folders' rows, keys and copies first, then the record that ties them to the family: a stop in between
         // leaves the record, and the next cleanup finds them again.
         vault.forgetWorkspaces(areas, FamilyWords.NOT_IN_FAMILY)
+        // Roster calls kept for a family this account is no longer in can never land: they go with it, before the
+        // record (a delete that fails stops the wipe with the record kept, and the next cleanup finds them again).
+        outbox.deleteGroup(userId, groupId)
         records.delete(userId, groupId)
         accepted.remove(groupId.lowercase())
         sweepCopies()

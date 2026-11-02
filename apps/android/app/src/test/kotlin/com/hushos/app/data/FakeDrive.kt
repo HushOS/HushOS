@@ -99,6 +99,15 @@ class FakeDrive : AutoCloseable {
     val rotationShares = HashMap<String, MutableList<JSONObject>>()
     /* Settings reads fail (a 500) once a rotation's work has been listed: a check mid-batch that can't run. */
     var failSettingsOnceWorkListed = false
+    /* Each request with the `HushOS-Client` it named, in order. */
+    val clients = java.util.Collections.synchronizedList(ArrayList<Pair<String, String?>>())
+    /* Every settings read fails with a 503 while set (the server or the connection down for that route). */
+    @Volatile var failSettingsReads = false
+    /* Every settings read answered with this while set (a refusal, not a server down). */
+    @Volatile var settingsReadAnswer: Pair<Int, JSONObject>? = null
+    /* People besides Grace that `lookup` answers for, by address (lowercase): their keys and name. */
+    val others = java.util.concurrent.ConcurrentHashMap<String, Pair<Person, String>>()
+    fun another(email: String, name: String): Person = person(UUID.randomUUID().toString(), randomBytes(32u)).also { others[email.lowercase()] = it to name }
     /* Runs once, as the next settings read is answered (another process acting right after it). */
     var onNextSettingsGet: (() -> Unit)? = null
     /* Rotation batches are refused with a 500, as a dropped send would leave them (nothing applied). */
@@ -513,6 +522,7 @@ class FakeDrive : AutoCloseable {
             .associate { it.substringBefore("=") to URLDecoder.decode(it.substringAfter("="), "UTF-8") }
         val raw = exchange.requestBody.readBytes()
         requests.add("$method $path")
+        clients.add("$method $path" to exchange.requestHeaders.getFirst("HushOS-Client"))
         try {
             if (path.startsWith("/store/")) return store(exchange, method, path, raw)
             val body = if (raw.isEmpty()) JSONObject() else runCatching { JSONObject(String(raw)) }.getOrDefault(JSONObject())
@@ -581,6 +591,8 @@ class FakeDrive : AutoCloseable {
             get && at("auth", "identity", "history") -> ok(JSONObject().put("identities", JSONArray()))
             get && at("auth", "settings") -> {
                 if (failSettingsOnceWorkListed && workListed) return 500 to JSONObject().put("message", "Settings are unavailable")
+                if (failSettingsReads) return 503 to JSONObject().put("message", "Drive is temporarily unavailable. Please try again.")
+                settingsReadAnswer?.let { return it }
                 val answer = settingsJson()
                 onNextSettingsGet?.let { hook -> onNextSettingsGet = null; hook() }
                 ok(answer)
@@ -602,6 +614,9 @@ class FakeDrive : AutoCloseable {
             post && at("auth", "contacts", "lookup") -> {
                 lookups++
                 if (failLookups) return 500 to JSONObject().put("message", "Lookups are down")
+                others[body.getString("email").lowercase()]?.let { (person, name) ->
+                    return ok(JSONObject().put("contact", person.served.toJson().put("userId", person.id).put("name", name).put("email", body.getString("email"))))
+                }
                 if (!body.getString("email").equals("grace@example.org", ignoreCase = true)) return 404 to JSONObject().put("message", "No HushOS account uses that email.")
                 ok(JSONObject().put("contact", grace.served.toJson().put("userId", grace.id).put("name", "Grace Hopper").put("email", "grace@example.org")))
             }
