@@ -1,0 +1,33 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NoticeQueue.kt
+  s_566b8e0c4467a4::t_9abb0ff3c68f2e 1-54
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_1a294a355d57a9 87
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyManage.kt
+  s_566b8e0c4467a4::t_95a7a5fdb7e11f 157-159
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_213d152252d1fc 321,484,501,1425,1635-1637,1640,1643,1647-1648,1650
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_88b65f2b72ce5a 230-232
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyManageTest.kt
+  s_566b8e0c4467a4::t_f0f30f5e420e57 461,493
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyManageModelTest.kt
+  s_566b8e0c4467a4::t_ee797ce837b743 47-52,57-60,105-106,120-121,123,185
+apps/android/app/src/test/kotlin/com/hushos/app/ui/NoticeQueueTest.kt
+  s_566b8e0c4467a4::t_c1553af24ba10d 1-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a57dafd3747480c283074db26c0bf17fb6afea26",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
