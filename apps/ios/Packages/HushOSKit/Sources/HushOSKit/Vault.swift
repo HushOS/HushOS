@@ -138,7 +138,13 @@ public actor Vault {
      * Folders an accepted member list named, held for the write barrier only (holdAsFamilyWorkspaces):
      * never how a node opens or writes, which only folders proven a family's decide (familyWorkspaces).
      */
-    var heldAreaGroup: [String: String] = [:]    /* The guard's turn (`withGuardTurn`): whether an act holds it, and who waits for it, in order. */
+    var heldAreaGroup: [String: String] = [:]
+    /*
+     * The rows (and keys) a family's area ledger opened. A family folder's row and key are served
+     * only when they came this way: one a share mount (or any write's answer) left there is never
+     * answered for a family's item, never decrypted with, and goes when the ledger is asked again.
+     */
+    var ledgerOpened: Set<NodeRef> = []    /* The guard's turn (`withGuardTurn`): whether an act holds it, and who waits for it, in order. */
     var guardBusy = false
     var guardWaiting: [CheckedContinuation<Void, Never>] = []
     /* Contacts looked up for display, by lowercased email, with when (`cachedLookup`). */
@@ -517,7 +523,14 @@ public actor Vault {
         // A family folder row served differently (a walk re-keyed it, its root moved to the next key) opens through the ledger
         // again, so what the ledger holds of its path is what the server serves now, never what this process saw first.
         // An older answer arriving after a newer one (listings out of order) keeps the newer row and key.
-        if let done = opened[node.ref], done.node == node || node.isOlder(than: done.node) || (!family && !replacing) { return done }
+        // A family folder's row is answered from the cache only when its area ledger opened it: one a share mount left there
+        // goes, with its key, and the ledger is asked.
+        let trusted = !family || ledgerOpened.contains(node.ref)
+        if let done = opened[node.ref], trusted, done.node == node || node.isOlder(than: done.node) || (!family && !replacing) { return done }
+        if family, !trusted {
+            opened[node.ref] = nil
+            nodeKeys[node.ref] = nil
+        }
         try node.checkEnvelopeSuite()
         try admitId(node, family: family)
         let key: Data
@@ -540,8 +553,36 @@ public actor Vault {
         nodeKeys[node.ref] = key
         let result = Opened(node: node, metadata: metadata, nodeKey: key)
         opened[node.ref] = result
+        if family { ledgerOpened.insert(node.ref) } else { ledgerOpened.remove(node.ref) }
         removedRows.remove(node.ref)
         return result
+    }
+
+    #if DEBUG
+    /* Tests only: a row and key held as anything but the ledger would leave them (a share mount, before mounts were refused). */
+    func holdUnchecked(_ row: Opened, key: Data) {
+        opened[row.ref] = row
+        nodeKeys[row.ref] = key
+        ledgerOpened.remove(row.ref)
+    }
+    #endif
+
+    /* A row held for a family folder's item only when its ledger opened it; any other row (and the own drive's, a share's) as held. */
+    func trustedRow(_ ref: NodeRef) -> Opened? {
+        guard let row = opened[ref] else { return nil }
+        return !isFamilyWorkspace(ref.workspaceId) || ledgerOpened.contains(ref) ? row : nil
+    }
+
+    /*
+     * Whether a received share may be mounted here: never into a family folder (proven, held by its
+     * barrier, or one this process let go of), whose items open only through its area ledger and
+     * never under a key a share hands over. A share refresh can't refill a family a fork cleared.
+     */
+    func admitShare(_ share: SharedWithMeView) throws {
+        let target = share.workspaceId.lowercased()
+        if isFamilyWorkspace(target) || heldAreaGroup[target] != nil || TemporaryCopies.wasForgotten(target) {
+            throw FamilyFailure(message: FamilyWords.couldntCheckKeys)
+        }
     }
 
     /*
@@ -591,9 +632,9 @@ public actor Vault {
         if !others.isEmpty || family { throw IdCollision() }
     }
 
-    public func item(_ id: String) -> Opened? { opened[id] }
-    /* Exactly this row, in its own workspace: never another workspace's row with the same id. */
-    public func item(_ ref: NodeRef) -> Opened? { opened[ref] }
+    public func item(_ id: String) -> Opened? { opened.ref(for: id).flatMap(trustedRow) }
+    /* Exactly this row, in its own workspace: never another workspace's row with the same id, nor a family's not from its ledger. */
+    public func item(_ ref: NodeRef) -> Opened? { trustedRow(ref) }
     public func nodeKey(_ id: String) -> Data? { nodeKeys[id] }
     /* The key of exactly this item, in its own workspace. */
     func nodeKey(of item: Opened) -> Data? { nodeKeys[item.ref] }
@@ -609,6 +650,11 @@ public actor Vault {
         }
         try node.checkEnvelopeSuite()
         try admitId(node, family: isFamilyWorkspace(node.workspaceId))
+        // Never over a newer row a family's ledger opened (a late answer's older row).
+        if ledgerOpened.contains(node.ref), let held = opened[node.ref], node.isOlder(than: held.node) { return held }
+        // In a family folder only a write's answer reaches here, under the key its ledger gave (familyTarget: writableKey,
+        // newNodeKey, rewrapNode); a share into a family folder is refused before it is adopted (admitShare).
+        if isFamilyWorkspace(node.workspaceId) { ledgerOpened.insert(node.ref) } else { ledgerOpened.remove(node.ref) }
         let previous = opened[node.ref]?.node.parentId
         nodeKeys[node.ref] = key
         let result = Opened(node: node, metadata: metadata, nodeKey: key)
@@ -723,6 +769,8 @@ public actor Vault {
 
     /* The content key and sizes of a file's version (the current one by default). */
     public func openVersion(_ item: Opened, version: VersionListView? = nil) throws -> OpenedVersion {
+        // A family's file decrypts only under the key its area ledger opened, never one a share mount left: refused first.
+        if isFamilyWorkspace(item.node.workspaceId), !ledgerOpened.contains(item.ref) { throw FamilyFailure(message: FamilyWords.couldntCheckKeys) }
         guard let nodeKey = nodeKeys[item.ref] else { throw DriveAPIError.server(500, "Node not opened") }
         let id: String, objectId: String, envelope: String, suite: UInt32, nonce: String, rowSize: String?
         if let version {

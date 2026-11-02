@@ -397,6 +397,82 @@ extension OnFakeDrive {
             #expect(await vault.nodeKey(of: try #require(await vault.item(plan.ref))) == planKey)
         }
 
+        /* A share Eve's server serves to the member, naming `node` in `workspace`. */
+        private func share(into workspace: String, _ node: NodeView) -> SharedWithMeView {
+            SharedWithMeView(id: "share-1", workspaceId: workspace, role: "editor", keyEpoch: 1, shareEnvelope: "", prevShareEnvelope: nil, prevKeyEpoch: nil,
+                             createdAt: "", granter: .init(id: "eve", name: "Eve", email: "eve@example.com", encryptionPublicKey: ""), node: node)
+        }
+
+        /*
+         * A share that targets the family's own folder, mounted after route 25 proved it: refused
+         * before any key opens, and the family's rows stay the ledger's. Fails if a share mount can
+         * put a row and key into a family's folder.
+         */
+        @Test func aShareIntoAFamilyFolderIsRefusedAtMount() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            _ = try await vault.children(of: family.rootId)
+            await #expect(throws: FamilyFailure.self) { try await vault.admitShare(share(into: family.workspaceId, family.file)) }
+            #expect(await vault.ledgerOpened.contains(family.file.ref))
+        }
+
+        /*
+         * The share was mounted before the family's folder was proven (nothing yet named it a
+         * family's). Once route 25 proves it, what the share put there goes, row and key, and the
+         * family's file is opened by its ledger alone. Fails if becoming a family folder keeps a
+         * share's rows.
+         */
+        @Test func aShareMountedBeforeTheFolderWasProvenIsEvictedWhenItIs() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            // What the mount leaves: the file's row and a key the share handed over, in a workspace nothing names a family's yet.
+            try await vault.admitShare(share(into: family.workspaceId, family.file))
+            let mounted = try await vault.adopt(family.file, nodeKey: try randomBytes(length: 32),
+                                      metadata: NodeMetadata(name: "Recipes.txt", mime: "text/plain", size: nil, modified: nil, attributes: [:]), in: family.workspaceId)
+            #expect(await vault.item(family.file.ref) != nil)
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(await vault.item(family.file.ref) == nil, "the share's row outlived the folder becoming a family's")
+            #expect(await vault.nodeKey(of: mounted) == nil)
+            _ = try await vault.children(of: family.rootId)
+            #expect(await vault.ledgerOpened.contains(family.file.ref))
+            #expect(await vault.nodeKey(of: mounted) == family.fileKey)
+        }
+
+        /*
+         * After a fork cleared the family, a share refresh can't put its file back, and a row and key
+         * held for it any way but its ledger are never served: Info's read finds nothing, a download
+         * refuses before it decrypts, and opening it asks the ledger (which refuses the forked family).
+         * Fails if a share mount or a cached row stands in for the ledger.
+         */
+        @Test func afterAForkClearAShareCantRefillTheFamilyAndDownloadRefuses() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2, family.r3], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let file = try #require(try await vault.children(of: family.rootId).first { $0.id == family.fileId })
+            server.serve(chain: [family.r1, family.r2, family.r3Fork, family.r4Fork])
+            guard case .fork = await phone.sync.sync(family.summary) else { Issue.record("no warning"); return }
+            await #expect(throws: FamilyFailure.self) { try await vault.admitShare(share(into: family.workspaceId, family.file)) }
+            #expect(await vault.item(file.ref) == nil, "the forked family's file was refilled")
+            // A row and key held for the family file that its ledger didn't open (as a share mount would leave them).
+            await vault.holdUnchecked(file, key: family.fileKey)
+            #expect(await vault.item(file.ref) == nil)
+            let out = FileManager.default.temporaryDirectory.appendingPathComponent("unchecked-\(UUID().uuidString)")
+            await #expect(throws: FamilyFailure.self) { try await vault.download(file.id, ref: file.ref, to: out) }
+            #expect(!FileManager.default.fileExists(atPath: out.path))
+            await #expect(throws: (any Error).self) { try await vault.open(family.file) }
+            #expect(await vault.nodeKey(of: file) == nil, "a key the ledger didn't give stayed after the ledger was asked")
+        }
+
         /* An own-drive row with `id`, under the member's top folder. */
         private func ownRow(_ id: String, _ family: FamilyFixture, kind: NodeKind, name: String) throws -> NodeView {
             try FamilyFixture.node(id: id, in: family.personal, parent: family.personalRoot.id, parentKey: family.personalRootKey,

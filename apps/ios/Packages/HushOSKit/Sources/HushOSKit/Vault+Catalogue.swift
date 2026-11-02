@@ -317,7 +317,7 @@ extension Vault {
     }
 
     /* One opened item by id, when this device knows it (the catalogue opens the whole drive). */
-    public func openedItem(_ id: String) -> Opened? { opened[id] }
+    public func openedItem(_ id: String) -> Opened? { opened.ref(for: id).flatMap(trustedRow) }
 
     /*
      * Everything live in this workspace, for Recent, search and tags: not trashed, and no trashed

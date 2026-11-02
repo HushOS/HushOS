@@ -114,6 +114,8 @@ extension Vault {
         for share in shares {
             do {
                 try Self.checkReceived(share, ownWorkspace: own)
+                // Never into a family folder: its items open only through its area ledger (admitShare).
+                try admitShare(share)
                 let ctx = ShareContext(
                     workspaceId: share.workspaceId, nodeId: share.node.id, keyEpoch: UInt64(share.keyEpoch),
                     granteeUserId: session.userId, granterUserId: share.granter.id

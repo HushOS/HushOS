@@ -223,6 +223,10 @@ extension Vault {
     func noteFamilyWorkspaces(_ ids: [String], of groupId: String) {
         let own = workspace?.workspaceId.lowercased()
         let family = ids.map { $0.lowercased() }.filter { $0 != own }
+        // Newly proven a family folder: whatever this phone held of it came some other way (a share mount), never through
+        // the family's ledger, and goes with its keys and its place in the parent index.
+        let newly = family.filter { !familyWorkspaces.contains($0) }
+        if !newly.isEmpty { forgetWorkspaces(newly) }
         familyWorkspaces.formUnion(family)
         for id in family { familyAreaGroup[id] = groupId.lowercased() }
     }
@@ -259,6 +263,7 @@ extension Vault {
         for id in ids.map({ $0.lowercased() }) where id != own {
             for nodeId in nodeKeys.values(in: id).keys { nodeKeys[NodeRef(workspaceId: id, nodeId: nodeId)] = nil; gone.insert(nodeId) }
             for nodeId in opened.values(in: id).keys { opened[NodeRef(workspaceId: id, nodeId: nodeId)] = nil; gone.insert(nodeId) }
+            ledgerOpened = ledgerOpened.filter { $0.workspaceId != id }
         }
         forgetParents(gone)
         return gone
