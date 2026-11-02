@@ -92,8 +92,9 @@ export function TagColourPicker({
                         checked={custom}
                         onChange={() => {
                             // Choosing Custom chooses a colour at once; the square then refines it.
+                            // With the editor already open its colour stands; it reads a value only as it opens.
+                            if (!custom && !open) onChange(FIRST_CUSTOM);
                             setOpen(true);
-                            if (!custom) onChange(FIRST_CUSTOM);
                         }}
                         onClick={() => setOpen(true)}
                         className="absolute inset-0 size-full cursor-pointer appearance-none rounded-full"

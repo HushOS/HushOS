@@ -194,8 +194,9 @@ function ColourForm({
                             aria-label="Custom colour"
                             checked={!swatch}
                             onChange={() => {
+                                // With the editor already open its colour stands; it reads a value only as it opens.
+                                if (swatch && !customOpen) setValue(FIRST_CUSTOM);
                                 setCustomOpen(true);
-                                if (swatch) setValue(FIRST_CUSTOM);
                             }}
                             onClick={() => setCustomOpen(true)}
                             className="absolute inset-0 size-full cursor-pointer appearance-none rounded-full"
