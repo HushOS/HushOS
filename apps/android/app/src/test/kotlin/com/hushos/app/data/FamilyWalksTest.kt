@@ -345,6 +345,63 @@ class FamilyWalksTest {
     }
 
     /*
+     * Route 2 still lists the family, its member list answers not-member, and the wipe can't finish (the family guard can't
+     * be read): the background pass asks to run again, so the removal is finished once storage is back. Fails if a removal
+     * left unfinished on a listed family counts as done.
+     */
+    @Test
+    fun anUnfinishedWipeOnAListedFamilyRunsAgain() {
+        val app = Vault(this.app, DriveApi(Shared.session(this.app)!!))
+        assertTrue(app.families.sync(family.summary) is FamilyState.Accepted)
+        family.notMember = true
+        val folder = app.familyGuard.file.parentFile!!
+        val outcome = try {
+            assertTrue(folder.setExecutable(false, false) && folder.setReadable(false, false))
+            // The app's vault, which accepted the family: its ledger holds the chain the wipe must hand a guard back for.
+            FamilyWalkWork.run(this.app, app) {}
+        } finally {
+            folder.setExecutable(true, false)
+            folder.setReadable(true, false)
+        }
+        assertEquals(FamilyWalkWork.Outcome.RETRY, outcome)
+    }
+
+    /*
+     * A walk's batch is on its way with a fresh key pending for the subfolder, and Sam's device re-keys the subfolder first.
+     * Meanwhile this phone lists the subfolder (Sam's key, at the target) and uploads into it. The upload's key is made only
+     * once the batch's pending keys are settled, so it is wrapped under Sam's key and reads afterwards. Fails if a write in
+     * the folder takes a key the walk holds pending (it is then sealed under a key the server refused).
+     */
+    @Test
+    fun anUploadDuringAWalkBatchNeverTakesItsPendingKey() {
+        val phone = opened()
+        family.replaceKeys()
+        val target = accepted(phone).areas.single().walkTarget()!!
+        server.rotationBatch = 1
+        val walker = Thread.currentThread()
+        var upload: Thread? = null
+        var uploaded: Opened? = null
+        // One node a batch, Sam's file first: the walk's send after it carries the subfolder, its fresh key pending.
+        phone.vault.beforeWriteGate = { _ ->
+            if (Thread.currentThread() == walker && upload == null && server.appliedIn(family.rootId).contains(family.fileId)) {
+                server.rekeyedElsewhere(family.rootId, sub)
+                upload = thread {
+                    phone.vault.listChildren(sub, family.workspaceId)
+                    val file = File(app.cacheDir, "up-${System.nanoTime()}/Tickets.txt").apply { parentFile!!.mkdirs(); writeText("marker-during-walk") }
+                    uploaded = phone.vault.upload(file, "Tickets.txt", "text/plain", sub, null)
+                }
+                upload!!.join(3_000)
+            }
+        }
+        phone.sync.walk(family.groupId, target)
+        upload!!.join(30_000)
+        assertNotNull("the upload landed", uploaded)
+        phone.vault.beforeWriteGate = null
+        if (server.running(family.rootId)) phone.sync.walk(family.groupId, accepted(phone).areas.single().walkTarget()!!)
+        assertEquals(mapOf("Recipes.txt" to "marker-family", "Packing.txt" to "marker-deep", "Tickets.txt" to "marker-during-walk"), readFresh())
+    }
+
+    /*
      * The app is closed (no live vault): Sam's key change is made meanwhile, and the background work's pass finds it with a
      * vault of its own, from the device record the app left, and walks it to its end; a pass whose walk stops asks to be
      * run again. Fails if the background pass doesn't walk, or calls a stopped walk done.

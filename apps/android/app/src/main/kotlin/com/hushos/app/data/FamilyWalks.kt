@@ -60,6 +60,24 @@ object FamilyWalkLocks {
     }
 }
 
+/*
+ * The window a walk's batch holds fresh keys pending in this process's ledgers, per folder: the core's wrap_key_for
+ * prefers a pending key for a parent at its epoch (it is what the walk's own children are wrapped under), so a write that
+ * made a new node or re-wrapped a moved one meanwhile could seal it under a key the server refuses (another device won
+ * that parent). Writes derive their keys only outside it (Vault.newNodeKey, the move's re-wrap), after the batch's keys
+ * were committed or dropped. Process-wide: the app's, the Files app's and the jobs' vaults share the process; a ledger
+ * in another process holds none of these pending keys.
+ */
+object FamilyKeyLocks {
+    private val locks = ConcurrentHashMap<String, ReentrantLock>()
+
+    fun <T> hold(workspaceId: String, body: () -> T): T {
+        val lock = locks.getOrPut(workspaceId.lowercase()) { ReentrantLock() }
+        lock.lock()
+        try { return body() } finally { lock.unlock() }
+    }
+}
+
 /* Whether route 25 still names the run as the folder's running one (the web's stillRunning). A folder not listed runs nothing of ours. */
 fun stillRunning(spaces: Map<String, List<SpaceArea>>, groupId: String, run: WalkTarget): Boolean {
     val area = spaces[groupId.lowercase()].orEmpty().firstOrNull { it.workspaceId.equals(run.workspaceId, ignoreCase = true) } ?: return false
@@ -141,6 +159,10 @@ internal fun Vault.walkFamilyFolder(target: WalkTarget, progress: (Int) -> Unit 
         val made = ArrayList<String>()
         val kept = HashSet<String>()
         var sent = false
+        // From the first fresh key made to the last one committed or dropped, no write of this process derives a key in
+        // the folder (FamilyKeyLocks): the ledger hands its pending keys to children it wraps, and a write's child under a
+        // key the server then refuses would be unreadable.
+        FamilyKeyLocks.hold(ws) {
         try {
             val batch = JSONArray()
             for (entry in sending) {
@@ -172,6 +194,7 @@ internal fun Vault.walkFamilyFolder(target: WalkTarget, progress: (Int) -> Unit 
             areaLedger.rotateDrop(ws, made.filter { it !in kept })
             // Rows served at the old keys are read again through the ledger; a send whose answer never came may have landed.
             if (sent) for (id in made) nodes.forget(ws, id)
+        }
         }
         done += kept.size
         progress(done)

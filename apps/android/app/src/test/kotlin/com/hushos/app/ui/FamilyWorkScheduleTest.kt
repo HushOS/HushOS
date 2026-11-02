@@ -139,6 +139,26 @@ class FamilyWorkScheduleTest {
         assertTrue(model.shown[family.groupId] == null)
     }
 
+    /*
+     * The background work's sync finds the member list shown differently (a fork): the family's warning shows on the
+     * screens and what they drew of it goes, as for the app's own sync. Fails if a refusal the background work met never
+     * reaches the screens.
+     */
+    @Test
+    fun aForkTheBackgroundWorkFindsReachesTheScreens() {
+        family.chain = listOf(family.r1, family.r2, family.r3)
+        val app = RuntimeEnvironment.getApplication()
+        val host = Host(Vault(app, DriveApi(Shared.session(app)!!)))
+        val model = FamiliesModel(host)
+        runBlocking { model.refreshFamilies() }
+        assertTrue(model.states[family.groupId] is FamilyState.Accepted)
+        assertTrue(model.shown[family.groupId] != null)
+        family.chain = listOf(family.r1, family.r2, family.r3Fork, family.r4Fork)
+        com.hushos.app.data.FamilyWalkWork.run(app, host.vault) {}
+        assertTrue("${model.states[family.groupId]}", model.states[family.groupId] is FamilyState.Fork)
+        assertTrue(model.shown[family.groupId] == null)
+    }
+
     /* Fails if a join that lands with nothing due leaves the background check unscheduled. */
     @Test
     fun joiningSchedulesTheBackgroundCheck() {

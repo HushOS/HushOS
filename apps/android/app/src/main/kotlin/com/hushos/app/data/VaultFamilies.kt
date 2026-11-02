@@ -272,7 +272,8 @@ internal fun Vault.newNodeKey(id: String, parent: Opened, keyEpoch: ULong, famil
         // The choke point every new family node passes: never a key made under an acceptance whose guard is owed.
         requireGuardKept(ws)
         val made = try {
-            areaLedger.newNodeKey(ws, id, parent.id, parent.node.keyEpoch, keyEpoch)
+            // Never while a walk's batch holds keys pending in this folder: its parent's might be one the server refuses.
+            FamilyKeyLocks.hold(ws) { areaLedger.newNodeKey(ws, id, parent.id, parent.node.keyEpoch, keyEpoch) }
         } catch (refused: com.hushos.core.CoreException) {
             throw FamilyFailure(FamilyWords.keyChangeWords(refused.message.orEmpty()))
         }

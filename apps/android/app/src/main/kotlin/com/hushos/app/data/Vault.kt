@@ -1538,7 +1538,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
         if (familyTarget(item.node.workspaceId)) {
             requireGuardKept(parent.node.workspaceId)
             return try {
-                base64urlEncode(areaLedger.rewrapNode(item.node.workspaceId, item.id, parent.id, parent.node.keyEpoch, item.node.keyEpoch))
+                // Never while a walk's batch holds keys pending in this folder (FamilyKeyLocks).
+                base64urlEncode(FamilyKeyLocks.hold(item.node.workspaceId) { areaLedger.rewrapNode(item.node.workspaceId, item.id, parent.id, parent.node.keyEpoch, item.node.keyEpoch) })
             } catch (refused: com.hushos.core.CoreException) {
                 throw FamilyFailure(FamilyWords.keyChangeWords(refused.message.orEmpty()))
             }

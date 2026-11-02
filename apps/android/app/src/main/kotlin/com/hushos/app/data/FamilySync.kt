@@ -197,6 +197,13 @@ class FamilySync(
         return listed to wiped
     }
 
+    /* Whether a sync's state let go of what was open of the family (refuse or wipe ran): everything but accepted and no answer. */
+    private fun letGo(state: FamilyState): Boolean = when (state) {
+        is FamilyState.Accepted -> false
+        is FamilyState.Failed -> state.words != FamilyWords.NO_ANSWER
+        else -> true
+    }
+
     /*
      * Every wipe of a family, whoever ran it (a sync's not-member, route 2's reconciliation, a member check, a join, a
      * leave), queued for the screens and told: the background work shares the app's vault and must not leave them drawing
@@ -282,9 +289,10 @@ class FamilySync(
     fun syncRevised(summary: GroupSummary): Revised {
         names[summary.id] = summary.name
         val revised = exclusive(summary.id) { Revised(run(summary), revision.incrementAndGet(), summary.id) }
-        // A removal, finished or not: the screens let go of the family either way (a refused one says its words).
-        val state = revised.state
-        if (state == FamilyState.Wiped || (state is FamilyState.Failed && state.removal)) publishRemovals(listOf(revised))
+        // Anything that let go of what was open (a removal finished or not, a fork, an unchecked chain, a rollback or any
+        // other refusal): the screens let go of it too, whoever ran the sync. Only an accepted family, or no answer at all
+        // (which leaves things as they were), isn't published.
+        if (letGo(revised.state)) publishRemovals(listOf(revised))
         return revised
     }
 

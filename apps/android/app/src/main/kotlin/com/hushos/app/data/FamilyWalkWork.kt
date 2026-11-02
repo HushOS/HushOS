@@ -117,7 +117,8 @@ object FamilyWalkWork {
                 val view = when (val state = families.sync(summary)) {
                     is FamilyState.Accepted -> state.view
                     // No answer, a timeout, throttling or a server error: the family is checked again with backoff.
-                    is FamilyState.Failed -> { if (state.transient || state.words == FamilyWords.NO_ANSWER) again = true; null }
+                    // A removal whose wipe didn't finish is asked about again too, until it does.
+                    is FamilyState.Failed -> { if (state.transient || state.removal || state.words == FamilyWords.NO_ANSWER) again = true; null }
                     else -> null
                 }
                 for (target in view?.areas.orEmpty().mapNotNull { it.walkTarget() }) {

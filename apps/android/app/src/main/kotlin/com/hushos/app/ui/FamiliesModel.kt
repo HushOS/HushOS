@@ -569,11 +569,18 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
      * background work using the app's vault, which never reaches these screens otherwise. Each shown as a sync's Wiped
      * is (or, a wipe that couldn't finish, as refused), ordered by its revision.
      */
-    private fun applyRemovals(s: FamilySession) {
+    private suspend fun applyRemovals(s: FamilySession) {
         if (!gate.current(s)) return
         for (found in s.owner.families.takeRemovals()) {
             val groupId = found.groupId ?: continue
-            if (found.state == FamilyState.Wiped) removed(groupId, s, found.revision) else unlistedFailed(groupId, found.state, s, found.revision)
+            // A family still listed shows the state as its own sync's would (a fork's warning, a refusal's words, its
+            // rows and marks let go of); one no longer listed as a removal found while unlisted.
+            val summary = list?.firstOrNull { it.id == groupId }
+            when {
+                summary != null -> show(found.state, summary, s, found.revision)
+                found.state == FamilyState.Wiped -> removed(groupId, s, found.revision)
+                else -> unlistedFailed(groupId, found.state, s, found.revision)
+            }
         }
     }
 

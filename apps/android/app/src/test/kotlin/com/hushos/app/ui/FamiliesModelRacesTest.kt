@@ -219,7 +219,9 @@ class FamiliesModelRacesTest {
         release.countDown()
         refresh.join(10_000)
         check.join(10_000)
-        assertTrue("${model.states[family.groupId]}", model.states[family.groupId] is FamilyState.Accepted)
+        // The check's sync met the fork, and a refusal any sync meets reaches the screens (FamilySync.takeRemovals): the
+        // fork shows already, and the refresh's older acceptance, landing after it, never covers it.
+        assertTrue("${model.states[family.groupId]}", model.states[family.groupId] is FamilyState.Fork)
         val found = start ?: throw AssertionError("the member check never finished")
         assertTrue("${found.state}", found.state is FamilyState.Fork)
         assertTrue("the fork found later was dropped", runBlocking { model.adopt(found.state, family.summary, session, found.revision) })
