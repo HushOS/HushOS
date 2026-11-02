@@ -133,7 +133,8 @@ sealed interface FamilyState {
     /* The server said this account is not in the family: what the phone kept of it is gone. */
     data object Wiped : FamilyState
     /* Couldn't check, in FamilyWords' words. */
-    data class Failed(val words: String) : FamilyState
+    /* `transient`: the failure was the network's or the server's for now (no answer, 408, 429, 5xx), so a retry may pass. */
+    data class Failed(val words: String, val transient: Boolean = false) : FamilyState
 }
 
 class FamilySync(
@@ -289,7 +290,7 @@ class FamilySync(
         } catch (error: NotAuthenticated) {
             throw error
         } catch (error: GroupsApiError) {
-            if (!error.isNotMember) { forgetUnlessUnanswered(groupId, error); return FamilyState.Failed(FamilyWords.error(error)) }
+            if (!error.isNotMember) { forgetUnlessUnanswered(groupId, error); return FamilyState.Failed(FamilyWords.error(error), transient = transient(error)) }
             try {
                 wipe(groupId)
                 FamilyState.Wiped
@@ -301,7 +302,7 @@ class FamilySync(
             }
         } catch (error: Exception) {
             forgetUnlessUnanswered(groupId, error)
-            FamilyState.Failed(FamilyWords.error(error))
+            FamilyState.Failed(FamilyWords.error(error), transient = transient(error))
         }
     }
 
@@ -786,6 +787,11 @@ class FamilySync(
         }
 
         /* A request that got no answer: nothing was refused, so nothing is taken away. */
+        /* The network's or the server's for now (no answer, a timeout, throttling, a server error): a retry may pass. */
+        fun transient(error: Throwable): Boolean = unanswered(error) ||
+            (error is GroupsApiError && (error.status == 408 || error.status == 429 || error.status >= 500)) ||
+            (error is ApiError && (error.status == 408 || error.status == 429 || error.status >= 500))
+
         fun unanswered(error: Throwable): Boolean = when (error) {
             is GroupsApiError -> error.status == 0
             is Unreachable, is AuthUnreachable, is java.io.IOException, is kotlinx.coroutines.CancellationException -> true

@@ -47,12 +47,11 @@ class FamilyUploadsTest {
 
     private fun local(name: String, text: String) = File(app.cacheDir, "local-${System.nanoTime()}/$name").apply { parentFile!!.mkdirs(); writeText(text) }
 
-    private fun queueDir() = File(app.filesDir, "queue/${UUID.randomUUID()}").apply { mkdirs() }
+    private fun upload(vault: Vault, job: String = UUID.randomUUID().toString(), progress: (Float) -> Unit = {}): Opened =
+        FamilyUploads.upload(vault, family.groupId, family.workspaceId, local("Notes.txt", "packing list"), "Notes.txt", "text/plain", family.rootId, null, job, progress)
 
-    private fun upload(vault: Vault, dir: File = queueDir(), progress: (Float) -> Unit = {}): Opened =
-        QueuedUploads.running(dir) { begun ->
-            FamilyUploads.upload(vault, family.groupId, family.workspaceId, local("Notes.txt", "packing list"), "Notes.txt", "text/plain", family.rootId, null, begun, progress)
-        }
+    private fun records() = Reservations.all(app)
+    private fun begins() = server.requests.count { it == "POST /api/drive/uploads" }
 
     private fun accepted(phone: FamilyFixture.Phone) =
         assertTrue(phone.sync.sync(family.summary) is FamilyState.Accepted)
@@ -87,14 +86,11 @@ class FamilyUploadsTest {
     fun aGuardOwedMidJobAbortsTheUploadAndSendsNoCompletion() {
         val vault = job()
         vault.beforeWriteGate = { if ("POST /api/drive/uploads" in server.requests) vault.oweFamilyGuard(family.groupId) }
-        val dir = queueDir()
-        assertThrows(GuardUnsaved::class.java) { upload(vault, dir) }
+        assertThrows(GuardUnsaved::class.java) { upload(vault) }
         assertEquals(1, aborted().size)
         assertEquals(emptyList<String>(), completed())
-        // Its record stays until an abort is answered for sure: the next run's settles it, and then it goes.
-        assertTrue(File(dir, "begun").exists())
-        QueuedUploads.abortLeftover(dir) { id, ws -> vault.api.abortUpload(id, ws) }
-        assertFalse(File(dir, "begun").exists())
+        // Its abort was answered: the reservation is settled and off the ledger.
+        assertEquals(emptyList<Reservations.Record>(), records())
     }
 
     /*
@@ -145,23 +141,20 @@ class FamilyUploadsTest {
      */
     @Test
     fun aRunAfterTheProcessDiedAbortsTheLeftoverAndOpensTheFamilyAgain() {
-        val dir = queueDir()
+        val job = UUID.randomUUID().toString()
         val first = job()
-        assertThrows(Killed::class.java) { upload(first, dir) { throw Killed() } }
-        val kept = File(dir, "begun")
-        assertTrue("the reservation wasn't kept for the next run", kept.exists())
-        val leftover = kept.readLines().first()
+        assertThrows(Killed::class.java) { upload(first, job) { throw Killed() } }
+        val leftover = records().single { it.job == job }.uploadId
         assertEquals(emptyList<String>(), aborted())
-        // A new process: the dead one's session state and ledger are gone.
+        // A new process: the dead one's session state and ledger are gone; the reservations ledger is on disk.
         first.close()
         val second = job()
         assertTrue(second.familyAreas.isEmpty() || !second.areaLedger.isArea(family.workspaceId))
-        QueuedUploads.abortLeftover(dir) { uploadId, workspaceId -> second.api.abortUpload(uploadId, workspaceId) }
+        val landed = upload(second, job)
         assertEquals(listOf("POST /api/drive/uploads/$leftover/abort"), aborted())
-        val landed = upload(second, dir)
         assertNotNull(landed)
         assertEquals(1, completed().size)
-        assertFalse(kept.exists())
+        assertEquals(emptyList<Reservations.Record>(), records())
     }
 
     /*
@@ -190,26 +183,21 @@ class FamilyUploadsTest {
      */
     @Test
     fun aReservationIsKeptUntilItsAbortIsAnswered() {
-        val dir = queueDir()
-        assertThrows(Killed::class.java) { upload(job(), dir) { throw Killed() } }
-        val kept = File(dir, "begun")
-        val leftover = kept.readLines().first()
-        val begins = { server.requests.count { it == "POST /api/drive/uploads" } }
+        val job = UUID.randomUUID().toString()
+        assertThrows(Killed::class.java) { upload(job(), job) { throw Killed() } }
+        val leftover = records().single().uploadId
         val reserved = begins()
-        val vault = job()
         server.beforeAnswer = { _, path -> if (path.endsWith("/abort")) throw java.io.IOException("dropped") }
-        val unanswered = runCatching { QueuedUploads.abortLeftover(dir) { id, ws -> vault.api.abortUpload(id, ws) } }.exceptionOrNull()
+        val unanswered = runCatching { upload(job(), job) }.exceptionOrNull()
         assertTrue("an unanswered abort wasn't the network's: $unanswered", unanswered is Unreachable)
-        assertTrue("an unanswered abort forgot the reservation", kept.exists())
-        assertEquals(reserved, begins())
-        // Released for good while still unanswered: owed, and kept owed until an answer comes.
-        QueuedUploads.release(app, dir)
-        QueuedUploads.settle(app) { id, ws -> vault.api.abortUpload(id, ws) }
+        assertEquals("an unanswered abort forgot the reservation", listOf(leftover), records().map { it.uploadId })
+        assertEquals("a new upload was reserved while an older one may hold room", reserved, begins())
+        // The job ends for good (its row removed, a removal): its folder goes, the record stays on the ledger.
+        TransferQueue.dropJob(app, job, null) { id, ws -> job().api.abortUpload(id, ws) }
+        assertEquals(listOf(leftover), records().map { it.uploadId })
         server.beforeAnswer = null
-        assertEquals(0, server.requests.count { it == "POST /api/drive/uploads/$leftover/abort" })
-        QueuedUploads.settle(app) { id, ws -> vault.api.abortUpload(id, ws) }
-        assertEquals(1, server.requests.count { it == "POST /api/drive/uploads/$leftover/abort" })
-        assertFalse(File(app.filesDir, "upload-aborts.tsv").exists())
+        Reservations.settleAll(app) { id, ws -> job().api.abortUpload(id, ws) }
+        assertEquals(emptyList<Reservations.Record>(), records())
     }
 
     /*
@@ -245,6 +233,100 @@ class FamilyUploadsTest {
         assertNotNull(landed)
         assertEquals(listOf(30_000L, 30_000L), pauses)
         assertEquals(1, completed().size)
+    }
+
+    /*
+     * #251 review 2, 1: a server error (503) while the job's family sync reads the member list: the network's, so the job
+     * runs again, never failed for good. Fails if a transient failure inside FamilySync.run loses its retryability.
+     */
+    @Test
+    fun aServerErrorInsideTheFamilysSyncIsTheNetworks() {
+        family.rostersFail = true
+        val error = runCatching { upload(job()) }.exceptionOrNull()
+        assertTrue("a 503 in the family's sync failed the upload for good: $error", error != null && Resumable.retryable(error))
+        assertEquals(0, begins())
+    }
+
+    /*
+     * #251 review 2, 2: a key change refuses the completion of the job's first look, and the abort of its reservation gets
+     * no answer. The wait's next look never reserves over it: it stops as the network's with the record kept. Fails if a
+     * key-change retry reserves again while the job's earlier reservation is unsettled.
+     */
+    @Test
+    fun aKeyChangeLookNeverReservesOverAnUnsettledReservation() {
+        val vault = job()
+        val job = UUID.randomUUID().toString()
+        val pending = FamilyFailure(FamilyWords.keyChangeWords("This folder’s keys changed: the key change has not reached it yet."))
+        var thrown = 0
+        vault.beforeWriteGate = { if (thrown == 0 && "POST /api/drive/uploads" in server.requests) { thrown++; throw pending } }
+        server.beforeAnswer = { _, path -> if (path.endsWith("/abort")) throw java.io.IOException("dropped") }
+        var since: Long? = null
+        var clock = 0L
+        val pauses = ArrayList<Long>()
+        val error = runCatching {
+            FamilyUploads.waitingOutKeyChanges({ since }, { since = it }, { clock }, { ms -> pauses.add(ms); clock += ms }, {}) { upload(vault, job) }
+        }.exceptionOrNull()
+        server.beforeAnswer = null
+        assertTrue("the wait went on past an unsettled reservation: $error", error is Unreachable)
+        assertEquals("a look reserved again over an unsettled reservation", 1, begins())
+        assertEquals(1, records().count { it.job == job })
+        assertEquals(listOf(30_000L), pauses)
+    }
+
+    /*
+     * #251 review 2, 4: the abort of a leftover reservation is answered 409 "finishing" (the server keeps its bytes
+     * reserved while it completes): the record stays and nothing new is reserved. Answered 409 "already finished", the
+     * upload completed after all: the record goes and the job is done, never sent again. Fails if a completing upload's
+     * abort counts as settled, or a finished one is uploaded twice.
+     */
+    @Test
+    fun anAbortAnsweredFinishingKeepsItsRecordAndFinishedEndsTheJob() {
+        val job = UUID.randomUUID().toString()
+        assertThrows(Killed::class.java) { upload(job(), job) { throw Killed() } }
+        val leftover = records().single().uploadId
+        val inner = server.extraRoutes!!
+        var answer = "This upload is finishing and cannot be cancelled."
+        server.extraRoutes = { method, segments, query, body ->
+            if (method == "POST" && segments.lastOrNull() == "abort") 409 to org.json.JSONObject().put("code", "conflict").put("message", answer)
+            else inner(method, segments, query, body)
+        }
+        val reserved = begins()
+        assertTrue(runCatching { upload(job(), job) }.exceptionOrNull() is Unreachable)
+        assertEquals("a completing upload's abort was counted as settled", listOf(leftover), records().map { it.uploadId })
+        assertEquals(reserved, begins())
+        answer = DriveApi.ALREADY_FINISHED
+        assertTrue(runCatching { upload(job(), job) }.exceptionOrNull() is Reservations.LandedEarlier)
+        assertEquals(emptyList<Reservations.Record>(), records())
+        assertEquals("a finished upload was sent again", reserved, begins())
+    }
+
+    /*
+     * The ledger's one rule over every path: a landed upload's record goes; a failed one whose abort isn't answered keeps
+     * its record through the job's drop (the worker's own end, a family's removal), a sweep that may not touch an upload
+     * still running here, and a dead process, until an answered abort settles it. Fails if any path loses an unsettled
+     * record or aborts a reservation still in use.
+     */
+    @Test
+    fun theReservationLedgerLosesNoUnsettledRecordOnAnyPath() {
+        val vault = job()
+        upload(vault)
+        assertEquals("a landed upload's record stayed", emptyList<Reservations.Record>(), records())
+        val job = UUID.randomUUID().toString()
+        server.beforeAnswer = { _, path -> if (path.endsWith("/abort")) throw java.io.IOException("dropped") }
+        assertThrows(java.io.IOException::class.java) { upload(vault, job) { throw java.io.IOException("the network dropped mid-part") } }
+        val failed = records().single { it.job == job }.uploadId
+        TransferQueue.dropJob(app, job, null) { id, ws -> vault.api.abortUpload(id, ws) }
+        assertEquals(listOf(failed), records().map { it.uploadId })
+        // Another upload under way here: a sweep never aborts it, only once it stopped running.
+        Reservations.reserved(app, "00000000-0000-4000-8000-0000000000aa", family.workspaceId, "other")
+        server.beforeAnswer = null
+        val asked = ArrayList<String>()
+        Reservations.settleAll(app) { id, ws -> asked.add(id); vault.api.abortUpload(id, ws) }
+        assertEquals(listOf(failed), asked)
+        assertEquals(listOf("00000000-0000-4000-8000-0000000000aa"), records().map { it.uploadId })
+        Reservations.idle("00000000-0000-4000-8000-0000000000aa")
+        Reservations.settleAll(app) { id, ws -> vault.api.abortUpload(id, ws) }
+        assertEquals(emptyList<Reservations.Record>(), records())
     }
 
     /*

@@ -127,6 +127,11 @@ private fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { get
 
 /* The Drive API over HttpURLConnection with the stored session cookie; every method is one route. */
 class DriveApi(val session: Shared.Session) : RootApi {
+    companion object {
+        /* The server's 409 for an abort of an upload that completed (packages/drive/src/server.ts abortUpload). */
+        const val ALREADY_FINISHED = "This upload already finished."
+    }
+
     private val origin = session.origin
     /*
      * Called when the server could not verify a write's signature against this account's current keys: the
@@ -432,16 +437,19 @@ class DriveApi(val session: Shared.Session) : RootApi {
         write(workspaceId, "/uploads/$uploadId/complete", JSONObject().put("workspaceId", workspaceId).put("parts", parts)).optJSONObject("node")?.let(NodeView::from)
 
     /*
-     * Releases an upload's reservation. True once the server's answer settles it (aborted, or already gone, completed or
-     * expired: any definite answer); false when it is not known (no answer, a 5xx, the session gone), so whoever keeps
-     * the reservation's record keeps it and asks again.
+     * Releases an upload's reservation, saying exactly what the server's answer means (packages/drive/src/server.ts
+     * abortUpload over packages/db/src/drive.ts): 200 aborted (now or before) and 404 no longer there are RELEASED; 409
+     * "already finished" is COMPLETED; 409 "finishing" (completing: its bytes stay reserved until it completes or the
+     * expiry sweep settles it), any other answer, no answer and an ended session are PENDING, asked again later.
      */
-    fun abortUpload(uploadId: String, workspaceId: String): Boolean = try {
+    fun abortUpload(uploadId: String, workspaceId: String): Reservations.Abort = try {
         send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId))
-        true
-    } catch (_: NotAuthenticated) {
-        false
-    } catch (error: Exception) {
-        !UploadFinish.unknown(error)
+        Reservations.Abort.RELEASED
+    } catch (_: NotFound) {
+        Reservations.Abort.RELEASED
+    } catch (error: ApiError) {
+        if (error.status == 409 && error.message == ALREADY_FINISHED) Reservations.Abort.COMPLETED else Reservations.Abort.PENDING
+    } catch (_: Exception) {
+        Reservations.Abort.PENDING
     }
 }

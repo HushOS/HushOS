@@ -155,7 +155,7 @@ class FamiliesModelRacesTest {
         // The connection drops before the server answers: no answer at all.
         server.beforeAnswer = { _, path -> if (path.startsWith("groups")) throw java.io.IOException("dropped") }
         runBlocking { model.refreshFamily(family.summary) }
-        assertEquals(FamilyState.Failed(FamilyWords.NO_ANSWER), model.states[family.groupId])
+        assertEquals(FamilyState.Failed(FamilyWords.NO_ANSWER, transient = true), model.states[family.groupId])
         assertTrue("the rows left the screen", host.state.value.folders.containsKey(family.rootId))
         assertEquals("the mark vanished on no answer", warned, model.verdict(row))
     }

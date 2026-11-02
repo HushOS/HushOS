@@ -54,7 +54,8 @@ object FamilyUploads {
         when (val state = sync.sync(summary)) {
             is FamilyState.Accepted -> Unit
             FamilyState.Wiped -> throw FamilyFailure.notInFamily
-            is FamilyState.Failed -> if (state.words == FamilyWords.NO_ANSWER) throw Unreachable() else throw FamilyFailure(state.words)
+            // No answer, a timeout, throttling or a server error anywhere in the sync (route 2, 5, 6, 25): the network's.
+            is FamilyState.Failed -> if (state.transient || state.words == FamilyWords.NO_ANSWER) throw Unreachable() else throw FamilyFailure(state.words)
             else -> throw FamilyFailure(FamilySync.checkWordsOf(state))
         }
         if (!vault.isFamilyWorkspace(workspaceId) || vault.familyOf(workspaceId)?.equals(groupId, ignoreCase = true) != true) {
@@ -65,10 +66,10 @@ object FamilyUploads {
 
     /* The upload itself, after `open`: a replaced file found again in the family's workspace, never by id alone. */
     fun upload(vault: Vault, groupId: String, workspaceId: String, file: File, name: String, mime: String?, folderId: String, replacingId: String?,
-               begun: (String, String) -> Unit, progress: (Float) -> Unit): Opened {
+               job: String, progress: (Float) -> Unit): Opened {
         open(vault, groupId, workspaceId, folderId)
         val replacing = replacingId?.let { vault.item(workspaceId, it) ?: throw NotFound("This item no longer exists.") }
-        return vault.upload(file, name, mime, folderId, replacing, vault.makeThumbnail(file, mime), begun = begun, progress = progress)
+        return vault.upload(file, name, mime, folderId, replacing, vault.makeThumbnail(file, mime), job = job, progress = progress)
     }
 
     /* How long a waiting upload pauses between looks (iOS's and the web's cadence, never growing with the tries). */
@@ -100,61 +101,5 @@ object FamilyUploads {
     } catch (error: GroupsApiError) {
         if (error.status == 0 || error.status == 408 || error.status == 429 || error.status >= 500) throw Unreachable()
         throw error
-    }
-}
-
-/*
- * The server upload a queued job reserved, kept beside its staged copy (`begun` in the job's folder) while it runs: a run
- * the process died in left it reserved, so the next run aborts it before anything else (its room released at once,
- * never held for a day). Gone once the upload landed or was aborted by the vault.
- */
-object QueuedUploads {
-    private fun record(dir: File) = File(dir, "begun")
-    private fun pending(context: android.content.Context) = File(context.filesDir, "upload-aborts.tsv")
-
-    private fun read(kept: File): Pair<String, String>? =
-        runCatching { kept.readLines() }.getOrNull()?.takeIf { it.size >= 2 && it[0].isNotBlank() }?.let { it[0] to it[1] }
-
-    /*
-     * Aborts what an earlier run of this job left reserved before anything new is reserved, and forgets it only once the
-     * server's answer settles it (`abort` true). Not settled (no answer): kept, and the run stops as the network's
-     * (Unreachable), so no second reservation is made while the first may still hold room.
-     */
-    fun abortLeftover(dir: File, abort: (uploadId: String, workspaceId: String) -> Boolean) {
-        val kept = record(dir)
-        val (uploadId, workspaceId) = read(kept) ?: run { kept.delete(); return }
-        if (!abort(uploadId, workspaceId)) throw Unreachable()
-        kept.delete()
-    }
-
-    /*
-     * `body` with the reservation kept while it runs: gone once the upload lands. A failure keeps it (the vault's own
-     * abort may not have been answered), so the next run, a Retry or `release` settles it.
-     */
-    fun <T> running(dir: File, body: (begun: (String, String) -> Unit) -> T): T {
-        val kept = record(dir)
-        val result = body { uploadId, workspaceId -> runCatching { kept.writeText("$uploadId\n$workspaceId") } }
-        kept.delete()
-        return result
-    }
-
-    /*
-     * A job's folder going for good (removed from the list, cancelled, a family's removal, the sweep): its reservation, if
-     * one is left unsettled, moves to the app's list of aborts still owed, asked again by every later job (`settle`).
-     */
-    @Synchronized
-    fun release(context: android.content.Context, dir: File) {
-        read(record(dir))?.let { (uploadId, workspaceId) -> pending(context).appendText("$uploadId\t$workspaceId\n") }
-        record(dir).delete()
-    }
-
-    /* Asks again for every abort still owed; keeps those the server didn't settle. */
-    @Synchronized
-    fun settle(context: android.content.Context, abort: (uploadId: String, workspaceId: String) -> Boolean) {
-        val file = pending(context)
-        val owed = runCatching { file.readLines() }.getOrDefault(emptyList()).mapNotNull { line -> line.split("\t").takeIf { it.size == 2 }?.let { it[0] to it[1] } }
-        if (owed.isEmpty()) return
-        val left = owed.distinct().filter { (uploadId, workspaceId) -> !runCatching { abort(uploadId, workspaceId) }.getOrDefault(false) }
-        if (left.isEmpty()) file.delete() else file.writeText(left.joinToString("") { "${it.first}\t${it.second}\n" })
     }
 }
