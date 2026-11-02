@@ -966,6 +966,14 @@ class Vault(internal val context: Context, val api: DriveApi) {
         }
     }
 
+    /* A write's own refusal before anything was sent (the final gate's), told apart from the network's. */
+    private fun <T> refusedHere(body: () -> T): T = try {
+        body()
+    } catch (refused: Exception) {
+        if (refused is GuardUnsaved || refused is FamilyFailure || refused is FamilyUnavailable || refused is SessionEnded) throw UploadFinish.RefusedHere(refused)
+        throw refused
+    }
+
     /* Whether this phone still holds this vault's account: a session for it, and its data recorded as its. */
     private fun stillThisAccount(): Boolean =
         Shared.session(context)?.token == api.session.token &&
@@ -1178,7 +1186,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
         // ledger opens it when listed.
         val kept = synchronized(familyCopiesLock) {
             if (!isFamilyWorkspace(node.workspaceId)) run { nodes.put(result, key); true }
-            else if (WriteIntent.decision(node.workspaceId) == true) run {
+            // ...and only while the folder stands as it did when the write began: a removal, a fork or a refusal meanwhile
+            // cleared what this vault held of it, and a late answer never puts a key back.
+            else if (WriteIntent.decision(node.workspaceId) == true && WriteIntent.epoch(node.workspaceId) == familyEpoch(node.workspaceId)) run {
                 nodes.put(result, key, viaLedger = true)
                 familyNodes[node.id] = node.workspaceId
                 true
@@ -1798,8 +1808,14 @@ class Vault(internal val context: Context, val api: DriveApi) {
             throw error
         }
         // Refused: aborted, so its reserved room is released now. Unknown: asked again, never aborted blind (UploadFinish).
-        var node = UploadFinish.complete({ sendingIntoFamily(ws); api.completeUpload(begun.uploadId, ws, etags) }, { api.abortUpload(begun.uploadId, ws) })
-            ?: throw ApiError(500, "Upload completed without a node")
+        // A completion the final gate refuses here (a guard owed, the folder no longer writable, the session ended) was never
+        // sent: a definite answer, so the upload is aborted and its room released, and a new node's ledger key goes.
+        var node = try {
+            UploadFinish.complete({ refusedHere { api.completeUpload(begun.uploadId, ws, etags) } }, { api.abortUpload(begun.uploadId, ws) })
+        } catch (refused: UploadFinish.RefusedHere) {
+            madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
+            throw refused.cause!!
+        } ?: throw ApiError(500, "Upload completed without a node")
         checkWritten(node, ws, nodeId)
         var final = metadata
         if (replacing != null) {

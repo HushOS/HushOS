@@ -187,14 +187,20 @@ internal fun Vault.finalWriteGate(workspaceId: String) {
  */
 internal class WriteEntry {
     private val decided = ConcurrentHashMap<String, Boolean>()
-    fun record(workspaceId: String, family: Boolean) { decided.putIfAbsent(workspaceId.lowercase(), family) }
+    private val epochs = ConcurrentHashMap<String, Long>()
+    fun record(workspaceId: String, family: Boolean, epoch: Long = 0L) {
+        if (decided.putIfAbsent(workspaceId.lowercase(), family) == null && family) epochs[workspaceId.lowercase()] = epoch
+    }
     fun decision(workspaceId: String): Boolean? = decided[workspaceId.lowercase()]
+    fun epoch(workspaceId: String): Long? = epochs[workspaceId.lowercase()]
 }
 
 internal object WriteIntent {
     val current = ThreadLocal<WriteEntry?>()
-    fun record(workspaceId: String, family: Boolean) { current.get()?.record(workspaceId, family) }
+    fun record(workspaceId: String, family: Boolean, epoch: Long = 0L) { current.get()?.record(workspaceId, family, epoch) }
     fun decision(workspaceId: String): Boolean? = current.get()?.decision(workspaceId)
+    /* The family folder's invalidation count when the write decided to write as the family's: an answer kept only while it stands. */
+    fun epoch(workspaceId: String): Long? = current.get()?.epoch(workspaceId)
 }
 
 /* A write's body with its own record of what it decided at entry; a write inside another (a copy's folder) shares it. */
@@ -234,7 +240,9 @@ internal fun Vault.familyTarget(workspaceId: String): Boolean {
     } catch (refused: com.hushos.core.CoreException) {
         throw FamilyFailure(FamilyWords.keyChangeWords(refused.message.orEmpty()))
     }
-    WriteIntent.record(workspaceId, true)
+    // The folder's invalidation count as the write begins: a removal, a fork or a refusal while it is on its way moves it,
+    // and its answer is then never kept (Vault.adopt), as an open begun before a forget keeps nothing.
+    WriteIntent.record(workspaceId, true, familyEpoch(workspaceId))
     return true
 }
 

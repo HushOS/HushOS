@@ -142,6 +142,39 @@ class FamilyWritesTest {
     }
 
     /*
+     * #249 review: a rename is on its way when the family's folder is let go of here (a removal, a fork or a refusal
+     * clears what this vault held of it). The server's late answer never puts the row and key back as the ledger's.
+     * Fails if a family write's answer is kept without checking the folder still stands as it did when the write began.
+     */
+    @Test
+    fun aWritesAnswerAfterItsFolderWasLetGoOfIsNeverKept() {
+        val phone = opened()
+        var cleared = false
+        server.beforeAnswer = { method, path ->
+            if (!cleared && method == "POST" && path == "drive/nodes/${family.fileId}/metadata") { cleared = true; phone.vault.forgetWorkspaces(listOf(family.workspaceId)) }
+        }
+        phone.vault.rename(family.fileId, "Renamed.txt")
+        server.beforeAnswer = null
+        assertTrue("the folder was never let go of meanwhile", cleared)
+        assertNull("a late answer put the family's row back", phone.vault.nodes.row(family.workspaceId, family.fileId))
+        assertNull(phone.vault.nodes.key(family.workspaceId, family.fileId))
+    }
+
+    /*
+     * #249 review: an upload's parts went up, then the family's guard became owed before its completion was sent. The
+     * final gate refuses the completion here, and the upload is aborted (its reserved room released at once, never held
+     * for a day) and never completed. Fails if a completion refused on this device is left to expire.
+     */
+    @Test
+    fun anUploadWhoseCompletionTheGateRefusesIsAborted() {
+        val phone = opened()
+        phone.vault.beforeWriteGate = { if ("POST /api/drive/uploads" in server.requests) phone.vault.oweFamilyGuard(family.groupId) }
+        assertThrows(GuardUnsaved::class.java) { phone.vault.upload(local("Notes.txt", "packing list"), "Notes.txt", "text/plain", family.rootId, null) }
+        assertTrue("the refused upload was never aborted", server.requests.any { it.startsWith("POST ") && it.endsWith("/abort") })
+        assertTrue(server.requests.none { it.endsWith("/complete") })
+    }
+
+    /*
      * The ledger refuses writes into the folder (its member list no longer committed here, as after a refusal): a trash,
      * which seals nothing, is refused all the same and sends nothing. Fails if a family write skips require_writable.
      */
