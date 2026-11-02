@@ -1,0 +1,45 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Tags.kt
+  s_ec12ebe02de5ff::t_bbecd89010e253 30,32-40
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_ec12ebe02de5ff::t_65a2ff65c13771 3-6,780,821,868-869,918
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Screens.kt
+  s_ec12ebe02de5ff::t_3e3900e83755a0 3-4,203-204,209-214,221,229,235,237-238
+apps/android/app/src/test/kotlin/com/hushos/app/data/TagsTest.kt
+  s_ec12ebe02de5ff::t_b66bcfe82ba713 33-44
+apps/ios/App/NodeActions.swift
+  s_ec12ebe02de5ff::t_e6845e61ccfb47 492
+apps/ios/App/RecentsView.swift
+  s_ec12ebe02de5ff::t_4be0e93e555e2f 463,491
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Tags.swift
+  s_ec12ebe02de5ff::t_836275281f0e50 37,39-49,106
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TagsTests.swift
+  s_ec12ebe02de5ff::t_2a13337743c98d 38-51
+apps/web/src/components/drive/folder-colour-dialog.tsx
+  s_ec12ebe02de5ff::t_ebfd9056e1017d 1-7,164,170
+apps/web/src/components/drive/tag-colour.tsx
+  s_ec12ebe02de5ff::t_2fb223e83f1c1f 1,6,41-42,55,59,66,107,113,353-356,362
+apps/web/src/lib/tags.ts
+  s_ec12ebe02de5ff::t_6c26d8eddcb9be 1-8,31-32,34,37,50,57-64
+packages/drive/src/colour.ts
+  s_ec12ebe02de5ff::t_15f651051b00c1 28-39
+packages/drive/src/tags.test.ts
+  s_ec12ebe02de5ff::t_1188ec53646e56 2,79-97
+packages/drive/src/tags.ts
+  s_ec12ebe02de5ff::t_f6bc8a04c45950 15-20,136-139,141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "23d8d4e35e0d69e621350f43003575dc03bf185f",
+  "prompts": {},
+  "sessions": {
+    "s_ec12ebe02de5ff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3f79b7e-f7a1-4c9c-9a58-b7059252bcae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
