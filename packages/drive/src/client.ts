@@ -348,6 +348,22 @@ export type ShareMount = SharedWithMeView & {
     waiting: boolean;
 };
 
+/*
+ * The nodes of a rotation's work that may be sealed now: none whose parent is
+ * in the same work. The server applies each node of a batch on its own, so
+ * another device walking the same rotation can win the parent (this one comes
+ * back stale, and its fresh key is dropped) while this device wins the child,
+ * which would then be wrapped under a key nobody kept. Both devices pick the
+ * same target epoch, so the server cannot tell the two keys apart. The work is
+ * listed parents first, so each child held back comes in a later batch, once
+ * its parent's key is the server's: committed here, or opened as the other
+ * device's. Siblings still go together.
+ */
+export function deferChildren<T extends { id: string; parentId: string | null }>(nodes: T[]): T[] {
+    const inWork = new Set(nodes.map((n) => n.id));
+    return nodes.filter((n) => n.parentId === null || !inWork.has(n.parentId));
+}
+
 export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientOptions = {}) {
     let workspace: WorkspaceView | undefined;
     let opening: Promise<{ workspaceId: string; root: NodeView; changeSeq: number }> | undefined;
@@ -1655,7 +1671,9 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
      * Rotation: after a revocation, fresh keys for the node and everything
      * beneath it, in server-sized batches parents first, every version, share
      * and link re-sealed on this device. Survives a reload: the server keeps the
-     * work list and previous envelopes, and `resumeRotation` picks it up.
+     * work list and previous envelopes, and `resumeRotation` picks it up. A
+     * batch never holds a node beside its parent (deferChildren): children go
+     * once the parent's new key is the server's.
      */
     async function rotate(node: DriveNode, onProgress?: (done: number) => void) {
         const ws = node.workspaceId;
@@ -1696,23 +1714,23 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 continue;
             }
             remember(work.nodes);
-            // Parents not opened on this device (a resumed rotation, a deep subtree):
-            // listing a parent opens it and, mid-rotation, its previous key too.
+            const ready = deferChildren(work.nodes);
+            // Parents not opened on this device (a resumed rotation, a deep subtree, one another
+            // device re-keyed first): listing a parent opens it under the key the server holds
+            // and, mid-rotation, its previous key too.
             const parents = new Set(
-                work.nodes.map((n) => n.parentId).filter((id): id is string => id !== null),
+                ready.map((n) => n.parentId).filter((id): id is string => id !== null),
             );
-            const inBatch = new Set(work.nodes.map((n) => n.id));
             for (const parentId of parents)
-                if (!inBatch.has(parentId) && !openedNodes.has(parentId))
-                    await listFolder(parentId);
+                if (!openedNodes.has(parentId)) await listFolder(parentId);
             // A family folder's walk refuses any share or link the server lists on a node, the
             // walker's own included (design 3.4): none is made there, so none is sealed again or
             // filtered down to the ledger's and the rest left to close. The worker and the core
             // refuse such a node alike; this one never reaches the worker.
             const sending = group
-                ? work.nodes.filter((n) => !n.shares.length && !n.links.length)
-                : work.nodes;
-            if (sending.length < work.nodes.length) shared = true;
+                ? ready.filter((n) => !n.shares.length && !n.links.length)
+                : ready;
+            if (sending.length < ready.length) shared = true;
             const sealed = await rpc('driveRotateNodes', {
                 workspaceId: ws,
                 targetEpoch,
@@ -1848,6 +1866,9 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                     workspaceId: ws,
                     nodeIds: ids.filter((id) => !kept.has(id)),
                 });
+                // What the server refused may be another device's now, under a key this worker
+                // never held: opened again from the server before anything is wrapped under it.
+                for (const n of sending) if (!kept.has(n.id)) openedNodes.delete(n.id);
             }
             done += applied;
             onProgress?.(done);
@@ -1860,7 +1881,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                           ? 'One item in this folder can’t take the new keys. A manager can move it to Trash and delete it forever, then the key change finishes.'
                           : 'The rotation could not finish. Try again.',
                 );
-            // Everything applied: continue past the batch; otherwise start over so parents come first.
+            // Everything applied: continue past the batch; otherwise (a refusal, or children held
+            // back for a later batch) start over so parents come first.
             cursor = applied === work.nodes.length ? work.nextCursor : null;
         }
         // Envelopes changed under every folder: what this client listed is stale.

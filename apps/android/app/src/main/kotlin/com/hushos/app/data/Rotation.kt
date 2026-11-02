@@ -90,11 +90,23 @@ internal fun Vault.granteeSealer(pins: Settings): (String, ServedIdentity) -> Pa
 }
 
 /*
+ * The nodes of a batch that may be sealed now: none whose parent is in the same batch (its fresh key would still be
+ * pending, so the server could take the child and refuse the parent). Parents come first in the work, so a later batch
+ * brings each deferred child once its parent's key is confirmed.
+ */
+internal fun deferChildren(nodes: List<RotationWorkNode>): List<RotationWorkNode> {
+    val inBatch = nodes.map { it.node.id.lowercase() }.toSet()
+    return nodes.filter { entry -> entry.node.parentId?.lowercase()?.let { it in inBatch } != true }
+}
+
+/*
  * Subtree rotation, as the web does it after a share is revoked: every node
  * below the root gets a fresh key at the target epoch, parents first; its
  * metadata, versions, live shares (to keys the pins vouch for) and links are
  * sealed again under it. The server hands out the work in depth order and
  * applies each batch; a node whose parent is not ready yet comes back later.
+ * A batch never holds a node beside its parent (`deferChildren`): the children
+ * go once the parent's key is the server's.
  *
  * Every record is checked before it is signed again (docs/integrity-design.md,
  * "Re-sealing never launders"): a verified one keeps the ordinary statement,
@@ -143,6 +155,29 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
         return null
     }
 
+    // A parent re-keyed at the target with a key this walk never made: another device's batch won it (this one's came
+    // back stale), or another device's run got there first. Its key is the one the server holds, opened from its row,
+    // and the one this device held stays beside it for the children still wrapped under it.
+    fun adoptServedKey(parentId: String) {
+        val row = runCatching { api.children(parentId, ws, null).folder }.getOrNull() ?: return
+        if (!row.id.equals(parentId, ignoreCase = true) || row.workspaceId != ws || row.keyEpoch != target) return
+        val under = parentKey(row.parentId, row.parentKeyEpoch) ?: return
+        val key = runCatching {
+            nodeOpen(NodeKeyContext(ws, parentId, row.parentId ?: ws, row.parentKeyEpoch, row.keyEpoch), under, base64urlDecode(row.keyEnvelope))
+        }.getOrNull() ?: return
+        val held = nodes.key(ws, parentId)
+        val heldEpoch = epochs[parentId]
+        if (held != null && heldEpoch != null && heldEpoch != target) {
+            previous[parentId] = heldEpoch to held
+            rotatedKeys[ws to parentId] = RotatedKey(rootId, target, heldEpoch, held)
+        }
+        nodes.putKey(ws, parentId, key)
+        epochs[parentId] = target
+        // Its row (at the old epoch) is read again; the catalogue lists children through it.
+        nodes.forget(ws, parentId)
+        catalogueState = CatalogueState.IDLE
+    }
+
     while (true) {
         val work = api.rotationWork(ws, rootId, cursor)
         if (work.done) break
@@ -154,12 +189,15 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
         // A node of another workspace is not this rotation's; one in a later format can't be re-sealed here.
         if (work.nodes.any { it.node.workspaceId != ws }) throw ApiError(502, "HushOS answered with nodes of another drive.")
         work.nodes.forEach { checkSuite(it.node.envelopeSuite) }
-        val inBatch = work.nodes.map { it.node.id }.toSet()
-        for (parentId in work.nodes.mapNotNull { it.node.parentId }.toSet()) {
-            if (parentId !in inBatch && nodes.row(ws, parentId) == null && parentId !in epochs) {
+        val ready = deferChildren(work.nodes)
+        for (parentId in ready.mapNotNull { it.node.parentId }.toSet()) {
+            if (nodes.row(ws, parentId) == null && parentId !in epochs) {
                 runCatching { listChildren(parentId) }
                 nodes.row(ws, parentId)?.let { epochs[parentId] = it.node.keyEpoch }
             }
+        }
+        for (parentId in ready.filter { it.node.id != rootId }.mapNotNull { it.node.parentId }.toSet()) {
+            if (parentKey(parentId, target) == null) adoptServedKey(parentId)
         }
         val batch = JSONArray()
         // What each node's re-sealed shares were sealed with, recorded once the server took that node.
@@ -183,7 +221,7 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
         var sending = false
         var applied = 0
         try {
-            for (entry in work.nodes) {
+            for (entry in ready) {
                 val node = entry.node
                 val newParentEpoch = if (node.id == rootId) node.parentKeyEpoch else target
                 val wrappedUnder = parentKey(node.parentId, node.parentKeyEpoch) ?: continue
@@ -299,7 +337,8 @@ internal fun Vault.rotateSubtree(item: Opened, progress: (Int) -> Unit): Rotatio
         progress(done)
         idle = if (applied > 0) 0 else idle + 1
         if (idle > 3) throw RotationStuck()
-        // Everything applied: continue past the batch; otherwise start over so parents come first.
+        // Everything applied: continue past the batch; otherwise (a refusal, or children held back for a later batch) start
+        // over so parents come first.
         cursor = if (applied == work.nodes.size) work.nextCursor else null
     }
     // Envelopes changed under every folder: what this device listed is stale.
