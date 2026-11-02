@@ -26,6 +26,9 @@ class LandedJobs(private val dir: File) {
         if (!mark(id)) android.util.Log.w("HushOS", "couldn't mark transfer $id as landed; a rerun may send it again")
     }
 
+    /* Whether `id` landed, the mark left in place (a family's removal reading it: the job ends as uploaded, not failed). */
+    fun has(id: String): Boolean = File(dir, id).exists()
+
     /* Whether `id` already landed; the mark is used up, so a later, new run of the same id isn't skipped. */
     fun take(id: String): Boolean = File(dir, id).delete()
 

@@ -585,4 +585,84 @@ class UploadWorkerTest {
         ledger.appendText("00000000-0000-4000-8000-0000000000e4\t" + family.workspaceId)
         assertThrows(Reservations.LedgerUnreadable::class.java) { Reservations.all(app) }
     }
+
+    /* A queued family upload as TransferQueue.upload leaves it, and its worker as WorkManager would start it. */
+    private fun queued(): Pair<UUID, UploadWorker> {
+        val id = TransferQueue.upload(app, File(app.cacheDir, "q-${UUID.randomUUID()}").apply { writeText("packing list") }, "Notes.txt", "text/plain",
+            family.rootId, null, familyOf)
+        return id to worker(id, File(app.filesDir, "queue/$id/content"))
+    }
+
+    private fun realAbort(uploadId: String, workspaceId: String) = Vault.fromShared(app)!!.api.abortUpload(uploadId, workspaceId)
+
+    /*
+     * Upload polish, item 2: a queued upload's completion landed but its answer was lost, and the family removes this
+     * account before the job runs again. The removal's settle hears "already finished": the job ends as uploaded, with no
+     * failure row, its job cancelled and its copy and records gone. Fails if a removal fails an upload that landed.
+     */
+    @Test
+    fun aRemovalEndsAQueuedUploadThatLandedAsUploaded() {
+        val (id, job) = queued()
+        server.dropReply = { method, path -> method == "POST" && path.endsWith("/complete") }
+        assertEquals(ListenableWorker.Result.retry(), run(job))
+        server.dropReply = null
+        assertEquals(1, records().count { it.job == id.toString() })
+        TransferQueue.endFamily(app, family.groupId, Shared.session(app)!!, abort = ::realAbort)
+        assertTrue("a landed upload was failed by the removal", FailedTransfers.of(app).all().none { it.id == id.toString() })
+        assertEquals(WorkInfo.State.CANCELLED, WorkManager.getInstance(app).getWorkInfoById(id).get()!!.state)
+        assertFalse(File(app.filesDir, "queue/$id").exists())
+        assertEquals(emptyList<Reservations.Record>(), records())
+    }
+
+    /*
+     * As above for a queued job that WorkManager stopped after its upload landed (its LandedJobs mark), and a failed row
+     * whose upload landed after all (a landed row under its ledger key): both end as uploaded, no row says the removal.
+     */
+    @Test
+    fun aRemovalEndsAMarkedJobAndALandedFailedRowAsUploaded() {
+        val (marked, _) = queued()
+        LandedJobs.of(app).mark(marked.toString())
+        Reservations.reserved(app, "00000000-0000-4000-8000-0000000000f1", family.workspaceId, "landed-key", System.currentTimeMillis(), null)
+        Reservations.idle("00000000-0000-4000-8000-0000000000f1")
+        Reservations.completed(app, "00000000-0000-4000-8000-0000000000f1")
+        val failed = FailedTransfer(UUID.randomUUID().toString(), TransferQueue.UPLOAD, "Trip.txt", "Sign in again to finish this.", 0L,
+            file = staged(UUID.randomUUID()).path, mime = "text/plain", folder = family.rootId, family = family.groupId.lowercase(),
+            familyWorkspace = family.workspaceId, ledger = "landed-key")
+        FailedTransfers.of(app).record(failed)
+        var failedOnCancel = false
+        TransferQueue.endFamily(app, family.groupId, Shared.session(app)!!, null, { true }, { _, _ -> Reservations.Abort.RELEASED }) { id ->
+            // Never said as failed, even for a moment: no removal row by the time its job is cancelled.
+            if (FailedTransfers.of(app).has(id.toString())) failedOnCancel = true
+            WorkManager.getInstance(app).cancelWorkById(id)
+        }
+        assertFalse("a job marked landed was said as failed", failedOnCancel)
+        val rows = FailedTransfers.of(app).all()
+        assertTrue("a job marked landed was failed by the removal", rows.none { it.id == marked.toString() })
+        assertTrue("a failed row whose upload landed still says it failed", rows.none { it.id == failed.id })
+        assertEquals(emptyList<Reservations.Record>(), records())
+    }
+
+    /*
+     * The worker's own removal: its first sweep's abort gets no answer, the family is gone, and its own settle then hears
+     * "already finished". The job ends as uploaded, not failed. Fails if the worker ignores the landed answer.
+     */
+    @Test
+    fun aRemovedJobWhoseUploadLandedEndsAsUploaded() {
+        val (id, job) = queued()
+        server.dropReply = { method, path -> method == "POST" && path.endsWith("/complete") }
+        assertEquals(ListenableWorker.Result.retry(), run(job))
+        server.dropReply = null
+        // Every abort unanswered until the job asks about its family: the run's first sweep learns nothing, and the landing is
+        // heard only by the removal's own settle.
+        var asked = false
+        server.beforeAnswer = { _, path ->
+            if (path.startsWith("groups")) asked = true
+            if (!asked && path.endsWith("/abort")) throw java.io.IOException("dropped")
+        }
+        family.listed = false
+        family.notMember = true
+        assertEquals("a removed job whose upload landed wasn't ended as uploaded", ListenableWorker.Result.success(), run(worker(id, File(app.filesDir, "queue/$id/content"))))
+        assertTrue("the run never asked about its family", asked)
+        assertTrue(FailedTransfers.of(app).all().none { it.id == id.toString() })
+    }
 }
