@@ -135,8 +135,12 @@ sealed interface FamilyState {
     data class Fork(val fork: FamilyFork) : FamilyState
     /* The server said this account is not in the family: what the phone kept of it is gone. */
     data object Wiped : FamilyState
-    /* Couldn't check, in FamilyWords' words. */
-    data class Failed(val words: String) : FamilyState
+    /*
+     * Couldn't check, in FamilyWords' words. `transient`: the failure was the network's or the server's for now (no answer,
+     * 408, 429, 5xx), so a retry may pass. `removal`: the server said this account is not in the family, but this phone
+     * couldn't let go of it yet (its guard not stored or read); the family is refused meanwhile.
+     */
+    data class Failed(val words: String, val transient: Boolean = false, val removal: Boolean = false) : FamilyState
 }
 
 class FamilySync(
@@ -236,7 +240,7 @@ class FamilySync(
                 // As run()'s removal: the guard (and so the record) kept for the two-phase wipe, but nothing of the family
                 // opens. Not settled: the next list asks again, until the wipe finishes.
                 refuse(groupId)
-                return FamilyState.Failed(FamilyWords.error(failed))
+                return FamilyState.Failed(FamilyWords.error(failed), removal = true)
             }
             // A closed vault's wipe lets go of nothing (it waits for this session's next look): not settled either.
             if (records.read(userId, groupId) != null) return null
@@ -278,7 +282,9 @@ class FamilySync(
     fun syncRevised(summary: GroupSummary): Revised {
         names[summary.id] = summary.name
         val revised = exclusive(summary.id) { Revised(run(summary), revision.incrementAndGet(), summary.id) }
-        if (revised.state == FamilyState.Wiped) publishRemovals(listOf(revised))
+        // A removal, finished or not: the screens let go of the family either way (a refused one says its words).
+        val state = revised.state
+        if (state == FamilyState.Wiped || (state is FamilyState.Failed && state.removal)) publishRemovals(listOf(revised))
         return revised
     }
 
@@ -321,7 +327,7 @@ class FamilySync(
         } catch (error: NotAuthenticated) {
             throw error
         } catch (error: GroupsApiError) {
-            if (!error.isNotMember) { forgetUnlessUnanswered(groupId, error); return FamilyState.Failed(FamilyWords.error(error)) }
+            if (!error.isNotMember) { forgetUnlessUnanswered(groupId, error); return FamilyState.Failed(FamilyWords.error(error), transient = transient(error)) }
             try {
                 wipe(groupId)
                 FamilyState.Wiped
@@ -329,11 +335,11 @@ class FamilySync(
                 // The guard the wipe hands back couldn't be stored (or read): nothing of the family was let go of, but
                 // nothing of it opens either.
                 refuse(groupId)
-                FamilyState.Failed(FamilyWords.error(failed))
+                FamilyState.Failed(FamilyWords.error(failed), removal = true)
             }
         } catch (error: Exception) {
             forgetUnlessUnanswered(groupId, error)
-            FamilyState.Failed(FamilyWords.error(error))
+            FamilyState.Failed(FamilyWords.error(error), transient = transient(error))
         }
     }
 
@@ -417,7 +423,7 @@ class FamilySync(
             FamilyState.Wiped
         } catch (failed: Exception) {
             refuse(groupId)
-            FamilyState.Failed(FamilyWords.error(failed))
+            FamilyState.Failed(FamilyWords.error(failed), removal = true)
         }
         Revised(state, revision.incrementAndGet(), groupId).also { publishRemovals(listOf(it)) }
     }
@@ -844,6 +850,11 @@ class FamilySync(
             FamilyState.Wiped -> FamilyWords.NOT_IN_FAMILY
             else -> FamilyWords.OPEN_AGAIN
         }
+
+        /* The network's or the server's for now (no answer, a timeout, throttling, a server error): a retry may pass. */
+        fun transient(error: Throwable): Boolean = unanswered(error) ||
+            (error is GroupsApiError && (error.status == 408 || error.status == 429 || error.status >= 500)) ||
+            (error is ApiError && (error.status == 408 || error.status == 429 || error.status >= 500))
 
         /* A request that got no answer: nothing was refused, so nothing is taken away. */
         fun unanswered(error: Throwable): Boolean = when (error) {

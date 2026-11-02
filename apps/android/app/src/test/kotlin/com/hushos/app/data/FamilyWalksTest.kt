@@ -328,6 +328,23 @@ class FamilyWalksTest {
     }
 
     /*
+     * The server is briefly unwell: a 503 from route 2, then (route 2 answering) a 503 from the member list. Either way the
+     * background pass asks to run again rather than spending the job. Fails if only a missing answer counts as passing.
+     */
+    @Test
+    fun aServerErrorMakesTheBackgroundPassRunAgain() {
+        val app = Vault(this.app, DriveApi(Shared.session(this.app)!!))
+        assertTrue(app.families.sync(family.summary) is FamilyState.Accepted)
+        family.groupsFail = true
+        assertEquals(FamilyWalkWork.Outcome.RETRY, FamilyWalkWork.run(this.app, Vault.fromShared(this.app)) {})
+        family.groupsFail = false
+        family.rostersFail = true
+        assertEquals(FamilyWalkWork.Outcome.RETRY, FamilyWalkWork.run(this.app, Vault.fromShared(this.app)) {})
+        family.rostersFail = false
+        assertEquals(FamilyWalkWork.Outcome.DONE, FamilyWalkWork.run(this.app, Vault.fromShared(this.app)) {})
+    }
+
+    /*
      * The app is closed (no live vault): Sam's key change is made meanwhile, and the background work's pass finds it with a
      * vault of its own, from the device record the app left, and walks it to its end; a pass whose walk stops asks to be
      * run again. Fails if the background pass doesn't walk, or calls a stopped walk done.

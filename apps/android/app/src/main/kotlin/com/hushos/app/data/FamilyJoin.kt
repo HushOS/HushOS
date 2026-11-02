@@ -217,7 +217,7 @@ private fun FamilySync.acceptJoin(groupId: String, first: ServedChain, matched: 
                     // when the wipe can't finish (its guard not stored), so nothing of it stays open meanwhile.
                     if (error.isNotMember) {
                         val wiped = runCatching { wipe(groupId) }.onFailure { refuse(groupId) }
-                        publishRemovals(listOf(FamilySync.Revised(if (wiped.isSuccess) FamilyState.Wiped else FamilyState.Failed(FamilyWords.error(wiped.exceptionOrNull()!!)), revise(), groupId)))
+                        publishRemovals(listOf(FamilySync.Revised(if (wiped.isSuccess) FamilyState.Wiped else FamilyState.Failed(FamilyWords.error(wiped.exceptionOrNull()!!), removal = true), revise(), groupId)))
                     }
                     throw error
                 }

@@ -112,6 +112,33 @@ class FamilyWorkScheduleTest {
         assertTrue(model.problems.values.any { it == FamilyProblem.Removed })
     }
 
+    /*
+     * The background work's sync meets not-member, but the wipe can't finish (the family guard can't be read): the family
+     * is refused, and the screens let go of it too, saying why, rather than drawing it as accepted. Fails if only a
+     * finished wipe reaches the screens.
+     */
+    @Test
+    fun aRemovalWhoseWipeFailsStillReachesTheScreens() {
+        val app = RuntimeEnvironment.getApplication()
+        val host = Host(Vault(app, DriveApi(Shared.session(app)!!)))
+        val model = FamiliesModel(host)
+        runBlocking { model.refreshFamilies() }
+        assertTrue(model.states[family.groupId] is FamilyState.Accepted)
+        family.notMember = true
+        val folder = host.vault.familyGuard.file.parentFile!!
+        try {
+            assertTrue(folder.setExecutable(false, false) && folder.setReadable(false, false))
+            com.hushos.app.data.FamilyWalkWork.run(app, host.vault) {}
+        } finally {
+            folder.setExecutable(true, false)
+            folder.setReadable(true, false)
+        }
+        val state = model.states[family.groupId]
+        assertTrue("$state", state is FamilyState.Failed && state.removal)
+        // What was drawn of the family is let go of: its accepted view is gone from the screens.
+        assertTrue(model.shown[family.groupId] == null)
+    }
+
     /* Fails if a join that lands with nothing due leaves the background check unscheduled. */
     @Test
     fun joiningSchedulesTheBackgroundCheck() {

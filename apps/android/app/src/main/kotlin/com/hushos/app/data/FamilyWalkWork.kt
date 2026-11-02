@@ -116,7 +116,8 @@ object FamilyWalkWork {
                 if (!current(context, session)) return Outcome.SIGNED_OUT
                 val view = when (val state = families.sync(summary)) {
                     is FamilyState.Accepted -> state.view
-                    is FamilyState.Failed -> { if (state.words == FamilyWords.NO_ANSWER) again = true; null }
+                    // No answer, a timeout, throttling or a server error: the family is checked again with backoff.
+                    is FamilyState.Failed -> { if (state.transient || state.words == FamilyWords.NO_ANSWER) again = true; null }
                     else -> null
                 }
                 for (target in view?.areas.orEmpty().mapNotNull { it.walkTarget() }) {
@@ -137,7 +138,7 @@ object FamilyWalkWork {
         } catch (_: NotAuthenticated) {
             Outcome.SIGNED_OUT
         } catch (error: Exception) {
-            if (FamilySync.unanswered(error)) Outcome.RETRY else Outcome.DONE
+            if (FamilySync.transient(error)) Outcome.RETRY else Outcome.DONE
         }
     }
 }
