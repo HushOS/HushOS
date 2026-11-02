@@ -1,0 +1,23 @@
+apps/web/src/components/drive/folder-view.tsx
+  s_ec12ebe02de5ff::t_c6dac6be455b01 32,99,860-861,893,895-916,931-945,1000,1258,1388,1616-1618,1630,1637,1640-1641,1647,1649-1653,1655-1671
+apps/web/src/components/folder-mark.tsx
+  s_ec12ebe02de5ff::t_a2507bf6ff26fe 19,23,25,41-57
+apps/web/src/styles.css
+  s_ec12ebe02de5ff::t_5917daaf1072a1 483-553
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "caa279c43f78c7afb5ce045d13377972952585a7",
+  "prompts": {},
+  "sessions": {
+    "s_ec12ebe02de5ff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3f79b7e-f7a1-4c9c-9a58-b7059252bcae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
