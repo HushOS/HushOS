@@ -123,14 +123,14 @@ data class GroupSummary(val id: String, val kind: String, val name: String, val 
  * Route 3: the family's members as the server names them (rosters carry no names), and the head's revision a roster call
  * is built against (0 when the server sent none).
  */
-data class GroupDetail(val members: List<Member>, val revision: Long = 0L, val headVersion: Long = 0L) {
+data class GroupDetail(val members: List<Member>, val revision: Long? = null, val headVersion: Long? = null) {
     data class Member(val userId: String, val name: String, val email: String?, val state: String, val roles: List<String>)
 
     companion object {
         fun from(json: JSONObject) = GroupDetail(json.getJSONArray("members").objects().map {
             Member(it.getString("userId"), it.optString("name"), if (it.isNull("email")) null else it.optString("email").ifEmpty { null },
                 it.getString("state"), it.optJSONArray("roles").strings())
-        }, json.optJSONObject("head")?.optLong("revision") ?: 0L, json.optJSONObject("head")?.optLong("version") ?: 0L)
+        }, json.optJSONObject("head")?.takeIf { it.has("revision") }?.getLong("revision"), json.optJSONObject("head")?.takeIf { it.has("version") }?.getLong("version"))
     }
 }
 
@@ -138,10 +138,11 @@ data class GroupDetail(val members: List<Member>, val revision: Long = 0L, val h
 data class PendingPerson(val userId: String, val name: String, val email: String, val identity: com.hushos.core.PublicIdentity?, val inFamily: Boolean) {
     companion object {
         fun from(json: JSONObject) = PendingPerson(json.getString("userId"), json.optString("name"), json.optString("email"),
-            json.optJSONObject("identity")?.let { runCatching {
+            // None served is none; one served that doesn't read whole throws (the list fails, never a person without keys).
+            json.optJSONObject("identity")?.let {
                 com.hushos.core.PublicIdentity(it.getLong("keyVersion").toULong(), it.getString("encryptionPublicKey"), it.getString("signingPublicKey"),
                     it.getString("mlDsaPublicKey"), it.getString("kemPublicKey"), it.getString("keysSignature"))
-            }.getOrNull() }, json.optBoolean("inFamily"))
+            }, json.optBoolean("inFamily"))
     }
 }
 
@@ -335,7 +336,7 @@ class GroupsApi(private val session: Shared.Session) {
 
     /* 12 */
     fun invitations(groupId: String): List<OpenInvitation> =
-        call("/groups/${id(groupId)}/invitations").optJSONArray("invitations").objects().map(OpenInvitation::from)
+        call("/groups/${id(groupId)}/invitations").getJSONArray("invitations").whole().map(OpenInvitation::from)
 
     /* 13 */
     fun revokeInvitation(groupId: String, invitationId: String) {
@@ -345,7 +346,7 @@ class GroupsApi(private val session: Shared.Session) {
 
     /* 16 */
     fun pending(groupId: String): List<PendingPerson> =
-        call("/groups/${id(groupId)}/pending").optJSONArray("pending").objects().map(PendingPerson::from).filter { FamilyRecords.valid(it.userId.lowercase()) }
+        call("/groups/${id(groupId)}/pending").getJSONArray("pending").whole().map(PendingPerson::from).filter { FamilyRecords.valid(it.userId.lowercase()) }
 
     /* 26: Not now on someone waiting. */
     fun decline(groupId: String, userId: String) {
@@ -406,6 +407,8 @@ class GroupsApi(private val session: Shared.Session) {
     }
 }
 
+/* Every row an object: a list that doesn't read whole throws, never read as shorter. */
+private fun JSONArray.whole(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
 private fun JSONArray?.objects(): List<JSONObject> = this?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) } }.orEmpty()
 
 private fun JSONArray?.strings(): List<String> = this?.let { a -> (0 until a.length()).mapNotNull { a.optString(it).ifEmpty { null } } }.orEmpty()

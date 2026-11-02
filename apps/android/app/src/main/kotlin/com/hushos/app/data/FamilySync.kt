@@ -713,9 +713,10 @@ class FamilySync(
         // Its folders' rows, keys and copies first, then the record that ties them to the family: a stop in between
         // leaves the record, and the next cleanup finds them again.
         vault.forgetWorkspaces(areas, FamilyWords.NOT_IN_FAMILY)
-        records.delete(userId, groupId)
-        // Roster calls kept for a family this account is no longer in can never land: they go with it.
+        // Roster calls kept for a family this account is no longer in can never land: they go with it, before the
+        // record (a delete that fails stops the wipe with the record kept, and the next cleanup finds them again).
         outbox.deleteGroup(userId, groupId)
+        records.delete(userId, groupId)
         accepted.remove(groupId.lowercase())
         sweepCopies()
         identities.remove(groupId)

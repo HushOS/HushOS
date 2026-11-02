@@ -242,10 +242,25 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         if (gate.current(s) && manages(groupId)) loadManaged(groupId, s)
     }
 
+    /*
+     * Who waits and the open invitations, read again. A read that fails keeps the rows last read (as the web's queries
+     * do) and says why above them, with Try again; a lost session goes where every other one does.
+     */
     private suspend fun reloadManaged(groupId: String, s: FamilySession) {
-        gate.run(s) { s.owner.families.pending(groupId) }?.getOrNull()?.let { if (gate.current(s)) waiting[groupId] = it }
-        gate.run(s) { s.owner.families.invitations(groupId) }?.getOrNull()?.let { if (gate.current(s)) invitations[groupId] = it }
+        val pending = gate.run(s) { s.owner.families.pending(groupId) } ?: return
+        val open = gate.run(s) { s.owner.families.invitations(groupId) } ?: return
+        if (!gate.current(s)) return
+        pending.onSuccess { waiting[groupId] = it }
+        open.onSuccess { invitations[groupId] = it }
+        val failed = pending.exceptionOrNull() ?: open.exceptionOrNull()
+        if (failed == null) { managedErrors.remove(groupId); return }
+        failed.rethrowIfCancelled()
+        if (failed is NotAuthenticated) { model.lostSession(); return }
+        managedErrors[groupId] = FamilyWords.error(failed)
     }
+
+    /* Why a manager's lists last failed to load, by family: said on the page until a read succeeds. */
+    val managedErrors = mutableStateMapOf<String, String>()
 
     /*
      * Let them in (6.8): one press, in the families' scope (the row may be redrawn meanwhile). What it came to is said on
@@ -893,7 +908,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         states.clear(); names.clear(); shown.clear(); details.clear(); syncing.clear(); refreshed.clear(); problems.clear(); verdicts.reset()
         checkedAt.clear(); joining.clear(); syncedAt = 0L; folders = FamilyFolders(); held = null; heldStack = emptyMap(); shownRevision.clear()
         walks.clear(); walking.clear(); walkEnded.clear(); leaving = null; leftFamily = null
-        waiting.clear(); invitations.clear(); waitingRows.clear(); inviting = null; turningDown = null; cancelling = null
+        waiting.clear(); invitations.clear(); managedErrors.clear(); waitingRows.clear(); inviting = null; turningDown = null; cancelling = null
     }
 
     /*

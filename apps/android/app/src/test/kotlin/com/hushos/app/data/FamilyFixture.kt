@@ -130,6 +130,13 @@ class FamilyFixture(val server: FakeDrive) {
     val callBodies = java.util.Collections.synchronizedList(ArrayList<String>())
     /* How route 17 answers each call, in turn (empty: apply it as the server would). Each sees the body. */
     val admitAnswers = java.util.concurrent.ConcurrentLinkedQueue<(JSONObject) -> Pair<Int, JSONObject>?>()
+    /* Route 12: the invitations still open, as JSON rows. */
+    val invitationRows = java.util.Collections.synchronizedList(ArrayList<JSONObject>())
+    /* Route 16's answer instead of the rows (a failure, a lost session), while set. */
+    @Volatile var pendingAnswer: Pair<Int, JSONObject>? = null
+    /* Route 22: each grants post (workspace, body), and how it is answered (null: taken). */
+    val grantPosts = java.util.Collections.synchronizedList(ArrayList<Pair<String, String>>())
+    @Volatile var grantsAnswer: Pair<Int, JSONObject>? = null
 
     /* Route 20's answer: null leaves (and the server then answers not-member), else this refusal. */
     @Volatile var leaveRefusal: Pair<Int, JSONObject>? = null
@@ -207,7 +214,12 @@ class FamilyFixture(val server: FakeDrive) {
             method == "PUT" && path == "groups/$groupId/areas/$workspaceId/self-grant" -> { selfGrant = body.getJSONObject("grant"); 200 to JSONObject() }
             method == "GET" && path == "groups/$groupId/key-seal" -> keySeal?.let { 200 to it }
                 ?: (409 to JSONObject().put("code", "no-seal").put("message", "Nobody has sealed the current group key to you yet."))
-            method == "GET" && path == "groups/$groupId/pending" -> 200 to JSONObject().put("pending", JSONArray(pendingRows.toList()))
+            method == "GET" && path == "groups/$groupId/invitations" -> 200 to JSONObject().put("invitations", JSONArray(invitationRows.toList()))
+            method == "GET" && path == "groups/$groupId/pending" -> pendingAnswer ?: (200 to JSONObject().put("pending", JSONArray(pendingRows.toList())))
+            method == "POST" && segments.size == 5 && path.startsWith("groups/$groupId/areas/") && segments[4] == "grants" -> {
+                grantPosts.add(segments[3] to body.toString())
+                grantsAnswer ?: (200 to JSONObject())
+            }
             method == "POST" && segments.size == 5 && path.startsWith("groups/$groupId/members/") && segments[4] == "admit" -> {
                 callBodies.add(body.toString())
                 // A scripted answer first (another manager's win, a lost answer), else applied as the server would.

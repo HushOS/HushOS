@@ -39,38 +39,54 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
 
     /* Kept before the first send: a write that may not be on disk throws, and nothing is sent. */
     fun put(userId: String, groupId: String, outboxId: String, entry: String) = synchronized(FamilyCopies.LOCK) {
-        if (!open()) throw FamilyRecords.Unsaved()
-        val target = file(userId, groupId, outboxId) ?: throw FamilyRecords.Unsaved()
+        if (!open()) throw OutboxUnsaved()
+        val target = file(userId, groupId, outboxId) ?: throw OutboxUnsaved()
         try {
             folder.mkdirs()
             val next = File(target.path + ".next")
             next.writeText(entry)
             if (!next.renameTo(target)) throw java.io.IOException("not moved")
         } catch (_: Exception) {
-            throw FamilyRecords.Unsaved()
+            throw OutboxUnsaved()
         }
     }
 
+    /*
+     * Dropped after a definite answer. A file that stays throws: left, it would be read again at the next open (judged
+     * by the core then, never signed again), but the answer that dropped it isn't to be taken as done.
+     */
     fun delete(userId: String, groupId: String, outboxId: String) = synchronized(FamilyCopies.LOCK) {
-        if (open()) file(userId, groupId, outboxId)?.delete()
-        Unit
+        if (!open()) return@synchronized
+        val target = file(userId, groupId, outboxId) ?: return@synchronized
+        if (!target.delete() && target.exists()) throw OutboxUnsaved()
     }
 
     /* Every entry of this account's for the family: a not-member wipe takes them with the family (the web's forgetGroup). */
     fun deleteGroup(userId: String, groupId: String) = synchronized(FamilyCopies.LOCK) {
-        val prefix = "${userId.lowercase()}_${groupId.lowercase()}_"
-        if (open()) folder.listFiles().orEmpty().filter { it.name.startsWith(prefix) && it.name.endsWith(".call") }.forEach { it.delete() }
-        Unit
+        if (!open()) return@synchronized
+        for (file in entries(userId, groupId)) if (!file.delete() && file.exists()) throw OutboxUnsaved()
     }
 
-    /* This account's entries for the family, oldest first. */
+    /*
+     * This account's entries for the family, oldest first. A folder or an entry that can't be read throws (never an
+     * empty or a partial list: a kept call missed here would be signed again, or skipped): only one read whole and then
+     * refused by the core (`outbox_open`'s Sealed) is lost.
+     */
     fun list(userId: String, groupId: String): List<Kept> {
         val prefix = "${userId.lowercase()}_${groupId.lowercase()}_"
-        return folder.listFiles().orEmpty().filter { it.name.startsWith(prefix) && it.name.endsWith(".call") }.sortedBy { it.lastModified() }
-            .mapNotNull { file ->
-                val id = file.name.removePrefix(prefix).removeSuffix(".call").takeIf(FamilyRecords::valid) ?: return@mapNotNull null
-                runCatching { Kept(id, file.readText()) }.getOrNull()
-            }
+        return entries(userId, groupId).sortedBy { it.lastModified() }.map { file ->
+            val id = file.name.removePrefix(prefix).removeSuffix(".call")
+            val entry = try { file.readText() } catch (_: Exception) { throw OutboxUnreadable() }
+            Kept(id, entry)
+        }
+    }
+
+    /* The entry files named for this account and family; a folder that exists but can't be listed throws. */
+    private fun entries(userId: String, groupId: String): List<File> {
+        val prefix = "${userId.lowercase()}_${groupId.lowercase()}_"
+        if (!folder.exists()) return emptyList()
+        val files = folder.listFiles() ?: throw OutboxUnreadable()
+        return files.filter { it.name.startsWith(prefix) && it.name.endsWith(".call") && FamilyRecords.valid(it.name.removePrefix(prefix).removeSuffix(".call")) }
     }
 
     companion object {
@@ -78,6 +94,10 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
             FamilyOutbox(File(File(context.noBackupFilesDir, FamilyRecords.FOLDER), "outbox"), open)
     }
 }
+
+/* The outbox couldn't be read, or written, on this device: nothing is signed or sent, and the screens say so. */
+class OutboxUnreadable : Refused("Nothing was changed", GuardWords.UNREADABLE)
+class OutboxUnsaved : Refused("Nothing was changed", GuardWords.UNSAVED)
 
 /* How a roster call ended, as the screens say it. */
 sealed interface CallEnd {
@@ -123,6 +143,7 @@ internal fun callWords(answer: CallAnswer, first: String?): String = when (answe
     "unsupported" -> "Update HushOS to do this."
     "seats" -> answer.message ?: "Every place in the family is taken."
     "rate-limited" -> "That’s been tried too often. Wait a little, then try again."
+    "grants-due" -> GRANTS_DUE
     else -> if (answer.status == 0) GroupsApiError.NO_ANSWER else "HushOS couldn’t do that just now. Try again in a moment."
 }
 
@@ -177,7 +198,12 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
                 Thread.sleep(RESEND_DELAY_MS * resends)
             }
             OutboxStep.SEND_GRANTS -> {
-                if (++fixes > 3 || !sendGrants(groupId, answer.data)) return CallEnd.Pending(callWords(answer, first))
+                if (++fixes > 3) return CallEnd.Pending(GRANTS_DUE)
+                when (val granted = sendGrants(summary, answer.data)) {
+                    Granted.Sent -> {}
+                    is Granted.Unsent -> return CallEnd.Pending(granted.words)
+                    Granted.Wiped -> return CallEnd.Wiped
+                }
             }
             OutboxStep.STALE -> {
                 outbox.delete(userId, groupId, kept.outboxId)
@@ -214,19 +240,53 @@ private fun OutboxCall.route(): ChainRoute = when (this) {
     is OutboxCall.Superseded -> route
 }
 
-/* Route 22's grants a call was told it owes (`grants-due`'s `missing`), sealed by the core; false when they can't be. */
-private fun FamilySync.sendGrants(groupId: String, data: JSONObject?): Boolean {
-    val missing = data?.optJSONArray("missing") ?: return false
+/* The web's grants-due words: a member still lacks a folder's keys, and the call waits for them. */
+private const val GRANTS_DUE = "Someone in the family is still missing a folder’s keys. Try again in a moment."
+
+private sealed interface Granted {
+    data object Sent : Granted
+    /* Not all posted: the call stays kept, with why. */
+    data class Unsent(val words: String) : Granted
+    /* Route 22 answered not-member: let go of as every removal (removedNow). */
+    data object Wiped : Granted
+}
+
+/*
+ * Route 22's grants a call was told it owes (`grants-due`'s `missing`), sealed by the core and posted in order. Every
+ * owed grant or none: a row the answer doesn't name whole, or a member whose key route 6 doesn't serve, posts nothing.
+ */
+private fun FamilySync.sendGrants(summary: GroupSummary, data: JSONObject?): Granted {
+    val groupId = summary.id
+    val missing = data?.optJSONArray("missing") ?: return Granted.Unsent(GRANTS_DUE)
+    val rows = (0 until missing.length()).map { missing.optJSONObject(it) ?: return Granted.Unsent(GRANTS_DUE) }
+    if (rows.isEmpty()) return Granted.Unsent(GRANTS_DUE)
     val kems = fetchIdentities(groupId)
-    val owed = (0 until missing.length()).mapNotNull { missing.optJSONObject(it) }.mapNotNull { row ->
+    val owed = rows.map { row ->
         val user = row.optString("userId").lowercase()
-        val kem = kems[user]?.identity?.kemPublicKey ?: return@mapNotNull null
-        OwedGrant(row.optString("workspaceId"), user, kem)
+        val workspace = row.optString("workspaceId")
+        if (user.isEmpty() || workspace.isEmpty()) return Granted.Unsent(GRANTS_DUE)
+        val kem = kems[user]?.identity?.kemPublicKey ?: return Granted.Unsent("HushOS couldn’t load everyone’s keys. Try again.")
+        OwedGrant(workspace, user, kem)
     }
-    if (owed.isEmpty()) return false
-    val calls = ledger.grantsBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, owed)
-    val requests = (calls as? GrantsCall.Grants)?.requests ?: return false
-    return requests.all { api.postGrants(groupId, it.workspaceId, it.body).status in 200..299 }
+    repeat(2) { round ->
+        when (val calls = ledger.grantsBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, owed)) {
+            is GrantsCall.Grants -> {
+                for (request in calls.requests) {
+                    val answer = api.postGrants(groupId, request.workspaceId, request.body)
+                    if (answer.status in 200..299) continue
+                    if (answer.status == 404 && answer.code == "not-member") {
+                        removedNow(groupId)
+                        return Granted.Wiped
+                    }
+                    return Granted.Unsent(callWords(answer, null))
+                }
+                return Granted.Sent
+            }
+            // The chain or a folder isn't open here: synced once, then asked again.
+            GrantsCall.SyncFirst, GrantsCall.OpenFoldersFirst -> if (round == 0) syncRevised(summary)
+        }
+    }
+    return Granted.Unsent(GRANTS_DUE)
 }
 
 /*
@@ -306,14 +366,12 @@ private fun FamilySync.admitInTurn(summary: GroupSummary, person: PendingPerson,
             }
         }
     }
-    return LetIn.Refused("${names(groupId)} keeps changing. Try again in a moment.")
+    return LetIn.Refused("${summary.name} keeps changing. Try again in a moment.")
 }
 
-/* Whether they are still waiting to join (route 16): one let in meanwhile, by another manager or an earlier send, isn't. */
+/* Whether they are still waiting to join (route 16): one let in meanwhile, by another manager or an earlier send, isn't. A read that fails throws. */
 private fun FamilySync.waiting(groupId: String, userId: String): Boolean =
-    runCatching { api.pending(groupId).any { it.userId.equals(userId, ignoreCase = true) } }.getOrDefault(true)
-
-private fun FamilySync.names(groupId: String): String = runCatching { list().firstOrNull { it.id == groupId }?.name }.getOrNull() ?: "The family"
+    api.pending(groupId).any { it.userId.equals(userId, ignoreCase = true) }
 
 private sealed interface Staged {
     class Call(val kept: FamilyOutbox.Kept) : Staged
@@ -339,15 +397,18 @@ private fun FamilySync.stageAdmit(summary: GroupSummary, userId: String, first: 
             else -> return Staged.Refused("Couldn’t check ${summary.name}. Try again.")
         }
         val head = api.group(groupId)
-        if (head.headVersion != view.rosterVersion.toLong()) return@repeat
-        val served = api.pending(groupId).firstOrNull { it.userId.equals(userId, ignoreCase = true) }?.identity
+        val headVersion = head.headVersion ?: return Staged.Refused("Couldn’t check ${summary.name}. Try again.")
+        val revision = head.revision ?: return Staged.Refused("Couldn’t check ${summary.name}. Try again.")
+        if (headVersion != view.rosterVersion.toLong()) return@repeat
+        val waiting = api.pending(groupId).firstOrNull { it.userId.equals(userId, ignoreCase = true) }
             ?: return Staged.Refused("$first isn’t waiting to join any more.")
+        val served = waiting.identity ?: return Staged.Refused("HushOS couldn’t load everyone’s keys. Try again.")
         // The ledger reads this account's contact pin of them from the settings it was handed last.
         vault.familyPin(groupId)
         val identities = fetchIdentities(groupId)
         val kems = identities.mapNotNull { (id, member) -> member.identity?.kemPublicKey?.let { id to it } }.toMap()
         val call = try {
-            ledger.admitBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, head.revision.toULong(), userId.lowercase(), served,
+            ledger.admitBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, revision.toULong(), userId.lowercase(), served,
                 emptyList(), kems)
         } catch (refused: CoreException) {
             return Staged.Refused(FamilyWords.error(refused))
@@ -391,7 +452,8 @@ fun FamilySync.dropKeptAdmission(groupId: String, userId: String) = exclusive(gr
     // Judged with the settings read afresh, as every read of the outbox is.
     vault.familyPin(groupId)
     for (kept in outbox.list(this.userId, groupId)) {
-        val read = runCatching { ledger.outboxOpen(groupId, kept.outboxId, this.userId, kept.entry) }.getOrNull()
+        // One the core can't open is left for the loss notice (sendKept); any other failure is passed on.
+        val read = try { ledger.outboxOpen(groupId, kept.outboxId, this.userId, kept.entry) } catch (_: CoreException.Sealed) { continue }
         val admits = (read as? OutboxCall.Hold)?.route as? ChainRoute.Admit
         if (admits != null && admits.userId.equals(userId, ignoreCase = true)) outbox.delete(this.userId, groupId, kept.outboxId)
     }

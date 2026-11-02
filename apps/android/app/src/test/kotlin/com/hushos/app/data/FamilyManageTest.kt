@@ -5,6 +5,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -36,6 +37,8 @@ class FamilyManageTest {
 
     @After
     fun close() {
+        outboxFolder.setReadable(true)
+        outboxFolder.listFiles()?.forEach { it.setReadable(true) }
         server.close()
         assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
     }
@@ -48,6 +51,8 @@ class FamilyManageTest {
         assertTrue(phone.sync.sync(summary) is FamilyState.Accepted)
         return phone
     }
+
+    private val outboxFolder get() = java.io.File(java.io.File(app.noBackupFilesDir, FamilyRecords.FOLDER), "outbox")
 
     private fun kept(phone: FamilyFixture.Phone) = phone.sync.outbox.list(family.member.id, family.groupId)
 
@@ -345,5 +350,78 @@ class FamilyManageTest {
         assertTrue("the change landed mid-staging", !once)
         assertEquals(1, family.callBodies.size)
         assertEquals(5, family.chain.size)
+    }
+
+    /*
+     * The outbox folder can't be read: Let them in and the page's resume throw (said as the storage words), and nothing is
+     * signed or sent. Fails if an outbox that can't be listed reads as empty, so a kept call is signed again beside itself.
+     */
+    @Test
+    fun anOutboxThatCantBeListedSignsAndSendsNothing() {
+        val phone = phone()
+        outboxFolder.mkdirs()
+        assertTrue(outboxFolder.setReadable(false))
+        assertThrows(OutboxUnreadable::class.java) { phone.sync.letIn(summary, grace) }
+        assertThrows(OutboxUnreadable::class.java) { phone.sync.resumeOutbox(summary) }
+        assertTrue(family.callBodies.isEmpty())
+        outboxFolder.setReadable(true)
+        assertTrue(kept(phone).isEmpty())
+    }
+
+    /*
+     * A kept Let them in whose file can't be read: neither skipped nor signed again. Fails if an entry that doesn't read
+     * is left out of the list, so the next press signs a second admission and the resume never sends the first.
+     */
+    @Test
+    fun aKeptEntryThatCantBeReadSignsAndSendsNothing() {
+        val phone = phone()
+        answer(3, 503)
+        assertTrue(phone.sync.letIn(summary, grace) is LetIn.Pending)
+        val sends = family.callBodies.size
+        val file = outboxFolder.listFiles()!!.single { it.name.endsWith(".call") }
+        assertTrue(file.setReadable(false))
+        assertThrows(OutboxUnreadable::class.java) { phone.sync.letIn(summary, grace) }
+        assertThrows(OutboxUnreadable::class.java) { phone.sync.resumeOutbox(summary) }
+        assertEquals("nothing sent", sends, family.callBodies.size)
+        assertEquals(1, outboxFolder.listFiles()!!.count { it.name.endsWith(".call") })
+        file.setReadable(true)
+        // Readable again: the very bytes go, and land.
+        assertEquals(listOf(CallEnd.Landed), phone.sync.resumeOutbox(summary).values.toList())
+        assertEquals(1, family.callBodies.toSet().size)
+    }
+
+    private fun grantsDue() = family.admitAnswers.add { _ ->
+        409 to JSONObject().put("code", "grants-due").put("message", "Some members are still missing grants.").put("data", JSONObject()
+            .put("missing", org.json.JSONArray().put(JSONObject().put("workspaceId", family.workspaceId).put("userId", family.creator.id))))
+    }
+
+    /*
+     * `grants-due`: the grants the server names are posted (route 22), then the very same bytes sent again, and they land.
+     * Fails if the owed grants aren't posted, or the call is signed again after them.
+     */
+    @Test
+    fun grantsDuePostsTheGrantsThenTheSameBytes() {
+        val phone = phone()
+        grantsDue()
+        assertEquals(LetIn.Landed, phone.sync.letIn(summary, grace))
+        assertEquals(listOf(family.workspaceId), family.grantPosts.map { it.first })
+        assertEquals(2, family.callBodies.size)
+        assertEquals(1, family.callBodies.toSet().size)
+    }
+
+    /*
+     * Route 22 answers not-member while the owed grants are posted: the family is let go of as every removal is, published,
+     * and the outbox goes with it. Fails if it is kept as a send still waiting, with nothing let go of.
+     */
+    @Test
+    fun notMemberWhilePostingGrantsIsARemoval() {
+        val phone = phone()
+        phone.sync.takeRemovals()
+        grantsDue()
+        family.grantsAnswer = 404 to JSONObject().put("code", "not-member").put("message", "You are not in this group.")
+        assertEquals(LetIn.Wiped, phone.sync.letIn(summary, grace))
+        assertEquals(1, family.grantPosts.size)
+        assertEquals(listOf(FamilyState.Wiped to family.groupId), phone.sync.takeRemovals().map { it.state to it.groupId })
+        assertTrue(kept(phone).isEmpty())
     }
 }

@@ -185,7 +185,7 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
                         KeyChanges(model, groupId, name, view)
                         Folders(view, openFolder)
                         // A manager's: Invite someone, and who waits to be let in (6.8).
-                        if (manages) { InviteRow(model, groupId); Waiting(model, groupId, name) }
+                        if (manages) { InviteRow(model, groupId); ManagedError(model, groupId); Waiting(model, groupId, name) }
                         Subheader("Members")
                         for (member in view.members) {
                             val who = served(member.userId)
@@ -307,6 +307,17 @@ private fun LeaveDialog(model: DriveViewModel, ask: LeaveAsk, family: String) {
 private fun InviteRow(model: DriveViewModel, groupId: String) {
     Row(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2)) {
         androidx.compose.material3.Button(onClick = { model.families.askInvite(groupId) }, modifier = Modifier.heightIn(min = 44.dp)) { Text("Invite someone") }
+    }
+}
+
+/* Who waits or the invitations didn't load: why, with Try again; the rows last read stay below. */
+@Composable
+private fun ManagedError(model: DriveViewModel, groupId: String) {
+    val words = model.families.managedErrors[groupId] ?: return
+    val scope = rememberCoroutineScope()
+    Row(Modifier.fillMaxWidth().padding(start = AlpineSpace.S4, end = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
+        Text(words, style = MaterialTheme.typography.bodyMedium, color = Alpine.colors.danger, modifier = Modifier.weight(1f))
+        TextButton(onClick = { scope.launch { model.families.loadManaged(groupId) } }, modifier = Modifier.heightIn(min = 44.dp)) { Text("Try again") }
     }
 }
 
