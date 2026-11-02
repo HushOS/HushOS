@@ -10,8 +10,8 @@ import com.hushos.core.GroupVerdict
  */
 object FamilyWords {
     const val NO_ANSWER = GroupsApiError.NO_ANSWER
-    /* Any change in a family folder, until writes come to Android (6c): iOS 1's words. */
-    const val READ_ONLY = "Family folders are read only in this app for now. Make changes on the web."
+    /* Something family folders don't offer (sharing, links, reports, keeping, versions, copies): iOS's words. */
+    const val UNAVAILABLE = "This isn’t available in family folders."
     const val OPEN_AGAIN = "Open the family again, then try again."
     const val NOT_IN_FAMILY = "You’re not in this family any more."
     private const val KEY_CHANGE_PENDING = "This folder’s keys changed: the key change has not reached it yet."
@@ -45,8 +45,8 @@ class FamilyFailure(message: String) : Exception(message) {
     }
 }
 
-/* Every change in a family folder (writes are Android 2, PR 6c): refused before anything is sent. */
-class FamilyReadOnly : Refused("Nothing was changed", FamilyWords.READ_ONLY)
+/* What family folders don't offer: refused before anything is sent. */
+class FamilyUnavailable : Refused("Nothing was changed", FamilyWords.UNAVAILABLE)
 
 /*
  * A family folder item's mark and Info lines, ported from the web (iOS's FamilyIntegrity.swift): trust.ts `recordIssues`

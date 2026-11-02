@@ -559,6 +559,13 @@ class FakeDrive : AutoCloseable {
                 ok(JSONObject().put("node", node.json()))
             }
             post && at("drive", "nodes", "*", "trash") -> { trash(segments[2]); ok(JSONObject()) }
+            // Back where it was (a trash's Undo; no move under the top folder here).
+            post && at("drive", "nodes", "*", "restore") -> {
+                val node = node(segments[2])
+                node.trashedAt = null
+                bump(node)
+                ok(JSONObject().put("node", node.json()))
+            }
             get && at("drive", "nodes", "*", "children") -> {
                 val folder = nodes[segments[2]]?.takeIf { it.workspaceId == query["workspaceId"] } ?: return 404 to JSONObject().put("message", "Not found")
                 ok(listing(folder))

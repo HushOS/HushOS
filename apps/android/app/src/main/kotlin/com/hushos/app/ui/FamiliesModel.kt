@@ -195,6 +195,27 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
     fun verdict(item: Opened): FamilyVerdict? = verdicts.of(item)
 
     /*
+     * Whether this device may write in the family folder `workspaceId` (iOS's familyWritable, the web's `writable`): its
+     * family accepted here, the folder's keys checked at its latest version and its top folder opened. The vault asks the
+     * ledger again on every write; this only decides what the screens offer.
+     */
+    fun writable(workspaceId: String): Boolean {
+        val groupId = folders.groupOfWorkspace(workspaceId) ?: return false
+        val view = (states[groupId] as? FamilyState.Accepted)?.view ?: return false
+        val area = view.areas.firstOrNull { it.workspaceId.equals(workspaceId, ignoreCase = true) } ?: return false
+        return area.openable && area.write == com.hushos.app.data.AreaWrite.WRITABLE
+    }
+
+    fun writable(item: Opened): Boolean = isFamilyItem(item) && writable(item.node.workspaceId)
+
+    /* A family folder's top folder, as the family page opened it (the move picker starts there): null when it didn't open. */
+    fun topFolder(workspaceId: String): Opened? {
+        val groupId = folders.groupOfWorkspace(workspaceId) ?: return null
+        val root = shown[groupId]?.areas?.firstOrNull { it.workspaceId.equals(workspaceId, ignoreCase = true) }?.root ?: return null
+        return model.currentVault?.item(workspaceId, root.id) ?: heldFolder(workspaceId, root.id)
+    }
+
+    /*
      * Each family folder item's mark and Info lines, judged once per version of its row, a family at a time. A judgement
      * publishes only for the session and the family's trust generation it began under: one that finishes after the
      * family's pins, guard or sync moved is dropped, and the newer judgement stands.

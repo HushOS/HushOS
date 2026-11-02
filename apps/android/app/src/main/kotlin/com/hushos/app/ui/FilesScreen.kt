@@ -146,8 +146,9 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     val isTop = current == null
     val floor = if (start != null) 1 else 0
     val folderName = current?.name ?: "Files"
-    // A family folder (FamiliesModel): read only on Android for now, so nothing here adds, selects or pastes; a folder
-    // of a family this account was removed from has nothing to search or sort.
+    // A family folder (FamiliesModel): added to, selected in and changed while it may be written here (`owner`), never
+    // pasted into or copied from (copies in and out of family folders aren't offered); a folder of a family this account
+    // was removed from has nothing to search or sort.
     val family = folderId != null && model.families.isFamilyFolder(folderId)
     val familyProblem = folderId?.let { model.families.problems[it] }
     val removed = familyProblem == FamilyProblem.Removed
@@ -285,7 +286,7 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                         // Each icon says what it does, aloud and on a long press.
                         if (owner == Owner.ME) Labelled("Share") { IconButton(enabled = one != null && !trashing, onClick = { sharing = one }) { Icon(Icons.Outlined.Share, "Share") } }
                         if (owner != Owner.VIEW) Labelled("Move") { IconButton(enabled = chosen.isNotEmpty() && !trashing, onClick = { movingMany = true }) { Icon(Icons.AutoMirrored.Outlined.DriveFileMove, "Move") } }
-                        Labelled("Copy") { IconButton(enabled = chosen.isNotEmpty() && !trashing, onClick = { /* The paste bar is the confirmation: no notice over it. */ model.copy(chosen); clearSelection() }) { Icon(Icons.Outlined.ContentCopy, "Copy") } }
+                        if (!family) Labelled("Copy") { IconButton(enabled = chosen.isNotEmpty() && !trashing, onClick = { /* The paste bar is the confirmation: no notice over it. */ model.copy(chosen); clearSelection() }) { Icon(Icons.Outlined.ContentCopy, "Copy") } }
                         // While it runs, the same slot holds a ring the icon's size, so nothing in the bar moves.
                         if (owner != Owner.VIEW) Labelled(if (trashing) "Moving to Trash" else "Move to Trash") {
                             IconButton(enabled = chosen.isNotEmpty() && !trashing, onClick = { model.trashAll(chosen) }) {
@@ -303,7 +304,7 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                                     onClick = { selectMenu = false; one?.let { sheetSelects = false; sheetFor = it to ItemSheet.RENAME }; clearSelection() })
                                 if (owner == Owner.ME) DropdownMenuItem(text = { Text("Tags") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Label, null) }, enabled = chosen.isNotEmpty(),
                                     onClick = { selectMenu = false; taggingMany = chosen; clearSelection() })
-                                if (owner != Owner.ME) DropdownMenuItem(text = { Text("Save a copy to my files") }, leadingIcon = { Icon(Icons.Outlined.LibraryAdd, null) }, enabled = chosen.isNotEmpty(),
+                                if (owner != Owner.ME && !family) DropdownMenuItem(text = { Text("Save a copy to my files") }, leadingIcon = { Icon(Icons.Outlined.LibraryAdd, null) }, enabled = chosen.isNotEmpty(),
                                     onClick = { selectMenu = false; model.saveCopy(chosen); clearSelection() })
                                 val all = here.isNotEmpty() && picked.size == here.size
                                 DropdownMenuItem(text = { Text(if (all) "Deselect all" else "Select all") }, leadingIcon = { Icon(Icons.Outlined.CheckCircleOutline, null) },
@@ -320,8 +321,8 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                     onBack = if (isTop) null else ({ if (stack.size > floor) stack.removeAt(stack.lastIndex) else onLeave?.invoke() }),
                     scrollBehavior = scroll,
                 ) {
-                    // A family folder takes no selection (its only item), so no menu.
-                    if (!family) Box {
+                    // A family folder that can't be written here takes no selection (its only item), so no menu.
+                    if (!family || owner != Owner.VIEW) Box {
                         IconButton(onClick = { folderMenu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
                         DropdownMenu(expanded = folderMenu, onDismissRequest = { folderMenu = false }, shape = RoundedCornerShape(16.dp), containerColor = alpine.menu) {
                             // Selecting is not an add action, so it lives here (and on a long press), not in the + menu.
@@ -335,7 +336,7 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
         floatingActionButton = {
             if (!selecting && owner != Owner.VIEW) AddButton(
                 fabOpen, { fabOpen = it }, add, lift = if (showPaste) 80.dp else 0.dp,
-                paste = if (clip != null && pasteProblem == null && folderId != null) (if (clip.first.size == 1) "Paste “${clip.first[0].name}”" else "Paste ${clip.first.size} items") to { model.paste(folderId); Unit } else null,
+                paste = if (clip != null && pasteProblem == null && folderId != null && !family) (if (clip.first.size == 1) "Paste “${clip.first[0].name}”" else "Paste ${clip.first.size} items") to { model.paste(folderId); Unit } else null,
             )
         },
     ) { padding ->
@@ -466,7 +467,7 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                                 note = if (words.isEmpty()) null else "In " + (item.node.parentId?.let { if (it == state.rootId) "Files" else model.itemIn(item.node.workspaceId, it)?.name } ?: "Files"),
                                 onClick = { if (selecting) toggle(item) else open(item) },
                                 // Long-press starts selecting, as Material lists do; ⋮ opens the item sheet.
-                                onLongClick = { if (family) { sheetSelects = false; sheetFor = item to ItemSheet.MENU } else if (!selecting) { selecting = true; picked = setOf(item.id) } else toggle(item) },
+                                onLongClick = { if (family && owner == Owner.VIEW) { sheetSelects = false; sheetFor = item to ItemSheet.MENU } else if (!selecting) { selecting = true; picked = setOf(item.id) } else toggle(item) },
                                 onMore = { sheetSelects = false; sheetFor = item to ItemSheet.MENU },
                                 selecting = selecting, selected = item.id in picked,
                                 away = away(item))

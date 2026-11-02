@@ -135,8 +135,8 @@ fun receivedVia(model: DriveViewModel, state: DriveState, item: Opened): Vault.S
 }
 
 fun ownerOf(model: DriveViewModel, state: DriveState, item: Opened): Owner {
-    // A family folder's item reads as viewer: read only on Android for now, and never this account's own.
-    if (model.families.isFamilyItem(item)) return Owner.VIEW
+    // A family folder's item is never this account's own: changed as the family's while its folder may be written here.
+    if (model.families.isFamilyItem(item)) return if (model.families.writable(item)) Owner.EDIT else Owner.VIEW
     val own = state.rootId?.let { model.item(it) }?.node?.workspaceId
     if (own == null || item.node.workspaceId == own) return Owner.ME
     return if (receivedVia(model, state, item)?.share?.role == "editor") Owner.EDIT else Owner.VIEW
@@ -208,14 +208,29 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
     val owner = ownerOf(model, state, item)
     val mine = owner == Owner.ME
     val canEdit = owner != Owner.VIEW
-    // Read only on Android for now (iOS 1's menu): send a copy of a file, or Info; no share, keep, copy, report or change.
+    // iOS 2's menu: send a copy of a file, rename, move within the family's folder, Info and Move to Trash while it may be
+    // written here; no share, keep, copy, tags, versions or report.
     val family = model.families.isFamilyItem(item)
     when (sheet) {
         ItemSheet.MENU -> if (family) Sheet(onDismissRequest = dismiss) { Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S4)) {
             ItemHeader(model, state, item)
             SheetDivider()
+            if (canEdit) onSelect?.let { select ->
+                SheetRow("Select", Icons.Outlined.CheckCircleOutline) { select(); dismiss() }
+                SheetDivider()
+            }
             if (!item.isFolder) SheetRow("Send a copy", Icons.AutoMirrored.Outlined.Send) { sheet = ItemSheet.SEND }
+            if (canEdit) {
+                SheetDivider()
+                SheetRow("Rename", Icons.Outlined.Edit) { sheet = ItemSheet.RENAME }
+                SheetRow("Move", Icons.AutoMirrored.Outlined.DriveFileMove) { sheet = ItemSheet.MOVE }
+            }
+            SheetDivider()
             SheetRow("Info", Icons.Outlined.Info) { sheet = ItemSheet.INFO }
+            if (canEdit) {
+                SheetDivider()
+                SheetRow("Move to Trash", Icons.Outlined.Delete, danger = true) { model.trash(item); dismiss() }
+            }
         } } else Sheet(onDismissRequest = dismiss) { Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S4)) {
             ItemHeader(model, state, item)
             SheetDivider()
@@ -335,13 +350,17 @@ fun MovePicker(model: DriveViewModel, state: DriveState, items: List<Opened>, di
     val alpine = Alpine.colors
     val first = items.first()
     val excluded = items.map { it.id }.toSet()
+    // A family folder's items move within that family's folder only: its top folder is where the picker starts and ends.
+    val familyTop = first.takeIf { model.families.isFamilyItem(it) }?.let { model.families.topFolder(it.node.workspaceId) }
     // null: the top, where Files and the shared folders sit side by side.
-    var trail by retain { mutableStateOf(listOf(Place(state.rootId, "Files", state.rootId?.let { model.item(it) }?.node?.workspaceId))) }
+    var trail by retain {
+        mutableStateOf(listOf(familyTop?.let { Place(it.id, it.name, it.node.workspaceId) } ?: Place(state.rootId, "Files", state.rootId?.let { model.item(it) }?.node?.workspaceId)))
+    }
     val here = trail.lastOrNull()
     val folderId = here?.id
     LaunchedEffect(Unit) { if (state.shares == null) model.refreshShares() }
     LaunchedEffect(folderId) { folderId?.let { if (!state.folders.containsKey(it)) model.refresh(it) } }
-    val editable = state.shares.orEmpty().filter { it.share.role == "editor" && it.root?.isFolder == true }
+    val editable = if (familyTop != null) emptyList() else state.shares.orEmpty().filter { it.share.role == "editor" && it.root?.isFolder == true }
     val folders = if (here == null) emptyList() else (folderId?.let { state.folders[it] }?.filter { it.isFolder && it.id !in excluded } ?: emptyList())
     val already = folderId != null && items.all { it.node.parentId == folderId }
     // Who will be able to open it there: this account's people on a shared folder of its own, or the one who shared it.

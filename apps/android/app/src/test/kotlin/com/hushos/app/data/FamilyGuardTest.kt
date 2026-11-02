@@ -108,7 +108,7 @@ class FamilyGuardTest {
         writable = true
         assertTrue(phone.sync.sync(family.summary) is FamilyState.Accepted)
         assertTrue(phone.vault.familyGuardOwed.isEmpty())
-        assertThrows(FamilyReadOnly::class.java) { phone.vault.refuseFamilyWrite(family.workspaceId) }
+        assertThrows(FamilyUnavailable::class.java) { phone.vault.refuseFamilyWrite(family.workspaceId) }
         assertNotNull(phone.records.read(family.member.id, family.groupId))
     }
 
