@@ -1,0 +1,35 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Reservations.kt
+  s_566b8e0c4467a4::t_fc89dd3211eefd 10-11,16-19,22,24,28-33,35,38,42-53,57-58,63-66,68,71,74-83,86-99,103,105-108,114-132,139,147-148,150,152-153,158-168,174,178-180
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_5e2340ed3d0f35 84
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_566b8e0c4467a4::t_7b67cbb59ec15e 81-82
+apps/android/app/src/main/kotlin/com/hushos/app/data/DriveApi.kt
+  s_566b8e0c4467a4::t_59c2c6d420d3d0 109-110,430-432,444-448,454,456-460
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_566b8e0c4467a4::t_150397b7808c40 147-148,320-331,387
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_a6806a032dea85 1819-1820,1888,1899-1908
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_566b8e0c4467a4::t_341d88a07b9dfe 150-151,429-433,450,631,639-644,646-648,667
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyUploadsTest.kt
+  s_566b8e0c4467a4::t_ccda85ebcee66f 41-43,303-306,327-328,331-333,335-393,397-423
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_247f4b054ca284 217
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "20cbccf1e5f22b1cdda5b28dd542e2cc8afc48c5",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
