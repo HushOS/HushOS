@@ -1,0 +1,23 @@
+apps/android/app/build.gradle.kts
+  s_566b8e0c4467a4::t_ed670b8e80e7be 62-64,92-94
+apps/android/scripts/build-core.sh
+  s_566b8e0c4467a4::t_46cac886e84585 15-17
+docs/release/google.md
+  s_566b8e0c4467a4::t_11c6f2dbd3d4ac 147-148,154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4bd2ee72785d3f5e5a10286b3b2ec58415c5dab5",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
