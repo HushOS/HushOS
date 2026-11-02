@@ -1,0 +1,25 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/NodeCache.kt
+  s_566b8e0c4467a4::t_eeea97622d0a3b 23-31,71,75,77,115-116
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_8e26b9c0cb1c0c 986-989,1013-1014,1060-1063,1092,1094-1095,1221-1222,1263
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_566b8e0c4467a4::t_f8cf2836f05912 109-114
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_566b8e0c4467a4::t_1af54e52d53e00 203-267
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ca08fce44ea7d72998f7e263f7c6f970c08e50c6",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
