@@ -213,7 +213,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     /* Removed from a family: its queued uploads end, their reserved uploads aborted and their copies deleted. */
     override fun familyEnded(groupId: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            com.hushos.app.data.TransferQueue.endFamily(context, groupId) { uploadId, workspaceId -> vault?.api?.abortUpload(uploadId, workspaceId) }
+            com.hushos.app.data.TransferQueue.endFamily(context, groupId) { uploadId, workspaceId -> vault?.api?.abortUpload(uploadId, workspaceId) ?: false }
         }
     }
     private val thumbnailTasks = HashSet<String>()

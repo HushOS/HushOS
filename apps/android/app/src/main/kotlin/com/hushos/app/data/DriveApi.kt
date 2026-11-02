@@ -431,7 +431,17 @@ class DriveApi(val session: Shared.Session) : RootApi {
     fun completeUpload(uploadId: String, workspaceId: String, parts: JSONArray): NodeView? =
         write(workspaceId, "/uploads/$uploadId/complete", JSONObject().put("workspaceId", workspaceId).put("parts", parts)).optJSONObject("node")?.let(NodeView::from)
 
-    fun abortUpload(uploadId: String, workspaceId: String) {
-        runCatching { send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId)) }
+    /*
+     * Releases an upload's reservation. True once the server's answer settles it (aborted, or already gone, completed or
+     * expired: any definite answer); false when it is not known (no answer, a 5xx, the session gone), so whoever keeps
+     * the reservation's record keeps it and asks again.
+     */
+    fun abortUpload(uploadId: String, workspaceId: String): Boolean = try {
+        send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId))
+        true
+    } catch (_: NotAuthenticated) {
+        false
+    } catch (error: Exception) {
+        !UploadFinish.unknown(error)
     }
 }

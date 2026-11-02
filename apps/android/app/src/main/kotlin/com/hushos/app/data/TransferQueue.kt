@@ -82,7 +82,7 @@ object TransferQueue {
      * folders fails at once (iOS's endFamily), its reserved server upload aborted (`abort`), its staged copy deleted, and
      * its row says why; failed ones kept for a retry lose their copies too.
      */
-    fun endFamily(context: Context, groupId: String, except: UUID? = null, abort: (uploadId: String, workspaceId: String) -> Unit) {
+    fun endFamily(context: Context, groupId: String, except: UUID? = null, abort: (uploadId: String, workspaceId: String) -> Boolean) {
         val work = WorkManager.getInstance(context)
         val records = FailedTransfers.of(context)
         val queue = File(context.filesDir, "queue").canonicalFile
@@ -90,7 +90,8 @@ object TransferQueue {
             val dir = path?.let { File(it).parentFile?.canonicalFile } ?: return
             // Only a job's own folder in the queue, never anything else a tag might name.
             if (dir.parentFile != queue) return
-            QueuedUploads.abortLeftover(dir, abort)
+            // Its reservation aborted now, or owed until a later job settles it; then the folder goes.
+            if (runCatching { QueuedUploads.abortLeftover(dir, abort) }.isFailure) QueuedUploads.release(context, dir)
             dir.deleteRecursively()
         }
         val infos = runCatching { work.getWorkInfosByTag("family:${groupId.lowercase()}").get() }.getOrDefault(emptyList())
@@ -132,12 +133,12 @@ object TransferQueue {
     /* Removed from the list: the record, and the copy an upload kept for its retry. */
     fun dismiss(context: Context, failed: FailedTransfer) {
         FailedTransfers.of(context).forget(failed.id)
-        if (failed.kind == UPLOAD) discard(failed.file)
+        if (failed.kind == UPLOAD) discard(context, failed.file)
     }
 
-    /* Removes the copy a failed upload kept for a retry. */
-    fun discard(file: String?) {
-        file?.let { File(it).parentFile?.deleteRecursively() }
+    /* Removes the copy a failed upload kept for a retry; a reservation it left unsettled is still owed (QueuedUploads). */
+    fun discard(context: Context, file: String?) {
+        file?.let { File(it).parentFile?.let { dir -> QueuedUploads.release(context, dir); dir.deleteRecursively() } }
     }
 
     /*
@@ -151,7 +152,7 @@ object TransferQueue {
         // A failed upload on the app's own record keeps its copy for Retry, however old its job.
         val recorded = FailedTransfers.of(context).all().mapNotNull { it.file?.let { path -> File(path).parent } }.toSet()
         File(context.filesDir, "queue").listFiles()?.forEach { dir ->
-            if (dir.path !in inUse && dir.path !in recorded && dir.lastModified() < cutoff) dir.deleteRecursively()
+            if (dir.path !in inUse && dir.path !in recorded && dir.lastModified() < cutoff) { QueuedUploads.release(context, dir); dir.deleteRecursively() }
         }
     }
 
@@ -167,9 +168,7 @@ object TransferQueue {
         OneTimeWorkRequestBuilder<UploadWorker>()
             .setId(id)
             .setConstraints(constraints())
-            // A family upload waiting out a key change looks again every half minute or so (iOS's wait, the web's queue's),
-            // never hours apart; any other upload backs off as before.
-            .setBackoffCriteria(if (family != null) BackoffPolicy.LINEAR else BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .setInputData(workDataOf("kind" to UPLOAD, "file" to file.path, "mime" to mime, "folder" to folderId, "replacing" to replacingId,
                 "family" to family?.groupId?.lowercase(), "familyWorkspace" to family?.workspaceId?.lowercase()))
             // The panel reads these: a job's input is not visible once it is queued. The name is the app's (JobNames).
@@ -202,7 +201,7 @@ object TransferQueue {
     /* Stops a queued or running transfer and drops an upload's copy. */
     fun cancel(context: Context, id: UUID, file: String?) {
         WorkManager.getInstance(context).cancelWorkById(id)
-        file?.let { File(it).parentFile?.deleteRecursively() }
+        file?.let { File(it).parentFile?.let { dir -> QueuedUploads.release(context, dir); dir.deleteRecursively() } }
     }
 
     /*
@@ -319,9 +318,11 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         val waits = KeyChangeWaits.of(applicationContext)
         return withContext(Dispatchers.IO) {
             val folder = inputData.getString("folder")!!
-            // What a run the process died in left reserved goes first (its room released at once).
-            QueuedUploads.abortLeftover(file.parentFile!!) { uploadId, workspaceId -> vault.api.abortUpload(uploadId, workspaceId) }
             val end = stoppable({ isStopped }) { checkStop ->
+                // Aborts still owed go first, then what a run the process died in left reserved: nothing new is reserved
+                // while that may still hold room (an unanswered abort makes this run the network's, tried again later).
+                QueuedUploads.settle(applicationContext) { uploadId, workspaceId -> vault.api.abortUpload(uploadId, workspaceId) }
+                QueuedUploads.abortLeftover(file.parentFile!!) { uploadId, workspaceId -> vault.api.abortUpload(uploadId, workspaceId) }
                 val mime = inputData.getString("mime")
                 var shown = 0
                 val progress = { fraction: Float ->
@@ -336,8 +337,15 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 }
                 QueuedUploads.running(file.parentFile!!) { begun ->
                     if (family != null && familyWorkspace != null) {
-                        // A family folder: the family opened in this job's own vault first, every run (FamilyUploads).
-                        FamilyUploads.upload(vault, family, familyWorkspace, file, name, mime, folder, inputData.getString("replacing"), begun, progress)
+                        // A family folder: the family opened in this job's own vault first, every look (FamilyUploads). A key
+                        // change not reached yet is waited out here, a look every half minute, for half an hour from when the
+                        // wait began (kept across runs), the row saying so.
+                        val job = this@UploadWorker.id.toString()
+                        FamilyUploads.waitingOutKeyChanges(
+                            since = { waits.since(job) }, mark = { waits.mark(job, it) }, now = System::currentTimeMillis,
+                            pause = { ms -> var left = ms; while (left > 0) { checkStop(); Thread.sleep(minOf(left, 1_000L)); left -= 1_000L } },
+                            waiting = { setProgressAsync(workDataOf("fraction" to 0f)) },
+                        ) { FamilyUploads.upload(vault, family, familyWorkspace, file, name, mime, folder, inputData.getString("replacing"), begun, progress) }
                     } else {
                         if (vault.item(folder) == null) vault.resolve(folder)
                         val replacing = inputData.getString("replacing")?.let { vault.resolve(it) }
@@ -358,11 +366,6 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 // Nothing said, nothing recorded: WorkManager drops a cancelled job and reschedules one whose constraint went.
                 JobEnd.Stopped -> Result.retry()
                 is JobEnd.Failed -> when {
-                    // A key change not reached yet: looked at again shortly, the row saying so, for half an hour at most.
-                    family != null && FamilyUploads.waits(end.error, waited = waits.since(this@UploadWorker.id.toString()) != null) -> {
-                        val since = waits.since(this@UploadWorker.id.toString()) ?: System.currentTimeMillis().also { waits.mark(this@UploadWorker.id.toString(), it) }
-                        if (System.currentTimeMillis() - since >= FamilyUploads.GIVE_UP_MS) failed(FamilyUploads.GAVE_UP) else Result.retry()
-                    }
                     // Not in the family any more: this upload and every other queued into the family end, copies deleted.
                     family != null && FamilyUploads.removed(end.error) -> {
                         TransferQueue.endFamily(applicationContext, family, except = this@UploadWorker.id) { uploadId, workspaceId -> vault.api.abortUpload(uploadId, workspaceId) }

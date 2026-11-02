@@ -80,7 +80,7 @@ class FamilyUploadsTest {
 
     /*
      * The family's guard becomes owed while the job's upload is on its way (a sync elsewhere that couldn't store it): the
-     * completion isn't sent, the reserved upload is aborted, and nothing of it is kept for a later run. Fails if a refused
+     * completion isn't sent and the reserved upload is aborted; its record goes once an abort is answered. Fails if a refused
      * completion leaves its room reserved.
      */
     @Test
@@ -91,6 +91,9 @@ class FamilyUploadsTest {
         assertThrows(GuardUnsaved::class.java) { upload(vault, dir) }
         assertEquals(1, aborted().size)
         assertEquals(emptyList<String>(), completed())
+        // Its record stays until an abort is answered for sure: the next run's settles it, and then it goes.
+        assertTrue(File(dir, "begun").exists())
+        QueuedUploads.abortLeftover(dir) { id, ws -> vault.api.abortUpload(id, ws) }
         assertFalse(File(dir, "begun").exists())
     }
 
@@ -159,6 +162,89 @@ class FamilyUploadsTest {
         assertNotNull(landed)
         assertEquals(1, completed().size)
         assertFalse(kept.exists())
+    }
+
+    /*
+     * #251 review: the group routes drop (a timeout, a lost connection) while the job opens the family, or route 2 skips
+     * the family and route 5 then drops. The job stops as the network's, to run again, never failed for good. Fails if a
+     * transient group answer fails the upload.
+     */
+    @Test
+    fun aDroppedGroupRouteIsTheNetworksAndTheJobRunsAgain() {
+        server.beforeAnswer = { _, path -> if (path.startsWith("groups")) throw java.io.IOException("dropped") }
+        val dropped = runCatching { upload(job()) }.exceptionOrNull()
+        assertTrue("a dropped route 2 failed the upload for good: $dropped", dropped != null && Resumable.retryable(dropped))
+        family.listed = false
+        server.beforeAnswer = { _, path -> if (path.contains("/rosters")) throw java.io.IOException("dropped") }
+        val unlisted = runCatching { upload(job()) }.exceptionOrNull()
+        server.beforeAnswer = null
+        assertTrue("a family route 2 skipped, with no answer from route 5, failed the upload: $unlisted", unlisted != null && Resumable.retryable(unlisted))
+        assertEquals(emptyList<String>(), server.requests.filter { it == "POST /api/drive/uploads" })
+    }
+
+    /*
+     * #251 review: a run the process died in left a reservation, and the next run's abort gets no answer. The record is
+     * kept, nothing new is reserved, and the run is the network's; once an abort is answered the record goes and the file
+     * lands once. A record released for good (the row removed) is owed until a later job's abort is answered. Fails if
+     * an unanswered abort forgets the reservation or a new one is made while it may still hold room.
+     */
+    @Test
+    fun aReservationIsKeptUntilItsAbortIsAnswered() {
+        val dir = queueDir()
+        assertThrows(Killed::class.java) { upload(job(), dir) { throw Killed() } }
+        val kept = File(dir, "begun")
+        val leftover = kept.readLines().first()
+        val begins = { server.requests.count { it == "POST /api/drive/uploads" } }
+        val reserved = begins()
+        val vault = job()
+        server.beforeAnswer = { _, path -> if (path.endsWith("/abort")) throw java.io.IOException("dropped") }
+        val unanswered = runCatching { QueuedUploads.abortLeftover(dir) { id, ws -> vault.api.abortUpload(id, ws) } }.exceptionOrNull()
+        assertTrue("an unanswered abort wasn't the network's: $unanswered", unanswered is Unreachable)
+        assertTrue("an unanswered abort forgot the reservation", kept.exists())
+        assertEquals(reserved, begins())
+        // Released for good while still unanswered: owed, and kept owed until an answer comes.
+        QueuedUploads.release(app, dir)
+        QueuedUploads.settle(app) { id, ws -> vault.api.abortUpload(id, ws) }
+        server.beforeAnswer = null
+        assertEquals(0, server.requests.count { it == "POST /api/drive/uploads/$leftover/abort" })
+        QueuedUploads.settle(app) { id, ws -> vault.api.abortUpload(id, ws) }
+        assertEquals(1, server.requests.count { it == "POST /api/drive/uploads/$leftover/abort" })
+        assertFalse(File(app.filesDir, "upload-aborts.tsv").exists())
+    }
+
+    /*
+     * #251 review: a key change the folder hasn't reached yet is looked at again every half minute, never further apart
+     * however many looks it took, and half an hour after the wait began (a wait kept from an earlier run counting) the
+     * upload gives up in iOS's words. Fails if the pauses grow or the give-up comes late.
+     */
+    @Test
+    fun aKeyChangeIsLookedAtEveryHalfMinuteForHalfAnHour() {
+        var clock = 1_000_000L
+        var since: Long? = null
+        val pauses = ArrayList<Long>()
+        val pending = FamilyFailure(FamilyWords.keyChangeWords("This folder’s keys changed: the key change has not reached it yet."))
+        val gaveUp = runCatching {
+            FamilyUploads.waitingOutKeyChanges<Unit>({ since }, { since = it }, { clock }, { ms -> pauses.add(ms); clock += ms }, {}) { throw pending }
+        }.exceptionOrNull()
+        assertEquals(FamilyUploads.GAVE_UP, gaveUp?.message)
+        assertEquals(List(60) { 30_000L }, pauses)
+        // A wait carried from an earlier run: a minute is left, so two looks.
+        pauses.clear()
+        since = clock - FamilyUploads.GIVE_UP_MS + 60_000L
+        assertEquals(FamilyUploads.GAVE_UP, runCatching {
+            FamilyUploads.waitingOutKeyChanges<Unit>({ since }, { since = it }, { clock }, { ms -> pauses.add(ms); clock += ms }, {}) { throw pending }
+        }.exceptionOrNull()?.message)
+        assertEquals(listOf(30_000L, 30_000L), pauses)
+        // The job's own upload: refused at its gate by the key change twice, then landed, each look opening the family.
+        pauses.clear()
+        since = null
+        val vault = job()
+        var refusals = 2
+        vault.beforeWriteGate = { if (refusals > 0) { refusals--; throw pending } }
+        val landed = FamilyUploads.waitingOutKeyChanges({ since }, { since = it }, { clock }, { ms -> pauses.add(ms); clock += ms }, {}) { upload(vault) }
+        assertNotNull(landed)
+        assertEquals(listOf(30_000L, 30_000L), pauses)
+        assertEquals(1, completed().size)
     }
 
     /*
