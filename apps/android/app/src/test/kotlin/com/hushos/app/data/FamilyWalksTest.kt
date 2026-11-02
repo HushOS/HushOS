@@ -130,6 +130,28 @@ class FamilyWalksTest {
     }
 
     /*
+     * The subfolder is in the trash, and Sam's device re-keyed it before this phone's process stopped: a fresh process
+     * resumes with the subfolder's child still to do. The children route refuses a trashed folder, so the phone opens the
+     * subfolder from the trash listing, at the key Sam's device gave it, and re-keys the child under it. Fails if a
+     * trashed parent is only ever listed (every child then fails and the walk never ends).
+     */
+    @Test
+    fun aResumeOverATrashedParentAnotherDeviceRekeyedFinishes() {
+        val phone = opened()
+        server.trash(sub)
+        family.replaceKeys()
+        server.walkedElsewhere(family.rootId, sub, family.creator)
+        // A fresh process: a vault and ledger that never opened the subfolder at its new key.
+        val next = family.phone(phone.folder)
+        val target = accepted(next).areas.single().walkTarget()!!
+        assertEquals(WalkEnd.WALKED, next.sync.walk(family.groupId, target))
+        assertFalse(server.running(family.rootId))
+        assertEquals(100L, server.node(deep).keyEpoch)
+        // The child's key is wrapped under the key Sam's device gave the subfolder, so its record opens under it.
+        assertEquals("Packing.txt", server.record(deep).name)
+    }
+
+    /*
      * A batch that doesn't land (the connection drops) leaves no fresh key pending, so the same phone's next walk sends
      * those nodes again under keys of its own; and a batch that landed with its answer lost, then the process killed, is
      * finished by a fresh process that lists the re-keyed folder through its ledger. Fails if a stopped batch's keys stay

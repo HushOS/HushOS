@@ -187,8 +187,22 @@ class FamilySync(
         val wiped = held.sorted().filter(FamilyRecords::valid).mapNotNull { id ->
             exclusive(id) { askUnlisted(id)?.let { Revised(it, revise(), id) } }
         }
+        // Kept for whoever draws the families (FamiliesModel), whichever caller found them: the background work using
+        // the app's vault finds a removal as surely as the app does, and the screens must let go of it too.
+        if (wiped.isNotEmpty()) {
+            removals.addAll(wiped)
+            onRemovals?.invoke()
+        }
         return listed to wiped
     }
+
+    /* Removals and unfinished wipes found by any caller of listReconciling, until the screens take them. */
+    private val removals = java.util.concurrent.ConcurrentLinkedQueue<Revised>()
+    /* Told when a caller found some (the background work, say); the screens then take them. */
+    @Volatile var onRemovals: (() -> Unit)? = null
+
+    /* The removals found since the last call, each once, in the order found. */
+    fun takeRemovals(): List<Revised> = generateSequence { removals.poll() }.toList()
 
     /*
      * Families this phone still keeps a device record of that `listed` doesn't name: a removal not settled yet (the

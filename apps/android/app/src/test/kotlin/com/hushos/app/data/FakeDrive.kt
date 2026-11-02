@@ -551,6 +551,8 @@ class FakeDrive : AutoCloseable {
     private fun objectUrl(objectId: String) = "$origin/store/objects/$objectId"
     private fun versionById(id: String): Pair<Node, Version>? = nodes.values.firstNotNullOfOrNull { n -> n.version?.takeIf { it.id == id }?.let { n to it } }
     private fun bump(node: Node) { node.changeSeq = changeSeq++ }
+    /* The folders above `node`, its parent first. */
+    private fun above(node: Node): List<Node> = generateSequence(node.parentId?.let { nodes[it] }) { it.parentId?.let { id -> nodes[id] } }.toList()
 
     private fun route(method: String, path: String, query: Map<String, String>, body: JSONObject, linkToken: String?): Pair<Int, JSONObject>? {
         val segments = path.trim('/').split("/")
@@ -597,7 +599,8 @@ class FakeDrive : AutoCloseable {
                 ok(JSONObject().put("share", share))
             }
             get && at("drive", "workspaces", "*", "trash") -> ok(JSONObject().put("items", JSONArray(nodes.values.filter { it.trashedAt != null }.map { node ->
-                JSONObject().put("node", node.json()).put("ancestors", JSONArray()).put("parentTrashed", false)
+                JSONObject().put("node", node.json()).put("ancestors", JSONArray(above(node).reversed().map { it.json() }))
+                    .put("parentTrashed", above(node).any { it.trashedAt != null })
             })).put("nextCursor", JSONObject.NULL))
 
             get && at("drive", "workspace") -> ok(JSONObject().put("workspaceId", workspace).put("changeSeq", changeSeq).put("grant", grant).put("root", node(root).json()))
@@ -646,6 +649,9 @@ class FakeDrive : AutoCloseable {
             }
             get && at("drive", "nodes", "*", "children") -> {
                 val folder = nodes[segments[2]]?.takeIf { it.workspaceId == query["workspaceId"] } ?: return 404 to JSONObject().put("message", "Not found")
+                // Nothing under a trashed folder is listed (packages/db listChildren): 409 `trashed`.
+                if (above(folder).any { it.trashedAt != null } || folder.trashedAt != null)
+                    return 409 to JSONObject().put("code", "trashed").put("message", "This item is in the trash. Restore it first.")
                 ok(listing(folder))
             }
             get && at("drive", "versions", "*", "url") -> versionById(segments[2])?.let { ok(JSONObject().put("url", objectUrl(it.second.objectId))) }

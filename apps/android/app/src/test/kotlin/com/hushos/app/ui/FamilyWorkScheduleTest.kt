@@ -75,4 +75,36 @@ class FamilyWorkScheduleTest {
         assertEquals(FamilyState.Wiped, model.states[family.groupId])
         assertEquals(false, host.scheduled.last())
     }
+
+    /*
+     * The background work, using the app's vault, finds the removal first: the screens let go of the family too (its
+     * state removed, its folders saying so), not only the vault. Fails if a removal the background work found never
+     * reaches the model.
+     */
+    @Test
+    fun aRemovalTheBackgroundWorkFindsReachesTheScreens() {
+        val app = RuntimeEnvironment.getApplication()
+        val host = Host(Vault(app, DriveApi(Shared.session(app)!!)))
+        val model = FamiliesModel(host)
+        runBlocking { model.refreshFamilies() }
+        assertTrue(model.states[family.groupId] is FamilyState.Accepted)
+        family.listed = false
+        family.notMember = true
+        assertEquals(com.hushos.app.data.FamilyWalkWork.Outcome.DONE, com.hushos.app.data.FamilyWalkWork.run(app, host.vault) {})
+        assertEquals(FamilyState.Wiped, model.states[family.groupId])
+        assertTrue(model.problems.values.any { it == FamilyProblem.Removed })
+    }
+
+    /* Fails if a join that lands with nothing due leaves the background check unscheduled. */
+    @Test
+    fun joiningSchedulesTheBackgroundCheck() {
+        val app = RuntimeEnvironment.getApplication()
+        val host = Host(Vault(app, DriveApi(Shared.session(app)!!)))
+        val model = FamiliesModel(host)
+        val session = model.begin()!!
+        val state = host.vault.families.sync(family.summary)
+        assertTrue(state is FamilyState.Accepted)
+        runBlocking { model.joined(family.groupId, state, session) }
+        assertEquals(true, host.scheduled.lastOrNull())
+    }
 }

@@ -263,6 +263,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
     suspend fun refreshFamilies(force: Boolean = false, maxAgeMs: Long = 60_000, session: FamilySession? = null) {
         val s = session ?: begin() ?: return
         if (!gate.current(s) || !familiesDue(now(), syncedAt, list != null, force, maxAgeMs)) return
+        listenForRemovals(s)
         val result = gate.run(s) { s.owner.families.let { sync -> sync.listReconciling().let { (listed, gone) -> Triple(listed, gone, sync.unsettled(listed)) } } } ?: return
         result.onSuccess { (listed, gone, unsettled) ->
             listed.forEach { names[it.id] = it.name }
@@ -272,7 +273,8 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             // A family this account is in has its due work checked in the background too, the app closed or not; so does
             // one this phone still keeps whose removal isn't settled (only a confirmed not-member lets it go).
             model.familyWork(listed.any { it.state == "active" } || unsettled.isNotEmpty() || gone.any { it.state != FamilyState.Wiped })
-            gone.forEach { if (it.state == FamilyState.Wiped) removed(it.groupId!!, s, it.revision) else unlistedFailed(it.groupId!!, it.state, s, it.revision) }
+            // Every removal found so far, by this pass or by the background work through the same vault.
+            applyRemovals(s)
             for (summary in listed) {
                 if (!gate.current(s)) return
                 refreshFamily(summary, session = s)
@@ -329,6 +331,8 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             list = listed
             listed.forEach { names[it.id] = it.name }
             syncedAt = now()
+            // In a family now: its due work is checked in the background from here on, whether or not anything is due yet.
+            model.familyWork(listed.any { it.state == "active" })
         }
         if (!gate.current(session)) return
         val summary = list?.firstOrNull { it.id == groupId } ?: run {
@@ -502,6 +506,24 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
     suspend fun loadMembers(groupId: String, session: FamilySession) {
         val result = gate.run(session) { session.owner.families.members(groupId) } ?: return
         result.getOrNull()?.let { if (gate.current(session)) details[groupId] = it }
+    }
+
+    /*
+     * Removals a caller of the session's family sync found (FamilySync.takeRemovals): this model's own pass, or the
+     * background work using the app's vault, which never reaches these screens otherwise. Each shown as a sync's Wiped
+     * is (or, a wipe that couldn't finish, as refused), ordered by its revision.
+     */
+    private fun applyRemovals(s: FamilySession) {
+        if (!gate.current(s)) return
+        for (found in s.owner.families.takeRemovals()) {
+            val groupId = found.groupId ?: continue
+            if (found.state == FamilyState.Wiped) removed(groupId, s, found.revision) else unlistedFailed(groupId, found.state, s, found.revision)
+        }
+    }
+
+    /* The session's family sync tells this model when anyone found a removal: shown on the families' scope. */
+    private fun listenForRemovals(s: FamilySession) {
+        s.owner.families.onRemovals = { model.familyScope.launch { applyRemovals(s) } }
     }
 
     /* A family the server says this account is no longer in, found while it wasn't listed: shown as a sync's Wiped is. */

@@ -127,7 +127,7 @@ internal fun Vault.walkFamilyFolder(target: WalkTarget, progress: (Int) -> Unit 
         val inBatch = work.nodes.map { it.node.id }.toSet()
         for (parentId in work.nodes.mapNotNull { it.node.parentId }.toSet()) {
             if (parentId in inBatch || areaLedger.nodeKey(ws, parentId)?.epoch == epoch) continue
-            runCatching { listChildren(parentId, ws) }
+            openWalkParent(ws, parentId)
         }
         // A family folder takes no shares or links (design 3.4): a node with any is refused by the core alike, and left.
         val unshared = work.nodes.filter { it.shares.isEmpty() && it.links.isEmpty() }
@@ -187,6 +187,35 @@ internal fun Vault.walkFamilyFolder(target: WalkTarget, progress: (Int) -> Unit 
         cursor = if (kept.size == work.nodes.size) work.nextCursor else null
     }
     done
+}
+
+/*
+ * A parent of the work's nodes opened through the ledger as the server serves it now (its key at the target, if it was
+ * re-keyed by another device or by this one before a stop). Listing it opens it; a trashed folder the children route
+ * refuses (409 `trashed`), so it is found in the trash listing with the folders above it and opened from there, as the
+ * web's walk finds a file root. Anything else that fails leaves the parent as it was: its children wait.
+ */
+internal fun Vault.openWalkParent(ws: String, parentId: String) {
+    try {
+        listChildren(parentId, ws)
+        return
+    } catch (error: Exception) {
+        if (error is NotAuthenticated || error is Unreachable) throw error
+    }
+    var after: String? = null
+    var pages = 0
+    do {
+        val page = runCatching { api.trashListing(ws, after) }.getOrElse { if (it is NotAuthenticated || it is Unreachable) throw it; return }
+        val entry = page.items.firstOrNull { it.node.id.equals(parentId, ignoreCase = true) && it.node.workspaceId.equals(ws, ignoreCase = true) }
+        if (entry != null) {
+            // The folders above it first (root first, in any order that opens), then the parent itself.
+            var pending = entry.ancestors.filter { it.workspaceId.equals(ws, ignoreCase = true) }
+            repeat(pending.size) { pending = pending.filter { runCatching { open(it, replace = true) }.isFailure } }
+            runCatching { open(entry.node, replace = true) }
+            return
+        }
+        after = page.nextCursor
+    } while (after != null && ++pages < 64)
 }
 
 /*
