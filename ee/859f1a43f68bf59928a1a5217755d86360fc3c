@@ -1,0 +1,35 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Catalogue.kt
+  s_566b8e0c4467a4::t_e500a6fcf149cc 268,272-273
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_ad5b1b7f6d7cb0 90-97,101-110,112,114,116-141,1413-1414,1429,1431
+apps/android/app/src/main/kotlin/com/hushos/app/files/HushOSDocumentsProvider.kt
+  s_566b8e0c4467a4::t_ec7040b35d5635 281
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_f46dbef084e9dd 104,106-107,178,782-784,1112-1114,1558,1709
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_455a15eef625e7 22,24-25,457,813-815,849,943,1315,1428
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Catalogue.swift
+  s_566b8e0c4467a4::t_473467e0233d2c 338-339,341-342
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_566b8e0c4467a4::t_bae1cb33857cb0 719-720,738,740,749-761,784-791,796-805,807,809-823,825,827
+packages/drive/src/catalogue.test.ts
+  s_566b8e0c4467a4::t_e970b4fd1b97a2 60-61
+packages/drive/src/catalogue.ts
+  s_566b8e0c4467a4::t_a493cc1bd90cd3 61-68,74,77-86,88,90-91,93,95-112,114
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ee859f1a43f68bf59928a1a5217755d86360fc3c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
