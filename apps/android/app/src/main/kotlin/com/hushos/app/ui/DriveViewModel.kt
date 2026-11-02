@@ -15,6 +15,7 @@ import com.hushos.app.data.rethrowIfCancelled
 import com.hushos.app.data.Auth
 import com.hushos.app.data.familyEpoch
 import com.hushos.app.data.familyWordsSince
+import com.hushos.app.data.familyOf
 import com.hushos.app.data.isFamilyWorkspace
 import com.hushos.app.data.olderThan
 import com.hushos.app.data.catalogueAll
@@ -80,6 +81,8 @@ data class TransferItem(
     val files: Pair<Int, Int>? = null,
     /* Queued and waiting for a network (or its next try); shown without a bar. */
     val waiting: Boolean = false,
+    /* A family upload waiting out a key change in its folder (KeyChangeWaits): its row says so. */
+    val keyChange: Boolean = false,
     /* Stops a queued transfer; null for the ones that run in the app. */
     val cancel: (() -> Unit)? = null,
     /* Why a transfer failed (the server's words for a refusal). */
@@ -212,6 +215,23 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     override val familyScope get() = viewModelScope
     override fun updateState(change: (DriveState) -> DriveState) = _state.update(change)
     override fun lostSession() = sessionLost()
+    /* Removed from a family: its queued uploads end, their reserved uploads aborted and their copies deleted. */
+    override fun familyEnded(groupId: String) {
+        // Tied to the session that found the removal: its vault's API, and nothing once that vault closed or another
+        // session signed in (endFamily asks before and after each step); cancelled with the vault (endFamilyCleanups).
+        val owner = vault ?: return
+        val job = viewModelScope.launch(Dispatchers.IO) {
+            val cleanup = coroutineContext[kotlinx.coroutines.Job]
+            com.hushos.app.data.TransferQueue.endFamily(context, groupId, owner.api.session, still = { cleanup?.isActive != false && !owner.closed }) { uploadId, workspaceId ->
+                owner.api.abortUpload(uploadId, workspaceId)
+            }
+        }
+        familyCleanups.add(job)
+        job.invokeOnCompletion { familyCleanups.remove(job) }
+    }
+    /* Removals' cleanups still running, each its session's: cancelled whenever the vault goes (sign-out, a lost or new session). */
+    private val familyCleanups: MutableSet<kotlinx.coroutines.Job> = java.util.Collections.synchronizedSet(HashSet())
+    private fun endFamilyCleanups() = synchronized(familyCleanups) { familyCleanups.toList() }.forEach { it.cancel() }
     override fun familyWork(inFamily: Boolean) {
         if (inFamily) com.hushos.app.data.FamilyWalkWork.schedule(context)
         else vault?.api?.session?.let { com.hushos.app.data.FamilyWalkWork.cancelSession(context, it) }
@@ -314,6 +334,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         com.hushos.app.data.AccountStore.of(context).adopt(user.id)
         // A new session starts with no families drawn: whatever the last one fetched, or has in flight, is dropped, and
         // no download of the last vault writes again.
+        endFamilyCleanups()
         vault?.close()
         vault?.areaLedger?.clear()
         families.reset()
@@ -349,31 +370,30 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         if (queueWatch != null) return
         val work = androidx.work.WorkManager.getInstance(context)
         queueWatch = viewModelScope.launch {
-            kotlinx.coroutines.flow.combine(work.getWorkInfosByTagFlow(com.hushos.app.data.TransferQueue.TAG), hiddenWork, failedChanged) { infos, hidden, _ -> infos to hidden }.collectLatest { (infos, hidden) ->
+            kotlinx.coroutines.flow.combine(work.getWorkInfosByTagFlow(com.hushos.app.data.TransferQueue.TAG), hiddenWork, failedChanged,
+                com.hushos.app.data.FailedTransfers.changes) { infos, hidden, _, _ -> infos to hidden }.collectLatest { (infos, hidden) ->
                 lastInfos = infos
                 val inUse = infos.mapNotNull { info -> info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:")?.let { File(it).parent } }.toSet()
                 val records = com.hushos.app.data.FailedTransfers.of(context)
+                val waits = com.hushos.app.data.KeyChangeWaits.of(context)
                 val jobNames = com.hushos.app.data.JobNames.of(context)
                 // A job's name is the app's (JobNames), or a tag of an older version's job.
                 val names = withContext(Dispatchers.IO) { jobNames.all() }
                 val nameOf = { info: androidx.work.WorkInfo -> names[info.id.toString()] ?: info.tags.firstOrNull { it.startsWith("name:") }?.removePrefix("name:") ?: "File" }
                 // Failures from before the app kept its own record go on it now, while WorkManager still has them.
+                // Only this account's jobs, and only while it is still the one here: each row lands before a wipe or not at all.
+                val generation = vault?.ledgerGeneration
                 withContext(Dispatchers.IO) {
-                    infos.filter { it.state == androidx.work.WorkInfo.State.FAILED && it.id !in hidden && !records.has(it.id.toString()) }.forEach { info ->
-                        val tag = { prefix: String -> info.tags.firstOrNull { it.startsWith(prefix) }?.removePrefix(prefix) }
-                        val out = info.outputData
-                        records.record(com.hushos.app.data.FailedTransfer(info.id.toString(), tag("kind:") ?: "upload", nameOf(info),
-                            out.getString("message") ?: "The transfer failed.", System.currentTimeMillis(), out.getString("file") ?: tag("file:"), out.getString("mime"),
-                            out.getString("folder"), out.getString("replacing"), tag("node:"), "folder" in info.tags, out.getString("share")))
-                    }
-                    com.hushos.app.data.TransferQueue.sweep(context, inUse)
+                    if (generation != null) com.hushos.app.data.TransferQueue.recordUnrecordedFailures(context, infos, hidden, generation, nameOf)
+                    com.hushos.app.data.TransferQueue.sweep(context, inUse, infos.map { it.id.toString() }.toSet())
                     jobNames.retain(infos.map { it.id.toString() }.toSet())
                 }
                 // Failed rows come from the app's own record, which outlives WorkManager's; its FAILED jobs are not shown twice.
                 val failedRows = withContext(Dispatchers.IO) { records.all() }.map { failed ->
                     TransferItem(
                         id = failed.id, kind = failed.kind, name = failed.name, fraction = 0f, done = true, failed = true,
-                        message = if (failed.sourceGone()) "The file isn’t there any more. Pick it again." else failed.reason,
+                        // A family upload a removal ended says so (its copy went with it), never "pick it again".
+                        message = if (failed.sourceGone() && failed.reason != com.hushos.app.data.FamilyWords.NOT_IN_FAMILY) "The file isn’t there any more. Pick it again." else failed.reason,
                         dismiss = { viewModelScope.launch(Dispatchers.IO) { com.hushos.app.data.TransferQueue.dismiss(context, failed); failedChanged.value++ } },
                         retry = if (failed.sourceGone()) null else ({ retryRecorded(failed) }),
                         node = failed.node, folder = failed.isFolder,
@@ -390,6 +410,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                         fraction = if (info.state == androidx.work.WorkInfo.State.SUCCEEDED) 1f else info.progress.getFloat("fraction", 0f),
                         done = finished, failed = failed,
                         waiting = info.state == androidx.work.WorkInfo.State.ENQUEUED || info.state == androidx.work.WorkInfo.State.BLOCKED,
+                        keyChange = waits.since(info.id.toString()) != null,
                         cancel = if (finished) null else ({ com.hushos.app.data.TransferQueue.cancel(context, info.id, file) }),
                         message = if (failed) info.outputData.getString("message") ?: "The transfer failed." else null,
                         node = tag("node:"),
@@ -425,9 +446,11 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     /* Sends a recorded failure again; its row makes way for the new job. */
     private fun retryRecorded(failed: com.hushos.app.data.FailedTransfer) = viewModelScope.launch {
-        val ok = withContext(Dispatchers.IO) { com.hushos.app.data.TransferQueue.retry(context, failed) }
+        // A ledger that couldn't hand the failed job's reservations over: nothing queued, the row stays.
+        val ok = withContext(Dispatchers.IO) { runCatching { com.hushos.app.data.TransferQueue.retry(context, failed) } }
         failedChanged.value++
-        if (!ok) notify("The file to upload is gone. Pick it again.")
+        ok.onFailure { notify("This didn’t finish. Try again.") }
+        if (ok.getOrNull() == false) notify("The file to upload is gone. Pick it again.")
     }
 
     /* Takes in-app rows off the panel, and the copies failed ones kept. */
@@ -445,6 +468,14 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
 
     /* Whether a folder is in this account's own drive, where the background queue can reach it without the app. */
+    /* The family folder `folderId` is in, as this session proved it (route 25), or null for any other folder. */
+    private fun familyFolderOf(folderId: String): com.hushos.app.data.TransferQueue.Family? {
+        val vault = vault ?: return null
+        val ws = vault.item(folderId)?.node?.workspaceId ?: return null
+        if (!vault.isFamilyWorkspace(ws)) return null
+        return vault.familyOf(ws)?.let { com.hushos.app.data.TransferQueue.Family(it, ws) }
+    }
+
     private fun ownDrive(folderId: String): Boolean {
         val vault = vault ?: return false
         val root = state.value.rootId ?: return false
@@ -475,6 +506,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         link = null
         // The session's families go with it: the ledger's keys wiped, nothing of them left drawn, and no download of it
         // writes again (before Auth.signOut wipes the account's copies).
+        endFamilyCleanups()
         vault?.close()
         vault?.areaLedger?.clear()
         vault = null
@@ -491,6 +523,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         contactStep = null
         val ended = Shared.session(context)
         Shared.clearSession(context)
+        endFamilyCleanups()
         vault?.close()
         vault?.areaLedger?.clear()
         vault = null
@@ -1414,6 +1447,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         link = null
         // The deleted account's families go with it, on the main thread where they are drawn. Its copies were wiped
         // already: what a download wrote since goes too, and none writes again.
+        endFamilyCleanups()
         vault?.close(deleteCopies = true)
         vault?.areaLedger?.clear()
         vault = null
@@ -1503,6 +1537,15 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     fun createFolder(name: String, folder: String) = viewModelScope.launch { write(folder) { it.createFolder(folder, name) } }
     fun rename(item: Opened, name: String) = viewModelScope.launch { write(item.node.parentId) { it.rename(item.id, name) } }
+    /*
+     * One signed write per folder not already that colour (null takes it back to the plain folder colour), each
+     * refreshed as it lands, so a failure partway leaves the ones before it shown as saved.
+     */
+    fun recolour(items: List<Opened>, colour: String?) = viewModelScope.launch {
+        for (item in items.filter { com.hushos.core.folderColour(it.metadata.attributes) != colour }) {
+            if (!write(item.node.parentId) { it.recolour(item.id, colour) }) break
+        }
+    }
     fun move(item: Opened, folder: String) = viewModelScope.launch {
         if (write(item.node.parentId) { it.move(item.id, folder) }) refresh(folder)
     }
@@ -1899,9 +1942,11 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         if (ownDrive(folder)) com.hushos.app.data.Places.used(context, folder, if (folder == state.value.rootId) "Files" else vault?.item(folder)?.name ?: "Files")
         for (item in items) {
             val staged = withContext(Dispatchers.IO) { stage(item.uri) } ?: continue
-            if (ownDrive(folder)) {
+            // A family folder's: queued too, its job opening the family itself (FamilyUploads), so it finishes after the app closes.
+            val family = familyFolderOf(folder)
+            if (ownDrive(folder) || family != null) {
                 // Queued: it waits for a network and finishes even if the app is closed; the panel shows it.
-                com.hushos.app.data.TransferQueue.upload(context, staged.first, item.name, staged.third, folder, item.replacing?.id)
+                com.hushos.app.data.TransferQueue.upload(context, staged.first, item.name, staged.third, folder, item.replacing?.id, family)
                 // The queue moved the copy into its own folder; the one it was staged in is empty now.
                 dropStaged(staged.first)
                 continue

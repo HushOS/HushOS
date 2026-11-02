@@ -25,6 +25,18 @@ export const FOLDER_COLOURS = [
     '#e99355',
 ] as const;
 
+/* The swatches' names, in FOLDER_COLOURS' order, for the pickers and screen readers. */
+export const COLOUR_NAMES: Record<(typeof FOLDER_COLOURS)[number], string> = {
+    '#70adfb': 'Blue',
+    '#53c48e': 'Mint',
+    '#f28881': 'Coral',
+    '#aa9cf7': 'Violet',
+    '#00c3cb': 'Teal',
+    '#e488be': 'Pink',
+    '#8fbb5f': 'Lime',
+    '#e99355': 'Orange',
+};
+
 const COLOUR = /^#[0-9a-f]{6}$/;
 
 export function isColour(value: unknown): value is string {
@@ -67,4 +79,67 @@ export function colourHue(colour: string): { hue: number; strength: number } {
         hue: ((Math.atan2(B, A) * 180) / Math.PI + 360) % 360,
         strength: Math.min(1, Math.hypot(A, B) / 0.12),
     };
+}
+
+/*
+ * A file's type colour, the OKLCH hue its page mark's label (and, faintly, its sheet)
+ * takes: documents blue, spreadsheets green, slides orange, PDF coral, pictures teal,
+ * video pink, audio violet, archives yellow, code cyan. A type not listed keeps the
+ * plain ink label. The Rust core keeps the twin (colour.rs FILE_TYPE_HUES).
+ */
+const FILE_TYPE_HUES: Record<string, number> = {
+    pdf: 25,
+    doc: 255,
+    docx: 255,
+    odt: 255,
+    rtf: 255,
+    txt: 255,
+    md: 255,
+    pages: 255,
+    xls: 145,
+    xlsx: 145,
+    ods: 145,
+    csv: 145,
+    tsv: 145,
+    numbers: 145,
+    ppt: 55,
+    pptx: 55,
+    odp: 55,
+    key: 55,
+    png: 160,
+    jpg: 160,
+    jpeg: 160,
+    heic: 160,
+    gif: 160,
+    webp: 160,
+    svg: 160,
+    mp4: 345,
+    mov: 345,
+    webm: 345,
+    mkv: 345,
+    mp3: 290,
+    m4a: 290,
+    wav: 290,
+    flac: 290,
+    zip: 85,
+    gz: 85,
+    tar: 85,
+    '7z': 85,
+    rar: 85,
+    json: 200,
+    js: 200,
+    ts: 200,
+    html: 200,
+    css: 200,
+    py: 200,
+    rs: 200,
+};
+
+/* A file name's type colour as an OKLCH hue, or null for a type with none of its own. */
+export function fileTypeHue(name: string): number | null {
+    const dot = name.lastIndexOf('.');
+    if (dot <= 0) return null;
+    const extension = name.slice(dot + 1).toLowerCase();
+    // Own entries only: `file.constructor` is no type.
+    return Object.hasOwn(FILE_TYPE_HUES, extension) ? FILE_TYPE_HUES[extension]! : null;
 }

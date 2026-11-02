@@ -1,6 +1,7 @@
 package com.hushos.app.ui
 
 import com.hushos.core.folderShades
+import com.hushos.core.sheetShades
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -302,20 +303,30 @@ fun PlayBadge(box: Dp) {
     }
 }
 
-/* A plain page with its type on a label, for a file that is not an item yet (Save to HushOS's list). */
+/*
+ * A page with its type on a label, in the type's colour: the shades the Rust core works out from the name
+ * (sheet_shades), the label in every scheme and the sheet faintly tinted, which high contrast leaves plain. A type
+ * with no colour of its own keeps ink and the plain sheet, as the web's SheetMark does. Also for a file that is
+ * not an item yet (Save to HushOS's list).
+ */
 @Composable
 fun PageMark(name: String, box: Dp = 36.dp) {
     val alpine = Alpine.colors
     val label = name.substringAfterLast('.', "").uppercase().takeIf { it.isNotEmpty() && it.length <= 4 && it != name.uppercase() }
+    val shades = remember(name) { sheetShades(name) }
+    val ink = shades?.let { Color((if (alpine.dark) { if (alpine.high) it.darkHighLabel else it.darkLabel } else { if (alpine.high) it.lightHighLabel else it.lightLabel }).toInt()) } ?: alpine.ink
+    val tinted = shades?.takeIf { !alpine.high }
+    val edge = tinted?.let { Color((if (alpine.dark) it.darkEdge else it.lightEdge).toInt()) } ?: alpine.field
+    val fill = tinted?.let { Color((if (alpine.dark) it.darkFill else it.lightFill).toInt()) } ?: alpine.surface
     val measurer = rememberTextMeasurer()
     Canvas(Modifier.size(box)) {
         val w = size.width * 0.66f
         val s = w / 44f
         translate((size.width - w) / 2, (size.height - 54f * s) / 2) {
             scale(s, s, pivot = Offset.Zero) {
-                drawPath(sheetOutline, alpine.surface)
-                drawPath(sheetOutline, alpine.field, style = Stroke(2f))
-                drawPath(sheetCorner, alpine.field, style = Stroke(2f))
+                drawPath(sheetOutline, fill)
+                drawPath(sheetOutline, edge, style = Stroke(2f))
+                drawPath(sheetCorner, edge, style = Stroke(2f))
                 if (label == null) {
                     drawRoundRect(alpine.rule, Offset(8f, 22f), Size(22f, 3f), CornerRadius(1.5f))
                     drawRoundRect(alpine.rule, Offset(8f, 29f), Size(27f, 3f), CornerRadius(1.5f))
@@ -326,7 +337,7 @@ fun PageMark(name: String, box: Dp = 36.dp) {
                 // The label is drawn at the screen's scale, so its letters stay crisp.
                 val top = 34f * s
                 val labelWidth = 27f * s
-                drawRoundRect(alpine.ink, Offset(6f * s, top), Size(labelWidth, 13f * s), CornerRadius(3f * s))
+                drawRoundRect(ink, Offset(6f * s, top), Size(labelWidth, 13f * s), CornerRadius(3f * s))
                 val text = measurer.measure(label, TextStyle(color = alpine.surface, fontSize = (8.5f * s).toSp(), fontWeight = FontWeight.Bold))
                 drawText(text, topLeft = Offset(6f * s + (labelWidth - text.size.width) / 2, top + (13f * s - text.size.height) / 2))
             }

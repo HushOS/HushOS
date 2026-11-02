@@ -19,6 +19,7 @@ import {
     MarqueeBox,
     ROW_FOCUS,
     ROW_FOCUS_WITHIN,
+    reveal,
     RowName,
     SelectableMark,
     SkeletonRows,
@@ -28,6 +29,7 @@ import {
     useHiddenColumn,
     useListSelection,
 } from '@/components/drive/file-list';
+import { folderTint } from '@/components/folder-mark';
 import { FileMark } from '@/components/drive/file-mark';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { HotkeyHints } from '@/components/drive/hotkey-hints';
@@ -94,7 +96,7 @@ import { previewKind } from '@/lib/previews';
 import { saveCopy } from '@/lib/save-copy';
 import { cue } from '@/lib/sounds';
 import { tagsQueryOptions } from '@/lib/tags';
-import { tagsOf } from '@hushos/drive/client';
+import { folderColour, tagsOf } from '@hushos/drive/client';
 import { useThumbnail } from '@/lib/thumbnails';
 import { combine } from '@atlaskit/pragmatic-drag-and-drop/combine';
 import {
@@ -853,56 +855,106 @@ export function FolderView({ folderId }: { folderId: string }) {
     const [ghost, setGhost] = useState<{
         x: number;
         y: number;
-        ids: string[];
+        /* What was picked up, as it was then: a move that lands mid-animation leaves the card whole. */
+        nodes: DriveNode[];
         copy: boolean;
+        /* Where the card goes on a drop: the centre of the target folder's mark. */
+        landing?: { x: number; y: number };
     } | null>(null);
-    useEffect(
-        () =>
-            monitorForElements({
-                canMonitor: ({ source }) =>
-                    source.data.type === 'drive-nodes' || source.data.type === 'drive-crumb',
-                onDragStart: ({ source, location }) => {
-                    setDragging(true);
-                    setGhost({
-                        x: location.current.input.clientX,
-                        y: location.current.input.clientY,
-                        ids:
-                            source.data.type === 'drive-crumb'
-                                ? [source.data.id as string]
-                                : (source.data.ids as string[]),
-                        copy: source.data.type === 'drive-nodes' && location.current.input.altKey,
-                    });
-                },
-                onDrag: ({ source, location }) =>
-                    setGhost((current) =>
-                        current
-                            ? {
-                                  ...current,
-                                  x: location.current.input.clientX,
-                                  y: location.current.input.clientY,
-                                  copy:
-                                      source.data.type === 'drive-nodes' &&
-                                      location.current.input.altKey,
-                              }
-                            : current,
+    // The rows and crumbs as last drawn, for the monitor, which is set up once.
+    const shown = useRef<DriveNode[]>([]);
+    useEffect(() => {
+        shown.current = [...rows, ...crumbs];
+    }, [rows, crumbs]);
+    // A drop's landing, cancelled by the next drag so it never clears that one's card.
+    const landingTimer = useRef<number | undefined>(undefined);
+    useEffect(() => {
+        const stop = monitorForElements({
+            canMonitor: ({ source }) =>
+                source.data.type === 'drive-nodes' || source.data.type === 'drive-crumb',
+            onDragStart: ({ source, location }) => {
+                window.clearTimeout(landingTimer.current);
+                setDragging(true);
+                const ids =
+                    source.data.type === 'drive-crumb'
+                        ? [source.data.id as string]
+                        : (source.data.ids as string[]);
+                setGhost({
+                    x: location.current.input.clientX,
+                    y: location.current.input.clientY,
+                    nodes: shown.current.filter(
+                        (node, index, all) =>
+                            ids.includes(node.id) &&
+                            all.findIndex((other) => other.id === node.id) === index,
                     ),
-                onDrop: () => {
+                    copy: source.data.type === 'drive-nodes' && location.current.input.altKey,
+                });
+            },
+            onDrag: ({ source, location }) =>
+                setGhost((current) =>
+                    current
+                        ? {
+                              ...current,
+                              x: location.current.input.clientX,
+                              y: location.current.input.clientY,
+                              copy:
+                                  source.data.type === 'drive-nodes' &&
+                                  location.current.input.altKey,
+                          }
+                        : current,
+                ),
+            onDrop: ({ location }) => {
+                setDragging(false);
+                // Dropped on a folder, the card shrinks into its mark and goes; cancelled,
+                // or under reduced motion, it goes at once.
+                const target = location.current.dropTargets[0]?.element;
+                const calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+                if (!target || calm) {
                     setGhost(null);
-                    setDragging(false);
-                },
-            }),
-        [],
-    );
-    const ghostNodes = ghost
-        ? [...rows, ...crumbs].filter(
-              (node, index, all) =>
-                  ghost.ids.includes(node.id) &&
-                  all.findIndex((other) => other.id === node.id) === index,
-          )
-        : [];
+                    return;
+                }
+                // A row's mark, a tile's face, or the crumb itself.
+                const mark =
+                    target.querySelector('[data-row-thumb] > *, [data-tile-face]') ?? target;
+                const rect = mark.getBoundingClientRect();
+                setGhost((current) =>
+                    current
+                        ? {
+                              ...current,
+                              landing: {
+                                  x: rect.left + rect.width / 2,
+                                  y: rect.top + rect.height / 2,
+                              },
+                          }
+                        : current,
+                );
+                landingTimer.current = window.setTimeout(() => setGhost(null), LANDING_MS);
+            },
+        });
+        return () => {
+            stop();
+            window.clearTimeout(landingTimer.current);
+        };
+    }, []);
+    const ghostNodes = ghost?.nodes ?? [];
     const ghostTarget = dropOver
         ? [...rows, ...crumbs].find((node) => node.id === dropOver)
         : undefined;
+    /*
+     * A row's or tile's place in the entrance, its folder's colour (for a drop on it), and
+     * whether it is being dragged or dropped on, which styles.css draws.
+     */
+    const rowLook = (node: DriveNode, index: number) => {
+        const entrance = reveal(index);
+        const tint = node.kind === 'folder' ? folderTint(folderColour(node)) : {};
+        return {
+            'data-reveal': entrance['data-reveal'],
+            'data-folder-colour': tint['data-folder-colour'],
+            'data-dragging': ghost?.nodes.some((held) => held.id === node.id) || undefined,
+            'data-drop-over': dropOver === node.id || undefined,
+            style: { ...entrance.style, ...tint.style },
+        };
+    };
 
     const actions: NodeActions = {
         onOpen: open,
@@ -957,6 +1009,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                     nodes={ghostNodes}
                     copy={ghost.copy}
                     target={ghostTarget ? crumbName(ghostTarget) : null}
+                    landing={ghost.landing}
                 />
             )}
             {over && folder && (
@@ -1204,7 +1257,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {rows.map((node) => {
+                                    {rows.map((node, index) => {
                                         const isSelected = selected.has(node.id);
                                         const entries = entriesFor(node);
                                         return (
@@ -1214,6 +1267,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                         <tr
                                                             aria-selected={isSelected}
                                                             data-node-id={node.id}
+                                                            {...rowLook(node, index)}
                                                             onDoubleClick={() => open(node)}
                                                             onContextMenu={(event) => {
                                                                 event.stopPropagation();
@@ -1333,7 +1387,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                 aria-label={`Contents of ${title || 'folder'}`}
                                 className="grid grid-cols-2 content-start gap-2 px-3 pt-1 pb-6 sm:grid-cols-[repeat(auto-fill,minmax(10.5rem,1fr))] sm:gap-3 sm:px-6"
                             >
-                                {rows.map((node) => {
+                                {rows.map((node, index) => {
                                     const isSelected = selected.has(node.id);
                                     const entries = entriesFor(node);
                                     return (
@@ -1343,6 +1397,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                     <div
                                                         data-node-id={node.id}
                                                         data-selected={isSelected || undefined}
+                                                        {...rowLook(node, index)}
                                                         onContextMenu={(event) => {
                                                             event.stopPropagation();
                                                             if (!isSelected) select(node.id);
@@ -1367,7 +1422,10 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                     onClick={(event) => select(node.id, event)}
                                                     onDoubleClick={() => open(node)}
                                                 >
-                                                    <span className="relative flex aspect-4/3 w-full items-center justify-center overflow-hidden rounded-md bg-muted">
+                                                    <span
+                                                        data-tile-face
+                                                        className="relative flex aspect-4/3 w-full items-center justify-center overflow-hidden rounded-md bg-muted"
+                                                    >
                                                         <NodeFace node={node} />
                                                     </span>
                                                     <span className="flex min-w-0 flex-col gap-0.5 px-1 pb-0.5">
@@ -1570,6 +1628,9 @@ export function FolderView({ folderId }: { folderId: string }) {
     );
 }
 
+/* How long the drag card takes to shrink into a folder on a drop (styles.css [data-landing]). */
+const LANDING_MS = 240;
+
 /*
  * What is being dragged and what the drop will do, beside the pointer: the first
  * item's thumbnail on a small pile when there are several, then "Move to …" over a
@@ -1581,27 +1642,48 @@ function DragCard({
     nodes,
     copy,
     target,
+    landing,
 }: {
     x: number;
     y: number;
     nodes: DriveNode[];
     copy: boolean;
     target: string | null;
+    landing?: { x: number; y: number };
 }) {
     const first = nodes[0]!;
+    // Up to three marks, fanned behind the first, so a stack looks like what it carries.
+    const fan = nodes.slice(0, 3);
     const verb = copy ? 'Copy' : 'Move';
     return (
         <div
             aria-hidden="true"
             data-drag-card
+            data-landing={landing ? '' : undefined}
             className="pointer-events-none fixed z-[60] flex max-w-80 items-center gap-3 rounded-xl border border-edge bg-popover py-2 pr-4 pl-2 shadow-xl"
-            style={{ left: x + 14, top: y + 10 }}
+            // The first mark's centre sits 26px into the card; landing puts it on the target's mark.
+            style={{
+                left: landing ? landing.x - 26 : x + 14,
+                top: landing ? landing.y - 26 : y + 10,
+            }}
         >
-            <span className="relative shrink-0">
-                {nodes.length > 1 && (
-                    <span className="absolute -top-1 -right-1 size-9 rotate-6 rounded-md bg-ink/10" />
-                )}
-                <FileMark node={first} size="list" className="relative" />
+            <span className="relative h-9 shrink-0" style={{ width: 36 + (fan.length - 1) * 9 }}>
+                {fan.map((node, index) => (
+                    <span
+                        key={node.id}
+                        data-drag-mark
+                        className="absolute inset-y-0 left-0 flex w-9 items-center justify-center"
+                        style={{
+                            zIndex: fan.length - index,
+                            transform:
+                                index === 0
+                                    ? undefined
+                                    : `translate(${index * 9}px, ${-index * 2}px) rotate(${index === 1 ? 12 : -10}deg)`,
+                        }}
+                    >
+                        <FileMark node={node} size="list" />
+                    </span>
+                ))}
             </span>
             <span className="flex min-w-0 flex-col leading-tight">
                 <span className="truncate text-sm font-semibold">
