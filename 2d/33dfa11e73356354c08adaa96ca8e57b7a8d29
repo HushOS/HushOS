@@ -1,0 +1,27 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyCheck.kt
+  s_566b8e0c4467a4::t_7ad297f7cc510f 35-40,99-100,104
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_031c75176a39b6 7,309-317
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamilyCheck.kt
+  s_566b8e0c4467a4::t_9b74f147a43789 35,147-154
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_566b8e0c4467a4::t_db2f497b526f3e 855,858-859
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamiliesModelRacesTest.kt
+  s_566b8e0c4467a4::t_03eba2b5ae0202 9,77-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2d33dfa11e73356354c08adaa96ca8e57b7a8d29",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
