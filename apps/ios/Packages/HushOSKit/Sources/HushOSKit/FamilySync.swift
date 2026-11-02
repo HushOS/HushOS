@@ -206,9 +206,9 @@ public actor FamilySync: FamilyJudge {
     /* Each family's members and their identities from the last sync (routes 3 and 6). */
     private var details: [String: GroupDetail] = [:]
     private var identities: [String: [String: MemberIdentity]] = [:]
-    private var families: [String: String] = [:]
+    var families: [String: String] = [:]
     /* Each family as route 2 or a caller last named it, for checking it again from a write that waits. */
-    private var summaries: [String: GroupSummary] = [:]
+    var summaries: [String: GroupSummary] = [:]
     /* Syncs not finished yet, per family: uploads waiting together share the one running rather than queue one each. */
     private var running: [String: Int] = [:]
     private var areasOf: [String: [String]] = [:]
@@ -217,7 +217,7 @@ public actor FamilySync: FamilyJudge {
     /* Families route 2 stopped listing that this session wiped on the server's not-member: not asked about again unless listed again. */
     private var settledUnlisted: Set<String> = []
     /* A 401 a sync met, until the app takes it (takeEnded). */
-    private var endedBy: (any Error)?
+    var endedBy: (any Error)?
     /*
      * Whether this person vouched for each family (Settings.familyChecked), read after every
      * accepted sync: until it is, a family reads as first use (an under-claim, never an over-claim).
@@ -663,19 +663,22 @@ public actor FamilySync: FamilyJudge {
      * leaves the family refused instead.
      */
     func removedNow(_ groupId: String) async -> Revised {
-        await exclusive(groupId) {
-            let state: FamilyState
-            do {
-                try await self.wipe(groupId)
-                state = .wiped
-            } catch {
-                await self.refuse(groupId)
-                state = .failed(FamilyWords.error(error))
-            }
-            let revised = Revised(state: state, revision: Self.revise())
-            self.releases.post(groupId, revised)
-            return revised
+        await exclusive(groupId) { await self.removedInTurn(groupId) }
+    }
+
+    /* `removedNow`'s work, for a caller already in the family's turn (a manager's call that met not-member). */
+    func removedInTurn(_ groupId: String) async -> Revised {
+        let state: FamilyState
+        do {
+            try await wipe(groupId)
+            state = .wiped
+        } catch {
+            await refuse(groupId)
+            state = .failed(FamilyWords.error(error))
         }
+        let revised = Revised(state: state, revision: Self.revise())
+        releases.post(groupId, revised)
+        return revised
     }
 
     /* The family folders this process or the device record knows of. */
@@ -733,7 +736,7 @@ public actor FamilySync: FamilyJudge {
     }
 
     /* A request that got no answer, the settings route's included: nothing was refused, so nothing is taken away. */
-    static func unanswered(_ error: Error) -> Bool {
+    public static func unanswered(_ error: Error) -> Bool {
         // Cancelled: nobody refused anything either.
         if ErrorWords.isCancellation(error) { return true }
         if let error = error as? GroupsAPIError { return error.status == 0 }
@@ -1071,6 +1074,8 @@ public actor FamilySync: FamilyJudge {
         // the record, and the next cleanup finds them again.
         await vault.forgetWorkspaces(areas)
         TemporaryCopies.forgetFamily(areas, in: temporary, session: session)
+        // A manager's calls kept for the family go with it, before the record: nothing of it is sent again.
+        try records.outboxDeleteAll(userId: userId, groupId: groupId)
         records.delete(userId: userId, groupId: groupId)
         identities[groupId] = nil
         details[groupId] = nil
