@@ -27,6 +27,22 @@ public enum FamilyWalkPass: Sendable, Equatable {
     case stopped
 }
 
+/*
+ * When to ask iOS to run the background check: iOS keeps one request for it, and a new one replaces
+ * the last, so a later ask (the hourly check route 2 wants) must never push back an earlier one of
+ * the same session (a stopped walk's retry), or closing the app would postpone the key change.
+ */
+public enum FamilyCheckSchedule {
+    /*
+     * The earliest begin to submit: `requested`, or the pending request's when it is earlier and
+     * belongs to the same session. Another session's pending request says nothing about this one.
+     */
+    public static func earliest(requested: Date, session: String, pending: Date?, pendingSession: String?) -> Date {
+        guard let pending, pendingSession == session else { return requested }
+        return min(pending, requested)
+    }
+}
+
 /* A pass whose session ended between steps (asked with the task's own stop check). */
 struct SessionEndedMidPass: Error {}
 

@@ -22,6 +22,8 @@ enum FamilyWalkTasks {
     static let identifier = "com.hushos.app.families.walks"
     private static let sessionKey = "familyWalks.session"
     private static let attemptsKey = "familyWalks.attempts"
+    /* The earliest begin of the request submitted and not run yet (seconds since 1970): what a later ask keeps if earlier. */
+    private static let dueKey = "familyWalks.due"
     private static let hour: TimeInterval = 60 * 60
     /* What a pass ended as: no names, ids or keys. */
     private static let log = Logger(subsystem: "com.hushos.app", category: "family-check")
@@ -58,6 +60,7 @@ enum FamilyWalkTasks {
     static func cancel() {
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: identifier)
         UserDefaults.standard.removeObject(forKey: sessionKey)
+        UserDefaults.standard.removeObject(forKey: dueKey)
         UserDefaults.standard.removeObject(forKey: attemptsKey)
     }
 
@@ -65,11 +68,17 @@ enum FamilyWalkTasks {
     private static func current(_ session: SharedKeychain.Session) -> Bool { SharedKeychain.session?.tag == session.tag }
 
     private static func schedule(after delay: TimeInterval, session: SharedKeychain.Session) {
-        UserDefaults.standard.set(session.tag, forKey: sessionKey)
+        let defaults = UserDefaults.standard
+        let pending = defaults.object(forKey: dueKey) as? Double
+        let due = FamilyCheckSchedule.earliest(requested: Date(timeIntervalSinceNow: delay), session: session.tag,
+                                               pending: pending.map { Date(timeIntervalSince1970: $0) },
+                                               pendingSession: defaults.string(forKey: sessionKey))
+        defaults.set(session.tag, forKey: sessionKey)
+        defaults.set(due.timeIntervalSince1970, forKey: dueKey)
         let request = BGProcessingTaskRequest(identifier: identifier)
         request.requiresNetworkConnectivity = true
         request.requiresExternalPower = false
-        request.earliestBeginDate = Date(timeIntervalSinceNow: delay)
+        request.earliestBeginDate = due
         // One request per identifier: this replaces any earlier one.
         try? BGTaskScheduler.shared.submit(request)
     }
@@ -77,6 +86,8 @@ enum FamilyWalkTasks {
     private static func handle(_ task: BGTask) {
         let stop = StopSwitch()
         task.expirationHandler = { stop.flip() }
+        // Run: no request is pending now, so whatever the pass asks for next stands on its own.
+        UserDefaults.standard.removeObject(forKey: dueKey)
         Task { @MainActor in
             log.notice("family check started")
             let (pass, session) = await run(stop: stop)

@@ -414,6 +414,24 @@ extension OnFakeDrive {
         }
 
         /*
+         * iOS keeps one request for the background check. A stopped walk's retry, due in 30 seconds,
+         * then the hourly check route 2 asks for: the retry's deadline stands, so closing the app
+         * doesn't postpone the key change. A later retry or another session's request is taken as
+         * asked. Fails if a later ask pushes back an earlier deadline of the same session.
+         */
+        @Test func anHourlyAskNeverPushesBackAPendingRetry() {
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            let retry = now.addingTimeInterval(30)
+            let hourly = now.addingTimeInterval(3600)
+            #expect(FamilyCheckSchedule.earliest(requested: hourly, session: "a", pending: retry, pendingSession: "a") == retry,
+                    "the hourly check pushed back a pending retry")
+            #expect(FamilyCheckSchedule.earliest(requested: retry, session: "a", pending: hourly, pendingSession: "a") == retry)
+            #expect(FamilyCheckSchedule.earliest(requested: hourly, session: "b", pending: retry, pendingSession: "a") == hourly,
+                    "another session's pending request held this one's")
+            #expect(FamilyCheckSchedule.earliest(requested: hourly, session: "a", pending: nil, pendingSession: "a") == hourly)
+        }
+
+        /*
          * The task's time runs out after the first batch: the pass stops between batches, sends
          * nothing more, leaves no folder locked and no key pending, and the run is still there for
          * the next pass. Fails if a stopped pass sends again, or stops holding a lock or keys.
