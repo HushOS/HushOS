@@ -105,6 +105,10 @@ class FakeDrive : AutoCloseable {
     var rotationBatch: Int? = null
     /* The rotation sends (counted from 1) refused with a 500, as a dropped connection leaves them. */
     var failRotationSends: Set<Int> = emptySet()
+    /* The rotation sends (counted from 1) applied whose answer is lost (a 500), as a process killed mid-send leaves them. */
+    var loseRotationAnswers: Set<Int> = emptySet()
+    /* The ids each rotation send carried, in order. */
+    val rotationBatches = ArrayList<List<String>>()
     private var rotationSends = 0
     /* The feed as the server pages it: at most this many changes a page (null: all at once). */
     var changesPage: Int? = null
@@ -124,11 +128,13 @@ class FakeDrive : AutoCloseable {
 
     class Version(
         val id: String, val objectId: String, var contentKeyEnvelope: String, val suite: UInt, val chunkCount: Long, val contentNonce: String,
-        val signer: String, var signature: String,
+        var signer: String, var signature: String,
+        /* What a family folder's walk kept of the version's writer (RekeyView): served as `rekey`, the signature then none. */
+        var rekey: JSONObject? = null,
     ) {
         fun json(): JSONObject = JSONObject().put("id", id).put("objectId", objectId).put("contentKeyEnvelope", contentKeyEnvelope).put("status", "ready")
             .put("contentSuite", suite.toInt()).put("chunkCount", chunkCount).put("contentNonce", contentNonce).put("plaintextSize", JSONObject.NULL)
-            .put("signer", JSONObject().put("id", signer)).put("signature", signature)
+            .put("signer", JSONObject().put("id", signer)).put("signature", signature.ifEmpty { null } ?: JSONObject.NULL).put("rekey", rekey ?: JSONObject.NULL)
     }
 
     class Node(
@@ -136,12 +142,21 @@ class FakeDrive : AutoCloseable {
         var keyEnvelope: String, var metadataVersion: Long, var metadataEnvelope: String, var signer: String, var signature: String,
         var version: Version? = null, var changeSeq: Int = 1, var trashedAt: String? = null,
     ) {
+        /* The envelope, key epoch and parent epoch before the node's first re-key in a run (the server's prevKeyEnvelope). */
+        var previous: Triple<String, Long, Long>? = null
+        /* What a family folder's walk kept of the metadata's writer, served as `metadataRekey`. */
+        var metadataRekey: JSONObject? = null
+
         fun json(): JSONObject = JSONObject().put("id", id).put("workspaceId", workspaceId).put("parentId", parentId ?: JSONObject.NULL).put("kind", kind)
             .put("keyEpoch", keyEpoch).put("parentKeyEpoch", parentKeyEpoch).put("keyEnvelope", keyEnvelope)
             .put("metadataVersion", metadataVersion).put("metadataEnvelope", metadataEnvelope).put("currentVersion", version?.json() ?: JSONObject.NULL)
             .put("trashedAt", trashedAt ?: JSONObject.NULL).put("createdAt", "2026-10-01T00:00:00Z").put("updatedAt", "2026-10-01T00:00:00Z")
             .put("changeSeq", changeSeq).put("envelopeSuite", ENVELOPE_SUITE)
-            .put("metadataSigner", JSONObject().put("id", signer)).put("metadataSignature", signature)
+            .put("metadataSigner", JSONObject().put("id", signer)).put("metadataSignature", signature.ifEmpty { null } ?: JSONObject.NULL)
+            .put("metadataRekey", metadataRekey ?: JSONObject.NULL)
+            .apply {
+                previous?.let { (envelope, epoch, parentEpoch) -> put("prevKeyEnvelope", envelope).put("prevKeyEpoch", epoch).put("prevParentKeyEpoch", parentEpoch) }
+            }
     }
 
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -320,10 +335,19 @@ class FakeDrive : AutoCloseable {
     fun child(parentId: String, name: String): Node = children(parentId).singleOrNull { record(it.id).name == name }
         ?: throw AssertionError("No single “$name” in $parentId: ${children(parentId).map { record(it.id).name }}")
 
+    /* Keys a node had before a re-key in a run, by node and key epoch: what its children not reached yet are wrapped under. */
+    private val previousKeys = HashMap<Pair<String, Long>, ByteArray>()
+
+    /* `id`'s key as it is now, kept as its previous one before something re-keys it (a manager's roster rotation of a top folder). */
+    fun keepPreviousKey(id: String) = synchronized(lock) { previousKeys[id to node(id).keyEpoch] = keyOf(id) }
+
+    /* A node's key at `epoch`: its key now, or the one it had before a re-key. */
+    private fun keyAt(id: String, epoch: Long): ByteArray = if (node(id).keyEpoch == epoch) keyOf(id) else previousKeys[id to epoch] ?: keyOf(id)
+
     /* A node's key, unwrapped from the envelopes the server holds, from its workspace key down. */
     fun keyOf(id: String): ByteArray = synchronized(lock) {
         val node = node(id)
-        val parentKey = node.parentId?.let { keyOf(it) } ?: workspaceKeys.getValue(node.workspaceId)
+        val parentKey = node.parentId?.let { keyAt(it, node.parentKeyEpoch) } ?: workspaceKeys.getValue(node.workspaceId)
         nodeOpen(NodeKeyContext(node.workspaceId, id, node.parentId ?: node.workspaceId, node.parentKeyEpoch.toULong(), node.keyEpoch.toULong()), parentKey,
             base64urlDecode(node.keyEnvelope))
     }
@@ -426,6 +450,20 @@ class FakeDrive : AutoCloseable {
     private val uploads = HashMap<String, Upload>()
     private class Rotation(val ws: String, val target: Long, val applied: HashSet<String> = HashSet(), var finished: Boolean = false)
     private val rotations = HashMap<String, Rotation>()
+
+    /*
+     * A key change running from `nodeId` to `target`, as a manager's member list change leaves one in a family folder: its
+     * top folder already re-keyed (applied), the rest for any member to walk.
+     */
+    fun startRun(nodeId: String, target: Long) = synchronized(lock) {
+        rotations[nodeId] = Rotation(node(nodeId).workspaceId, target, hashSetOf(nodeId))
+    }
+
+    /* Whether the run from `nodeId` is still running (route 25 names it). */
+    fun running(nodeId: String): Boolean = synchronized(lock) { rotations[nodeId]?.finished == false }
+
+    /* The nodes a run re-keyed so far. */
+    fun appliedIn(nodeId: String): Set<String> = synchronized(lock) { rotations[nodeId]?.applied?.toSet().orEmpty() }
 
     private fun answer(exchange: HttpExchange) {
         val method = exchange.requestMethod
@@ -677,30 +715,55 @@ class FakeDrive : AutoCloseable {
                     .put("nextCursor", if (batch.size < todo.size) "more" else JSONObject.NULL).put("done", todo.isEmpty()))
             }
             post && at("drive", "nodes", "*", "rotation", "nodes") -> {
-                if (failRotationSend || ++rotationSends in failRotationSends) return 500 to JSONObject().put("message", "The connection dropped")
-                val rotation = rotations.getValue(segments[2])
+                val send = ++rotationSends
                 val wires = body.getJSONArray("nodes")
+                rotationBatches.add((0 until wires.length()).map { wires.getJSONObject(it).getString("id") })
+                if (failRotationSend || send in failRotationSends) return 500 to JSONObject().put("message", "The connection dropped")
+                val rotation = rotations.getValue(segments[2])
                 val results = JSONArray()
                 for (i in 0 until wires.length()) {
                     val wire = wires.getJSONObject(i)
                     val node = node(wire.getString("id"))
+                    // A node sent at a change order the server has moved past (another device's walk applied it): stale.
+                    if (!wire.isNull("changeSeq") && wire.optInt("changeSeq") != node.changeSeq) { results.put(JSONObject().put("id", node.id).put("status", "stale")); continue }
+                    val rotated = wire.optJSONObject("rotated")
+                    // Its key before, kept for the children the walk hasn't reached: they are still wrapped under it.
+                    if (rotated != null) {
+                        previousKeys[node.id to node.keyEpoch] = keyOf(node.id)
+                        if (node.previous == null) node.previous = Triple(node.keyEnvelope, node.keyEpoch, node.parentKeyEpoch)
+                    }
                     node.parentKeyEpoch = wire.getLong("parentKeyEpoch")
                     node.keyEnvelope = wire.getString("keyEnvelope")
-                    wire.optJSONObject("rotated")?.let { rotated ->
+                    rotated?.let {
                         node.keyEpoch = rotation.target
+                        // A re-keyed record keeps its writer's origin (carried from an earlier walk, or the record as it was).
+                        fun origin(kept: JSONObject?, envelope: String, signer: String, signature: String, sent: JSONObject) =
+                            JSONObject().put("origin", JSONObject(kept?.getJSONObject("origin")?.toString() ?: JSONObject().put("envelope", envelope)
+                                .put("signer", JSONObject().put("id", signer)).put("signature", signature).toString()).put("keyEnvelope", sent.getString("originKeyEnvelope")))
+                                .put("signature", sent.getString("signature"))
+                        val metaRekey = rotated.optJSONObject("metadataRekey")
+                        if (metaRekey != null) node.metadataRekey = origin(node.metadataRekey, node.metadataEnvelope, node.signer, node.signature, metaRekey)
+                        else node.metadataRekey = null
                         node.metadataEnvelope = rotated.getString("metadataEnvelope")
-                        node.signature = rotated.getString("metadataSignature")
+                        node.signature = if (rotated.isNull("metadataSignature")) "" else rotated.getString("metadataSignature")
                         node.signer = userId
                         val versions = rotated.getJSONArray("versions")
                         for (j in 0 until versions.length()) {
                             val v = versions.getJSONObject(j)
-                            node.version?.takeIf { it.id == v.getString("id") }?.let { it.contentKeyEnvelope = v.getString("contentKeyEnvelope"); it.signature = v.getString("signature") }
+                            node.version?.takeIf { it.id == v.getString("id") }?.let { version ->
+                                val rekey = v.optJSONObject("rekey")
+                                version.rekey = rekey?.let { origin(version.rekey, version.contentKeyEnvelope, version.signer, version.signature, it) }
+                                version.contentKeyEnvelope = v.getString("contentKeyEnvelope")
+                                version.signature = if (v.isNull("signature")) "" else v.optString("signature")
+                                version.signer = userId
+                            }
                         }
                     }
                     bump(node)
                     rotation.applied.add(node.id)
                     results.put(JSONObject().put("id", node.id).put("status", "ok"))
                 }
+                if (send in loseRotationAnswers) return 500 to JSONObject().put("message", "The connection dropped")
                 ok(JSONObject().put("results", results))
             }
             get && at("drive", "shares") -> ok(JSONObject().put("shares", JSONArray(shares.map { share ->

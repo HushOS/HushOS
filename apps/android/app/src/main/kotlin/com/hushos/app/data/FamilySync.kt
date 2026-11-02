@@ -71,9 +71,12 @@ data class FamilyArea(
     /* The folder's key opened from a grant the member list vouches for. */
     val opened: Boolean = false,
     /* Its top folder opened through the ledger at the member list's latest key version. */
-    val rootListed: Boolean = false, val rotating: Boolean = false, val write: AreaWrite = AreaWrite.READ_ONLY,
+    val rootListed: Boolean = false,
+    /* The key change route 25 says is running in it (a removal's, a departure's), if any. */
+    val rotation: SpaceRotation? = null, val write: AreaWrite = AreaWrite.READ_ONLY,
 ) {
     val openable: Boolean get() = opened && root != null && name != null
+    val rotating: Boolean get() = rotation != null
 
     /* What its row says under its name, in the web's words (s/$groupId/index.tsx, areaLine). */
     val line: String get() = when {
@@ -385,6 +388,35 @@ class FamilySync(
         Revised(state, revision.incrementAndGet())
     }
 
+    /*
+     * Leaving (route 20), then this phone's wipe, as a removal's (the web's LeaveDialog then wipeGroup): the family's keys,
+     * its device record, its folders' rows and keys and every copy opened from them go; the settings pin and the family
+     * guard stay as marks, so the family coming back is never first use. A refusal (the organizer, the last manager, the
+     * payer) or no answer keeps everything. A not-member answer is a leave that already happened: the same wipe.
+     */
+    fun leave(groupId: String, endsLapsed: List<String> = emptyList()): Leaving {
+        if (!FamilyRecords.valid(groupId)) return Leaving.Refused("Please try again.")
+        val dissolved = try {
+            api.leave(groupId, endsLapsed)
+        } catch (error: GroupsApiError) {
+            if (error.code == "ends-lapsed" && error.plans.isNotEmpty()) return Leaving.EndsLapsed(error.plans)
+            if (!error.isNotMember) return Leaving.Refused(leaveWords(error))
+            false
+        }
+        val removed = removedNow(groupId)
+        // Not asked about again from route 2's side (it no longer lists the family) unless it lists it again.
+        if (removed.state == FamilyState.Wiped) settledUnlisted.add(groupId.lowercase())
+        return Leaving.Left(removed, dissolved)
+    }
+
+    sealed interface Leaving {
+        /* Left: `removed` is the wipe's outcome (Wiped, or Failed when this phone couldn't let go of everything). */
+        data class Left(val removed: Revised, val dissolved: Boolean) : Leaving
+        data class Refused(val words: String) : Leaving
+        /* Lapsed plans this person pays for end with the leave: said, and confirmed by id on the next press. */
+        data class EndsLapsed(val plans: List<FamilyLapsedPlan>) : Leaving
+    }
+
     /* The family folders this process or the device record knows of. */
     internal fun knownAreas(groupId: String): List<String> =
         (groupsOf.filterValues { it == groupId }.keys + areasOf[groupId].orEmpty() + records.read(userId, groupId)?.areas.orEmpty())
@@ -532,7 +564,7 @@ class FamilySync(
         val keyVersion = vault.accountKeyVersion()
         return family.map { area ->
             // The top folder is set only once it proved to be this area's own (below): a refused one is never handed out.
-            var folder = FamilyArea(area.workspaceId, rotating = area.rotating)
+            var folder = FamilyArea(area.workspaceId, rotation = area.rotation)
             var pinArea: OpenedArea? = null
             try {
                 val row = area.grant
@@ -801,6 +833,33 @@ class FamilySync(
             return keyCommitment(PinKeys(entry.keyVersion, entry.encryptionPublicKey, entry.signingPublicKey, mlDsa, kem, ""))
         }
 
+        /* Why this person can't leave or step back yet: someone else must hold the role first (the web's copy.ts). */
+        const val ORGANIZER_FIRST = "Make someone else the organizer first."
+        const val MANAGER_FIRST = "Let someone else manage the family first."
+
+        /*
+         * Why this person can't leave now, by the rule the server applies (the web's leaveBlocker), from route 3's members, or
+         * null when Leave family can be offered. The last one in a family may always leave: that ends it.
+         */
+        fun leaveBlocker(userId: String, members: List<GroupDetail.Member>): String? {
+            val active = members.filter { it.state == "active" }
+            val me = active.firstOrNull { it.userId.equals(userId, ignoreCase = true) } ?: return null
+            val others = active.filter { it !== me }
+            if (others.isEmpty()) return null
+            fun held(role: String) = others.any { role in it.roles }
+            if ("billing" in me.roles && !held("billing")) return ORGANIZER_FIRST
+            if ("members" in me.roles && !held("members")) return MANAGER_FIRST
+            return null
+        }
+
+        /* A leave the server refused, in the web's words (copy.ts errorCopy); the payer's in the server's own, as it names where. */
+        fun leaveWords(error: GroupsApiError): String = when (error.code) {
+            "organizer" -> ORGANIZER_FIRST
+            "last-holder" -> MANAGER_FIRST
+            "payer" -> error.message ?: error.words
+            else -> error.words
+        }
+
         /* The web's names for roles (rolesLine reads `billing` and `members`). */
         fun role(role: GroupRole) = when (role) {
             GroupRole.BILLING -> "billing"
@@ -844,9 +903,9 @@ class FamilySync(
         }
 
         /* Present but unreadable is a signature that cannot hold, as the web reads it. */
-        private fun signature(value: Any?): ByteArray? = (value as? String)?.let { runCatching { base64urlDecode(it) }.getOrDefault(ByteArray(0)) }
+        internal fun signature(value: Any?): ByteArray? = (value as? String)?.let { runCatching { base64urlDecode(it) }.getOrDefault(ByteArray(0)) }
 
-        private fun rekey(raw: JSONObject?): ServedRekey? {
+        internal fun rekey(raw: JSONObject?): ServedRekey? {
             raw ?: return null
             val origin = raw.optJSONObject("origin") ?: JSONObject()
             fun bytes(name: String) = runCatching { base64urlDecode(origin.getString(name)) }.getOrDefault(ByteArray(0))

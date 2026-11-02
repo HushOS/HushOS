@@ -163,6 +163,7 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
                     joining -> JoinContent(model, groupId, name, title = { waitTitle = it }, onJoined = {})
                     view != null -> {
                         Alerts(model, groupId, name, state, organizer)
+                        KeyChanges(model, groupId, name, view)
                         Folders(view, openFolder)
                         Subheader("Members")
                         for (member in view.members) {
@@ -177,15 +178,122 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
                             }
                         }
                         TechnicalDetailsRow(view)
+                        Leaving(model, groupId, name, me, onBack)
                     }
                     else -> {
                         Alerts(model, groupId, name, state, organizer)
                         if (state == null || families.syncing[groupId] == true) Box(Modifier.fillMaxWidth().padding(AlpineSpace.S8), contentAlignment = Alignment.Center) { LoadingIndicator() }
+                        // A family this phone couldn't check (or found shown differently) can still be left, as on the web.
+                        else if (summary?.state == "active" && state != FamilyState.Wiped) Leaving(model, groupId, name, me, onBack)
                     }
                 }
             }
         }
     }
+}
+
+/*
+ * Key changes on the family page (the web's KeyChangeNotice): while route 25 says a folder's keys are being replaced (a
+ * removal's, a departure's), how far this phone's walk has got; and a walk that stopped, with why and when it is tried
+ * again. Everything in the folders stays readable meanwhile.
+ */
+@Composable
+private fun KeyChanges(model: DriveViewModel, groupId: String, family: String, view: FamilyView) {
+    val running = view.areas.filter { it.rotating }
+    val walks = model.families.walks.filterValues { it.groupId == groupId }
+    fun nameOf(workspaceId: String) = view.areas.firstOrNull { it.workspaceId.equals(workspaceId, ignoreCase = true) }?.name ?: "A family folder"
+    if (running.isNotEmpty()) {
+        val done = walks.values.sumOf { it.done }
+        val what = if (running.size == 1) "${nameOf(running[0].workspaceId)} is getting new keys." else "${running.size} folders are getting new keys."
+        val progress = if (done > 0) " $done ${if (done == 1) "item" else "items"} done so far." else ""
+        Info("Replacing keys in the family folders", "$what$progress Everything stays readable meanwhile.")
+    }
+    for ((workspaceId, walk) in walks) {
+        val error = walk.error ?: continue
+        Notice("Replacing keys in ${nameOf(workspaceId)} stopped", "$error HushOS tries again the next time it checks $family.")
+    }
+}
+
+/* A notice in the calm colours, for what is under way rather than wrong (the web's info alert). */
+@Composable
+private fun Info(title: String, body: String) {
+    val alpine = Alpine.colors
+    Column(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2).background(alpine.tint, RoundedCornerShape(12.dp)).padding(AlpineSpace.S4),
+        verticalArrangement = Arrangement.spacedBy(AlpineSpace.S1)) {
+        Text(title, style = MaterialTheme.typography.titleSmall, color = alpine.ink)
+        Text(body, style = MaterialTheme.typography.bodyMedium, color = alpine.ink)
+    }
+}
+
+/*
+ * Leaving (route 20, the web's Leaving setting and LeaveDialog): Leave family, disabled with the reason when the member list
+ * already shows the server would refuse (the organizer, the last manager), asked once, then this phone forgets the family.
+ * The server stays the judge: its refusal shows in the dialog, and lapsed plans it names are said and confirmed by id.
+ */
+@Composable
+private fun Leaving(model: DriveViewModel, groupId: String, family: String, me: String, onBack: () -> Unit) {
+    val alpine = Alpine.colors
+    val families = model.families
+    val members = families.details[groupId]?.members
+    LaunchedEffect(groupId, members == null) {
+        if (members != null) return@LaunchedEffect
+        val session = families.begin() ?: return@LaunchedEffect
+        families.loadMembers(groupId, session)
+    }
+    val blocker = members?.let { FamilySync.leaveBlocker(me, it) }
+    var asking by remember { mutableStateOf(false) }
+    Subheader("Leaving")
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = AlpineSpace.S4, end = AlpineSpace.S2, top = AlpineSpace.S2, bottom = AlpineSpace.S2),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(blocker ?: "You’ll lose the family folders. Your own files stay yours.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted,
+            modifier = Modifier.weight(1f))
+        TextButton(onClick = { asking = true }, enabled = members != null && blocker == null, modifier = Modifier.heightIn(min = 44.dp)) {
+            Text("Leave family", color = if (members != null && blocker == null) alpine.danger else alpine.inkMuted)
+        }
+    }
+    if (asking) LeaveDialog(model, groupId, family, alone = members?.count { it.state == "active" } == 1, onDismiss = { asking = false }, onLeft = onBack)
+}
+
+@Composable
+private fun LeaveDialog(model: DriveViewModel, groupId: String, family: String, alone: Boolean, onDismiss: () -> Unit, onLeft: () -> Unit) {
+    val alpine = Alpine.colors
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    // The plans the server named when the leave asked (`ends-lapsed`): said, and confirmed by id on the next press.
+    var plans by remember { mutableStateOf<List<com.hushos.app.data.FamilyLapsedPlan>>(emptyList()) }
+    // In the families' scope, not the dialog's: the leave's own wipe redraws the page, which takes this dialog with it.
+    fun leave() = model.familyScope.launch {
+        busy = true
+        error = null
+        val result = model.families.leave(groupId, plans.map { it.id })
+        busy = false
+        val outcome = result?.getOrElse { failed -> error = com.hushos.app.data.FamilyWords.error(failed); return@launch } ?: return@launch
+        when (outcome) {
+            is FamilySync.Leaving.EndsLapsed -> plans = outcome.plans
+            is FamilySync.Leaving.Refused -> error = outcome.words
+            is FamilySync.Leaving.Left -> {
+                // The leave landed either way; a wipe that failed is said, not hidden behind it.
+                if (outcome.removed.state == FamilyState.Wiped) model.notify("You left $family")
+                else model.notifyUntilRead("You left $family, but this device kept some of it. HushOS couldn’t clear the family’s keys and saved records on this device. Sign out to clear them.")
+                onDismiss()
+                onLeft()
+            }
+        }
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("Leave $family?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
+                Text(if (alone) "You’re the only one in $family, so leaving ends it. You’ll lose the family folders. Your own files stay yours."
+                    else "You’ll lose the family folders. Your own files stay yours.")
+                if (plans.isNotEmpty()) Text(com.hushos.app.data.FamilyLapsedPlan.endsWhenYouLeave(family, plans))
+                error?.let { Text(it, color = alpine.danger) }
+            }
+        },
+        confirmButton = { TextButton(onClick = { leave() }, enabled = !busy) { Text(if (busy) "Leaving" else "Leave family", color = alpine.danger) } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } },
+    )
 }
 
 /* A member: avatar, name, address, role, "Account changed"; Verified or Not verified at the right; the row's menu checks them. */

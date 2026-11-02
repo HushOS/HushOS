@@ -200,6 +200,11 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     private val _state = MutableStateFlow(DriveState(origin = defaultOrigin()))
     override val state: StateFlow<DriveState> = _state
     private var vault: Vault? = null
+        set(value) {
+            field = value
+            // A family walk WorkManager runs in this process works through this vault while it is the session's.
+            com.hushos.app.data.LiveVaults.app = value
+        }
     /* Families (FamiliesModel.kt): each family's state, page and folders, beside the drive's. */
     val families = FamiliesModel(this)
     override val currentVault: Vault? get() = vault
@@ -207,6 +212,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     override val familyScope get() = viewModelScope
     override fun updateState(change: (DriveState) -> DriveState) = _state.update(change)
     override fun lostSession() = sessionLost()
+    override fun familyWork(inFamily: Boolean) {
+        if (inFamily) com.hushos.app.data.FamilyWalkWork.schedule(context) else com.hushos.app.data.FamilyWalkWork.cancel(context)
+    }
+    override fun walkSoon() = com.hushos.app.data.FamilyWalkWork.soon(context)
     private val thumbnailTasks = HashSet<String>()
     /* Who can open what (`access`): one request at a time, and one more after it for anything asked meanwhile. */
     private val sharingLoads = SharingRefresh(viewModelScope) { loadAccess() }
@@ -458,6 +467,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         // Queued transfers belong to the account signing out: stopped now; Auth.signOut removes
         // their copies with every other file of the account (AccountStore).
         androidx.work.WorkManager.getInstance(context).cancelAllWorkByTag(com.hushos.app.data.TransferQueue.TAG)
+        com.hushos.app.data.FamilyWalkWork.cancel(context)
         queueWatch?.cancel(); queueWatch = null
         link = null
         // The session's families go with it: the ledger's keys wiped, nothing of them left drawn, and no download of it

@@ -1022,7 +1022,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * words), then the session (ended: nothing more lands). Callers then apply the newer-row rule and only then open, keep
      * or show anything. Under familyCopiesLock, the lock a forget takes.
      */
-    private fun requireWriteStands(workspaceId: String) {
+    internal fun requireWriteStands(workspaceId: String) {
         if (!isFamilyWorkspace(workspaceId) || WriteIntent.decision(workspaceId) != true) return
         val began = WriteIntent.epoch(workspaceId) ?: throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
         familyWordsSince(workspaceId, began)?.let { throw FamilyFailure(it) }
