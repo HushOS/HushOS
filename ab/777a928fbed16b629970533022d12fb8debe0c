@@ -1,0 +1,87 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_637cb8e676158c 39
+apps/android/app/src/main/kotlin/com/hushos/app/data/Rotation.kt
+  s_566b8e0c4467a4::t_2b5f28c03587be 92-101,108-109,158-180,192-194,199-201,224,340-341
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NodeRow.kt
+  s_566b8e0c4467a4::t_6812868db87ce9 3,271-279,285-286
+apps/android/app/src/test/kotlin/com/hushos/app/data/ContactTrustTest.kt
+  s_566b8e0c4467a4::t_6546412886acd3 344-345,352-354,357-360,363-364,366
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_566b8e0c4467a4::t_12ebf882799212 463-465,467,475,478-480,483-485
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyWalksTest.kt
+  s_566b8e0c4467a4::t_e73558a14ba699 122,143,167-168
+apps/android/app/src/test/kotlin/com/hushos/app/data/RotationRaceTest.kt
+  s_566b8e0c4467a4::t_9047154cb44915 1-81
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_acdff25ac7e71a 51
+apps/ios/App/ActionSheets.swift
+  s_566b8e0c4467a4::t_a82e7681b7594a 212
+apps/ios/App/Glyphs.swift
+  s_566b8e0c4467a4::t_ae378362b5b8ec 8-11,13-15,31,33
+apps/ios/App/NodeRow.swift
+  s_566b8e0c4467a4::t_ab79c3103828d4 354,382-398
+apps/ios/App/Received.swift
+  s_566b8e0c4467a4::t_79ed60d9e20963 578
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Rotation.swift
+  s_566b8e0c4467a4::t_cdcb0d540ac4a5 11-13,133-145,220-243,253-254,258-261,282,437-438
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ContactGuardTests.swift
+  s_566b8e0c4467a4::t_efe3e5fa8aaad6 755-757,763-764,769,772,781,786,790-791,802,804-816,822-823,825-833,838-840,844,851,855-857,862
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RotationTests.swift
+  s_566b8e0c4467a4::t_361fa96f536214 96-134,287-293,318,360-405,653-655,659-675,705-706
+apps/web/package.json
+  s_566b8e0c4467a4::t_2dee0bad4114a2 101
+apps/web/src/components/drive/file-mark.tsx
+  s_566b8e0c4467a4::t_94b3ede509c5c2 1,35-42
+apps/web/src/components/drive/folder-colour-dialog.tsx
+  s_566b8e0c4467a4::t_859cb187821a38 1-241
+apps/web/src/components/drive/folder-view.tsx
+  s_566b8e0c4467a4::t_b9c6a39e31ad89 10,272,939,1476,1535-1538
+apps/web/src/components/drive/node-actions.tsx
+  s_566b8e0c4467a4::t_efc8e454c6be25 13-14,101-102,175-180,290,310-311,322-324,429-433
+apps/web/src/components/drive/tag-colour.tsx
+  s_566b8e0c4467a4::t_785eb7810dcf09 173
+apps/web/src/components/folder-mark.tsx
+  s_566b8e0c4467a4::t_76e6717cf1f8f8 1,3,5-19,23,25-31,46-51
+apps/web/src/styles.css
+  s_566b8e0c4467a4::t_aef10314c7219a 215-217,225-228,236-239,247-250,258-261,270-273,281-284,292-295,303-315
+bun.lock
+  s_566b8e0c4467a4::t_92da7856933c41 107,692,822,824,826,828,830,832,834,836,838,840,842,844,846,848,850,1290,1368,1448,1754,1772,1930,1934,1984,2238-2239
+crates/hushos-core/fuzz/src/targets.rs
+  s_566b8e0c4467a4::t_642ac849fba614 1077-1078,1208-1212,1214,2129-2178
+crates/hushos-core/src/colour.rs
+  s_566b8e0c4467a4::t_bca4304c1892d0 1-175
+crates/hushos-core/src/lib.rs
+  s_566b8e0c4467a4::t_a84b2f44d3366b 19,52
+packages/crypto/fuzz/oracles.test.ts
+  s_566b8e0c4467a4::t_fd11dfd468aa5d 3,54-88
+packages/crypto/fuzz/seeds.ts
+  s_566b8e0c4467a4::t_fd4615a437a268 591-614
+packages/crypto/fuzz/verdicts.ts
+  s_566b8e0c4467a4::t_efb4fb2736060d 1505,1548-1549,1681-1686
+packages/drive/src/client.attributes.test.ts
+  s_566b8e0c4467a4::t_6b96f03c114a0d 80,105-108,170,244-319
+packages/drive/src/client.rotation.test.ts
+  s_566b8e0c4467a4::t_8e6d5027195395 1-355
+packages/drive/src/client.ts
+  s_566b8e0c4467a4::t_7e257cbc9b0d3d 19,196,353-368,1131-1164,1171,1706-1708,1749-1752,1754,1757,1763-1765,1901-1903,1916-1917,2277
+packages/drive/src/colour.test.ts
+  s_566b8e0c4467a4::t_5d28eb28c7656b 1-45
+packages/drive/src/colour.ts
+  s_566b8e0c4467a4::t_f76478eaf9265d 1-70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ab777a928fbed16b629970533022d12fb8debe0c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
