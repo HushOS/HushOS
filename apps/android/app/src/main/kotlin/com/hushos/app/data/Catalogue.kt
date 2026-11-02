@@ -265,10 +265,12 @@ fun Vault.catalogueAll(): List<Opened> {
     return nodes.rowsIn(ws).filter { isLive(it) }
 }
 
-fun Vault.catalogueRecents(limit: Int): List<Opened>? {
+fun Vault.catalogueRecents(limit: Int, keep: (Opened) -> Boolean = { true }): List<Opened>? {
     if (catalogueState != CatalogueState.READY) return null
+    val ws = workspaceId
     // Folders included, as the web's Recent and iOS list them; the top folder itself is not a recent item.
-    return catalogueAll().filter { it.node.parentId != null && (it.isFolder || it.node.currentVersion != null) }.sortedWith(byRecent).take(limit)
+    val found = catalogueAll().filter { it.node.parentId != null && (it.isFolder || it.node.currentVersion != null) && keep(it) }
+    return collapseRecents(found, limit) { nodes.row(ws, it)?.node?.parentId }
 }
 
 /* Trashed rows, newest first, as the server lists them; the id breaks ties so the order holds between loads. */

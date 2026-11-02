@@ -276,7 +276,9 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         val vault = requireVault()
         val cursor = MatrixCursor(projection ?: documentColumns)
         val trust = trustFor(vault)
-        for (item in vault.recents(64)) addRow(cursor, item, vault, trust)
+        // Files only: DocumentsUI's Recent drops folders from what a provider returns (its RecentsLoader
+        // rejects the directory type), so a folder standing in for what it holds would hide its files.
+        for (item in vault.recents(64) { !it.isFolder }) addRow(cursor, item, vault, trust)
         cursor
     }
 

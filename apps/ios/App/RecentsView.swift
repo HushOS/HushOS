@@ -8,7 +8,7 @@ enum HomeFilter: String, CaseIterable, Identifiable {
     case all = "All", folders = "Folders", images = "Images", videos = "Videos", documents = "Documents"
     var id: String { rawValue }
 
-    func matches(_ item: Opened) -> Bool {
+    nonisolated func matches(_ item: Opened) -> Bool {
         switch self {
         case .all: return true
         case .folders: return item.isFolder
@@ -121,6 +121,8 @@ struct HomeView: View {
             .fileViewer($viewing, among: rows, store: store)
             .uploadFlow(into: store.rootId, importer: $showingImporter, folder: $showingFolder, photos: $showingPhotos, camera: $showingCamera)
             .sheet(isPresented: $managingTags) { TagManagerSheet().environment(store) }
+            // Recent is narrowed to the chip before a folder stands in for what it holds.
+            .task(id: filter) { await store.showRecents(filter) }
             .task {
                 if let root = await store.loadRoot(), store.folders[root] == nil { await store.refresh(folder: root) }
                 await store.refreshRecents()

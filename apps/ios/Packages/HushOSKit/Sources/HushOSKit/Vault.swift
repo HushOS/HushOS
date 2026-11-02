@@ -714,15 +714,20 @@ public actor Vault {
         return result.map { (item: $0.0, parentTrashed: $0.1) }
     }
 
-    /* The most recently changed files, from the tail of the change feed. */
-    public func recents(limit: Int = 60) async throws -> [Opened] {
-        if let fast = catalogueRecents(limit: limit) { return fast }
+    /*
+     * The most recently changed files and folders that `keep` lets through, a folder standing in for
+     * what it holds (`Opened.collapsedRecents`); from the tail of the change feed until the catalogue
+     * can answer.
+     */
+    public func recents(limit: Int = 60, keep: @Sendable (Opened) -> Bool = { _ in true }) async throws -> [Opened] {
+        if let fast = catalogueRecents(limit: limit, keep: keep) { return fast }
         let workspace = try await loadWorkspace()
         let seq = workspace.changeSeq ?? 0
         let feed = try await api.changes(workspaceId: workspace.workspaceId, since: max(0, seq - 400), limit: 400)
         var latest: [String: NodeView] = [:]
         for change in feed.changes where change.kind == "node" {
-            guard let node = change.node, !node.isFolder, node.trashedAt == nil, node.currentVersion != nil else {
+            // Folders included, as the catalogue and the other clients list them; the top folder is not a recent item.
+            guard let node = change.node, node.parentId != nil, node.trashedAt == nil, node.isFolder || node.currentVersion != nil else {
                 if let id = change.node?.id { latest[id] = nil }
                 continue
             }
@@ -732,9 +737,9 @@ public actor Vault {
         for node in latest.values {
             if let parent = node.parentId { rememberParent(node.id, parent: parent) }
             forget(node.id)
-            if let opened = try? await resolve(node.id) { items.append(opened) }
+            if let opened = try? await resolve(node.id), keep(opened) { items.append(opened) }
         }
-        return items.sorted(by: Opened.byRecent).prefix(limit).map { $0 }
+        return Opened.collapsedRecents(items, limit: limit) { self.opened[$0]?.node.parentId ?? self.parents[$0] }
     }
 
     public func versions(of nodeId: String) async throws -> [VersionListView] {
@@ -754,11 +759,54 @@ extension Opened {
      * them, so the list never reshuffles between loads.
      */
     public static func byRecent(_ a: Opened, _ b: Opened) -> Bool {
-        let (x, y) = (a.changed ?? .distantPast, b.changed ?? .distantPast)
+        newer(a, at: a.changed ?? .distantPast, than: b, at: b.changed ?? .distantPast)
+    }
+
+    private static func newer(_ a: Opened, at x: Date, than b: Opened, at y: Date) -> Bool {
         if x != y { return x > y }
         let names = a.name.localizedCompare(b.name)
         if names != .orderedSame { return names == .orderedAscending }
         return a.id < b.id
+    }
+
+    /*
+     * Recent shows a folder once, not again for what it holds (the web's `collapseRecent`): an item
+     * with a folder above it, at any depth, also among `items` is left out, and the topmost such
+     * folder sorts by the newest change among itself and what it stands in for, so a folder whose
+     * contents keep changing stays near the top. The cut comes after, so the list still fills to
+     * `limit`. `parentOf` walks up through folders not among `items`; one it doesn't know ends the walk.
+     */
+    public static func collapsedRecents(_ items: [Opened], limit: Int, parentOf: (String) -> String? = { _ in nil }) -> [Opened] {
+        var held: [String: Opened] = [:]
+        for item in items { held[item.id] = item }
+        // The topmost held item at or above each id walked; .some(nil) when there is none.
+        var topmost: [String: String?] = [:]
+        func topOf(_ id: String) -> String? {
+            var walked: [String] = []
+            var found: String?
+            var current: String? = id
+            while let at = current, !walked.contains(at) {
+                if let known = topmost[at] {
+                    found = known
+                    break
+                }
+                walked.append(at)
+                current = held[at]?.node.parentId ?? parentOf(at)
+            }
+            for at in walked.reversed() {
+                if found == nil, held[at] != nil { found = at }
+                topmost[at] = .some(found)
+            }
+            return found
+        }
+        var at: [String: Date] = [:]
+        for item in held.values {
+            guard let top = topOf(item.id) else { continue }
+            at[top] = max(at[top] ?? .distantPast, item.changed ?? .distantPast)
+        }
+        return at.compactMap { id, when in held[id].map { ($0, when) } }
+            .sorted { newer($0.0, at: $0.1, than: $1.0, at: $1.1) }
+            .prefix(limit).map(\.0)
     }
 
     /* Newest in the trash first, as the server lists it; the id breaks ties so the order holds between loads. */

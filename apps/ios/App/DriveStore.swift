@@ -20,6 +20,12 @@ final class DriveStore {
     var catalogueVersion = 0
     var names: [String: String] = [:]
     var recents: [Opened] = []
+    /*
+     * Home's type chip. A recent folder stands in for what it holds (`Opened.collapsedRecents`), so
+     * the chip narrows Recent before that, in the vault: filtered after, images inside a recent
+     * folder would never show.
+     */
+    private(set) var recentsFilter: HomeFilter = .all
     var trash: [(item: Opened, parentTrashed: Bool)] = []
     /* Trash rows being restored or deleted, and the whole trash being emptied: each shows it is under way. */
     var trashWorking: Set<String> = []
@@ -369,7 +375,7 @@ final class DriveStore {
         await vault.buildCatalogue()
         guard await vault.catalogueState == .ready else { return }
         for id in folders.keys { if let children = try? await vault.children(of: id) { folders[id] = children } }
-        recents = (try? await vault.recents()) ?? recents
+        try? await loadRecents()
         await reloadCatalogue()
         catalogueVersion += 1
         // The build took in every change since the last run, so every kept file is checked against it.
@@ -412,7 +418,7 @@ final class DriveStore {
         for id in folders.keys where touched.contains(id) || folders[id]?.contains(where: { touched.contains($0.id) }) == true {
             if let children = try? await vault.children(of: id) { folders[id] = children }
         }
-        recents = (try? await vault.recents()) ?? recents
+        try? await loadRecents()
         await reloadCatalogue()
         catalogueVersion += 1
         refreshKept(touched)
@@ -785,10 +791,24 @@ final class DriveStore {
     func refreshRecents() async {
         do {
             await sync()
-            recents = try await vault.recents()
+            try await loadRecents()
         } catch {
             report(error)
         }
+    }
+
+    /* A chip chosen on Home: Recent again from what the phone holds, without a sync. */
+    func showRecents(_ filter: HomeFilter) async {
+        guard filter != recentsFilter else { return }
+        recentsFilter = filter
+        try? await loadRecents()
+    }
+
+    /* Recent under the chip chosen now; an answer for a chip no longer chosen is dropped. */
+    private func loadRecents() async throws {
+        let filter = recentsFilter
+        let list = try await vault.recents { filter.matches($0) }
+        if filter == recentsFilter { recents = list }
     }
 
     func refreshTrash() async {
@@ -886,7 +906,7 @@ final class DriveStore {
      */
     private func caughtUp() async {
         await reloadCatalogue()
-        recents = (try? await vault.recents()) ?? recents
+        try? await loadRecents()
         catalogueVersion += 1
     }
 

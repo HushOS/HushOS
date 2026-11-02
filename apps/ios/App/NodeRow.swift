@@ -114,7 +114,7 @@ struct NodeRow: View {
         return (lead, parts.isEmpty ? nil : Self.join(parts))
     }
 
-    static func type(for item: Opened) -> UTType {
+    nonisolated static func type(for item: Opened) -> UTType {
         if let mime = item.metadata.mime, let type = UTType(mimeType: mime) { return type }
         return UTType(filenameExtension: (item.name as NSString).pathExtension) ?? .data
     }
