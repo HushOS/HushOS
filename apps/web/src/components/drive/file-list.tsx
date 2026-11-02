@@ -7,6 +7,7 @@ import {
     useState,
     useSyncExternalStore,
     type ComponentProps,
+    type CSSProperties,
     type ReactNode,
     type MouseEvent,
     type RefObject,
@@ -856,4 +857,13 @@ export function HiddenSortToggle({
             <Arrow className="size-3.5" aria-hidden="true" />
         </button>
     );
+}
+
+/*
+ * A row's place in the list, for the entrance in styles.css ([data-reveal]): rows fade in,
+ * rise and sharpen one after another as a folder opens or an item arrives, the stagger
+ * stopping at the fourteenth so a long list is not kept waiting. Off under reduced motion.
+ */
+export function reveal(index: number) {
+    return { 'data-reveal': '', style: { '--i': index } as CSSProperties };
 }

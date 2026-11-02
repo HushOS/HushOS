@@ -444,3 +444,39 @@
 @utility text-link {
     @apply text-primary underline decoration-1 underline-offset-4 transition-colors hover:text-primary-hover;
 }
+
+/*
+ * Drive's motion (the Marks direction): rows and tiles enter by fading in, rising
+ * 6px and sharpening from a 2px blur over 0.3s, 22ms apart and no later than the
+ * fourteenth (--i from reveal() in file-list.tsx); a row's mark presses to 92% and a
+ * row's hover fades in. Buttons press to 96% (components/ui/button.tsx). None of it
+ * runs under reduced motion.
+ */
+@media (prefers-reduced-motion: no-preference) {
+    [data-reveal] {
+        animation: row-in 0.3s cubic-bezier(0.2, 0, 0, 1) both;
+        animation-delay: calc(min(var(--i, 0), 14) * 22ms);
+    }
+
+    [data-node-id] {
+        transition:
+            background-color 150ms ease-out,
+            box-shadow 150ms ease-out;
+    }
+
+    [data-node-id] [data-row-thumb] > * {
+        transition: scale 150ms ease-out;
+    }
+
+    [data-node-id]:active [data-row-thumb] > * {
+        scale: 0.92;
+    }
+}
+
+@keyframes row-in {
+    from {
+        opacity: 0;
+        translate: 0 6px;
+        filter: blur(2px);
+    }
+}

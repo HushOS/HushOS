@@ -8,7 +8,7 @@ import { cn } from 'cn';
  * and Tailwind's own order, not the variant, would pick the winner.
  */
 const buttonVariants = cva(
-    "group/button inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 rounded-md border font-sans text-sm font-semibold whitespace-nowrap transition-[color,background-color,border-color,transform] duration-150 ease-out-soft outline-none select-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+    "group/button inline-flex shrink-0 cursor-pointer items-center justify-center gap-2 rounded-md border font-sans text-sm font-semibold whitespace-nowrap transition-[color,background-color,border-color,scale] duration-150 ease-out-soft outline-none select-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 active:not-aria-[haspopup]:scale-96 disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
     {
         variants: {
             variant: {
