@@ -75,6 +75,25 @@ extension OnFakeDrive {
             await #expect(throws: GuardError.unsaved) { try await phone.vault.sendingIntoFamily(family.workspaceId) }
         }
 
+        /*
+         * Removed right after the join's acceptance (route 3 answers not-member while the join opens its
+         * folders): the family is let go of as a sync's not-member is, so the folders the acceptance
+         * opened don't stay open. Fails if the not-member only propagates.
+         */
+        @Test func aNotMemberRightAfterAJoinsAcceptanceLeavesItsFoldersUnopenable() async throws {
+            let family = try FamilyFixture()
+            let server = FamilyServer(family: family)
+            server.serve(chain: [family.r1, family.r2])
+            try server.storeSettings(pin: nil)
+            server.detailNotMember = true
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            await #expect(throws: (any Error).self) { _ = try await phone.sync.joinStatus(family.groupId) }
+            await #expect(throws: (any Error).self) { _ = try await phone.vault.children(of: family.rootId) }
+            #expect(await phone.vault.item(family.rootId) == nil)
+            #expect(phone.records.read(userId: family.member.userId, groupId: family.groupId) == nil)
+        }
+
         @Test func theyMatchSavesTheCheckAndAVerifiedPinAndTheMemberReadsVerified() async throws {
             let family = try FamilyFixture()
             let server = FamilyServer(family: family)

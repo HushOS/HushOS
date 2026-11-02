@@ -290,7 +290,20 @@ extension FamilySync {
                     throw error
                 }
                 noteAccepted(groupId, chain)
-                let state = try await afterAcceptance(groupId, chain: chain, pin: pin, reset: false)
+                let state: FamilyState
+                do {
+                    state = try await afterAcceptance(groupId, chain: chain, pin: pin, reset: false)
+                } catch let error as GroupsAPIError where error.isNotMember {
+                    // Removed right after joining: let go of as a sync's not-member is (a wipe whose guard can't be stored
+                    // refuses instead), so nothing the acceptance opened stays open.
+                    do { try await wipe(groupId) } catch { await refuse(groupId) }
+                    throw error
+                } catch {
+                    // Refused after the acceptance (keys that didn't check, a settings save refused): nothing of it stays open.
+                    // No answer leaves it as it was.
+                    if !Self.unanswered(error) { await refuse(groupId) }
+                    throw error
+                }
                 if case .fork(let fork) = state { return .fork(fork) }
                 records.delete(.joins, userId: userId, groupId: groupId)
                 // An escalation an earlier release's join check left: nothing reads it now.
