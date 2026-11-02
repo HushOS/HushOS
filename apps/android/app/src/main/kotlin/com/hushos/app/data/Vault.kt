@@ -946,6 +946,20 @@ class Vault(internal val context: Context, val api: DriveApi) {
         }
     }
 
+    /*
+     * Where a copy of `item` opened for the viewer, another app or Send a copy goes: a family file's under its family
+     * folder's, a received share's under its workspace's (both deleted whole by a removal or a proof, whatever this
+     * process remembers), this account's own under opened/<node>. Null when the workspace id can't name a folder.
+     */
+    fun openedCopyFolder(item: Opened): File? {
+        val ws = item.node.workspaceId
+        return when {
+            isFamilyWorkspace(ws) -> FamilyCopies.folder(context.cacheDir, ws)
+            ownWorkspaceId?.equals(ws, ignoreCase = true) == true -> File(context.cacheDir, "opened")
+            else -> ShareCopies.folder(context.cacheDir, ws)
+        }
+    }
+
     /* Whether this phone still holds this vault's account: a session for it, and its data recorded as its. */
     private fun stillThisAccount(): Boolean =
         Shared.session(context)?.token == api.session.token &&

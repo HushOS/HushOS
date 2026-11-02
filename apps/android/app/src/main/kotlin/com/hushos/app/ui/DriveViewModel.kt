@@ -13,7 +13,6 @@ import androidx.lifecycle.viewModelScope
 import com.hushos.app.BuildConfig
 import com.hushos.app.data.rethrowIfCancelled
 import com.hushos.app.data.Auth
-import com.hushos.app.data.FamilyCopies
 import com.hushos.app.data.familyEpoch
 import com.hushos.app.data.familyWordsSince
 import com.hushos.app.data.isFamilyWorkspace
@@ -2153,8 +2152,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         val familyVault = currentVault?.takeIf { it.isFamilyWorkspace(item.node.workspaceId) }
         // A family folder let go of meanwhile (a removal) hands nothing to another app: what it was before anything began.
         val epoch = familyVault?.familyEpoch(item.node.workspaceId)
-        val folder = if (familyVault != null) FamilyCopies.folder(context.cacheDir, item.node.workspaceId) ?: return null
-            else File(context.cacheDir, "opened")
+        // A received share's goes in its workspace's own (opened/share/<workspace>), which a proof deletes whole.
+        val folder = currentVault?.openedCopyFolder(item) ?: return null
         val file = File(folder, "${item.id}/$versionId/${item.name}")
         // Opening a file is not a transfer to announce: the row shows a small ring while it comes down.
         _state.update { it.copy(opening = it.opening + (item.id to 0f)) }

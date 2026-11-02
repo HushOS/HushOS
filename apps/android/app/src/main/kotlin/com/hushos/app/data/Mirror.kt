@@ -111,6 +111,10 @@ class Mirror private constructor(context: Context) : SQLiteOpenHelper(context, "
         }
     }
 
+    /* Whether this account's own drive (what the mirror keeps) holds a node with this id. */
+    fun holds(nodeId: String): Boolean =
+        readableDatabase.rawQuery("SELECT 1 FROM nodes WHERE id = ? COLLATE NOCASE LIMIT 1", arrayOf(nodeId)).use { it.moveToFirst() }
+
     fun rows(workspaceId: String): List<NodeView> = readableDatabase.rawQuery("SELECT json FROM nodes WHERE workspace_id = ?", arrayOf(workspaceId)).use { cursor ->
         val out = ArrayList<NodeView>()
         while (cursor.moveToNext()) runCatching { NodeView.from(JSONObject(cursor.getString(0))) }.onSuccess { out.add(it) }

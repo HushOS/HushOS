@@ -138,6 +138,8 @@ private fun Vault.purgeShareCopies(workspaceId: String, held: Set<String>): Set<
     val kept = Offline.entries(context).filter { it.workspaceId?.equals(ws, ignoreCase = true) ?: (it.id in held) }
     for (entry in kept) Offline.forget(context, entry.id)
     val ids = held + folders.map { it.id } + kept.map { it.id }
+    // Every copy opened from it as a share, whichever process or session opened it: its workspace's folder, whole.
+    ShareCopies.folder(context.cacheDir, ws)?.deleteRecursively()
     // Node ids name folders here only when they are ids (never "family", "..", or a path).
     for (id in ids.filter { FamilyRecords.valid(it) }) {
         for (place in listOf("opened", "files", "edits", "thumbnails")) File(File(context.cacheDir, place), id.lowercase()).deleteRecursively()
@@ -177,8 +179,27 @@ internal fun Vault.seedFamilyAreas() {
             val areas = runCatching { records.read(user, group)?.areas }.getOrNull().orEmpty()
             for (id in areas.map { it.lowercase() }) if (id != own) familyAreas.putIfAbsent(id, group.lowercase())
         }
+        sweepLegacyOpened()
         familyState.seeded = true
     }
+}
+
+/*
+ * Copies an earlier release left flat under opened/<node> (a received share's among them, which a proof can't find by
+ * workspace): each one this account's own drive doesn't hold (its mirror) goes, being only a copy to download again.
+ * Old thumbnails/ copies go whole (nothing writes there now). Under the copies lock, once per session state.
+ */
+private fun Vault.sweepLegacyOpened() {
+    val opened = File(context.cacheDir, "opened")
+    val names = opened.list().orEmpty().filter { FamilyRecords.valid(it.lowercase()) }
+    if (names.isNotEmpty()) {
+        val mirror = runCatching { Mirror.shared(context) }.getOrNull()
+        for (name in names) {
+            val own = runCatching { mirror?.holds(name) == true }.getOrDefault(false)
+            if (!own) File(opened, name).deleteRecursively()
+        }
+    }
+    File(context.cacheDir, "thumbnails").deleteRecursively()
 }
 
 /* A share into a family's folder: proven, let go of, or held by a barrier still up. Checked again where it is kept. */

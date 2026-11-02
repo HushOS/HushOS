@@ -267,6 +267,50 @@ class FamilySyncTest {
     }
 
     /*
+     * #247 check, round 9: a share of the family's file is opened (the viewer's copy, not kept) and the app restarts
+     * before its folder is proven; the new vault holds nothing of the share. When the sync proves the folder, the copy
+     * goes all the same: share copies live under their workspace's folder, which a proof deletes whole. Fails if a proof
+     * finds a share's copies only by the ids this process remembers.
+     */
+    @Test
+    fun aShareCopyOpenedBeforeARestartGoesWhenItsFolderIsProven() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val before = family.phone()
+        server.shareWithMe(family.fileId)
+        server.pinGrace()
+        val root = before.vault.mountShares().single().root!!
+        val copy = File(before.vault.openedCopyFolder(root)!!, "${family.fileId}/${root.node.currentVersion!!.id}/${root.name}")
+        before.vault.download(family.fileId, copy, workspaceId = family.workspaceId)
+        assertTrue(copy.exists())
+        // A restart: this session's vault ends, and the next holds no row, key or id of the share.
+        before.vault.close()
+        val after = family.phone()
+        assertNull(after.vault.nodes.row(family.workspaceId, family.fileId))
+        assertTrue(copy.exists())
+        accepted(after)
+        assertFalse("a share's copy outlived a restart and its folder being proven a family's", copy.exists())
+    }
+
+    /*
+     * #247 check, round 9: copies an earlier release left flat under opened/<node> can't be tied to a workspace a proof
+     * looks in. At the next start, each one this account's own drive doesn't hold goes; the own drive's stays. Fails if
+     * a flat copy of something else outlives the start, or the own drive's copies are swept with them.
+     */
+    @Test
+    fun aFlatCopyAnEarlierReleaseLeftGoesAtStartUnlessItIsTheOwnDrives() {
+        val mine = server.file(server.root, "Mine.txt", "my own".toByteArray())
+        val first = family.phone()
+        first.vault.buildCatalogue()
+        first.vault.close()
+        val cache = org.robolectric.RuntimeEnvironment.getApplication().cacheDir
+        val stray = File(cache, "opened/${UUID.randomUUID()}/v1/Recipes.txt").apply { parentFile!!.mkdirs(); writeText("theirs") }
+        val own = File(cache, "opened/$mine/v1/Mine.txt").apply { parentFile!!.mkdirs(); writeText("my own") }
+        family.phone()
+        assertFalse("a flat copy of a share outlived the next start", stray.exists())
+        assertTrue("the own drive's copy was swept", own.exists())
+    }
+
+    /*
      * #247 check, round 7: a keep job's own vault (jobVault, a second vault of the session) opened a share of the family's
      * file and is downloading it when the app's vault proves the folder a family's. The job stops, its partial copy goes,
      * and it keeps, downloads and mounts nothing of the folder after. Fails if a vault's family state is its own, so a
