@@ -327,6 +327,19 @@ public enum TemporaryCopies {
         forgetLock.withLock { CopySession(account: account, epoch: account.value) }
     }
 
+    /*
+     * The copies opened of these items outside any family's folder (`opened/<item>`): items of a
+     * share whose folder was proven a family's, opened before the proof under the share's keys.
+     */
+    public static func forgetItems(_ ids: Set<String>, in temporary: URL = FileManager.default.temporaryDirectory) {
+        let opened = temporary.appendingPathComponent("opened", isDirectory: true)
+        forgetLock.withLock {
+            for id in ids where UUID(uuidString: id) != nil {
+                try? FileManager.default.removeItem(at: opened.appendingPathComponent(id.lowercased(), isDirectory: true))
+            }
+        }
+    }
+
     /* `opened/family/`: family folders' copies by workspace; never an item id (those are UUIDs). */
     static let familyFolder = "family"
 

@@ -253,6 +253,13 @@ extension DriveStore {
         // after it. No answer says nothing new, so the marks already judged stay (the rows are still shown, read only).
         if FamilyVerdictBook.moves(after: state) { familyBook.moved(summary.id) }
         guard let areas = try? await inFamily(session, { await $0.familyAreas() }) else { return }
+        // Rows a proof or a forget let go of with their workspace (a share's, kept or opened before): off the screens, with
+        // their pictures.
+        if let gone = try? await inSession(session, { await $0.takeEvicted() }), !gone.isEmpty {
+            for id in gone { thumbnails[id] = nil }
+            dropRows(gone)
+            offlineVersion += 1
+        }
         // Which folders are family folders is only ever learned, never undone: kept whoever shows the family now.
         for (area, groupId) in areas { familyAreaGroups[area] = groupId }
         guard stillShown() else { return }

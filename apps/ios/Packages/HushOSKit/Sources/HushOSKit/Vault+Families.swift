@@ -264,13 +264,20 @@ extension Vault {
         // account's own drive, whatever a member list names. On this actor nothing runs between the clearing and an
         // open, which asks the core for the key as it runs: one that resumes after a fork or removal is refused there.
         let own = workspace?.workspaceId.lowercased()
+        var workspaces: Set<String> = []
         for id in ids.map({ $0.lowercased() }) where id != own {
             // Let go of by this session (its family refused, forked or wiped): no share refills it (admitShare).
             if lettingGo { letGoWorkspaces.insert(id) }
+            workspaces.insert(id)
             for nodeId in nodeKeys.values(in: id).keys { nodeKeys[NodeRef(workspaceId: id, nodeId: nodeId)] = nil; gone.insert(nodeId) }
             for nodeId in opened.values(in: id).keys { opened[NodeRef(workspaceId: id, nodeId: nodeId)] = nil; gone.insert(nodeId) }
             ledgerOpened = ledgerOpened.filter { $0.workspaceId != id }
         }
+        // Their plaintext elsewhere too: what was kept on this phone from them (Offline), and the copies opened from their
+        // items outside a family's folder (a share's, before its folder was proven a family's). The screens drop the rows.
+        let kept = Offline.forgetWorkspaces(workspaces, ids: Set(gone.map { $0.lowercased() }))
+        TemporaryCopies.forgetItems(gone.union(kept))
+        evictedRows.formUnion(gone.union(kept))
         forgetParents(gone)
         return gone
     }

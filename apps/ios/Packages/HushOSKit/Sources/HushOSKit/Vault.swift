@@ -144,6 +144,13 @@ public actor Vault {
      * listing): a share never refills one. This session's own, never another account's or session's.
      */
     var letGoWorkspaces: Set<String> = []
+    /* Rows this vault let go of with their workspace (a proof, a forget), for the screens to drop with their pictures. */
+    var evictedRows: Set<String> = []
+    /* What was let go of since the last call: the screens drop those rows and their thumbnails. */
+    public func takeEvicted() -> Set<String> {
+        defer { evictedRows = [] }
+        return evictedRows
+    }
     /*
      * The rows (and keys) a family's area ledger opened. A family folder's row and key are served
      * only when they came this way: one a share mount (or any write's answer) left there is never

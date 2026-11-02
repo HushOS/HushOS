@@ -671,6 +671,31 @@ extension OnFakeDrive {
         }
 
         /*
+         * A share's file kept on this phone (and opened in another app) before route 25 proved its folder
+         * a family's: once proven, the kept entry, its plaintext and the opened copy all go, and the
+         * screens hear which rows went. Fails if a proof purges only the vault's rows and keys.
+         */
+        @Test func aSharedFileKeptOfflineWhoseFolderIsProvenLeavesNothing() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            let photo = try await photoAsShare(family, server, vault)
+            defer { Offline.forget(photo.id) }
+            try await vault.keepDownloaded(photo)
+            let kept = try #require(Offline.localCopy(of: photo))
+            let opened = try #require(TemporaryCopies.openedFolder(itemId: photo.id, version: "v1", familyWorkspace: nil))
+            try FileManager.default.createDirectory(at: opened, withIntermediateDirectories: true)
+            try Data("plaintext".utf8).write(to: opened.appendingPathComponent("Beach.jpg"))
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            #expect(!Offline.isKept(photo.id), "a share's kept file outlived its folder becoming a family's")
+            #expect(!FileManager.default.fileExists(atPath: kept.path))
+            #expect(!FileManager.default.fileExists(atPath: opened.path))
+            #expect(await vault.takeEvicted().contains(photo.id))
+        }
+
+        /*
          * Writes that decided at entry not to write as a family's (a share's rename, a trash batch) and
          * a write that declared nothing (as share() and the link and tag writes are) reach the final gate
          * as route 25 proves their folder a family's: each is refused there, and nothing is sent. A write

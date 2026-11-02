@@ -1433,7 +1433,7 @@ final class DriveStore {
     }
 
     /* Rows the server agreed are gone: off every folder on screen, Recent and search, without a listing. */
-    private func dropRows(_ ids: Set<String>) {
+    func dropRows(_ ids: Set<String>) {
         for (id, rows) in folders where rows.contains(where: { ids.contains($0.id) }) { folders[id] = rows.filter { !ids.contains($0.id) } }
         recents.removeAll { ids.contains($0.id) }
         for id in ids { catalogue[id] = nil }
