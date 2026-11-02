@@ -1,0 +1,19 @@
+apps/web/src/components/drive/tag-colour.tsx
+  s_ec12ebe02de5ff::t_d078678da56035 36-37,71,97,124,379,381
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f3301064edc512b2c3dc274200bec1146e452fc8",
+  "prompts": {},
+  "sessions": {
+    "s_ec12ebe02de5ff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3f79b7e-f7a1-4c9c-9a58-b7059252bcae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
