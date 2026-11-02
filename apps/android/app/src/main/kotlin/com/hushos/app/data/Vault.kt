@@ -63,6 +63,8 @@ data class Opened(
     val node: NodeView, val metadata: NodeMetadata,
     /* The current version's size as sealed in its own envelope: true after a restore, when the metadata still describes the newer upload. */
     val contentSize: Long? = null,
+    /* In Recent: when it sorts there (`collapseRecents`), which a folder takes from the newest of what it stands in for. */
+    val recentMillis: Long? = null,
 ) {
     val id get() = node.id
     val name get() = metadata.name
@@ -89,7 +91,8 @@ data class Opened(
  * with a folder above it, at any depth, also among `items` is left out, and the topmost such folder
  * sorts by the newest change among itself and what it stands in for, so a folder whose contents
  * keep changing stays near the top. The cut comes after, so the list still fills to `limit`.
- * `parentOf` walks up through folders not among `items`; one it doesn't know ends the walk.
+ * `parentOf` walks up through folders not among `items`; one it doesn't know ends the walk. Each
+ * row carries the time it sorts by as `recentMillis`, which is what Recent shows for it.
  */
 fun collapseRecents(items: List<Opened>, limit: Int, parentOf: (String) -> String? = { null }): List<Opened> {
     val held = items.associateBy { it.id }
@@ -110,15 +113,17 @@ fun collapseRecents(items: List<Opened>, limit: Int, parentOf: (String) -> Strin
         }
         return found
     }
-    val at = HashMap<String, Long>()
+    val at = HashMap<String, Long?>()
     for (item in held.values) {
         val top = topOf(item.id)!!
-        at[top] = maxOf(at[top] ?: 0L, item.changedMillis ?: 0L)
+        val known = at[top]
+        val changed = item.changedMillis
+        if (!at.containsKey(top) || (changed != null && (known == null || changed > known))) at[top] = changed
     }
     // Newest first; things changed in the same moment by name, then id, as the web orders them, so the list never reshuffles.
     return at.entries.map { held.getValue(it.key) to it.value }
-        .sortedWith(compareByDescending<Pair<Opened, Long>> { it.second }.thenBy(java.text.Collator.getInstance()) { it.first.name }.thenBy { it.first.id })
-        .take(limit).map { it.first }
+        .sortedWith(compareByDescending<Pair<Opened, Long?>> { it.second ?: 0L }.thenBy(java.text.Collator.getInstance()) { it.first.name }.thenBy { it.first.id })
+        .take(limit).map { (item, millis) -> item.copy(recentMillis = millis) }
 }
 
 /*

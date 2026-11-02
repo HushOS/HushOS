@@ -148,7 +148,7 @@ fun NodeRow(
     val bitmap = remember(thumbnail) { thumbnail?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }
     // Who can open it only when that differs from its folder: an item shared on its own. Otherwise the date, and a file's size.
     val who = shownWho(model, state, item, note)
-    val time = if (away) "Not on this phone" else note ?: listOfNotNull(whenText(if (recent) item.changedMillis else item.modifiedMillis), item.size?.let { formatBytes(it) }).joinToString(" · ").ifEmpty { null }
+    val time = if (away) "Not on this phone" else note ?: listOfNotNull(whenText(if (recent) item.recentMillis ?: item.changedMillis else item.modifiedMillis), item.size?.let { formatBytes(it) }).joinToString(" · ").ifEmpty { null }
     val keepProblem = keepProblemOf(state, item, note)
     val showingInfo = LocalInfoShown.current == (item.node.workspaceId to item.id)
     Row(

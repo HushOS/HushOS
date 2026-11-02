@@ -6,6 +6,8 @@ public struct Opened: Sendable, Identifiable, Hashable {
     public let metadata: NodeMetadata
     /* The current version's size from its own envelope (suite 2) or row (suite 1). */
     public var contentSize: UInt64?
+    /* In Recent: when it sorts there (`collapsedRecents`), which a folder takes from the newest of what it stands in for. */
+    public var recentAt: Date?
     public var id: String { node.id }
     public var name: String { metadata.name }
     public var isFolder: Bool { node.isFolder }
@@ -775,6 +777,7 @@ extension Opened {
      * folder sorts by the newest change among itself and what it stands in for, so a folder whose
      * contents keep changing stays near the top. The cut comes after, so the list still fills to
      * `limit`. `parentOf` walks up through folders not among `items`; one it doesn't know ends the walk.
+     * Each row carries the time it sorts by as `recentAt`, which is what Recent shows for it.
      */
     public static func collapsedRecents(_ items: [Opened], limit: Int, parentOf: (String) -> String? = { _ in nil }) -> [Opened] {
         var held: [String: Opened] = [:]
@@ -806,7 +809,12 @@ extension Opened {
         }
         return at.compactMap { id, when in held[id].map { ($0, when) } }
             .sorted { newer($0.0, at: $0.1, than: $1.0, at: $1.1) }
-            .prefix(limit).map(\.0)
+            .prefix(limit).map { item, when in
+                var row = item
+                // Nothing to say when no change carried a date.
+                row.recentAt = when == .distantPast ? nil : when
+                return row
+            }
     }
 
     /* Newest in the trash first, as the server lists it; the id breaks ties so the order holds between loads. */

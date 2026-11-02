@@ -638,7 +638,7 @@ export function HomeView() {
                                                                 'text-[13px] text-muted-foreground tabular-nums',
                                                             )}
                                                         >
-                                                            {formatWhen(node.updatedAt)}
+                                                            {formatWhen(node.recentAt)}
                                                         </td>
                                                         <td
                                                             className={cn(

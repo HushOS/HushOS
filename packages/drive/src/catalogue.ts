@@ -62,7 +62,8 @@ function scoreWord(word: string, tokens: string[], weight: number) {
  * any depth, also among `nodes` is left out, and the topmost such folder sorts by the newest
  * change among itself and what it stands in for, so a folder whose contents keep changing
  * stays near the top. The cut comes after, so the list still fills to `limit`. `parentOf`
- * walks up through folders not among `nodes`; one it doesn't know ends the walk.
+ * walks up through folders not among `nodes`; one it doesn't know ends the walk. Each row
+ * carries the time it sorts by as `recentAt`, which is what Recent shows for it.
  */
 export function collapseRecent(
     nodes: Iterable<DriveNode>,
@@ -91,14 +92,17 @@ export function collapseRecent(
         }
         return found;
     };
-    const at = new Map<string, number>();
+    // The newest change each kept node stands for, with the time as it was written.
+    const newest = new Map<string, { at: number; iso: string }>();
     for (const node of held.values()) {
         const top = topOf(node.id)!;
-        at.set(top, Math.max(at.get(top) ?? 0, Date.parse(node.updatedAt) || 0));
+        const at = Date.parse(node.updatedAt) || 0;
+        const known = newest.get(top);
+        if (!known || at > known.at) newest.set(top, { at, iso: node.updatedAt });
     }
     // Newest first; things changed in the same moment by name, then id, so the order never shuffles.
-    return [...at]
-        .map(([id, when]) => ({ node: held.get(id)!, at: when }))
+    return [...newest]
+        .map(([id, { at, iso }]) => ({ node: held.get(id)!, at, iso }))
         .sort(
             (a, b) =>
                 b.at - a.at ||
@@ -106,8 +110,11 @@ export function collapseRecent(
                 (a.node.id < b.node.id ? -1 : a.node.id > b.node.id ? 1 : 0),
         )
         .slice(0, limit)
-        .map((entry) => entry.node);
+        .map((entry): RecentNode => ({ ...entry.node, recentAt: entry.iso }));
 }
+
+/* A row of Recent: the node, and when Recent says it changed (`collapseRecent`). */
+export type RecentNode = DriveNode & { recentAt: string };
 
 export class Catalogue {
     private readonly nodes = new Map<string, DriveNode>();
