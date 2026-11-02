@@ -1,0 +1,25 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyJoin.swift
+  s_566b8e0c4467a4::t_1d7c1a294f0ef5 162,252
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_566b8e0c4467a4::t_6ca474a8aa171e 211-212,222-223,547-565,581,583,735,817-820,823-824,999-1000
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Unbacked.swift
+  s_566b8e0c4467a4::t_dd7cae9cb71241 274-295
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilySyncTests.swift
+  s_566b8e0c4467a4::t_a6955590de9c85 186-239
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7809e7f783608d164a47b9c7c746d3709c703db2",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

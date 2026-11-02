@@ -1,0 +1,33 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_566b8e0c4467a4::t_b197d406305d16 283-285,287,290-291,294,301,303-307,309,312-315,319,324,329-332,335,338
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyJoinTests.swift
+  s_566b8e0c4467a4::t_650a7265640f00 251-254,256,259-260
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilySyncTests.swift
+  s_566b8e0c4467a4::t_5e2a5787b6ddb4 191-192
+apps/ios/App/Families.swift
+  s_9a0dff1047278c::t_22a791101a743b 103,109,209-222,512-513
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "50e18ed047a9766258b00ddab2fa6777052766ef",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_9a0dff1047278c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a97937941d32e71eb",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_e392ccd861f72f 31-39,131-135
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_541b2758f21c71 75-76,143-146,549
+apps/ios/App/Families.swift
+  s_566b8e0c4467a4::t_378cb4d1d4c0e1 149,417-418,437,453,458-460
+apps/ios/App/Join.swift
+  s_566b8e0c4467a4::t_2c2fa9704b15cc 43-49,57,61-62,78-80,84-89,150,153,160,163,247-248,298,333-335,340-342,347
+apps/ios/App/MainView.swift
+  s_566b8e0c4467a4::t_4a138a3ca0b9b7 121-122
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "28beadea5256059c54344f21fc38f91c72cfaefb",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

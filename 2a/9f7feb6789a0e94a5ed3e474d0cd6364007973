@@ -1,0 +1,37 @@
+apps/ios/App/AppModel.swift
+  s_566b8e0c4467a4::t_aeae717e660eef 219-220
+apps/ios/Files/FileProviderExtension.swift
+  s_566b8e0c4467a4::t_8bd208b22f8345 137-138,148,150
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AccountStore.swift
+  s_566b8e0c4467a4::t_7363ee2d075f9e 27-28,43,48,113-114,140-141
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Links.swift
+  s_566b8e0c4467a4::t_d4794e24cb07b2 306-307,317
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Offline.swift
+  s_566b8e0c4467a4::t_9c32bb0c023c0c 228-233,237-245,253
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Resumable.swift
+  s_566b8e0c4467a4::t_5d28e1eca749a8 106
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Unbacked.swift
+  s_566b8e0c4467a4::t_fa2ee6dee9a147 272-294,309,314-315,326-340,345-346,348,350-352
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_566b8e0c4467a4::t_1e55d4d57b77bb 677-678
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FilesOwnerTests.swift
+  s_566b8e0c4467a4::t_bc8959ffb87784 174,178,181,186,190-215,223
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SessionGateTests.swift
+  s_566b8e0c4467a4::t_c8577f775d69d4 209-245
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2a9f7feb6789a0e94a5ed3e474d0cd6364007973",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
