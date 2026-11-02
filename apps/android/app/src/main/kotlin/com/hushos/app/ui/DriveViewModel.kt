@@ -1490,6 +1490,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     fun createFolder(name: String, folder: String) = viewModelScope.launch { write(folder) { it.createFolder(folder, name) } }
     fun rename(item: Opened, name: String) = viewModelScope.launch { write(item.node.parentId) { it.rename(item.id, name) } }
+    /* One signed write per folder not already that colour; null takes them back to the plain folder colour. */
+    fun recolour(items: List<Opened>, colour: String?) = viewModelScope.launch {
+        items.filter { com.hushos.core.folderColour(it.metadata.attributes) != colour }.groupBy { it.node.parentId }.forEach { (parent, here) -> write(parent) { vault -> here.forEach { vault.recolour(it.id, colour) } } }
+    }
     fun move(item: Opened, folder: String) = viewModelScope.launch {
         if (write(item.node.parentId) { it.move(item.id, folder) }) refresh(folder)
     }

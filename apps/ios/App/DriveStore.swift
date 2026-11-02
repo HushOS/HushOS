@@ -1058,6 +1058,14 @@ final class DriveStore {
         _ = await perform(in: item.node.parentId) { _ = try await vault.rename(item.id, to: name) }
     }
 
+    /* One signed write per folder not already that colour; nil takes them back to the plain folder colour. */
+    func recolour(_ items: [Opened], to colour: String?) async {
+        for (parent, here) in Dictionary(grouping: items.filter { folderColour(attributes: $0.metadata.attributes) != colour }, by: \.node.parentId) {
+            let ok = await perform(in: parent) { for item in here { _ = try await vault.recolour(item.id, to: colour) } }
+            if !ok { return }
+        }
+    }
+
     func move(_ item: Opened, to folder: String) async {
         // Where it is now: an Undo hands back the item as it was before the move, whose parent is the destination.
         let from = await vault.item(item.id)?.node.parentId ?? item.node.parentId
