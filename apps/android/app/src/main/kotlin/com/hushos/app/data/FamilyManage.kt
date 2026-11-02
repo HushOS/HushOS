@@ -131,16 +131,17 @@ sealed interface LetIn {
 
 internal val FamilySync.outbox: FamilyOutbox get() = FamilyOutbox.of(vault.context) { !vault.closed }
 
-/* The words a refusal of a roster call says (the web's refusalCopy, the codes Let them in meets). */
+/*
+ * The words a refusal of a roster call says: the web's refusalCopy for every code route 17 answers (its chainAnswer, the
+ * checks before it, the route's 426, 429 and 413), so none falls through to a retry that can't help. Where the web says
+ * "Reload and try again", a phone says "Try again" (it has no page to reload), as it does for `unsupported`.
+ */
 internal fun callWords(answer: CallAnswer, first: String?, family: String = "this family"): String = when (answer.code) {
-    "not-pending" -> first?.let { "$it isn’t waiting to join any more." } ?: "They aren’t waiting to join any more."
-    "already-member" -> "That person is already in the family."
-    "forbidden" -> "Only someone who manages the family can do that."
-    "held" -> "Another manager paused your changes in this family for now."
-    "not-member" -> FamilyWords.NOT_IN_FAMILY
-    "members-changed" -> "The family’s members changed meanwhile. Try again."
+    "invalid" -> "Couldn’t save that change. Try again."
+    "succession-due" -> "A manager of $family needs to finish an earlier change first. Try again."
     "left-due" -> "Someone left the family. A manager needs to finish that before anyone can join or roles change."
-    "unsupported" -> "Update HushOS to do this."
+    "members-changed", "stale" -> "$family changed while you were working on it. Try again."
+    "busy" -> "Another change to this plan is in progress. Try again in a moment."
     // The web's seats words. A phone never buys a place (billing is read only there): the server
     // refuses one that would need a purchase as `full`, said as the web's plain "no free places".
     "seats" -> when (answer.data?.optString("reason")) {
@@ -149,9 +150,31 @@ internal fun callWords(answer: CallAnswer, first: String?, family: String = "thi
         "cap" -> "The plan for $family allows no more members."
         else -> "Every place in $family is taken."
     }
-    "rate-limited" -> "That’s been tried too often. Wait a little, then try again."
+    "no-plan" -> "Choose a plan for $family first. Until it has one, nobody can be invited and no family folders can be made."
+    // Let them in: the newcomer's other family is never named to this one.
+    "in-family" -> if (answer.data?.optString("reason") == "newcomer") "They’ve joined another family since they accepted. They can join yours once they leave it."
+        else "You’re in a family already. Leave it before you create another."
+    // No figure: managers learn only that the newcomer's files are more than what's free.
+    "pool-full" -> "Their files don’t fit in the family’s free space. Free up space or move to a bigger plan, then let them in."
+    "unsupported" -> "Update HushOS to do this."
+    "forbidden" -> "Only someone who manages the family can do that."
+    "not-member" -> FamilyWords.NOT_IN_FAMILY
+    "not-pending" -> first?.let { "$it isn’t waiting to join any more." } ?: "They aren’t waiting to join any more."
+    "held" -> "Another manager paused your changes in this family for now."
+    "rotating", "epoch-stale", "root-moved", "document-stale" -> "A family folder was changing at the same time. Try again in a moment."
+    "root-mid-rotation" -> "A family folder is in the middle of a key change this server can’t account for. Contact the server’s operator."
+    "not-rotating", "area-moved" -> "A family folder changed meanwhile. Try again."
+    "no-seal" -> "Another manager needs to open the family before you can change it. Try again later."
+    "area-limit" -> answer.data?.takeIf { it.has("limit") }?.optInt("limit")?.let { "A family can have at most $it shared folders on this server." }
+        ?: "This family has as many shared folders as this server allows."
     "grants-due" -> GRANTS_DUE
-    else -> if (answer.status == 0) GroupsApiError.NO_ANSWER else "HushOS couldn’t do that just now. Try again in a moment."
+    "already-member" -> "That person is already in the family."
+    "too-large" -> "That change is too large for this server."
+    "rate-limited" -> "That’s been tried too often. Wait a little, then try again."
+    "unavailable" -> "HushOS couldn’t save that just now. Try again in a moment."
+    // A code this app doesn't know (a newer server): the web's own fallback.
+    null -> if (answer.status == 0) GroupsApiError.NO_ANSWER else "HushOS couldn’t do that just now. Try again in a moment."
+    else -> "Couldn’t save that change. Try again."
 }
 
 /*

@@ -445,4 +445,53 @@ class FamilyManageTest {
         assertEquals(1, family.callBodies.size)
         assertTrue(admitClients().single()?.startsWith("android/") == true)
     }
+
+    /*
+     * Every refusal route 17 can answer says its own words (the web's), never the retry that can't help. Fails if a
+     * blocker that won't clear on retry, such as files that don't fit or a newcomer now in another family, falls through
+     * to "Try again in a moment".
+     */
+    @Test
+    fun everyAdmissionRefusalSaysItsOwnWords() {
+        val family = "Lindqvist family"
+        val retry = "HushOS couldn’t do that just now. Try again in a moment."
+        fun said(status: Int, code: String, data: JSONObject? = null) = callWords(CallAnswer(status, code, data, "server words"), "Grace", family)
+        // A list, never a map keyed by the words: two codes said alike must both be checked.
+        val cases = listOf(
+            said(409, "pool-full") to "Their files don’t fit in the family’s free space. Free up space or move to a bigger plan, then let them in.",
+            said(409, "in-family", JSONObject().put("reason", "newcomer")) to "They’ve joined another family since they accepted. They can join yours once they leave it.",
+            said(400, "invalid", JSONObject().put("reason", "roster-chain")) to "Couldn’t save that change. Try again.",
+            said(409, "succession-due") to "A manager of Lindqvist family needs to finish an earlier change first. Try again.",
+            said(409, "left-due") to "Someone left the family. A manager needs to finish that before anyone can join or roles change.",
+            said(409, "members-changed") to "Lindqvist family changed while you were working on it. Try again.",
+            said(409, "busy") to "Another change to this plan is in progress. Try again in a moment.",
+            said(402, "seats", JSONObject().put("reason", "full")) to "Every place in Lindqvist family is taken.",
+            said(402, "seats", JSONObject().put("reason", "payer")) to "Every place in the plan for Lindqvist family is taken. Ask the person who pays for it to add a place.",
+            said(402, "seats", JSONObject().put("reason", "no-plan")) to "Choose a plan for Lindqvist family before letting anyone in.",
+            said(402, "seats", JSONObject().put("reason", "cap")) to "The plan for Lindqvist family allows no more members.",
+            said(409, "not-pending") to "Grace isn’t waiting to join any more.",
+            said(403, "forbidden") to "Only someone who manages the family can do that.",
+            said(404, "not-member") to FamilyWords.NOT_IN_FAMILY,
+            said(409, "held") to "Another manager paused your changes in this family for now.",
+            said(409, "rotating") to "A family folder was changing at the same time. Try again in a moment.",
+            said(409, "root-mid-rotation") to "A family folder is in the middle of a key change this server can’t account for. Contact the server’s operator.",
+            said(409, "area-moved") to "A family folder changed meanwhile. Try again.",
+            said(409, "area-limit", JSONObject().put("limit", 10)) to "A family can have at most 10 shared folders on this server.",
+            said(409, "grants-due") to "Someone in the family is still missing a folder’s keys. Try again in a moment.",
+            said(409, "already-member") to "That person is already in the family.",
+            said(413, "too-large") to "That change is too large for this server.",
+            said(429, "rate-limited") to "That’s been tried too often. Wait a little, then try again.",
+            said(426, "unsupported") to "Update HushOS to do this.",
+            said(503, "unavailable") to "HushOS couldn’t save that just now. Try again in a moment.",
+        )
+        assertEquals(25, cases.size)
+        for ((got, expected) in cases) assertEquals(expected, got)
+        assertTrue("none is the generic retry", cases.none { it.first == retry })
+        // End to end: the newcomer's files don't fit, said on Let them in, and nothing is kept to send again.
+        val phone = phone()
+        this.family.admitAnswers.add { _ -> 409 to JSONObject().put("code", "pool-full").put("message", "Their files don't fit.") }
+        assertEquals(LetIn.Refused("Their files don’t fit in the family’s free space. Free up space or move to a bigger plan, then let them in."),
+            phone.sync.letIn(summary, grace))
+        assertTrue(kept(phone).isEmpty())
+    }
 }
