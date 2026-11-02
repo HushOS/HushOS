@@ -427,9 +427,9 @@ class ProviderFamilies internal constructor(
     fun editCopy(doc: FamilyDoc.Node, keepContents: Boolean): File {
         val (folder, item) = writable(doc)
         val chain = WriteBacks.chainOf(doc.workspaceId, doc.nodeId)
-        // After a save of it still on its way, never during: the newest one still queued is what the file holds now, and
-        // the server's version is older than it.
-        return WriteBacks.serially(chain) { editCopy(doc, folder, item, if (keepContents) WriteBacks.pending(vault.context, chain) ?: readCopy(doc, strict = true) else null) }
+        // The newest save of it not landed yet (in flight here, or queued) is what the file holds now: the server's
+        // version is older than it, and an edit built on that would drop the save.
+        return editCopy(doc, folder, item, if (keepContents) WriteBacks.newestPending(vault.context, chain) ?: readCopy(doc, strict = true) else null)
     }
 
     private fun editCopy(doc: FamilyDoc.Node, folder: FamilyRoot.Folder, item: Opened, source: File?): File {
@@ -455,22 +455,26 @@ class ProviderFamilies internal constructor(
      * blocks a write only for now (no answer, so the root is read only; a guard owed; keys still being checked) is the
      * job's to wait out with its own gates: queued, never dropped. The edit moves into the queue's own folder. The job's id.
      */
-    fun writeBack(doc: FamilyDoc.Node, edit: File): java.util.UUID {
+    fun writeBack(doc: FamilyDoc.Node, edit: File, order: Long = WriteBacks.nextOrder(), opened: Opened? = null): java.util.UUID {
         if (!edit.exists()) throw FileNotFoundException(FamilyWords.OPEN_AGAIN)
         if (vault.closed) throw SessionEnded()
         require(doc.groupId)
-        val item = vault.item(doc.workspaceId, doc.nodeId) ?: throw FileNotFoundException(FamilyWords.OPEN_AGAIN)
+        // Where the file is now: this vault's row, else found through the ledger or the feed (another device moved it, and
+        // a listing since forgot it here); when that can't be asked now, as it was when the app opened it. The job looks it
+        // up again itself.
+        val item = vault.item(doc.workspaceId, doc.nodeId)
+            ?: runCatching { held(doc.workspaceId, doc.nodeId) }.getOrNull()
+            ?: opened ?: throw FileNotFoundException(FamilyWords.OPEN_AGAIN)
         val parent = item.node.parentId ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
-        // In the document's chain (WriteBacks): it runs only after the saves of it queued before, never ahead of them.
+        // Its place among the file's saves (WriteBacks), taken in the close callback: it lands only while no newer save
+        // of the file has, and no other save's fate (cancelled, failed, retrying) holds it up.
         val chain = WriteBacks.chainOf(doc.workspaceId, doc.nodeId)
-        return WriteBacks.serially(chain) {
-            queue(edit, item.name, item.metadata.mime, parent, item.id, TransferQueue.Family(doc.groupId.lowercase(), doc.workspaceId.lowercase()), chain)
-        }
+        return queue(edit, item.name, item.metadata.mime, parent, item.id, TransferQueue.Family(doc.groupId.lowercase(), doc.workspaceId.lowercase()), chain, order)
     }
 
     /* Tests: what queues a write-back (TransferQueue.upload), so a test can run the job it queued. */
-    internal var queue: (file: File, name: String, mime: String?, folder: String, replacingId: String, family: TransferQueue.Family, chain: String) -> java.util.UUID =
-        { file, name, mime, folder, replacingId, family, chain -> TransferQueue.upload(vault.context, file, name, mime, folder, replacingId, family, chain = chain) }
+    internal var queue: (file: File, name: String, mime: String?, folder: String, replacingId: String, family: TransferQueue.Family, chain: String, order: Long) -> java.util.UUID =
+        { file, name, mime, folder, replacingId, family, chain, order -> TransferQueue.upload(vault.context, file, name, mime, folder, replacingId, family, chain = chain, order = order) }
 
     /* A new folder, or an empty file whose bytes follow through a write, in a writable family folder. Its document id. */
     fun create(parentDoc: FamilyDoc.Node, mimeType: String, name: String): String {

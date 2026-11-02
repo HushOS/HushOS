@@ -34,6 +34,7 @@ import com.hushos.app.data.oweFamilyGuard
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -105,12 +106,10 @@ class ProviderFamiliesTest {
 
     private fun watchQueue(families: ProviderFamilies) {
         val real = families.queue
-        families.queue = { file, name, mime, folder, replacing, fam, chain ->
-            real(file, name, mime, folder, replacing, fam, chain).also { id ->
-                // Its place in the document's chain is the queue's own (WriteBacks.nextOrder): read back from WorkManager.
-                val order = WorkManager.getInstance(app).getWorkInfoById(id).get()!!.tags.filter { it.startsWith("order:") }
+        families.queue = { file, name, mime, folder, replacing, fam, chain, order ->
+            real(file, name, mime, folder, replacing, fam, chain, order).also { id ->
                 requests[id] = TransferQueue.uploadRequest(id, File(app.filesDir, "queue/$id/content"), mime, folder, replacing, fam,
-                    session = TransferQueue.accountTag(Shared.session(app)!!), extraTags = listOf("chain:$chain") + order)
+                    session = TransferQueue.accountTag(Shared.session(app)!!), chain = chain, order = order)
             }
         }
     }
@@ -741,26 +740,128 @@ class ProviderFamiliesTest {
     }
 
     /*
-     * An editor saves twice while the first save's upload is retrying: the second save waits behind the first in the
-     * document's chain (never a job that could run first), and the version left is the second. Fails if two saves of one
-     * document are independent jobs, so the older could land last and replace the newer.
+     * An editor saves twice while the first save's upload is retrying: the second is never held up by it (it runs and
+     * lands), and the first, running after, finds the newer save landed and is superseded, so the version left is the
+     * second. Fails if a save waits on another's fate, or an older save lands after a newer one.
      */
     @Test
-    fun twoSavesOfAFamilyFileLandInTheOrderTheyWereMade() {
+    fun twoSavesOfAFamilyFileLandNewestLastWhateverTheFirstDoes() {
         val provider = provider()
         rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
         val families = familiesOf(provider).also(::watchQueue)
         val doc = FamilyDoc.of(file) as FamilyDoc.Node
         val first = families.writeBack(doc, families.editFor(doc, "w").apply { writeText("first save") })
         val second = families.writeBack(doc, families.editFor(doc, "w").apply { writeText("second save") })
-        assertEquals(androidx.work.WorkInfo.State.BLOCKED, WorkManager.getInstance(app).getWorkInfoById(second).get()!!.state)
         server.beforeAnswer = { method, path -> if (method == "POST" && path == "drive/uploads") throw IllegalStateException("dropped") }
         assertEquals(ListenableWorker.Result.retry(), runJob(first))
         server.beforeAnswer = null
-        assertEquals(ListenableWorker.Result.success(), runJob(first))
+        assertEquals(androidx.work.WorkInfo.State.ENQUEUED, WorkManager.getInstance(app).getWorkInfoById(second).get()!!.state)
         assertEquals(ListenableWorker.Result.success(), runJob(second))
+        assertEquals(ListenableWorker.Result.success(), runJob(first))
         families.children(FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId))
         assertEquals("second save", families.readCopy(doc).readText())
+    }
+
+    /*
+     * The first save is cancelled from the transfers panel, or fails for good: the second is still runnable and lands, and
+     * a failed first stays on the list with its copy; its Retry, after the second landed, keeps its place and is
+     * superseded. Fails if saves are chained (one cancelled or failed takes the next down) or a Retry lands an older save
+     * over the newer one.
+     */
+    @Test
+    fun aCancelledOrFailedFamilySaveNeverStopsTheNextAndItsRetryNeverLandsOverIt() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider).also(::watchQueue)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        val cancelled = families.writeBack(doc, families.editFor(doc, "w").apply { writeText("cancelled save") })
+        val failed = families.writeBack(doc, families.editFor(doc, "w").apply { writeText("failed save") })
+        val last = families.writeBack(doc, families.editFor(doc, "w").apply { writeText("last save") })
+        WorkManager.getInstance(app).cancelWorkById(cancelled).result.get()
+        val inner = server.extraRoutes!!
+        server.extraRoutes = { method, segments, query, body ->
+            if (method == "POST" && segments == listOf("drive", "uploads")) 400 to org.json.JSONObject().put("message", "Refused.") else inner(method, segments, query, body)
+        }
+        assertEquals(ListenableWorker.Result.failure()::class, runJob(failed)::class)
+        server.extraRoutes = inner
+        assertEquals(androidx.work.WorkInfo.State.ENQUEUED, WorkManager.getInstance(app).getWorkInfoById(last).get()!!.state)
+        assertEquals(ListenableWorker.Result.success(), runJob(last))
+        val row = com.hushos.app.data.FailedTransfers.of(app).all().single { it.id == failed.toString() }
+        assertFalse(row.sourceGone())
+        assertTrue(TransferQueue.retry(app, row))
+        val retried = WorkManager.getInstance(app).getWorkInfosByTag(TransferQueue.TAG).get().single { it.id !in setOf(cancelled, failed, last) }
+        val tag = { prefix: String -> retried.tags.first { it.startsWith(prefix) }.removePrefix(prefix) }
+        requests[retried.id] = TransferQueue.uploadRequest(retried.id, File(tag("file:")), row.mime, row.folder!!, row.replacing,
+            TransferQueue.Family(row.family!!, row.familyWorkspace!!), tag("ledger:"), TransferQueue.accountTag(Shared.session(app)!!), row.chain, row.order)
+        assertEquals(ListenableWorker.Result.success(), runJob(retried.id))
+        families.children(FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId))
+        assertEquals("the retried older save landed over the newer one", "last save", families.readCopy(doc).readText())
+    }
+
+    /*
+     * Two closes back to back through the provider's real close callback, the second's write-back getting further first:
+     * the second lands and the first is superseded. Fails if a save's place is taken anywhere but its close callback.
+     */
+    @Test
+    fun twoClosesOfAFamilyFileBackToBackLandInTheirOrder() {
+        val provider = provider()
+        val spawned = ArrayList<Runnable>()
+        provider.spawn = { spawned.add(it) }
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider).also(::watchQueue)
+        for (text in listOf("first save", "second save")) {
+            ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write(text.toByteArray()) }
+            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        }
+        assertEquals(2, spawned.size)
+        spawned.reversed().forEach { it.run() }
+        for (id in requests.keys.toList()) assertEquals(ListenableWorker.Result.success(), runJob(id))
+        families.children(FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId))
+        assertEquals("second save", families.readCopy(FamilyDoc.of(file) as FamilyDoc.Node).readText())
+    }
+
+    /*
+     * An editor holds the file open while another member's device moves it into a folder of its own, and a poll's listing
+     * forgets it where it was: closing the editor finds it where it is now (the feed) and its save lands there. When even
+     * that can't be asked (no answer), the save is queued as the file was when opened, never deleted. Fails if a close
+     * that can't find the file in the cache drops the only edited copy.
+     */
+    @Test
+    fun aSaveOfAFileMovedAndForgottenWhileOpenIsKept() {
+        val provider = provider()
+        val spawned = ArrayList<Runnable>()
+        provider.spawn = { spawned.add(it) }
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider).also(::watchQueue)
+        val pfd = provider.openDocument(file, "w", null)
+        val other = family.phone()
+        assertTrue(other.sync.sync(family.summary) is FamilyState.Accepted)
+        other.vault.listChildren(family.rootId, family.workspaceId)
+        val trips = other.vault.createFolder(family.rootId, "Trips")
+        other.vault.move(family.fileId, trips.id)
+        assertTrue(provider.pollOnce())
+        assertNull("the poll kept the moved file where it was", families.vault.item(family.workspaceId, family.fileId)?.takeIf { it.node.parentId == family.rootId })
+        ParcelFileDescriptor.AutoCloseOutputStream(pfd).use { it.write("saved after the move".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        spawned.single().run()
+        val job = requests.keys.single()
+        assertEquals(ListenableWorker.Result.success(), runJob(job))
+        val out = File(app.cacheDir, "read-${System.nanoTime()}")
+        other.vault.listChildren(trips.id, family.workspaceId)
+        other.vault.download(family.fileId, out, workspaceId = family.workspaceId)
+        assertEquals("saved after the move", out.readText())
+        // Moved and forgotten again, and nothing answers the lookup: queued as it was when opened.
+        spawned.clear()
+        val again = provider.openDocument(file, "w", null)
+        families.vault.forget(family.workspaceId, family.fileId)
+        families.vault.parents.remove(family.fileId)
+        server.beforeAnswer = { _, path -> if (path.endsWith("/children") || path.endsWith("/changes")) throw IllegalStateException("dropped") }
+        ParcelFileDescriptor.AutoCloseOutputStream(again).use { it.write("saved offline".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        spawned.single().run()
+        server.beforeAnswer = null
+        val queuedAgain = requests.keys.single { it != job }
+        assertEquals("saved offline", File(app.filesDir, "queue/$queuedAgain/content").readText())
     }
 
     /*

@@ -21,6 +21,7 @@ import com.hushos.app.data.NotAuthenticated
 import com.hushos.app.data.Opened
 import com.hushos.app.data.Shared
 import com.hushos.app.data.Vault
+import com.hushos.app.data.WriteBacks
 import com.hushos.app.data.sync
 import com.hushos.app.data.buildCatalogue
 import com.hushos.app.data.Offline
@@ -445,17 +446,31 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     private fun openFamily(families: ProviderFamilies, doc: FamilyDoc.Node, mode: String): ParcelFileDescriptor {
         if (mode.contains("r") && !mode.contains("w")) return ParcelFileDescriptor.open(families.readCopy(doc), ParcelFileDescriptor.MODE_READ_ONLY)
         val edit = families.editFor(doc, mode)
+        val opened = families.node(doc)
+        val chain = WriteBacks.chainOf(doc.workspaceId, doc.nodeId)
         val handler = Handler(Looper.getMainLooper())
         return ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), handler) { error ->
             if (error != null) { edit.delete(); return@open }
-            Thread {
-                // Queued: the job tells Files once it lands (Vault.foldersChanged). Refused: nothing goes, and the edit with it.
-                runCatching { families.writeBack(doc, edit) }
-                    .onFailure { android.util.Log.w("HushOSFiles", "family write-back refused: ${it.javaClass.name}") }
-                edit.delete()
-            }.start()
+            // Its place among the file's saves, taken here in the close callback before anything runs elsewhere (WriteBacks):
+            // two closes back to back keep their order whichever thread gets further first.
+            val order = WriteBacks.nextOrder()
+            WriteBacks.closing(chain, order, edit)
+            spawn(Runnable {
+                // Queued: the job tells Files once it lands (Vault.foldersChanged). Refused (the family let go of it, the
+                // session ended): nothing goes, and the edit with it.
+                try {
+                    runCatching { families.writeBack(doc, edit, order, opened) }
+                        .onFailure { android.util.Log.w("HushOSFiles", "family write-back refused: ${it.javaClass.name}") }
+                } finally {
+                    WriteBacks.settled(chain, order)
+                    edit.delete()
+                }
+            })
         }
     }
+
+    /* Tests: where a closed edit's write-back runs (a thread of its own). */
+    internal var spawn: (Runnable) -> Unit = { Thread(it).start() }
 
     /* Through a pipe, never a plaintext file in the cache: the decrypted JPEG exists only in memory and in transit. */
     override fun openDocumentThumbnail(documentId: String, sizeHint: Point, signal: CancellationSignal?): AssetFileDescriptor = guarded {
