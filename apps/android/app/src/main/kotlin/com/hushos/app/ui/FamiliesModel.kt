@@ -515,10 +515,10 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             model.familyScope.launch {
                 var done = 0
                 val result = gate.run(s) {
-                    s.owner.families.walk(summary.id, target) { count ->
+                    s.owner.families.walk(summary.id, target, progress = { count ->
                         done = count
                         model.familyScope.launch { if (gate.current(s) && ws in walking) walks[ws] = WalkShown(summary.id, count, null) }
-                    }
+                    })
                 }
                 walking.remove(ws)
                 if (result == null || !gate.current(s)) return@launch

@@ -291,7 +291,7 @@ class FamilyWalksTest {
         assertTrue(app.families.sync(family.summary) is FamilyState.Accepted)
         val records = FamilyRecords.of(this.app)
         var stopped = 0
-        val pass = { FamilyWalkWork.run(this.app, Vault.fromShared(this.app)) { stopped++ } }
+        val pass = { FamilyWalkWork.run(this.app, Vault.fromShared(this.app), stop = { stopped++ }) }
         family.listed = false
         family.rostersFail = true
         assertEquals(FamilyWalkWork.Outcome.RETRY, pass())
@@ -320,7 +320,7 @@ class FamilyWalksTest {
                 Shared.writeSession(app, Shared.Session(server.origin, "another-session", java.util.UUID.randomUUID().toString(), "ana@example.org"))
             }
         }
-        assertEquals(FamilyWalkWork.Outcome.SIGNED_OUT, FamilyWalkWork.run(app, vault) { stopped++ })
+        assertEquals(FamilyWalkWork.Outcome.SIGNED_OUT, FamilyWalkWork.run(app, vault, stop = { stopped++ }))
         assertEquals("the next account's checks stay", 0, stopped)
         // Each session's work has its own key: one session never names another's.
         val one = Shared.Session(server.origin, "a", "u", "e")
@@ -336,12 +336,12 @@ class FamilyWalksTest {
         val app = Vault(this.app, DriveApi(Shared.session(this.app)!!))
         assertTrue(app.families.sync(family.summary) is FamilyState.Accepted)
         family.groupsFail = true
-        assertEquals(FamilyWalkWork.Outcome.RETRY, FamilyWalkWork.run(this.app, Vault.fromShared(this.app)) {})
+        assertEquals(FamilyWalkWork.Outcome.RETRY, FamilyWalkWork.run(this.app, Vault.fromShared(this.app), stop = {}))
         family.groupsFail = false
         family.rostersFail = true
-        assertEquals(FamilyWalkWork.Outcome.RETRY, FamilyWalkWork.run(this.app, Vault.fromShared(this.app)) {})
+        assertEquals(FamilyWalkWork.Outcome.RETRY, FamilyWalkWork.run(this.app, Vault.fromShared(this.app), stop = {}))
         family.rostersFail = false
-        assertEquals(FamilyWalkWork.Outcome.DONE, FamilyWalkWork.run(this.app, Vault.fromShared(this.app)) {})
+        assertEquals(FamilyWalkWork.Outcome.DONE, FamilyWalkWork.run(this.app, Vault.fromShared(this.app), stop = {}))
     }
 
     /*
@@ -358,7 +358,7 @@ class FamilyWalksTest {
         val outcome = try {
             assertTrue(folder.setExecutable(false, false) && folder.setReadable(false, false))
             // The app's vault, which accepted the family: its ledger holds the chain the wipe must hand a guard back for.
-            FamilyWalkWork.run(this.app, app) {}
+            FamilyWalkWork.run(this.app, app, stop = {})
         } finally {
             folder.setExecutable(true, false)
             folder.setReadable(true, false)
@@ -399,6 +399,32 @@ class FamilyWalksTest {
         phone.vault.beforeWriteGate = null
         if (server.running(family.rootId)) phone.sync.walk(family.groupId, accepted(phone).areas.single().walkTarget()!!)
         assertEquals(mapOf("Recipes.txt" to "marker-family", "Packing.txt" to "marker-deep", "Tickets.txt" to "marker-during-walk"), readFresh())
+    }
+
+    /*
+     * WorkManager stops the background pass after the walk's first batch landed (its window ran out, or the network went):
+     * the pass ends at the next check, sends nothing more, leaves no folder locked and no key pending, and asks to run
+     * again. Fails if a stopped pass goes on walking, or a stop is swallowed as an ordinary failure.
+     */
+    @Test
+    fun aStoppedPassSendsNothingMoreAndLeavesNoFolderLocked() {
+        val app = Vault(this.app, DriveApi(Shared.session(this.app)!!))
+        assertTrue(app.families.sync(family.summary) is FamilyState.Accepted)
+        family.replaceKeys()
+        server.rotationBatch = 1
+        var sentWhenStopped = -1
+        val outcome = FamilyWalkWork.run(this.app, app, stop = {}) {
+            if (server.rotationBatches.isNotEmpty()) {
+                if (sentWhenStopped < 0) sentWhenStopped = server.requests.size
+                throw JobStopped()
+            }
+        }
+        assertEquals(FamilyWalkWork.Outcome.STOPPED, outcome)
+        assertEquals("no request after the stop", sentWhenStopped, server.requests.size)
+        assertEquals(1, server.rotationBatches.size)
+        assertTrue(FamilyKeyLocks.free(family.workspaceId) && FamilyWalkLocks.free(family.workspaceId))
+        assertEquals(0u, app.areaLedger.rotateDropAll(family.workspaceId))
+        assertTrue("the rest is left for the next run", server.running(family.rootId))
     }
 
     /*

@@ -90,7 +90,7 @@ class FamilyWorkScheduleTest {
         assertTrue(model.states[family.groupId] is FamilyState.Accepted)
         family.listed = false
         family.notMember = true
-        assertEquals(com.hushos.app.data.FamilyWalkWork.Outcome.DONE, com.hushos.app.data.FamilyWalkWork.run(app, host.vault) {})
+        assertEquals(com.hushos.app.data.FamilyWalkWork.Outcome.DONE, com.hushos.app.data.FamilyWalkWork.run(app, host.vault, stop = {}))
         assertEquals(FamilyState.Wiped, model.states[family.groupId])
         assertTrue(model.problems.values.any { it == FamilyProblem.Removed })
     }
@@ -107,7 +107,7 @@ class FamilyWorkScheduleTest {
         runBlocking { model.refreshFamilies() }
         assertTrue(model.states[family.groupId] is FamilyState.Accepted)
         family.notMember = true
-        com.hushos.app.data.FamilyWalkWork.run(app, host.vault) {}
+        com.hushos.app.data.FamilyWalkWork.run(app, host.vault, stop = {})
         assertEquals(FamilyState.Wiped, model.states[family.groupId])
         assertTrue(model.problems.values.any { it == FamilyProblem.Removed })
     }
@@ -128,7 +128,7 @@ class FamilyWorkScheduleTest {
         val folder = host.vault.familyGuard.file.parentFile!!
         try {
             assertTrue(folder.setExecutable(false, false) && folder.setReadable(false, false))
-            com.hushos.app.data.FamilyWalkWork.run(app, host.vault) {}
+            com.hushos.app.data.FamilyWalkWork.run(app, host.vault, stop = {})
         } finally {
             folder.setExecutable(true, false)
             folder.setReadable(true, false)
@@ -154,7 +154,7 @@ class FamilyWorkScheduleTest {
         assertTrue(model.states[family.groupId] is FamilyState.Accepted)
         assertTrue(model.shown[family.groupId] != null)
         family.chain = listOf(family.r1, family.r2, family.r3Fork, family.r4Fork)
-        com.hushos.app.data.FamilyWalkWork.run(app, host.vault) {}
+        com.hushos.app.data.FamilyWalkWork.run(app, host.vault, stop = {})
         assertTrue("${model.states[family.groupId]}", model.states[family.groupId] is FamilyState.Fork)
         assertTrue(model.shown[family.groupId] == null)
     }

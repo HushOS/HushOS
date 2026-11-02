@@ -53,6 +53,9 @@ enum class WalkEnd { WALKED, ENDED_ELSEWHERE }
 object FamilyWalkLocks {
     private val locks = ConcurrentHashMap<String, ReentrantLock>()
 
+    /* Whether no walk of the folder holds its lock now (tests). */
+    internal fun free(workspaceId: String): Boolean = locks[workspaceId.lowercase()]?.isLocked != true
+
     fun <T> hold(workspaceId: String, body: () -> T): T {
         val lock = locks.getOrPut(workspaceId.lowercase()) { ReentrantLock() }
         lock.lock()
@@ -70,6 +73,9 @@ object FamilyWalkLocks {
  */
 object FamilyKeyLocks {
     private val locks = ConcurrentHashMap<String, ReentrantLock>()
+
+    /* Whether nothing holds the folder's lock now (tests). */
+    internal fun free(workspaceId: String): Boolean = locks[workspaceId.lowercase()]?.isLocked != true
 
     fun <T> hold(workspaceId: String, body: () -> T): T {
         val lock = locks.getOrPut(workspaceId.lowercase()) { ReentrantLock() }
@@ -90,10 +96,11 @@ fun stillRunning(spaces: Map<String, List<SpaceArea>>, groupId: String, run: Wal
  * device finished it while this one waited, or a 404 from its work) is ended elsewhere, never failed; a 404 while it still
  * runs is the walk failing.
  */
-fun FamilySync.walk(groupId: String, target: WalkTarget, progress: (Int) -> Unit = {}): WalkEnd = FamilyWalkLocks.hold(target.workspaceId) {
+fun FamilySync.walk(groupId: String, target: WalkTarget, progress: (Int) -> Unit = {}, checkStop: () -> Unit = {}): WalkEnd = FamilyWalkLocks.hold(target.workspaceId) {
+    checkStop()
     if (!stillRunning(api.spaces(), groupId, target)) return@hold WalkEnd.ENDED_ELSEWHERE
     try {
-        vault.walkFamilyFolder(target, progress)
+        vault.walkFamilyFolder(target, progress, checkStop)
         WalkEnd.WALKED
     } catch (error: NotFound) {
         if (!stillRunning(api.spaces(), groupId, target)) WalkEnd.ENDED_ELSEWHERE else throw error
@@ -111,7 +118,12 @@ fun FamilySync.walk(groupId: String, target: WalkTarget, progress: (Int) -> Unit
  * in memory only: the next walk is given the same nodes and sends them again under keys of its own. The number of nodes
  * this walk re-keyed.
  */
-internal fun Vault.walkFamilyFolder(target: WalkTarget, progress: (Int) -> Unit = {}): Int = writing {
+/*
+ * `checkStop` throws once the walk's job was stopped (WorkManager's window, the network lost: JobStopped): checked between
+ * batches and between pages of a parent's lookup, never with a batch's keys pending, so a stop leaves no folder locked and
+ * every fresh key committed (what the server took) or dropped.
+ */
+internal fun Vault.walkFamilyFolder(target: WalkTarget, progress: (Int) -> Unit = {}, checkStop: () -> Unit = {}): Int = writing {
     val ws = target.workspaceId
     val rootId = target.nodeId
     val epoch = target.targetEpoch
@@ -128,6 +140,7 @@ internal fun Vault.walkFamilyFolder(target: WalkTarget, progress: (Int) -> Unit 
     var notCarried = false
     var shared = false
     while (true) {
+        checkStop()
         requireFamilyEpoch(ws, began)
         val work = api.rotationWork(ws, rootId, cursor)
         if (work.done) break
@@ -145,7 +158,7 @@ internal fun Vault.walkFamilyFolder(target: WalkTarget, progress: (Int) -> Unit 
         val inBatch = work.nodes.map { it.node.id }.toSet()
         for (parentId in work.nodes.mapNotNull { it.node.parentId }.toSet()) {
             if (parentId in inBatch || areaLedger.nodeKey(ws, parentId)?.epoch == epoch) continue
-            openWalkParent(ws, parentId)
+            openWalkParent(ws, parentId, checkStop)
         }
         // A family folder takes no shares or links (design 3.4): a node with any is refused by the core alike, and left.
         val unshared = work.nodes.filter { it.shares.isEmpty() && it.links.isEmpty() }
@@ -220,7 +233,7 @@ internal fun Vault.walkFamilyFolder(target: WalkTarget, progress: (Int) -> Unit 
  * (state from cursor 0: every live, trashed or nested row once), and are opened from the top down. A row that won't open
  * leaves its children to wait.
  */
-internal fun Vault.openWalkParent(ws: String, parentId: String) {
+internal fun Vault.openWalkParent(ws: String, parentId: String, checkStop: () -> Unit = {}) {
     try {
         listChildren(parentId, ws)
         return
@@ -247,6 +260,7 @@ internal fun Vault.openWalkParent(ws: String, parentId: String) {
     var cursor = 0
     var found: List<NodeView>? = null
     while (found == null) {
+        checkStop()
         val feed = try {
             api.changes(ws, cursor)
         } catch (error: Exception) {

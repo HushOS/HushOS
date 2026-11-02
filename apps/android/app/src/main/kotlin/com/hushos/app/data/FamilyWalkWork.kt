@@ -42,7 +42,7 @@ object FamilyWalkWork {
     private const val PERIODIC = "family-walks-periodic"
     private const val SOON = "family-walks-soon"
 
-    enum class Outcome { DONE, RETRY, SIGNED_OUT }
+    enum class Outcome { DONE, RETRY, SIGNED_OUT, STOPPED }
 
     private val network = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
 
@@ -99,6 +99,8 @@ object FamilyWalkWork {
         vault: Vault? = Shared.session(context)?.let { LiveVaults.of(it) ?: Vault.fromShared(context) },
         /* What lets the background check go: only this vault's session's work (tests watch it). */
         stop: () -> Unit = { vault?.let { cancelSession(context, it.api.session) } },
+        /* Throws JobStopped once WorkManager stopped the job: checked between families, walks, batches and pages. */
+        checkStop: () -> Unit = {},
     ): Outcome {
         val session = vault ?: return Outcome.SIGNED_OUT
         // Every step only while this vault is the open session signed in now: a pass whose session ended (a sign-out,
@@ -113,6 +115,7 @@ object FamilyWalkWork {
             val unsettled = families.unsettled(listed)
             var again = unsettled.isNotEmpty() || gone.any { it.state != FamilyState.Wiped }
             for (summary in listed.filter { it.state == "active" }) {
+                checkStop()
                 if (!current(context, session)) return Outcome.SIGNED_OUT
                 val view = when (val state = families.sync(summary)) {
                     is FamilyState.Accepted -> state.view
@@ -124,9 +127,11 @@ object FamilyWalkWork {
                 for (target in view?.areas.orEmpty().mapNotNull { it.walkTarget() }) {
                     if (!current(context, session)) return Outcome.SIGNED_OUT
                     try {
-                        families.walk(summary.id, target)
+                        families.walk(summary.id, target, checkStop = checkStop)
                     } catch (error: NotAuthenticated) {
                         throw error
+                    } catch (stopped: JobStopped) {
+                        throw stopped
                     } catch (_: Exception) {
                         again = true
                     }
@@ -138,6 +143,9 @@ object FamilyWalkWork {
             if (again) Outcome.RETRY else Outcome.DONE
         } catch (_: NotAuthenticated) {
             Outcome.SIGNED_OUT
+        } catch (_: JobStopped) {
+            // Stopped by WorkManager: nothing more is sent, nothing is concluded; it runs again when WorkManager says.
+            Outcome.STOPPED
         } catch (error: Exception) {
             if (FamilySync.transient(error)) Outcome.RETRY else Outcome.DONE
         }
@@ -149,9 +157,10 @@ class FamilyWalkWorker(context: Context, params: WorkerParameters) : CoroutineWo
         // A job left over from a session that ended does nothing for the one signed in now.
         val now = Shared.session(applicationContext)?.let(FamilyWalkWork::sessionKey)
         if (now == null || now != inputData.getString("session")) return@withContext Result.success()
-        when (FamilyWalkWork.run(applicationContext)) {
+        // A stop cancels this coroutine but not the blocking pass: the pass checks `isStopped` itself and ends there.
+        when (FamilyWalkWork.run(applicationContext, checkStop = { if (isStopped) throw JobStopped() })) {
             FamilyWalkWork.Outcome.DONE, FamilyWalkWork.Outcome.SIGNED_OUT -> Result.success()
-            FamilyWalkWork.Outcome.RETRY -> Result.retry()
+            FamilyWalkWork.Outcome.RETRY, FamilyWalkWork.Outcome.STOPPED -> Result.retry()
         }
     }
 }
