@@ -54,6 +54,8 @@ struct FamilyCheckView: View {
     @State private var failure: String?
     @State private var stage = Stage.words
     @State private var saving = false
+    /* The request a button began (They match, Try again): cancelled when the sheet goes, so nothing it answers shows or closes after. */
+    @State private var working: Task<Void, Never>?
     @State private var error = ""
     @State private var ownWords = false
 
@@ -78,7 +80,7 @@ struct FamilyCheckView: View {
                 }
                 if let failure {
                     Text(failure).font(Theme.Text.callout).foregroundStyle(Alpine.danger).alpineRow()
-                    Button("Try again") { Task { await load() } }.alpineRow()
+                    Button("Try again") { run { await load() } }.alpineRow()
                 } else if code == nil {
                     HStack(spacing: Alpine.Space.s2) { ProgressView(); Text("Getting the latest").foregroundStyle(Alpine.inkMuted) }.alpineRow()
                 } else if code == .ownEntryWrong {
@@ -135,18 +137,32 @@ struct FamilyCheckView: View {
         }
         .interactiveDismissDisabled(saving)
         .task { await load() }
+        .onDisappear { working?.cancel() }
+    }
+
+    /* A button's request, tied to the sheet: closed meanwhile, it shows and closes nothing. */
+    private func run(_ request: @escaping @MainActor () async -> Void) {
+        working?.cancel()
+        working = Task { await request() }
     }
 
     private func load() async {
+        // Closed already: nothing to load, show or close.
+        guard !Task.isCancelled else { return }
         failure = nil
         code = nil
         do {
             // One session for the whole check: if it ends (a sign-out, the same account signed in again), nothing of it shows.
             guard let session = store.beginSession() else { done(); return }
             let (summary, memberId) = (summary, member.userId)
-            guard let start = try await store.inFamily(session, { try await $0.checkCode(summary, with: memberId) }) else { done(); return }
+            // Nil: dropped, its session ended (the sheet closes) or the sheet closed already (nothing more to do).
+            guard let start = try await store.inFamily(session, { try await $0.checkCode(summary, with: memberId) }) else {
+                if !Task.isCancelled { done() }
+                return
+            }
             // The sync it ran is shown as after any sync (a warning, a refusal, a removal) when it is a later look than what is shown.
             await store.adopt(start.state, of: summary, revision: start.revision, session: session)
+            guard !Task.isCancelled else { return }
             guard store.current(session) else { done(); return }
             // The family as it is shown now decides: words worked out over a chain it has since left don't show.
             if let problem = start.problem ?? FamilySync.checkProblem(store.familyStates[summary.id] ?? start.state) {
@@ -163,12 +179,14 @@ struct FamilyCheckView: View {
     private func match(_ rosterVersion: UInt64, _ words: [String]) {
         saving = true
         error = ""
-        Task {
+        run {
             do {
                 let (groupId, member) = (summary.id, member)
+                // Nil: dropped with its session (the sheet closes), or the sheet closed already. A match saved meanwhile stays
+                // saved; only nothing of it is said or closed from a closed sheet.
                 guard let saved = try await store.inFamily(nil, { try await $0.checkMatch(groupId, member: member, rosterVersion: rosterVersion, code: words) }) else {
                     saving = false
-                    done()
+                    if !Task.isCancelled { done() }
                     return
                 }
                 guard saved.checked else {
@@ -189,6 +207,7 @@ struct FamilyCheckView: View {
                 if let session = store.beginSession() {
                     await store.adopt(removed.removed.state, of: summary, revision: removed.removed.revision, session: session)
                 }
+                guard !Task.isCancelled else { return }
                 if case .failed(let words) = removed.removed.state {
                     failure = words
                 } else {

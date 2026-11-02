@@ -139,6 +139,34 @@ import Testing
     }
 
     /*
+     * The caller is cancelled while its work is suspended (the join sheet closed during a
+     * first-use join), and the work, which can't be stopped, still finishes well: the caller gets
+     * nothing, so a closed screen never shows or navigates on it. Fails if the gate hands back an
+     * answer to a caller cancelled while the session stayed the same.
+     */
+    @Test func aCallerCancelledWhileItsWorkRunsGetsNothing() async {
+        let owner = Owner()
+        let gate = SessionGate<Owner> { owner }
+        let token = try! #require(gate.begin())
+        let started = Gate()
+        let answer = Gate()
+        let caller = Task { @MainActor in
+            await gate.run(token) { _ -> Int in
+                started.open()
+                // Unstoppable, as an exclusive turn is: it finishes whatever the cancel says.
+                await Task.detached { await answer.wait() }.value
+                return 7
+            }
+        }
+        await started.wait()
+        caller.cancel()
+        answer.open()
+        let result = await caller.value
+        #expect(result == nil, "a cancelled caller was handed its work's answer")
+        #expect(gate.current(token), "the session stayed the same throughout")
+    }
+
+    /*
      * The session is replaced after the gate took the work and before the work got its turn (a
      * sign-in queued on the main actor between them): the work never starts. The session reads as
      * the token's for the token and the run's first check, and as the next session's after. Fails

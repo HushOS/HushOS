@@ -43,6 +43,8 @@ struct InvitationSheet: View {
     /* The wait's title, as the step below says it ("Waiting for Sam"): the sheet's own title. */
     @State private var waitTitle: String?
     @State private var detent = InvitationSheet.short
+    /* A button's request (Join, Try again): cancelled when the sheet closes, so nothing it answers shows or navigates after. */
+    @State private var working: Task<Void, Never>?
     @Environment(\.dynamicTypeSize) private var typeSize
 
     /* As tall as these steps need: the invitation and the wait are a few lines, so the sheet opens part way up. */
@@ -79,6 +81,13 @@ struct InvitationSheet: View {
         .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [Self.short, .large], selection: $detent)
         .onChange(of: typeSize, initial: true) { _, size in if size.isAccessibilitySize { detent = .large } }
         .task { if step == .opening { await open() } }
+        .onDisappear { working?.cancel() }
+    }
+
+    /* A button's request, tied to the sheet: closed meanwhile, it shows and closes nothing. */
+    private func run(_ request: @escaping @MainActor () async -> Void) {
+        working?.cancel()
+        working = Task { await request() }
     }
 
     /* The family's page, pushed in Account where its row is (never inside this sheet), once in or already in. */
@@ -114,7 +123,7 @@ struct InvitationSheet: View {
                 Text(gone ? "It was used, cancelled, or it ran out. Ask the person who invited you for a new one." : words)
                     .font(Theme.Text.callout).foregroundStyle(Alpine.ink).alpineRow()
                 if !gone {
-                    Button("Try again") { Task { await open() } }.foregroundStyle(Alpine.primary).alpineRow()
+                    Button("Try again") { run { await open() } }.foregroundStyle(Alpine.primary).alpineRow()
                 }
             } footer: { signedInAs }
         case .invitation(let invitation):
@@ -170,7 +179,7 @@ struct InvitationSheet: View {
             } footer: { signedInAs }
         }
         Section {
-            Button { Task { await accept(invitation) } } label: { Text(accepting ? "Joining" : "Join").frame(maxWidth: .infinity) }
+            Button { run { await accept(invitation) } } label: { Text(accepting ? "Joining" : "Join").frame(maxWidth: .infinity) }
                 .buttonStyle(PrimaryCapsuleStyle())
                 .disabled(accepting || !notice.canAccept)
         } footer: {
@@ -196,7 +205,11 @@ struct InvitationSheet: View {
         }
         step = .opening
         do {
-            guard let invitation = try await store.inFamily(nil, { try await $0.openInvitation(token) }) else { dismiss(); return }
+            // Nil: dropped, its session ended (the sheet closes) or the sheet closed already (nothing more to do).
+            guard let invitation = try await store.inFamily(nil, { try await $0.openInvitation(token) }) else {
+                if !Task.isCancelled { dismiss() }
+                return
+            }
             step = .invitation(invitation)
         } catch let error as GroupsAPIError where error.code == "gone" {
             step = .failed(gone: true, words: "")
@@ -213,8 +226,13 @@ struct InvitationSheet: View {
         error = nil
         problem = nil
         do {
-            guard let groupId = try await store.inFamily(nil, { try await $0.acceptInvitation(token) }) else { dismiss(); return }
+            guard let groupId = try await store.inFamily(nil, { try await $0.acceptInvitation(token) }) else {
+                if !Task.isCancelled { dismiss() }
+                return
+            }
             await store.refreshFamilies(force: true)
+            // Closed meanwhile: accepted on the server, which the next sync finishes; no join screen opens from a closed sheet.
+            guard !Task.isCancelled else { return }
             step = .joining(groupId, family: invitation.name)
         } catch let refused as GroupsAPIError where refused.status != 0 {
             // Said under the invitation in the web's words (InvitationNotice), Accept off where it can't help.
@@ -259,6 +277,8 @@ struct JoinSections: View {
     @State private var step: Step = .loading
     @State private var error: String?
     @State private var managers: [GroupDetail.Member] = []
+    /* Try again's count: each starts the step check again as the screen's own task, cancelled when the screen goes. */
+    @State private var attempt = 0
 
     /* One manager is named; with more, whoever manages the family lets them in. */
     private var only: String? { managers.count == 1 ? firstName(managers[0].name) : nil }
@@ -269,7 +289,7 @@ struct JoinSections: View {
                 Section {
                     Text(error).font(Theme.Text.callout).foregroundStyle(Alpine.ink).listRowBackground(Alpine.warningSoft)
                     if step == .loading {
-                        Button { Task { await resume() } } label: { Label("Try again", systemImage: "arrow.counterclockwise") }
+                        Button { attempt += 1 } label: { Label("Try again", systemImage: "arrow.counterclockwise") }
                             .foregroundStyle(Alpine.primary).alpineRow()
                     }
                 }
@@ -294,7 +314,7 @@ struct JoinSections: View {
         .task { store.openJoin(groupId) }
         // Keyed on the session's vault too: a new session (the same account signed in again from Files) drops what the last
         // one asked, and the screen asks again under the new one rather than staying where it was.
-        .task(id: ObjectIdentifier(store.vault)) { await resume() }
+        .task(id: "\(ObjectIdentifier(store.vault).hashValue)-\(attempt)") { await resume() }
         .onDisappear { store.closeJoin(groupId) }
         .onChange(of: "\(waitingEntry != 0)-\(waitingTitle)", initial: true) { _, _ in title?(waitingEntry != 0 ? waitingTitle : nil) }
         // Route 3 answers someone who accepted: who manages the family, read again every few seconds.
@@ -316,7 +336,7 @@ struct JoinSections: View {
                 do {
                     // Dropped when the session it began in ended: the screen goes with it.
                     guard let (outcome, revision) = try await store.inFamily(nil, { try await $0.joinStatusRevised(groupId) }) else { return }
-                    if outcome != .waiting { show(outcome, revision: revision); return }
+                    if outcome != .waiting { await show(outcome, revision: revision); return }
                     error = nil
                 } catch {
                     if endsSession(error) { store.report(error); return }
@@ -353,24 +373,27 @@ struct JoinSections: View {
 
     // MARK: Actions
 
-    /* Each answer from the join steps, as a step; `revision`: when the join's answer was found, for the family it left to publish in order. */
-    private func show(_ outcome: JoinOutcome, revision: UInt64? = nil) {
+    /*
+     * Each answer from the join steps, as a step; `revision`: when the join's answer was found, for
+     * the family it left to publish in order. In the screen's task: closed meanwhile, nothing shows
+     * or navigates (a join the server committed is finished by the next sync).
+     */
+    private func show(_ outcome: JoinOutcome, revision: UInt64? = nil) async {
+        guard !Task.isCancelled else { return }
         error = nil
         switch outcome {
         case .joined(let state):
             store.notify("You’re in \(family)")
-            Task {
-                await store.joined(groupId, state, revision: revision)
-                onJoined?()
-            }
+            await store.joined(groupId, state, revision: revision)
+            guard !Task.isCancelled else { return }
+            onJoined?()
         case .member:
             // This phone already holds the family: nothing to join. Checked as a member, from this screen.
-            Task {
-                if let summary = (try? await store.inFamily(nil, { try await $0.list() }))?.first(where: { $0.id == groupId }) {
-                    await store.refreshFamily(summary, fromJoin: true)
-                }
-                onJoined?()
+            if let summary = (try? await store.inFamily(nil, { try await $0.list() }))?.first(where: { $0.id == groupId }) {
+                await store.refreshFamily(summary, fromJoin: true)
             }
+            guard !Task.isCancelled else { return }
+            onJoined?()
         case .waiting:
             if case .waiting = step { return }
             step = .waiting(Int(Date().timeIntervalSince1970 * 1000))
@@ -383,7 +406,7 @@ struct JoinSections: View {
         error = nil
         do {
             guard let (outcome, revision) = try await store.inFamily(nil, { try await $0.joinStatusRevised(groupId) }) else { return }
-            show(outcome, revision: revision)
+            await show(outcome, revision: revision)
         } catch {
             if endsSession(error) { store.report(error); return }
             // The retry belongs to the loading step, whatever step this came from.

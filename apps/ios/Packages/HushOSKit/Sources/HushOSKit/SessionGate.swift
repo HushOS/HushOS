@@ -43,7 +43,9 @@ public final class SessionGate<Owner: AnyObject & Sendable> {
     /*
      * `work` against the token's own owner, its answer or failure; nil when that session ended
      * or changed before the work could start, or before it answered, and nil for a caller
-     * cancelled by then. Cancelling the caller cancels the work too.
+     * cancelled by then (before the work started or while it ran: work that can't be stopped,
+     * an exclusive family turn, may still finish, but its answer reaches no closed screen).
+     * Cancelling the caller cancels the work too.
      */
     public func run<T: Sendable>(_ token: Token, _ work: @escaping @Sendable (Owner) async throws -> T) async -> Result<T, Error>? {
         guard !Task.isCancelled, current(token) else { return nil }
@@ -58,7 +60,7 @@ public final class SessionGate<Owner: AnyObject & Sendable> {
         running[id] = { task.cancel() }
         let result = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
         running[id] = nil
-        return current(token) ? result : nil
+        return !Task.isCancelled && current(token) ? result : nil
     }
 
     /* `run` for an operation of one step: its session is the one now. */
