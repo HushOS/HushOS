@@ -508,6 +508,49 @@ describe('admission with billing on', () => {
         expect(raises().map((u) => u.units)).toEqual([2, 2, 2]);
     });
 
+    test('a phone app’s admission never buys a place: the payer is refused with `full`, Polar isn’t asked, and the web’s same call buys it', async () => {
+        const fam = await kit.family();
+        const subscription = await onPlan(fam, 1);
+        const newcomer = await kit.member();
+        const call = await admission(fam, newcomer);
+        const before = await kit.head(fam.groupId);
+        polar.updates = [];
+        // The organizer pays, and the plan's one place is theirs: a second needs a charge.
+        for (const client of ['android', 'ios', 'something-else', null]) {
+            expect(
+                await refusal(
+                    groups.admit(fam.organizer.userId, fam.groupId, newcomer.userId, call, {
+                        mayBuy: groups.mayBuySeatFrom(client),
+                    }),
+                ),
+            ).toMatchObject({ code: 'seats', status: 402, data: { reason: 'full' } });
+        }
+        expect(polar.updates).toEqual([]);
+        expect(subscription.units).toBe(1);
+        expect((await groupsRepository.getGroupRow(fam.groupId))?.seatLimit).toBe(1);
+        expect(await state(fam.groupId, newcomer.userId)).toBe('accepted');
+        expect(await kit.head(fam.groupId)).toEqual(before);
+        // The web says what it costs before Let them in; its very same call buys the place.
+        await groups.admit(fam.organizer.userId, fam.groupId, newcomer.userId, call, {
+            mayBuy: groups.mayBuySeatFrom('web'),
+        });
+        expect(await state(fam.groupId, newcomer.userId)).toBe('active');
+        expect(raises().map((u) => u.units)).toEqual([2]);
+    });
+
+    test('a phone app’s admission into a place already paid for needs no purchase and lands', async () => {
+        const fam = await kit.family();
+        await onPlan(fam, 2);
+        const newcomer = await kit.member();
+        const call = await admission(fam, newcomer);
+        polar.updates = [];
+        await groups.admit(fam.organizer.userId, fam.groupId, newcomer.userId, call, {
+            mayBuy: groups.mayBuySeatFrom('android'),
+        });
+        expect(await state(fam.groupId, newcomer.userId)).toBe('active');
+        expect(raises()).toEqual([]);
+    });
+
     test('a manager who does not pay cannot buy a place; a place already paid for needs no charge', async () => {
         const fam = await kit.family();
         const subscription = await onPlan(fam, 2);

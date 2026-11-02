@@ -54,6 +54,8 @@ class FamilyManageTest {
 
     private val outboxFolder get() = java.io.File(java.io.File(app.noBackupFilesDir, FamilyRecords.FOLDER), "outbox")
 
+    private fun admitClients() = server.clients.toList().filter { (request, _) -> request.startsWith("POST") && request.endsWith("/admit") }.map { it.second }
+
     private fun kept(phone: FamilyFixture.Phone) = phone.sync.outbox.list(family.member.id, family.groupId)
 
     /* Answers the next `n` admissions with `status` (the server down, or answering in a way nobody hears). */
@@ -98,6 +100,8 @@ class FamilyManageTest {
         assertEquals(3, family.callBodies.size)
         assertEquals(1, family.callBodies.toSet().size)
         assertTrue(kept(phone).isEmpty())
+        // Every send names this app, resends included: the server never buys a place for a phone's admission.
+        assertEquals(List(3) { true }, admitClients().map { it?.startsWith("android/") == true })
     }
 
     /*
@@ -423,5 +427,22 @@ class FamilyManageTest {
         assertEquals(1, family.grantPosts.size)
         assertEquals(listOf(FamilyState.Wiped to family.groupId), phone.sync.takeRemovals().map { it.state to it.groupId })
         assertTrue(kept(phone).isEmpty())
+    }
+
+    /*
+     * The family's places are all taken and this account pays for it: the server refuses the phone's admission as `full`
+     * (it never buys a place for a phone), said as the web's plain words, with nothing about buying one; the call is
+     * dropped. Fails if the refusal says to add a place, or the admission is kept to be sent again.
+     */
+    @Test
+    fun aFullPlanIsSaidAndNothingIsBought() {
+        val phone = phone()
+        family.admitAnswers.add { _ ->
+            402 to JSONObject().put("code", "seats").put("message", "Every place in the family is taken.").put("data", JSONObject().put("reason", "full"))
+        }
+        assertEquals(LetIn.Refused("Every place in Lindqvist family is taken."), phone.sync.letIn(summary, grace))
+        assertTrue(kept(phone).isEmpty())
+        assertEquals(1, family.callBodies.size)
+        assertTrue(admitClients().single()?.startsWith("android/") == true)
     }
 }

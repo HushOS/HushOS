@@ -30,6 +30,7 @@ import {
     MAX_TRASH_BATCH,
     checkClient,
     legacyMinimums,
+    parseClientHeader,
     parseMinimums,
 } from '@hushos/drive/protocol';
 import { REPORT_CATEGORIES } from '@hushos/drive/api';
@@ -2645,6 +2646,13 @@ export const apiApp = new Elysia({ prefix: '/api' })
                         params.id,
                         params.userId,
                         body,
+                        // Only the web buys a place for a full plan (it says the cost first); the
+                        // phone apps never do, resends of their kept calls included.
+                        {
+                            mayBuy: groups.mayBuySeatFrom(
+                                parseClientHeader(request.headers.get(CLIENT_HEADER))?.name,
+                            ),
+                        },
                     ),
             )
             .patch(

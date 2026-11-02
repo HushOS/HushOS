@@ -2001,6 +2001,7 @@ function seatRefusal(result: Exclude<SeatResult, { status: 'ok' }>) {
     const messages: Record<Exclude<SeatResult['status'], 'ok' | 'unavailable'>, string> = {
         'no-plan': 'Choose a family plan before letting anyone in.',
         payer: 'The family is full. Ask the person who pays for it to add a place.',
+        full: 'Every place in the family is taken.',
         cap: 'The family has as many members as its plan allows.',
         canceling: 'The family plan is set to end. Resume it before letting anyone in.',
         declined:
@@ -2020,15 +2021,29 @@ function seatRefusal(result: Exclude<SeatResult, { status: 'ok' }>) {
 }
 
 /*
+ * Whether an admission from this client may buy a place for the payer: only
+ * the web's, which says what it will cost before Let them in is pressed. The
+ * phone apps keep billing read only (store payment rules), and a client this
+ * server doesn't know sells nothing either. Decided from the request's
+ * `HushOS-Client`, which every send of a kept call carries again.
+ */
+export function mayBuySeatFrom(clientName: string | null | undefined) {
+    return clientName === 'web';
+}
+
+/*
  * Route 17: the admitting roster, the newcomer's grants and, with `members`,
  * their seal. With billing on, the place is paid for after every check and
  * before the write: Polar's 200 or no admission (a 402 there changed nothing).
+ * `mayBuy` false (mayBuySeatFrom) never pays for one: a full plan is 402
+ * `seats` with reason `full`.
  */
 export async function admit(
     userId: string,
     groupId: string,
     targetId: string,
     call: RosterCall & { keySeal?: SealWire },
+    { mayBuy = true }: { mayBuy?: boolean } = {},
 ) {
     /*
      * One family per account, then whether the newcomer's own files fit in the pool's free
@@ -2053,7 +2068,7 @@ export async function admit(
                     throw newcomerInFamily();
                 if (!(await groupsRepository.admissionFitsNow(groupId, targetId))) throw poolFull();
                 if (!billingEnabled()) return;
-                const seat = await ensureGroupSeat(groupId, userId);
+                const seat = await ensureGroupSeat(groupId, userId, { mayBuy });
                 if (seat.status !== 'ok') throw seatRefusal(seat);
             },
         },

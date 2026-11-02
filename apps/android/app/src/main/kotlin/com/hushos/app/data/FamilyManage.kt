@@ -132,7 +132,7 @@ sealed interface LetIn {
 internal val FamilySync.outbox: FamilyOutbox get() = FamilyOutbox.of(vault.context) { !vault.closed }
 
 /* The words a refusal of a roster call says (the web's refusalCopy, the codes Let them in meets). */
-internal fun callWords(answer: CallAnswer, first: String?): String = when (answer.code) {
+internal fun callWords(answer: CallAnswer, first: String?, family: String = "this family"): String = when (answer.code) {
     "not-pending" -> first?.let { "$it isn’t waiting to join any more." } ?: "They aren’t waiting to join any more."
     "already-member" -> "That person is already in the family."
     "forbidden" -> "Only someone who manages the family can do that."
@@ -141,7 +141,14 @@ internal fun callWords(answer: CallAnswer, first: String?): String = when (answe
     "members-changed" -> "The family’s members changed meanwhile. Try again."
     "left-due" -> "Someone left the family. A manager needs to finish that before anyone can join or roles change."
     "unsupported" -> "Update HushOS to do this."
-    "seats" -> answer.message ?: "Every place in the family is taken."
+    // The web's seats words. A phone never buys a place (billing is read only there): the server
+    // refuses one that would need a purchase as `full`, said as the web's plain "no free places".
+    "seats" -> when (answer.data?.optString("reason")) {
+        "no-plan" -> "Choose a plan for $family before letting anyone in."
+        "payer" -> "Every place in the plan for $family is taken. Ask the person who pays for it to add a place."
+        "cap" -> "The plan for $family allows no more members."
+        else -> "Every place in $family is taken."
+    }
     "rate-limited" -> "That’s been tried too often. Wait a little, then try again."
     "grants-due" -> GRANTS_DUE
     else -> if (answer.status == 0) GroupsApiError.NO_ANSWER else "HushOS couldn’t do that just now. Try again in a moment."
@@ -194,7 +201,7 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
             }
             OutboxStep.RESEND, OutboxStep.REBUILD -> {
                 // The same bytes again, a few times now, then at the next open.
-                if (++resends >= RESENDS) return CallEnd.Pending(callWords(answer, first))
+                if (++resends >= RESENDS) return CallEnd.Pending(callWords(answer, first, summary.name))
                 Thread.sleep(RESEND_DELAY_MS * resends)
             }
             OutboxStep.SEND_GRANTS -> {
@@ -213,12 +220,12 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
             OutboxStep.MEMBERSHIP_MOVED -> {
                 outbox.delete(userId, groupId, kept.outboxId)
                 syncRevised(summary)
-                return CallEnd.Refused(callWords(answer, first))
+                return CallEnd.Refused(callWords(answer, first, summary.name))
             }
             OutboxStep.REFUSED -> {
                 outbox.delete(userId, groupId, kept.outboxId)
                 if (answer.code == "forbidden") syncRevised(summary)
-                return CallEnd.Refused(callWords(answer, first))
+                return CallEnd.Refused(callWords(answer, first, summary.name))
             }
             OutboxStep.WIPED -> {
                 // As every not-member: two-phase, its outcome (finished, or refused with a guard not stored) published.
@@ -278,7 +285,7 @@ private fun FamilySync.sendGrants(summary: GroupSummary, data: JSONObject?): Gra
                         removedNow(groupId)
                         return Granted.Wiped
                     }
-                    return Granted.Unsent(callWords(answer, null))
+                    return Granted.Unsent(callWords(answer, null, summary.name))
                 }
                 return Granted.Sent
             }

@@ -97,6 +97,8 @@ class FakeDrive : AutoCloseable {
     val rotationShares = HashMap<String, MutableList<JSONObject>>()
     /* Settings reads fail (a 500) once a rotation's work has been listed: a check mid-batch that can't run. */
     var failSettingsOnceWorkListed = false
+    /* Each request with the `HushOS-Client` it named, in order. */
+    val clients = java.util.Collections.synchronizedList(ArrayList<Pair<String, String?>>())
     /* Every settings read fails with a 503 while set (the server or the connection down for that route). */
     @Volatile var failSettingsReads = false
     /* People besides Grace that `lookup` answers for, by address (lowercase): their keys and name. */
@@ -509,6 +511,7 @@ class FakeDrive : AutoCloseable {
             .associate { it.substringBefore("=") to URLDecoder.decode(it.substringAfter("="), "UTF-8") }
         val raw = exchange.requestBody.readBytes()
         requests.add("$method $path")
+        clients.add("$method $path" to exchange.requestHeaders.getFirst("HushOS-Client"))
         try {
             if (path.startsWith("/store/")) return store(exchange, method, path, raw)
             val body = if (raw.isEmpty()) JSONObject() else runCatching { JSONObject(String(raw)) }.getOrDefault(JSONObject())
