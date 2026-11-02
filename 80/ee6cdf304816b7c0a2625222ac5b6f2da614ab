@@ -1,0 +1,27 @@
+packages/drive/src/walk-holds.ts
+  s_566b8e0c4467a4::t_4bac96620d058a 1-8,17,24-28,32-33,39,41-42,45-46,50-57,60,72-75
+  s_566b8e0c4467a4::t_ba211d533bb734 9-16,18-23,29-31,34-38,43,47-49,64-71
+  s_566b8e0c4467a4::t_38a775475bd7b5 40,44,58-59,61-63
+packages/drive/src/client.rotation.test.ts
+  s_566b8e0c4467a4::t_c2ab13e8f5d885 6-9,28-31,46,55,236-273,341-415,418,422-447,450-452,504-656
+packages/drive/src/client.ts
+  s_566b8e0c4467a4::t_c41a23ca659ffa 49,1085-1107,1190-1199,1221-1241,1243-1256,1778,1847,1853-1860,1862,1914-1925,2151-2159
+packages/drive/src/transfers.ts
+  s_566b8e0c4467a4::t_8d32ef0f910961 23,1081-1099,1471-1491,1493-1495
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "80ee6cdf304816b7c0a2625222ac5b6f2da614ab",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
