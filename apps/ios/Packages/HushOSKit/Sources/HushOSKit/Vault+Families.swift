@@ -150,13 +150,16 @@ extension Vault {
     /*
      * Compare and set: `pin` saved as the family's mark only while the stored one is still
      * `expected` (read again inside the save, which another device's write makes read again).
-     * False when it changed meanwhile, and nothing was saved.
+     * False when it changed meanwhile, and nothing was saved. The first-use marker and the
+     * `before` records go in the same save, derived again from what each attempt read, with a
+     * record of what vouched for this acceptance (`checked`) (docs/optional-verification.md 7.2).
      */
-    func saveGroupPin(_ groupId: String, over expected: GroupPin?, _ pin: GroupPin) async throws -> Bool {
+    func saveGroupPin(_ groupId: String, over expected: GroupPin?, _ pin: GroupPin, checked: FamilyChecked?, now: String) async throws -> Bool {
         struct Moved: Error {}
         do {
             try await updateSettings { settings in
                 guard try settings.groupPin(groupId) == expected else { throw Moved() }
+                settings.markFamilyChecks(now: now, acceptance: (groupId, checked))
                 settings.setGroupPin(groupId, pin)
             }
             return true
@@ -193,10 +196,43 @@ extension Vault {
         return version
     }
 
-    /* Route 25 named these as family folders: never opened under a key from the personal path. */
-    func noteFamilyWorkspaces(_ ids: [String]) {
+    /*
+     * Held for the write barrier on a roster's word alone (an acceptance whose guard may not store):
+     * writes into them wait for the guard (sendingIntoFamily). Never this account's own drive, never
+     * over a folder already known as another family's, and never a family folder for how a node
+     * opens or writes, nor this family's to clear: only route 25 and the id check prove that
+     * (noteFamilyWorkspaces). A received share a member list names stays a share.
+     */
+    func holdAsFamilyWorkspaces(_ ids: [String], of groupId: String) async {
+        _ = try? await loadWorkspace()
         let own = workspace?.workspaceId.lowercased()
-        familyWorkspaces.formUnion(ids.map { $0.lowercased() }.filter { $0 != own })
+        // Held for every family that named it: a first member list's word never keeps another family's barrier off it.
+        for id in ids.map({ $0.lowercased() }) where id != own { heldAreaGroups[id, default: []].insert(groupId.lowercased()) }
+    }
+
+    /* Held by a family whose guard is still owed: the barrier is up over it. Never past the guard's store, never ownership. */
+    func heldUnderOwedGuard(_ workspaceId: String) -> Bool {
+        heldAreaGroups[workspaceId.lowercased()]?.contains { familyGuardOwed.contains($0) } == true
+    }
+
+    /* Whether a folder may be let go of with `groupId`: never this account's own drive, never one known as another family's. */
+    func mayForget(_ workspaceId: String, with groupId: String) async -> Bool {
+        _ = try? await loadWorkspace()
+        let id = workspaceId.lowercased()
+        guard id != workspace?.workspaceId.lowercased() else { return false }
+        return familyAreaGroup[id].map { $0 == groupId.lowercased() } ?? true
+    }
+
+    /* Route 25 named these as family folders of `groupId`: never opened under a key from the personal path. */
+    func noteFamilyWorkspaces(_ ids: [String], of groupId: String) {
+        let own = workspace?.workspaceId.lowercased()
+        let family = ids.map { $0.lowercased() }.filter { $0 != own }
+        // Newly proven a family folder: whatever this phone held of it came some other way (a share mount), never through
+        // the family's ledger, and goes with its keys and its place in the parent index.
+        let newly = family.filter { !familyWorkspaces.contains($0) }
+        if !newly.isEmpty { forgetWorkspaces(newly, lettingGo: false) }
+        familyWorkspaces.formUnion(family)
+        for id in family { familyAreaGroup[id] = groupId.lowercased() }
     }
 
     /*
@@ -204,6 +240,10 @@ extension Vault {
      * opened before): the ledger decides from it whether the folder's root is the committed one.
      */
     func openListed(_ node: NodeView) throws -> Opened {
+        // Through the ledger only: a node of any workspace not known as a family folder is refused before any cache is touched.
+        guard isFamilyWorkspace(node.workspaceId) else { throw FamilyFailure(message: "Couldn’t check this folder’s keys") }
+        // A newer row of it already held stays: an older listing never replaces it (open keeps the newer one too).
+        if let held = opened[node.ref], node.isOlder(than: held.node) { return held }
         opened[node.ref] = nil
         nodeKeys[node.ref] = nil
         let item = try open(node)
@@ -218,25 +258,42 @@ extension Vault {
      * the screens to drop what they drew and decrypted.
      */
     @discardableResult
-    func forgetWorkspaces(_ ids: [String]) -> Set<String> {
+    func forgetWorkspaces(_ ids: [String], lettingGo: Bool = true) -> Set<String> {
         var gone: Set<String> = []
-        // Only family folders: a member list naming the personal drive (or anything else) never clears it here.
-        for id in ids where familyWorkspaces.contains(id.lowercased()) {
+        // Every folder the family names (the device record's too, not only those this session opened), never this
+        // account's own drive, whatever a member list names. On this actor nothing runs between the clearing and an
+        // open, which asks the core for the key as it runs: one that resumes after a fork or removal is refused there.
+        let own = workspace?.workspaceId.lowercased()
+        var workspaces: Set<String> = []
+        for id in ids.map({ $0.lowercased() }) where id != own {
+            // Let go of by this session (its family refused, forked or wiped): no share refills it (admitShare).
+            if lettingGo { letGoWorkspaces.insert(id) }
+            workspaces.insert(id)
             for nodeId in nodeKeys.values(in: id).keys { nodeKeys[NodeRef(workspaceId: id, nodeId: nodeId)] = nil; gone.insert(nodeId) }
             for nodeId in opened.values(in: id).keys { opened[NodeRef(workspaceId: id, nodeId: nodeId)] = nil; gone.insert(nodeId) }
+            ledgerOpened = ledgerOpened.filter { $0.workspaceId != id }
         }
+        // Their plaintext elsewhere too: what was kept on this phone from them (Offline), and the copies opened from their
+        // items outside a family's folder (a share's, before its folder was proven a family's). The screens drop the rows.
+        // Only while this vault's session stands: what is there once it ended may be the next session's.
+        let kept = copySession.whileOpen { Offline.forgetWorkspaces(workspaces, ids: Set(gone.map { $0.lowercased() })) } ?? []
+        TemporaryCopies.forgetShareWorkspaces(workspaces, session: copySession)
+        evictedRows.formUnion(gone.union(kept))
         forgetParents(gone)
         return gone
     }
 
     /* Whether a workspace is a family folder (as far as this session knows). */
     public func isFamilyWorkspace(_ workspaceId: String) -> Bool {
-        familyWorkspaces.contains(workspaceId.lowercased()) || areaLedger.isArea(workspaceId: workspaceId)
+        // Proven only (route 25 and the folder id derived under the family, noteFamilyWorkspaces): the ledger also names
+        // as areas the workspaces a committed member list merely lists, a received share's among them, which stay shares.
+        familyWorkspaces.contains(workspaceId.lowercased())
     }
 
     /* What family folders don't offer (sharing, links, reports, keeping, versions): refused before anything is sent. */
     func refuseFamilyWrite(_ workspaceId: String) throws {
         if isFamilyWorkspace(workspaceId) { throw FamilyWriteError.unavailable }
+        WriteIntent.record(workspaceId, family: false)
     }
 
     /*
@@ -247,14 +304,79 @@ extension Vault {
      * family is opened again; it never falls back to the personal key path.
      */
     func familyTarget(_ workspaceId: String) throws -> Bool {
-        guard isFamilyWorkspace(workspaceId) else { return false }
+        guard isFamilyWorkspace(workspaceId) else {
+            WriteIntent.record(workspaceId, family: false)
+            return false
+        }
         guard areaLedger.isArea(workspaceId: workspaceId) else { throw FamilyWriteError.notOpen }
+        try requireGuardKept(workspaceId)
         try areaLedger.requireWritable(workspaceId: workspaceId)
+        WriteIntent.record(workspaceId, family: true)
         return true
     }
 
+    /*
+     * The last check every write passes, right before it is sent (DriveAPI.perform): never into a
+     * workspace a family whose guard is owed holds, and into a family folder only a write that decided
+     * at its entry to write as the family's (familyTarget, under the ledger's keys), still writable
+     * now. A write begun on a share's or this account's path (sealed under their keys) into a folder
+     * proven a family's since is refused, as is any write that declared nothing.
+     */
+    func finalGate(_ workspaceId: String) async throws {
+        #if DEBUG
+        if let beforeGate { await beforeGate(workspaceId) }
+        #endif
+        // Nothing awaited from here to the send's start: a proof or a guard landing now is seen.
+        let id = workspaceId.lowercased()
+        if heldUnderOwedGuard(id) { throw GuardError.unsaved }
+        guard isFamilyWorkspace(id) else { return }
+        guard WriteIntent.decision(id) == true else { throw FamilyFailure(message: FamilyWords.couldntCheckKeys) }
+        _ = try familyTarget(id)
+    }
+
+    /* A write's body, with its own record of what it decided at entry (WriteIntent), for the final gate. */
+    func writing<T>(_ body: () async throws -> T) async rethrows -> T {
+        try await WriteIntent.$entry.withValue(WriteEntry(), operation: body)
+    }
+
+    /*
+     * The web worker's requireGuardKept: nothing is written into a family while the guard its last
+     * acceptance handed back isn't stored (docs/optional-verification.md 2.8); reading goes on. A
+     * family folder whose family isn't known here is refused while any family's guard is owed.
+     */
+    func requireGuardKept(_ workspaceId: String) throws {
+        guard !familyGuardOwed.isEmpty else { return }
+        let id = workspaceId.lowercased()
+        // Any family that named it and still owes its guard holds it, the proven family's or not.
+        if heldUnderOwedGuard(id) { throw GuardError.unsaved }
+        if let groupId = familyAreaGroup[id] {
+            if familyGuardOwed.contains(groupId) { throw GuardError.unsaved }
+            return
+        }
+        // Named only by families whose guards are stored: written as what it is. Known to none: held while any guard is owed.
+        if heldAreaGroups[id] != nil { return }
+        throw GuardError.unsaved
+    }
+
+    /*
+     * Right before a write leaves for the server, after every await of its own (a key from the server,
+     * a signature, a lookup): a sync may have committed and failed to store its guard meanwhile.
+     */
+    func sendingIntoFamily(_ workspaceId: String) throws {
+        // A folder a member list named but not proven a family's (a share, maybe) waits for the guard too, as a family folder.
+        if isFamilyWorkspace(workspaceId) || heldAreaGroups[workspaceId.lowercased()] != nil { try requireGuardKept(workspaceId) }
+    }
+
+    /* Raised before an acceptance of `groupId` commits; whether it was raised already (an earlier guard still owed). */
+    @discardableResult
+    func oweFamilyGuard(_ groupId: String) -> Bool { !familyGuardOwed.insert(groupId.lowercased()).inserted }
+
+    /* The guard an acceptance handed back is stored (or there was none): writes into the family go on. */
+    func familyGuardKept(_ groupId: String) { familyGuardOwed.remove(groupId.lowercased()) }
+
     /* The key of a family folder node a write puts something under (its metadata, a version), at the epoch it was opened at. */
     func writableKey(of item: Opened) throws -> Data {
+        try requireGuardKept(item.node.workspaceId)
         guard let held = try areaLedger.writableNodeKey(workspaceId: item.node.workspaceId, nodeId: item.id) else {
             throw DriveAPIError.server(500, "Open the containing folder first.")
         }
@@ -282,7 +404,28 @@ extension Vault {
     }
 
     /* A family folder listed afresh, so the ledger sees the envelopes the server serves now (a walk may have re-keyed it). */
-    func lookAgain(_ folderId: String) async throws {
-        _ = try await listChildren(of: folderId)
+    func lookAgain(_ folderId: String, in workspaceId: String) async throws {
+        _ = try await listChildren(of: folderId, in: workspaceId)
     }
+}
+
+/*
+ * What a write decided at its entry for each workspace it writes into: the first decision stands
+ * (a check run again later never changes it). Carried to the final gate in a task-local.
+ */
+final class WriteEntry: @unchecked Sendable {
+    private let lock = NSLock()
+    private var decided: [String: Bool] = [:]
+
+    func record(_ workspaceId: String, family: Bool) {
+        lock.withLock { if decided[workspaceId.lowercased()] == nil { decided[workspaceId.lowercased()] = family } }
+    }
+
+    func decision(_ workspaceId: String) -> Bool? { lock.withLock { decided[workspaceId.lowercased()] } }
+}
+
+enum WriteIntent {
+    @TaskLocal static var entry: WriteEntry?
+    static func record(_ workspaceId: String, family: Bool) { entry?.record(workspaceId, family: family) }
+    static func decision(_ workspaceId: String) -> Bool? { entry?.decision(workspaceId) }
 }

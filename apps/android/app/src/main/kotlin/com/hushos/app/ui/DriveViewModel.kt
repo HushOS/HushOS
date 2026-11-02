@@ -13,13 +13,29 @@ import androidx.lifecycle.viewModelScope
 import com.hushos.app.BuildConfig
 import com.hushos.app.data.rethrowIfCancelled
 import com.hushos.app.data.Auth
+import com.hushos.app.data.familyEpoch
+import com.hushos.app.data.familyWordsSince
+import com.hushos.app.data.isFamilyWorkspace
+import com.hushos.app.data.olderThan
 import com.hushos.app.data.catalogueAll
 import com.hushos.app.data.saveFromLink
 import com.hushos.app.data.BillingSummary
 import com.hushos.app.data.StorageAllowance
 import com.hushos.app.data.NotAuthenticated
 import com.hushos.app.data.Unreachable
-import com.hushos.app.data.Contact
+import com.hushos.app.data.AccountChange
+import com.hushos.app.data.Added
+import com.hushos.app.data.ContactStanding
+import com.hushos.app.data.ShareeChecks
+import com.hushos.app.data.addContact
+import com.hushos.app.data.accountChanges
+import com.hushos.app.data.contactStandings
+import com.hushos.app.data.continueWith
+import com.hushos.app.data.lookup
+import com.hushos.app.data.openWaiting
+import com.hushos.app.data.remove
+import com.hushos.app.data.shareeChanged
+import com.hushos.app.data.theyMatch
 import com.hushos.app.data.ContactPin
 import com.hushos.app.data.LinkView
 import com.hushos.app.data.Lookup
@@ -85,8 +101,12 @@ data class DriveState(
     val origin: String = "https://hushos.com",
     val rootId: String? = null,
     val folders: Map<String, List<Opened>> = emptyMap(),
+    /* Home's Recent rows: the chip's type, a recent folder standing in for what it holds. */
     val recents: List<Opened> = emptyList(),
+    /* The newest changes as they are (every type, nothing folded in): what search falls back on before the catalogue. */
+    val latest: List<Opened> = emptyList(),
     val trash: List<TrashItem> = emptyList(),
+    /* Decrypted thumbnails by item and version (thumbnailKey): a replaced file's new version is never shown the old one. */
     val thumbnails: Map<String, ByteArray> = emptyMap(),
     val storage: StorageBreakdown? = null,
     val shares: List<Vault.ShareMount>? = null,
@@ -155,7 +175,7 @@ data class DriveState(
     val resealing: Pair<Int, Int>? = null,
 ) {
     /* Every item this session has opened, for search across folders. */
-    val everything: List<Opened> get() = (folders.values.flatten() + recents).distinctBy { it.id }
+    val everything: List<Opened> get() = (folders.values.flatten() + latest).distinctBy { it.id }
     val emptyingTrash: Boolean get() = emptying != null
 }
 
@@ -174,12 +194,19 @@ data class RestoreProblem(
  * What the screens read: the gate, folder listings, recents and the trash,
  * refreshed after every write, plus thumbnails decrypted once and kept.
  */
-class DriveViewModel(application: Application) : AndroidViewModel(application) {
+class DriveViewModel(application: Application) : AndroidViewModel(application), FamilyHost {
     private val context: Context get() = getApplication()
     // The saved origin is read with the session below, off the main thread (the store's first open is Keystore work).
     private val _state = MutableStateFlow(DriveState(origin = defaultOrigin()))
-    val state: StateFlow<DriveState> = _state
+    override val state: StateFlow<DriveState> = _state
     private var vault: Vault? = null
+    /* Families (FamiliesModel.kt): each family's state, page and folders, beside the drive's. */
+    val families = FamiliesModel(this)
+    override val currentVault: Vault? get() = vault
+    override val cacheDir: File get() = context.cacheDir
+    override val familyScope get() = viewModelScope
+    override fun updateState(change: (DriveState) -> DriveState) = _state.update(change)
+    override fun lostSession() = sessionLost()
     private val thumbnailTasks = HashSet<String>()
     /* Who can open what (`access`): one request at a time, and one more after it for anything asked meanwhile. */
     private val sharingLoads = SharingRefresh(viewModelScope) { loadAccess() }
@@ -266,12 +293,18 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun signedIn(user: SessionUser) {
         showingOwnWords = false
+        contactStep = null
         // A session saved before the email was kept learns it now, so the Files app can name the account.
         if (user.email.isNotEmpty()) Shared.session(context)?.takeIf { it.email != user.email && it.userId == user.id }?.let {
             Shared.writeSession(context, it.copy(email = user.email))
         }
         // A session from before AccountStore: the data on the phone is this account's.
         com.hushos.app.data.AccountStore.of(context).adopt(user.id)
+        // A new session starts with no families drawn: whatever the last one fetched, or has in flight, is dropped, and
+        // no download of the last vault writes again.
+        vault?.close()
+        vault?.areaLedger?.clear()
+        families.reset()
         vault = Vault.fromShared(context)
         filesAppChanged()
         refreshOffline()
@@ -421,12 +454,18 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     fun signOut() {
         showingOwnWords = false
+        contactStep = null
         // Queued transfers belong to the account signing out: stopped now; Auth.signOut removes
         // their copies with every other file of the account (AccountStore).
         androidx.work.WorkManager.getInstance(context).cancelAllWorkByTag(com.hushos.app.data.TransferQueue.TAG)
         queueWatch?.cancel(); queueWatch = null
         link = null
+        // The session's families go with it: the ledger's keys wiped, nothing of them left drawn, and no download of it
+        // writes again (before Auth.signOut wipes the account's copies).
+        vault?.close()
+        vault?.areaLedger?.clear()
         vault = null
+        families.reset()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin)
         viewModelScope.launch {
             withContext(Dispatchers.IO) { Auth.signOut(context) }
@@ -436,9 +475,13 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun sessionLost() {
         showingOwnWords = false
+        contactStep = null
         val ended = Shared.session(context)
         Shared.clearSession(context)
+        vault?.close()
+        vault?.areaLedger?.clear()
         vault = null
+        families.reset()
         link = null
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin, signedOutNotice = true)
         // Ended because this phone was removed from the account: everything of the account goes too,
@@ -586,6 +629,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         refreshTrust()
         // The catalogue: the whole tree from the mirror on disk, then only the feed's changes.
         buildCatalogue()
+        // The account's families (none on a server without them): Account's section and any family folder on screen.
+        families.refreshFamilies()
     }
 
     /* Builds the catalogue once, then redraws every list from it. */
@@ -621,6 +666,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun liveSync() {
         if (state.value.gate != Gate.SIGNED_IN || vault == null) return
         sync(quiet = true)
+        families.tick()
     }
 
     /*
@@ -715,6 +761,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         refreshKeptFolders(withShares = true)
         // Someone checked on another device counts here too once the app is back.
         refreshTrust()
+        // And a family changed elsewhere (a removal), at most once a minute.
+        families.refreshFamilies()
     }
 
     /* Retry on a file that couldn't be kept: its folder's failed files are tried again now. */
@@ -727,12 +775,24 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun redraw(folderIds: Collection<String>) {
         val vault = vault ?: return
-        val fresh = withContext(Dispatchers.IO) { folderIds.associateWith { runCatching { vault.listChildren(it) }.getOrNull() } }
-        val recents = withContext(Dispatchers.IO) { runCatching { vault.recents() }.getOrNull() }
-        _state.update { s -> s.copy(folders = s.folders + fresh.filterValues { it != null }.mapValues { it.value!! }, recents = recents ?: s.recents) }
+        // Family folders are listed through their family (its guards), never merged here.
+        val plain = families.relist(folderIds)
+        val fresh = withContext(Dispatchers.IO) { plain.associateWith { runCatching { vault.listChildren(it) }.getOrNull() } }
+        val type = recentsType
+        val loaded = withContext(Dispatchers.IO) { runCatching { vault.recents { type.matches(it) } }.getOrNull() }
+        val recents = loaded?.rows?.takeIf { type == recentsType }
+        _state.update { s -> s.copy(folders = s.folders + fresh.filterValues { it != null }.mapValues { it.value!! }, recents = recents ?: s.recents, latest = loaded?.latest ?: s.latest) }
     }
 
     fun refresh(folderId: String, pulled: Boolean = false) = viewModelScope.launch {
+        // A family folder is listed through its family (FamiliesModel), never as a folder of this drive.
+        if (families.isFamilyFolder(folderId)) {
+            // One session for the pull and the listing: an account switch between them lists nothing for the next one.
+            val session = families.begin() ?: return@launch
+            if (pulled) families.refreshFamilies(force = true, session = session)
+            families.refreshFolder(folderId, session)
+            return@launch
+        }
         _state.update { it.copy(loading = it.loading + folderId, failedFolders = it.failedFolders - folderId) }
         sync()
         // A pull also looks at kept folders now, shared ones included, rather than at the next tick.
@@ -787,7 +847,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     private fun firstName(name: String, email: String) = name.trim().split(' ').firstOrNull { it.isNotEmpty() } ?: email.substringBefore('@')
 
     /* Everything search can look through: the whole drive once the catalogue is built, else what this session opened. */
-    fun searchable(): List<Opened> = vault?.takeIf { it.catalogueState == CatalogueState.READY }?.catalogueAll()?.takeIf { it.isNotEmpty() } ?: state.value.everything
+    fun searchable(): List<Opened> =
+        // Family folders are not in this drive's catalogue: what this session listed of them is searched in place, each row once.
+        searchableRows(vault?.takeIf { it.catalogueState == CatalogueState.READY }?.catalogueAll()?.takeIf { it.isNotEmpty() } ?: state.value.everything,
+            state.value.folders) { families.isFamilyItem(it) }
 
     /* Whether search covers every folder (the catalogue is built) or only the ones opened here. */
     fun searchesEverything(): Boolean = vault?.catalogueState == CatalogueState.READY
@@ -869,6 +932,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
                     com.hushos.app.data.AppLink.IncompleteShare -> "link:${origin.trimEnd('/')}/s/"
                     is com.hushos.app.data.AppLink.Node -> "node:${target.id}"
                     is com.hushos.app.data.AppLink.Recover -> null
+                    // The invitation is a sheet of its own (Main), started here so it outlives whatever is on screen.
+                    is com.hushos.app.data.AppLink.Join -> { families.invite(target.token); null }
+                    com.hushos.app.data.AppLink.IncompleteInvite -> { families.invite(null); null }
                 })
             }
             is com.hushos.app.data.AppLinkResult.Refused -> when (val reason = result.reason) {
@@ -908,6 +974,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
      */
     internal var showingOwnWords by mutableStateOf(false)
         private set
+
+    /* A contact step a mark or Info started, shown by `Main` so it outlives the mark (ContactsUi.kt, MarkContactStep). */
+    internal var contactStep by mutableStateOf<ContactStep?>(null)
 
     fun openOwnWords() { showingOwnWords = true }
     fun closeOwnWords() { showingOwnWords = false }
@@ -1019,8 +1088,30 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         loadRoot().join()
         sync()
         if (pulled) refreshKeptFolders(withShares = true)
-        io { it.recents() }?.let { recents -> _state.update { it.copy(recents = recents) } }
+        loadRecents()
         _state.update { it.copy(loading = it.loading - "recents") }
+    }
+
+    /*
+     * Home's type chip. A recent folder stands in for what it holds (`collapseRecents`), so the chip
+     * narrows Recent before that, in the vault: filtered after, images inside a recent folder would
+     * never show.
+     */
+    private var recentsType = TypeFilter.ALL
+
+    /* A chip chosen on Home: Recent again from what the phone holds, without a sync. */
+    fun showRecents(type: TypeFilter) = viewModelScope.launch {
+        if (type == recentsType) return@launch
+        recentsType = type
+        loadRecents()
+    }
+
+    /* Recent under the chip chosen now; an answer for a chip no longer chosen is dropped. */
+    private suspend fun loadRecents() {
+        val type = recentsType
+        io { vault -> vault.recents { type.matches(it) } }?.let { loaded ->
+            _state.update { it.copy(latest = loaded.latest, recents = if (type == recentsType) loaded.rows else it.recents) }
+        }
     }
 
     fun refreshTrash(pulled: Boolean = false) = viewModelScope.launch {
@@ -1101,18 +1192,19 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
      * worked out again when the trusted keys change. An unknown writer who granted a share here can be checked by email.
      */
     fun unverified(item: Opened, state: DriveState): com.hushos.app.data.Unverified? {
+        // A family folder's item is judged by its family's member list (families.verdict), never by the personal trust set.
+        if (families.isFamilyItem(item)) return null
         val trust = state.trust
         if (integrityTrust !== trust) { integrity.clear(); integrityTrust = trust }
         val node = item.node
         val version = node.currentVersion
         val key = listOf(node.workspaceId, node.id, node.metadataVersion, node.metadataSigner?.id, node.metadataSignature, node.metadataEnvelope.hashCode(),
             version?.id, version?.signer?.id, version?.signature).joinToString("|")
-        val found = integrity.getOrPut(key) { java.util.Optional.ofNullable(com.hushos.app.data.markOf(node, trust)) }.orElse(null) ?: return null
-        val writer = found.writer
-        if (writer !is com.hushos.app.data.Writer.Unknown || writer.email != null || found.signerId == null) return found
-        val granter = state.shares?.firstOrNull { it.share.granterId.equals(found.signerId, ignoreCase = true) }?.share?.granterEmail?.ifEmpty { null } ?: return found
-        return found.copy(writer = com.hushos.app.data.Writer.Unknown(granter))
+        return integrity.getOrPut(key) { java.util.Optional.ofNullable(com.hushos.app.data.markOf(node, trust)) }.orElse(null)
     }
+
+    /* Whether a row carries a mark: its writer unverified by the personal trust set, or by its family's member list. */
+    fun marked(item: Opened, state: DriveState): Boolean = unverified(item, state) != null || families.verdict(item)?.mark != null
 
     /* Started without a network, the account is known only by its id; once the server answers, its name and email fill in for the avatar. */
     fun refreshUser() = viewModelScope.launch {
@@ -1170,14 +1262,67 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun contacts(): List<ContactPin>? = io { it.contacts() }
     /* `failure` hears why the words couldn’t be opened, for the sheet to say in place. */
     suspend fun ownFingerprint(failure: ((String) -> Unit)? = null): String? = io(failure) { it.currentOwnFingerprint() }
-    suspend fun lookup(email: String): Result<Lookup> = withContext(Dispatchers.IO) { runCatching { (vault ?: throw NotAuthenticated()).lookup(email) } }
-        .also { result -> if (result.getOrNull()?.followed == true) refreshTrust() }
-    /* Pins the contact whose words were just compared; `failure` hears why not (they haven't upgraded, say). */
-    suspend fun pin(contact: Contact, failure: ((String) -> Unit)? = null): Boolean = (io(failure) { it.pin(contact); true } ?: false).also { if (it) refreshTrust() }
-    suspend fun unpin(pin: ContactPin): Boolean = (io { it.unpin(pin); true } ?: false).also { if (it) refreshTrust() }
+    /*
+     * Contacts without comparing words (docs/optional-verification.md 2, 6; ContactTrust.kt). Each act runs off the main
+     * thread and comes back as a Result for the sheet to say in place; a lost session signs out.
+     */
+    private suspend fun <T> act(block: (Vault) -> T): Result<T> {
+        val vault = vault ?: return Result.failure(NotAuthenticated())
+        val result = withContext(Dispatchers.IO) { runCatching { block(vault) } }
+        result.exceptionOrNull()?.let { error ->
+            error.rethrowIfCancelled()
+            if (error is NotAuthenticated) sessionLost()
+            if (error is Unreachable) _state.update { it.copy(unreachable = true) }
+        }
+        return result
+    }
+
+    /*
+     * Whom signatures count for, or who may open what, moved (an add, Continue, They match, a removal, a lookup that
+     * followed someone or settled an act): rows are judged again, Shared with me mounts again, and what was shared with
+     * someone whose keys were accepted is sealed again.
+     */
+    fun trustMoved() = viewModelScope.launch {
+        refreshTrust()
+        families.rejudge()
+        if (state.value.shares != null) refreshShares()
+        resealIfDue()
+    }
+
+    /* Check it's Maya and the changed-account notice: where this phone stands with them now. */
+    suspend fun lookup(email: String): Result<Lookup> = act { it.lookup(email) }.onSuccess { if (it.trustChanged) trustMoved() }
+
+    /* Add someone (6.2): no words. `writer`, from a mark: the account that wrote the item. */
+    suspend fun addContact(email: String, writer: String? = null): Result<Added> = act { it.addContact(email, writer) }
+        .onSuccess { if (it.trustChanged) trustMoved() }
+
+    suspend fun continueWith(change: AccountChange): Result<ContactPin> = act { it.continueWith(change) }.onSuccess { trustMoved() }
+
+    suspend fun theyMatch(found: Lookup): Result<ContactPin> = act { it.theyMatch(found) }.onSuccess { trustMoved() }
+
+    suspend fun removeContact(userId: String): Result<Unit> = act { it.remove(userId) }.onSuccess { trustMoved() }
+
+    /* Where everyone in Contacts stands on this phone, with the changes met this session; a guard that can't be read fails it. */
+    suspend fun contactStandings(): Result<Map<String, ContactStanding>> = act { vault ->
+        vault.contactStandings().toMutableMap().also { found -> vault.accountChanges().keys.forEach { found[it] = ContactStanding(false, true) } }
+    }
+
+    /* Which of `pins` (the people on an item) have an account that changed: a few lookups at a time, the first failure said. */
+    suspend fun shareeChanges(pins: List<ContactPin>): Pair<Set<String>, Throwable?> {
+        val vault = vault ?: return emptySet<String>() to NotAuthenticated()
+        return withContext(Dispatchers.IO) { ShareeChecks.changed(pins) { vault.shareeChanged(it) } }
+    }
+
+    /* Open on a Shared with me row that waits (6.4): adds them back or follows them, then everything they shared mounts. */
+    suspend fun openWaiting(share: ShareView): Result<Unit> = act { it.openWaiting(share) }.also { trustMoved() }
+
+    /* Info's "Added by" for an item whose writer was first seen and not checked; null otherwise. */
+    fun seenBy(item: Opened, state: DriveState): com.hushos.app.data.SeenBy? = com.hushos.app.data.seenByOf(item.node, state.trust)
+
     suspend fun shares(item: Opened): List<OwnedShare>? = io { it.shares(item) }
     suspend fun sharedByMe(): List<SharedByMe>? = io { it.sharedByMe() }
     suspend fun share(item: Opened, pin: ContactPin, role: String): Result<OwnedShare> = withContext(Dispatchers.IO) { runCatching { (vault ?: throw NotAuthenticated()).share(item, pin, role) } }
+        .onSuccess { if (it.trustChanged) trustMoved() }.map { it.share }
     /* Revokes a share and, as the web does, rotates the subtree so the old key opens nothing new. */
     suspend fun revokeShare(share: OwnedShare, item: Opened): Boolean = viewModelScope.async { revokeShareNow(share, item) }.await()
 
@@ -1254,7 +1399,12 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         androidx.work.WorkManager.getInstance(context).cancelAllWorkByTag(com.hushos.app.data.TransferQueue.TAG)
         queueWatch?.cancel(); queueWatch = null
         link = null
+        // The deleted account's families go with it, on the main thread where they are drawn. Its copies were wiped
+        // already: what a download wrote since goes too, and none writes again.
+        vault?.close(deleteCopies = true)
+        vault?.areaLedger?.clear()
         vault = null
+        viewModelScope.launch { families.reset() }
         filesAppChanged()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin, accountDeleted = true)
         null
@@ -1300,12 +1450,21 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun thumbnail(item: Opened) {
-        if (!item.hasThumbnail || state.value.thumbnails.containsKey(item.id) || !thumbnailTasks.add(item.id)) return
+        val key = thumbnailKey(item)
+        if (!thumbnailDue(item, state.value.thumbnails) || !thumbnailTasks.add(key)) return
         viewModelScope.launch {
             val vault = vault ?: return@launch
-            val bytes = withContext(Dispatchers.IO) { runCatching { vault.thumbnail(item.id) }.getOrNull() }
-            if (bytes != null) _state.update { it.copy(thumbnails = it.thumbnails + (item.id to bytes)) }
-            thumbnailTasks.remove(item.id)
+            // A family file's thumbnail is kept only while its folder stands: one decrypted across a removal or a fork is dropped.
+            val family = vault.isFamilyWorkspace(item.node.workspaceId)
+            val epoch = vault.familyEpoch(item.node.workspaceId)
+            val bytes = withContext(Dispatchers.IO) { runCatching { vault.thumbnail(item.id, item.node.workspaceId) }.getOrNull() }
+            // ...and only for the version the cache holds now: an older row's thumbnail never stands for a newer one.
+            // Kept only under the version it was asked for, the version the vault decrypted it from (any file's).
+            val stale = (family && (vault.familyEpoch(item.node.workspaceId) != epoch || this@DriveViewModel.vault !== vault)) ||
+                vault.item(item.node.workspaceId, item.id)?.node?.currentVersion?.id != item.node.currentVersion?.id
+            // An earlier version's thumbnail of the item goes as the newer one comes.
+            if (bytes != null && !stale) _state.update { s -> s.copy(thumbnails = s.thumbnails.filterKeys { thumbnailItem(it) != item.id } + (key to bytes)) }
+            thumbnailTasks.remove(key)
         }
     }
 
@@ -1322,7 +1481,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         if (!ok && failure == null && state.value.unreachable) notify("You’re offline, so that didn’t happen. Try again once you’re connected.")
         // The catalogue answers listings, so pull the feed first: the write is in it already.
         if (ok) sync(restored = restored)
-        if (ok && folder != null) io { it.listChildren(folder) }?.let { children -> _state.update { it.copy(folders = it.folders + (folder to children)) } }
+        if (ok && folder != null) families.relist(listOf(folder)).forEach { plain -> io { it.listChildren(plain) }?.let { children -> _state.update { it.copy(folders = it.folders + (plain to children)) } } }
         if (ok) context.contentResolver.notifyChange(android.provider.DocumentsContract.buildRootsUri("${context.packageName}.documents"), null)
         // A change made here inside a kept folder of a share isn't in this drive's feed: look at those now too.
         if (ok && Offline.folders(context).any { it.shareRoot != null }) refreshKeptFolders(withShares = true)
@@ -1396,7 +1555,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
 
     /* Rows the server agreed are gone: off every folder on screen and off Recent, without a listing. */
     private fun dropRows(ids: Set<String>) = _state.update { s ->
-        s.copy(folders = s.folders.mapValues { (_, rows) -> rows.filter { it.id !in ids } }, recents = s.recents.filter { it.id !in ids })
+        s.copy(folders = s.folders.mapValues { (_, rows) -> rows.filter { it.id !in ids } }, recents = s.recents.filter { it.id !in ids }, latest = s.latest.filter { it.id !in ids })
     }
 
     /*
@@ -1406,7 +1565,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
      */
     private suspend fun settle(folders: Set<String>, restored: Boolean = false) {
         sync(quiet = true, restored = restored)
-        for (folder in folders) quietly { it.listChildren(folder) }?.let { children -> _state.update { it.copy(folders = it.folders + (folder to children)) } }
+        for (folder in families.relist(folders)) quietly { it.listChildren(folder) }?.let { children -> _state.update { it.copy(folders = it.folders + (folder to children)) } }
         context.contentResolver.notifyChange(android.provider.DocumentsContract.buildRootsUri("${context.packageName}.documents"), null)
         if (Offline.folders(context).any { it.shareRoot != null }) refreshKeptFolders(withShares = true)
     }
@@ -1547,7 +1706,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     /* The original of a move across drives, once its copy landed: part of that move, so no notice of its own. */
     private suspend fun trashOne(item: Opened): Boolean {
         val ok = write(item.node.parentId) { it.trash(item.id) }
-        if (ok) _state.update { s -> s.copy(recents = s.recents.filter { it.id != item.id }) }
+        if (ok) _state.update { s -> s.copy(recents = s.recents.filter { it.id != item.id }, latest = s.latest.filter { it.id != item.id }) }
         return ok
     }
     fun restore(entry: TrashItem) = viewModelScope.launch {
@@ -1951,7 +2110,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /* The opened item for an id, when this session knows it (the catalogue opens the whole drive). */
-    fun item(id: String): Opened? = vault?.item(id)
+    override fun item(id: String): Opened? = vault?.item(id)
+
+    /* A row of a workspace by its id: a family's, a share's or this account's own, never another's with the same id. */
+    fun itemIn(workspaceId: String, id: String): Opened? = vault?.item(workspaceId, id)
 
     /* `item`, only while it is live (not trashed, nor inside a trashed folder); null when gone or not yet loaded. */
     fun liveItem(id: String, workspaceId: String? = null): Opened? = vault?.liveItem(id, workspaceId)
@@ -1970,9 +2132,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
      * shares the server listed last. Unknown (shares not listed yet, the drive not open): false.
      */
     fun outOfReach(workspaceId: String): Boolean {
-        val own = vault?.ownWorkspaceId ?: return false
-        val shares = state.value.shares ?: return false
-        return workspaceId != own && shares.none { it.share.workspaceId == workspaceId }
+        val group = families.folders.groupOfWorkspace(workspaceId) ?: vault?.familyAreas?.get(workspaceId.lowercase())
+        return outOfReach(workspaceId, vault?.ownWorkspaceId, state.value.shares?.map { it.share.workspaceId }, family = group != null,
+            familyState = group?.let { families.states[it] })
     }
 
     /* A kept folder off the phone (from one of its files, or On this phone): everything that came with it goes. */
@@ -1987,27 +2149,61 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
         refreshOffline()
     }
 
+    /*
+     * A family file as it is now: its folder listed again first (a family folder has no change feed), then the newer of
+     * the tapped row and the vault's row of the same workspace. Any other file opens as tapped.
+     */
+    private suspend fun currentOpened(asked: Opened): Opened {
+        val vault = currentVault ?: return asked
+        if (!vault.isFamilyWorkspace(asked.node.workspaceId)) return asked
+        asked.node.parentId?.let { families.refreshFolder(it) }
+        return freshest(asked, currentVault?.item(asked.node.workspaceId, asked.id))
+    }
+
     /* `quiet`: a caller that says itself what went wrong (Send a copy) gets no offline notice. */
-    suspend fun download(item: Opened, version: VersionListView? = null, quiet: Boolean = false): Uri? {
-        if (version == null) Offline.localCopy(context, item)?.let { return FileProvider.getUriForFile(context, "${context.packageName}.shared", it) }
+    suspend fun download(asked: Opened, version: VersionListView? = null, quiet: Boolean = false): Uri? = downloadOpened(asked, version, quiet)?.first
+
+    /*
+     * The copy and the row it was made from, which may be newer than the one tapped (a family file another member
+     * replaced): its name and type are the ones an app is handed, never the tapped row's.
+     */
+    suspend fun downloadOpened(asked: Opened, version: VersionListView? = null, quiet: Boolean = false): Pair<Uri, Opened>? {
+        if (version == null) Offline.localCopy(context, asked)?.let { return FileProvider.getUriForFile(context, "${context.packageName}.shared", it) to asked }
+        // The file as it is now, not as the row that was tapped last drew it: a family folder has no change feed, so its
+        // folder is listed again first (another member may have replaced it); then whichever is newer, the row or what the
+        // vault holds, names the version and the path. A retry after "It changed meanwhile" so reads the newer one.
+        val item = if (version != null) asked else currentOpened(asked)
+        // Keyed by the version itself, so a file replaced elsewhere is fetched again rather than served from an old copy.
+        // A family file's copy goes in its family folder's own, which a removal deletes whole (none without one).
+        val versionId = version?.id ?: item.node.currentVersion?.id ?: "current"
+        val familyVault = currentVault?.takeIf { it.isFamilyWorkspace(item.node.workspaceId) }
+        // A family folder let go of meanwhile (a removal) hands nothing to another app: what it was before anything began.
+        val epoch = familyVault?.familyEpoch(item.node.workspaceId)
+        // A received share's goes in its workspace's own (opened/share/<workspace>), which a proof deletes whole.
+        val folder = currentVault?.openedCopyFolder(item) ?: return null
+        val file = File(folder, "${item.id}/$versionId/${item.name}")
         // Opening a file is not a transfer to announce: the row shows a small ring while it comes down.
         _state.update { it.copy(opening = it.opening + (item.id to 0f)) }
-        // Keyed by the version itself, so a file replaced elsewhere is fetched again rather than served from an old copy.
-        val file = File(context.cacheDir, "opened/${item.id}/${version?.id ?: item.node.currentVersion?.id ?: "current"}/${item.name}")
         var reason: String? = null
         val ok = try {
             if (file.exists()) true else io({ reason = it }) { vault ->
-                vault.download(item.id, file, version) { fraction -> _state.update { it.copy(opening = it.opening + (item.id to fraction)) } }
+                vault.download(item.id, file, version, expectedVersionId = versionId.takeIf { it != "current" }, workspaceId = item.node.workspaceId) { fraction -> _state.update { it.copy(opening = it.opening + (item.id to fraction)) } }
                 true
             } ?: false
         } finally {
             // Cancelled too (the screen that asked went away): the ring goes with it.
             _state.update { it.copy(opening = it.opening - item.id) }
         }
+        val invalidated = if (familyVault != null && epoch != null) familyVault.familyWordsSince(item.node.workspaceId, epoch) else null
+        if (invalidated != null) {
+            // Nothing deleted: what this download wrote went with the forget, and a copy there now is a newer download's.
+            if (!quiet) notify("Couldn’t open “${item.name}”. $invalidated")
+            return null
+        }
         // A failure is said on a notice, not an alert: the row it came from is still there to try again.
         if (!ok && !quiet && !state.value.unreachable) notify("Couldn’t open “${item.name}”. ${reason ?: "Try again."}")
         if (!ok && !quiet && state.value.unreachable) notify("You’re offline. Files you keep on this phone open without a connection.", action = "Show") { _state.update { it.copy(request = "phone") } }
-        return if (ok) FileProvider.getUriForFile(context, "${context.packageName}.shared", file) else null
+        return if (ok) FileProvider.getUriForFile(context, "${context.packageName}.shared", file) to item else null
     }
 }
 
@@ -2016,3 +2212,16 @@ class DriveViewModel(application: Application) : AndroidViewModel(application) {
  * builds, production for release (build.gradle.kts), the same origin its links answer to.
  */
 internal fun defaultOrigin(): String = BuildConfig.DEFAULT_ORIGIN
+
+/* A decrypted thumbnail's key: the item and the version it shows, so a replaced file asks for its new one. */
+fun thumbnailKey(item: Opened): String = item.id + "@" + (item.node.currentVersion?.id ?: "")
+
+/* The item a thumbnail key belongs to. */
+fun thumbnailItem(key: String): String = key.substringBefore('@')
+
+/* Whether an item's thumbnail is still to be fetched: it has one, and none is held for its current version. */
+fun thumbnailDue(item: Opened, held: Map<String, ByteArray>): Boolean = item.hasThumbnail && !held.containsKey(thumbnailKey(item))
+
+/* The row to open for `asked`: `held` only when it is the same workspace's row of the same node and not older. */
+fun freshest(asked: Opened, held: Opened?): Opened =
+    if (held == null || held.id != asked.id || !held.node.workspaceId.equals(asked.node.workspaceId, ignoreCase = true) || held.node.olderThan(asked.node)) asked else held

@@ -112,19 +112,30 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     // or the system stopping the app in the background brings you back to the same folder. After a restart
     // the ids are found again from the catalogue; until then the screen shows that it is opening.
     var savedStack by rememberSaveable(start?.id) { mutableStateOf<List<String>>(emptyList()) }
+    // A family folder's rows a removal or a refusal took away are found again from what the families hold in memory, so a
+    // fold or a rotation keeps the nested folder on screen, still saying so.
+    // A family's folders are found again in that family's workspace only (the start's), never by id alone.
+    val familySpace = start?.takeIf { model.families.isFamilyItem(it) }?.node?.workspaceId
+    fun found(id: String): Opened? =
+        if (familySpace != null) model.currentVault?.item(familySpace, id) ?: model.families.heldFolder(familySpace, id) else model.item(id)
     val stack = remember(start?.id) {
         mutableStateListOf<Opened>().apply {
             start?.let { add(it) }
-            for (id in savedStack.drop(size)) add(model.item(id) ?: break)
+            for (id in savedStack.drop(size)) add(found(id) ?: break)
         }
     }
     var restoring by remember(start?.id) { mutableStateOf(stack.size < savedStack.size) }
     LaunchedEffect(start?.id) {
         if (restoring) {
-            for (id in savedStack.drop(stack.size)) stack.add(model.find(id) ?: break)
+            for (id in savedStack.drop(stack.size)) stack.add((if (familySpace != null) found(id) else model.find(id)) ?: break)
             restoring = false
         }
-        androidx.compose.runtime.snapshotFlow { stack.map { it.id } }.collect { if (!restoring) savedStack = it }
+        androidx.compose.runtime.snapshotFlow { stack.map { it.id } }.collect {
+            if (restoring) return@collect
+            savedStack = it
+            // A family folder's way down, kept beside the drive (in memory, never saved) for a fold after a removal.
+            if (stack.firstOrNull()?.let(model.families::isFamilyItem) == true) model.families.holdStack(stack.toList())
+        }
     }
     if (restoring) {
         OpeningScreen()
@@ -135,6 +146,11 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     val isTop = current == null
     val floor = if (start != null) 1 else 0
     val folderName = current?.name ?: "Files"
+    // A family folder (FamiliesModel): read only on Android for now, so nothing here adds, selects or pastes; a folder
+    // of a family this account was removed from has nothing to search or sort.
+    val family = folderId != null && model.families.isFamilyFolder(folderId)
+    val familyProblem = folderId?.let { model.families.problems[it] }
+    val removed = familyProblem == FamilyProblem.Removed
     var fabOpen by rememberSaveable { mutableStateOf(false) }
     DisposableEffect(fabOpen) {
         model.addMenu(fabOpen)
@@ -142,7 +158,7 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     }
     // An open item sheet, saved as the item's id and which sheet, and found again after a restore.
     var savedSheet by rememberSaveable { mutableStateOf<String?>(null) }
-    var sheetFor by remember { mutableStateOf(savedSheet?.split('|')?.let { (id, sheet) -> model.item(id)?.let { it to ItemSheet.valueOf(sheet) } }) }
+    var sheetFor by remember { mutableStateOf(savedSheet?.split('|')?.let { (id, sheet) -> found(id)?.let { it to ItemSheet.valueOf(sheet) } }) }
     LaunchedEffect(sheetFor) { savedSheet = sheetFor?.let { (item, sheet) -> "${item.id}|${sheet.name}" } }
     // Opened by a long press on a tile: the sheet then starts with Select, the grid's only way into selecting from an item.
     var sheetSelects by rememberSaveable { mutableStateOf(false) }
@@ -165,7 +181,7 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
         if (preview.isNotEmpty()) {
             val file = model.find(preview)
             if (file == null || file.isFolder) model.notify("This isn’t available any more.")
-            else model.download(file)?.let { openWith(context, it, mimeOf(file), model, file.name) }
+            else model.downloadOpened(file)?.let { (uri, opened) -> openWith(context, uri, mimeOf(opened), model, opened.name) }
         }
     }
 
@@ -188,7 +204,10 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     // Whenever the folder on screen has no rows and nobody is fetching them (opened, or dropped by
     // something else), fetch them: a list must never wait on a reload nobody started.
     val missing = needsLoad(folderId, state.folders, state.loading, state.failedFolders)
-    LaunchedEffect(folderId, missing) { if (missing && folderId != null) model.refresh(folderId) }
+    LaunchedEffect(folderId, missing, familyProblem) { if (missing && familyProblem == null && folderId != null) model.refresh(folderId) }
+    // A family folder checks its family again while browsing when the last check is a few minutes old; its rows are judged
+    // by the family's member list.
+    LaunchedEffect(folderId, family) { if (family && folderId != null) model.families.refreshIfStale(folderId, 180_000) }
     LaunchedEffect(isTop) { if (isTop) model.refreshStorage() }
     var query by rememberSaveable { mutableStateOf("") }
     var tagFilter by rememberSaveable { mutableStateOf<String?>(null) }
@@ -246,7 +265,7 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     val clip = state.clipboard
     val pasteProblem = if (clip != null && folderId != null) model.pasteProblem(folderId) else null
     val pasteText = clip?.first?.let { if (it.size == 1) "Paste “${it[0].name}” here" else "Paste ${it.size} items here" }
-    val showPaste = clip != null && !selecting && folderId != null
+    val showPaste = clip != null && !selecting && folderId != null && !family
 
     // Per folder: a bar hidden by scrolling one folder must not stay hidden in the next, where an empty
     // list cannot scroll to bring it (and its back arrow) back.
@@ -301,7 +320,8 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                     onBack = if (isTop) null else ({ if (stack.size > floor) stack.removeAt(stack.lastIndex) else onLeave?.invoke() }),
                     scrollBehavior = scroll,
                 ) {
-                    Box {
+                    // A family folder takes no selection (its only item), so no menu.
+                    if (!family) Box {
                         IconButton(onClick = { folderMenu = true }) { Icon(Icons.Outlined.MoreVert, "More") }
                         DropdownMenu(expanded = folderMenu, onDismissRequest = { folderMenu = false }, shape = RoundedCornerShape(16.dp), containerColor = alpine.menu) {
                             // Selecting is not an add action, so it lives here (and on a long press), not in the + menu.
@@ -334,7 +354,7 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                                 // Who can open everything here, once, right under the title, for a folder this account shared (or one
                                 // inside it). It stays while searching: the field under it must not move as you type.
                                 if (state.unreachable) OfflineCapsule()
-                                if (!isTop) TextField(
+                                if (!isTop && !removed) TextField(
                                     value = query, onValueChange = { query = it }, singleLine = true,
                                     placeholder = { Text("Search in $folderName", maxLines = 1) },
                                     leadingIcon = { Icon(Icons.Outlined.Search, null, tint = alpine.ink) },
@@ -392,6 +412,15 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                             }
                         }
                         when {
+                            // The web's words for a family space someone was removed from (family-space.tsx).
+                            removed -> item(key = "removed") {
+                                EmptyState("You’re not in this family", "It may have ended, or someone removed you.", modifier = Modifier.padding(top = 96.dp))
+                            }
+                            familyProblem is FamilyProblem.Words && here.isEmpty() -> item(key = "family") {
+                                EmptyState("This folder couldn’t be opened", familyProblem.words, modifier = Modifier.padding(top = 96.dp)) {
+                                    Button(onClick = { model.families.reopen(folderId!!) }) { Text("Try again") }
+                                }
+                            }
                             words.isNotEmpty() && items.isEmpty() -> item(key = "none") {
                                 EmptyState("No results for “${query.trim()}”", "Check the spelling, or try fewer words.", modifier = Modifier.padding(top = 48.dp))
                             }
@@ -410,12 +439,13 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                                 EmptyState("Nothing tagged $name", "Nothing in this folder carries this tag.", modifier = Modifier.padding(top = 64.dp))
                             }
                             items.isEmpty() -> item(key = "empty") {
-                                EmptyState("Nothing here yet", "Use + to add files, or save to HushOS from the Files app.", modifier = Modifier.padding(top = 64.dp, bottom = 32.dp))
+                                if (family) EmptyState("Nothing here yet", modifier = Modifier.padding(top = 64.dp, bottom = 32.dp))
+                                else EmptyState("Nothing here yet", "Use + to add files, or save to HushOS from the Files app.", modifier = Modifier.padding(top = 64.dp, bottom = 32.dp))
                             }
                         }
                         fun open(item: Opened) {
                             if (item.isFolder) { query = ""; stack.add(item) }
-                            else scope.launch { model.download(item)?.let { openWith(context, it, mimeOf(item), model, item.name) } }
+                            else scope.launch { model.downloadOpened(item)?.let { (uri, opened) -> openWith(context, uri, mimeOf(opened), model, opened.name) } }
                         }
                         // While this selection's batch runs, taps that would change it are ignored.
                         fun toggle(item: Opened) { if (!trashing) picked = if (item.id in picked) picked - item.id else picked + item.id }
@@ -433,10 +463,10 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                             }
                         } else items(items, key = { it.id }) { item ->
                             NodeRow(model, state, item,
-                                note = if (words.isEmpty()) null else "In " + (item.node.parentId?.let { if (it == state.rootId) "Files" else model.item(it)?.name } ?: "Files"),
+                                note = if (words.isEmpty()) null else "In " + (item.node.parentId?.let { if (it == state.rootId) "Files" else model.itemIn(item.node.workspaceId, it)?.name } ?: "Files"),
                                 onClick = { if (selecting) toggle(item) else open(item) },
                                 // Long-press starts selecting, as Material lists do; ⋮ opens the item sheet.
-                                onLongClick = { if (!selecting) { selecting = true; picked = setOf(item.id) } else toggle(item) },
+                                onLongClick = { if (family) { sheetSelects = false; sheetFor = item to ItemSheet.MENU } else if (!selecting) { selecting = true; picked = setOf(item.id) } else toggle(item) },
                                 onMore = { sheetSelects = false; sheetFor = item to ItemSheet.MENU },
                                 selecting = selecting, selected = item.id in picked,
                                 away = away(item))
@@ -464,7 +494,7 @@ private fun isBelow(model: DriveViewModel, item: Opened, folder: String): Boolea
     var steps = 0
     while (cursor != null && steps++ < 256) {
         if (cursor == folder) return true
-        cursor = model.item(cursor)?.node?.parentId
+        cursor = model.itemIn(item.node.workspaceId, cursor)?.node?.parentId
     }
     return false
 }

@@ -28,6 +28,20 @@ struct AccountView: View {
     /* Account has finished appearing: a link may push onto its stack. */
     @State private var onScreen = false
 
+    /* A family pushed by the app (a join just finished), as Account's own Families row pushes it. */
+    /*
+     * Account's stack, as values: a family the app opens (a join just finished) goes in as the same
+     * FamilyRoute its row pushes, so a folder pushed from it stacks above it and Back returns to it.
+     * A view-based destination beside value links popped the family page when a folder was pushed.
+     */
+    @State private var path = NavigationPath()
+
+    private func openFamily(_ groupId: String?) {
+        guard onScreen, let groupId else { return }
+        store.familyToOpen = nil
+        path.append(FamilyRoute.family(groupId))
+    }
+
     private func openTrash(_ link: AppLink?) {
         guard onScreen, link == .trash else { return }
         store.route = nil
@@ -35,7 +49,7 @@ struct AccountView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
                 // Who is signed in, as the first row (iOS Settings' account row, Android's AccountScreen): a tap edits the name.
                 Section {
@@ -61,7 +75,7 @@ struct AccountView: View {
                         row("laptopcomputer.and.iphone", "Devices", "Where you’re signed in")
                     }
                     .alpineRow()
-                    Button { showingPeople = true } label: { row("person.2", "Contacts", "Check it’s them before you share anything sensitive", chevron: true) }.alpineRow()
+                    Button { showingPeople = true } label: { row("person.2", "Contacts", nil, chevron: true) }.alpineRow()
                     Button { showingWords = true } label: { row("person.text.rectangle", "Your twelve words", "Read these to someone checking it’s you", chevron: true) }.alpineRow()
                 } header: {
                     sectionLabel("Sign-in and recovery")
@@ -119,7 +133,8 @@ struct AccountView: View {
             // A link to the Trash pushes it once Account has finished appearing, as a tap would (Appeared.swift).
             .onFinishedAppearing { onScreen = true }
             .onChange(of: store.route, initial: true) { _, link in openTrash(link) }
-            .onChange(of: onScreen) { _, _ in openTrash(store.route) }
+            .onChange(of: onScreen) { _, _ in openTrash(store.route); openFamily(store.familyToOpen) }
+            .onChange(of: store.familyToOpen, initial: true) { _, groupId in openFamily(groupId) }
             .refreshable {
                 await load()
                 await store.refreshFamilies()

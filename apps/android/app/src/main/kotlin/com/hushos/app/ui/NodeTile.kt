@@ -87,8 +87,8 @@ fun NodeTile(
     away: Boolean = false,
 ) {
     val alpine = Alpine.colors
-    LaunchedEffect(item.id) { model.thumbnail(item) }
-    val thumbnail = state.thumbnails[item.id]
+    LaunchedEffect(thumbnailKey(item)) { model.thumbnail(item) }
+    val thumbnail = state.thumbnails[thumbnailKey(item)]
     // Only a photo or a video fills the picture; a PDF's first page, cropped to 4:3, is mostly white margin, so it keeps its mark.
     val pictured = mimeOf(item)?.let { it.startsWith("image/") || it.startsWith("video/") } == true
     val bitmap = remember(thumbnail, pictured) { thumbnail?.takeIf { pictured }?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }

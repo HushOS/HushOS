@@ -80,6 +80,11 @@
                 <!-- The emailed recovery link: recovery carries on in the app. -->
                 <data android:path="/recover/complete" />
             </intent-filter>
+            <!--
+                The mailed family invitation reaches the app only as hushos://join#invite=<token> (the hushos
+                filter above) for now. The https /join filter goes in with the owner's /join rollout: the host is
+                already verified for this package, so it would open the app on release installs at once.
+            -->
         </activity>
 
         <!--
@@ -138,6 +143,12 @@
         <receiver
             android:name="com.hushos.app.data.RetryReceiver"
             android:exported="false" />
+
+        <!-- Polls the change feed while Files or a picker is likely open (files/FilesPoll.kt). -->
+        <service
+            android:name="com.hushos.app.files.FilesPollService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <!-- WorkManager's foreground service, declared as data sync for the queued transfers. -->
         <service

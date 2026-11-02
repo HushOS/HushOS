@@ -64,6 +64,50 @@ extension OnFakeDrive {
         #expect(newFileKey != oldFileKey)
     }
 
+    /*
+     * Batch 1 (A) lands; batch 2 (F, still wrapped under A's old key) is lost on the way. The retry must
+     * finish from what the server holds: A at its new key, F under A's previous one.
+     */
+    @Test func aRotationStoppedAfterABatchLandedFinishesOnRetryAndEveryNodeOpens() async throws {
+        let server = try FakeDrive()
+        let vault = try await readyVault(server)
+        _ = try await vault.listChildren(of: server.root)
+        _ = try await vault.listChildren(of: server.a)
+        server.batchSize = 1
+        server.failRotationSends = [2]
+        let a = try #require(await vault.item(server.a))
+        await #expect(throws: (any Error).self) { try await vault.rotate(a) }
+        #expect(server.nodes[server.a]?.keyEpoch == 2 && server.nodes[server.f]?.keyEpoch == 1)
+
+        // Retried from what the vault offers now, as the share sheet does.
+        let again = try await vault.resolve(server.a)
+        let outcome = try await vault.rotate(again)
+        #expect(outcome.rotated == 1)
+        #expect(server.nodes[server.a]?.keyEpoch == 2 && server.nodes[server.f]?.keyEpoch == 2)
+        // Every node opens under the keys the server holds, with its name.
+        let listing = try await vault.listChildren(of: server.a)
+        #expect(listing.children.map(\.id) == [server.f])
+        #expect(await vault.item(server.a)?.name == "A")
+        #expect(await vault.item(server.f)?.name == "f.txt")
+        // Finished: no previous key is kept for anything under it.
+        #expect(await vault.previousKeysKept(in: server.workspace) == 0)
+    }
+
+    /* Batch 1 landed and the walk then stopped: the folder still lists its child, under the parent's previous key. */
+    @Test func aFolderWhoseRotationStoppedHalfWayStillListsWhatItHasNotReached() async throws {
+        let server = try FakeDrive()
+        let vault = try await readyVault(server)
+        _ = try await vault.listChildren(of: server.root)
+        _ = try await vault.listChildren(of: server.a)
+        server.batchSize = 1
+        server.failRotationSends = [2]
+        await #expect(throws: (any Error).self) { try await vault.rotate(try #require(await vault.item(server.a))) }
+        let listing = try await vault.listChildren(of: server.a)
+        #expect(listing.children.map(\.id) == [server.f])
+        #expect(await vault.item(server.f)?.name == "f.txt")
+        #expect(await vault.item(server.a)?.node.keyEpoch == 2)
+    }
+
     @Test func rotationReSignsOnlyWhatVerifiedAndReSealsTheRest() async throws {
         let server = try FakeDrive()
         let vault = try await readyVault(server)
@@ -151,6 +195,9 @@ extension OnFakeDrive {
 }
 
 extension Vault {
+    /* How many previous keys an unfinished rotation keeps in this workspace. */
+    func previousKeysKept(in workspaceId: String) -> Int { rotatedKeys.values(in: workspaceId).count }
+
     /* As a finished catalogue build leaves it: every opened folder's children filed. */
     func markCatalogueReady() {
         catalogueChildren = [:]
@@ -193,6 +240,13 @@ final class FakeDrive: @unchecked Sendable {
     let g = UUID().uuidString.lowercased()
     var nodes: [String: NodeView] = [:]
     var failMoves = false
+    /* At most this many nodes per batch of rotation work (nil: all at once), as the server sizes them. */
+    var batchSize: Int?
+    /* The rotation sends (counted from 1) that fail as a dropped connection would. */
+    var failRotationSends: Set<Int> = []
+    private var rotationSends = 0
+    /* A rotation still running keeps its target: starting it again resumes it, as the server does. */
+    private var running: [String: UInt64] = [:]
     /* Every client-chosen id a create sent, with its kind and seed, in order: what the server derived and compared. */
     var minted: [(kind: IdKind, id: String, seed: String)] = []
     /* Upload begins as sent, and the uploads they started. */
@@ -477,12 +531,15 @@ final class FakeDrive: @unchecked Sendable {
             return (200, ["node": try json(renamed)])
         case ("POST", ["rotation"]):
             rotationStarted = true
-            target = (nodes[id]?.keyEpoch ?? 1) + 1
+            target = running[id] ?? (nodes[id]?.keyEpoch ?? 1) + 1
+            running[id] = target
             return (200, ["rotation": ["nodeId": id, "targetEpoch": target]])
         case ("GET", ["rotation", "work"]):
-            let due = subtree(id).filter { $0.keyEpoch < target }
+            let due = subtree(id).filter { $0.keyEpoch < target }.sorted { (ancestors(of: $0.id).count, $0.id) < (ancestors(of: $1.id).count, $1.id) }
+            if due.isEmpty { running[id] = nil }
+            let batch = batchSize.map { Array(due.prefix($0)) } ?? due
             var work: [Any] = []
-            for node in due {
+            for node in batch {
                 var entry = try json(node) as? [String: Any] ?? [:]
                 entry["depth"] = ancestors(of: node.id).count
                 if let version = node.currentVersion {
@@ -494,8 +551,12 @@ final class FakeDrive: @unchecked Sendable {
                 }
                 work.append(entry)
             }
-            return (200, ["rotation": ["nodeId": id, "targetEpoch": target], "nodes": work, "nextCursor": NSNull(), "done": due.isEmpty])
+            // What a batch applied leaves the due list, so the cursor only says more is left.
+            let next: Any = batch.count < due.count ? "more" : NSNull()
+            return (200, ["rotation": ["nodeId": id, "targetEpoch": target], "nodes": work, "nextCursor": next, "done": due.isEmpty])
         case ("POST", ["rotation", "nodes"]):
+            rotationSends += 1
+            if failRotationSends.contains(rotationSends) { return (500, ["message": "The connection dropped."]) }
             let sent = (try JSONSerialization.jsonObject(with: body ?? Data()) as? [String: Any])?["nodes"] as? [[String: Any]] ?? []
             var results: [[String: String]] = []
             for wire in sent {

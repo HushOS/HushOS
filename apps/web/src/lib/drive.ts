@@ -42,8 +42,10 @@ function unlockedUser() {
 export const driveClient = createDriveClient(authClient.rpc, driveApi, {
     mirror: typeof indexedDB === 'undefined' ? undefined : createIndexedDbMirror(),
     trustGranter,
+    // The server names the grantee here (a rotation, the re-seal pass): a legacy pin whose
+    // migration can't be saved for room is sealed to its own keys unsaved, never left out.
     trustGrantee: async (granteeUserId, served) =>
-        trustGrantee(unlockedUser(), granteeUserId, served),
+        trustGrantee(unlockedUser(), granteeUserId, served, { sealUnsaved: true }),
     signers: async () => trustedSigners(unlockedUser()),
     openIdentity: (userId) => openIdentity(userId),
     resealPending: async () => resealPending(unlockedUser()),

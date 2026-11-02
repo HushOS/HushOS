@@ -63,6 +63,8 @@ data class Opened(
     val node: NodeView, val metadata: NodeMetadata,
     /* The current version's size as sealed in its own envelope: true after a restore, when the metadata still describes the newer upload. */
     val contentSize: Long? = null,
+    /* In Recent: when it sorts there (`collapseRecents`), which a folder takes from the newest of what it stands in for. */
+    val recentMillis: Long? = null,
 ) {
     val id get() = node.id
     val name get() = metadata.name
@@ -85,12 +87,59 @@ data class Opened(
 }
 
 /*
- * Recent: newest first; things changed in the same moment by name, then id, as the web orders
- * them, so the list never reshuffles between loads.
+ * Recent shows a folder once, not again for what it holds (the web's `collapseRecent`), as a window
+ * over what changed lately: items are taken newest first by their own time, and one with a kept
+ * folder above it (at any depth) is folded into that folder instead of kept. A folder kept later
+ * takes in what was kept below it, so the topmost recent folder stands in for everything under it.
+ * The walk stops once `limit` rows are kept, so a folder older than that window hides nothing: a
+ * file changed today inside it shows on its own. `parentOf` walks up through folders not among
+ * `items`; one it doesn't know ends the walk. Each row carries the newest change it stands for as
+ * `recentMillis`, which Recent sorts by and shows.
  */
-val byRecent: Comparator<Opened> = compareByDescending<Opened> { it.changedMillis ?: 0L }
-    .thenBy(java.text.Collator.getInstance()) { it.name }
-    .thenBy { it.id }
+fun collapseRecents(items: List<Opened>, limit: Int, parentOf: (String) -> String? = { null }): List<Opened> {
+    val held = items.associateBy { it.id }
+    fun parent(id: String): String? = held[id]?.node?.parentId ?: parentOf(id)
+    // Kept rows by id, with the newest change each stands for (null: none carried a date).
+    val kept = HashMap<String, Long?>()
+    // The kept folder above an id, if any: on any line of folders at most one is kept.
+    fun keptAbove(id: String): String? {
+        val walked = HashSet<String>()
+        var current = parent(id)
+        while (current != null && walked.add(current)) {
+            if (kept.containsKey(current)) return current
+            current = parent(current)
+        }
+        return null
+    }
+    fun newest(a: Long?, b: Long?) = if (a == null) b else if (b == null) a else maxOf(a, b)
+    // Newest first; things changed in the same moment by name, then id, as the web orders them, so the list never reshuffles.
+    val collator = java.text.Collator.getInstance()
+    for (item in held.values.sortedWith(compareByDescending<Opened> { it.changedMillis ?: 0L }.thenBy(collator) { it.name }.thenBy { it.id })) {
+        if (kept.size >= limit) break
+        val above = keptAbove(item.id)
+        if (above != null) {
+            kept[above] = newest(kept[above], item.changedMillis)
+            continue
+        }
+        var at = item.changedMillis
+        if (item.isFolder) {
+            kept[item.id] = at
+            for (id in kept.keys.toList()) if (id != item.id && keptAbove(id) == item.id) at = newest(at, kept.remove(id))
+        }
+        kept[item.id] = at
+    }
+    return kept.entries.map { held.getValue(it.key) to it.value }
+        .sortedWith(compareByDescending<Pair<Opened, Long?>> { it.second ?: 0L }.thenBy(collator) { it.first.name }.thenBy { it.first.id })
+        .map { (item, millis) -> item.copy(recentMillis = millis) }
+}
+
+/* What changed lately, two ways: as Home's Recent shows it, and as it is, for search. */
+class Recents(items: List<Opened>, limit: Int, keep: (Opened) -> Boolean, parentOf: (String) -> String?) {
+    /* Home's rows: what `keep` lets through, a recent folder standing in for what it holds (`collapseRecents`). */
+    val rows: List<Opened> = collapseRecents(items.filter(keep), limit, parentOf)
+    /* The newest changes of every type with nothing folded in: what search falls back on before the catalogue. */
+    val latest: List<Opened> = items.sortedWith(compareByDescending<Opened> { it.changedMillis ?: 0L }.thenBy(java.text.Collator.getInstance()) { it.name }.thenBy { it.id }).take(limit)
+}
 
 /*
  * A row as every list, link and provider cursor shows it: the node, its metadata, and the
@@ -123,6 +172,10 @@ data class OpenedVersion(val content: Content, val versionId: String) {
  * their parents. A node-to-parent index persists so a document id the system
  * asks about cold is found by listing the folder it was last seen in.
  */
+/* A share made, and whether checking whom it is sealed to moved whom this phone trusts (a legacy pin made first-seen, a
+ * succession followed, a first guard entry), so what is drawn is judged again. */
+data class ShareResult(val share: OwnedShare, val trustChanged: Boolean)
+
 class Vault(internal val context: Context, val api: DriveApi) {
     private var accountKey: ByteArray? = null
     private var workspace: WorkspaceView? = null
@@ -132,11 +185,23 @@ class Vault(internal val context: Context, val api: DriveApi) {
     @Volatile internal var catalogueState: CatalogueState = CatalogueState.IDLE
     /* The catalogue holds what the server sent this session, not only what the phone had: a node missing from it is gone. */
     @Volatile internal var cataloguePulled = false
+    /* Where this vault's catalogue stands in the feed: its own, since other vaults in this process share the mirror. */
+    @Volatile internal var catalogueCursor = 0
+    /* The mirror generation that cursor was taken under (Mirror.FeedState): 0, none, until the catalogue is built. */
+    @Volatile internal var catalogueGeneration = 0L
+    /* What the catalogue held before a rebuild that hasn't succeeded yet (Catalogue.kt, rebuildCatalogue): Files is owed the difference. */
+    @Volatile internal var owedFiled: Map<String, Pair<String, Int?>>? = null
     /* One sync or build at a time; the maps below are read from many threads while one of them writes. */
     internal val syncLock = Any()
     internal val catalogueChildren = ConcurrentHashMap<String, MutableSet<String>>()
     /* Node keys and rows by (workspace, node): a share's keys never answer for this account's own nodes (NodeCache). */
     internal val nodes = NodeCache { workspace?.workspaceId }
+    /*
+     * Nodes a rotation on this device re-keyed whose subtree it hasn't finished, by workspace and node: the epoch the
+     * server applied, and the key before it, which children the walk hasn't reached are still wrapped under. Kept from
+     * the moment the server applies a batch until that rotation ends, so a retry (or a listing meanwhile) opens what is left.
+     */
+    internal val rotatedKeys = java.util.concurrent.ConcurrentHashMap<Pair<String, String>, RotatedKey>()
     /* The identity in use and the earlier ones, opened once and kept until forgotten (see OpenedIdentities). */
     private val ownIdentities = OpenedIdentities(
         open = {
@@ -153,6 +218,62 @@ class Vault(internal val context: Context, val api: DriveApi) {
     private var settingsKey: ByteArray? = null
     /* The envelope `settingsKey` came out of, as the server keeps it: kept beside the rollback marks. */
     private var settingsKeyEnvelope: com.hushos.core.SettingsKeyEnvelope? = null
+    /* Lookups kept for display, people found changed, the trust generation, the tests' hooks (ContactTrust.kt). */
+    val memory = TrustMemory()
+
+    /* The area ledger: this session's families, their chains and the family folders' keys (FamilySync, VaultFamilies.kt). */
+    internal val areaLedger = com.hushos.core.AreaLedger()
+    /*
+     * This session's family state, shared with every other vault of the session in this process (FamilySessions): the
+     * Files app's and each transfer job's see the same proofs, holds, invalidations and end as this one.
+     */
+    internal val familyState: FamilySessionState = FamilySessions.of(api.session)
+    /* Each family folder route 25 named this session, lowercase, to its family: never opened under a personal key. */
+    internal val familyAreas: ConcurrentHashMap<String, String> get() = familyState.areas
+    /*
+     * The write barrier's hold, apart from familyAreas: the folders an accepted member list names before route 25 proved
+     * them (a guard that can't be stored stops writes into them). Never makes a workspace a family folder: a member list
+     * naming a share's workspace (or any other) only holds that family's writes while its guard is owed. Every family that
+     * named it, so a first roster's word never keeps another family's barrier off it.
+     */
+    internal val familyHeld: ConcurrentHashMap<String, MutableSet<String>> get() = familyState.held
+    /* Every family folder node this session opened, to its workspace: listed there again after its family let go of it (the core then refuses). */
+    internal val familyNodes = ConcurrentHashMap<String, String>()
+    /*
+     * Each family folder's invalidation, lowercase workspace to a count and the family's words: moved by every forget (a
+     * removal, a fork, a refusal). A download or a listing begun before it never keeps, writes or shows what it opened.
+     */
+    internal val familyEpochs: ConcurrentHashMap<String, Pair<Long, String>> get() = familyState.epochs
+    /* Held while a forget deletes family copies or the session ends, and while a download makes its folder, writes or keeps its file. */
+    internal val familyCopiesLock: Any get() = FamilyCopies.LOCK
+    /* Set once this vault's session ended (close, by this vault or another of the session): nothing it downloads is written after. */
+    internal val closed: Boolean get() = familyState.closed
+    /* Families whose acceptance may hand back a guard not stored yet: nothing is written into them meanwhile (the write barrier). */
+    internal val familyGuardOwed: MutableSet<String> get() = familyState.guardOwed
+    /* Tests: whether the family guard can be written (a full disk when not), and a stop right after each write, as a crash would. */
+    internal var familyGuardWrites: () -> Boolean = { true }
+    internal var afterFamilyGuard: (() -> Unit)? = null
+    /* Tests: runs right after the ledger opened a family node's key, before it is kept (a forget landing there). */
+    internal var afterFamilyOpen: (() -> Unit)? = null
+    /* Tests: runs right before a row opened by a share's or this account's keys is kept (a family's proof landing there). */
+    internal var beforeKept: ((workspaceId: String) -> Unit)? = null
+    /* Tests: runs as a write reaches its final gate, before it is checked (a sync proving the folder meanwhile). */
+    internal var beforeWriteGate: ((workspaceId: String) -> Unit)? = null
+    /* Ids whose copies a family's proof deleted (VaultFamilies.purgeShareCopies): the screens drop them (drainFamilyPurged). */
+    internal val familyPurged: MutableSet<String> get() = familyState.purged
+    /* The family guard (FamilyGuard.kt), sealed under the settings key as the contact guard is. */
+    internal val familyGuard: FamilyGuardStore
+        get() = FamilyGuardStore.of(context, api.session, familyGuardWrites) { kept, create -> marksKey(kept, create, served = null) }
+    /* This session's family sync: one per vault, so one per session in this process. */
+    val families: FamilySync by lazy { FamilySync(this) }
+
+    /*
+     * The contact guard (ContactGuard.kt), sealed under the settings key as the rollback marks find theirs: the envelope
+     * kept beside the record when it opens under the account key, else this process's, else the server's. None to be
+     * had (no account key, nothing served) leaves the guard unreadable, never empty.
+     */
+    internal val guard: ContactGuard
+        get() = memory.guard ?: ContactGuard.of(context, api.session) { kept -> marksKey(kept, create = false, served = null) }
     private val indexFile = File(context.filesDir, "files-parents.json")
     internal val parents: ConcurrentHashMap<String, String> = ConcurrentHashMap<String, String>().also { map ->
         runCatching {
@@ -163,6 +284,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     init {
         api.onBadSignature = { forgetIdentity() }
+        // Every write's last word, right before it is sent, wherever it began (the app, the Files app, a worker).
+        api.beforeWrite = { finalWriteGate(it) }
+        // A job's process may start without the app's: the folders this account's device records kept as family folders
+        // are family folders here too, before any sync of this process proves them again.
+        seedFamilyAreas()
     }
 
     companion object {
@@ -175,13 +301,20 @@ class Vault(internal val context: Context, val api: DriveApi) {
         runCatching { indexFile.writeText(json.toString()) }
     }
 
+    /* Ids no longer this device's to remember where they sit (a family folder forgotten): out of the index on disk too. */
+    internal fun forgetParents(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        ids.forEach { parents.remove(it) }
+        saveIndex()
+    }
+
     internal fun rememberParent(id: String, parent: String) {
         if (parents[id] == parent) return
         parents[id] = parent
         saveIndex()
     }
 
-    private fun unlockAccount(): ByteArray {
+    internal fun unlockAccount(): ByteArray {
         accountKey?.let { return it }
         val device = Shared.device(context) ?: throw NotAuthenticated()
         return deviceRestore(device.bundle, device.deviceKey).also { accountKey = it }
@@ -253,7 +386,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
      */
     fun trust(): Trust {
         val all = identities(strict = true)
-        return Trust.of(api.session.userId, base64urlDecode(all[0].signingPublicKey), all.drop(1).map { base64urlDecode(it.signingPublicKey) }, loadSettings().contacts)
+        // Every pin as this phone's guard allows (2.8): read under the guard's turn, acts left pending settled first.
+        return Trust.of(api.session.userId, base64urlDecode(all[0].signingPublicKey), all.drop(1).map { base64urlDecode(it.signingPublicKey) }, effectivePins())
     }
 
     /* The trust set for a write that re-signs what it copies or rotates: without it nothing is locked again. */
@@ -293,6 +427,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     /* Mints a link for an item this account holds the key of; returns it with the URL to hand out. Recorded in the ledger once the server took it. */
     fun createLink(item: Opened, password: String?, expiresAt: Instant?): Pair<LinkView, String> {
+        refuseFamilyWrite(item.node.workspaceId)
         val nodeKey = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val linkId = IdField.LINK.mint(item.node.workspaceId)
         val ctx = LinkContext(item.node.workspaceId, item.id, item.node.keyEpoch, linkId.id)
@@ -317,6 +452,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     /* Out of the ledger first (saved before the server hears of it), so no rotation ever seals it again. */
     fun revokeLink(link: LinkView, item: Opened) {
+        refuseFamilyWrite(item.node.workspaceId)
         updateSettings { it.removeLink(link.id) }
         api.revokeLink(link.id, item.node.workspaceId)
     }
@@ -341,10 +477,14 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     /* Deletes an earlier version of a file for good. */
-    fun discardVersion(item: Opened, version: VersionListView) = api.discardVersion(version.id, item.node.workspaceId)
+    fun discardVersion(item: Opened, version: VersionListView) {
+        refuseFamilyWrite(item.node.workspaceId)
+        api.discardVersion(version.id, item.node.workspaceId)
+    }
 
     /* Files a report on an item shared with this account; the session names the reporter. */
     fun report(item: Opened, category: String, reason: String, email: String?): Boolean {
+        refuseFamilyWrite(item.node.workspaceId)
         val nodeKey = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val operators = PublicApi(api.session.origin).operators()
         return api.fileReport(Reports.body(operators, item, nodeKey, category, reason, email, JSONObject().put("share", true)))
@@ -405,7 +545,10 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * Version 2 opens under the settings key. Version 1 (sealed under a key off the identity, which a stolen identity
      * key opened) no longer opens: it reads as no settings at its stored sequence, and the next save goes over it.
      */
-    fun loadSettings(): Settings {
+    fun loadSettings(): Settings = settingsServed().first
+
+    /* The settings as loadSettings reads them, with what the server served them in (the area ledger opens those itself). */
+    internal fun settingsServed(): Pair<Settings, Auth.StoredSettings> {
         val userId = api.session.userId
         val identity = identityKeys()
         val stored = Auth.settings(context, api.session)
@@ -414,7 +557,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         mark.adopt(userId, listOf(identity.encryptionPublicKey))
         return readServedSettings(userId, stored.envelope, stored.sequence, mark) {
             openSettingsKey(stored) ?: throw AuthFailure("Your settings key is missing. Sign in again.")
-        }
+        } to stored
     }
 
     /*
@@ -422,13 +565,18 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * saving in between is a 409: read again and apply the change again, up to three tries. The JSON
      * is edited in place, so fields this app doesn't know (the web's, a later client's) survive.
      */
-    internal fun updateSettings(change: (Settings) -> Unit): Settings {
+    internal fun updateSettings(beforeSend: ((base: ULong) -> Unit)? = null, change: (Settings) -> Unit): Settings {
         val key = settingsKeyForSave()
         var attempt = 0
         while (true) {
             val settings = loadSettings()
             change(settings)
+            // Removals count against the room the document has: the oldest go first (docs/optional-verification.md 2.7).
+            settings.fit()
+            // Each attempt names the sequence it lands over (a contact act's pending record), before it is sent.
+            beforeSend?.invoke(settings.version)
             val next = settings.version + 1uL
+            memory.generation.incrementAndGet()
             try {
                 // Always version 2, under the settings key: a version 1 document is moved over by its first save here.
                 // Named over the stored sequence and sealed at one above it, the version the server stores it at.
@@ -456,92 +604,37 @@ class Vault(internal val context: Context, val api: DriveApi) {
      */
     fun currentOwnFingerprint(): String = ownFingerprint(ownIdentities.current(Auth.identity(context, api.session)))
 
-    /*
-     * A person by email, with what the pin says about them. "Check it's them": the one place a pinned contact's served keys are followed through their succession chain
-     * (docs/integrity-design.md, "Who sees whom"), because the person asked. Nothing else follows them on its own.
-     */
-    fun lookup(email: String): Lookup {
-        val contact = Auth.lookupContact(context, email, api.session)
-        val pinned = loadSettings().contacts[contact.userId] ?: return Lookup(contact, null, changed = false)
-        val comparison = comparePin(pinned, contact.served)
-        // New keys signed by the pinned ones: the pin follows them, and People says so rather than warning.
-        if (comparison == PinComparison.SUCCESSION) followPin(pinned, contact.served)?.let { return Lookup(contact, it, changed = false, followed = true) }
-        // A changed key, or a chain that does not hold: the words no longer vouch for the account.
-        val changed = comparison == PinComparison.CHANGED || comparison == PinComparison.SUCCESSION
-        // A pin from before the release (or never checked) over keys that did not change: "Check words again".
-        return Lookup(contact, pinned, changed, recheck = !changed && !pinned.verified)
-    }
-
-    /*
-     * Trusts the keys shown now: what the person does after comparing the words. Writes the version 3 pin of the served
-     * keys (both digests and the fingerprint over all four), and only for an upgraded identity whose keys statement
-     * holds: words are never compared over fewer keys. The earlier keys a succession vouched for stay only when the
-     * words were compared over the same keys again (the notice after a succession); a different key accepted by hand
-     * vouches for none of them. Shares to them may now be sealed in suite 4, so the re-seal pass runs next.
-     */
-    fun pin(contact: Contact) {
-        val fresh = ContactPin.ofServed(contact.userId, contact.email, contact.name, contact.served, Instant.now().toString())
-            ?.takeIf { contact.upgraded }
-            ?: throw AuthFailure("${contact.name.ifEmpty { contact.email }} needs to sign in to HushOS once more before you can compare words.")
-        updateSettings { settings ->
-            val before = settings.contacts[contact.userId]
-            val moved = before != null && (before.encryptionPublicKey != contact.encryptionPublicKey || before.signingPublicKey != contact.signingPublicKey)
-            settings.pin(fresh.copy(previousSigningKeys = if (before != null && !moved) before.previousSigningKeys else emptyList()))
-        }
-        ShareSeals.of(context).lastPass = 0L
-    }
-
-    /*
-     * A pinned contact whose served keys differ: their whole succession chain, checked link by link; the pin follows
-     * it and is saved when it holds. Null when it doesn't, or can't be asked: the changed-key warning stands. Only
-     * "Check it's them" calls this. A share to them sealed to the old keys is sealed again at the next pass.
-     */
-    private fun followPin(pin: ContactPin, served: ServedIdentity): ContactPin? {
-        if (comparePin(pin, served) != PinComparison.SUCCESSION) return null
-        val links = runCatching { Auth.succession(context, pin.userId, api.session) }.getOrNull() ?: return null
-        val next = followSuccession(pin, served, links, Instant.now().toString()) ?: return null
-        updateSettings { settings ->
-            // Another device may have followed (or re-pinned) first: only a pin still at the old keys is moved.
-            val now = settings.contacts[pin.userId]
-            if (now == null || (now.encryptionPublicKey == pin.encryptionPublicKey && now.signingPublicKey == pin.signingPublicKey)) settings.pin(next)
-        }
-        ShareSeals.of(context).lastPass = 0L
-        return next
-    }
-
-    fun unpin(pin: ContactPin) {
-        updateSettings { it.unpin(pin.userId) }
-    }
-
     fun shares(item: Opened): List<OwnedShare> = api.shares(item.id, item.node.workspaceId)
 
     /*
-     * Shares an item with a pinned contact: the pin must be version 3 (words compared over all four keys) and the
-     * served keys the pinned ones, the ML-KEM key by its digest (granteeKem). Only then is the node key sealed to them,
-     * in suite 4 (hybrid, signed with both halves of this account's identity), and the share goes in the ledger once
-     * the server took it.
+     * Shares an item with a contact: the served keys must be the ones the pin (verified or first-seen) holds and agree
+     * with this phone's guard (`trustGrantee`), then the node key is sealed to them in suite 4 (hybrid, signed with both
+     * halves of this account's identity), and the share goes in the ledger once the server took it. A changed account
+     * throws AccountChanged: nothing is shared.
      */
-    fun share(item: Opened, pin: ContactPin, role: String): OwnedShare {
+    fun share(item: Opened, pin: ContactPin, role: String): ShareResult {
+        refuseFamilyWrite(item.node.workspaceId)
         val nodeKey = nodes.key(item) ?: throw ApiError(500, "Node not opened")
-        // The pin as the settings hold it now, not as the sheet last read it.
-        val current = loadSettings().contacts[pin.userId] ?: throw SharingRefused("Add ${pin.displayName} in Contacts before you share with them.")
-        val contact = Auth.lookupContact(context, current.email, api.session)
-        if (contact.userId != current.userId) throw ContactChanged()
-        // Other keys than the pinned ones are never followed here: replaced or changed, the person checks them again first.
-        val kem = granteeKem(current, contact.served)
+        val contact = Auth.lookupContact(context, pin.email, api.session)
+        if (!contact.userId.equals(pin.userId, ignoreCase = true)) throw ContactProblem.otherAccount()
+        // Every guard write and settings save moves the generation: one during the check (a legacy pin made first-seen,
+        // a succession followed, a first guard entry) is a change in trust, which the caller refreshes for.
+        val generation = memory.generation.get()
+        val (publicKey, kem) = trustGrantee(contact, follow = true)
+        val trustChanged = memory.generation.get() != generation
         val keys = identityKeys()
-        val ctx = ShareContext(item.node.workspaceId, item.id, item.node.keyEpoch, current.userId, api.session.userId)
-        // Suite 4: a fresh X25519 key and ML-KEM to the pinned keys, signed by this account's Ed25519 and ML-DSA keys.
-        val envelope = shareSeal(ctx, nodeKey, keys, base64urlDecode(current.encryptionPublicKey), kem)
-        val share = api.createShare(item.id, JSONObject().put("workspaceId", item.node.workspaceId).put("granteeUserId", current.userId).put("role", role)
+        val ctx = ShareContext(item.node.workspaceId, item.id, item.node.keyEpoch, contact.userId, api.session.userId)
+        val envelope = shareSeal(ctx, nodeKey, keys, publicKey, kem)
+        val share = api.createShare(item.id, JSONObject().put("workspaceId", item.node.workspaceId).put("granteeUserId", contact.userId).put("role", role)
             .put("keyEpoch", item.node.keyEpoch.toLong()).put("shareEnvelope", base64urlEncode(envelope)))
         ShareSeals.of(context).record(mapOf(share.id to ShareSeals.Seal(keys.keyVersion, contact.keyVersion)))
-        updateSettings { it.addShare(item.id, current.userId) }
-        return share
+        updateSettings { it.addShare(item.id, contact.userId) }
+        return ShareResult(share, trustChanged)
     }
 
     /* Out of the ledger first (saved before the revoke and the rotation after it), so no rotation seals to them again. */
     fun revokeShare(share: OwnedShare, item: Opened) {
+        refuseFamilyWrite(item.node.workspaceId)
         updateSettings { it.removeShare(item.id, share.granteeId) }
         api.revokeShare(share.id, item.node.workspaceId)
     }
@@ -589,12 +682,20 @@ class Vault(internal val context: Context, val api: DriveApi) {
      */
     internal fun resealLedgerShares(progress: (done: Int, total: Int) -> Unit = { _, _ -> }): RotationResult {
         val seals = ShareSeals.of(context)
+        // People whose new keys were accepted or followed: everything shared with them is sealed again, whatever the record says.
+        // Read before the settings, so every request this pass may acknowledge is judged against settings at least as new as
+        // itself (a Continue queues before its save): one that lands after this read is never consumed by an older view.
+        val queued = seals.queued
         val settings = loadSettings()
         val ledger = settings.ledger
-        val pins = settings.contacts
         val keys = identityKeys()
+        // What is in the Trash, asked once and only when a ledger item can't be found: a trashed item is left out of its
+        // folder's listing exactly as a deleted one is, but restored it would still hold the old keys.
+        val trashed by lazy { trashedIds() }
         val skipped = LinkedHashSet<String>()
         val served = HashMap<String, Contact?>()
+        val sealTo = granteeSealer(settings)
+        val failedFor = HashSet<String>()
         val todo = ledger.shares.filterValues { it.isNotEmpty() }
         var done = 0
         var failed = 0
@@ -602,26 +703,39 @@ class Vault(internal val context: Context, val api: DriveApi) {
         for ((index, entry) in todo.entries.withIndex()) {
             val (nodeId, people) = entry
             try {
-                // A node gone from the drive has nothing left to share; its ledger entry goes with its next revoke.
-                val item = runCatching { resolve(nodeId) }.getOrNull()?.takeIf { it.node.workspaceId == workspaceId && it.node.trashedAt == null } ?: continue
-                val nodeKey = nodes.key(item) ?: continue
+                // Only a node confirmed gone (its folder lists without it, or the server says so) has nothing left to share:
+                // its people are done with here. Anything else that stops this node (not found here yet, no network, a key
+                // not opened, a trashed item that may come back) keeps them queued, so the next pass seals it.
+                val item = try {
+                    resolve(nodeId)
+                } catch (gone: NotFound) {
+                    if (nodeId in trashed) people.forEach { failedFor.add(it.lowercase()) }
+                    continue
+                }
+                if (item.node.workspaceId != workspaceId) continue
+                if (item.node.trashedAt != null) { people.forEach { failedFor.add(it.lowercase()) }; continue }
+                val nodeKey = nodes.key(item) ?: throw ApiError(500, "A shared item couldn’t be opened to seal it again.")
                 val rows = api.shares(item.id, item.node.workspaceId).filter { it.granteeId in people }
                 val wire = rows.mapNotNull { share ->
-                    // Someone no longer pinned, or not found now, keeps the envelope they have.
-                    val pin = pins[share.granteeId] ?: return@mapNotNull null
-                    if (!needsReseal(share.suite, seals.get(share.id), keys.keyVersion, pin.keyVersion)) return@mapNotNull null
-                    // The post-quantum key to seal to is only in a lookup; keys other than the pin's are left out by the plan.
+                    // Someone no longer pinned keeps the envelope they have.
+                    val pin = settings.pinOf(share.granteeId) ?: return@mapNotNull null
+                    val owed = share.granteeId.lowercase() in queued
+                    if (!owed && !needsReseal(share.suite, seals.get(share.id), keys.keyVersion, pin.keyVersion)) return@mapNotNull null
+                    // The post-quantum key to seal to is only in a lookup; whether it may be sealed to is the guard's (sealTo).
                     val contact = served.getOrPut(share.granteeId) { runCatching { Auth.lookupContact(context, pin.email, api.session) }.getOrNull() }
-                    val grantee = contact?.takeIf { it.userId == share.granteeId } ?: return@mapNotNull null
+                    val grantee = contact?.takeIf { it.userId.equals(share.granteeId, ignoreCase = true) }
+                    if (grantee == null) { failedFor.add(share.granteeId.lowercase()); return@mapNotNull null }
                     JSONObject().put("id", share.id).put("granteeUserId", share.granteeId).put("grantee", grantee.served.toJson())
                 }
-                val plan = planReseal(item.id, wire, emptyList(), ledger, pins)
+                val plan = planReseal(item.id, wire, emptyList(), ledger, sealTo)
                 skipped.addAll(plan.skipped)
+                val sealedTo = plan.shares.map { it.granteeUserId.lowercase() }.toSet()
+                wire.forEach { share -> share.getString("granteeUserId").lowercase().let { if (it !in sealedTo) failedFor.add(it) } }
                 for (share in plan.shares) {
                     val ctx = ShareContext(item.node.workspaceId, item.id, item.node.keyEpoch, share.granteeUserId, api.session.userId)
                     api.resealShare(share.id, item.node.workspaceId, item.node.keyEpoch, base64urlEncode(shareSeal(ctx, nodeKey, keys, share.publicKey, share.kemPublicKey)))
                     // Sealed to the pinned keys, which are the ones served at this version.
-                    seals.record(mapOf(share.id to ShareSeals.Seal(keys.keyVersion, pins[share.granteeUserId]?.keyVersion ?: served[share.granteeUserId]?.keyVersion)))
+                    seals.record(mapOf(share.id to ShareSeals.Seal(keys.keyVersion, served[share.granteeUserId]?.keyVersion)))
                     done++
                 }
             } catch (error: Unreachable) {
@@ -630,20 +744,39 @@ class Vault(internal val context: Context, val api: DriveApi) {
                 throw error
             } catch (error: Exception) {
                 android.util.Log.w("HushOSShares", "sealing the shares of $nodeId again failed: ${error.javaClass.name}")
+                people.forEach { failedFor.add(it.lowercase()) }
                 failed++
             } finally {
                 progress(index + 1, todo.size)
             }
         }
+        // Everyone queued whose shares were all sealed again (or who has none left) is let go; the rest stay for the next pass.
+        seals.unqueue(queued.filterKeys { it !in failedFor })
         if (failed > 0) skipped.add("Some shares couldn’t be sealed again under your current keys. They’re tried again the next time you open HushOS.")
-        else { seals.pending = null; seals.lastPass = System.currentTimeMillis() }
+        else {
+            // Only a key replacement this pass sealed for (its identity or an older one): one begun while it ran waits for its own.
+            seals.clearPending(upTo = keys.keyVersion)
+            seals.lastPass = System.currentTimeMillis()
+        }
         return RotationResult(done, skipped.toList())
+    }
+
+    /* The ids of this drive's items in the Trash, as the server lists them (a parent's listing leaves them out). */
+    internal fun trashedIds(): Set<String> {
+        val ids = HashSet<String>()
+        var after: String? = null
+        do {
+            val page = api.trashListing(workspaceId, after)
+            page.items.forEach { ids.add(it.node.id) }
+            after = page.nextCursor
+        } while (after != null)
+        return ids
     }
 
     /* Whether the re-seal pass should run now: a key replacement is waiting to finish, or the last full pass is a day old. */
     fun resealDue(now: Long = System.currentTimeMillis()): Boolean {
         val seals = ShareSeals.of(context)
-        return seals.pending != null || now - seals.lastPass >= ShareSeals.PASS_INTERVAL_MS
+        return seals.pending != null || seals.queued.isNotEmpty() || now - seals.lastPass >= ShareSeals.PASS_INTERVAL_MS
     }
 
     /*
@@ -652,6 +785,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * the next Drive open rather than left half done.
      */
     fun rotate(item: Opened, progress: (Int) -> Unit = {}): RotationResult {
+        refuseFamilyWrite(item.node.workspaceId)
         val pending = PendingRotations.of(context)
         pending.add(item.node.workspaceId, item.id)
         val result = rotateSubtree(item, progress)
@@ -665,7 +799,14 @@ class Vault(internal val context: Context, val api: DriveApi) {
         var finished = 0
         for ((ws, nodeId) in pending.all()) {
             if (ws != workspaceId) { pending.remove(ws, nodeId); continue }
-            val item = try { resolve(nodeId) } catch (error: NotFound) { pending.remove(ws, nodeId); continue }
+            val item = try {
+                resolve(nodeId)
+            } catch (error: NotFound) {
+                // In the Trash it is left out of its folder's listing as a deleted item is; restored, it would still open
+                // with the keys the stopped share had, so the rotation stays owed. Only a deletion lets it go.
+                if (nodeId !in trashedIds()) pending.remove(ws, nodeId)
+                continue
+            }
             rotate(item)
             finished++
         }
@@ -685,6 +826,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
      */
     fun copyAcross(id: String, parentId: String, name: String? = null, trust: Trust? = null, progress: (Float) -> Unit = {}): Opened {
         val source = resolve(id)
+        // Out of a family folder or into one: a change family folders don't take on Android yet.
+        refuseFamilyWrite(source.node.workspaceId)
+        refuseFamilyWrite(workspaceOf(parentId))
         val checked = trust ?: trustForWrite()
         val prior = Prior.of(source.node, checked)
         if (source.isFolder) {
@@ -761,8 +905,13 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * many files are done of how many. A folder gone from the drive takes its files with it.
      */
     fun keepFolder(folder: Opened, shareRoot: String? = null, progress: (fraction: Float, done: Int, total: Int) -> Unit = { _, _, _ -> }) {
+        refuseFamilyWrite(folder.node.workspaceId)
         if (folder.node.trashedAt != null) { Offline.forgetFolder(context, folder.id); return }
-        Offline.rememberFolder(context, folder, shareRoot)
+        // Recorded under the lock a family's proof purges kept copies under: never after a proof that already ran.
+        synchronized(familyCopiesLock) {
+            refuseFamilyWrite(folder.node.workspaceId)
+            Offline.rememberFolder(context, folder, shareRoot)
+        }
         val files = filesUnder(folder.id)
         val bytes = files.sumOf { it.size ?: 0L }.coerceAtLeast(1L).toDouble()
         var doneBytes = 0L
@@ -810,13 +959,14 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     /* Keeps a file: downloads its current version into the offline store and records it (with the kept folder it came with, if any). */
     fun keepDownloaded(item: Opened, via: String? = null, progress: (Float) -> Unit = {}) {
+        refuseFamilyWrite(item.node.workspaceId)
         val destination = Offline.file(context, item) ?: throw ApiError(400, "Only files can be kept downloaded.")
         if (!destination.exists()) {
             // Renamed elsewhere: the same version is already here under its old name, so move it rather than fetch it again.
             val earlier = destination.parentFile?.listFiles()?.firstOrNull { it.isFile && !it.name.endsWith(".part") }
             if (earlier == null || !earlier.renameTo(destination)) {
                 try {
-                    download(item.id, destination, null, progress)
+                    download(item.id, destination, null, progress = progress)
                 } catch (error: Exception) {
                     // A first keep that failed is nobody's to resume: its partial goes. A kept file's stays for the next refresh.
                     if (!Offline.isKept(context, item.id)) File(Offline.root(context), item.id).deleteRecursively()
@@ -830,9 +980,33 @@ class Vault(internal val context: Context, val api: DriveApi) {
             File(Offline.root(context), item.id).deleteRecursively()
             throw NotAuthenticated()
         }
-        // Older versions of the same file go; only the current one is kept.
-        destination.parentFile?.parentFile?.listFiles()?.filter { it.name != item.node.currentVersion?.id }?.forEach { it.deleteRecursively() }
-        Offline.remember(context, item, via)
+        // Recorded under the lock a family's proof purges kept copies under: a folder proven a family's while this came
+        // down (a share's) keeps nothing of it, and a proof after this finds and purges the entry.
+        synchronized(familyCopiesLock) {
+            try {
+                refuseFamilyWrite(item.node.workspaceId)
+            } catch (error: Exception) {
+                File(Offline.root(context), item.id).deleteRecursively()
+                throw error
+            }
+            // Older versions of the same file go; only the current one is kept.
+            destination.parentFile?.parentFile?.listFiles()?.filter { it.name != item.node.currentVersion?.id }?.forEach { it.deleteRecursively() }
+            Offline.remember(context, item, via)
+        }
+    }
+
+    /*
+     * Where a copy of `item` opened for the viewer, another app or Send a copy goes: a family file's under its family
+     * folder's, a received share's under its workspace's (both deleted whole by a removal or a proof, whatever this
+     * process remembers), this account's own under opened/<node>. Null when the workspace id can't name a folder.
+     */
+    fun openedCopyFolder(item: Opened): File? {
+        val ws = item.node.workspaceId
+        return when {
+            isFamilyWorkspace(ws) -> FamilyCopies.folder(context.cacheDir, ws)
+            ownWorkspaceId?.equals(ws, ignoreCase = true) == true -> File(context.cacheDir, "opened")
+            else -> ShareCopies.folder(context.cacheDir, ws)
+        }
     }
 
     /* Whether this phone still holds this vault's account: a session for it, and its data recorded as its. */
@@ -884,7 +1058,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     fun recoveryPhrase(): String = recoveryPhrase(api.session.userId, unlockAccount(), Auth.recoveryKey(context))
 
     /* The workspace a node lives in: a share's subtree belongs to the granter's. */
-    private fun workspaceOf(nodeId: String): String = nodes.find(nodeId)?.node?.workspaceId ?: workspaceId
+    private fun workspaceOf(nodeId: String): String = nodes.find(nodeId)?.node?.workspaceId ?: familyNodes[nodeId] ?: workspaceId
 
     /*
      * A share as received, with its root opened under the key the granter sealed to this identity; `trust` when
@@ -897,25 +1071,52 @@ class Vault(internal val context: Context, val api: DriveApi) {
         if (shares.isEmpty()) return emptyList()
         val own = workspaceId
         val identities = identities()
-        // The pins as they are: a granter's newer keys are followed only when the person checks them again.
-        val pins = loadSettings().contacts
+        // The settings read once for the whole list, and one verdict per granter and the full identity served (MountPass).
+        // Read up front, so settings that can't be had (offline, rolled back, signed out) fail the listing as before.
+        val pass = MountPass().apply { settings = loadSettings() }
         return shares.map { share ->
             runCatching {
                 // Before any key is opened: a share into this account's own drive, or for a node of another workspace, is refused.
                 checkShare(share, own)
+                // And one into a family's folder (proven, let go of, or held by a barrier still up): a family's items open
+                // only through its area ledger, never under a key a share hands over. A member list's word alone outlasts
+                // nothing: once that family's guard is stored, a share it named mounts as any other.
+                val target = share.workspaceId.lowercase()
+                if (shareIntoFamily(target)) throw ShareRefused("This share could not be checked.")
                 checkSuite(share.node.envelopeSuite)
                 val name = share.granterName.ifEmpty { share.granterEmail }
-                val granter = granterKey(share.granterId, name, share.granter, pins)
+                val granter = try {
+                    trustGranter(share, explicit = false, pass = pass)
+                } catch (_: GuardUnreadable) {
+                    throw GranterTrust.Unchecked()
+                }
                 val key = openShare(base64urlDecode(share.shareEnvelope), granter, name, identities,
                     ShareContext(share.workspaceId, share.node.id, share.keyEpoch, api.session.userId, share.granterId))
                 val metadata = metadataOpen(MetadataContext(share.node.workspaceId, share.node.id, share.node.metadataVersion), key, base64urlDecode(share.node.metadataEnvelope))
                 // Kept under the granter's workspace only (NodeCache.adoptShare). The root's parent is the granter's and
                 // opens nothing here: it stays out of the parents index, which a share naming one of this drive's ids would rewrite.
-                ShareMount(share, nodes.adoptShare(share, own, openedRow(share.node, metadata, key), key), null)
-            }.getOrElse { ShareMount(share, null, it.message ?: "This share could not be opened.", it as? GranterTrust, explained = it is Refused) }
+                val row = openedRow(share.node, metadata, key)
+                beforeKept?.invoke(target)
+                // Checked again where it is kept, under the lock a family's proof, a forget and a session's end take: a
+                // family proven, let go of or held meanwhile (while the granter was judged) gets nothing of the share.
+                val kept = synchronized(familyCopiesLock) {
+                    if (closed) throw SessionEnded()
+                    if (shareIntoFamily(target)) throw ShareRefused("This share could not be checked.")
+                    nodes.adoptShare(share, own, row, key)
+                }
+                ShareMount(share, kept, null)
+            }.getOrElse {
+                if (it is NotAuthenticated || it is Unreachable) throw it
+                ShareMount(share, null, it.message ?: "This share could not be opened.", it as? GranterTrust, explained = it is Refused)
+            }
         }
     }
+
     fun item(id: String): Opened? = nodes.find(id)
+
+    /* A row by its workspace and id: never another workspace's row that has the same id (a personal file, a share). */
+    fun item(workspaceId: String, id: String): Opened? =
+        nodes.row(workspaceId, id)?.takeIf { !isFamilyWorkspace(workspaceId) || nodes.viaLedger(workspaceId, id) }
 
     /* The row while it is live: neither it nor a folder above it in the trash (NodeCache.live); in `workspaceId` when given. */
     fun liveItem(id: String, workspaceId: String? = null): Opened? = nodes.live(id, workspaceId)
@@ -942,18 +1143,71 @@ class Vault(internal val context: Context, val api: DriveApi) {
             if (node.workspaceId != workspace?.workspaceId) throw ApiError(500, "This folder isn’t in your drive.")
             return workspaceKey ?: throw ApiError(500, "Workspace not opened")
         }
+        // A rotation here re-keyed the parent and hasn't reached this child: it is still wrapped under the previous key.
+        rotatedKeys[node.workspaceId to parentId]?.let { kept ->
+            if (kept.epoch != node.parentKeyEpoch && kept.previousEpoch == node.parentKeyEpoch) return kept.previousKey
+        }
         return nodes.key(node.workspaceId, parentId) ?: throw ApiError(500, "Open the containing folder first.")
     }
 
     @Synchronized
-    fun open(node: NodeView): Opened {
+    /*
+     * `replace` (a listing's own rows): a row of this drive or a share served differently from the one held, and not older,
+     * is opened afresh and kept in its place once it opened; until then, and if it can't be opened, the held one stays.
+     */
+    fun open(node: NodeView, replace: Boolean = false): Opened {
         checkSuite(node.envelopeSuite)
-        nodes.row(node.workspaceId, node.id)?.let { return it }
-        val ctx = NodeKeyContext(node.workspaceId, node.id, node.parentId ?: node.workspaceId, node.parentKeyEpoch, node.keyEpoch)
-        val key = nodeOpen(ctx, parentKeyFor(node), base64urlDecode(node.keyEnvelope))
+        val family = isFamilyWorkspace(node.workspaceId)
+        nodes.row(node.workspaceId, node.id)?.let { held ->
+            // A family folder has no change feed here: a row served differently (another member's rename, a new version, a
+            // walk's re-key) is opened again through the ledger, never answered from what this process opened before. An
+            // older answer arriving after a newer one (listings out of order) keeps the newer row and key.
+            // A family folder's row is answered from the cache only when its area ledger opened it: one a share mount
+            // left there goes, and the ledger is asked.
+            val trusted = !family || nodes.viaLedger(node.workspaceId, node.id)
+            if (trusted && (sameRecords(held.node, node) || node.olderThan(held.node))) return held
+            if (!family && !replace) return held
+            if (family) {
+                nodes.forget(node.workspaceId, node.id)
+                nodes.dropKey(node.workspaceId, node.id)
+            }
+        }
+        // One id, one workspace on this phone where a family is involved: a family row whose id another workspace's row
+        // holds (a personal file, a share), or a row of another workspace whose id a family row holds, is refused, so no
+        // lookup or list keyed by node id can mix a family's item with another's (a server serving colliding ids).
+        val others = nodes.workspacesOf(node.id).filterNot { it.equals(node.workspaceId, ignoreCase = true) }
+        if (family && others.isNotEmpty()) throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
+        if (!family && others.any { isFamilyWorkspace(it) }) throw Refused("Couldn’t open", "This item couldn’t be checked. Try again later.")
+        // A family folder's node opens only through the area ledger, under keys its member list vouches for, never the personal path.
+        // Its folder's invalidation before the ledger is asked: a forget meanwhile (a removal, a fork) keeps what opened out of the cache.
+        val epoch = if (family) familyEpoch(node.workspaceId) else 0L
+        val key = if (family) {
+            familyNodes[node.id] = node.workspaceId
+            areaLedger.openListedNode(node.workspaceId, servedKey(node)).also { afterFamilyOpen?.invoke() }
+        } else {
+            val ctx = NodeKeyContext(node.workspaceId, node.id, node.parentId ?: node.workspaceId, node.parentKeyEpoch, node.keyEpoch)
+            nodeOpen(ctx, parentKeyFor(node), base64urlDecode(node.keyEnvelope))
+        }
         val metadata = metadataOpen(MetadataContext(node.workspaceId, node.id, node.metadataVersion), key, base64urlDecode(node.metadataEnvelope))
         val result = openedRow(node, metadata, key)
-        nodes.put(result, key)
+        if (family) {
+            // Kept under the lock a forget clears the cache under, and only while the folder stands: a stale open keeps nothing.
+            synchronized(familyCopiesLock) {
+                requireFamilyEpoch(node.workspaceId, epoch)
+                // Checked again where it is kept: nothing newer the ledger opened is ever replaced by an older row.
+                val held = nodes.row(node.workspaceId, node.id)
+                if (held != null && nodes.viaLedger(node.workspaceId, node.id) && node.olderThan(held.node)) return held
+                nodes.put(result, key, viaLedger = true)
+            }
+        } else {
+            beforeKept?.invoke(node.workspaceId)
+            // Under the lock a family's proof takes: a folder proven a family's since this open began keeps nothing opened
+            // under a share's or this account's keys (its rows open through the ledger alone).
+            synchronized(familyCopiesLock) {
+                if (isFamilyWorkspace(node.workspaceId)) throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
+                nodes.put(result, key)
+            }
+        }
         node.parentId?.let { parents[node.id] = it }
         return result
     }
@@ -962,7 +1216,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
     private fun adopt(node: NodeView, key: ByteArray, metadata: NodeMetadata): Opened {
         checkSuite(node.envelopeSuite)
         val result = openedRow(node, metadata, key)
-        nodes.put(result, key)
+        // A write's answer into a folder proven a family's while it was sent is not kept: the ledger opens it when listed.
+        val kept = synchronized(familyCopiesLock) {
+            !isFamilyWorkspace(node.workspaceId) && run { nodes.put(result, key); true }
+        }
+        if (!kept) return result
+        fileWritten(node)
         node.parentId?.let { rememberParent(node.id, it) }
         return result
     }
@@ -972,6 +1231,20 @@ class Vault(internal val context: Context, val api: DriveApi) {
         checkWritten(node, workspaceId, nodeId)
         return adopt(node, key, metadata)
     }
+
+    /*
+     * A write's row filed in this vault's catalogue at once (out of the folder it left, into the one it is in), so a
+     * listing asked for right after the write, as Files asks once told, has it before the feed brings it.
+     */
+    private fun fileWritten(node: NodeView) {
+        if (catalogueState != CatalogueState.READY || node.workspaceId != workspace?.workspaceId) return
+        val parent = node.parentId ?: return
+        nodes.row(node.workspaceId, node.id)?.node?.parentId?.let { old -> if (old != parent) catalogueChildren[old]?.remove(node.id) }
+        catalogueChildren.getOrPut(parent) { ConcurrentHashMap.newKeySet() }.add(node.id)
+    }
+
+    /* Files and the pickers read these folders again (FilesRoots); every write that changes a folder's children ends here. */
+    internal fun foldersChanged(folders: Collection<String?>) = FilesRoots.foldersChanged(context, folders.filterNotNull(), workspace?.root?.id)
 
     fun forget(workspaceId: String, id: String) {
         nodes.forget(workspaceId, id)
@@ -983,25 +1256,43 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     /* Every page of a folder, every key along the way opened; parents first, folders before files. */
-    fun listChildren(folderId: String): List<Opened> {
-        // The catalogue answers first when it can, so a folder draws before the server is asked.
-        catalogueChildren(folderId)?.let { return it }
-        val ws = workspaceOf(folderId)
+    fun listChildren(folderId: String, workspaceId: String? = null): List<Opened> {
+        // The catalogue answers first when it can, so a folder draws before the server is asked: only this account's own.
+        if (workspaceId == null || workspaceId.equals(this.workspaceId, ignoreCase = true)) catalogueChildren(folderId)?.let { return it }
+        // The workspace asked for (a family folder's), never one guessed by id alone.
+        val ws = workspaceId ?: workspaceOf(folderId)
         var after: String? = null
         val children = ArrayList<Opened>()
         do {
             val page = api.children(folderId, ws, after)
             // Rows are opened only in the workspace asked about; one claiming another is not this folder's.
             if (page.folder.workspaceId != ws || page.folder.id != folderId) throw ApiError(502, "HushOS answered with a different folder.")
-            // Above a share's root the keys are the granter's; those ancestors stay closed.
-            page.ancestors.filter { it.workspaceId == ws }.forEach { runCatching { open(it) } }
-            open(page.folder)
+            // Parents first: the ancestors, then the folder, each refreshed from the page's own row where it differs (an owner's
+            // re-key included), so the children open under the keys their new envelopes are wrapped in. Above a share's root
+            // the keys are the granter's: those stay closed, and a row the page can't open keeps the one held.
+            var pending = page.ancestors.filter { it.workspaceId == ws }
+            repeat(pending.size) { pending = pending.filter { runCatching { open(it, replace = true) }.isFailure } }
+            runCatching { open(page.folder, replace = true) }.onFailure { if (nodes.row(ws, page.folder.id) == null) throw it }
             for (child in page.children) {
                 if (child.workspaceId != ws) continue
-                // A row in a later format stays out of the list; anything else wrong with one fails the folder, as before.
-                val row = try { open(child) } catch (error: NewerFormat) { continue }
+                // The listing's row is kept over a cached one that is older, or tied on every counter but different (a share's
+                // row has no change order, and restoring an earlier version moves neither its key epoch nor its metadata
+                // version), a move included. Nothing is evicted before the fresh row opened: one this phone can't open (a
+                // parent key the page didn't carry) keeps the row held. A row in a later format stays out of the list;
+                // anything else wrong with one it never held fails the folder, as before.
+                val row = try {
+                    open(child, replace = true)
+                } catch (error: NewerFormat) {
+                    continue
+                } catch (error: Exception) {
+                    nodes.row(ws, child.id) ?: throw error
+                }
+                // Only when the cache knows of a move this listing doesn't (its row is newer and under another folder) is
+                // the row left out here: it belongs to its new folder.
+                if (child.olderThan(row.node) && !row.node.parentId.equals(folderId, ignoreCase = true)) continue
                 children.add(row)
-                parents[child.id] = folderId
+                // A newer row kept over this older one keeps its own parent too (a move this listing doesn't know of).
+                if (!child.olderThan(row.node)) parents[child.id] = folderId
             }
             after = page.nextCursor
         } while (after != null)
@@ -1035,18 +1326,61 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * Every chunk is fetched, the padding of a suite 3 object included, so the store never learns where the file ends;
      * the core returns only the file's own bytes.
      */
-    fun download(id: String, destination: File, version: VersionListView? = null, progress: (Float) -> Unit = {}) {
-        val item = resolve(id)
-        val v = openVersion(item, version)
-        var url = api.versionUrl(v.versionId, item.node.workspaceId)
-        Resumable.download(destination, v.layout.chunkCount, v.layout.chunkBytes.toLong(),
-            online = { Resumable.online(context) }, progress = progress, fileSize = v.content.plaintextSize.toLong(),
-            onExpired = { url = api.versionUrl(v.versionId, item.node.workspaceId) },
-        ) { index -> chunkDecrypt(v.content, index, api.range(url, chunkRange(v.content.suite, v.content.plaintextSize, v.content.thumbnailBytes, index))) }
+    fun download(id: String, destination: File, version: VersionListView? = null, expectedVersionId: String? = null, workspaceId: String? = null,
+                 progress: (Float) -> Unit = {}) {
+        // A family file's folder may be let go of while this runs (a removal): what it was before anything is opened.
+        val began = HashMap(familyEpochs)
+        // The row of the workspace asked for, never another with the same id (resolve alone prefers this account's own).
+        val item = if (workspaceId == null) resolve(id)
+            else nodes.row(workspaceId, id) ?: run { resolve(id); nodes.row(workspaceId, id) } ?: throw NotFound("This item no longer exists.")
+        val ws = item.node.workspaceId.lowercase()
+        val family = isFamilyWorkspace(ws) || familyEpochs.containsKey(ws)
+        // A family's file downloads only under the key its area ledger opened, never one a share mount left in the cache.
+        if (family && !nodes.viaLedger(ws, item.id)) throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
+        val epoch = began[ws]?.first ?: 0L
+        try {
+            val v = openVersion(item, version)
+            // The copy's path is keyed by the version the caller saw: another version never goes there.
+            if (expectedVersionId != null && v.versionId != expectedVersionId) throw Refused("Couldn’t open", "It changed meanwhile. Try again.")
+            var url = api.versionUrl(v.versionId, item.node.workspaceId)
+            // Its folder made, each chunk written and the file kept only while this vault's session lasts and, for a family
+            // file, while its folder stands, under the lock a forget and a session's end take: either they come after a
+            // write (and the forget or the account's wipe deletes it), or nothing more is written.
+            Resumable.download(destination, v.layout.chunkCount, v.layout.chunkBytes.toLong(),
+                online = { Resumable.online(context) }, progress = progress, fileSize = v.content.plaintextSize.toLong(),
+                onExpired = { url = api.versionUrl(v.versionId, item.node.workspaceId) },
+                lock = familyCopiesLock, check = {
+                    if (closed) throw SessionEnded()
+                    if (family) requireFamilyEpoch(ws, epoch)
+                    // Proven a family's folder since this began (a share's): nothing more is written under the share's key.
+                    else if (isFamilyWorkspace(ws)) throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
+                },
+            ) { index -> chunkDecrypt(v.content, index, api.range(url, chunkRange(v.content.suite, v.content.plaintextSize, v.content.thumbnailBytes, index))) }
+        } catch (error: Throwable) {
+            // Let go of meanwhile: the family's words say why. Nothing is deleted here: what this download wrote went with
+            // the forget (or the account's wipe), and whatever is at its paths now is a newer download's.
+            if (family && !closed && familyEpoch(ws) != epoch) requireFamilyEpoch(ws, epoch)
+            throw error
+        }
     }
 
-    fun thumbnail(id: String): ByteArray? {
-        val item = resolve(id)
+    /*
+     * This vault's session ended (a sign-out, the account deleted, a lost session, another sign-in): no download of it
+     * writes again, and every family folder it knew is let go of. `deleteCopies` when the account's copies were wiped
+     * before this (deletion): what a download wrote between the wipe and now goes too.
+     */
+    fun close(deleteCopies: Boolean = false) = synchronized(familyCopiesLock) {
+        // The session's end for every vault of it (the Files app's, a job's): the next vault of the session starts afresh.
+        familyState.closed = true
+        for (ws in familyAreas.keys + familyNodes.values.map { it.lowercase() } + familyEpochs.keys)
+            familyEpochs.compute(ws) { _, old -> ((old?.first ?: 0L) + 1) to FamilyWords.OPEN_AGAIN }
+        if (deleteCopies) for (folder in DecryptedCopies.FOLDERS) File(context.cacheDir, folder).deleteRecursively()
+    }
+
+    fun thumbnail(id: String, workspaceId: String? = null): ByteArray? {
+        // The workspace's own row of the id, never another's (resolve alone prefers this account's own).
+        val item = if (workspaceId == null) resolve(id) else nodes.row(workspaceId, id) ?: return null
+        if (isFamilyWorkspace(item.node.workspaceId) && !nodes.viaLedger(item.node.workspaceId, item.id)) return null
         if (!item.hasThumbnail) return null
         val v = openVersion(item)
         if (v.content.thumbnailBytes == 0u) return null
@@ -1076,9 +1410,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
         return result
     }
 
-    /* The most recently changed files and folders, from the tail of the change feed. */
-    fun recents(limit: Int = 60): List<Opened> {
-        catalogueRecents(limit)?.let { return it }
+    /* What changed lately (`Recents`); from the tail of the change feed until the catalogue can answer. */
+    fun recents(limit: Int = 60, keep: (Opened) -> Boolean = { true }): Recents {
+        catalogueRecents(limit, keep)?.let { return it }
         val view = loadWorkspace()
         val feed = api.changes(view.workspaceId, maxOf(0, view.changeSeq - 400), 400)
         val latest = LinkedHashMap<String, NodeView>()
@@ -1094,7 +1428,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             forget(node.workspaceId, node.id)
             runCatching { resolve(node.id) }.onSuccess { items.add(it) }
         }
-        return items.sortedWith(byRecent).take(limit)
+        return Recents(items, limit, keep) { nodes.find(it)?.node?.parentId ?: parents[it] }
     }
 
     fun versions(id: String): List<VersionListView> = api.versions(id, resolve(id).node.workspaceId)
@@ -1109,6 +1443,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         // Shared folders belong to the granter's workspace; an editor writes there, and the id is minted there.
         val parent = resolve(parentId)
         val ws = parent.node.workspaceId
+        refuseFamilyWrite(ws)
         val parentKey = nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
         val epoch = api.allocateEpoch(ws)
         val made = IdField.NODE.mint(ws)
@@ -1118,28 +1453,33 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val metadata = NodeMetadata(typedName(name), null, null, null, attributes)
         val sealed = metadataSeal(MetadataContext(ws, id, 1uL), key, metadata)
         val signature = if (copy != null) signCopiedMetadata(ws, id, NodeKind.FOLDER, sealed, copy) else signMetadata(ws, id, NodeKind.FOLDER, 1uL, sealed)
+        sendingIntoFamily(ws)
         val node = api.createFolder(ws, JSONObject().putId(made).put("parentId", parent.id).put("keyEpoch", epoch.toLong())
             .put("parentKeyEpoch", parent.node.keyEpoch.toLong()).put("keyEnvelope", base64urlEncode(wrapped)).put("metadataEnvelope", base64urlEncode(sealed))
             .put("metadataSignature", signature))
-        return adoptWritten(node, key, metadata, ws, id)
+        return adoptWritten(node, key, metadata, ws, id).also { foldersChanged(listOf(parent.id)) }
     }
 
     fun rename(id: String, name: String): Opened {
         val item = resolve(id)
+        refuseFamilyWrite(item.node.workspaceId)
         val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val metadata = item.metadata.copy(name = typedName(name))
         val next = item.node.metadataVersion + 1uL
         // The type, size and date are carried over into the re-signed record: signed as it checked, never vouched for blind.
         val prior = replacedNamePrior(item)
         val sealed = metadataSeal(MetadataContext(item.node.workspaceId, id, next), key, metadata)
+        sendingIntoFamily(item.node.workspaceId)
         val node = api.rename(id, item.node.workspaceId, item.node.metadataVersion, item.node.keyEpoch, base64urlEncode(sealed),
             signMetadata(item.node.workspaceId, id, if (item.isFolder) NodeKind.FOLDER else NodeKind.FILE, next, sealed, prior))
-        return adoptWritten(node, key, metadata, item.node.workspaceId, id)
+        return adoptWritten(node, key, metadata, item.node.workspaceId, id).also { foldersChanged(listOf(item.node.parentId, it.node.parentId)) }
     }
 
     /* A node's key wrapped under a new parent's; both in one workspace, or the envelope would name the wrong one. */
     private fun rewrap(item: Opened, parent: Opened): String {
         if (parent.node.workspaceId != item.node.workspaceId) throw ApiError(400, "Move it within one drive.")
+        // The key choke point of a move: never a family folder's key wrapped outside the ledger.
+        refuseFamilyWrite(item.node.workspaceId)
         val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val parentKey = nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
         return base64urlEncode(nodeWrap(NodeKeyContext(item.node.workspaceId, item.id, parent.id, parent.node.keyEpoch, item.node.keyEpoch), parentKey, key))
@@ -1148,9 +1488,14 @@ class Vault(internal val context: Context, val api: DriveApi) {
     fun move(id: String, parentId: String): Opened {
         val item = resolve(id)
         val parent = resolve(parentId)
+        refuseFamilyWrite(item.node.workspaceId)
+        refuseFamilyWrite(parent.node.workspaceId)
         val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
-        val node = api.move(id, item.node.workspaceId, parent.id, parent.node.keyEpoch, rewrap(item, parent))
-        return adoptWritten(node, key, item.metadata, item.node.workspaceId, id)
+        val wrapped = rewrap(item, parent)
+        sendingIntoFamily(item.node.workspaceId)
+        val node = api.move(id, item.node.workspaceId, parent.id, parent.node.keyEpoch, wrapped)
+        // Both listings change: the folder it left and the one it entered.
+        return adoptWritten(node, key, item.metadata, item.node.workspaceId, id).also { foldersChanged(listOf(item.node.parentId, parent.id)) }
     }
 
     /*
@@ -1163,6 +1508,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val source = resolve(id)
         val parent = resolve(parentId)
         val ws = parent.node.workspaceId
+        refuseFamilyWrite(source.node.workspaceId)
+        refuseFamilyWrite(ws)
         val parentKey = nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
         val newName = typedName(name ?: source.name)
         val checked = trust ?: trustForWrite()
@@ -1188,23 +1535,28 @@ class Vault(internal val context: Context, val api: DriveApi) {
             ContentKey(opened.content.key, opened.content.plaintextSize, opened.content.thumbnailBytes),
         )
         // Signed over the copy's node and version, the source version's object and its content suite.
+        sendingIntoFamily(ws)
         val node = api.copy(source.id, ws, JSONObject().put("sourceVersionId", version.id)
             .put("node", JSONObject().putId(madeNode).put("parentId", parent.id).put("parentKeyEpoch", parent.node.keyEpoch.toLong()).put("keyEpoch", epoch.toLong())
                 .put("keyEnvelope", base64urlEncode(keyEnvelope)).put("metadataEnvelope", base64urlEncode(metadataEnvelope))
                 .put("metadataSignature", signCopiedMetadata(ws, newId, NodeKind.FILE, metadataEnvelope, prior)))
             .putId(madeVersion).put("contentKeyEnvelope", base64urlEncode(contentKeyEnvelope))
             .put("versionSignature", signCopiedVersion(ws, newId, versionId, version.objectId, version.contentSuite, contentKeyEnvelope, prior)))
-        return adoptWritten(node, key, metadata, ws, newId)
+        return adoptWritten(node, key, metadata, ws, newId).also { foldersChanged(listOf(parent.id)) }
     }
 
     fun trash(id: String) {
+        val parent = resolve(id).node.parentId
         val workspace = sendTrash(id)
         remove(workspace, id)
+        foldersChanged(listOf(parent))
     }
 
     /* The single route's trash, without forgetting the row: its workspace, for the caller to forget it once the lists let go. */
     private fun sendTrash(id: String): String {
         val item = resolve(id)
+        refuseFamilyWrite(item.node.workspaceId)
+        sendingIntoFamily(item.node.workspaceId)
         api.trash(id, item.node.workspaceId)
         return item.node.workspaceId
     }
@@ -1217,7 +1569,10 @@ class Vault(internal val context: Context, val api: DriveApi) {
      */
     suspend fun trashMany(ids: List<String>, moved: (List<String>) -> Unit = {}): List<Result<TrashMove>> {
         val items = ids.map { id -> id to (nodes.find(id)?.node?.workspaceId ?: runCatching { resolve(id).node.workspaceId }.getOrDefault(workspaceId)) }
+        items.forEach { (_, ws) -> refuseFamilyWrite(ws) }
         val workspaces = items.toMap()
+        // Read before the rows are forgotten: the folders whose listings lose what moved.
+        val parentsOf = ids.associateWith { id -> nodes.find(id)?.node?.parentId ?: parents[id] }
         return trashInBatches(
             items,
             send = { ws, chunk -> api.trashBatch(ws, chunk) },
@@ -1230,7 +1585,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             // Called after `moved`: the row leaves the lists first, then this device forgets it.
             forget = { landed -> for (id in landed) workspaces[id]?.let { remove(it, id) } },
             moved = { landed -> moved(landed.map { it.first }) },
-        )
+        ).also { outcomes -> foldersChanged(ids.filterIndexed { index, _ -> outcomes[index].isSuccess }.map { parentsOf[it] }.distinct()) }
     }
 
     /*
@@ -1240,6 +1595,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * each row as it lands.
      */
     suspend fun restoreMany(items: List<Opened>, back: (Opened) -> Unit = {}): List<Result<Opened>> {
+        items.forEach { refuseFamilyWrite(it.node.workspaceId) }
         val given = items.associateBy { it.id }
         val rows = java.util.concurrent.ConcurrentHashMap<String, Opened>()
         val outcomes = restoreInBatches(
@@ -1251,6 +1607,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             sequential = { chunk -> chunk.map { id -> runCatching { rows[id] = restore(TrashItem(given.getValue(id), false)) } } },
             back = { id -> rows[id]?.let(back) },
         )
+        foldersChanged(rows.values.map { it.node.parentId }.distinct())
         return items.mapIndexed { index, item -> outcomes[index].map { rows.getValue(item.id) } }
     }
 
@@ -1273,11 +1630,13 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     fun restore(entry: TrashItem): Opened {
+        refuseFamilyWrite(entry.item.node.workspaceId)
         val item = nodes.row(entry.item.node.workspaceId, entry.item.id) ?: open(entry.item.node)
         val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val toRoot = if (entry.parentTrashed) resolve(rootId).let { root -> root.node.keyEpoch to rewrap(item, root) } else null
+        sendingIntoFamily(item.node.workspaceId)
         val node = api.restore(item.id, item.node.workspaceId, toRoot)
-        return adoptWritten(node, key, item.metadata, item.node.workspaceId, item.id)
+        return adoptWritten(node, key, item.metadata, item.node.workspaceId, item.id).also { foldersChanged(listOf(it.node.parentId)) }
     }
 
     fun purge(id: String) {
@@ -1290,8 +1649,10 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     fun restoreVersion(version: VersionListView, id: String): Opened {
         val item = resolve(id)
+        refuseFamilyWrite(item.node.workspaceId)
         val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
-        return adoptWritten(api.restoreVersion(version.id, item.node.workspaceId), key, item.metadata, item.node.workspaceId, id)
+        // Its size and date change in its folder's listing.
+        return adoptWritten(api.restoreVersion(version.id, item.node.workspaceId), key, item.metadata, item.node.workspaceId, id).also { foldersChanged(listOf(it.node.parentId)) }
     }
 
     /* A JPEG for the lists, the grid and the picker, 512px on the long edge as the web makes one at upload; null when not an image or too big. */
@@ -1345,6 +1706,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
                attributes: Map<String, String> = emptyMap(), progress: (Float) -> Unit = {}): Opened {
         // The workspace written to: the replaced file's, or the folder's (a share's subtree is the granter's).
         val ws = replacing?.node?.workspaceId ?: resolve(parentId).node.workspaceId
+        refuseFamilyWrite(ws)
         // A new version carries the old name over into metadata signed again: checked before any byte goes up, so an
         // unverified name is re-sealed rather than vouched for, and nothing is uploaded when the check can't run.
         val keptName = replacing?.let { replacedNamePrior(it) }
@@ -1393,7 +1755,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val begun = api.beginUpload(ws, JSONObject().put("node", nodeInput).putId(madeVersion).putId(madeObject)
             .put("contentKeyEnvelope", base64urlEncode(version.envelope)).put("contentNonce", base64urlEncode(contentNonce))
             .put("versionSignature", versionSignature)
-            .put("contentSuite", suite.toInt()).put("chunkCount", layout.chunkCount.toLong()).put("ciphertextSize", layout.ciphertextSize.toString()))
+            .put("contentSuite", suite.toInt()).put("chunkCount", layout.chunkCount.toLong()).put("ciphertextSize", layout.ciphertextSize.toString())
+            .also { sendingIntoFamily(ws) })
         val urls = HashMap<Int, String>()
         for (part in begun.parts) urls[part.partNumber] = part.url
         val etags = JSONArray()
@@ -1428,7 +1791,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             throw error
         }
         // Refused: aborted, so its reserved room is released now. Unknown: asked again, never aborted blind (UploadFinish).
-        var node = UploadFinish.complete({ api.completeUpload(begun.uploadId, ws, etags) }, { api.abortUpload(begun.uploadId, ws) })
+        var node = UploadFinish.complete({ sendingIntoFamily(ws); api.completeUpload(begun.uploadId, ws, etags) }, { api.abortUpload(begun.uploadId, ws) })
             ?: throw ApiError(500, "Upload completed without a node")
         checkWritten(node, ws, nodeId)
         var final = metadata
@@ -1439,6 +1802,10 @@ class Vault(internal val context: Context, val api: DriveApi) {
             val sealed = metadataSeal(MetadataContext(ws, nodeId, next), nodeKey, final)
             node = api.rename(nodeId, ws, node.metadataVersion, node.keyEpoch, base64urlEncode(sealed), signMetadata(ws, nodeId, NodeKind.FILE, next, sealed, keptName))
         }
-        return adoptWritten(node, nodeKey, final, ws, nodeId)
+        // Told once it has landed, wherever it was started from (the app, a transfer job, Files writing a file back).
+        return adoptWritten(node, nodeKey, final, ws, nodeId).also { foldersChanged(listOf(it.node.parentId)) }
     }
 }
+
+/* A download whose session ended while it ran: nothing more of it is written. */
+class SessionEnded : java.io.IOException("You signed out.")

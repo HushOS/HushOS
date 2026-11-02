@@ -107,7 +107,7 @@ public struct FamilyUploads: Sendable {
         try await families.ensureOpen(upload.family.groupId)
         if recheck { await families.recheck(upload.family.workspaceId) }
         await vault.hint(workspace: upload.family.workspaceId, for: upload.folderId)
-        _ = try await vault.listChildren(of: upload.folderId)
+        _ = try await vault.listChildren(of: upload.folderId, in: upload.family.workspaceId)
     }
 
     /*

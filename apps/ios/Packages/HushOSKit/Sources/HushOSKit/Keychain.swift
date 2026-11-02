@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Security
 @_exported import HushOSCore
 
@@ -9,7 +10,15 @@ import Security
  * the sign-in sheet inside Files writes it too.
  */
 public enum SharedKeychain {
-    public static let accessGroup = "group.com.hushos.app"
+    /*
+     * The app group, from the APP_GROUP_ID build setting (Project.xcconfig) that every bundle's Info.plist
+     * carries as HushOSAppGroup, so a build signed under another team changes one value. The package's
+     * tests have no such Info.plist and get HushOS's own group.
+     */
+    public static let accessGroup: String = {
+        let value = Bundle.main.object(forInfoDictionaryKey: "HushOSAppGroup") as? String
+        return value.flatMap { $0.isEmpty ? nil : $0 } ?? "group.com.hushos.app"
+    }()
     public static let service = "com.hushos.files"
     public static let sessionAccount = "session"
     public static let deviceAccount = "device"
@@ -25,6 +34,14 @@ public enum SharedKeychain {
             self.origin = origin
             self.token = token
             self.userId = userId
+        }
+
+        /*
+         * This session, named without its secret: what a refusal (a 401) carries of the session it
+         * was sent under, so the app can tell the session in use ending from an old one's late answer.
+         */
+        public var tag: String {
+            SHA256.hash(data: Data((origin + "\n" + userId + "\n" + token).utf8)).prefix(12).map { String(format: "%02x", $0) }.joined()
         }
     }
 

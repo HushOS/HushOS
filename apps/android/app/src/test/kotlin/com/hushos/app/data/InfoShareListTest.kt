@@ -8,8 +8,10 @@ import com.hushos.core.deviceRemember
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -68,6 +70,61 @@ class InfoShareListTest {
         removed = vault.removed(item.node.workspaceId, item.id), outOfReach = false, seen = true,
         missingFromList = missingFromShareList(item, vault.ownWorkspaceId, refreshed = true, listed = listed),
     )
+
+    /*
+     * Round 17, item 1: Grace moves t.txt into U on her own device. A share has no feed here, so the cached row still
+     * names S; U's listing serves the moved row, which is the newer one and is kept: the file shows in U, and no longer
+     * in S. Fails if a listing trusts a stale cached row's parent over its own newer row.
+     */
+    @Test
+    fun aShareFileMovedOnAnotherDeviceShowsInItsNewFolder() {
+        server.moveAs(t, u)
+        assertEquals(listOf("t.txt"), vault.listChildren(u).map { it.name })
+        assertEquals(u, vault.liveItem(t, theirs)?.node?.parentId)
+        assertFalse(vault.listChildren(s).any { it.id == t })
+    }
+
+    /*
+     * #247 check, item 2: Grace restores an earlier version of t.txt. A share's row carries no change order here and a
+     * restore moves neither its key epoch nor its metadata version, so nothing says which row is newer: the one the
+     * listing returned is trusted, and t.txt opens as restored. Fails if the stale cached row wins a tie (the download
+     * would then answer "It changed meanwhile" for the listed version every time).
+     */
+    @Test
+    fun aShareFileRestoredToAnEarlierVersionOpensAsRestored() {
+        val cached = vault.liveItem(t, theirs)!!
+        server.newVersion(t, "restored content".toByteArray(), bumped = false)
+        val row = vault.listChildren(s).single { it.id == t }
+        assertNotEquals(cached.node.currentVersion?.id, row.node.currentVersion?.id)
+        val out = java.io.File(RuntimeEnvironment.getApplication().cacheDir, "opened/${t}/${row.node.currentVersion!!.id}/t.txt")
+        vault.download(t, out, expectedVersionId = row.node.currentVersion!!.id, workspaceId = theirs)
+        assertEquals("restored content", out.readText())
+    }
+
+    /*
+     * #247 check, round 2: Grace re-keys the nested shared folder U (a revoke-and-rotate) while its listing is cached here.
+     * One listing of U opens U afresh from the page first, then its file under U's new key, and the file downloads; S,
+     * unchanged, keeps the rows it held. Fails if a listing opens children under a cached parent's old key, or evicts
+     * what it can't reopen.
+     */
+    @Test
+    fun aNestedSharedFolderReKeyedByItsOwnerListsAndOpensAfterOneListing() {
+        val x = server.file(u, "x.txt", "inside U".toByteArray())
+        assertEquals(listOf("x.txt"), vault.listChildren(u).map { it.name })
+        val heldT = vault.liveItem(t, theirs)
+        server.rekeyFolderAs(u)
+        val listed = vault.listChildren(u)
+        assertEquals(listOf("x.txt"), listed.map { it.name })
+        // The rows kept are the re-keyed ones: U at its new key epoch, x wrapped under it.
+        assertEquals(server.node(u).keyEpoch, vault.liveItem(u, theirs)!!.node.keyEpoch.toLong())
+        assertEquals(server.node(u).keyEpoch, listed.single().node.parentKeyEpoch.toLong())
+        val out = java.io.File(RuntimeEnvironment.getApplication().cacheDir, "opened/$x/v/x.txt")
+        vault.download(x, out, workspaceId = theirs)
+        assertEquals("inside U", out.readText())
+        // S unchanged: its rows are the ones held, not opened again.
+        vault.listChildren(s)
+        assertTrue("an unchanged folder's row was replaced", vault.liveItem(t, theirs) === heldT)
+    }
 
     @Test
     fun aShareItemMissingFromItsParentsRefreshedListClosesInfoAndTheCacheIsUntouched() {

@@ -30,21 +30,6 @@ public struct ServedContactKeys: Sendable, Equatable {
     }
 }
 
-/*
- * What a pin says about the keys the server serves for that person now
- * (docs/identity-pq-design.md 2, `comparePin` in packages/drive/src/trust.ts):
- * - same: a version 3 pin, the served X25519 and Ed25519 keys are the pinned ones, and the
- *   served ML-DSA and ML-KEM keys match its digests;
- * - recheck: a pin that vouches for nothing (from before the release) over the same X25519
- *   and Ed25519 keys: they upgraded, and only comparing words again trusts them;
- * - succession: other keys at a higher key version, from a version 3 pin, so a signed chain may explain it;
- * - changed: anything else, including no ML-DSA key, or an ML-DSA or ML-KEM key that differs
- *   beside the pinned classical keys.
- */
-public enum PinComparison: Sendable, Equatable {
-    case same, recheck, succession, changed
-}
-
 /* The decision for one pin against the served keys. */
 public enum PinFollow: Sendable, Equatable {
     /* The served keys are the pinned ones. */
@@ -61,18 +46,30 @@ func digestOf(_ publicKey: String?) -> String? {
     return keyDigest(publicKey: bytes)
 }
 
+extension ServedContactKeys {
+    /* As the core compares them; no key version reads as 0, which never makes a succession. */
+    var core: HushOSCore.ServedContactKeys {
+        HushOSCore.ServedContactKeys(keyVersion: keyVersion ?? 0, encryptionPublicKey: encryptionPublicKey, signingPublicKey: signingPublicKey,
+                                     mlDsaPublicKey: mlDsaPublicKey, kemPublicKey: kemPublicKey)
+    }
+
+    /* The four keys in full, as a pin is made of them; nil for an identity that has not upgraded. */
+    var full: ServedKeys? {
+        guard let mlDsaPublicKey, let kemPublicKey else { return nil }
+        return ServedKeys(keyVersion: keyVersion ?? 0, encryptionPublicKey: encryptionPublicKey, signingPublicKey: signingPublicKey,
+                          mlDsaPublicKey: mlDsaPublicKey, kemPublicKey: kemPublicKey)
+    }
+}
+
 extension ContactPin {
+    /*
+     * What this pin says about the keys served now: the core's `compare_pin` (packages/drive's
+     * `comparePin`). Same for a verified or first-seen pin whose four keys are served; recheck for a
+     * legacy pin over the same classical keys; succession from a verified or first-seen pin to keys
+     * at a higher version; changed otherwise.
+     */
     public func compare(_ served: ServedContactKeys) -> PinComparison {
-        let sameKeys = served.encryptionPublicKey == encryptionPublicKey && served.signingPublicKey == signingPublicKey
-        if sameKeys {
-            guard verified else { return .recheck }
-            guard let mlDsa = digestOf(served.mlDsaPublicKey), let kem = digestOf(served.kemPublicKey) else { return .changed }
-            return mlDsa == mlDsaPublicKeyHash && kem == kemPublicKeyHash ? .same : .changed
-        }
-        // A succession is always to a version 2 identity, and only a version 3 pin passes trust on.
-        guard served.mlDsaPublicKey != nil, served.kemPublicKey != nil, let version = served.keyVersion else { return .changed }
-        // A pin with no version: the chain is then looked for from 1.
-        return version > (keyVersion ?? 1) && verified ? .succession : .changed
+        comparePin(pin: keys, served: served.core)
     }
 
     /* Whether asking the server for a chain is worth it: a version 3 pin, and a newer identity served. */
@@ -120,6 +117,9 @@ extension ContactPin {
             links: links
         )
         guard valid, var next = try? ContactPin.of(served, userId: userId, email: email, name: name, pinnedAt: pinnedAt) else { return .changed }
+        // A followed first-seen pin stays first-seen: the chain carries the pin's standing, never a check nobody made.
+        if trust != .verified { next.fingerprint = "" }
+        next.firstSeen = firstSeen
         let start = chainStart(links)
         if start == nil {
             // The core verified a chain this client finds no start for: the two start rules disagree. Followed all the same, keeping the pinned key.
@@ -186,34 +186,6 @@ extension SharedWithMeView.Granter {
     }
 }
 
-extension Vault {
-    /*
-     * "Check again": the person asked to follow a pinned contact to the keys served now. Only
-     * then is the server asked for the chain, and always for the whole of it, so lookups never
-     * say which contacts are pinned or at which version. A chain that holds moves the pin
-     * (saved over the pin it was decided from, unless another device moved that meanwhile) and
-     * queues what was shared with them to be sealed again to the new keys; anything else
-     * leaves the pin as it was and the changed-key warning stands.
-     */
-    public func checkAgain(_ pin: ContactPin, served: ServedContactKeys) async throws -> PinFollow {
-        switch pin.compare(served) {
-        case .same: return .same
-        case .recheck, .changed: return .changed
-        case .succession: break
-        }
-        let links = try await Auth.succession(of: pin.userId, as: session)
-        let decision = pin.follow(served, links: links)
-        guard case .followed(let next) = decision else { return decision }
-        try await updateSettings { settings in
-            guard let stored = settings.contacts[pin.userId], stored.encryptionPublicKey == pin.encryptionPublicKey,
-                  stored.signingPublicKey == pin.signingPublicKey else { return }
-            settings.setPin(next)
-        }
-        ResealTo.add(next.userId)
-        return decision
-    }
-}
-
 /*
  * People whose keys this person followed along a succession, whose shares still hold the old
  * keys: the next upgrade pass seals them again to the pin's keys, then lets them go. Kept on
@@ -221,21 +193,58 @@ extension Vault {
  */
 enum ResealTo {
     static let file = "reseal-to.json"
+    private static let lock = NSLock()
 
-    static func add(_ userId: String) {
-        var all = Set(Unbacked.read([String].self, file) ?? [])
-        all.insert(userId.lowercased())
-        Unbacked.write(all.sorted(), file)
+    /*
+     * Each request carries the generation it was made at, so a pass acknowledges only what it read before it began: one
+     * made again meanwhile (another Continue, to keys that pass never saw) outlives that pass.
+     */
+    private struct Stored: Codable {
+        var next: UInt64 = 0
+        var to: [String: UInt64] = [:]
     }
 
-    static var all: Set<String> { Set(Unbacked.read([String].self, file) ?? []) }
+    /* As stored; the list an earlier build kept reads as generation 0, which any later request is above. */
+    private static func read() -> Stored {
+        if let stored = Unbacked.read(Stored.self, file) { return stored }
+        let list = Unbacked.read([String].self, file) ?? []
+        return Stored(to: Dictionary(list.map { ($0.lowercased(), 0) }, uniquingKeysWith: { first, _ in first }))
+    }
+
+    static func add(_ userId: String) {
+        lock.withLock {
+            var stored = read()
+            stored.next += 1
+            stored.to[userId.lowercased()] = stored.next
+            Unbacked.write(stored, file)
+        }
+    }
+
+    /* Who is owed a re-seal, with the generation of the latest request: what a pass reads before it begins. */
+    static var requests: [String: UInt64] { lock.withLock { read().to } }
+
+    static var all: Set<String> { Set(requests.keys) }
 
     static func contains(_ userId: String) -> Bool { all.contains(userId.lowercased()) }
 
+    /* Acknowledges the requests a pass read: one made again since, at a later generation, stays. */
+    static func acknowledge(_ done: [String: UInt64]) {
+        guard !done.isEmpty else { return }
+        lock.withLock {
+            var stored = read()
+            for (id, generation) in done where stored.to[id] == generation { stored.to[id] = nil }
+            Unbacked.write(stored, file)
+        }
+    }
+
+    /* Forgets these requests whatever their generation (tests). */
     static func remove(_ userIds: Set<String>) {
         guard !userIds.isEmpty else { return }
-        let left = (Unbacked.read([String].self, file) ?? []).filter { !userIds.contains($0) }
-        Unbacked.write(left, file)
+        lock.withLock {
+            var stored = read()
+            for id in userIds { stored.to[id.lowercased()] = nil }
+            Unbacked.write(stored, file)
+        }
     }
 }
 

@@ -98,9 +98,6 @@ function folderLink(rootId: string, folderId: string) {
         : ({ to: '/app/drive/f/$folderId', params: { folderId } } as const);
 }
 
-/* When an item last changed in HushOS: an upload, a new version, a rename or a move. */
-const changedAt = (node: DriveNode) => Date.parse(node.updatedAt) || 0;
-
 export function HomeView() {
     const { rootId, workspaceId } = useDrive();
     const navigate = useNavigate();
@@ -119,21 +116,18 @@ export function HomeView() {
     const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
     const [back, setBack] = useState<ReadonlyMap<string, DriveNode>>(new Map());
 
-    // The catalogue knows every folder; the top folder's own listing is fresher right
-    // after something is added here, so it wins for the items it holds.
+    // The catalogue knows every folder; the top folder's own listing is fresher right after
+    // something is added here, and a row put back is ahead of it until the refresh, so both win
+    // for the items they hold. A folder stands in for what it holds, after the filters.
     const rows = useMemo(() => {
         const keep = (node: DriveNode) =>
             !gone.has(node.id) &&
+            // What was inside a folder trashed from here goes with it, not into the folder's place.
+            (gone.size === 0 ||
+                !driveClient.ancestorsOf(node.id).some((folder) => gone.has(folder.id))) &&
             matchesType(node, type) &&
             (!tag || (registry !== null && tagsOf(registry, node.id).includes(tag.id)));
-        const found = new Map<string, DriveNode>();
-        for (const node of back.values()) if (keep(node)) found.set(node.id, node);
-        for (const node of driveClient.recent(LIMIT, keep)) found.set(node.id, node);
-        for (const node of top.data?.children ?? [])
-            if (!node.trashedAt && keep(node)) found.set(node.id, node);
-        return [...found.values()]
-            .sort((a, b) => changedAt(b) - changedAt(a) || a.name.localeCompare(b.name))
-            .slice(0, LIMIT);
+        return driveClient.recent(LIMIT, keep, [...back.values(), ...(top.data?.children ?? [])]);
         // The catalogue state stands in for the catalogue's contents, which it follows.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [catalogue, top.data, type, tag, registry, gone, back]);
@@ -644,7 +638,7 @@ export function HomeView() {
                                                                 'text-[13px] text-muted-foreground tabular-nums',
                                                             )}
                                                         >
-                                                            {formatWhen(node.updatedAt)}
+                                                            {formatWhen(node.recentAt)}
                                                         </td>
                                                         <td
                                                             className={cn(
@@ -840,7 +834,7 @@ function TypeChips({
                         'flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-3.5 text-sm font-semibold transition-colors outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring pointer-coarse:h-10',
                         value === filter
                             ? 'border-ink bg-ink text-secondary-foreground'
-                            : 'border-rule bg-card text-foreground hover:bg-muted',
+                            : 'border-rule bg-panel text-foreground hover:bg-muted',
                     )}
                 >
                     {value === filter && filter !== 'All' && (
@@ -864,7 +858,7 @@ function TagPill({ tag, selected, onClick }: { tag: Tag; selected: boolean; onCl
                 'flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-[13px] font-semibold transition-colors outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring pointer-coarse:h-10',
                 selected
                     ? 'border-primary bg-accent text-accent-foreground'
-                    : 'border-rule bg-card text-foreground hover:bg-muted',
+                    : 'border-rule bg-panel text-foreground hover:bg-muted',
             )}
         >
             {selected ? (

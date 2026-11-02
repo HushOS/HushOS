@@ -107,6 +107,8 @@ struct MainView: View {
                 }
                 .sheet(isPresented: $makingRoom) { StorageFullSheet(rows: rows(store)).environment(store).environment(model) }
                 .sheet(item: $invitation) { link in InvitationSheet(link: link).environment(store).environment(model) }
+                // A mark's check, for every mark not inside Info or the viewer (rows, lists, search).
+                .contactHost(.root, store: store)
                 .fileViewer(Binding(get: { store.deepFile }, set: { store.deepFile = $0 }), among: store.deepSiblings, store: store)
                 // Notices sit above the tab bar, and above the transfers bar while it shows.
                 .onChange(of: rows(store).isEmpty, initial: true) { _, empty in NoticeCenter.shared.bottom = empty ? 76 : 124 }
@@ -116,6 +118,8 @@ struct MainView: View {
                     if scenePhase == .active { BackgroundAccess.shared.version += 1; await BackgroundAccess.shared.readNotifications() }
                     if scenePhase == .active { await store.liveSync() }
                 }
+                // A family opened from the invitation sheet is pushed in Account, where its row is.
+                .onChange(of: store.familyToOpen) { _, groupId in if groupId != nil { tab = .account } }
                 // Anything that routes (a link, Info's Folder row) brings its tab forward.
                 .onChange(of: store.route) { _, link in
                     switch link {
@@ -170,7 +174,7 @@ struct MainView: View {
                 .alert("You’ve been signed out", isPresented: Binding(get: { store.error == DriveStore.sessionEnded && model.sessionCheck == .kept }, set: { if !$0 { store.error = nil } })) {
                     Button("Sign in") {
                         store.error = nil
-                        model.sessionLost()
+                        model.sessionLost(ended: store.vault.api.session)
                     }
                 } message: {
                     Text("Your session ended, perhaps because your password was changed on another device. Sign in again to carry on.")
@@ -197,6 +201,8 @@ struct MainView: View {
         .task(id: model.vault.map(ObjectIdentifier.init)) {
             guard let vault = model.vault else { return }
             if let store { await store.adopt(vault) } else { store = DriveStore(vault: vault) }
+            // The session's ends (sign-out, deletion, a lost session) reset its families from the model, never from a view's lifecycle.
+            model.driveStore = store
         }
     }
 

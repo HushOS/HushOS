@@ -22,7 +22,7 @@ struct NodeRow: View {
     var access = true
     /* The note says something went wrong ("Couldn’t be restored"): it is drawn in the danger colour. */
     var noteIsProblem = false
-    /* In Recent: the date is when it changed in HushOS, which Recent is ordered by, not the file's own. */
+    /* In Recent: the date is when it changed in HushOS, which Recent is ordered by (a folder's newest change within), not the file's own. */
     var recent = false
 
     var body: some View {
@@ -54,7 +54,8 @@ struct NodeRow: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected == true ? .isSelected : [])
-        .task { store.thumbnail(for: item) }
+        // Asked again when the row shows another version (a replaced picture comes back new) or under a new session.
+        .task(id: "\(item.node.currentVersion?.id ?? "")-\(store.sessionKey.hashValue)") { store.thumbnail(for: item) }
     }
 
     /*
@@ -100,7 +101,7 @@ struct NodeRow: View {
             when = Text("Couldn’t be kept").foregroundStyle(Alpine.danger).fontWeight(.semibold)
         } else if let note, noteIsProblem {
             when = Text(note).foregroundStyle(Alpine.danger).fontWeight(.semibold)
-        } else if let label = note ?? changedLabel(recent ? item.changed : item.modified) {
+        } else if let label = note ?? changedLabel(recent ? item.recentAt ?? item.changed : item.modified) {
             when = Text(label).foregroundStyle(muted)
         }
         // Kept on this phone (a file, a folder, or a file kept with its folder): the phone mark leads the date, as on Android.
@@ -114,7 +115,7 @@ struct NodeRow: View {
         return (lead, parts.isEmpty ? nil : Self.join(parts))
     }
 
-    static func type(for item: Opened) -> UTType {
+    nonisolated static func type(for item: Opened) -> UTType {
         if let mime = item.metadata.mime, let type = UTType(mimeType: mime) { return type }
         return UTType(filenameExtension: (item.name as NSString).pathExtension) ?? .data
     }
@@ -160,13 +161,14 @@ struct NodeTile: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected == true ? .isSelected : [])
-        .task { store.thumbnail(for: item) }
+        // Asked again when the row shows another version (a replaced picture comes back new) or under a new session.
+        .task(id: "\(item.node.currentVersion?.id ?? "")-\(store.sessionKey.hashValue)") { store.thumbnail(for: item) }
     }
 
     /* A photo or a video frame fills the picture; anything else, a PDF included, is its type mark. */
     private var photo: UIImage? {
         let type = NodeRow.type(for: item)
-        guard type.conforms(to: .image) || type.conforms(to: .movie), let data = store.thumbnails[item.id] else { return nil }
+        guard type.conforms(to: .image) || type.conforms(to: .movie), let data = store.thumbnailData(for: item) else { return nil }
         return UIImage(data: data)
     }
 
@@ -337,7 +339,7 @@ struct FileMark: View {
 
     var body: some View {
         Group {
-            if thumbnail, let data = store.thumbnails[item.id], let image = UIImage(data: data) {
+            if thumbnail, let data = store.thumbnailData(for: item), let image = UIImage(data: data) {
                 let shape = RoundedRectangle(cornerRadius: box * 0.22, style: .continuous)
                 Image(uiImage: image).resizable().scaledToFill()
                     .frame(width: box, height: box).clipShape(shape)

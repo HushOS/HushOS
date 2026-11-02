@@ -144,12 +144,12 @@ fun NodeRow(
     recent: Boolean = false,
 ) {
     val alpine = Alpine.colors
-    LaunchedEffect(item.id) { model.thumbnail(item) }
-    val thumbnail = state.thumbnails[item.id]
+    LaunchedEffect(thumbnailKey(item)) { model.thumbnail(item) }
+    val thumbnail = state.thumbnails[thumbnailKey(item)]
     val bitmap = remember(thumbnail) { thumbnail?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }
     // Who can open it only when that differs from its folder: an item shared on its own. Otherwise the date, and a file's size.
     val who = shownWho(model, state, item, note)
-    val time = if (away) "Not on this phone" else note ?: listOfNotNull(whenText(if (recent) item.changedMillis else item.modifiedMillis), item.size?.let { formatBytes(it) }).joinToString(" · ").ifEmpty { null }
+    val time = if (away) "Not on this phone" else note ?: listOfNotNull(whenText(if (recent) item.recentMillis ?: item.changedMillis else item.modifiedMillis), item.size?.let { formatBytes(it) }).joinToString(" · ").ifEmpty { null }
     val keepProblem = keepProblemOf(state, item, note)
     val showingInfo = LocalInfoShown.current == (item.node.workspaceId to item.id)
     Row(
@@ -213,7 +213,7 @@ fun ItemLine(model: DriveViewModel, state: DriveState, item: Opened, who: WhoCan
     val linked = who == WhoCanOpen.AnyoneWithLink && !opening
     // Up to three of its tags as dots after the line, as iOS and the web mark them.
     val tags = state.tags.tagsOf(item.id)
-    val unverified = !opening && model.unverified(item, state) != null
+    val unverified = !opening && model.marked(item, state)
     if (line.isEmpty() && !kept && keepProblem == null && tags.isEmpty() && !unverified) return
     val text = androidx.compose.ui.text.buildAnnotatedString {
         val whole = { part: String -> part.replace(' ', '\u00A0').replace('\u202F', '\u00A0') }

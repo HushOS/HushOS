@@ -12,7 +12,97 @@ import SwiftUI
  */
 
 extension DriveStore {
-    var families: FamilySync { FamilySync.shared(for: vault) }
+    /* The session an operation begins in (SessionGate): taken once at its outermost entry and passed down. */
+    func beginSession() -> Session? { sessionGate.begin() }
+
+    /* Whether an operation's session is still the current one: checked at every step after a suspension. */
+    func current(_ session: Session) -> Bool { sessionGate.current(session) }
+
+    /*
+     * Work of `session` (or of the session now, for an operation of one step), through its gate,
+     * against that session's own vault: nil when it ended or changed before the work started or
+     * answered (dropped, its failure and any 401 too), the failure thrown otherwise.
+     */
+    func inSession<T: Sendable>(_ session: Session?, _ work: @escaping @Sendable (Vault) async throws -> T) async throws -> T? {
+        guard let session = session ?? beginSession(), let result = await sessionGate.run(session, work) else { return nil }
+        return try result.get()
+    }
+
+    /* A family request of `session` (`inSession`), against that session's family sync: nil, as dropped, when its vault has none (replaced). */
+    func inFamily<T: Sendable>(_ session: Session?, _ work: @escaping @Sendable (FamilySync) async throws -> T) async throws -> T? {
+        try await inSession(session) { vault -> T? in
+            guard let families = FamilySync.shared(for: vault) else { return nil }
+            return try await work(families)
+        } ?? nil
+    }
+
+    /*
+     * A family request from a screen whose outcome is the session's, not the screen's: `land` (adopt
+     * what a sync found, clear, end the queue, show a join) runs as the session's own work whether
+     * or not the screen is still open (SessionGate.publish), under the session's rules and each
+     * family's order. The answer reaches the screen only while it waits: a closed sheet says, closes
+     * and opens nothing.
+     */
+    func inFamilyLanding<T: Sendable>(_ session: Session?, _ work: @escaping @Sendable (FamilySync) async throws -> T,
+                                      land: @escaping @MainActor @Sendable (Result<T, Error>) async -> Void) async throws -> T? {
+        guard let session = session ?? beginSession() else { return nil }
+        let result = await sessionGate.publish(session, { vault -> T? in
+            guard let families = FamilySync.shared(for: vault) else { return nil }
+            return try await work(families)
+        }, land: { result in
+            switch result {
+            case .success(let value?): await land(.success(value))
+            case .success(nil): break
+            case .failure(let error): await land(.failure(error))
+            }
+        })
+        return try result?.get() ?? nil
+    }
+
+    /*
+     * What a join's step found, for the session: in, its state published and its family's folders
+     * listed again; already a member, the family checked from here. Waiting and a fork are the join
+     * screen's own to show.
+     */
+    func landJoin(_ groupId: String, _ outcome: JoinOutcome, revision: UInt64?) async {
+        switch outcome {
+        case .joined(let state):
+            await joined(groupId, state, revision: revision)
+        case .member:
+            if let summary = (try? await inFamily(nil, { try await $0.list() }))?.first(where: { $0.id == groupId }) {
+                await refreshFamily(summary, fromJoin: true)
+            }
+        case .waiting, .fork:
+            break
+        }
+    }
+
+    /*
+     * The session ended or is replaced (the same account signed in again, a sign-out, a deletion):
+     * everything drawn of its families goes, and what it still has out is cancelled and dropped.
+     * Which folders are family folders stays (`familyRoots`, `familyAreaGroups`, `familyFolders`):
+     * never read under a personal key, whatever the new session finds.
+     */
+    func resetFamilies() {
+        sessionGate.reset()
+        for groupId in familyStates.keys { familyGenerations.published(groupId) }
+        familyRevisions = FamilyRevisions()
+        familyList = nil
+        familiesServed = nil
+        familiesSyncedAt = nil
+        familyStates = [:]
+        familyShown = [:]
+        familyDetails = [:]
+        familyNames = [:]
+        familySyncing = []
+        familyBook.reset()
+        familyCheckedAt = [:]
+        familyToOpen = nil
+        for (id, problem) in folderProblems {
+            if case .family = problem { folderProblems[id] = nil } else if problem == .removed { folderProblems[id] = nil }
+        }
+        for groupId in familyRefreshed.keys { familyRefreshed[groupId, default: 0] += 1 }
+    }
 
     /* A family folder's item: decided by every family folder this session learned of, never by the last sync's answer. */
     func isFamily(_ item: Opened) -> Bool { familyAreaGroups[item.node.workspaceId.lowercased()] != nil }
@@ -24,7 +114,7 @@ extension DriveStore {
 
     /* Whether a folder on screen is in a family folder: its own row, or a family folder's top. */
     func isFamilyFolder(_ id: String) -> Bool {
-        if familyRoots[id.lowercased()] != nil { return true }
+        if familyRoots[id.lowercased()] != nil || familyFolders[id.lowercased()] != nil { return true }
         if let item = known(id) { return isFamily(item) }
         return false
     }
@@ -69,25 +159,35 @@ extension DriveStore {
     }
 
     /* The family's verdict for an item as it is now; nil while it is being judged. */
-    func familyVerdict(of item: Opened) -> FamilyVerdict? {
-        guard let entry = familyVerdicts[item.ref], entry.node == item.node else { return nil }
-        return entry.verdict
-    }
+    func familyVerdict(of item: Opened) -> FamilyVerdict? { familyBook.verdict(of: item.ref, node: item.node) }
 
-    /* Each family folder item's mark and Info lines, judged once per version of its row, a family at a time. */
-    func judgeFamilyItems(_ items: [Opened]) async {
+    /*
+     * Each family folder item's mark and Info lines, judged once per version of its row, a family
+     * at a time. A judgement publishes only for the session and the family's trust generation it
+     * began under (FamilyVerdictBook): one that finishes after the family synced, was cleared or
+     * judged again, or after trust changed, is dropped, and the newer one stands.
+     */
+    func judgeFamilyItems(_ items: [Opened], session: Session? = nil) async {
+        guard let session = session ?? beginSession() else { return }
         let due = items.filter { isFamily($0) && familyVerdict(of: $0) == nil }
         for (groupId, group) in Dictionary(grouping: due, by: { familyAreaGroups[$0.node.workspaceId.lowercased()] ?? "" }) where !groupId.isEmpty {
-            let verdicts = await families.verdicts(of: group.map(\.node), groupId: groupId)
-            for (item, verdict) in zip(group, verdicts) { familyVerdicts[item.ref] = (item.node, verdict) }
+            guard current(session) else { return }
+            let trust = familyBook.capture(groupId)
+            let nodes = group.map(\.node)
+            // Published as the session's own work: a screen that stops waiting never leaves its rows without marks.
+            _ = try? await inFamilyLanding(session, { await $0.verdicts(of: nodes, groupId: groupId) }, land: { result in
+                guard case .success(let verdicts) = result, self.current(session) else { return }
+                self.familyBook.publish(groupId, trust: trust, zip(group, verdicts).map { ($0.ref, $0.node, $1) })
+            })
         }
     }
 
-    /* Every family mark judged again (a sync accepted, pins or identities changed): what is on screen now. */
-    func rejudgeFamilies(_ groupId: String? = nil) async {
-        for (ref, _) in familyVerdicts where groupId == nil || familyAreaGroups[ref.workspaceId] == groupId { familyVerdicts[ref] = nil }
+    /* Every family mark judged again (a sync accepted, pins or identities changed): what is on screen now, under a new trust generation. */
+    func rejudgeFamilies(_ groupId: String? = nil, session: Session? = nil) async {
+        guard let session = session ?? beginSession(), current(session) else { return }
+        familyBook.moved(groupId)
         let shown = folders.values.flatMap { $0 }.filter { isFamily($0) }
-        await judgeFamilyItems(shown)
+        await judgeFamilyItems(shown, session: session)
     }
 
     /*
@@ -95,17 +195,34 @@ extension DriveStore {
      * reuses what the last pass found; pulling to refresh always checks. A server without
      * families shows none.
      */
-    func refreshFamilies(force: Bool = false) async {
+    func refreshFamilies(force: Bool = false, session: Session? = nil) async {
+        guard let session = session ?? beginSession(), current(session) else { return }
         if !force, let at = familiesSyncedAt, Date().timeIntervalSince(at) < 60, familyList != nil { return }
-        do {
-            let list = try await families.list()
-            familyList = list
-            familiesSyncedAt = Date()
-            for summary in list { await refreshFamily(summary) }
-        } catch let error as GroupsAPIError where error.status == 404 || error.status == 501 {
-            familyList = nil
-        } catch {
-            // No answer: what was shown stays.
+        // A family this phone holds that the list no longer names is asked about, and wiped only on the server's
+        // not-member, so an open family page or folder leaves at once rather than at the next launch. What the list and
+        // the removal check found lands as the session's own work, whoever asked (Account, a family page, the tick) and
+        // whether or not it still waits (SessionGate.publish).
+        let found = try? await inFamilyLanding(session, { try await $0.listReconciling() }, land: { result in
+            switch result {
+            case .success(let found):
+                for summary in found.listed { self.familyNames[summary.id] = summary.name }
+                self.familyList = found.listed
+                self.familiesServed = true
+                self.familiesSyncedAt = Date()
+                for groupId in found.removed { self.removed(groupId) }
+                for (groupId, words) in found.failed { self.couldntRemove(groupId, words) }
+            case .failure(let error as GroupsAPIError) where error.status == 404 || error.status == 501:
+                self.familyList = nil
+                self.familiesServed = false
+            case .failure:
+                // No answer: what was shown stays.
+                break
+            }
+        })
+        // Each family checked in turn; a caller that stopped waiting starts no more checks (none of whose outcome is lost).
+        for summary in found?.listed ?? [] {
+            guard current(session), !Task.isCancelled else { return }
+            await refreshFamily(summary, session: session)
         }
     }
 
@@ -113,57 +230,155 @@ extension DriveStore {
      * One family checked again, and who route 3 names in it. Skipped while a join screen is open
      * for it (that screen checks it), unless the join screen itself asks (`fromJoin`).
      */
-    func refreshFamily(_ summary: GroupSummary, fromJoin: Bool = false) async {
+    func refreshFamily(_ summary: GroupSummary, fromJoin: Bool = false, session: Session? = nil) async {
+        guard let session = session ?? beginSession(), current(session) else { return }
         guard !familySyncing.contains(summary.id), fromJoin || familyJoining[summary.id] == nil else { return }
         familySyncing.insert(summary.id)
-        defer { familySyncing.remove(summary.id) }
+        // A reset cleared it already; the next session may be checking the same family by now.
+        defer { if current(session) { familySyncing.remove(summary.id) } }
         let previous = familyStates[summary.id]
-        await show(await families.sync(summary), of: summary, previous: previous)
+        // What the sync found lands as the session's own work, whoever asked and whether or not it still waits: a fork or
+        // removal found by a sync whose page closed still clears the family's rows, pictures and queued uploads (show).
+        _ = try? await inFamilyLanding(session, { sync in (await sync.syncRevised(summary), await sync.takeEnded()) }, land: { result in
+            guard case .success(let found) = result else { return }
+            // A 401 the sync met is any request's: the app asks whether the session ended.
+            if let ended = found.1 { self.report(ended) }
+            await self.show(found.0.state, of: summary, previous: previous, revision: found.0.revision, session: session)
+        })
     }
 
     /*
      * A join that finished on the join screen: the family as its acceptance left it, shown as a
      * sync's would be, with route 2 read again so the row says it is in (no second acceptance).
      */
-    func joined(_ groupId: String, _ state: FamilyState) async {
-        if let list = try? await families.list() {
+    /* `revision`: the join's, taken in the family's turn: a fork or removal found since by a check or sync is never covered. */
+    func joined(_ groupId: String, _ state: FamilyState, revision: UInt64? = nil, session: Session? = nil) async {
+        guard let session = session ?? beginSession(), current(session) else { return }
+        // Dropped (the session it began in ended) is not "no list": nothing of the old session is shown in the new one.
+        guard let listed = await sessionGate.run(session, { vault -> [GroupSummary]? in try await FamilySync.shared(for: vault)?.list() }) else { return }
+        if let list = (try? listed.get()) ?? nil {
             familyList = list
             familiesSyncedAt = Date()
         }
+        guard current(session) else { return }
         guard let summary = familyList?.first(where: { $0.id == groupId }) else {
-            familyStates[groupId] = state
+            if publishFamily(state, of: groupId, revision: revision) { familyBook.moved(groupId) }
             return
         }
-        await show(state, of: summary, previous: familyStates[groupId])
+        await show(state, of: summary, previous: familyStates[groupId], revision: revision, session: session)
     }
 
-    private func show(_ state: FamilyState, of summary: GroupSummary, previous: FamilyState?) async {
-        familyStates[summary.id] = state
+    /*
+     * A sync's outcome a screen ran itself (Check it's Sam's "Getting the latest"), shown as any
+     * sync's is when it is a later look at the family than what is shown (its revision, taken inside
+     * the family's turn): a check queued behind a refresh shows what it found after it, a refusal as
+     * much as a fork or a removal, and an older answer of any kind never covers a newer one.
+     */
+    func adopt(_ state: FamilyState, of summary: GroupSummary, revision: UInt64?, session: Session) async {
+        guard current(session) else { return }
+        await show(state, of: summary, previous: familyStates[summary.id], revision: revision, session: session)
+    }
+
+    /*
+     * Every family state shown goes through here, so each publication is counted (`familyGenerations`)
+     * and ordered (`familyRevisions`): false, and nothing shown, when what is shown is a later look.
+     * Without a revision (a join, a removal the list found) it is the latest now.
+     */
+    @discardableResult
+    func publishFamily(_ state: FamilyState, of groupId: String, revision: UInt64? = nil) -> Bool {
+        guard familyRevisions.admits(revision, of: groupId) else { return false }
+        familyStates[groupId] = state
+        familyGenerations.published(groupId)
+        return true
+    }
+
+    /*
+     * A member check and a refresh can show the same family at once: after every suspension this
+     * goes on only while its publication is still the latest (`stillShown`), so an older result
+     * never clears, deletes or redraws over a newer one.
+     */
+    private func show(_ state: FamilyState, of summary: GroupSummary, previous: FamilyState?, revision: UInt64? = nil, session: Session) async {
+        guard current(session), publishFamily(state, of: summary.id, revision: revision) else { return }
+        let shownAs = familyGenerations.current(summary.id)
+        func stillShown() -> Bool { current(session) && familyGenerations.current(summary.id) == shownAs }
         familyCheckedAt[summary.id] = Date()
-        for (area, groupId) in await families.familyAreas() { familyAreaGroups[area] = groupId }
+        // Moved once this showing is done, its folders listed again (or a newer showing took over): a family page reads its
+        // labels again on it, and a viewer whose file failed while the family wasn't open asks again.
+        defer { familyRefreshed[summary.id, default: 0] += 1 }
+        // Every family sync that found something moves its trust generation: a judgement from before it never publishes
+        // after it. No answer says nothing new, so the marks already judged stay (the rows are still shown, read only).
+        if FamilyVerdictBook.moves(after: state) { familyBook.moved(summary.id) }
+        guard let areas = try? await inFamily(session, { await $0.familyAreas() }) else { return }
+        // Rows a proof or a forget let go of with their workspace (a share's, kept or opened before): off the screens, with
+        // their pictures.
+        if let gone = try? await inSession(session, { await $0.takeEvicted() }), !gone.isEmpty {
+            for id in gone { thumbnails[id] = nil }
+            dropRows(gone)
+            offlineVersion += 1
+        }
+        // Which folders are family folders is only ever learned, never undone: kept whoever shows the family now.
+        for (area, groupId) in areas { familyAreaGroups[area] = groupId }
+        guard stillShown() else { return }
         if case .accepted(let view) = state {
             familyShown[summary.id] = view
             for root in view.areas.compactMap({ $0.root?.id.lowercased() }) { familyRoots[root] = summary.id }
-            familyDetails[summary.id] = await families.detail(summary.id)
+            let groupId = summary.id
+            guard let detail = await sessionGate.run(session, { await FamilySync.shared(for: $0)?.detail(groupId) }), stillShown() else { return }
+            familyDetails[summary.id] = (try? detail.get()) ?? nil
             // Listed again, not only judged again: a walk since may have re-keyed every row on screen.
             let areas = Set(familyAreaGroups.filter { $0.value == summary.id }.map(\.key))
             let roots = Set(view.areas.compactMap { $0.root?.id })
             let shown = folders.filter { id, items in roots.contains(id) || items.contains { areas.contains($0.node.workspaceId.lowercased()) } }.map(\.key)
-            for id in shown { await refresh(folder: id) }
+            for id in shown {
+                guard stillShown() else { return }
+                await refresh(folder: id, session: session)
+            }
             // Folders a refusal or fork took off screen open again now.
             for (id, problem) in folderProblems where familyGroup(ofFolder: id) == summary.id {
-                if case .family = problem { await refresh(folder: id) }
+                guard stillShown() else { return }
+                if case .family = problem { await refresh(folder: id, session: session) } else if problem == .removed { await refresh(folder: id, session: session) }
             }
-            await rejudgeFamilies(summary.id)
+            guard stillShown() else { return }
+            await rejudgeFamilies(summary.id, session: session)
         } else if case .failed(let message) = state, message == FamilyWords.noAnswer {
             // No answer: what this phone opened before stays on screen, read only.
         } else {
             var roots: [String] = []
             if case .accepted(let view)? = previous { roots = view.areas.compactMap { $0.root?.id } }
-            clearFamily(summary.id, roots: roots, details: state == .wiped)
+            clearFamily(summary.id, roots: roots, details: state == .wiped,
+                        problem: state == .wiped ? .removed : .family(FamilyWords.openAgain))
             // Removed from the family: what was queued into its folders fails now, its plaintext removed.
             if state == .wiped { BackgroundTransfers.shared.endFamily(summary.id) }
         }
+    }
+
+    /*
+     * A family the server says this account is no longer in, found while it wasn't listed: shown as
+     * a sync's `.wiped` is (the page says so in the web's words), everything drawn of it dropped, its
+     * queued uploads failed and their plaintext removed. Its folders on screen say the web's words.
+     */
+    func removed(_ groupId: String) {
+        var roots: [String] = []
+        if case .accepted(let view)? = familyStates[groupId] { roots = view.areas.compactMap { $0.root?.id } }
+        roots += familyRoots.filter { $0.value == groupId }.map(\.key)
+        publishFamily(.wiped, of: groupId)
+        familyCheckedAt[groupId] = Date()
+        clearFamily(groupId, roots: roots, details: true, problem: .removed)
+        BackgroundTransfers.shared.endFamily(groupId)
+    }
+
+    /*
+     * A family the server says this account is no longer in, whose wipe waits for the guard it hands
+     * back to be stored: shown as a sync's failed wipe is (the storage words), nothing of it left open
+     * here, and its device record and guard kept, so the next pass asks again.
+     */
+    func couldntRemove(_ groupId: String, _ words: String) {
+        var roots: [String] = []
+        if case .accepted(let view)? = familyStates[groupId] { roots = view.areas.compactMap { $0.root?.id } }
+        roots += familyRoots.filter { $0.value == groupId }.map(\.key)
+        publishFamily(.failed(words), of: groupId)
+        familyCheckedAt[groupId] = Date()
+        clearFamily(groupId, roots: roots, details: false)
     }
 
     /*
@@ -171,48 +386,94 @@ extension DriveStore {
      * deleteMirrors): its folders' lists, names, thumbnails and marks, and the plaintext copies
      * opened from them. The folders stay family folders, read only, for the session.
      */
-    func clearFamily(_ groupId: String, roots: [String], details: Bool) {
+    func clearFamily(_ groupId: String, roots: [String], details: Bool, problem: FolderProblem = .family(FamilyWords.openAgain)) {
         let areas = Set(familyAreaGroups.filter { $0.value == groupId }.map(\.key))
         guard !areas.isEmpty else { return }
         var ids: Set<String> = []
+        var folderIds = Set(roots)
         for (folderId, items) in folders {
             let family = items.filter { areas.contains($0.node.workspaceId.lowercased()) }
             ids.formUnion(family.map(\.id))
-            if !family.isEmpty { ids.insert(folderId) }
+            folderIds.formUnion(family.filter(\.isFolder).map(\.id))
+            if !family.isEmpty { ids.insert(folderId); folderIds.insert(folderId) }
         }
         ids.formUnion(roots)
+        // Folders an earlier clear already dropped (a refusal, a fork) are still this family's, and are said anew.
+        let cleared = familyFolders.filter { $0.value == groupId }.map(\.key)
+        folderIds.formUnion(cleared)
+        ids.formUnion(cleared)
+        // Their rows go below; which family each folder was in stays, for the removal to stay said on a
+        // refresh. Folders only: a file kept here would be asked for as a folder by every later recovery.
+        for id in folderIds { familyFolders[id.lowercased()] = groupId }
         for id in ids {
             folders[id] = nil
             // Said in the folder's place, never as an empty folder.
-            folderProblems[id] = .family(FamilyWords.openAgain)
+            folderProblems[id] = problem
             names[id] = nil
             thumbnails[id] = nil
-            try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("opened/\(id)", isDirectory: true))
+            try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("opened/own/\(id)", isDirectory: true))
         }
-        for (ref, _) in familyVerdicts where areas.contains(ref.workspaceId) { familyVerdicts[ref] = nil }
+        // Every opened copy of the family's folders, those this session never listed included: never once this session ended.
+        TemporaryCopies.forgetFamily(Array(areas), session: vault.copySession)
+        // A listing of its folders that is out now never undoes this clear.
+        familyListings.cleared(groupId)
+        familyBook.moved(groupId)
         familyShown[groupId] = nil
         if details { familyDetails[groupId] = nil }
     }
 
     /* Which family a folder on screen belongs to: a top folder by route 25, anything else by its workspace. */
     func familyGroup(ofFolder id: String) -> String? {
-        if let group = familyRoots[id.lowercased()] { return group }
+        if let group = familyRoots[id.lowercased()] ?? familyFolders[id.lowercased()] { return group }
         return known(id).flatMap { familyAreaGroups[$0.node.workspaceId.lowercased()] }
     }
 
-    /* A family folder on screen checks its family again when the last check is older than `maxAge`. */
-    func refreshFamilyIfStale(folder id: String, maxAge: TimeInterval) async {
-        guard let groupId = familyGroup(ofFolder: id), let summary = familyList?.first(where: { $0.id == groupId }) else { return }
-        if let at = familyCheckedAt[groupId], Date().timeIntervalSince(at) < maxAge { return }
-        await refreshFamily(summary)
+    /* A folder listed, and the folders in it, kept against their family for the session (see `familyFolders`). */
+    func noteFamilyFolders(_ id: String, children: [Opened]) {
+        if let groupId = familyGroup(ofFolder: id) { familyFolders[id.lowercased()] = groupId }
+        for child in children where child.node.isFolder {
+            if let groupId = familyAreaGroups[child.node.workspaceId.lowercased()] { familyFolders[child.id.lowercased()] = groupId }
+        }
     }
 
-    /* Try again on a family folder that couldn't be opened: the family checked again, then the folder. */
+    /* A family folder on screen checks its family again when the last check is older than `maxAge`. */
+    func refreshFamilyIfStale(folder id: String, maxAge: TimeInterval, session: Session? = nil) async {
+        guard let groupId = familyGroup(ofFolder: id), let summary = familyList?.first(where: { $0.id == groupId }) else { return }
+        if let at = familyCheckedAt[groupId], Date().timeIntervalSince(at) < maxAge { return }
+        await refreshFamily(summary, session: session)
+    }
+
+    /* Check it's <name> for someone in a family, as its page opens it (Info's "Added by" on a first-seen writer). */
+    struct FamilyMemberCheck: Identifiable {
+        let check: MemberCheck
+        let summary: GroupSummary
+        let me: String
+        let organizer: String?
+        var id: String { check.id }
+    }
+
+    /* Nil when they aren't in the family's accepted member list now, or the family isn't listed: their own check instead. */
+    func memberCheck(groupId: String, userId: String) -> FamilyMemberCheck? {
+        guard let summary = familyList?.first(where: { $0.id == groupId }) else { return nil }
+        let view: FamilyView? = if case .accepted(let accepted)? = familyStates[groupId] { accepted } else { familyShown[groupId] }
+        guard let view, view.members.contains(where: { $0.userId.lowercased() == userId.lowercased() }) else { return nil }
+        let me = vault.api.session.userId.lowercased()
+        let named = familyDetails[groupId]?.members.filter { $0.state == "active" } ?? []
+        func served(_ id: String) -> GroupDetail.Member? { named.first { $0.userId.lowercased() == id.lowercased() } }
+        let who = served(userId)
+        let organizer = view.members.first { $0.roles.contains("billing") && $0.userId.lowercased() != me }.flatMap { served($0.userId) }.map { HushOS.firstName($0.name) }
+        return FamilyMemberCheck(check: MemberCheck(member: FamilyMemberRef(userId: userId, email: who?.email ?? "", name: who?.name ?? "Someone"), personal: false),
+                                 summary: summary, me: served(me).map { HushOS.firstName($0.name) } ?? "you", organizer: organizer)
+    }
+
+    /* Try again on a family folder that couldn't be opened: the family checked again, then the folder, in one session. */
     func reopenFamilyFolder(_ id: String) async {
+        guard let session = beginSession() else { return }
         if let groupId = familyGroup(ofFolder: id), let summary = familyList?.first(where: { $0.id == groupId }) {
-            await refreshFamily(summary)
+            await refreshFamily(summary, session: session)
         }
-        await refresh(folder: id)
+        guard current(session) else { return }
+        await refresh(folder: id, session: session)
     }
 
     /* How a member reads in a list: the roles in words, never colour alone (the web's rolesLine). */
@@ -279,21 +540,27 @@ private struct FamilyRow: View {
     }
 }
 
-/* The hard warning: the family's member list was shown differently to this person, with what each side was. */
+/*
+ * The hard warning (docs/optional-verification.md 6.11, the web's ForkAlert): the family's member
+ * list was shown differently to this person. Calm words in the warning colours, never the danger
+ * ones, with both sides under Technical details.
+ */
 struct FamilyForkSection: View {
     let name: String
     let fork: FamilyFork
+    /* The organizer's first name, when it is someone else: who to tell. */
+    var organizer: String? = nil
 
     var body: some View {
         Section {
             VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                Label("\(name)’s member list was shown differently to you", systemImage: "exclamationmark.triangle.fill")
-                    .font(Theme.Text.headline).foregroundStyle(Alpine.danger)
-                Text("This device won’t change anything in \(name) until it’s sorted. Tell the other members, and don’t use this family until you’ve sorted it out together.")
+                Label("\(name) looks different on this device", systemImage: "exclamationmark.triangle")
+                    .font(Theme.Text.headline).foregroundStyle(Alpine.warning)
+                Text("HushOS has paused changes to the family here. Let \(organizer ?? "the others") know, and check each other from the family page.")
                     .font(Theme.Text.callout).foregroundStyle(Alpine.ink)
             }
             .padding(.vertical, Alpine.Space.s1)
-            .listRowBackground(Alpine.dangerSoft)
+            .listRowBackground(Alpine.warningSoft)
             DisclosureGroup("Technical details") {
                 fact(fork.memberList ? "Member list version" : "Family key version", String(fork.version))
                 ForEach(fork.sides, id: \.digest) { side in
@@ -304,7 +571,7 @@ struct FamilyForkSection: View {
                 }
             }
             .tint(Alpine.ink)
-            .listRowBackground(Alpine.dangerSoft)
+            .listRowBackground(Alpine.warningSoft)
         }
     }
 
@@ -347,7 +614,8 @@ struct FamilyPage: View {
     let groupId: String
 
     private var summary: GroupSummary? { store.familyList?.first { $0.id == groupId } }
-    private var name: String { summary?.name ?? "Family" }
+    /* Its name as route 2 last named it: a family it no longer lists (a removal) keeps its name on the page that says so. */
+    private var name: String { summary?.name ?? store.familyNames[groupId] ?? "Family" }
     private var state: FamilyState? { store.familyStates[groupId] }
     private var view: Accepted? {
         if case .accepted(let view) = state { return view }
@@ -360,12 +628,34 @@ struct FamilyPage: View {
 
     private var joining: Bool { state == .waiting || state == .unchecked }
 
+    /* Who this person checked in the family, on this phone (3.8), as read for one member list and trust load: nil until read, or when it couldn't be (no labels then). */
+    @State private var labels: MemberLabels?
+    /* Whom this person's family check was with: their own words check them once their keys changed since (6.10). */
+    @State private var checkedWith: String?
+    /* Moved after every check, so the labels are read again. */
+    @State private var checks = 0
+    @State private var checking: MemberCheck?
+    /* "Waiting for Sam" while the join below waits: the page's title, as the web's. */
+    @State private var waitTitle: String?
+
+    private var me: String { store.vault.api.session.userId.lowercased() }
+    private var named: [GroupDetail.Member] { store.familyDetails[groupId]?.members.filter { $0.state == "active" } ?? [] }
+
+    private func served(_ userId: String) -> GroupDetail.Member? { named.first { $0.userId.lowercased() == userId.lowercased() } }
+
+    /* The organizer's first name, when it is someone else. */
+    private var organizer: String? {
+        guard let view, let entry = view.members.first(where: { $0.roles.contains("billing") && $0.userId.lowercased() != me }),
+              let member = served(entry.userId) else { return nil }
+        return firstName(member.name)
+    }
+
     var body: some View {
         List {
             if joining {
                 // Accepted but not let in, or let in with nothing on this phone or account checking the family yet:
                 // the join screen is where that goes on (the web's family page redirects to it too).
-                JoinSections(groupId: groupId, family: name)
+                JoinSections(groupId: groupId, family: name, title: { waitTitle = $0 })
             } else if let view {
                 alerts
                 folders(view)
@@ -381,20 +671,43 @@ struct FamilyPage: View {
         .listStyle(.insetGrouped)
         .alpineGrouped()
         .listSectionSpacing(Alpine.Space.s4)
-        .screenChrome(title: joining ? "Join \(name)" : name)
+        .screenChrome(title: joining ? (waitTitle ?? "Join \(name)") : name)
         .refreshable { await store.refreshFamilies(force: true) }
         .task {
             if store.familyList == nil { await store.refreshFamilies() } else if let summary { await store.refreshFamily(summary) }
+        }
+        // The labels are read again after every finished check of the family (pull to refresh included), every trust
+        // reload and every check made here: a pin changed on another device never leaves someone shown Verified.
+        .task(id: "\(view?.rosterDigest ?? "")-\(checks)-\(store.familyRefreshed[groupId] ?? 0)-\(store.trustGeneration)") {
+            guard let view else { return }
+            let trust = store.trustGeneration
+            let groupId = groupId
+            guard let session = store.beginSession() else { return }
+            let read = (try? await store.inFamily(session, { try await $0.memberStandings(view) })).map { MemberLabels($0, of: view, trust: trust) }
+            let with = (try? await store.inFamily(session, { await $0.checkedFamilyWith(groupId) })) ?? nil
+            // A newer read began (the list, a check or trust moved) or the session ended: an older read never lands last.
+            guard !Task.isCancelled, store.current(session) else { return }
+            labels = read
+            checkedWith = with
+        }
+        .sheet(item: $checking) { check in
+            if let summary {
+                MemberCheckSheet(check: check, summary: summary, me: served(me).map { HushOS.firstName($0.name) } ?? "you", organizer: organizer,
+                                 checked: { checks += 1; Task { await store.refreshSigners(); await store.rejudgeFamilies(groupId) } },
+                                 done: { checking = nil })
+                    .environment(store)
+            }
         }
     }
 
     @ViewBuilder private var alerts: some View {
         switch state {
         case .fork(let fork):
-            FamilyForkSection(name: name, fork: fork)
+            FamilyForkSection(name: name, fork: fork, organizer: organizer)
         case .failed(let message):
             notice(title: "Couldn’t check \(name)", message: message, danger: false) {
-                Button("Try again") { Task { if let summary { await store.refreshFamily(summary) } } }
+                // A family route 2 no longer lists (a removal that couldn't be saved yet) is asked about by listing again.
+                Button("Try again") { Task { if let summary { await store.refreshFamily(summary) } else { await store.refreshFamilies(force: true) } } }
                     .font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
             }
         case .wiped:
@@ -404,11 +717,13 @@ struct FamilyPage: View {
             EmptyView()
         case .accepted(let view):
             if view.ownEntryWrong {
-                notice(title: "Your entry in \(name)’s member list isn’t your keys", message: "Ask someone who manages the family to check your words again.", danger: true) { EmptyView() }
+                // The web's words (family-page.tsx), in the warning colours.
+                notice(title: "\(name) has your account wrong on this device", message: "Ask someone who manages the family to check it’s you, from the family’s page.",
+                       danger: false) { EmptyView() }
             }
             if !view.ownEntryWrong && view.ownEntryBehind {
                 Section {
-                    Text("\(name)’s member list still has your previous keys. A manager’s device updates it the next time they open the family.")
+                    Text("\(name) still has your account as it was before you updated it. A manager’s device catches up the next time they open the family.")
                         .font(Theme.Text.callout).foregroundStyle(Alpine.ink).listRowBackground(Alpine.tint)
                 }
             }
@@ -478,33 +793,62 @@ struct FamilyPage: View {
     }
 
     @ViewBuilder private func members(_ view: Accepted) -> some View {
-        let named = store.familyDetails[groupId]?.members.filter { $0.state == "active" } ?? []
-        let me = store.vault.api.session.userId.lowercased()
         Section {
             // The member list this phone accepted says who is in the family and with what roles; route 3 gives the names.
             ForEach(view.members) { member in
-                let served = named.first { $0.userId.lowercased() == member.userId.lowercased() }
-                let you = member.userId.lowercased() == me
-                let name = served?.name ?? "Someone"
-                HStack(spacing: Alpine.Space.s3) {
-                    PersonAvatar(name: name, seed: member.userId)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(you ? "\(name) (you)" : name).foregroundStyle(Alpine.ink).lineLimit(1)
-                        if let email = served?.email, !email.isEmpty {
-                            Text(email).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
+                if member.userId.lowercased() == me {
+                    memberRow(member, you: true).alpineRow()
+                } else {
+                    let standing = label(member, in: view)
+                    let who = served(member.userId)
+                    let ref = FamilyMemberRef(userId: member.userId, email: who?.email ?? "", name: who?.name ?? "Someone")
+                    Menu {
+                        Button(standing == .verified ? "Check again" : "Check it’s \(firstName(ref.name))", systemImage: "checkmark.shield") {
+                            // An account that changed, or a family check over keys that changed since: their own twelve words (6.10).
+                            let personal = standing == .changed || (checkedWith?.lowercased() == member.userId.lowercased() && standing != .verified)
+                            checking = MemberCheck(member: ref, personal: personal)
                         }
-                        Text(DriveStore.rolesLine(member.roles)).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                        .disabled(ref.email.isEmpty)
+                    } label: {
+                        memberRow(member, you: false)
                     }
-                    Spacer(minLength: 0)
+                    .accessibilityLabel("More for \(ref.name)")
+                    .alpineRow()
                 }
-                .padding(.vertical, Alpine.Space.s1)
-                .frame(minHeight: Theme.row)
-                .accessibilityElement(children: .combine)
-                .alpineRow()
             }
         } header: {
             Text("Members").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
         }
+    }
+
+    /* A member's label as the list on screen and the trust loaded now stand: none while it is read again (MemberLabels). */
+    private func label(_ member: FamilyMember, in view: Accepted) -> MemberStanding? {
+        labels?.label(of: member, in: view, trust: store.trustGeneration)
+    }
+
+    private func memberRow(_ member: FamilyMember, you: Bool) -> some View {
+        let served = served(member.userId)
+        let name = served?.name ?? "Someone"
+        let standing = view.flatMap { label(member, in: $0) }
+        return HStack(spacing: Alpine.Space.s3) {
+            PersonAvatar(name: name, seed: member.userId)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(you ? "\(name) (you)" : name).foregroundStyle(Alpine.ink).lineLimit(1)
+                if let email = served?.email, !email.isEmpty {
+                    Text(email).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).lineLimit(1)
+                }
+                Text(DriveStore.rolesLine(member.roles)).font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                if standing == .changed {
+                    Text("Account changed").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+                }
+            }
+            Spacer(minLength: 0)
+            if !you, let standing, standing != .changed { VerifiedLabel(verified: standing == .verified) }
+        }
+        .padding(.vertical, Alpine.Space.s1)
+        .frame(minHeight: Theme.row)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
     }
 
     private func technical(_ view: Accepted) -> some View {

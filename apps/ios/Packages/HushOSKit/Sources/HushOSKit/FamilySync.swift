@@ -57,6 +57,8 @@ public struct FamilyArea: Sendable, Equatable, Identifiable {
 public struct FamilyMember: Sendable, Equatable, Identifiable {
     public let userId: String
     public let roles: [String]
+    /* The key commitment of their entry's four keys (the web's entryCommitment); nil when it makes none. */
+    public var commitment: String? = nil
     public var id: String { userId }
 }
 
@@ -140,12 +142,14 @@ public struct FamilyVerdict: Sendable, Equatable {
     public let writtenBy: String?
     public let replacedBy: [String]
     public let verifiedBy: String?
+    /* Who wrote it, when nobody checked them (a family taken on first use) and no mark speaks instead: Info's "Added by". */
+    public var seen: FamilySeen? = nil
 
     public var provenance: Provenance? { mark.map { .family($0) } }
 
     public static func == (a: FamilyVerdict, b: FamilyVerdict) -> Bool {
         a.mark == b.mark && a.changedBy?.label == b.changedBy?.label && a.changedBy?.words == b.changedBy?.words
-            && a.writtenBy == b.writtenBy && a.replacedBy == b.replacedBy && a.verifiedBy == b.verifiedBy
+            && a.writtenBy == b.writtenBy && a.replacedBy == b.replacedBy && a.verifiedBy == b.verifiedBy && a.seen == b.seen
     }
 
     /* Everything unchecked: whom to judge by didn't load. */
@@ -153,6 +157,17 @@ public struct FamilyVerdict: Sendable, Equatable {
         mark: FamilyMark(label: "Couldn’t check", lines: [FamilyLines.couldntCheck], danger: false, retry: true, check: nil),
         changedBy: ("Changed by", "Not checked"), writtenBy: nil, replacedBy: [], verifiedBy: nil
     )
+}
+
+/*
+ * Who wrote a family item whose writer nobody checked (2.6, first use): Info's "Added by <name>"
+ * with "Not verified · Check it's <first name>", as personal files say it. The account id picks
+ * the check: the family's member check for a member, the person's own otherwise.
+ */
+public struct FamilySeen: Sendable, Equatable {
+    public let name: String
+    public let userId: String
+    public let email: String?
 }
 
 struct FamilyFailure: Error, LocalizedError, Equatable {
@@ -180,19 +195,49 @@ public actor FamilySync: FamilyJudge {
     private var areasOf: [String: [String]] = [:]
     /* Every family folder this process learned of, to its family: never forgotten in a session (a wipe or fork keeps it a family folder). */
     private var groupsOf: [String: String] = [:]
-    /* Families whose kept join escalation went into this sync's ledger (FamilyJoin): once per ledger, before anything is shown. */
-    var restoredHolds: Set<String> = []
+    /* Families route 2 stopped listing that this session wiped on the server's not-member: not asked about again unless listed again. */
+    private var settledUnlisted: Set<String> = []
+    /* A 401 a sync met, until the app takes it (takeEnded). */
+    private var endedBy: (any Error)?
+    /*
+     * Whether this person vouched for each family (Settings.familyChecked), read after every
+     * accepted sync: until it is, a family reads as first use (an under-claim, never an over-claim).
+     */
+    var vouched: [String: Bool] = [:]
+    /* Each family's chain as this process last committed it. */
+    private var chains: [String: AcceptedRosters] = [:]
+    /* Families whose last refusal was a fork (lowercase): a later refusal keeps the core's fork. A commit clears it. */
+    private var forked: Set<String> = []
+    /* Families accepted in this process and not refused, forked or wiped since (lowercase): whose proven folders' copies may stay. */
+    private var acceptedFamilies: Set<String> = []
 
-    public init(vault: Vault, api: GroupsAPI? = nil, records: FamilyRecords = .shared, now: @escaping @Sendable () -> Date = { Date() }) {
+    public init(vault: Vault, api: GroupsAPI? = nil, records: FamilyRecords = .shared, now: @escaping @Sendable () -> Date = { Date() },
+                temporary: URL = FileManager.default.temporaryDirectory) {
         self.vault = vault
         self.api = api ?? GroupsAPI(drive: vault.api)
-        self.records = records
+        // Kept to its vault's session, never the one open as it is made: a sync made late for a replaced vault
+        // deletes and writes no record or copy, its first sweep included, since those there now are the next session's.
+        let session = vault.copySession
+        self.session = session
+        self.records = records.bound(to: session)
+        // The families start with nothing proven: every family copy goes before any family download (sweepCopies).
+        TemporaryCopies.sweepFamily(keeping: [], in: temporary, session: session)
         self.now = now
+        self.temporary = temporary
     }
 
-    /* One per session in this process: the app's screens and any background task share it. */
+    /* This process's temporary folder, where opened copies of family items are kept (TemporaryCopies.openedFolder). */
+    let temporary: URL
+    /* The session this sync belongs to (CopySession): its cleanup and record writes do nothing once it ended. */
+    public nonisolated let session: CopySession
+
+    /*
+     * One per session in this process: the app's screens and any background task share it. None
+     * for a vault whose session ended or that a later vault replaced (a family request of the last
+     * session that runs after a sign-in): it would take the new session's place.
+     */
     private static let registry = Registry()
-    public static func shared(for vault: Vault) -> FamilySync { registry.sync(for: vault) }
+    public static func shared(for vault: Vault) -> FamilySync? { registry.sync(for: vault) }
 
     /*
      * Sign-out (and deletion, and a removed device): the session's sync goes, the ledger it held is
@@ -207,9 +252,13 @@ public actor FamilySync: FamilyJudge {
         private let lock = NSLock()
         private weak var vault: Vault?
         private var current: FamilySync?
-        func sync(for vault: Vault) -> FamilySync {
+        /* The latest vault a sync was made for (Vault.serial): an earlier one is replaced, whether its sync is held or not. */
+        private var latest: UInt64 = 0
+        func sync(for vault: Vault) -> FamilySync? {
             lock.withLock {
-                if let current, self.vault === vault { return current }
+                if let current, self.vault === vault, vault.copySession.stands { return current }
+                guard vault.serial >= latest, vault.copySession.stands else { return nil }
+                latest = vault.serial
                 let made = FamilySync(vault: vault)
                 self.vault = vault
                 current = made
@@ -244,7 +293,8 @@ public actor FamilySync: FamilyJudge {
      * already accepted it. Throws the family's words when it isn't accepted.
      */
     public func ensureOpen(_ groupId: String) async throws {
-        if areasOf[groupId] != nil, ledger.isArea(workspaceId: areasOf[groupId]?.first ?? "") { return }
+        // Accepted in this process and not refused since (a refusal drops the chain): open already.
+        if chains[groupId] != nil, areasOf[groupId] != nil, ledger.isArea(workspaceId: areasOf[groupId]?.first ?? "") { return }
         let summary: GroupSummary
         if let known = summaries[groupId] { summary = known } else {
             let listed: [GroupSummary]
@@ -264,6 +314,81 @@ public actor FamilySync: FamilyJudge {
         case .wiped: throw FamilyFailure.notInFamily
         default: throw FamilyFailure(message: FamilyWords.openAgain)
         }
+    }
+
+    /*
+     * Families this phone holds (a device record, or a chain accepted this session) that route 2 no
+     * longer lists: each asked about once (route 5 from the record's version). Only the server's
+     * 404 `not-member` wipes one, as any sync's does (`wipe`); a family still served (route 2 caught
+     * between two states) or no answer at all changes nothing. A list that didn't load never reaches
+     * here: nothing is unlisted without one. The wiped families, by id; and those the server said
+     * not-member of whose wipe couldn't store the guard it hands back (`failed`, with the words to
+     * show, as a sync's failed wipe says them): kept, with their device record, and asked again.
+     */
+    public func listReconciling() async throws -> (listed: [GroupSummary], removed: [String], failed: [String: String]) {
+        // Route 2 first: when it doesn't load, nothing is unlisted and nothing is asked about.
+        let listed = try await list()
+        let (removed, failed) = await reconcile(listed: listed)
+        return (listed, removed, failed)
+    }
+
+    func reconcile(listed: [GroupSummary]) async -> (removed: [String], failed: [String: String]) {
+        let shown = Set(listed.map { $0.id.lowercased() })
+        settledUnlisted.subtract(shown)
+        var held = Set(records.groups(userId: userId))
+        held.formUnion(groupsOf.values.map { $0.lowercased() })
+        held.subtract(settledUnlisted)
+        var wiped: [String] = []
+        var failed: [String: String] = [:]
+        for groupId in held.subtracting(shown).sorted() where FamilyRecords.valid(groupId) {
+            switch await checkUnlisted(groupId) {
+            case .kept: break
+            case .wiped: wiped.append(groupId)
+            case .failed(let words): failed[groupId] = words
+            }
+        }
+        return (wiped, failed)
+    }
+
+    private enum Unlisted: Sendable { case kept, wiped, failed(String) }
+
+    /* One family route 2 stopped listing, asked about in its own turn. */
+    private func checkUnlisted(_ groupId: String) async -> Unlisted {
+        await exclusive(groupId) { await self.askUnlisted(groupId) }
+    }
+
+    private func askUnlisted(_ groupId: String) async -> Unlisted {
+        let after = Int(records.read(userId: userId, groupId: groupId)?.rosterVersion ?? 0)
+        do {
+            _ = try await api.rosters(groupId, after: after)
+            // Still served: a list caught mid-change, never a removal.
+            return .kept
+        } catch let error as GroupsAPIError where error.isNotMember {
+            do {
+                try await wipe(groupId)
+            } catch {
+                // The guard the wipe hands back couldn't be stored (or read): nothing of the family was let go of, and
+                // nothing of it opens here; said as a sync's failed wipe is, and asked again on the next pass.
+                await refuse(groupId)
+                return .failed(FamilyWords.error(error))
+            }
+            forgetSession(groupId)
+            return .wiped
+        } catch {
+            // No answer, a 5xx, any other refusal: nothing is taken away.
+            return .kept
+        }
+    }
+
+    /*
+     * A wiped family's place in route 2 goes with it, and it isn't asked about again this session
+     * unless route 2 lists it again. Its folders stay family folders (`groupsOf`): never opened under
+     * a personal key, whatever a server says later.
+     */
+    private func forgetSession(_ groupId: String) {
+        summaries[groupId] = nil
+        families[groupId] = nil
+        settledUnlisted.insert(groupId.lowercased())
     }
 
     /* Route 3 as the last sync read it: who is in the family, named by the server. */
@@ -286,18 +411,37 @@ public actor FamilySync: FamilyJudge {
     /* Folders route 25 named for the family and derived under it: family folders for the rest of the session. */
     private func note(_ areas: [String], of groupId: String) async {
         for area in areas { groupsOf[area.lowercased()] = groupId }
-        await vault.noteFamilyWorkspaces(areas)
+        await vault.noteFamilyWorkspaces(areas, of: groupId)
     }
 
     /* One family synced, after any sync of it already running. */
-    public func sync(_ summary: GroupSummary) async -> FamilyState {
+    public func sync(_ summary: GroupSummary) async -> FamilyState { await syncRevised(summary).state }
+
+    /* A sync's outcome and the revision it ran at (`FamilySync.revise`), for the screens to order answers by. */
+    public struct Revised: Sendable {
+        public let state: FamilyState
+        public let revision: UInt64
+    }
+
+    /*
+     * Revisions for every family, taken inside the family's turn as an answer is settled: a later
+     * revision is a later look at the family, whenever it was asked for. Process-wide, so what
+     * publishes without one (a join, a removal the list found) can take the latest.
+     */
+    private static let revisions = OSAllocatedUnfairLock(initialState: UInt64(0))
+    static func revise() -> UInt64 { revisions.withLock { $0 += 1; return $0 } }
+    /* The last revision given out: an answer taken at or before it is no later than now. */
+    public static func latestRevision() -> UInt64 { revisions.withLock { $0 } }
+
+    /* A sync with the revision it ran at: taken inside the family's turn, after the sync settled. */
+    public func syncRevised(_ summary: GroupSummary) async -> Revised {
         families[summary.id] = summary.name
         summaries[summary.id] = summary
         // The vault asks this sync how family records are signed again (FamilyJudge).
         await vault.useFamilyJudge(self)
         running[summary.id, default: 0] += 1
         defer { running[summary.id, default: 1] -= 1 }
-        return await exclusive(summary.id) { await self.run(summary) }
+        return await exclusive(summary.id) { Revised(state: await self.run(summary), revision: Self.revise()) }
     }
 
     /* `body` once every earlier piece of work on the family has finished, and before any queued after it. */
@@ -325,7 +469,7 @@ public actor FamilySync: FamilyJudge {
         // Accepted but not let in: the join flow's (iOS 3), never a sync's. Nothing of the family stays open meanwhile.
         // A record on this device means the join finished (a list read before it, still saying `accepted`): synced as a member.
         if summary.state == "accepted" && records.read(userId: userId, groupId: groupId) == nil {
-            await vault.forgetWorkspaces(knownAreas(groupId))
+            await refuse(groupId)
             return .waiting
         }
         do {
@@ -334,10 +478,10 @@ public actor FamilySync: FamilyJudge {
             for _ in 0 ..< 2 {
                 switch try await accept(groupId) {
                 case .unchecked:
-                    await vault.forgetWorkspaces(knownAreas(groupId))
+                    await refuse(groupId)
                     return .unchecked
                 case .fork(let fork):
-                    await vault.forgetWorkspaces(knownAreas(groupId))
+                    await refuse(groupId, fork: true)
                     return .fork(fork)
                 case .recordReset:
                     reset = true
@@ -348,12 +492,21 @@ public actor FamilySync: FamilyJudge {
             }
             throw FamilyFailure(message: "This device’s saved check of the family could not be opened.")
         } catch let error as GroupsAPIError where error.isNotMember {
-            await wipe(groupId)
+            do {
+                try await wipe(groupId)
+            } catch {
+                // The guard the wipe hands back couldn't be stored (or read): nothing of the family was let go of, but
+                // nothing of it opens either.
+                await refuse(groupId)
+                return .failed(FamilyWords.error(error))
+            }
             return .wiped
         } catch {
             // Refused (a rollback, a race that kept losing, keys that didn't check): the ledger kept nothing of this run, and
             // nothing of the family stays open here. No answer at all leaves what was opened before as it was.
-            if !Self.unanswered(error) { await vault.forgetWorkspaces(knownAreas(groupId)) }
+            if !Self.unanswered(error) { await refuse(groupId) }
+            // A 401: kept for the app (takeEnded), which asks whether the session ended.
+            if endsSession(error) { endedBy = error }
             return .failed(FamilyWords.error(error))
         }
     }
@@ -365,20 +518,151 @@ public actor FamilySync: FamilyJudge {
      */
     func afterAcceptance(_ groupId: String, chain: AcceptedRosters, pin: GroupPin, reset: Bool) async throws -> FamilyState {
         let areas = try await openAreas(groupId, chain: chain)
-        switch try await settle(groupId, pin: pin, opened: areas.compactMap(\.pinArea)) {
+        switch try await settle(groupId, pin: pin, checked: chain.checked(), opened: areas.compactMap(\.pinArea)) {
         case .fork(let fork):
-            await vault.forgetWorkspaces(knownAreas(groupId))
+            await refuse(groupId, fork: true)
             return .fork(fork)
         case .settled(let latest):
-            if let detail = try? await api.group(groupId) { details[groupId] = detail }
+            // The family's details are a nicety: going without them is fine, but not-member means the family went (the wipe)
+            // and a 401 that the session may have ended (handed on).
+            do {
+                details[groupId] = try await api.group(groupId)
+            } catch let error as GroupsAPIError where error.isNotMember {
+                throw error
+            } catch where endsSession(error) {
+                throw error
+            } catch {}
+            // Read with the settings the pin was just saved into: Verified by the family only when this person vouched for it.
+            vouched[groupId] = (try? await vault.familyChecked(groupId)) ?? false
             return .accepted(view(groupId, chain: latest ?? chain, areas: areas.map(\.area), reset: reset))
         }
     }
 
+    /* Whether this person vouched for the family, as the last accepted sync read it (false until one did). */
+    public func familyChecked(_ groupId: String) -> Bool { vouched[groupId] ?? false }
+
+    /* A 401 a sync met, once, for the app to treat as any request's (the session may have ended): nil when none. */
+    public func takeEnded() -> (any Error)? {
+        defer { endedBy = nil }
+        return endedBy
+    }
+
+    /* The chain this process last accepted for the family: the pair code is worked out over it. */
+    func acceptedChain(_ groupId: String) -> AcceptedRosters? { chains[groupId] }
+
+    func noteAccepted(_ groupId: String, _ chain: AcceptedRosters) {
+        chains[groupId] = chain
+        forked.remove(groupId.lowercased())
+        acceptedFamilies.insert(groupId.lowercased())
+    }
+
+    /*
+     * The allowlist sweep (TemporaryCopies.sweepFamily): only the copies of folders proven this
+     * process to belong to a family accepted now (or shown read only after no answer) stay. Run when
+     * this sync starts, after every refusal, fork or wipe, after an unreadable record goes, and
+     * whenever a family's folders change. Nothing once this session ended.
+     */
+    func sweepCopies() {
+        let keep = Set(groupsOf.filter { acceptedFamilies.contains($0.value.lowercased()) }.map(\.key))
+        TemporaryCopies.sweepFamily(keeping: keep, in: temporary, session: session)
+    }
+
+    /* A device record nothing opens any more: its folders' rows and keys first (the sweep takes their copies), then the record. */
+    func dropUnreadableRecord(_ groupId: String) async {
+        await vault.forgetWorkspaces(await knownAreas(groupId))
+        records.delete(userId: userId, groupId: groupId)
+        sweepCopies()
+    }
+
+    /*
+     * Refused (a settings rollback, a fork, a guard that can't be stored, an unchecked chain, keys
+     * that didn't check, a race that kept losing): the core opens and writes nothing of the family
+     * until a chain is committed again (the web's uncommit), so no listing or queued upload goes on
+     * through the chain an earlier sync committed, and nothing of it stays open here. A refusal of
+     * a family found forked keeps the fork.
+     */
+    func refuse(_ groupId: String, fork: Bool? = nil) async {
+        let key = groupId.lowercased()
+        let fork = fork ?? forked.contains(key)
+        if fork { forked.insert(key) }
+        ledger.uncommit(groupId: groupId, fork: fork)
+        chains[groupId] = nil
+        acceptedFamilies.remove(key)
+        await forgetOpened(groupId)
+        sweepCopies()
+    }
+
+    /*
+     * The server said not-member outside a sync (a member check's own read of the member list): let
+     * go of in two phases as a sync's removal is, after any sync of it; a guard the wipe can't store
+     * leaves the family refused instead.
+     */
+    func removedNow(_ groupId: String) async -> Revised {
+        await exclusive(groupId) {
+            let state: FamilyState
+            do {
+                try await self.wipe(groupId)
+                state = .wiped
+            } catch {
+                await self.refuse(groupId)
+                state = .failed(FamilyWords.error(error))
+            }
+            return Revised(state: state, revision: Self.revise())
+        }
+    }
+
     /* The family folders this process or the device record knows of. */
-    func knownAreas(_ groupId: String) -> [String] {
-        let known = groupsOf.filter { $0.value == groupId }.map(\.key)
-        return Array(Set(known + (areasOf[groupId] ?? []) + (records.read(userId: userId, groupId: groupId)?.areas ?? [])))
+    /*
+     * Everything opened of a family on this phone goes (a not-member wipe, a fork, a refusal, a
+     * guard that couldn't be stored): its rows and keys, and the plaintext copies opened from it,
+     * by every folder of it this phone knows, the device record's included, not only those this
+     * session listed.
+     */
+    func forgetOpened(_ groupId: String) async {
+        let areas = await knownAreas(groupId)
+        await vault.forgetWorkspaces(areas)
+        TemporaryCopies.forgetFamily(areas, in: temporary, session: session)
+    }
+
+    /*
+     * The family folders this process or the device record knows of, that may be let go of with the
+     * family: never one proven another family's (derived under it, seen this process) or this
+     * account's own drive, whatever a member list or a saved record names. A roster's word alone
+     * clears nothing.
+     */
+    func knownAreas(_ groupId: String) async -> [String] {
+        let key = groupId.lowercased()
+        let known = groupsOf.filter { $0.value.lowercased() == key }.map(\.key)
+        var out: [String] = []
+        // A record an earlier version wrote names folders on a member list's word alone (a received share's maybe): hints, never
+        // let go of with the family (FamilyRecords.Row.ownedAreas).
+        for area in Set((known + (areasOf[groupId] ?? []) + (records.read(userId: userId, groupId: groupId)?.ownedAreas ?? [])).map { $0.lowercased() }) {
+            if await owned(area, by: groupId) { out.append(area) }
+        }
+        return out.sorted()
+    }
+
+    /* Whether a folder may be let go of with `groupId`: never one proven another family's, never the own drive. */
+    private func owned(_ area: String, by groupId: String) async -> Bool {
+        if let owner = groupsOf[area.lowercased()], owner.lowercased() != groupId.lowercased() { return false }
+        return await vault.mayForget(area, with: groupId)
+    }
+
+    /*
+     * The folders a device record keeps after an acceptance: every one it already holds (a folder
+     * leaves the record only once its copies are forgotten, in openAreas) and those of the chain's
+     * proven this family's. Merged, never replaced: after a relaunch nothing is proven yet.
+     */
+    func keptAreas(_ groupId: String, of chainAreas: [String]) -> [String] {
+        let held = records.read(userId: userId, groupId: groupId)?.ownedAreas ?? []
+        return Array(Set((held + provenAreas(groupId, of: chainAreas)).map { $0.lowercased() })).sorted()
+    }
+
+    /* The folders a device record keeps for `groupId`: of the chain's, only those proven this family's (opened under it). */
+    func provenAreas(_ groupId: String, of chainAreas: [String]) -> [String] {
+        let key = groupId.lowercased()
+        let proven = Set(((areasOf[groupId] ?? []) + groupsOf.filter { $0.value.lowercased() == key }.map(\.key)).map { $0.lowercased() })
+        return chainAreas.filter { proven.contains($0.lowercased()) }.sorted()
     }
 
     /* A request that got no answer, the settings route's included: nothing was refused, so nothing is taken away. */
@@ -407,8 +691,11 @@ public actor FamilySync: FamilyJudge {
      * continue it fetched again from version 1 **with the same record**, so the record's own pin
      * stays a mark whatever settings the server serves. A run another acceptance overtook
      * (`Overtaken`) is read again quietly, three times; then the server is said to be serving an
-     * older member list. The record is written only from a committed acceptance, before anything
-     * else, and never over one at a later roster version.
+     * older member list. The family guard this phone holds goes in as one more mark (read afresh
+     * for every call), and the guard an acceptance hands back is stored before anything else of it
+     * (docs/optional-verification.md 2.8): a crash after it leaves the guard at or above the record,
+     * never below. The record is written only from a committed acceptance, after the guard, and
+     * never over one at a later roster version.
      */
     func accept(_ groupId: String) async throws -> Acceptance {
         var overtaken = 0
@@ -419,20 +706,45 @@ public actor FamilySync: FamilyJudge {
             let me = try await vault.ownIdentities()
             let checkedAt = Self.checkTime(now())
             var served = try await fetchServed(groupId, after: row?.rosterVersion ?? 0)
-            var answer = try ledger.acceptServed(me: me, groupId: groupId, record: row?.envelope, served: served, guard: .absent, checkedAt: checkedAt)
-            if case .fetchFromVersionOne = answer {
-                served = try await fetchServed(groupId, after: 0)
-                answer = try ledger.acceptServed(me: me, groupId: groupId, record: row?.envelope, served: served, guard: .absent, checkedAt: checkedAt)
+            // The write barrier (the web worker's guard owed): raised before the core commits, so no write into the
+            // family seals under this acceptance until its guard is stored; put back as it was if nothing commits.
+            let owedBefore = await vault.oweFamilyGuard(groupId)
+            let answer: ServedAcceptance
+            do {
+                var first = try ledger.acceptServed(me: me, groupId: groupId, record: row?.envelope, served: served,
+                                                    guard: await vault.heldFamilyGuard(groupId), checkedAt: checkedAt)
+                if case .fetchFromVersionOne = first {
+                    served = try await fetchServed(groupId, after: 0)
+                    first = try ledger.acceptServed(me: me, groupId: groupId, record: row?.envelope, served: served,
+                                                    guard: await vault.heldFamilyGuard(groupId), checkedAt: checkedAt)
+                }
+                answer = first
+            } catch {
+                if !owedBefore { await vault.familyGuardKept(groupId) }
+                throw error
             }
+            if case .accepted = answer {} else if !owedBefore { await vault.familyGuardKept(groupId) }
             switch answer {
-            case .accepted(let chain, let record, let pin, _):  // The guard (docs/optional-verification.md 2.8) is stored from PR 5.
-                let areas = Array(chain.areaKeys().keys).sorted()
-                try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: record, rosterVersion: chain.roster().rosterVersion, areas: areas))
+            case .accepted(let chain, let record, let pin, let guardPin):
+                // Its folders are held as family folders whatever follows: a guard that can't be stored refuses the family (the
+                // core then opens none of them) and the barrier holds writes into them, never taken as personal. Only for the
+                // barrier: a roster's word never makes a folder this family's to show or clear (route 25 and checkId do).
+                await vault.holdAsFamilyWorkspaces(Array(chain.areaKeys().keys), of: groupId)
+                // A guard that can't be stored stops everything of this acceptance, and the barrier stays raised until a
+                // later acceptance stores it; one with nothing new to store (the held guard covers it) releases it.
+                if let guardPin { try await vault.keepFamilyGuard(groupId, guardPin) }
+                await vault.familyGuardKept(groupId)
+                // What it held and the folders proven this family's (opened under it before): a roster's word never names
+                // another's for cleanup, and nothing it held is let go of here.
+                let areas = keptAreas(groupId, of: Array(chain.areaKeys().keys))
+                try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: record, rosterVersion: chain.roster().rosterVersion, areas: areas,
+                                                                                    areasProven: true))
+                noteAccepted(groupId, chain)
                 return .accepted(chain, pin)
             case .fork(let of, let version, let sides):
                 return .fork(Self.fork(of: of, version: version, sides: sides))
             case .recordUnreadable:
-                records.delete(userId: userId, groupId: groupId)
+                await dropUnreadableRecord(groupId)
                 return .recordReset
             case .overtaken(let split):
                 overtaken += 1
@@ -494,14 +806,43 @@ public actor FamilySync: FamilyJudge {
             guard let seed = area.idSeed else { return false }
             return (try? checkId(kind: .workspace, scopeId: groupId, seed: seed, id: area.workspaceId)) != nil
         }
+        let proven = family.map { $0.workspaceId.lowercased() }.sorted()
+        // A folder the family no longer lists (deleted elsewhere, maybe while the app was closed): its rows, keys and copies
+        // go before anything lets go of the tie between it and the family, so no plaintext of it outlives the last place a
+        // cleanup would find it. An ended session forgets nothing, and so lets go of nothing.
+        let row = records.read(userId: userId, groupId: groupId)
+        var dropped: [String] = []
+        for area in Set(((areasOf[groupId] ?? []) + (row?.ownedAreas ?? [])).map { $0.lowercased() }) where !proven.contains(area) {
+            if await owned(area, by: groupId) { dropped.append(area) }
+        }
+        var forgotten: Set<String> = []
+        if !dropped.isEmpty {
+            await vault.forgetWorkspaces(dropped)
+            if TemporaryCopies.forgetFamily(dropped, in: temporary, session: session) { forgotten = Set(dropped) }
+        }
         areasOf[groupId] = family.map(\.workspaceId)
         await note(family.map(\.workspaceId), of: groupId)
+        // The record keeps what it held and the folders proven this family's now, less those just forgotten: merged, never
+        // replaced, so a folder deleted while the app was closed is still found after a relaunch.
+        // An earlier version's record is rewritten with the proven folders alone: its other areas were a member list's word.
+        if let row {
+            let kept = Array(Set(row.ownedAreas.map { $0.lowercased() } + proven)).filter { !forgotten.contains($0) }.sorted()
+            // Passed on: folders whose ids couldn't be kept are not opened, so no copy of them is made either.
+            if kept != row.ownedAreas.map({ $0.lowercased() }).sorted() || row.areasProven != true,
+               !(try records.put(userId: userId, groupId: groupId, FamilyRecords.Row(envelope: row.envelope, rosterVersion: row.rosterVersion, areas: kept,
+                                                                                     areasProven: true))) {
+                throw FamilyRecords.RecordsError.busy
+            }
+        }
+        // The family's folders changed: only the copies of folders proven a family's accepted now stay.
+        sweepCopies()
         let served = try await fetchIdentities(groupId)
         identities[groupId] = served
         let keyVersion = try await vault.accountKeyVersion()
         var out: [OpenedFolder] = []
         for area in family {
-            var folder = OpenedFolder(area: FamilyArea(workspaceId: area.workspaceId, root: area.root, rotating: area.rotation != nil))
+            // The top folder is set only once it proved to be this area's own (below): a refused one is never handed out.
+            var folder = OpenedFolder(area: FamilyArea(workspaceId: area.workspaceId, root: nil, rotating: area.rotation != nil))
             do {
                 guard let seed = area.idSeed else {
                     out.append(folder)
@@ -551,11 +892,16 @@ public actor FamilySync: FamilyJudge {
                 folder.area.opened = true
                 folder.pinArea = opened.opened.pinArea
                 if let root = area.root {
+                    // The area's own top folder or nothing: a server naming a folder of another workspace (this account's own
+                    // drive, another family's) or one inside the area is the family's Couldn't check, never opened by its own
+                    // workspace's key path, checked before any cache is touched.
+                    guard Self.isAreaRoot(root, of: area.workspaceId) else { throw FamilyFailure(message: "Couldn’t check this folder’s keys") }
                     let item = try await vault.openListed(root)
+                    folder.area.root = root
                     folder.area.name = item.name
                     folder.area.rootListed = root.parentKeyEpoch == areaWriteVersion(chain: chain, workspaceId: area.workspaceId)
                 }
-                folder.area.write = Self.write(reason: opened.opened.reason, rootListed: folder.area.rootListed, root: area.root != nil)
+                folder.area.write = Self.write(reason: opened.opened.reason, rootListed: folder.area.rootListed, root: folder.area.root != nil)
             } catch let error as GroupsAPIError where error.isNotMember {
                 throw error
             } catch where Self.unanswered(error) {
@@ -563,12 +909,19 @@ public actor FamilySync: FamilyJudge {
                 throw error
             } catch {
                 // The row says "Couldn't check this folder's keys", as the web's does; nothing of it opens.
+                folder.area.root = nil
                 folder.area.name = nil
                 folder.area.write = .readOnly
             }
             out.append(folder)
         }
         return out
+    }
+
+    /* A family area's top folder: a folder of that very workspace, at its top (no parent, or the workspace itself). */
+    static func isAreaRoot(_ root: NodeView, of workspaceId: String) -> Bool {
+        root.workspaceId.lowercased() == workspaceId.lowercased() && root.isFolder
+            && (root.parentId == nil || root.parentId?.lowercased() == workspaceId.lowercased())
     }
 
     /* A member's identity and links as route 6 served them, by user id in any case; none when it served none. */
@@ -612,14 +965,14 @@ public actor FamilySync: FamilyJudge {
      * settings read anew, and only that acceptance's pin is saved; four tries, as the web. The
      * only `next` is an acceptance's pin; the only opened areas are the ledger's.
      */
-    func settle(_ groupId: String, pin accepted: GroupPin, opened: [OpenedArea]) async throws -> Settled {
+    func settle(_ groupId: String, pin accepted: GroupPin, checked: FamilyChecked?, opened: [OpenedArea]) async throws -> Settled {
         var pin = accepted
         var latest: AcceptedRosters?
         for _ in 0 ..< 4 {
             let current = try await vault.familyPin(groupId)
             if case .merged(let merged) = try mergePin(groupId: groupId, current: current, next: pin, opened: opened) {
                 if !pinAhead(current: current, next: merged) { return .settled(latest) }
-                if try await vault.saveGroupPin(groupId, over: current, merged) { return .settled(latest) }
+                if try await vault.saveGroupPin(groupId, over: current, merged, checked: checked, now: Self.checkTime(now())) { return .settled(latest) }
             }
             // Behind, a conflict, or a save another device won: accept again against what is stored now.
             switch try await accept(groupId) {
@@ -638,17 +991,27 @@ public actor FamilySync: FamilyJudge {
 
     /*
      * Only after a 404 `not-member`: the ledger's chain and keys, the device record and the
-     * folders opened here go. **The settings pin stays**: if the family comes back (a server
-     * that said not-member to erase a warning), it is still a mark.
+     * folders opened here go. **The settings pin and the family guard stay**: if the family comes
+     * back (a server that said not-member to erase a warning, then served settings without the pin
+     * and a fresh invitation), they are still marks, and first use is refused. Nothing goes until
+     * the core let go of the family, which waits for the guard it hands back to be stored; a guard
+     * that can't be stored or read throws, and nothing is deleted.
      */
-    func wipe(_ groupId: String) async {
-        let areas = knownAreas(groupId)
-        guard forgetInCore(groupId) else { return }
-        records.delete(userId: userId, groupId: groupId)
+    func wipe(_ groupId: String) async throws {
+        let areas = await knownAreas(groupId)
+        guard try await forgetInCore(groupId) else { return }
+        // Its folders' rows, keys and copies first, then the record that ties them to the family: a stop in between leaves
+        // the record, and the next cleanup finds them again.
         await vault.forgetWorkspaces(areas)
+        TemporaryCopies.forgetFamily(areas, in: temporary, session: session)
+        records.delete(userId: userId, groupId: groupId)
         identities[groupId] = nil
         details[groupId] = nil
         areasOf[groupId] = nil
+        chains[groupId] = nil
+        forked.remove(groupId.lowercased())
+        acceptedFamilies.remove(groupId.lowercased())
+        sweepCopies()
     }
 
     // MARK: Verdicts
@@ -656,16 +1019,22 @@ public actor FamilySync: FamilyJudge {
     /*
      * Who may have written what the family's folders hold, as the core's group verdicts take
      * them (the web's groupWriters): every member route 6 serves, each with this person's
-     * version 3 pin of them (and where it came from), and the personal keys of everyone they
-     * checked. Built from the current trust set at every judgement, so a pin saved or checked
-     * since is never judged by the one before. This account's own records go by its own keys.
+     * version 3 pin of them, verified or first-seen, and where it came from, and the personal keys
+     * of everyone they checked. A first-seen pin (let in without words) is no check of this
+     * person's own: it goes as the family's word (`trustedVia` the family), so keys the member list
+     * puts in its place are a key conflict, and what agrees with it reads as the family's word
+     * does. Built from the current trust set at every judgement, so a pin saved or checked since
+     * is never judged by the one before. This account's own records go by its own keys.
      */
-    func groupWriters(_ served: [String: MemberIdentity], signers: TrustedSigners, pins: [String: ContactPin]) -> [GroupWriter] {
+    func groupWriters(_ served: [String: MemberIdentity], signers: TrustedSigners, pins: [String: ContactPin], groupId: String) -> [GroupWriter] {
+        // `pins`: judgingPins(), never the settings' own (a pin another device saved that this phone's guard didn't accept).
         let me = userId.lowercased()
         func pinned(_ id: String) -> WriterPin? {
-            guard let pin = pins[id.lowercased()], pin.verified, let digest = pin.mlDsaPublicKeyHash else { return nil }
+            guard let pin = pins[id.lowercased()], let digest = pin.mlDsaPublicKeyHash else { return nil }
+            let trust = pin.trust
+            guard trust == .verified || trust == .seen else { return nil }
             return WriterPin(keyVersion: pin.keyVersion, encryptionPublicKey: pin.encryptionPublicKey, signingPublicKey: pin.signingPublicKey,
-                             mlDsaPublicKeyHash: digest, trustedVia: pin.trustedVia)
+                             mlDsaPublicKeyHash: digest, trustedVia: trust == .seen ? groupId : pin.trustedVia)
         }
         func personal(_ id: String) -> TrustedKeys? { id.lowercased() == me ? nil : signers.trusted(Signer(id: id)) }
         var out: [String: GroupWriter] = [:]
@@ -677,6 +1046,17 @@ public actor FamilySync: FamilyJudge {
             out[id] = GroupWriter(userId: id, pinned: pinned(id), served: nil, links: nil, personal: personal(id))
         }
         return Array(out.values)
+    }
+
+    /*
+     * The pins every judgement goes by: as this phone's contact guard allows them (Vault.effectivePins,
+     * 2.8). A pin another device saved with keys the guard doesn't hold vouches for nothing, and the
+     * guard's keys stand in (never verified), so the member list is compared with keys this phone
+     * accepted, both for an item's mark and for what a write of it is judged to be. Throws when the
+     * guard can't be read.
+     */
+    func judgingPins() async throws -> [String: ContactPin] {
+        Dictionary(try await vault.effectivePins().map { ($0.userId.lowercased(), $0) }, uniquingKeysWith: { a, _ in a })
     }
 
     /* Who lines can name: this account, its checked contacts, pins on a family's word, and route 3's members (D10). */
@@ -698,17 +1078,19 @@ public actor FamilySync: FamilyJudge {
      * (FamilyLines). Without the writers or the reader every record is "Couldn't check", never clean.
      */
     public func verdicts(of nodes: [NodeView], groupId: String) async -> [FamilyVerdict] {
-        guard let served = identities[groupId], let signers = try? await vault.signers(), let reader = try? await reader() else {
+        guard let served = identities[groupId], let signers = try? await vault.signers(), let reader = try? await reader(),
+              let pins = try? await judgingPins() else {
             return nodes.map { _ in .unchecked }
         }
-        let pins = await vault.knownPins()
-        let writers = groupWriters(served, signers: signers, pins: pins)
+        let writers = groupWriters(served, signers: signers, pins: pins, groupId: groupId)
         let names = names(groupId, pins: pins)
+        let checked = familyChecked(groupId)
         return nodes.map { node in
             var judged = [judge(Self.metadataRecord(of: node), .metadata, groupId: groupId, reader: reader, writers: writers)]
             if !node.isFolder, let current = node.currentVersion {
                 judged.append(judge(Self.versionRecord(current, of: node), .version, groupId: groupId, reader: reader, writers: writers))
             }
+            if !checked { judged = judged.map { Self.asFirstUse($0, groupId: groupId) } }
             return Self.verdict(judged, names: names, groupId: groupId)
         }
     }
@@ -732,8 +1114,8 @@ public actor FamilySync: FamilyJudge {
         }
         let signers = try await vault.signers()
         let reader = try await reader()
-        let pins = await vault.knownPins()
-        return try ledger.copyForm(groupId: groupId, reader: reader, writers: groupWriters(served, signers: signers, pins: pins), record: record, cache: nil)
+        let pins = try await judgingPins()
+        return try ledger.copyForm(groupId: groupId, reader: reader, writers: groupWriters(served, signers: signers, pins: pins, groupId: groupId), record: record, cache: nil)
     }
 
     /* The family of a folder checked again, for an upload waiting out a key change there. */
@@ -747,6 +1129,21 @@ public actor FamilySync: FamilyJudge {
         _ = await sync(summary)
     }
 
+    /*
+     * A record as this person may read it in a family taken on first use (the web's asFirstUse,
+     * docs/optional-verification.md 2.6): nobody checked the member list, so what it vouches for
+     * reads `seen`, as a first-seen contact's work does, never "Verified by" the family. A verdict
+     * from this person's own verified pin (no `via`) stays verified.
+     */
+    static func asFirstUse(_ record: FamilyJudged, groupId: String) -> FamilyJudged {
+        func seen(_ verdict: GroupVerdict, _ via: String?) -> GroupVerdict {
+            verdict == .verified && via?.lowercased() == groupId.lowercased() ? .seen : verdict
+        }
+        var note = record.note
+        if let held = note { note = RekeyNote(writer: held.writer, by: held.by, integrity: seen(held.integrity, held.via), bound: held.bound, via: held.via) }
+        return FamilyJudged(record: record.record, verdict: seen(record.verdict, record.via), via: record.via, signer: record.signer, note: note)
+    }
+
     /* The web's issues, mark and Info lines over the judged records. */
     static func verdict(_ judged: [FamilyJudged], names: FamilyNames, groupId: String) -> FamilyVerdict {
         let issues = FamilyLines.issues(judged)
@@ -756,7 +1153,8 @@ public actor FamilySync: FamilyJudge {
             changedBy: issues.first.map { (FamilyLines.changedByLabel($0), FamilyLines.changedByWords($0, names)) },
             writtenBy: issues.isEmpty ? rekeyed.writtenBy : nil,
             replacedBy: rekeyed.replacedBy,
-            verifiedBy: FamilyLines.vouched(judged, issues: issues, groupId: groupId) ? "Verified by \(names.family)" : nil
+            verifiedBy: FamilyLines.vouched(judged, issues: issues, groupId: groupId) ? "Verified by \(names.family)" : nil,
+            seen: FamilyLines.seenWriter(judged, issues: issues, names: names)
         )
     }
 
@@ -779,7 +1177,8 @@ public actor FamilySync: FamilyJudge {
         case .rekeyed(let rekeyed):
             // A re-keyed record's verdict is its origin's; its own signer is the re-keyer.
             return FamilyJudged(record: kind, verdict: rekeyed.origin.verdict, via: rekeyed.origin.via, signer: record.signer,
-                                note: RekeyNote(writer: record.rekey?.origin.signerId, by: record.signer, integrity: rekeyed.rekeyer.verdict, bound: rekeyed.bound))
+                                note: RekeyNote(writer: record.rekey?.origin.signerId, by: record.signer, integrity: rekeyed.rekeyer.verdict, bound: rekeyed.bound,
+                                                via: rekeyed.rekeyer.via))
         }
     }
 
@@ -826,10 +1225,19 @@ public actor FamilySync: FamilyJudge {
         }
         return FamilyView(
             groupId: groupId, rosterVersion: roster.rosterVersion, rosterDigest: chain.rosterDigest(), groupKeyVersion: chain.groupKeyVersion(),
-            members: roster.members.filter { $0.status == .active }.map { FamilyMember(userId: $0.userId, roles: $0.roles.map(Self.role)) },
+            members: roster.members.filter { $0.status == .active }.map {
+                FamilyMember(userId: $0.userId, roles: $0.roles.map(Self.role), commitment: Self.commitment(of: $0))
+            },
             areas: areas, recordReset: reset, ownEntryWrong: !chain.ownEntryWrongAt().isEmpty, ownEntryBehind: !chain.ownEntryBehindAt().isEmpty,
             foreign: owners.map { ForeignNotice(owner: $0.key, count: $0.value) }.sorted { ($0.owner ?? "") < ($1.owner ?? "") }
         )
+    }
+
+    /* The key commitment of an entry's four keys (the web's entryCommitment): nil for digests that don't decode. */
+    static func commitment(of entry: RosterMember) -> String? {
+        guard let mlDsa = try? digestHex(base64url: entry.mlDsaPublicKeyDigest), let kem = try? digestHex(base64url: entry.kemPublicKeyDigest) else { return nil }
+        return keyCommitment(pin: PinKeys(keyVersion: entry.keyVersion, encryptionPublicKey: entry.encryptionPublicKey, signingPublicKey: entry.signingPublicKey,
+                                          mlDsaPublicKeyHash: mlDsa, kemPublicKeyHash: kem, fingerprint: ""))
     }
 
     /* The web's names for roles (rolesLine reads `billing` and `members`). */
@@ -847,8 +1255,8 @@ public actor FamilySync: FamilyJudge {
         FamilyFork(memberList: of == .roster, version: version, sides: sides.map { side in
             FamilyFork.Side(digest: side.digest, from: side.from.map { source in
                 switch source {
-                // `.pair`: a family check in the settings (docs/optional-verification.md 3.4); its own words come with PR 5.
-                case .pin, .pair: "your account’s earlier check"
+                case .pin: "your account’s earlier check"
+                case .pair: "the family check you made"
                 case .cache: "this device’s earlier check"
                 case .join: "the join code you compared"
                 case .served: "what the server shows now"
@@ -857,28 +1265,34 @@ public actor FamilySync: FamilyJudge {
         })
     }
 
-    /* A check time as pins carry it: ISO 8601 UTC to the millisecond, as the web's toISOString. */
     /*
-     * The core lets go of a family (docs/optional-verification.md 2.8): it drops nothing while the
-     * guard it hands back is not stored, and nothing of the family is deleted here unless this says
-     * it forgot. No family guard is kept on this phone yet: PR 5 stores the guard handed back
-     * (merged into the stored one, never lower, under the account's lock) between the two calls;
-     * until then it is handed straight back, as no store could hold it.
+     * The core lets go of a family (docs/optional-verification.md 2.8), store before delete: it
+     * drops nothing while the guard this phone holds does not cover the highest chain the session
+     * accepted, and hands that guard back instead; it is stored here (merged, never lower, under the
+     * guard's lock) and the core asked again with what is stored then. Nothing of the family is
+     * deleted unless this says the core forgot it. A guard that can't be stored throws (the wipe
+     * waits, and the family says it couldn't save on this phone); one that couldn't be read over a
+     * floor throws too. A held guard that disagrees with the core's floor (GUARD_CONFLICT) or is past
+     * it (GUARD_AHEAD) is the core's refusal, thrown: nothing of the family goes. False when an
+     * acceptance landed in between every time: the wipe waits for the next answer.
      */
-    func forgetInCore(_ groupId: String) -> Bool {
+    func forgetInCore(_ groupId: String) async throws -> Bool {
         let at = Self.checkTime(now())
-        do {
-            let first = try ledger.forgetGroup(groupId: groupId, guard: .absent, checkedAt: at)
-            guard let pin = first.guard else { return true }
-            let again = try ledger.forgetGroup(groupId: groupId, guard: .held(pin: pin), checkedAt: at)
-            if again.guard != nil { familyLog.notice("A family wipe waits: an acceptance landed while it ran.") }
-            return again.guard == nil
-        } catch {
-            familyLog.error("A family wipe was refused: \(String(describing: error), privacy: .public)")
-            return false
+        for _ in 0 ..< 4 {
+            let answer = try ledger.forgetGroup(groupId: groupId, guard: await vault.heldFamilyGuard(groupId), checkedAt: at)
+            guard let pin = answer.guard else {
+                // Let go of in the core: nothing is written under its chains any more, so no guard is owed.
+                await vault.familyGuardKept(groupId)
+                return true
+            }
+            if answer.unreadable { throw GuardError.unreadable }
+            try await vault.keepFamilyGuard(groupId, pin)
         }
+        familyLog.notice("A family wipe waits: an acceptance landed while it ran.")
+        return false
     }
 
+    /* A check time as pins carry it: ISO 8601 UTC to the millisecond, as the web's toISOString. */
     static func checkTime(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

@@ -275,6 +275,8 @@ struct SendCopySheet: View {
                         try? await Task.sleep(for: .milliseconds(100))
                         if let top = TextPrompt.topController(), !top.isBeingDismissed, !top.isBeingPresented, !(top.presentingViewController != nil && top.view.window == nil) { break }
                     }
+                    // Checked again after the wait: a family let go of meanwhile took its copy with it, and nothing is handed on.
+                    guard FileManager.default.fileExists(atPath: ready.path) else { return }
                     TextPrompt.topController()?.present(UIActivityViewController(activityItems: [ready], applicationActivities: nil), animated: true)
                 }
             } catch {
@@ -386,7 +388,7 @@ struct VersionsSheet: View {
                 }
                 .environment(store)
             }
-            .task { await load() }
+            .task(id: store.sessionKey) { await load() }
         }
     }
 
@@ -473,6 +475,10 @@ struct InfoSheet: View {
     /* Set when Info sits beside the list (an inspector), which `dismiss` would not close. */
     var close: (() -> Void)? = nil
     var open: (NodeAction) -> Void = { _ in }
+    /* Check it's Maya from the Added by line, in Info's place. */
+    @State private var step: ContactStep?
+    /* The same for a family's member: the family's check, as its page opens it. */
+    @State private var familyCheck: DriveStore.FamilyMemberCheck?
 
     private func dismiss() {
         if let close { close() } else { dismissSheet() }
@@ -483,7 +489,7 @@ struct InfoSheet: View {
             List {
                 Section {} header: {
                     VStack(spacing: Alpine.Space.s2) {
-                        FileMark(item: item, box: store.thumbnails[item.id] != nil ? 120 : 88)
+                        FileMark(item: item, box: store.thumbnailData(for: item) != nil ? 120 : 88)
                         Text(item.name).font(.title3.weight(.bold)).foregroundStyle(Alpine.ink).multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
@@ -509,6 +515,8 @@ struct InfoSheet: View {
                     // Said as the rows and the web's details say it: "Today, 11:17 AM", "Yesterday", "6 Oct".
                     if let changed = changedLabel(item.modified) { fact("Changed", changed) }
                     if let created = changedLabel(parseDate(item.node.createdAt)) { fact("Added", created) }
+                    // Written by someone this person's devices first saw and nobody checked (6.4): no mark, and the way to check.
+                    if let seen = store.seenBy(of: item) { addedBy(seen) }
                     // A family folder's item: who wrote it and who vouched, as the web's Info says (details-panel.tsx).
                     if let verdict = store.familyVerdict(of: item) {
                         if verdict.mark != nil, let changed = verdict.changedBy { sentence(changed.label, value: changed.words, chevron: false).alpineRow() }
@@ -547,7 +555,16 @@ struct InfoSheet: View {
             .navigationTitle("Info")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-            .task { store.thumbnail(for: item) }
+            .contactSteps($step) { Task { await store.refreshSigners() } }
+            .sheet(item: $familyCheck) { check in
+                MemberCheckSheet(check: check.check, summary: check.summary, me: check.me, organizer: check.organizer,
+                                 checked: { Task { await store.refreshSigners(); await store.rejudgeFamilies(check.summary.id) } },
+                                 done: { familyCheck = nil })
+                    .environment(store)
+            }
+            // A mark's check started here stays up when the mark goes: Info hosts it, not the mark.
+            .contactHost(.info, store: store)
+            .task(id: "\(item.node.currentVersion?.id ?? "")-\(store.sessionKey.hashValue)") { store.thumbnail(for: item) }
         }
     }
 
@@ -605,6 +622,33 @@ struct InfoSheet: View {
             .padding(.vertical, Alpine.Space.s1)
             .contentShape(Rectangle())
         }
+    }
+
+    private func addedBy(_ seen: DriveStore.SeenWriter) -> some View {
+        // A family's member is checked as the family's page checks them; anyone else by their own words.
+        let family = seen.groupId.flatMap { store.memberCheck(groupId: $0, userId: seen.id) }
+        let pin = store.pins[seen.id.lowercased()]
+        let email = seen.email ?? pin?.email
+        return HStack(alignment: .firstTextBaseline) {
+            Text("Added by").foregroundStyle(Alpine.ink)
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(seen.shown).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.trailing)
+                HStack(spacing: 4) {
+                    Text("Not verified")
+                    if family != nil || email?.isEmpty == false {
+                        Text("·")
+                        Button("Check it’s \(firstName(seen.name))") {
+                            if let family { familyCheck = family } else if let email { step = .check(email: email, name: pin?.name ?? seen.name) }
+                        }
+                        .fontWeight(.semibold).buttonStyle(.borderless)
+                    }
+                }
+                .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
+            }
+        }
+        .padding(.vertical, Alpine.Space.s1)
+        .alpineRow()
     }
 
     private func fact(_ label: String, _ value: String) -> some View {

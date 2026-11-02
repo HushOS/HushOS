@@ -426,7 +426,7 @@ export function SelectableMark({
                 checked={checked}
                 revealed={revealed}
                 onToggle={onToggle}
-                className="-right-0.5 -bottom-0.5 size-4 ring-2 ring-card"
+                className="-right-0.5 -bottom-0.5 size-4 ring-2 ring-panel"
                 iconClassName="size-2.5"
             />
         </span>

@@ -22,6 +22,8 @@ struct FileViewer: View {
     @State private var failed = false
     @State private var attempt = 0
     @State private var action: NodeAction?
+    /* The file on screen, once a loaded listing of its folder showed it: only then can that listing say it's gone. */
+    @State private var seenListed: String?
 
     init(items: [Opened], start: Opened, version: VersionListView? = nil, versionNote: String? = nil, onRestore: (() -> Void)? = nil) {
         self.items = items.isEmpty ? [start] : items
@@ -39,6 +41,8 @@ struct FileViewer: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
         }
+        // A mark's check started in the viewer is the viewer's to show (the mark leaves once the writer is added).
+        .contactHost(.viewer, store: store)
     }
 
     /* The system's bars: Done, the name and where you are, Share and More above; who can open it and Send a copy below. */
@@ -99,14 +103,56 @@ struct FileViewer: View {
         .nodeActionSheets(action: $action, store: store, beside: false)
         // Somewhere else was asked for (a link, Info's Folder row): get out of its way.
         .onChange(of: store.route) { _, link in if link != nil { dismiss() } }
-        .task(id: "\(current.id)-\(attempt)") {
+        // Keyed on the session's vault too: a new session (the same account signed in again from Files) cancels a copy
+        // under way, and the copy starts again under the new one rather than waiting on a cancelled one.
+        .task(id: "\(current.id)-\(attempt)-\(ObjectIdentifier(store.vault).hashValue)") {
             url = nil
-            // Paged past before it came down: the next page's task is the one that counts.
-            do { url = try await store.fetch(current, version: version) } catch where !ErrorWords.isCancellation(error) { failed = true } catch {}
+            // Paged past before it came down: the next page's task is the one that counts. A newer version the vault learned
+            // comes down instead, and the viewer shows that row.
+            do { url = try await store.fetch(current, version: version, adopted: { current = $0 }) } catch where !ErrorWords.isCancellation(error) { failed = true } catch {}
         }
-        .onChange(of: store.folders[current.node.parentId ?? ""]?.contains { $0.id == current.id }) { _, here in
-            // Moved to the Trash or elsewhere from the menu: the viewer has nothing left to show.
-            if here == false, version == nil { dismiss() }
+        // A family's file that failed while its family wasn't open yet (a new session's vault, before the family is checked
+        // again): asked again once the family has been shown anew. The fetch lists the file's folder itself when the vault
+        // doesn't hold its row (Vault.holdForCopy), so the retry doesn't wait on the screens' listings.
+        .onChange(of: familyShown) { _, _ in
+            if failed { failed = false; attempt += 1 }
+        }
+        .onChange(of: listedHere, initial: true) { _, id in
+            if let id { seenListed = id }
+        }
+        .onChange(of: removed) { _, gone in
+            if gone { dismiss() }
+        }
+    }
+
+    /* How many times the file's family was shown (FamilySync's checks): nil for a file in no family. */
+    private var familyShown: Int? {
+        guard store.isFamily(current), let groupId = store.familyAreaGroups[current.node.workspaceId.lowercased()] else { return nil }
+        return store.familyRefreshed[groupId] ?? 0
+    }
+
+    /* The file on screen's id while its folder's loaded listing shows it. */
+    private var listedHere: String? {
+        guard let listed = store.folders[current.node.parentId ?? ""], listed.contains(where: { $0.id == current.id }) else { return nil }
+        return current.id
+    }
+
+    /*
+     * Whether the file on screen is confirmed gone: its folder's loaded listing showed it and a
+     * loaded listing no longer does (moved to the Trash or elsewhere from the menu), or its family was
+     * removed, forked or refused. A listing that never showed it (a folder not listed, a cached
+     * listing older than the file, paged to) says nothing, nor does a folder whose listing was merely
+     * let go of (a rotation's failure clears them), nor a family whose state isn't known yet.
+     */
+    private var removed: Bool {
+        guard version == nil else { return false }
+        if seenListed == current.id, store.folders[current.node.parentId ?? ""] != nil, listedHere == nil { return true }
+        guard store.isFamily(current), let groupId = store.familyAreaGroups[current.node.workspaceId.lowercased()],
+              let state = store.familyStates[groupId] else { return false }
+        switch state {
+        case .accepted: return false
+        case .failed(let words): return words != FamilyWords.noAnswer
+        default: return true
         }
     }
 
@@ -121,6 +167,10 @@ struct FileViewer: View {
                 // Saved from a link: where it came from, in the subtitle's place and colour.
                 Text(saved.line).font(.caption).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
+            } else if version == nil, let seen = store.seenBy(of: current) {
+                // Written by someone first seen and not checked: no mark, said in the subtitle's place (Info has the way to check).
+                // Cut in the middle, so a long address never pushes "Not verified" off the line.
+                Text("Added by \(seen.shown) · Not verified").font(.caption).foregroundStyle(Alpine.inkMuted).lineLimit(1).truncationMode(.middle)
             } else {
                 Text(subtitle).font(.caption).foregroundStyle(Alpine.inkMuted).lineLimit(1)
             }
@@ -232,8 +282,8 @@ enum Opener {
             } catch {
                 if store.offline {
                     store.notify("You’re offline. Files you keep on this phone open without a connection.")
-                } else if case DriveAPIError.notAuthenticated = error {
-                    // The session alert says it.
+                } else if store.endsThisSession(error) {
+                    // The session alert says it. (A late 401 of a session no longer in use says nothing of the one in use.)
                 } else {
                     store.notify("Couldn’t open “\(item.name)”. Check your connection and try again.")
                 }
