@@ -855,76 +855,88 @@ export function FolderView({ folderId }: { folderId: string }) {
     const [ghost, setGhost] = useState<{
         x: number;
         y: number;
-        ids: string[];
+        /* What was picked up, as it was then: a move that lands mid-animation leaves the card whole. */
+        nodes: DriveNode[];
         copy: boolean;
         /* Where the card goes on a drop: the centre of the target folder's mark. */
         landing?: { x: number; y: number };
     } | null>(null);
-    useEffect(
-        () =>
-            monitorForElements({
-                canMonitor: ({ source }) =>
-                    source.data.type === 'drive-nodes' || source.data.type === 'drive-crumb',
-                onDragStart: ({ source, location }) => {
-                    setDragging(true);
-                    setGhost({
-                        x: location.current.input.clientX,
-                        y: location.current.input.clientY,
-                        ids:
-                            source.data.type === 'drive-crumb'
-                                ? [source.data.id as string]
-                                : (source.data.ids as string[]),
-                        copy: source.data.type === 'drive-nodes' && location.current.input.altKey,
-                    });
-                },
-                onDrag: ({ source, location }) =>
-                    setGhost((current) =>
-                        current
-                            ? {
-                                  ...current,
-                                  x: location.current.input.clientX,
-                                  y: location.current.input.clientY,
-                                  copy:
-                                      source.data.type === 'drive-nodes' &&
-                                      location.current.input.altKey,
-                              }
-                            : current,
+    // The rows and crumbs as last drawn, for the monitor, which is set up once.
+    const shown = useRef<DriveNode[]>([]);
+    useEffect(() => {
+        shown.current = [...rows, ...crumbs];
+    }, [rows, crumbs]);
+    // A drop's landing, cancelled by the next drag so it never clears that one's card.
+    const landingTimer = useRef<number | undefined>(undefined);
+    useEffect(() => {
+        const stop = monitorForElements({
+            canMonitor: ({ source }) =>
+                source.data.type === 'drive-nodes' || source.data.type === 'drive-crumb',
+            onDragStart: ({ source, location }) => {
+                window.clearTimeout(landingTimer.current);
+                setDragging(true);
+                const ids =
+                    source.data.type === 'drive-crumb'
+                        ? [source.data.id as string]
+                        : (source.data.ids as string[]);
+                setGhost({
+                    x: location.current.input.clientX,
+                    y: location.current.input.clientY,
+                    nodes: shown.current.filter(
+                        (node, index, all) =>
+                            ids.includes(node.id) &&
+                            all.findIndex((other) => other.id === node.id) === index,
                     ),
-                onDrop: ({ location }) => {
-                    setDragging(false);
-                    // Dropped on a folder, the card shrinks into its mark and goes; cancelled,
-                    // or under reduced motion, it goes at once.
-                    const target = location.current.dropTargets[0]?.element;
-                    const calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-                    if (!target || calm) {
-                        setGhost(null);
-                        return;
-                    }
-                    const mark = target.querySelector('[data-row-thumb] > *') ?? target;
-                    const rect = mark.getBoundingClientRect();
-                    setGhost((current) =>
-                        current
-                            ? {
-                                  ...current,
-                                  landing: {
-                                      x: rect.left + rect.width / 2,
-                                      y: rect.top + rect.height / 2,
-                                  },
-                              }
-                            : current,
-                    );
-                    window.setTimeout(() => setGhost(null), LANDING_MS);
-                },
-            }),
-        [],
-    );
-    const ghostNodes = ghost
-        ? [...rows, ...crumbs].filter(
-              (node, index, all) =>
-                  ghost.ids.includes(node.id) &&
-                  all.findIndex((other) => other.id === node.id) === index,
-          )
-        : [];
+                    copy: source.data.type === 'drive-nodes' && location.current.input.altKey,
+                });
+            },
+            onDrag: ({ source, location }) =>
+                setGhost((current) =>
+                    current
+                        ? {
+                              ...current,
+                              x: location.current.input.clientX,
+                              y: location.current.input.clientY,
+                              copy:
+                                  source.data.type === 'drive-nodes' &&
+                                  location.current.input.altKey,
+                          }
+                        : current,
+                ),
+            onDrop: ({ location }) => {
+                setDragging(false);
+                // Dropped on a folder, the card shrinks into its mark and goes; cancelled,
+                // or under reduced motion, it goes at once.
+                const target = location.current.dropTargets[0]?.element;
+                const calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+                if (!target || calm) {
+                    setGhost(null);
+                    return;
+                }
+                // A row's mark, a tile's face, or the crumb itself.
+                const mark =
+                    target.querySelector('[data-row-thumb] > *, [data-tile-face]') ?? target;
+                const rect = mark.getBoundingClientRect();
+                setGhost((current) =>
+                    current
+                        ? {
+                              ...current,
+                              landing: {
+                                  x: rect.left + rect.width / 2,
+                                  y: rect.top + rect.height / 2,
+                              },
+                          }
+                        : current,
+                );
+                landingTimer.current = window.setTimeout(() => setGhost(null), LANDING_MS);
+            },
+        });
+        return () => {
+            stop();
+            window.clearTimeout(landingTimer.current);
+        };
+    }, []);
+    const ghostNodes = ghost?.nodes ?? [];
     const ghostTarget = dropOver
         ? [...rows, ...crumbs].find((node) => node.id === dropOver)
         : undefined;
@@ -938,7 +950,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         return {
             'data-reveal': entrance['data-reveal'],
             'data-folder-colour': tint['data-folder-colour'],
-            'data-dragging': ghost?.ids.includes(node.id) || undefined,
+            'data-dragging': ghost?.nodes.some((held) => held.id === node.id) || undefined,
             'data-drop-over': dropOver === node.id || undefined,
             style: { ...entrance.style, ...tint.style },
         };
@@ -1410,7 +1422,10 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                     onClick={(event) => select(node.id, event)}
                                                     onDoubleClick={() => open(node)}
                                                 >
-                                                    <span className="relative flex aspect-4/3 w-full items-center justify-center overflow-hidden rounded-md bg-muted">
+                                                    <span
+                                                        data-tile-face
+                                                        className="relative flex aspect-4/3 w-full items-center justify-center overflow-hidden rounded-md bg-muted"
+                                                    >
                                                         <NodeFace node={node} />
                                                     </span>
                                                     <span className="flex min-w-0 flex-col gap-0.5 px-1 pb-0.5">
