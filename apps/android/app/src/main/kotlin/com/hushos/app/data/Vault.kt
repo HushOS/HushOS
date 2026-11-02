@@ -983,6 +983,10 @@ class Vault(internal val context: Context, val api: DriveApi) {
             runCatching {
                 // Before any key is opened: a share into this account's own drive, or for a node of another workspace, is refused.
                 checkShare(share, own)
+                // And one into a family's folder (proven, held by its barrier, or let go of): a family's items open only
+                // through its area ledger, never under a key a share hands over.
+                val target = share.workspaceId.lowercase()
+                if (isFamilyWorkspace(target) || familyHeld.containsKey(target) || familyEpochs.containsKey(target)) throw ShareRefused("This share could not be checked.")
                 checkSuite(share.node.envelopeSuite)
                 val name = share.granterName.ifEmpty { share.granterEmail }
                 val granter = try {
@@ -1006,7 +1010,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
     fun item(id: String): Opened? = nodes.find(id)
 
     /* A row by its workspace and id: never another workspace's row that has the same id (a personal file, a share). */
-    fun item(workspaceId: String, id: String): Opened? = nodes.row(workspaceId, id)
+    fun item(workspaceId: String, id: String): Opened? =
+        nodes.row(workspaceId, id)?.takeIf { !isFamilyWorkspace(workspaceId) || nodes.viaLedger(workspaceId, id) }
 
     /* The row while it is live: neither it nor a folder above it in the trash (NodeCache.live); in `workspaceId` when given. */
     fun liveItem(id: String, workspaceId: String? = null): Opened? = nodes.live(id, workspaceId)
@@ -1052,7 +1057,10 @@ class Vault(internal val context: Context, val api: DriveApi) {
             // A family folder has no change feed here: a row served differently (another member's rename, a new version, a
             // walk's re-key) is opened again through the ledger, never answered from what this process opened before. An
             // older answer arriving after a newer one (listings out of order) keeps the newer row and key.
-            if (sameRecords(held.node, node) || node.olderThan(held.node)) return held
+            // A family folder's row is answered from the cache only when its area ledger opened it: one a share mount
+            // left there goes, and the ledger is asked.
+            val trusted = !family || nodes.viaLedger(node.workspaceId, node.id)
+            if (trusted && (sameRecords(held.node, node) || node.olderThan(held.node))) return held
             if (!family && !replace) return held
             if (family) {
                 nodes.forget(node.workspaceId, node.id)
@@ -1081,10 +1089,10 @@ class Vault(internal val context: Context, val api: DriveApi) {
             // Kept under the lock a forget clears the cache under, and only while the folder stands: a stale open keeps nothing.
             synchronized(familyCopiesLock) {
                 requireFamilyEpoch(node.workspaceId, epoch)
-                // Checked again where it is kept: nothing newer is ever replaced by an older row.
+                // Checked again where it is kept: nothing newer the ledger opened is ever replaced by an older row.
                 val held = nodes.row(node.workspaceId, node.id)
-                if (held != null && node.olderThan(held.node)) return held
-                nodes.put(result, key)
+                if (held != null && nodes.viaLedger(node.workspaceId, node.id) && node.olderThan(held.node)) return held
+                nodes.put(result, key, viaLedger = true)
             }
         } else nodes.put(result, key)
         node.parentId?.let { parents[node.id] = it }
@@ -1210,6 +1218,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
             else nodes.row(workspaceId, id) ?: run { resolve(id); nodes.row(workspaceId, id) } ?: throw NotFound("This item no longer exists.")
         val ws = item.node.workspaceId.lowercase()
         val family = isFamilyWorkspace(ws) || familyEpochs.containsKey(ws)
+        // A family's file downloads only under the key its area ledger opened, never one a share mount left in the cache.
+        if (family && !nodes.viaLedger(ws, item.id)) throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
         val epoch = began[ws]?.first ?: 0L
         try {
             val v = openVersion(item, version)
@@ -1250,6 +1260,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     fun thumbnail(id: String, workspaceId: String? = null): ByteArray? {
         // The workspace's own row of the id, never another's (resolve alone prefers this account's own).
         val item = if (workspaceId == null) resolve(id) else nodes.row(workspaceId, id) ?: return null
+        if (isFamilyWorkspace(item.node.workspaceId) && !nodes.viaLedger(item.node.workspaceId, item.id)) return null
         if (!item.hasThumbnail) return null
         val v = openVersion(item)
         if (v.content.thumbnailBytes == 0u) return null

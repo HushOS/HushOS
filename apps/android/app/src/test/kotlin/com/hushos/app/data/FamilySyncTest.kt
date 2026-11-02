@@ -201,6 +201,71 @@ class FamilySyncTest {
     }
 
     /*
+     * #247 check, round 3: a share (Grace's, served by the server) that targets the family's own folder. Mounted after
+     * route 25 proved the folder, it is refused, and the family's rows stay the ledger's. Fails if a share mount can put a
+     * row and key into a family's folder.
+     */
+    @Test
+    fun aShareIntoAFamilyFolderIsRefusedAtMount() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        accepted(phone)
+        phone.vault.listChildren(family.rootId, family.workspaceId)
+        server.shareWithMe(family.fileId)
+        server.pinGrace()
+        val mount = phone.vault.mountShares().single()
+        assertNotNull("a share into a family folder was mounted", mount.error)
+        assertTrue(phone.vault.nodes.viaLedger(family.workspaceId, family.fileId))
+    }
+
+    /*
+     * #247 check, round 3: the share was mounted before the family's folder was proven (nothing yet named it a family's).
+     * Once route 25 proves it, what the share put there goes, and the family's file is opened by the ledger alone. Fails if
+     * becoming a family folder keeps a share's rows.
+     */
+    @Test
+    fun aShareMountedBeforeTheFolderWasProvenIsEvictedWhenItIs() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        server.shareWithMe(family.fileId)
+        server.pinGrace()
+        assertNull(phone.vault.mountShares().single().error)
+        assertNotNull(phone.vault.nodes.row(family.workspaceId, family.fileId))
+        accepted(phone)
+        assertNull("the share's row outlived the folder becoming a family's", phone.vault.nodes.row(family.workspaceId, family.fileId))
+        assertNull(phone.vault.nodes.key(family.workspaceId, family.fileId))
+        phone.vault.listChildren(family.rootId, family.workspaceId)
+        assertTrue(phone.vault.nodes.viaLedger(family.workspaceId, family.fileId))
+    }
+
+    /*
+     * #247 check, round 3: after a fork cleared the family, a share refresh can't put the family's file back, and a
+     * download of it refuses; nor does a row and key put there any way but the ledger download. Fails if a share mount or
+     * a cached row stands in for the ledger.
+     */
+    @Test
+    fun afterAForkClearAShareRefreshCantRefillTheFamilyAndDownloadRefuses() {
+        family.chain = listOf(family.r1, family.r2, family.r3)
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        accepted(phone)
+        val file = phone.vault.listChildren(family.rootId, family.workspaceId).single()
+        val key = phone.vault.nodes.key(family.workspaceId, family.fileId)!!
+        family.chain = listOf(family.r1, family.r2, family.r3Fork, family.r4Fork)
+        assertTrue(phone.sync.sync(family.summary) is FamilyState.Fork)
+        server.shareWithMe(family.fileId)
+        server.pinGrace()
+        assertNotNull(phone.vault.mountShares().single().error)
+        assertNull("a share refresh refilled the forked family", phone.vault.nodes.row(family.workspaceId, family.fileId))
+        // A row and key held for the family file that its ledger didn't open (as a share mount would leave them).
+        phone.vault.nodes.put(file, key)
+        val cache = org.robolectric.RuntimeEnvironment.getApplication().cacheDir
+        val out = File(cache, "opened/elsewhere/Recipes.txt")
+        assertThrows(FamilyFailure::class.java) { phone.vault.download(family.fileId, out, workspaceId = family.workspaceId) }
+        assertFalse(out.exists())
+    }
+
+    /*
      * #247 check, item 1: an accepted member list names a received share's workspace (a hostile roster). The barrier's
      * hold over it never makes it a family folder: the share still opens and lists, a write into it isn't refused as a
      * family's, and the family's own folder, proven by route 25, still is one. Fails if a roster's word classes a

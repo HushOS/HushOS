@@ -106,7 +106,12 @@ internal fun Vault.accountKeyVersion(): ULong = loadWorkspace().grant?.grant?.ke
 /* Route 25 named these as family folders of `groupId`: never opened under a key from the personal path, for the session. */
 internal fun Vault.noteFamilyWorkspaces(ids: List<String>, groupId: String) {
     val own = ownWorkspaceId?.lowercase()
-    for (id in ids.map { it.lowercase() }) if (id != own) familyAreas[id] = groupId.lowercase()
+    for (id in ids.map { it.lowercase() }) {
+        if (id == own) continue
+        // Newly proven a family folder: whatever this phone held of it came some other way (a share mount), never through
+        // the family's ledger, and goes.
+        if (familyAreas.put(id, groupId.lowercase()) == null) forgetParents(nodes.forgetWorkspace(id))
+    }
 }
 
 /*
