@@ -1,0 +1,23 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_b706bcfaf51674 251,254-260,263-264,267-272,285,323,347,372,933
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyFixture.kt
+  s_566b8e0c4467a4::t_351a3e5f9fe805 135,137-143,227-228,230-231
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyManageModelTest.kt
+  s_566b8e0c4467a4::t_96bd36e650ac52 176-222
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "204bf88f2becc09581680c0e8edce13bb93cef29",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
