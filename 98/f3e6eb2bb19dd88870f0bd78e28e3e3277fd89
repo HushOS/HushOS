@@ -1,0 +1,41 @@
+apps/ios/App/FolderColourSheet.swift
+  s_ec12ebe02de5ff::t_ba949d7aeb3aff 1-83
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_ec12ebe02de5ff::t_9160b0c2f62dae 11,1518-1526,1528-1539,1543,1552
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_ec12ebe02de5ff::t_61d43abbb263bf 1493-1496
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_ec12ebe02de5ff::t_90003f5bb6fb68 3,231,309-310,491
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_ec12ebe02de5ff::t_09333cf0e33496 3-11,128,236,296,311,323-377
+apps/android/app/src/test/kotlin/com/hushos/app/data/VaultAttributesTest.kt
+  s_ec12ebe02de5ff::t_93d300c10aa9fc 109-132
+apps/ios/App/BrowseView.swift
+  s_ec12ebe02de5ff::t_24a38e4dbee3db 631-632
+apps/ios/App/DriveStore.swift
+  s_ec12ebe02de5ff::t_09c7334e5dd8cc 1061-1068
+apps/ios/App/NodeActions.swift
+  s_ec12ebe02de5ff::t_20fb4417b92801 18,29,97,239
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_ec12ebe02de5ff::t_cd97925c306cf6 84-117,119-133
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/AttributesTests.swift
+  s_ec12ebe02de5ff::t_6b8fba82380df3 53-80
+crates/hushos-core/src/colour.rs
+  s_ec12ebe02de5ff::t_36fabf2c756cdc 10-11,18-28,86-130,198-231
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "98f3e6eb2bb19dd88870f0bd78e28e3e3277fd89",
+  "prompts": {},
+  "sessions": {
+    "s_ec12ebe02de5ff": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d3f79b7e-f7a1-4c9c-9a58-b7059252bcae",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
