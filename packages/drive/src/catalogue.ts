@@ -58,59 +58,60 @@ function scoreWord(word: string, tokens: string[], weight: number) {
 }
 
 /*
- * Recent shows a folder once, not again for what it holds: a node with a folder above it, at
- * any depth, also among `nodes` is left out, and the topmost such folder sorts by the newest
- * change among itself and what it stands in for, so a folder whose contents keep changing
- * stays near the top. The cut comes after, so the list still fills to `limit`. `parentOf`
- * walks up through folders not among `nodes`; one it doesn't know ends the walk. Each row
- * carries the time it sorts by as `recentAt`, which is what Recent shows for it.
+ * Recent shows a folder once, not again for what it holds, as a window over what changed lately:
+ * nodes are taken newest first by their own time, and one with a kept folder above it (at any
+ * depth) is folded into that folder instead of kept. A folder kept later takes in what was kept
+ * below it, so the topmost recent folder stands in for everything under it. The walk stops once
+ * `limit` rows are kept, so a folder older than that window hides nothing: a file changed today
+ * inside it shows on its own. `parentOf` walks up through folders not among `nodes`; one it
+ * doesn't know ends the walk. Each row carries the newest change it stands for as `recentAt`,
+ * which Recent sorts by and shows.
  */
 export function collapseRecent(
     nodes: Iterable<DriveNode>,
     limit: number,
     parentOf: (id: string) => string | null | undefined = () => null,
-) {
+): RecentNode[] {
     const held = new Map<string, DriveNode>();
     for (const node of nodes) held.set(node.id, node);
-    // The topmost held node at or above each id walked, or null when there is none.
-    const topmost = new Map<string, string | null>();
-    const topOf = (id: string) => {
-        const walked = new Set<string>();
-        let found: string | null = null;
-        for (let current: string | null | undefined = id; current && !walked.has(current);) {
-            const known = topmost.get(current);
-            if (known !== undefined) {
-                found = known;
-                break;
-            }
-            walked.add(current);
-            current = held.get(current)?.parentId ?? parentOf(current);
-        }
-        for (const current of [...walked].reverse()) {
-            if (found === null && held.has(current)) found = current;
-            topmost.set(current, found);
-        }
-        return found;
-    };
-    // The newest change each kept node stands for, with the time as it was written.
-    const newest = new Map<string, { at: number; iso: string }>();
-    for (const node of held.values()) {
-        const top = topOf(node.id)!;
-        const at = Date.parse(node.updatedAt) || 0;
-        const known = newest.get(top);
-        if (!known || at > known.at) newest.set(top, { at, iso: node.updatedAt });
-    }
+    const parent = (id: string) => held.get(id)?.parentId ?? parentOf(id);
     // Newest first; things changed in the same moment by name, then id, so the order never shuffles.
-    return [...newest]
-        .map(([id, { at, iso }]) => ({ node: held.get(id)!, at, iso }))
-        .sort(
-            (a, b) =>
-                b.at - a.at ||
-                a.node.name.localeCompare(b.node.name) ||
-                (a.node.id < b.node.id ? -1 : a.node.id > b.node.id ? 1 : 0),
-        )
-        .slice(0, limit)
-        .map((entry): RecentNode => ({ ...entry.node, recentAt: entry.iso }));
+    const newer = (a: { node: DriveNode; at: number }, b: { node: DriveNode; at: number }) =>
+        b.at - a.at ||
+        a.node.name.localeCompare(b.node.name) ||
+        (a.node.id < b.node.id ? -1 : a.node.id > b.node.id ? 1 : 0);
+    // Kept rows by id, with the newest change each stands for, as it was written.
+    const kept = new Map<string, { node: DriveNode; at: number; iso: string }>();
+    // The kept folder above an id, if any: on any line of folders at most one is kept.
+    const keptAbove = (id: string) => {
+        const walked = new Set<string>();
+        for (let current = parent(id); current && !walked.has(current); current = parent(current)) {
+            walked.add(current);
+            const row = kept.get(current);
+            if (row) return row;
+        }
+        return undefined;
+    };
+    const order = [...held.values()]
+        .map((node) => ({ node, at: Date.parse(node.updatedAt) || 0 }))
+        .sort(newer);
+    for (const { node, at } of order) {
+        if (kept.size >= limit) break;
+        const above = keptAbove(node.id);
+        if (above) {
+            if (at > above.at) Object.assign(above, { at, iso: node.updatedAt });
+            continue;
+        }
+        const row = { node, at, iso: node.updatedAt };
+        kept.set(node.id, row);
+        if (node.kind === 'folder')
+            for (const [id, below] of kept)
+                if (id !== node.id && keptAbove(id) === row) {
+                    kept.delete(id);
+                    if (below.at > row.at) Object.assign(row, { at: below.at, iso: below.iso });
+                }
+    }
+    return [...kept.values()].sort(newer).map((row) => ({ ...row.node, recentAt: row.iso }));
 }
 
 /* A row of Recent: the node, and when Recent says it changed (`collapseRecent`). */

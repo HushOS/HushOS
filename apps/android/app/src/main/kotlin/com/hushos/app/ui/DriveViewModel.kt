@@ -101,7 +101,10 @@ data class DriveState(
     val origin: String = "https://hushos.com",
     val rootId: String? = null,
     val folders: Map<String, List<Opened>> = emptyMap(),
+    /* Home's Recent rows: the chip's type, a recent folder standing in for what it holds. */
     val recents: List<Opened> = emptyList(),
+    /* The newest changes as they are (every type, nothing folded in): what search falls back on before the catalogue. */
+    val latest: List<Opened> = emptyList(),
     val trash: List<TrashItem> = emptyList(),
     /* Decrypted thumbnails by item and version (thumbnailKey): a replaced file's new version is never shown the old one. */
     val thumbnails: Map<String, ByteArray> = emptyMap(),
@@ -172,7 +175,7 @@ data class DriveState(
     val resealing: Pair<Int, Int>? = null,
 ) {
     /* Every item this session has opened, for search across folders. */
-    val everything: List<Opened> get() = (folders.values.flatten() + recents).distinctBy { it.id }
+    val everything: List<Opened> get() = (folders.values.flatten() + latest).distinctBy { it.id }
     val emptyingTrash: Boolean get() = emptying != null
 }
 
@@ -776,8 +779,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         val plain = families.relist(folderIds)
         val fresh = withContext(Dispatchers.IO) { plain.associateWith { runCatching { vault.listChildren(it) }.getOrNull() } }
         val type = recentsType
-        val recents = withContext(Dispatchers.IO) { runCatching { vault.recents { type.matches(it) } }.getOrNull() }?.takeIf { type == recentsType }
-        _state.update { s -> s.copy(folders = s.folders + fresh.filterValues { it != null }.mapValues { it.value!! }, recents = recents ?: s.recents) }
+        val loaded = withContext(Dispatchers.IO) { runCatching { vault.recents { type.matches(it) } }.getOrNull() }
+        val recents = loaded?.rows?.takeIf { type == recentsType }
+        _state.update { s -> s.copy(folders = s.folders + fresh.filterValues { it != null }.mapValues { it.value!! }, recents = recents ?: s.recents, latest = loaded?.latest ?: s.latest) }
     }
 
     fun refresh(folderId: String, pulled: Boolean = false) = viewModelScope.launch {
@@ -1105,7 +1109,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     /* Recent under the chip chosen now; an answer for a chip no longer chosen is dropped. */
     private suspend fun loadRecents() {
         val type = recentsType
-        io { vault -> vault.recents { type.matches(it) } }?.let { recents -> if (type == recentsType) _state.update { it.copy(recents = recents) } }
+        io { vault -> vault.recents { type.matches(it) } }?.let { loaded ->
+            _state.update { it.copy(latest = loaded.latest, recents = if (type == recentsType) loaded.rows else it.recents) }
+        }
     }
 
     fun refreshTrash(pulled: Boolean = false) = viewModelScope.launch {
@@ -1549,7 +1555,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     /* Rows the server agreed are gone: off every folder on screen and off Recent, without a listing. */
     private fun dropRows(ids: Set<String>) = _state.update { s ->
-        s.copy(folders = s.folders.mapValues { (_, rows) -> rows.filter { it.id !in ids } }, recents = s.recents.filter { it.id !in ids })
+        s.copy(folders = s.folders.mapValues { (_, rows) -> rows.filter { it.id !in ids } }, recents = s.recents.filter { it.id !in ids }, latest = s.latest.filter { it.id !in ids })
     }
 
     /*
@@ -1700,7 +1706,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     /* The original of a move across drives, once its copy landed: part of that move, so no notice of its own. */
     private suspend fun trashOne(item: Opened): Boolean {
         val ok = write(item.node.parentId) { it.trash(item.id) }
-        if (ok) _state.update { s -> s.copy(recents = s.recents.filter { it.id != item.id }) }
+        if (ok) _state.update { s -> s.copy(recents = s.recents.filter { it.id != item.id }, latest = s.latest.filter { it.id != item.id }) }
         return ok
     }
     fun restore(entry: TrashItem) = viewModelScope.launch {

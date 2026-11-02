@@ -87,43 +87,58 @@ data class Opened(
 }
 
 /*
- * Recent shows a folder once, not again for what it holds (the web's `collapseRecent`): an item
- * with a folder above it, at any depth, also among `items` is left out, and the topmost such folder
- * sorts by the newest change among itself and what it stands in for, so a folder whose contents
- * keep changing stays near the top. The cut comes after, so the list still fills to `limit`.
- * `parentOf` walks up through folders not among `items`; one it doesn't know ends the walk. Each
- * row carries the time it sorts by as `recentMillis`, which is what Recent shows for it.
+ * Recent shows a folder once, not again for what it holds (the web's `collapseRecent`), as a window
+ * over what changed lately: items are taken newest first by their own time, and one with a kept
+ * folder above it (at any depth) is folded into that folder instead of kept. A folder kept later
+ * takes in what was kept below it, so the topmost recent folder stands in for everything under it.
+ * The walk stops once `limit` rows are kept, so a folder older than that window hides nothing: a
+ * file changed today inside it shows on its own. `parentOf` walks up through folders not among
+ * `items`; one it doesn't know ends the walk. Each row carries the newest change it stands for as
+ * `recentMillis`, which Recent sorts by and shows.
  */
 fun collapseRecents(items: List<Opened>, limit: Int, parentOf: (String) -> String? = { null }): List<Opened> {
     val held = items.associateBy { it.id }
-    // The topmost held item at or above each id walked; null when there is none.
-    val topmost = HashMap<String, String?>()
-    fun topOf(id: String): String? {
-        val walked = ArrayList<String>()
-        var found: String? = null
-        var current: String? = id
-        while (current != null && current !in walked) {
-            if (topmost.containsKey(current)) { found = topmost[current]; break }
-            walked.add(current)
-            current = held[current]?.node?.parentId ?: parentOf(current)
+    fun parent(id: String): String? = held[id]?.node?.parentId ?: parentOf(id)
+    // Kept rows by id, with the newest change each stands for (null: none carried a date).
+    val kept = HashMap<String, Long?>()
+    // The kept folder above an id, if any: on any line of folders at most one is kept.
+    fun keptAbove(id: String): String? {
+        val walked = HashSet<String>()
+        var current = parent(id)
+        while (current != null && walked.add(current)) {
+            if (kept.containsKey(current)) return current
+            current = parent(current)
         }
-        for (index in walked.indices.reversed()) {
-            if (found == null && walked[index] in held) found = walked[index]
-            topmost[walked[index]] = found
-        }
-        return found
+        return null
     }
-    val at = HashMap<String, Long?>()
-    for (item in held.values) {
-        val top = topOf(item.id)!!
-        val known = at[top]
-        val changed = item.changedMillis
-        if (!at.containsKey(top) || (changed != null && (known == null || changed > known))) at[top] = changed
-    }
+    fun newest(a: Long?, b: Long?) = if (a == null) b else if (b == null) a else maxOf(a, b)
     // Newest first; things changed in the same moment by name, then id, as the web orders them, so the list never reshuffles.
-    return at.entries.map { held.getValue(it.key) to it.value }
-        .sortedWith(compareByDescending<Pair<Opened, Long?>> { it.second ?: 0L }.thenBy(java.text.Collator.getInstance()) { it.first.name }.thenBy { it.first.id })
-        .take(limit).map { (item, millis) -> item.copy(recentMillis = millis) }
+    val collator = java.text.Collator.getInstance()
+    for (item in held.values.sortedWith(compareByDescending<Opened> { it.changedMillis ?: 0L }.thenBy(collator) { it.name }.thenBy { it.id })) {
+        if (kept.size >= limit) break
+        val above = keptAbove(item.id)
+        if (above != null) {
+            kept[above] = newest(kept[above], item.changedMillis)
+            continue
+        }
+        var at = item.changedMillis
+        if (item.isFolder) {
+            kept[item.id] = at
+            for (id in kept.keys.toList()) if (id != item.id && keptAbove(id) == item.id) at = newest(at, kept.remove(id))
+        }
+        kept[item.id] = at
+    }
+    return kept.entries.map { held.getValue(it.key) to it.value }
+        .sortedWith(compareByDescending<Pair<Opened, Long?>> { it.second ?: 0L }.thenBy(collator) { it.first.name }.thenBy { it.first.id })
+        .map { (item, millis) -> item.copy(recentMillis = millis) }
+}
+
+/* What changed lately, two ways: as Home's Recent shows it, and as it is, for search. */
+class Recents(items: List<Opened>, limit: Int, keep: (Opened) -> Boolean, parentOf: (String) -> String?) {
+    /* Home's rows: what `keep` lets through, a recent folder standing in for what it holds (`collapseRecents`). */
+    val rows: List<Opened> = collapseRecents(items.filter(keep), limit, parentOf)
+    /* The newest changes of every type with nothing folded in: what search falls back on before the catalogue. */
+    val latest: List<Opened> = items.sortedWith(compareByDescending<Opened> { it.changedMillis ?: 0L }.thenBy(java.text.Collator.getInstance()) { it.name }.thenBy { it.id }).take(limit)
 }
 
 /*
@@ -1395,12 +1410,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
         return result
     }
 
-    /*
-     * The most recently changed files and folders that `keep` lets through, a folder standing in
-     * for what it holds (`collapseRecents`); from the tail of the change feed until the catalogue
-     * can answer.
-     */
-    fun recents(limit: Int = 60, keep: (Opened) -> Boolean = { true }): List<Opened> {
+    /* What changed lately (`Recents`); from the tail of the change feed until the catalogue can answer. */
+    fun recents(limit: Int = 60, keep: (Opened) -> Boolean = { true }): Recents {
         catalogueRecents(limit, keep)?.let { return it }
         val view = loadWorkspace()
         val feed = api.changes(view.workspaceId, maxOf(0, view.changeSeq - 400), 400)
@@ -1415,9 +1426,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
         for (node in latest.values) {
             node.parentId?.let { rememberParent(node.id, it) }
             forget(node.workspaceId, node.id)
-            runCatching { resolve(node.id) }.onSuccess { if (keep(it)) items.add(it) }
+            runCatching { resolve(node.id) }.onSuccess { items.add(it) }
         }
-        return collapseRecents(items, limit) { nodes.find(it)?.node?.parentId ?: parents[it] }
+        return Recents(items, limit, keep) { nodes.find(it)?.node?.parentId ?: parents[it] }
     }
 
     fun versions(id: String): List<VersionListView> = api.versions(id, resolve(id).node.workspaceId)

@@ -716,12 +716,8 @@ public actor Vault {
         return result.map { (item: $0.0, parentTrashed: $0.1) }
     }
 
-    /*
-     * The most recently changed files and folders that `keep` lets through, a folder standing in for
-     * what it holds (`Opened.collapsedRecents`); from the tail of the change feed until the catalogue
-     * can answer.
-     */
-    public func recents(limit: Int = 60, keep: @Sendable (Opened) -> Bool = { _ in true }) async throws -> [Opened] {
+    /* What changed lately (`Recents`); from the tail of the change feed until the catalogue can answer. */
+    public func recents(limit: Int = 60, keep: @Sendable (Opened) -> Bool = { _ in true }) async throws -> Recents {
         if let fast = catalogueRecents(limit: limit, keep: keep) { return fast }
         let workspace = try await loadWorkspace()
         let seq = workspace.changeSeq ?? 0
@@ -739,14 +735,27 @@ public actor Vault {
         for node in latest.values {
             if let parent = node.parentId { rememberParent(node.id, parent: parent) }
             forget(node.id)
-            if let opened = try? await resolve(node.id), keep(opened) { items.append(opened) }
+            if let opened = try? await resolve(node.id) { items.append(opened) }
         }
-        return Opened.collapsedRecents(items, limit: limit) { self.opened[$0]?.node.parentId ?? self.parents[$0] }
+        return Recents(items, limit: limit, keep: keep) { self.opened[$0]?.node.parentId ?? self.parents[$0] }
     }
 
     public func versions(of nodeId: String) async throws -> [VersionListView] {
         let item = try await resolve(nodeId)
         return try await api.versions(of: nodeId, workspaceId: item.node.workspaceId)
+    }
+}
+
+/* What changed lately, two ways: as Home's Recent shows it, and as it is, for search. */
+public struct Recents: Sendable {
+    /* Home's rows: what `keep` lets through, a recent folder standing in for what it holds (`Opened.collapsedRecents`). */
+    public let rows: [Opened]
+    /* The newest changes of every type with nothing folded in: what search falls back on before the catalogue. */
+    public let latest: [Opened]
+
+    init(_ items: [Opened], limit: Int, keep: (Opened) -> Bool, parentOf: (String) -> String?) {
+        rows = Opened.collapsedRecents(items.filter(keep), limit: limit, parentOf: parentOf)
+        latest = Array(items.sorted(by: Opened.byRecent).prefix(limit))
     }
 }
 
@@ -772,44 +781,50 @@ extension Opened {
     }
 
     /*
-     * Recent shows a folder once, not again for what it holds (the web's `collapseRecent`): an item
-     * with a folder above it, at any depth, also among `items` is left out, and the topmost such
-     * folder sorts by the newest change among itself and what it stands in for, so a folder whose
-     * contents keep changing stays near the top. The cut comes after, so the list still fills to
-     * `limit`. `parentOf` walks up through folders not among `items`; one it doesn't know ends the walk.
-     * Each row carries the time it sorts by as `recentAt`, which is what Recent shows for it.
+     * Recent shows a folder once, not again for what it holds (the web's `collapseRecent`), as a window
+     * over what changed lately: items are taken newest first by their own time, and one with a kept
+     * folder above it (at any depth) is folded into that folder instead of kept. A folder kept later
+     * takes in what was kept below it, so the topmost recent folder stands in for everything under
+     * it. The walk stops once `limit` rows are kept, so a folder older than that window hides
+     * nothing: a file changed today inside it shows on its own. `parentOf` walks up through folders
+     * not among `items`; one it doesn't know ends the walk. Each row carries the newest change it
+     * stands for as `recentAt`, which Recent sorts by and shows.
      */
     public static func collapsedRecents(_ items: [Opened], limit: Int, parentOf: (String) -> String? = { _ in nil }) -> [Opened] {
         var held: [String: Opened] = [:]
         for item in items { held[item.id] = item }
-        // The topmost held item at or above each id walked; .some(nil) when there is none.
-        var topmost: [String: String?] = [:]
-        func topOf(_ id: String) -> String? {
-            var walked: [String] = []
-            var found: String?
-            var current: String? = id
-            while let at = current, !walked.contains(at) {
-                if let known = topmost[at] {
-                    found = known
-                    break
+        func parent(_ id: String) -> String? { held[id]?.node.parentId ?? parentOf(id) }
+        // Kept rows by id, with the newest change each stands for.
+        var kept: [String: Date] = [:]
+        // The kept folder above an id, if any: on any line of folders at most one is kept.
+        func keptAbove(_ id: String) -> String? {
+            var walked: Set<String> = []
+            var current = parent(id)
+            while let at = current, walked.insert(at).inserted {
+                if kept[at] != nil { return at }
+                current = parent(at)
+            }
+            return nil
+        }
+        for item in held.values.sorted(by: byRecent) {
+            if kept.count >= limit { break }
+            let when = item.changed ?? .distantPast
+            if let above = keptAbove(item.id) {
+                kept[above] = max(kept[above] ?? .distantPast, when)
+                continue
+            }
+            var newest = when
+            if item.isFolder {
+                kept[item.id] = when
+                for id in Array(kept.keys) where id != item.id && keptAbove(id) == item.id {
+                    newest = max(newest, kept.removeValue(forKey: id) ?? .distantPast)
                 }
-                walked.append(at)
-                current = held[at]?.node.parentId ?? parentOf(at)
             }
-            for at in walked.reversed() {
-                if found == nil, held[at] != nil { found = at }
-                topmost[at] = .some(found)
-            }
-            return found
+            kept[item.id] = newest
         }
-        var at: [String: Date] = [:]
-        for item in held.values {
-            guard let top = topOf(item.id) else { continue }
-            at[top] = max(at[top] ?? .distantPast, item.changed ?? .distantPast)
-        }
-        return at.compactMap { id, when in held[id].map { ($0, when) } }
+        return kept.compactMap { id, when in held[id].map { ($0, when) } }
             .sorted { newer($0.0, at: $0.1, than: $1.0, at: $1.1) }
-            .prefix(limit).map { item, when in
+            .map { item, when in
                 var row = item
                 // Nothing to say when no change carried a date.
                 row.recentAt = when == .distantPast ? nil : when

@@ -19,7 +19,10 @@ final class DriveStore {
     /* Bumped when the catalogue changes what lists show. */
     var catalogueVersion = 0
     var names: [String: String] = [:]
+    /* Home's Recent rows: the chip's type, a recent folder standing in for what it holds. */
     var recents: [Opened] = []
+    /* The newest changes as they are (every type, nothing folded in): what search falls back on before the catalogue. */
+    var latest: [Opened] = []
     /*
      * Home's type chip. A recent folder stands in for what it holds (`Opened.collapsedRecents`), so
      * the chip narrows Recent before that, in the vault: filtered after, images inside a recent
@@ -451,7 +454,7 @@ final class DriveStore {
     func known(_ id: String) -> Opened? {
         if let item = catalogue[id] { return item }
         for list in folders.values { if let item = list.first(where: { $0.id == id }) { return item } }
-        return recents.first { $0.id == id }
+        return latest.first { $0.id == id } ?? recents.first { $0.id == id }
     }
 
     /* Everything inside a folder at any depth, as far as this phone knows it: "Search in Lisbon 2026". */
@@ -807,8 +810,9 @@ final class DriveStore {
     /* Recent under the chip chosen now; an answer for a chip no longer chosen is dropped. */
     private func loadRecents() async throws {
         let filter = recentsFilter
-        let list = try await vault.recents { filter.matches($0) }
-        if filter == recentsFilter { recents = list }
+        let loaded = try await vault.recents { filter.matches($0) }
+        latest = loaded.latest
+        if filter == recentsFilter { recents = loaded.rows }
     }
 
     func refreshTrash() async {
@@ -842,7 +846,7 @@ final class DriveStore {
     /* Every item this session has opened, for search across folders. */
     var everything: [Opened] {
         var seen: Set<String> = []
-        return (folders.values.flatMap { $0 } + recents).filter { seen.insert($0.id).inserted }
+        return (folders.values.flatMap { $0 } + latest).filter { seen.insert($0.id).inserted }
     }
 
     func thumbnail(for item: Opened) {
@@ -936,6 +940,7 @@ final class DriveStore {
                     let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.relocate(item.id, to: folder) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
                     finish(ticket, failed: !ok, message: why)
                     recents.removeAll { $0.id == item.id }
+                    latest.removeAll { $0.id == item.id }
                 } else {
                     // Signed by what the original verified as: someone's share is vouched for only from a checked contact, a family
                     // folder's file only as its member list judges it.
@@ -1307,6 +1312,7 @@ final class DriveStore {
     private func dropRows(_ ids: Set<String>) {
         for (id, rows) in folders where rows.contains(where: { ids.contains($0.id) }) { folders[id] = rows.filter { !ids.contains($0.id) } }
         recents.removeAll { ids.contains($0.id) }
+        latest.removeAll { ids.contains($0.id) }
         for id in ids { catalogue[id] = nil }
         catalogueVersion += 1
     }
@@ -1419,6 +1425,7 @@ final class DriveStore {
                 if ok {
                     moved.append(item)
                     recents.removeAll { $0.id == item.id }
+                    latest.removeAll { $0.id == item.id }
                     if let from = item.node.parentId { await refresh(folder: from) }
                 }
             }

@@ -57,7 +57,8 @@ describe('recent', () => {
     });
 
     test('stops at the limit and passes only what keep lets through', () => {
-        expect(ids(drive().recent(2))).toEqual(['work', 'notes.md']);
+        // The window closes before work and deep are reached, so they hide nothing: old.pdf shows itself.
+        expect(ids(drive().recent(2))).toEqual(['old.pdf', 'notes.md']);
         expect(ids(drive().recent(10, (entry) => entry.kind === 'folder'))).toEqual(['work']);
         // With the folders filtered out, nothing stands in for old.pdf: it shows itself.
         expect(ids(drive().recent(10, (entry) => entry.kind === 'file'))).toEqual([

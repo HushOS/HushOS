@@ -278,7 +278,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         val trust = trustFor(vault)
         // Files only: DocumentsUI's Recent drops folders from what a provider returns (its RecentsLoader
         // rejects the directory type), so a folder standing in for what it holds would hide its files.
-        for (item in vault.recents(64) { !it.isFolder }) addRow(cursor, item, vault, trust)
+        for (item in vault.recents(64) { !it.isFolder }.rows) addRow(cursor, item, vault, trust)
         cursor
     }
 
