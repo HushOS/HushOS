@@ -1,4 +1,4 @@
-import type { DriveNode } from '@hushos/drive/client';
+import type { DriveNode, NodeKind } from '@hushos/drive/client';
 import type { FileReader } from '@hushos/drive/downloads';
 import { downloadWorker } from '@/lib/download-sinks';
 import { downloads } from '@/lib/downloads';
@@ -120,6 +120,20 @@ export function previewKind(node: DriveNode): PreviewKind {
     )
         return 'text';
     return 'none';
+}
+
+const DOCUMENT_KINDS = new Set<PreviewKind>(['pdf', 'office', 'markdown', 'text']);
+
+/*
+ * What search's kind words find a node as (images, videos, documents, folders): an image or
+ * video by what it previews as, a document if it opens as a PDF, Office file, Markdown or text.
+ * The phones copy these lists, so a change here goes to them too.
+ */
+export function nodeKind(node: DriveNode): NodeKind | null {
+    if (node.kind === 'folder') return 'folder';
+    const kind = previewKind(node);
+    if (kind === 'image' || kind === 'video') return kind;
+    return DOCUMENT_KINDS.has(kind) ? 'document' : null;
 }
 
 /* A JSON file, which opens in the JSON viewer: by its name, or by its recorded type. */

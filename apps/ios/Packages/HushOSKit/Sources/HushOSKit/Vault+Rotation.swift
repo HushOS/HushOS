@@ -29,6 +29,8 @@ struct RotationWorkNode: Decodable, Sendable {
         /* Who signed the envelope being replaced. */
         var signer: Signer? = nil
         var signature: String? = nil
+        /* A family record's re-key: its origin, carried into the next walk's (FamilyWalks). */
+        var rekey: RekeyView? = nil
     }
     struct Share: Decodable, Sendable {
         let id: String

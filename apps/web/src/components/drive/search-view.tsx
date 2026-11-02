@@ -12,6 +12,7 @@ import { FileMark } from '@/components/drive/file-mark';
 import { UnverifiedMark } from '@/components/drive/unverified-mark';
 import { Highlight } from '@/components/drive/highlight';
 import { useOpenNode } from '@/lib/open-node';
+import { nodeKind } from '@/lib/previews';
 import { Spinner } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
 import { Button } from '@/components/ui/button';
@@ -19,7 +20,7 @@ import { driveClient, formatBytes, formatWhen, nodeSize, useCatalogueState } fro
 
 /*
  * The full list of matches for a query, from the catalogue: every folder and
- * file whose name, extension, tags or path the words land on, best first,
+ * file whose name, extension, kind ("photos"), tags or path the words land on, best first,
  * opened where it lives. Nothing is asked of the server, and the answer is as
  * complete as the build is; while rows are still opening the footer says so.
  * Shared folders are not part of the catalogue yet, so they are not searched.
@@ -38,7 +39,7 @@ export function SearchView({ query }: { query: string }) {
     // A new query starts at the top; the index is kept per query, without an effect.
     const focused = focus.query === query ? focus.index : 0;
     // The catalogue state is read above, so this recomputes as rows open.
-    const hits: CatalogueHit[] = query ? driveClient.search(query, LIMIT) : [];
+    const hits: CatalogueHit[] = query ? driveClient.search(query, LIMIT, nodeKind) : [];
 
     const enabled = hits.length > 0;
     useHotkey(

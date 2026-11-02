@@ -199,6 +199,7 @@ extension FamilySync {
         switch await run(summary) {
         case .accepted(let view):
             records.delete(.joins, userId: userId, groupId: summary.id)
+            wantWork(true)
             return .joined(.accepted(view))
         case .fork(let fork):
             return .fork(fork)
@@ -296,7 +297,15 @@ extension FamilySync {
                 } catch let error as GroupsAPIError where error.isNotMember {
                     // Removed right after joining: let go of as a sync's not-member is (a wipe whose guard can't be stored
                     // refuses instead), so nothing the acceptance opened stays open.
-                    do { try await wipe(groupId) } catch { await refuse(groupId) }
+                    let revised: Revised
+                    do {
+                        try await wipe(groupId)
+                        revised = Revised(state: .wiped, revision: Self.revise())
+                    } catch let failure {
+                        await refuse(groupId)
+                        revised = Revised(state: .failed(FamilyWords.error(failure)), revision: Self.revise())
+                    }
+                    releases.post(groupId, revised)
                     throw error
                 } catch {
                     // Refused after the acceptance (keys that didn't check, a settings save refused): nothing of it stays open.
@@ -308,6 +317,9 @@ extension FamilySync {
                 records.delete(.joins, userId: userId, groupId: groupId)
                 // An escalation an earlier release's join check left: nothing reads it now.
                 records.delete(.holds, userId: userId, groupId: groupId)
+                // In a family now: its background check is scheduled even with nothing due yet, so a key change a removal
+                // leaves later is walked while the app is closed.
+                wantWork(true)
                 return .joined(state)
             }
         }

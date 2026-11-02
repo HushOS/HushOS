@@ -2,17 +2,35 @@ import HushOSKit
 import QuickLook
 import SwiftUI
 
+/* What search's type chips narrow it to: everything, or one kind (`ItemKind`, the web's split). */
+enum TypeFilter: String, CaseIterable, Identifiable {
+    case all = "All", folders = "Folders", images = "Images", videos = "Videos", documents = "Documents"
+    var id: String { rawValue }
+
+    func matches(_ item: Opened) -> Bool {
+        switch self {
+        case .all: return true
+        case .folders: return ItemKind.of(item) == .folder
+        case .images: return ItemKind.of(item) == .image
+        case .videos: return ItemKind.of(item) == .video
+        case .documents: return ItemKind.of(item) == .document
+        }
+    }
+}
+
 /*
  * The search tab (the iOS 26 search role): the field sits at the bottom by the thumb.
  * Type chips narrow it; recent searches and tags fill the screen until something is
  * typed; results come grouped into folders and files, each saying where it is.
- * Names and tags are matched word by word, as the web's catalogue does.
+ * Names and tags are matched word by word, as the web's catalogue does, and a word
+ * that names a kind ("photos", "videos", "documents", "folders") finds everything
+ * of that kind, as the web's does (`ItemKind`).
  */
 struct SearchView: View {
     @Environment(DriveStore.self) private var store
     /* Kept by the shell, so a search survives switching tabs. */
     @Binding var query: String
-    @State private var filter: HomeFilter = .all
+    @State private var filter: TypeFilter = .all
     @State private var action: NodeAction?
     @State private var viewing: Opened?
     /* In a file out of backups (`RecentSearches`), not the app's defaults: the words name what is in the drive. */
@@ -27,10 +45,12 @@ struct SearchView: View {
 
     private var hits: [Opened] {
         guard !words.isEmpty else { return [] }
+        let kinds = words.map(ItemKind.named)
         return pool.filter { item in
             guard filter.matches(item), item.id != store.rootId else { return false }
             let text = ([item.name] + store.tags.tags(of: item.id).map(\.name)).joined(separator: " ").lowercased()
-            return words.allSatisfy { text.contains($0) }
+            let kind = kinds.contains { $0 != nil } ? ItemKind.of(item) : nil
+            return zip(words, kinds).allSatisfy { word, named in text.contains(word) || (named != nil && named == kind) }
         }
         .sorted(by: Opened.byName)
     }
@@ -132,7 +152,7 @@ struct SearchView: View {
             title: "No results for “\(query.trimmingCharacters(in: .whitespaces))”",
             message: store.catalogueReady
                 ? "Search looks at names, tags and file types in every folder. Check the spelling, or try fewer words."
-                : "Search looks at names and tags in folders you’ve opened on this phone. Check the spelling, or try fewer words."
+                : "Search looks at names, tags and file types in folders you’ve opened on this phone. Check the spelling, or try fewer words."
         ) {
             if filter != .all {
                 Button("Search all types") { filter = .all }.font(.body.weight(.semibold)).foregroundStyle(Alpine.primary)
@@ -188,5 +208,36 @@ private struct WrapLayout: Layout {
             x += size.width + spacing
             line = max(line, size.height)
         }
+    }
+}
+
+/* All, Folders, Images, Videos, Documents. The chosen one fills with ink and carries a check. */
+struct TypeChips: View {
+    @Binding var value: TypeFilter
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Alpine.Space.s2) {
+                ForEach(TypeFilter.allCases) { option in
+                    let on = value == option
+                    Button { value = option } label: {
+                        HStack(spacing: 6) {
+                            if on && option != .all { Image(systemName: "checkmark").font(.caption.weight(.bold)) }
+                            Text(option.rawValue)
+                        }
+                        .font(Theme.Text.callout.weight(.semibold))
+                        .foregroundStyle(on ? Alpine.surface : Alpine.ink)
+                        .padding(.horizontal, Alpine.Space.s4).frame(height: 36)
+                        .background(on ? Alpine.ink : Alpine.surface, in: Capsule())
+                        .overlay { if contrast == .increased && !on { Capsule().strokeBorder(Alpine.rule, lineWidth: 1) } }
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(on ? .isSelected : [])
+                }
+            }
+        }
+        .chipRowClip()
     }
 }

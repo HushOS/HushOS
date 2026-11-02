@@ -59,6 +59,9 @@ val buildNumber: Int = (project.findProperty("buildNumber") as String?)?.toInt()
 android {
     namespace = "com.hushos.app"
     compileSdk = 37
+    // The NDK the Rust core is built with (scripts/build-core.sh takes the newest installed): AGP strips the packaged native
+    // libraries and extracts their symbols with it. Without one it packages them unstripped and extracts nothing.
+    ndkVersion = "27.1.12297006"
 
     defaultConfig {
         applicationId = "com.hushos.app"
@@ -66,7 +69,7 @@ android {
         targetSdk = 36
         versionCode = buildNumber
         // The product version (the root package.json): the release pull request sets it.
-        versionName = "0.10.0" // x-release-please-version
+        versionName = "0.11.0" // x-release-please-version
     }
 
     signingConfigs {
@@ -86,6 +89,9 @@ android {
         debug { serves(this, "http://localhost:5173") }
         release {
             serves(this, "https://hushos.com")
+            // The Rust core's symbol table goes into the bundle's BUNDLE-METADATA, for Play to symbolicate native crashes;
+            // the libraries the app ships are stripped of it (they don't grow). FULL would need DWARF the core isn't built with.
+            ndk { debugSymbolLevel = "SYMBOL_TABLE" }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

@@ -11,14 +11,11 @@ import Security
  */
 public enum SharedKeychain {
     /*
-     * The app group, from the APP_GROUP_ID build setting (Project.xcconfig) that every bundle's Info.plist
-     * carries as HushOSAppGroup, so a build signed under another team changes one value. The package's
-     * tests have no such Info.plist and get HushOS's own group.
+     * The app group, which is also the keychain's access group (an app group serves as one on iOS, so
+     * the keychain-access-groups entitlement isn't what the items are kept under): `AppGroup.current`,
+     * the build's APP_GROUP_ID unless a sideloading tool's profile granted the team's own group.
      */
-    public static let accessGroup: String = {
-        let value = Bundle.main.object(forInfoDictionaryKey: "HushOSAppGroup") as? String
-        return value.flatMap { $0.isEmpty ? nil : $0 } ?? "group.com.hushos.app"
-    }()
+    public static var accessGroup: String { AppGroup.current }
     public static let service = "com.hushos.files"
     public static let sessionAccount = "session"
     public static let deviceAccount = "device"

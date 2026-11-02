@@ -205,7 +205,8 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
 /*
  * Key changes on the family page (the web's KeyChangeNotice): while route 25 says a folder's keys are being replaced (a
  * removal's, a departure's), how far this phone's walk has got; and a walk that stopped, with why and when it is tried
- * again. Everything in the folders stays readable meanwhile.
+ * again. Everything in the folders stays readable meanwhile, and an upload to a folder waits until its new keys reach it
+ * (FamilyUploads.waitingOutKeyChanges), as the web's notice says.
  */
 @Composable
 private fun KeyChanges(model: DriveViewModel, groupId: String, family: String, view: FamilyView) {
@@ -216,7 +217,7 @@ private fun KeyChanges(model: DriveViewModel, groupId: String, family: String, v
         val done = walks.values.sumOf { it.done }
         val what = if (running.size == 1) "${nameOf(running[0].workspaceId)} is getting new keys." else "${running.size} folders are getting new keys."
         val progress = if (done > 0) " $done ${if (done == 1) "item" else "items"} done so far." else ""
-        Info("Replacing keys in the family folders", "$what$progress Everything stays readable meanwhile.")
+        Info("Replacing keys in the family folders", "$what$progress Everything stays readable meanwhile; an upload to a folder waits until its new keys reach it.")
     }
     for ((workspaceId, walk) in walks) {
         val error = walk.error ?: continue

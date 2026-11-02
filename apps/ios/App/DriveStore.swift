@@ -19,16 +19,10 @@ final class DriveStore {
     /* Bumped when the catalogue changes what lists show. */
     var catalogueVersion = 0
     var names: [String: String] = [:]
-    /* Home's Recent rows: the chip's type, a recent folder standing in for what it holds. */
+    /* Home's Recent rows: a recent folder standing in for what it holds. */
     var recents: [Opened] = []
     /* The newest changes as they are (every type, nothing folded in): what search falls back on before the catalogue. */
     var latest: [Opened] = []
-    /*
-     * Home's type chip. A recent folder stands in for what it holds (`Opened.collapsedRecents`), so
-     * the chip narrows Recent before that, in the vault: filtered after, images inside a recent
-     * folder would never show.
-     */
-    private(set) var recentsFilter: HomeFilter = .all
     var trash: [(item: Opened, parentTrashed: Bool)] = []
     /* Trash rows being restored or deleted, and the whole trash being emptied: each shows it is under way. */
     var trashWorking: Set<String> = []
@@ -174,6 +168,19 @@ final class DriveStore {
     @ObservationIgnored var familyFolders: [String: String] = [:]
     /* When each family was last checked on this phone: a family folder on screen checks again when it is old. */
     @ObservationIgnored var familyCheckedAt: [String: Date] = [:]
+    /* The session's family sync this store listens to (attachFamilies): detached when the session ends or is replaced. */
+    @ObservationIgnored weak var listenedFamilies: FamilySync?
+    /* The leave dialog, kept here rather than by the page, so a scene change or a redraw keeps it as it was (LeaveDialog). */
+    var leaving: LeaveDialog?
+    /* A family this person just left: its page goes back to Account once. */
+    var leftFamily: String?
+    /* Moved after a leave: Account reads its plan and storage again, so the family's pool and plan stop showing. */
+    var accountGeneration = 0
+    /* Each family's key-change walks on this phone: how many items were done, and why the last one stopped. */
+    var familyWalks: [String: FamilyWalkShown] = [:]
+    /* The folders a walk runs in now, and when each run may be tried again after one stopped. */
+    @ObservationIgnored var walking: Set<String> = []
+    @ObservationIgnored var walkEnded: [String: (attempts: Int, until: Date)] = [:]
     /* Moved as every showing of a family's check finishes (its folders listed again), whatever it found: what a family page reads its labels again on. */
     var familyRefreshed: [String: Int] = [:]
     /* Moved by every trust reload (refreshSigners): pins saved or changed on another device are read again on it. */
@@ -346,6 +353,7 @@ final class DriveStore {
         // old session asked lands in this one.
         resetFamilies()
         BackgroundTransfers.shared.vault = next
+        attachFamilies()
         // Everything below runs in the new session, as one operation: what the old one still has out is dropped.
         guard let session = beginSession() else { return }
         Task { await refreshSigners() }
@@ -370,6 +378,7 @@ final class DriveStore {
         sessionGate.session = { [weak self] in self?.vault }
         // The background queue shares this vault, and a landed transfer redraws the lists.
         BackgroundTransfers.shared.vault = vault
+        attachFamilies()
         BackgroundTransfers.shared.onLanded = { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -934,23 +943,12 @@ final class DriveStore {
         }
     }
 
-    /* A chip chosen on Home: Recent again from what the phone holds, without a sync. */
-    func showRecents(_ filter: HomeFilter) async {
-        guard filter != recentsFilter else { return }
-        recentsFilter = filter
-        try? await loadRecents(nil)
-    }
-
-    /*
-     * Recent under the chip chosen now, in `session` (the session now when nil, `inSession`): an
-     * answer for a session that ended is dropped, and Home's rows for a chip no longer chosen.
-     */
+    /* Recent in `session` (the session now when nil, `inSession`): an answer for a session that ended is dropped. */
     private func loadRecents(_ session: Session?) async throws {
-        let filter = recentsFilter
-        guard let loaded = try await inSession(session, { try await $0.recents { filter.matches($0) } }) else { return }
+        guard let loaded = try await inSession(session, { try await $0.recents() }) else { return }
         if let session, !current(session) { return }
         latest = loaded.latest
-        if filter == recentsFilter { recents = loaded.rows }
+        recents = loaded.rows
     }
 
     func refreshTrash() async {

@@ -1,5 +1,64 @@
 # Changelog
 
+## [0.11.0](https://github.com/HushOS/HushOS/compare/v0.10.0...v0.11.0) (2026-11-02)
+
+
+### Features
+
+* **android:** adapt the app to foldables and large screens ([#234](https://github.com/HushOS/HushOS/issues/234)) ([fc04537](https://github.com/HushOS/HushOS/commit/fc0453701c4f261aa40a614727cc48124fb86c8d))
+* **android:** add contacts without comparing words ([#241](https://github.com/HushOS/HushOS/issues/241)) ([72924b9](https://github.com/HushOS/HushOS/commit/72924b9c7c5bd7f9f93dd766a99ba428f8712e71))
+* **android:** finish family uploads in the background ([#251](https://github.com/HushOS/HushOS/issues/251)) ([3e4f8fd](https://github.com/HushOS/HushOS/commit/3e4f8fdeb7f3f69ea3f08f4b5ce2fb14e25285fe))
+* **android:** join a family on first use and read its folders ([#247](https://github.com/HushOS/HushOS/issues/247)) ([30cb815](https://github.com/HushOS/HushOS/commit/30cb815ceee3c91282d720d39aa4144637680ec5))
+* **android:** leave a family and walk its key changes in the background ([#252](https://github.com/HushOS/HushOS/issues/252)) ([9724a2b](https://github.com/HushOS/HushOS/commit/9724a2b343c566ebc8223c30d3556ad9b8cb3d04))
+* **android:** write in family folders ([#249](https://github.com/HushOS/HushOS/issues/249)) ([f71bc56](https://github.com/HushOS/HushOS/commit/f71bc569e0efc2ce135371c6a4cb75db2cfade54))
+* **crypto:** accept a family on first use and check it later ([#207](https://github.com/HushOS/HushOS/issues/207)) ([d57831a](https://github.com/HushOS/HushOS/commit/d57831a70c0eeb27bff4030c77f02c96f9d8180a))
+* **crypto:** keep a first-seen pin for people nobody has checked ([#206](https://github.com/HushOS/HushOS/issues/206)) ([d78682b](https://github.com/HushOS/HushOS/commit/d78682b317054dc5d87c8ad2de514837ddc0708d))
+* **crypto:** keep a node's attributes when a client re-saves it ([#226](https://github.com/HushOS/HushOS/issues/226)) ([d389f2a](https://github.com/HushOS/HushOS/commit/d389f2aa474a6ecff7190e15c105b86f1ba3e68d))
+* **drive:** draw a file's mark in its type's colour ([#260](https://github.com/HushOS/HushOS/issues/260)) ([8d9fc3a](https://github.com/HushOS/HushOS/commit/8d9fc3a4797a3867dff64855cc1bf5d6ca7d91d3))
+* **drive:** give folders a colour ([#232](https://github.com/HushOS/HushOS/issues/232)) ([46ce805](https://github.com/HushOS/HushOS/commit/46ce805857a35ec0f2258a71876ffa158601e772))
+* **drive:** give tags the folder colour swatches ([#259](https://github.com/HushOS/HushOS/issues/259)) ([d12141c](https://github.com/HushOS/HushOS/commit/d12141c3b0c7f7176d528cd5f33fb6dd5720fe8b))
+* **ios:** adapt the app to iPhone Duo's inner and outer displays ([#233](https://github.com/HushOS/HushOS/issues/233)) ([f42366b](https://github.com/HushOS/HushOS/commit/f42366bae0ed81b2fbc6c43c607ab0cfb17a0633))
+* **ios:** join a family without comparing words ([#243](https://github.com/HushOS/HushOS/issues/243)) ([d94ab83](https://github.com/HushOS/HushOS/commit/d94ab83b056bec25241252e2cc94257c7fddc02b))
+* **ios:** share with someone as soon as they're added ([#239](https://github.com/HushOS/HushOS/issues/239)) ([89b21b8](https://github.com/HushOS/HushOS/commit/89b21b886303b3d05fa963f9d8f216cf909a58f4))
+* **ios:** tint the row whose Info is open beside the list ([#235](https://github.com/HushOS/HushOS/issues/235)) ([2512e89](https://github.com/HushOS/HushOS/commit/2512e89eabb7b36338a6550d999d3048b38cf4d7))
+* **mobile:** let folders take a colour on iOS and Android ([#258](https://github.com/HushOS/HushOS/issues/258)) ([9569f0e](https://github.com/HushOS/HushOS/commit/9569f0ef32741b5de9f2b0554632766bbd11e719))
+* open invite links in the apps ([#267](https://github.com/HushOS/HushOS/issues/267)) ([1318cbf](https://github.com/HushOS/HushOS/commit/1318cbf6d56ca34e2754f54e57d3f665131faef8))
+* **tokens:** make the dark ground true black ([#236](https://github.com/HushOS/HushOS/issues/236)) ([9be67b7](https://github.com/HushOS/HushOS/commit/9be67b7e59464a0c08d8512e1f2644e1f965ae7f))
+* **web:** add a dev-only component playground with live controls ([#219](https://github.com/HushOS/HushOS/issues/219)) ([3ab0404](https://github.com/HushOS/HushOS/commit/3ab0404e53ba52835fed85396681544e611eb2d6))
+* **web:** give dragging rows the Marks polish ([#263](https://github.com/HushOS/HushOS/issues/263)) ([57d761a](https://github.com/HushOS/HushOS/commit/57d761ae6568ba0dfdbadd081bdb7d6b76cd5049))
+* **web:** give Drive's lists the Marks motion ([#261](https://github.com/HushOS/HushOS/issues/261)) ([bb7d4b2](https://github.com/HushOS/HushOS/commit/bb7d4b2b61c87eda227892332d7c2d1bdc7627b0))
+* **web:** let people into a family without comparing words ([#231](https://github.com/HushOS/HushOS/issues/231)) ([745fd28](https://github.com/HushOS/HushOS/commit/745fd289c3e15933659dce4ee5e4e1f5e86e3a90))
+* **web:** share with someone as soon as they're added ([#222](https://github.com/HushOS/HushOS/issues/222)) ([c4dff12](https://github.com/HushOS/HushOS/commit/c4dff12150807181aa5865c81674aef455dfe48a))
+
+
+### Bug fixes
+
+* **android:** drop "once approved" from the release notes' Google Play line ([#195](https://github.com/HushOS/HushOS/issues/195)) ([2fcd8c9](https://github.com/HushOS/HushOS/commit/2fcd8c927b603799a452b2524eeacb0e296deab1))
+* **billing:** end a family's unpaid plan before a new one is bought ([#188](https://github.com/HushOS/HushOS/issues/188)) ([deb9b12](https://github.com/HushOS/HushOS/commit/deb9b12ff221d8f0aa0cc9dcda1f9928fb6e4b50))
+* **billing:** keep the newest Polar reading when reconciles overlap ([#205](https://github.com/HushOS/HushOS/issues/205)) ([efa5e47](https://github.com/HushOS/HushOS/commit/efa5e4724601d31ae7d966fd342a5af3c0827e9f))
+* **billing:** revoke a deleted family's plan that Polar bills again ([#189](https://github.com/HushOS/HushOS/issues/189)) ([41cfde5](https://github.com/HushOS/HushOS/commit/41cfde5eb17146caa7b480fcb441d804189d3e2e))
+* confirm a folder's new key before re-keying what it holds ([#254](https://github.com/HushOS/HushOS/issues/254)) ([4759ac6](https://github.com/HushOS/HushOS/commit/4759ac6e8e98ebe9a04bed151c7cf5e90cdd143d))
+* **crypto:** give every ledger a generation no other ledger holds ([#197](https://github.com/HushOS/HushOS/issues/197)) ([a1cc098](https://github.com/HushOS/HushOS/commit/a1cc0982af998ce481cbd73978280eba5a6187b6))
+* **drive:** keep writes off a walk's unconfirmed keys ([#262](https://github.com/HushOS/HushOS/issues/262)) ([b94bd9a](https://github.com/HushOS/HushOS/commit/b94bd9ac2539dbd7cc9535d88055ed0e77486483))
+* **ios:** drop a family the server says you were removed from ([#244](https://github.com/HushOS/HushOS/issues/244)) ([15ec7ee](https://github.com/HushOS/HushOS/commit/15ec7ee8a2b96a9fa6a2d90d269728ae7f9c5ff4))
+* **ios:** heed resync only on a pull's first page ([#246](https://github.com/HushOS/HushOS/issues/246)) ([ed62c5b](https://github.com/HushOS/HushOS/commit/ed62c5b5076d268b78083d302f483c22fe0fc11b))
+* **ios:** name HushOSKit's ServedContactKeys in the tests that also import the core ([#227](https://github.com/HushOS/HushOS/issues/227)) ([81234be](https://github.com/HushOS/HushOS/commit/81234be44bf8d062817b606d2a6b1a87a6658251))
+* **mobile:** leave no rollback marks on a phone after sign-out ([#229](https://github.com/HushOS/HushOS/issues/229)) ([c144e03](https://github.com/HushOS/HushOS/commit/c144e033e182e3e1077fcfd99f8a2530a523ed68))
+* never revoke a share because a check failed for another reason ([#240](https://github.com/HushOS/HushOS/issues/240)) ([3e9518f](https://github.com/HushOS/HushOS/commit/3e9518f78ebff28ba96fcf6bc75176f93dd0f5eb))
+* show a folder once in Recent, not again for what it holds ([#248](https://github.com/HushOS/HushOS/issues/248)) ([70b7855](https://github.com/HushOS/HushOS/commit/70b78558500dafd1b73584508a8fbf190873a5e9))
+* show new and changed files in the system Files app without reopening it ([#245](https://github.com/HushOS/HushOS/issues/245)) ([124298e](https://github.com/HushOS/HushOS/commit/124298ebf59647cd8e910736a1282c2cc616b080))
+* **web:** draw outline buttons as outlines on the black panel ([#237](https://github.com/HushOS/HushOS/issues/237)) ([7546002](https://github.com/HushOS/HushOS/commit/754600263e01a179364dffcbfd08922d6d515fab))
+* **web:** draw the keyboard focus outline again ([#213](https://github.com/HushOS/HushOS/issues/213)) ([fdaa9d3](https://github.com/HushOS/HushOS/commit/fdaa9d3db49481108185fdaaae88ea651081cd86))
+* **web:** keep the Markdown preview inside the screen on phones ([#218](https://github.com/HushOS/HushOS/issues/218)) ([6c08297](https://github.com/HushOS/HushOS/commit/6c0829789173e5b9e425f97ff0d0c2e866631104))
+* **web:** keep the sign-up code behind "Have a code?" ([#209](https://github.com/HushOS/HushOS/issues/209)) ([e350a94](https://github.com/HushOS/HushOS/commit/e350a944641c090a6f9a4f32bd24b0a12b9086cb))
+* **web:** keep toasts at the bottom, in front of the transfers panel ([#223](https://github.com/HushOS/HushOS/issues/223)) ([ec001ee](https://github.com/HushOS/HushOS/commit/ec001ee2feaf25f320c9889858581cff55f7a017))
+* **web:** leave nothing of an account in the browser after sign-out ([#224](https://github.com/HushOS/HushOS/issues/224)) ([aea2985](https://github.com/HushOS/HushOS/commit/aea298561db8c29509a2028e6d0e0af10c31a768))
+* **web:** name the family plan once, and colour members' plan notices ([#220](https://github.com/HushOS/HushOS/issues/220)) ([6abe10d](https://github.com/HushOS/HushOS/commit/6abe10d3c5c3b260dbb69961e0424df57952fc8d))
+* **web:** one section pattern on the family page; rename, cancel and resume a family plan; one Trash list ([#202](https://github.com/HushOS/HushOS/issues/202)) ([6ed4a73](https://github.com/HushOS/HushOS/commit/6ed4a73bd1b49635604158daaed510a31d2864cb))
+* **web:** open a re-check on the words, not the email form ([#217](https://github.com/HushOS/HushOS/issues/217)) ([76ed743](https://github.com/HushOS/HushOS/commit/76ed743f1826c02ba15939a5be0e399c464f26bb))
+* **web:** raise the chosen segment out of a soft groove so the switch reads ([#221](https://github.com/HushOS/HushOS/issues/221)) ([502f1ec](https://github.com/HushOS/HushOS/commit/502f1ec2b28be1071f67565dfa35e59299d879aa))
+* **web:** run the environment and database server plugins ([#255](https://github.com/HushOS/HushOS/issues/255)) ([01bb987](https://github.com/HushOS/HushOS/commit/01bb9879f0c0f061b6aa78dd9a4d259e175765bd))
+
 ## [0.10.0](https://github.com/HushOS/HushOS/compare/v0.9.0...v0.10.0) (2026-10-26)
 
 

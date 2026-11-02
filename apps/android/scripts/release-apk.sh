@@ -14,8 +14,8 @@
 # installed one APK takes updates only from APKs signed with the same key.
 #
 # It uploads HushOS-X.Y.Z.apk and HushOS-X.Y.Z.apk.sha256 (replacing earlier ones) and writes
-# the Android and iOS section of the release's notes (scripts/release-notes-section.sh), so it
-# can run again. The files stay in apps/android/build/release-apk.
+# the Android section of the release's notes (scripts/release-notes-section.sh; the iOS section is
+# apps/ios/scripts/release-ipa.sh's), so it can run again. The files stay in apps/android/build/release-apk.
 set -euo pipefail
 UPLOAD_CERT_SHA256=1B:FD:E7:01:A4:DE:68:3E:BD:7A:3F:18:2E:C6:6C:04:5D:D9:9D:5D:76:BE:67:AD:8F:44:5E:0B:84:BC:FD:F3
 PLAY_URL='https://play.google.com/store/apps/details?id=com.hushos.app'
@@ -138,8 +138,5 @@ Check it before installing: \`shasum -a 256 -c $NAME.sha256\`, then \`apksigner 
 
 Google Play and this APK are signed with different keys (Google's, and HushOS's upload key), so Android won't update one with the other. To switch, uninstall the app first: that removes what it keeps on the phone, such as offline copies, and you sign in again. Your files stay in HushOS.
 
-## iOS
-
-App Store link to come. There is no IPA: Apple doesn't let people install iPhone apps from a download like this.
 EOF
 "$ROOT/scripts/release-notes-section.sh" "$TAG" apps "$WORK/section.md"
