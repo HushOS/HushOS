@@ -269,10 +269,12 @@ public enum TemporaryCopies {
     /*
      * Every copy opened from these workspaces' items as a received share's (a workspace proven a
      * family's, or let go of): the whole `opened/share/<workspace>` folder, under the copies' lock.
+     * Nothing once `session` ended: the copies there now may be the next session's.
      */
-    public static func forgetShareWorkspaces(_ workspaces: Set<String>, in temporary: URL = FileManager.default.temporaryDirectory) {
+    public static func forgetShareWorkspaces(_ workspaces: Set<String>, in temporary: URL = FileManager.default.temporaryDirectory, session: CopySession? = nil) {
         let shares = temporary.appendingPathComponent("opened", isDirectory: true).appendingPathComponent(shareFolder, isDirectory: true)
         forgetLock.withLock {
+            if let session, !session.open { return }
             for id in workspaces {
                 guard let workspace = UUID(uuidString: id) else { continue }
                 try? FileManager.default.removeItem(at: shares.appendingPathComponent(workspace.uuidString.lowercased(), isDirectory: true))
@@ -349,8 +351,14 @@ public enum TemporaryCopies {
      * for it (the version, its address), so a session that ends meanwhile is seen.
      */
     public static func copyGate(familyWorkspace: String?, account: CopyEpoch = .process) -> FamilyCopyGate {
+        copyGate(familyWorkspace: familyWorkspace, session: session(account))
+    }
+
+    /* The same, kept to `session` (a vault's own, Vault.copyGate): refused from the start once that session ended. */
+    public static func copyGate(familyWorkspace: String?, session: CopySession) -> FamilyCopyGate {
         forgetLock.withLock {
-            let epoch = account.value
+            let account = session.account
+            let epoch = session.epoch
             guard let familyWorkspace, let workspace = UUID(uuidString: familyWorkspace) else {
                 return FamilyCopyGate(workspace: nil, generation: 0, account: account, epoch: epoch)
             }
@@ -424,6 +432,9 @@ public struct CopySession: Sendable {
 
     /* Whether the session still stands; read under TemporaryCopies.forgetLock. */
     var open: Bool { account.value == epoch }
+
+    /* Whether the session still stands, taking the copies' lock. */
+    public var stands: Bool { TemporaryCopies.forgetLock.withLock { open } }
 
     /* `body` under the copies' lock while the session stands; nil, and nothing done, once it ended. */
     func whileOpen<T>(_ body: () throws -> T) rethrows -> T? {

@@ -275,8 +275,9 @@ extension Vault {
         }
         // Their plaintext elsewhere too: what was kept on this phone from them (Offline), and the copies opened from their
         // items outside a family's folder (a share's, before its folder was proven a family's). The screens drop the rows.
-        let kept = Offline.forgetWorkspaces(workspaces, ids: Set(gone.map { $0.lowercased() }))
-        TemporaryCopies.forgetShareWorkspaces(workspaces)
+        // Only while this vault's session stands: what is there once it ended may be the next session's.
+        let kept = copySession.whileOpen { Offline.forgetWorkspaces(workspaces, ids: Set(gone.map { $0.lowercased() })) } ?? []
+        TemporaryCopies.forgetShareWorkspaces(workspaces, session: copySession)
         evictedRows.formUnion(gone.union(kept))
         forgetParents(gone)
         return gone

@@ -245,7 +245,7 @@ extension Vault {
         try refuseFamilyWrite(item.node.workspaceId)
         guard !item.isFolder, let destination = Offline.file(for: item) else { throw DriveAPIError.server(400, "Only files can be kept downloaded.") }
         // The session's: a sign-out while it comes down leaves nothing kept (TemporaryCopies.copyGate).
-        let gate = TemporaryCopies.copyGate(familyWorkspace: nil)
+        let gate = copyGate(familyWorkspace: nil)
         let moved = try gate.perform { () -> Bool in
             Unbacked.folder(Offline.root())
             try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)

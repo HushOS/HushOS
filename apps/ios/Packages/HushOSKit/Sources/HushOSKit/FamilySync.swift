@@ -212,11 +212,12 @@ public actor FamilySync: FamilyJudge {
     private var acceptedFamilies: Set<String> = []
 
     public init(vault: Vault, api: GroupsAPI? = nil, records: FamilyRecords = .shared, now: @escaping @Sendable () -> Date = { Date() },
-                temporary: URL = FileManager.default.temporaryDirectory, account: CopyEpoch = .process) {
+                temporary: URL = FileManager.default.temporaryDirectory) {
         self.vault = vault
         self.api = api ?? GroupsAPI(drive: vault.api)
-        // Kept to the session open now: once it ends, nothing this sync does deletes or writes a record or a copy.
-        let session = TemporaryCopies.session(account)
+        // Kept to its vault's session, never the one open as it is made: a sync made late for a replaced vault
+        // deletes and writes no record or copy, its first sweep included, since those there now are the next session's.
+        let session = vault.copySession
         self.session = session
         self.records = records.bound(to: session)
         // The families start with nothing proven: every family copy goes before any family download (sweepCopies).
@@ -230,9 +231,13 @@ public actor FamilySync: FamilyJudge {
     /* The session this sync belongs to (CopySession): its cleanup and record writes do nothing once it ended. */
     public nonisolated let session: CopySession
 
-    /* One per session in this process: the app's screens and any background task share it. */
+    /*
+     * One per session in this process: the app's screens and any background task share it. None
+     * for a vault whose session ended or that a later vault replaced (a family request of the last
+     * session that runs after a sign-in): it would take the new session's place.
+     */
     private static let registry = Registry()
-    public static func shared(for vault: Vault) -> FamilySync { registry.sync(for: vault) }
+    public static func shared(for vault: Vault) -> FamilySync? { registry.sync(for: vault) }
 
     /*
      * Sign-out (and deletion, and a removed device): the session's sync goes, the ledger it held is
@@ -247,9 +252,13 @@ public actor FamilySync: FamilyJudge {
         private let lock = NSLock()
         private weak var vault: Vault?
         private var current: FamilySync?
-        func sync(for vault: Vault) -> FamilySync {
+        /* The latest vault a sync was made for (Vault.serial): an earlier one is replaced, whether its sync is held or not. */
+        private var latest: UInt64 = 0
+        func sync(for vault: Vault) -> FamilySync? {
             lock.withLock {
-                if let current, self.vault === vault { return current }
+                if let current, self.vault === vault, vault.copySession.stands { return current }
+                guard vault.serial >= latest, vault.copySession.stands else { return nil }
+                latest = vault.serial
                 let made = FamilySync(vault: vault)
                 self.vault = vault
                 current = made

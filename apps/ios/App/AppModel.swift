@@ -157,10 +157,11 @@ final class AppModel {
         BackgroundTransfers.shared.vault = nil
         self.user = user
         if !user.email.isEmpty { lastEmail = user.email }
-        vault = Vault.fromKeychain()
         owner = AccountOwner.signedIn
-        // Decrypted copies this process kept for another account go before this one opens anything.
+        // Decrypted copies this process kept for another account go before this one opens anything, and before its
+        // vault is made: a claim ends the copies' session, and a vault keeps to the session it was made in.
         TemporaryCopies.claim(owner)
+        vault = Vault.fromKeychain()
         state = .signedIn
         if let owner { Task { await FilesDomain.register(for: owner) } }
     }

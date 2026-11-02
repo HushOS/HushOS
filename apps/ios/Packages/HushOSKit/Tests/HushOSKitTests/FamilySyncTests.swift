@@ -1078,7 +1078,7 @@ struct FamilyFixture {
     }
 
     /* The member's phone: a vault with their keys and drive, its own ledger, and FamilySync over the stub. */
-    /* `account`: the session epoch its sync is kept to (a test's own, so ending it touches no other test). */
+    /* `account`: the session epoch its vault and sync are kept to (a test's own, so ending it touches no other test). */
     func phone(_ server: FamilyServer, records: FamilyRecords? = nil, guards: FamilyGuardStore? = nil, account: CopyEpoch = CopyEpoch()) async throws -> Phone {
         let session = SharedKeychain.Session(origin: "https://family.test", token: "t", userId: member.userId)
         let configuration = URLSessionConfiguration.ephemeral
@@ -1087,7 +1087,7 @@ struct FamilyFixture {
         Auth.testSession = session
         Auth.testTransport = configuration
         let api = DriveAPI(session: session, configuration: configuration)
-        let vault = Vault(api: api, session: session)
+        let vault = Vault(api: api, session: session, account: account)
         await vault.adopt(accountKey: member.root)
         await vault.adopt(identity: member.keys, envelope: member.envelope)
         // The personal workspace's grant names the account key's version, which a self-grant names too.
@@ -1103,7 +1103,7 @@ struct FamilyFixture {
         held.key = server.guardKey
         // Opened copies in a folder of the test's own, beside the guard: a relaunch passing the same guard finds them.
         let temporary = guards.folder.deletingLastPathComponent().appendingPathComponent(guards.folder.lastPathComponent + "-tmp", isDirectory: true)
-        return Phone(vault: vault, sync: FamilySync(vault: vault, api: GroupsAPI(drive: api), records: store, temporary: temporary, account: account),
+        return Phone(vault: vault, sync: FamilySync(vault: vault, api: GroupsAPI(drive: api), records: store, temporary: temporary),
                      records: store, guards: guards, held: held, temporary: temporary)
     }
 

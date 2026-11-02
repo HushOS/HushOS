@@ -208,9 +208,23 @@ public actor Vault {
     /* The family's sync, for the forms family records are signed again with (weak: it holds this vault). */
     weak var familyJudge: (any FamilyJudge)?
 
-    public init(api: DriveAPI, session: SharedKeychain.Session) {
+    /*
+     * The session of the account this vault was made in (CopySession), taken once, here: every
+     * copy it makes, every sweep and forget of copies, and its family sync's records keep to it,
+     * never to whichever session is open when they run. Once that session ended (a sign-out,
+     * another sign-in), nothing of this vault's writes or deletes a copy or a record, so a late
+     * task of a replaced vault can't touch the next session's.
+     */
+    public nonisolated let copySession: CopySession
+    /* Made in this order in the process: a vault made earlier never takes a later one's place (FamilySync.shared). */
+    nonisolated let serial: UInt64
+
+    /* `account`: the copies' session epoch the vault keeps to (the process's; a test's own in a test). */
+    public init(api: DriveAPI, session: SharedKeychain.Session, account: CopyEpoch = .process) {
         self.api = api
         self.session = session
+        copySession = TemporaryCopies.session(account)
+        serial = Self.made.next()
         defer { api.writeGate.set { [weak self] workspaceId in try await self?.finalGate(workspaceId) } }
         // Copies an earlier version left flat, a share's among them, whose workspace nothing records: gone before any opens.
         TemporaryCopies.dropFlatCopies()
@@ -237,6 +251,19 @@ public actor Vault {
         return current.vault(for: session)
     }
 
+    /* A copy of an item, kept to this vault's session (and a family folder's forget generation): FamilyCopyGate. */
+    public nonisolated func copyGate(familyWorkspace: String?) -> FamilyCopyGate {
+        TemporaryCopies.copyGate(familyWorkspace: familyWorkspace, session: copySession)
+    }
+
+    private static let made = Counter()
+
+    final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: UInt64 = 0
+        func next() -> UInt64 { lock.withLock { value &+= 1; return value } }
+    }
+
     /* Sign-out, deletion, a removed device: the session's vault (and the keys it holds) is let go. */
     public static func forgetCurrent() { current.forget() }
 
@@ -248,7 +275,8 @@ public actor Vault {
 
         func vault(for session: SharedKeychain.Session) -> Vault {
             lock.withLock {
-                if let held, held.session == session { return held }
+                // A vault whose session ended (a sign-out or sign-in since) is never handed out again, whatever it holds.
+                if let held, held.session == session, held.copySession.stands { return held }
                 let made = Vault(api: DriveAPI(session: session), session: session)
                 held = made
                 return made
@@ -862,7 +890,7 @@ public actor Vault {
     public func download(_ nodeId: String, ref: NodeRef? = nil, version: VersionListView? = nil, expectedVersionId: String? = nil, to destination: URL,
                          gate: FamilyCopyGate? = nil, progress: @Sendable (Double) -> Void = { _ in }) async throws {
         // Taken before anything is awaited: a session that ends while the address comes writes nothing.
-        let gate = gate ?? TemporaryCopies.copyGate(familyWorkspace: nil)
+        let gate = gate ?? copyGate(familyWorkspace: nil)
         let item: Opened
         if let ref, let held = opened[ref] {
             item = held

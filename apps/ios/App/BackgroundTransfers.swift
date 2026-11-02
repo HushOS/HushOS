@@ -237,9 +237,10 @@ final class BackgroundTransfers {
         sealing.removeValue(forKey: id)?.cancel()
         for task in await allTasks() where task.taskDescription?.hasPrefix(id.uuidString) == true { task.cancel() }
         // Aborted only under the session of the account that began it; another account's session never names its upload.
-        if let upload = record.familyUpload, TransferOwnership.of(record.owner, signedIn: AccountOwner.signedIn) == .run, let vault = currentVault() {
+        if let upload = record.familyUpload, TransferOwnership.of(record.owner, signedIn: AccountOwner.signedIn) == .run, let vault = currentVault(),
+           let families = FamilySync.shared(for: vault) {
             // HushOSKit's discard: the server's half aborted, the folder (the plaintext included) removed.
-            await FamilyUploads(vault: vault, families: FamilySync.shared(for: vault)).discard(upload, in: folder(id))
+            await FamilyUploads(vault: vault, families: families).discard(upload, in: folder(id))
         } else if let sealed = record.sealed, TransferOwnership.of(record.owner, signedIn: AccountOwner.signedIn) == .run, let vault = currentVault() {
             await vault.abortUpload(sealed)
         }
@@ -388,13 +389,15 @@ final class BackgroundTransfers {
      * session. A record cancelled meanwhile has its begun upload aborted.
      */
     private func sealFamily(_ record: Record, _ vault: Vault) {
-        guard var upload = record.familyUpload, sealing[record.id] == nil, sealing.count < Self.sealingAtOnce else { return }
+        // A vault with no family sync is one a sign-in replaced: the record waits for the new session's.
+        guard var upload = record.familyUpload, sealing[record.id] == nil, sealing.count < Self.sealingAtOnce,
+              let families = FamilySync.shared(for: vault) else { return }
         let id = record.id
         let directory = folder(id)
         sealing[id] = Task { @MainActor in
             defer { sealing[id] = nil }
             let thumbnail = Thumbnails.make(for: FamilyUpload.content(in: directory), mime: upload.mime)
-            let step = await FamilyUploads(vault: vault, families: FamilySync.shared(for: vault))
+            let step = await FamilyUploads(vault: vault, families: families)
                 .seal(&upload, in: directory, thumbnail: thumbnail) { began in
                     Task { @MainActor in
                         guard BackgroundTransfers.shared.record(id)?.keyChangeSince == nil else { return }
@@ -414,12 +417,12 @@ final class BackgroundTransfers {
 
     /* A family upload's completion, from the stored record (after a background launch too). */
     private func finishFamily(_ record: Record, _ vault: Vault) {
-        guard var upload = record.familyUpload, sealing[record.id] == nil else { return }
+        guard var upload = record.familyUpload, sealing[record.id] == nil, let families = FamilySync.shared(for: vault) else { return }
         let id = record.id
         let directory = folder(id)
         sealing[id] = Task { @MainActor in
             defer { sealing[id] = nil }
-            let step = await FamilyUploads(vault: vault, families: FamilySync.shared(for: vault)).finish(&upload, in: directory)
+            let step = await FamilyUploads(vault: vault, families: families).finish(&upload, in: directory)
             guard self.record(id) != nil, !Task.isCancelled else { return }
             apply(step, upload, to: id)
         }
@@ -772,7 +775,8 @@ final class BackgroundTransfers {
 
     /* The signed-in account's vault: one held for an account that is no longer signed in is let go. */
     private func currentVault() -> Vault? {
-        if let held = vault, held.api.session != SharedKeychain.session { vault = nil }
+        // And one whose session ended (signed out or in since): what it would copy or clean up is the next session's.
+        if let held = vault, held.api.session != SharedKeychain.session || !held.copySession.stands { vault = nil }
         if vault == nil { vault = Vault.fromKeychain() }
         return vault
     }

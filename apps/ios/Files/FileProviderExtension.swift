@@ -136,9 +136,10 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         let progress = Progress(totalUnitCount: 100)
         let task = Task {
             do {
-                // The vault first (opening may claim this folder for the account), then the copy's gate, before anything is
-                // awaited: an account change after it writes nothing, and the claim itself never refuses this download.
-                let (vault, copyGate) = try self.gate.openForCopy()
+                // The vault first (opening may claim this folder for the account), then the copy's gate, kept to that
+                // vault's session: an account change after it writes nothing, and the claim itself never refuses this download.
+                let vault = try self.gate.open()
+                let copyGate = vault.copyGate(familyWorkspace: nil)
                 let rootId = try await vault.rootId()
                 // Decrypted into the extension's own temporary directory; Files moves it into place. The path is the
                 // item's and its version's, so when Files asks again after a failure the partial is continued, not orphaned.

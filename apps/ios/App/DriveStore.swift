@@ -1954,7 +1954,7 @@ final class DriveStore {
 
     /* The gate a copy of `item` is made under (FamilyCopyGate): a family folder's item's, else one that lets it through. */
     private func copyGate(_ item: Opened) -> FamilyCopyGate {
-        TemporaryCopies.copyGate(familyWorkspace: isFamily(item) ? item.node.workspaceId : nil)
+        vault.copyGate(familyWorkspace: isFamily(item) ? item.node.workspaceId : nil)
     }
 
     /* Decrypts to a temporary file named as the user sees it, for Quick Look and the share sheet. */

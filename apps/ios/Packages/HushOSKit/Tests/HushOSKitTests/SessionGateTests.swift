@@ -120,6 +120,46 @@ import Testing
         #expect(!ran.isOpen, "a request started for an ended session")
     }
 
+    /*
+     * A family request whose caller was cancelled before it started (the session's screens gone,
+     * `inFamily` queued behind a sign-in) never runs. Fails if the gate starts work for a task that
+     * is already cancelled, which then reaches a vault the sign-in replaced.
+     */
+    @Test func aCancelledTaskNeverRunsItsWork() async {
+        let owner = Owner()
+        let gate = SessionGate<Owner> { owner }
+        let token = try! #require(gate.begin())
+        let ran = Gate()
+        // Cancelled before it gets the main actor: the gate sees a cancelled caller.
+        let queued = Task { @MainActor in await gate.run(token) { _ in ran.open() } }
+        queued.cancel()
+        let result = await queued.value
+        #expect(result == nil, "a cancelled caller was handed an answer")
+        #expect(!ran.isOpen, "a cancelled task ran its work")
+    }
+
+    /*
+     * The session is replaced after the gate took the work and before the work got its turn (a
+     * sign-in queued on the main actor between them): the work never starts. The session reads as
+     * the token's for the token and the run's first check, and as the next session's after. Fails
+     * if the gate checks the session only before scheduling the work and after it answers, not as
+     * the work starts.
+     */
+    @Test func workScheduledBeforeASignInNeverStartsAfterIt() async {
+        let owner = Owner()
+        let next = Owner()
+        var asked = 0
+        let gate = SessionGate<Owner> {
+            asked += 1
+            return asked <= 2 ? owner : next
+        }
+        let token = try! #require(gate.begin())
+        let ran = Gate()
+        let result = await gate.run(token) { _ in ran.open() }
+        #expect(result == nil)
+        #expect(!ran.isOpen, "work of a replaced session started")
+    }
+
     /* The owner a token runs against is its own, never whichever session is current by then. */
     @Test func aTokenRunsAgainstItsOwnSession() async throws {
         let owner = Owner()
@@ -333,6 +373,28 @@ import Testing
         TemporaryCopies.forgetFamily([UUID().uuidString], in: temporary)
         try after.check()
         try TemporaryCopies.copyGate(familyWorkspace: nil).check()
+    }
+
+    /*
+     * A download of a vault a sign-in replaced (a task of the last session that runs late, its gate
+     * taken after the sign-in): nothing is written, family or personal. Fails if a vault's copies
+     * keep to the session open when the gate is taken rather than to the vault's own.
+     */
+    @Test func aReplacedVaultsCopyWritesNothing() async throws {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("copies-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let account = CopyEpoch()
+        let session = SharedKeychain.Session(origin: "https://family.test", token: UUID().uuidString, userId: UUID().uuidString.lowercased())
+        let old = Vault(api: DriveAPI(session: session), session: session, account: account)
+        // The sign-in's close of the last session (closeLastSession), without its process-wide forget of the family sync.
+        TemporaryCopies.endAccount(account)
+        for workspace in [UUID().uuidString.lowercased(), nil] {
+            let file = temporary.appendingPathComponent("\(workspace ?? "own")/content")
+            await #expect(throws: (any Error).self) {
+                try await Resumable.download(to: file, count: 1, chunkBytes: 4, gate: old.copyGate(familyWorkspace: workspace)) { _ in Data("abcd".utf8) }
+            }
+            #expect(!FileManager.default.fileExists(atPath: file.path), "a replaced vault wrote a copy")
+        }
     }
 }
 

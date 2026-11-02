@@ -85,6 +85,67 @@ extension OnFakeDrive {
             #expect(now.records.read(userId: family.member.userId, groupId: family.groupId) != nil, "the last session's sync deleted the new session's record")
         }
 
+        /*
+         * A family request of the last session that runs after the sign-in (`inFamily` queued
+         * behind it) asks for a sync of the last session's vault: none is handed out, the new
+         * session's stays, and a sync made for that vault anyway is kept to that vault's own
+         * session, so its start (which sweeps every family copy) and its cleanup delete nothing the
+         * new session opened or wrote. Fails if a sync takes the session open when it is made rather
+         * than its vault's, or if the registry hands out or swaps in a sync for a replaced vault.
+         */
+        @Test func aSyncMadeForTheLastSessionsVaultAfterASignInDeletesNothing() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let account = CopyEpoch()
+            let old = try await family.phone(server, account: account)
+            defer { old.done(); FamilySync.forget() }
+            guard case .accepted = await old.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            SessionChange.closeLastSession(account: account)
+            // Asked first, while no sync is held (the sign-in let the last one go): still none for the last session's vault.
+            #expect(FamilySync.shared(for: old.vault) == nil, "a sync was made for the last session's vault after the sign-in")
+            let now = try await family.phone(server, records: old.records, guards: old.guards, account: account)
+            guard case .accepted = await now.sync.sync(family.summary) else { Issue.record("not accepted again"); return }
+            _ = try await now.vault.children(of: family.rootId)
+            let folder = try #require(TemporaryCopies.openedFolder(itemId: family.fileId, version: "v1", familyWorkspace: family.workspaceId, in: now.temporary))
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let copy = folder.appendingPathComponent("Recipes.txt")
+            try Data("Pancakes".utf8).write(to: copy)
+            // The new session's copy of the folder as a share's (opened before it was proven a family's), where a vault's
+            // forget looks: the process's temporary folder, under this test's own workspace id.
+            let shares = FileManager.default.temporaryDirectory.appendingPathComponent("opened/share/\(family.workspaceId.lowercased())", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: shares) }
+            let shared = shares.appendingPathComponent("\(family.fileId)/v1/Recipes.txt")
+            try FileManager.default.createDirectory(at: shared.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("Pancakes".utf8).write(to: shared)
+            let held = try #require(FamilySync.shared(for: now.vault))
+            #expect(FamilySync.shared(for: old.vault) == nil, "a sync was handed out for the last session's vault")
+            #expect(FamilySync.shared(for: now.vault) === held, "the last session's vault displaced the new session's sync")
+            let stale = FamilySync(vault: old.vault, api: GroupsAPI(drive: old.vault.api), records: old.records, temporary: now.temporary)
+            await stale.refuse(family.groupId)
+            try? await stale.wipe(family.groupId)
+            #expect(FileManager.default.fileExists(atPath: copy.path), "a sync made for the last session's vault deleted the new session's copy")
+            #expect(FileManager.default.fileExists(atPath: shared.path), "the last session's vault deleted the new session's share copy")
+            #expect(now.records.read(userId: family.member.userId, groupId: family.groupId) != nil, "a sync made for the last session's vault deleted the new session's record")
+        }
+
+        /*
+         * A vault made earlier in the same session epoch (one the keychain's vault replaced without a
+         * sign-out between) asks for a sync after the later one has its own: none is handed out, and
+         * the later vault keeps its sync. Fails if an earlier vault can swap the registry's sync,
+         * which drops the later session's checked families and makes its next sync start over.
+         */
+        @Test func anEarlierVaultNeverTakesALaterOnesPlace() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let account = CopyEpoch()
+            let earlier = try await family.phone(server, account: account)
+            let later = try await family.phone(server, records: earlier.records, guards: earlier.guards, account: account)
+            defer { later.done(); earlier.done(); FamilySync.forget() }
+            let held = try #require(FamilySync.shared(for: later.vault))
+            #expect(FamilySync.shared(for: earlier.vault) == nil, "a sync was handed out for a vault a later one replaced")
+            #expect(FamilySync.shared(for: later.vault) === held, "an earlier vault took the later one's sync")
+        }
+
         @Test func theSameSessionKeepsItsFamily() async throws {
             guard let (family, phone) = try await accepted() else { return }
             defer { phone.done(); FamilySync.forget() }

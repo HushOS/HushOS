@@ -12,8 +12,6 @@ import SwiftUI
  */
 
 extension DriveStore {
-    var families: FamilySync { FamilySync.shared(for: vault) }
-
     /* The session an operation begins in (SessionGate): taken once at its outermost entry and passed down. */
     func beginSession() -> Session? { sessionGate.begin() }
 
@@ -30,9 +28,12 @@ extension DriveStore {
         return try result.get()
     }
 
-    /* A family request of `session` (`inSession`), against that session's family sync. */
+    /* A family request of `session` (`inSession`), against that session's family sync: nil, as dropped, when its vault has none (replaced). */
     func inFamily<T: Sendable>(_ session: Session?, _ work: @escaping @Sendable (FamilySync) async throws -> T) async throws -> T? {
-        try await inSession(session) { try await work(FamilySync.shared(for: $0)) }
+        try await inSession(session) { vault -> T? in
+            guard let families = FamilySync.shared(for: vault) else { return nil }
+            return try await work(families)
+        } ?? nil
     }
 
     /*
@@ -201,8 +202,8 @@ extension DriveStore {
     func joined(_ groupId: String, _ state: FamilyState, revision: UInt64? = nil, session: Session? = nil) async {
         guard let session = session ?? beginSession(), current(session) else { return }
         // Dropped (the session it began in ended) is not "no list": nothing of the old session is shown in the new one.
-        guard let listed = await sessionGate.run(session, { try await FamilySync.shared(for: $0).list() }) else { return }
-        if let list = try? listed.get() {
+        guard let listed = await sessionGate.run(session, { vault -> [GroupSummary]? in try await FamilySync.shared(for: vault)?.list() }) else { return }
+        if let list = (try? listed.get()) ?? nil {
             familyList = list
             familiesSyncedAt = Date()
         }
@@ -267,7 +268,7 @@ extension DriveStore {
             familyShown[summary.id] = view
             for root in view.areas.compactMap({ $0.root?.id.lowercased() }) { familyRoots[root] = summary.id }
             let groupId = summary.id
-            guard let detail = await sessionGate.run(session, { await FamilySync.shared(for: $0).detail(groupId) }), stillShown() else { return }
+            guard let detail = await sessionGate.run(session, { await FamilySync.shared(for: $0)?.detail(groupId) }), stillShown() else { return }
             familyDetails[summary.id] = (try? detail.get()) ?? nil
             // Listed again, not only judged again: a walk since may have re-keyed every row on screen.
             let areas = Set(familyAreaGroups.filter { $0.value == summary.id }.map(\.key))
@@ -358,7 +359,7 @@ extension DriveStore {
             try? FileManager.default.removeItem(at: FileManager.default.temporaryDirectory.appendingPathComponent("opened/own/\(id)", isDirectory: true))
         }
         // Every opened copy of the family's folders, those this session never listed included: never once this session ended.
-        TemporaryCopies.forgetFamily(Array(areas), session: FamilySync.shared(for: vault).session)
+        TemporaryCopies.forgetFamily(Array(areas), session: vault.copySession)
         // A listing of its folders that is out now never undoes this clear.
         familyListings.cleared(groupId)
         familyBook.moved(groupId)

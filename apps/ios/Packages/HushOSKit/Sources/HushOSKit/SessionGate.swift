@@ -42,13 +42,16 @@ public final class SessionGate<Owner: AnyObject & Sendable> {
 
     /*
      * `work` against the token's own owner, its answer or failure; nil when that session ended
-     * or changed before the work could start, or before it answered. Cancelling the caller
-     * cancels the work too.
+     * or changed before the work could start, or before it answered, and nil for a caller
+     * cancelled by then. Cancelling the caller cancels the work too.
      */
     public func run<T: Sendable>(_ token: Token, _ work: @escaping @Sendable (Owner) async throws -> T) async -> Result<T, Error>? {
-        guard current(token) else { return nil }
+        guard !Task.isCancelled, current(token) else { return nil }
         let owner = token.owner
-        let task = Task { () -> Result<T, Error> in
+        // On the main actor, as the gate is: checked again as the work starts, since a reset or a cancel can land
+        // between scheduling it and its turn, and work that runs then would reach a vault a sign-in replaced.
+        let task = Task { () -> Result<T, Error>? in
+            guard !Task.isCancelled, self.current(token) else { return nil }
             do { return .success(try await work(owner)) } catch { return .failure(error) }
         }
         let id = UUID()
