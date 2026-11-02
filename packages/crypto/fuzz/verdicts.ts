@@ -1502,7 +1502,7 @@ function guardCovers(next: Json, held: Json) {
  * what the page last stored (each check's escalation), which a lock or a
  * relaunch restores, and `after` what was stored after each step.
  */
-function sessionRules(base: Json, settings: string, steps: Json[], outcomes: Json[]) {
+export function sessionRules(base: Json, settings: string, steps: Json[], outcomes: Json[]) {
     type Book = { held: Map<string, string>; tried: boolean };
     const empty = (): Book => ({ held: new Map(), tried: false });
     const copy = (b: Book): Book => ({ held: new Map(b.held), tried: b.tried });
@@ -1514,7 +1514,6 @@ function sessionRules(base: Json, settings: string, steps: Json[], outcomes: Jso
     let pending: Book | null = null;
     let life = 0;
     const shownIn = new Map<number, number>();
-    let joined = false;
     const used = new Set<number>();
     // The marks with keys this device holds, each a history and the roster it reaches: the
     // settings pin, a guard handed (pin-main-2, or the held one from the step that handed it
@@ -1546,6 +1545,8 @@ function sessionRules(base: Json, settings: string, steps: Json[], outcomes: Jso
         if (settings === 'pin-main-2') marks.push(main2);
         if (step.guard === 'pin-main-2') marks.push(main2);
         if (step.guard === 'held' && guardFrom) marks.push(guardFrom);
+        // The session's floor, as this step found it: a chain committed earlier in this unlock.
+        const floor = committed !== null;
         if (committed) marks.push(committed);
         if (from !== undefined && outcomes[from]!.status === 'first-use')
             marks.push({ served: steps[from]!.served, version: outcomes[from]!.rosterVersion });
@@ -1671,26 +1672,27 @@ function sessionRules(base: Json, settings: string, steps: Json[], outcomes: Jso
             );
             invariant(!used.has(from!), `step ${at}: a match joined twice in one unlock`);
             used.add(from!);
-            joined = true;
         } else if (
             step.op === 'sync' &&
             status === 'accepted' &&
             settings !== 'pin-main-2' &&
             handed === null
         ) {
-            // Without a settings pin or a guard, only a join gives this device a mark.
-            invariant(joined, `step ${at}: a family accepted before any join`);
+            // Without a settings pin or a guard handed, only the session's floor is a mark: a chain
+            // committed earlier in this unlock, by a join or by a sync this rule (or a pin or a
+            // guard) let through, so every acceptance still goes back to a join, a pin or a guard.
+            // A guard outlives a relaunch, a lock and a wipe (2.8), so a sync it let through after
+            // one is a floor as good as a join's.
+            invariant(floor, `step ${at}: a family accepted with no mark`);
         } else if (step.op === 'relaunch' || step.op === 'lock') {
             life += 1;
             pending = step.restore === true ? copy(kept) : null;
             book = empty();
-            joined = false;
             committed = null;
             used.clear();
         } else if (step.op === 'restore' && status !== 'skipped') {
             pending = copy(after[step.from]!);
         } else if (step.op === 'forget' && status === 'forgotten') {
-            joined = false;
             committed = null;
             used.clear();
         }

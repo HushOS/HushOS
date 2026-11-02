@@ -588,6 +588,30 @@ export function documents(target: Target): Uint8Array[] {
                         ],
                     }),
                 ]),
+                // A guard kept past a wipe or a relaunch lets a sync in again, and the chain it
+                // commits is the session's floor: a later sync with no guard handed accepts on it
+                // (nightly 2026-10-30 to 11-02, which read that as a family accepted with no join).
+                ...(['forget', 'relaunch'] as const).map((reset) =>
+                    json({
+                        kind: 'join_session',
+                        settings: 'none',
+                        steps: [
+                            { op: 'first-use', served: { history: 'removal', through: 3 } },
+                            {
+                                op: 'accept',
+                                matched: 0,
+                                served: { history: 'removal', through: 3 },
+                            },
+                            { op: reset },
+                            {
+                                op: 'sync',
+                                served: { history: 'removal', through: 3 },
+                                guard: 'held',
+                            },
+                            { op: 'sync', served: { history: 'removal', through: 5 } },
+                        ],
+                    }),
+                ),
                 // "They match" and the join on the same served chain, right and misheard.
                 ...(
                     [

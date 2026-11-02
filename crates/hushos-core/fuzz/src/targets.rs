@@ -1040,7 +1040,6 @@ fn session_rules(base: &Value, settings: &str, steps: &[Value], outcomes: &[Valu
     let mut pending: Option<Book> = None;
     let mut life = 0usize;
     let mut shown_in: HashMap<usize, usize> = HashMap::new();
-    let mut joined = false;
     let mut used: HashSet<usize> = HashSet::new();
     // The marks with keys this device holds, each a history and the roster it reaches: the
     // settings pin, a guard handed (pin-main-2, or the held one from the step that handed it
@@ -1075,6 +1074,8 @@ fn session_rules(base: &Value, settings: &str, steps: &[Value], outcomes: &[Valu
         if let (Some("held"), Some(mark)) = (step["guard"].as_str(), &guard_from) {
             marks.push(mark.clone());
         }
+        // The session's floor, as this step found it: a chain committed earlier in this unlock.
+        let floor = committed.is_some();
         if let Some(mark) = &committed {
             marks.push(mark.clone());
         }
@@ -1203,17 +1204,19 @@ fn session_rules(base: &Value, settings: &str, steps: &[Value], outcomes: &[Valu
                     "step {at}: a join without a match"
                 );
                 assert!(used.insert(from), "step {at}: a match joined twice in one unlock");
-                joined = true;
             }
-            // Without a settings pin or a guard, only a join gives this device a mark.
+            // Without a settings pin or a guard handed, only the session's floor is a mark: a chain
+            // committed earlier in this unlock, by a join or by a sync this rule (or a pin or a
+            // guard) let through, so every acceptance still goes back to a join, a pin or a guard.
+            // A guard outlives a relaunch, a lock and a wipe (2.8), so a sync it let through after
+            // one is a floor as good as a join's.
             "sync" if status == "accepted" && settings != "pin-main-2" && !handed => {
-                assert!(joined, "step {at}: a family accepted before any join")
+                assert!(floor, "step {at}: a family accepted with no mark")
             }
             "relaunch" | "lock" => {
                 life += 1;
                 pending = (step["restore"] == true).then(|| kept.clone());
                 book = Book::default();
-                joined = false;
                 committed = None;
                 used.clear();
             }
@@ -1221,7 +1224,6 @@ fn session_rules(base: &Value, settings: &str, steps: &[Value], outcomes: &[Valu
                 pending = Some(after[step["from"].as_u64().unwrap() as usize].clone());
             }
             "forget" if status == "forgotten" => {
-                joined = false;
                 committed = None;
                 used.clear();
             }
@@ -2123,5 +2125,55 @@ mod tests {
         assert!(holds(chain("succ", 3), chain("succBare", 2), 2));
         // Below the roster a succession is tied at, it is not the mark's to hold.
         assert!(holds(chain("removalBare", 5), chain("removal", 4), 4));
+    }
+
+    /*
+     * A sync with no settings pin and no guard handed is accepted only on the session's floor: after a
+     * wipe or a relaunch drops it, an acceptance with nothing committed since is refused by the
+     * oracle, and one after a guarded sync committed again is not. Hand-built outcomes, as a core
+     * that accepted with no mark would return them.
+     */
+    #[test]
+    fn a_sync_with_no_mark_fails_the_session_oracle() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        let base = &fixtures::core_join()["joinPreviews"];
+        let chain = |through: u64| json!({ "history": "removal", "through": through, "cut": null });
+        let guard =
+            |roster: u64, key: u64| json!({ "rosterVersion": roster, "keyVersion": key, "areas": {} });
+        let run = |reset: &str, guarded: bool| {
+            let mut steps = vec![
+                json!({ "op": "first-use", "served": chain(3) }),
+                json!({ "op": "accept", "matched": 0, "served": chain(3) }),
+                json!({ "op": reset }),
+            ];
+            let mut outcomes = vec![
+                json!({ "status": "first-use", "rosterVersion": 3 }),
+                json!({ "status": "accepted", "rosterVersion": 3, "guard": guard(3, 1) }),
+                match reset {
+                    "forget" => json!({ "status": "forgotten", "guard": null, "unreadable": false }),
+                    _ => json!({ "status": "relaunched" }),
+                },
+            ];
+            if guarded {
+                steps.push(json!({ "op": "sync", "served": chain(3), "guard": "held" }));
+                outcomes.push(json!({ "status": "accepted", "rosterVersion": 3, "guard": null }));
+            }
+            steps.push(json!({ "op": "sync", "served": chain(5) }));
+            outcomes.push(json!({ "status": "accepted", "rosterVersion": 5, "guard": guard(5, 2) }));
+            catch_unwind(AssertUnwindSafe(|| session_rules(base, "none", &steps, &outcomes)))
+                .map_err(|panic| panic.downcast_ref::<String>().cloned().unwrap_or_default())
+        };
+        for reset in ["forget", "relaunch"] {
+            assert_eq!(
+                run(reset, false),
+                Err("step 3: a family accepted with no mark".to_string()),
+                "an unguarded sync after a {reset} with nothing committed since"
+            );
+            assert_eq!(
+                run(reset, true),
+                Ok(()),
+                "an unguarded sync on the floor a guarded {reset} sync committed"
+            );
+        }
     }
 }

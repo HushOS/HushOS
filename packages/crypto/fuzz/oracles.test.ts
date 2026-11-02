@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { coreJoin } from './fixtures';
-import { sessionHoldsMark } from './verdicts';
+import { sessionHoldsMark, sessionRules } from './verdicts';
 
 /*
  * The oracles the fuzz kinds hold both twins to, against the fixtures: an
@@ -50,5 +50,40 @@ describe('the join session oracle', () => {
         expect(holdsIn(chain('succ', 3), chain('succBare', 2), 2)).toBe(true);
         // Below the roster a succession is tied at, it is not the mark's to hold.
         expect(holdsIn(chain('removalBare', 5), chain('removal', 4), 4)).toBe(true);
+    });
+
+    // Hand-built outcomes, as a twin that accepted with no mark would return them.
+    it('fails a sync with no pin or guard handed unless this unlock committed a chain', () => {
+        const chain = (through: number) => ({ history: 'removal', through, cut: null });
+        const guard = (rosterVersion: number, keyVersion: number) => ({
+            rosterVersion,
+            keyVersion,
+            areas: {},
+        });
+        const run = (reset: 'forget' | 'relaunch', guarded: boolean) => () => {
+            const steps = [
+                { op: 'first-use', served: chain(3) },
+                { op: 'accept', matched: 0, served: chain(3) },
+                { op: reset },
+                ...(guarded ? [{ op: 'sync', served: chain(3), guard: 'held' }] : []),
+                { op: 'sync', served: chain(5) },
+            ];
+            const outcomes = [
+                { status: 'first-use', rosterVersion: 3 },
+                { status: 'accepted', rosterVersion: 3, guard: guard(3, 1) },
+                reset === 'forget'
+                    ? { status: 'forgotten', guard: null, unreadable: false }
+                    : { status: 'relaunched' },
+                ...(guarded ? [{ status: 'accepted', rosterVersion: 3, guard: null }] : []),
+                { status: 'accepted', rosterVersion: 5, guard: guard(5, 2) },
+            ];
+            sessionRules(base, 'none', steps, outcomes);
+        };
+        for (const reset of ['forget', 'relaunch'] as const) {
+            // The floor went with the reset and nothing was committed since: no mark at all.
+            expect(run(reset, false)).toThrow('step 3: a family accepted with no mark');
+            // The held guard let a sync in again, and the chain it committed is the floor.
+            expect(run(reset, true)).not.toThrow();
+        }
     });
 });
