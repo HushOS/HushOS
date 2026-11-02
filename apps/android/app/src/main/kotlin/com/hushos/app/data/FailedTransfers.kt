@@ -20,6 +20,8 @@ data class FailedTransfer(
     val family: String? = null, val familyWorkspace: String? = null,
     /* The upload ledger's key its reservations are kept under (Reservations): the first job's id, carried by every Retry. */
     val ledger: String? = null,
+    /* A save from the Files app: its document and its place among the document's saves (WriteBacks), kept by a Retry. */
+    val chain: String? = null, val order: Long? = null,
 ) {
     /* Whose reservations this row's upload holds: its ledger key, or its own id for a job that carried none. */
     val ledgerKey: String get() = ledger ?: id
@@ -36,7 +38,8 @@ data class FailedTransfer(
             return FailedTransfer(info.id.toString(), tag("kind:") ?: TransferQueue.UPLOAD, name, out.getString("message") ?: "The transfer failed.",
                 System.currentTimeMillis(), out.getString("file") ?: tag("file:"), out.getString("mime"), out.getString("folder"), out.getString("replacing"),
                 tag("node:"), "folder" in info.tags, out.getString("share"),
-                family = out.getString("family") ?: tag("family:"), familyWorkspace = out.getString("familyWorkspace"), ledger = out.getString("ledger") ?: tag("ledger:"))
+                family = out.getString("family") ?: tag("family:"), familyWorkspace = out.getString("familyWorkspace"), ledger = out.getString("ledger") ?: tag("ledger:"),
+                chain = out.getString("chain") ?: tag(WriteBacks.CHAIN), order = out.getLong("order", -1L).takeIf { it >= 0 } ?: tag(WriteBacks.ORDER)?.toLongOrNull())
         }
     }
 
@@ -67,12 +70,13 @@ class FailedTransfers(private val store: File) {
 
     private fun encode(t: FailedTransfer) = listOf(
         t.id, t.kind, t.name, t.reason, t.at.toString(), t.file, t.mime, t.folder, t.replacing, t.node, t.isFolder.toString(), t.shareRoot,
-        t.family, t.familyWorkspace, t.ledger,
+        t.family, t.familyWorkspace, t.ledger, t.chain, t.order?.toString(),
     ).joinToString("\t") { if (it == null) "-" else "=" + URLEncoder.encode(it, "UTF-8") }
 
     private fun decode(line: String): FailedTransfer? = runCatching {
         val f = line.split("\t").map { if (it == "-") null else URLDecoder.decode(it.removePrefix("="), "UTF-8") }
-        FailedTransfer(f[0]!!, f[1]!!, f[2]!!, f[3]!!, f[4]!!.toLong(), f[5], f[6], f[7], f[8], f[9], f[10] == "true", f[11], f.getOrNull(12), f.getOrNull(13), f.getOrNull(14))
+        FailedTransfer(f[0]!!, f[1]!!, f[2]!!, f[3]!!, f[4]!!.toLong(), f[5], f[6], f[7], f[8], f[9], f[10] == "true", f[11], f.getOrNull(12), f.getOrNull(13), f.getOrNull(14),
+            f.getOrNull(15), f.getOrNull(16)?.toLongOrNull())
     }.getOrNull()
 
     companion object {

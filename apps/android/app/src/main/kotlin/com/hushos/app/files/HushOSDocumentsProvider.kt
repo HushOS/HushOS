@@ -21,6 +21,7 @@ import com.hushos.app.data.NotAuthenticated
 import com.hushos.app.data.Opened
 import com.hushos.app.data.Shared
 import com.hushos.app.data.Vault
+import com.hushos.app.data.WriteBacks
 import com.hushos.app.data.sync
 import com.hushos.app.data.buildCatalogue
 import com.hushos.app.data.Offline
@@ -310,26 +311,63 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         // Written by another app: the bytes land in a file of their own and go up as a new version when it closes.
         // Never the version's read copy: if the upload fails, a later read must not show edits the server never got.
         val edit = File(context!!.cacheDir, "edits/$id/${java.util.UUID.randomUUID()}").also { it.parentFile?.mkdirs() }
+        val chain = WriteBacks.chainOf(item.node.workspaceId, id)
         if (mode.contains("r")) {
-            if (!file.exists()) vault.download(id, file)
-            file.copyTo(edit, overwrite = true)
+            // The newest save of it not landed yet, when there is one (WriteBacks): never the server's older version,
+            // which that save would then replace, dropping this edit's start.
+            val pending = WriteBacks.newestPending(context!!, chain)
+            if (pending == null || runCatching { pending.copyTo(edit, overwrite = true) }.isFailure) {
+                if (!file.exists()) vault.download(id, file)
+                file.copyTo(edit, overwrite = true)
+            }
         }
         val handler = Handler(Looper.getMainLooper())
-        ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), handler) { error ->
-            if (error != null) { edit.delete(); return@open }
-            Thread {
-                val fresh = runCatching { vault.resolve(id) }.getOrNull()
-                val sent = fresh != null && runCatching {
+        ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), handler) { error -> onEditClosed(error, vault, id, documentId, edit, item, chain) }
+    }
+
+    /* Tests: where a closed edit's write-back runs (a thread of its own). */
+    internal var spawn: (Runnable) -> Unit = { Thread(it).start() }
+
+    /*
+     * The other app closed what it wrote. Its place among the document's saves is taken here, in the close callback,
+     * before anything runs on another thread: two closes back to back keep their order whichever write-back gets further
+     * first (WriteBacks.land supersedes the older if the newer lands first).
+     */
+    internal fun onEditClosed(error: java.io.IOException?, vault: Vault, id: String, documentId: String, edit: File, opened: com.hushos.app.data.Opened, chain: String) {
+        if (error != null) { edit.delete(); return }
+        val order = WriteBacks.nextOrder()
+        WriteBacks.closing(chain, order, edit)
+        spawn(Runnable { personalWriteBack(vault, id, documentId, edit, opened, chain, order) })
+    }
+
+    /*
+     * What another app wrote, once it closed the file: a new version, landing only while no newer save of the file has
+     * (WriteBacks.land; a newer one that landed first supersedes it, nothing sent). Not sent now (no network, the name it
+     * keeps couldn't be checked, or the file's row couldn't be looked up now): the queue takes the edit with its place and
+     * tries again, rather than the edit being dropped; the job looks the file up again itself.
+     */
+    internal fun personalWriteBack(vault: Vault, id: String, documentId: String, edit: File, opened: com.hushos.app.data.Opened, chain: String, order: Long) {
+        try {
+            val fresh = runCatching { vault.resolve(id) }.getOrNull()
+            val sent = fresh != null && try {
+                WriteBacks.land(context!!, chain, order) {
                     vault.upload(edit, fresh.name, fresh.metadata.mime, fresh.node.parentId ?: vault.rootId, fresh, vault.makeThumbnail(edit, fresh.metadata.mime))
-                    context!!.contentResolver.notifyChange(DocumentsContract.buildDocumentUri(authority, documentId), null)
-                }.isSuccess
-                // Not sent now (no network, or the name it keeps couldn't be checked): the queue takes the edit and tries
-                // again, rather than the edit being dropped.
-                if (!sent && fresh != null) runCatching {
-                    com.hushos.app.data.TransferQueue.upload(context!!, edit, fresh.name, fresh.metadata.mime, fresh.node.parentId ?: vault.rootId, fresh.id)
                 }
-                edit.delete()
-            }.start()
+                context!!.contentResolver.notifyChange(DocumentsContract.buildDocumentUri(authority, documentId), null)
+                true
+            } catch (_: WriteBacks.Superseded) {
+                true
+            } catch (_: Exception) {
+                false
+            }
+            if (!sent) runCatching {
+                val known = fresh ?: opened
+                com.hushos.app.data.TransferQueue.upload(context!!, edit, known.name, known.metadata.mime, known.node.parentId ?: vault.rootId, known.id,
+                    chain = chain, order = order)
+            }
+        } finally {
+            WriteBacks.settled(chain, order)
+            edit.delete()
         }
     }
 
