@@ -480,3 +480,74 @@
         filter: blur(2px);
     }
 }
+
+/*
+ * Dragging rows (FolderView's DragCard): the rows being dragged fade back, and the
+ * folder they are over takes its own colour (folderTint; the plain folder colour when
+ * it has none) in place of the accent. The card lifts in, its marks fanned with a
+ * soft edge so white sheets stay apart, and on a drop it shrinks into the folder's
+ * mark. Reduced motion keeps the fade and the colour and drops the movement.
+ */
+[data-node-id][data-dragging] {
+    opacity: 0.4;
+}
+
+[data-node-id][data-drop-over] {
+    background-color: color-mix(in oklab, var(--folder-front) 28%, var(--surface));
+    --tw-ring-color: var(--folder-back);
+}
+
+[data-drag-mark] {
+    filter: drop-shadow(0 1px 1.5px rgb(23 32 58 / 0.28));
+}
+
+[data-drag-mark] + [data-drag-mark] {
+    filter: drop-shadow(0 1px 1.5px rgb(23 32 58 / 0.28)) brightness(0.93);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not(.light) [data-drag-mark] {
+        filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.6));
+    }
+
+    :root:not(.light) [data-drag-mark] + [data-drag-mark] {
+        filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.6)) brightness(0.85);
+    }
+}
+
+.dark [data-drag-mark] {
+    filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.6));
+}
+
+.dark [data-drag-mark] + [data-drag-mark] {
+    filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.6)) brightness(0.85);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    [data-drag-card] {
+        transform-origin: 26px 26px;
+        animation: card-lift 160ms cubic-bezier(0.2, 0, 0, 1) both;
+    }
+
+    [data-drag-card][data-landing] {
+        scale: 0.35;
+        opacity: 0;
+        transition:
+            left 220ms cubic-bezier(0.4, 0, 0.2, 1),
+            top 220ms cubic-bezier(0.4, 0, 0.2, 1),
+            scale 220ms cubic-bezier(0.4, 0, 0.2, 1),
+            opacity 160ms ease-in 60ms;
+    }
+
+    [data-drag-mark] {
+        transition: transform 160ms cubic-bezier(0.2, 0, 0, 1);
+    }
+}
+
+@keyframes card-lift {
+    from {
+        opacity: 0;
+        scale: 0.92;
+        translate: 0 4px;
+    }
+}

@@ -16,19 +16,13 @@ export function FolderMark({
     colour?: string;
     className?: string;
 }) {
-    const hue = colour ? colourHue(colour) : null;
+    const tint = folderTint(colour);
     return (
         <span
             aria-hidden="true"
-            data-folder-colour={hue ? '' : undefined}
+            data-folder-colour={tint['data-folder-colour']}
             className={cn('flex shrink-0 items-center justify-center', className)}
-            style={
-                {
-                    width: box,
-                    height: box,
-                    ...(hue ? { '--fh': hue.hue.toFixed(1), '--fs': hue.strength.toFixed(3) } : {}),
-                } as CSSProperties
-            }
+            style={{ width: box, height: box, ...tint.style }}
         >
             <svg width={box} height={box * 0.82} viewBox="0 0 56 46">
                 <path
@@ -42,6 +36,23 @@ export function FolderMark({
             </svg>
         </span>
     );
+}
+
+/*
+ * What puts an element in a folder's own colour (styles.css [data-folder-colour]): its
+ * --folder-front and --folder-back for the folder mark, and for anything else drawn in
+ * the folder's colour, such as its row as a drop target. None is the plain folder colour.
+ */
+export function folderTint(colour: string | null | undefined): {
+    'data-folder-colour'?: '';
+    style?: CSSProperties;
+} {
+    if (!colour) return {};
+    const { hue, strength } = colourHue(colour);
+    return {
+        'data-folder-colour': '',
+        style: { '--fh': hue.toFixed(1), '--fs': strength.toFixed(3) } as CSSProperties,
+    };
 }
 
 /* A swatch for a colour in a picker: the colour at a folder front's weight, the same in every theme. */
