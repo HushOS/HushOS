@@ -155,7 +155,7 @@ class FamiliesModelRacesTest {
         // The connection drops before the server answers: no answer at all.
         server.beforeAnswer = { _, path -> if (path.startsWith("groups")) throw java.io.IOException("dropped") }
         runBlocking { model.refreshFamily(family.summary) }
-        assertEquals(FamilyState.Failed(FamilyWords.NO_ANSWER), model.states[family.groupId])
+        assertEquals(FamilyState.Failed(FamilyWords.NO_ANSWER, transient = true), model.states[family.groupId])
         assertTrue("the rows left the screen", host.state.value.folders.containsKey(family.rootId))
         assertEquals("the mark vanished on no answer", warned, model.verdict(row))
     }
@@ -219,7 +219,9 @@ class FamiliesModelRacesTest {
         release.countDown()
         refresh.join(10_000)
         check.join(10_000)
-        assertTrue("${model.states[family.groupId]}", model.states[family.groupId] is FamilyState.Accepted)
+        // The check's sync met the fork, and a refusal any sync meets reaches the screens (FamilySync.takeRemovals): the
+        // fork shows already, and the refresh's older acceptance, landing after it, never covers it.
+        assertTrue("${model.states[family.groupId]}", model.states[family.groupId] is FamilyState.Fork)
         val found = start ?: throw AssertionError("the member check never finished")
         assertTrue("${found.state}", found.state is FamilyState.Fork)
         assertTrue("the fork found later was dropped", runBlocking { model.adopt(found.state, family.summary, session, found.revision) })
