@@ -7,11 +7,24 @@
 
 use std::collections::HashMap;
 
+use crate::error::{CoreError, CoreResult};
+
 const COLOUR_ATTRIBUTE: &str = "colour";
 
 /// The swatches offered for a folder beside the plain folder colour, in the web's order.
 pub const FOLDER_COLOURS: [&str; 8] =
     ["#70adfb", "#53c48e", "#f28881", "#aa9cf7", "#00c3cb", "#e488be", "#8fbb5f", "#e99355"];
+
+/// The swatches' names, in `FOLDER_COLOURS`' order, as the web's colour dialog says them.
+const SWATCH_NAMES: [&str; 8] = ["Blue", "Mint", "Coral", "Violet", "Teal", "Pink", "Lime", "Orange"];
+
+/// A swatch a person can pick for a folder: its stored colour and the name it is offered under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FolderSwatch {
+    pub colour: String,
+    pub name: String,
+}
 
 /// One scheme's folder steps: front and back lightness and vividness in OKLCH.
 struct Steps {
@@ -68,6 +81,51 @@ pub fn folder_shades(attributes: HashMap<String, String>) -> Option<FolderShades
         dark_high_front: draw(DARK_HIGH.front_l, DARK_HIGH.front_c),
         dark_high_back: draw(DARK_HIGH.back_l, DARK_HIGH.back_c),
     })
+}
+
+/// The swatches offered for a folder, in the web's order, beside the plain folder colour.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn folder_swatches() -> Vec<FolderSwatch> {
+    FOLDER_COLOURS
+        .iter()
+        .zip(SWATCH_NAMES)
+        .map(|(colour, name)| FolderSwatch { colour: (*colour).to_owned(), name: name.to_owned() })
+        .collect()
+}
+
+/// A colour a person typed or picked, as it is stored (trimmed, lower case), or `None` when it is not one.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn to_colour(value: String) -> Option<String> {
+    let lower = value.trim().to_ascii_lowercase();
+    is_colour(&lower).then_some(lower)
+}
+
+/// A folder's attributes with its colour set, or with `None` taken back to the plain folder
+/// colour; every other attribute is kept as it was. A colour that is not one is refused.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn with_folder_colour(
+    attributes: HashMap<String, String>,
+    colour: Option<String>,
+) -> CoreResult<HashMap<String, String>> {
+    let mut next = attributes;
+    match colour {
+        None => {
+            next.remove(COLOUR_ATTRIBUTE);
+        }
+        Some(colour) => {
+            let clean = to_colour(colour).ok_or_else(|| CoreError::Input("Choose a colour.".into()))?;
+            next.insert(COLOUR_ATTRIBUTE.to_owned(), clean);
+        }
+    }
+    Ok(next)
+}
+
+/// A colour as a picker draws its swatch, as ARGB: the web's `swatchColour`, at a folder
+/// front's weight and the same in every scheme. A value that is not a colour draws grey.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn swatch_argb(colour: String) -> u32 {
+    let (hue, strength) = to_colour(colour).map_or((0.0, 0.0), |clean| hue_of(&clean));
+    argb(0.74, 0.13 * strength, hue)
 }
 
 fn to_linear(channel: u8) -> f64 {
@@ -135,6 +193,40 @@ mod tests {
             assert_eq!(folder_shades(colour(bad)), None, "{bad}");
         }
         assert_eq!(folder_shades(HashMap::new()), None);
+    }
+
+    #[test]
+    fn a_colour_change_keeps_every_other_attribute() {
+        let mut attributes = colour("#123456");
+        attributes.insert("zz-later".into(), "kept".into());
+        let set = with_folder_colour(attributes.clone(), Some(" #7C5CBF ".into())).unwrap();
+        assert_eq!(set.get("colour").map(String::as_str), Some("#7c5cbf"));
+        assert_eq!(set.get("zz-later").map(String::as_str), Some("kept"));
+        let plain = with_folder_colour(attributes, None).unwrap();
+        assert_eq!(plain, HashMap::from([("zz-later".to_owned(), "kept".to_owned())]));
+    }
+
+    #[test]
+    fn a_colour_that_is_not_one_is_refused() {
+        for bad in ["blue", "#fff", "", "oklch(0.7 0.1 250)", "#12345g"] {
+            assert!(with_folder_colour(HashMap::new(), Some(bad.into())).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_swatches_are_the_webs_in_order_with_names() {
+        let swatches = folder_swatches();
+        assert_eq!(swatches.iter().map(|s| s.colour.as_str()).collect::<Vec<_>>(), FOLDER_COLOURS);
+        assert_eq!(swatches[0].name, "Blue");
+        assert_eq!(swatches[7].name, "Orange");
+    }
+
+    #[test]
+    fn a_swatch_is_drawn_in_its_hue_and_a_bad_value_grey() {
+        let (r, g, b) = channels(swatch_argb(FOLDER_COLOURS[0].into()));
+        assert!(b > r && b > g, "{r} {g} {b}");
+        let (r, g, b) = channels(swatch_argb("nope".into()));
+        assert!((r - g).abs() <= 1 && (g - b).abs() <= 1, "{r} {g} {b}");
     }
 
     #[test]
