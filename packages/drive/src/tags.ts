@@ -12,7 +12,12 @@ export const MAX_TAGS = 200;
 export const MAX_TAGS_PER_NODE = 16;
 export const TAG_NAME_MAX_CODE_POINTS = 40;
 
-/* The five Ledger colours a new tag cycles through, and any hex colour a person picks instead. */
+import { FOLDER_COLOURS } from './colour';
+
+/*
+ * The five Ledger colours tags were first given, still read wherever a tag has one. A
+ * colour is otherwise any hex a person picks; new tags take the swatches folders offer.
+ */
 export const TAG_PRESETS = ['blue', 'ink', 'yellow', 'teal', 'coral'] as const;
 export const TAG_COLOURS = TAG_PRESETS;
 export type TagPreset = (typeof TAG_PRESETS)[number];
@@ -128,9 +133,12 @@ export function findTag(registry: TagRegistry, name: string) {
     return registry.tags.find((tag) => fold(tag.name) === wanted) ?? null;
 }
 
-/* The colour a new tag would get if nobody chose one: the next in the cycle. */
+/* The swatches offered for a tag, the ones folders offer, stored as their hex. */
+export const OFFERED_TAG_COLOURS = FOLDER_COLOURS as readonly TagColour[];
+
+/* The colour a new tag would get if nobody chose one: the next swatch in the cycle. */
 export function nextColour(registry: TagRegistry): TagColour {
-    return TAG_PRESETS[registry.tags.length % TAG_PRESETS.length]!;
+    return OFFERED_TAG_COLOURS[registry.tags.length % OFFERED_TAG_COLOURS.length]!;
 }
 
 /* A new tag, in the chosen colour or the next in the cycle; an existing name is returned as is. */

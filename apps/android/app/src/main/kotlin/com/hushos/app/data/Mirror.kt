@@ -163,4 +163,11 @@ class Mirror private constructor(context: Context) : SQLiteOpenHelper(context, "
     fun putThumbnail(versionId: String, sealed: ByteArray) {
         writableDatabase.insertWithOnConflict("thumbnails", null, ContentValues().apply { put("version_id", versionId); put("bytes", sealed) }, SQLiteDatabase.CONFLICT_REPLACE)
     }
+
+    /* The thumbnails kept for these versions, gone (a family folder let go of: what was opened of it keeps nothing here). */
+    fun dropThumbnails(versionIds: Collection<String>) {
+        if (versionIds.isEmpty()) return
+        val db = writableDatabase
+        for (id in versionIds) db.delete("thumbnails", "version_id = ?", arrayOf(id))
+    }
 }

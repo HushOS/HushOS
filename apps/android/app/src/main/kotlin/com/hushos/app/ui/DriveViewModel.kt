@@ -200,6 +200,11 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     private val _state = MutableStateFlow(DriveState(origin = defaultOrigin()))
     override val state: StateFlow<DriveState> = _state
     private var vault: Vault? = null
+        set(value) {
+            field = value
+            // A family walk WorkManager runs in this process works through this vault while it is the session's.
+            com.hushos.app.data.LiveVaults.app = value
+        }
     /* Families (FamiliesModel.kt): each family's state, page and folders, beside the drive's. */
     val families = FamiliesModel(this)
     override val currentVault: Vault? get() = vault
@@ -207,6 +212,13 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     override val familyScope get() = viewModelScope
     override fun updateState(change: (DriveState) -> DriveState) = _state.update(change)
     override fun lostSession() = sessionLost()
+    override fun familyWork(inFamily: Boolean) {
+        if (inFamily) com.hushos.app.data.FamilyWalkWork.schedule(context)
+        else vault?.api?.session?.let { com.hushos.app.data.FamilyWalkWork.cancelSession(context, it) }
+    }
+    override fun walkSoon() = com.hushos.app.data.FamilyWalkWork.soon(context)
+    override fun notice(text: String, untilRead: Boolean) = if (untilRead) notifyUntilRead(text) else notify(text)
+    override fun accountChanged() { refreshAccount(); refreshStorage() }
     private val thumbnailTasks = HashSet<String>()
     /* Who can open what (`access`): one request at a time, and one more after it for anything asked meanwhile. */
     private val sharingLoads = SharingRefresh(viewModelScope) { loadAccess() }
@@ -458,6 +470,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         // Queued transfers belong to the account signing out: stopped now; Auth.signOut removes
         // their copies with every other file of the account (AccountStore).
         androidx.work.WorkManager.getInstance(context).cancelAllWorkByTag(com.hushos.app.data.TransferQueue.TAG)
+        com.hushos.app.data.FamilyWalkWork.cancel(context)
         queueWatch?.cancel(); queueWatch = null
         link = null
         // The session's families go with it: the ledger's keys wiped, nothing of them left drawn, and no download of it
@@ -1490,6 +1503,15 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     fun createFolder(name: String, folder: String) = viewModelScope.launch { write(folder) { it.createFolder(folder, name) } }
     fun rename(item: Opened, name: String) = viewModelScope.launch { write(item.node.parentId) { it.rename(item.id, name) } }
+    /*
+     * One signed write per folder not already that colour (null takes it back to the plain folder colour), each
+     * refreshed as it lands, so a failure partway leaves the ones before it shown as saved.
+     */
+    fun recolour(items: List<Opened>, colour: String?) = viewModelScope.launch {
+        for (item in items.filter { com.hushos.core.folderColour(it.metadata.attributes) != colour }) {
+            if (!write(item.node.parentId) { it.recolour(item.id, colour) }) break
+        }
+    }
     fun move(item: Opened, folder: String) = viewModelScope.launch {
         if (write(item.node.parentId) { it.move(item.id, folder) }) refresh(folder)
     }

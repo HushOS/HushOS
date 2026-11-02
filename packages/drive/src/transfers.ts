@@ -20,6 +20,7 @@ import type { DriveApi, NodeView, PartUrl } from './api';
 import type { DriveErrorCode } from './protocol';
 import { DriveApiError } from './api';
 import type { DriveNode, Rpc } from './client';
+import { holdFolder } from './walk-holds';
 import type {
     IdSeeds,
     JournalEntry,
@@ -1077,22 +1078,25 @@ export function createTransferManager(options: TransferManagerOptions) {
                     u.keyEpoch = u.replaces.keyEpoch;
                 } else {
                     const from = await takeEpoch(workspaceId);
-                    const { nodes } = await rpc('driveCreateNodes', {
-                        workspaceId,
-                        nodes: [
-                            {
-                                id: u.nodeId,
-                                kind: 'file',
-                                parentId: parent.id,
-                                parentKeyEpoch: parent.keyEpoch,
-                                keyEpoch: from,
-                                metadata,
-                                // A saved copy is signed by where it came from: saved from a link,
-                                // re-locked when the original did not verify, ordinary when it did.
-                                signAs: u.signAs.metadata,
-                            },
-                        ],
-                    });
+                    // Never under a key a walk's batch holds pending in the folder (walk-holds.ts).
+                    const { nodes } = await holdFolder(rpc, workspaceId, parent, () =>
+                        rpc('driveCreateNodes', {
+                            workspaceId,
+                            nodes: [
+                                {
+                                    id: u.nodeId,
+                                    kind: 'file',
+                                    parentId: parent.id,
+                                    parentKeyEpoch: parent.keyEpoch,
+                                    keyEpoch: from,
+                                    metadata,
+                                    // A saved copy is signed by where it came from: saved from a link,
+                                    // re-locked when the original did not verify, ordinary when it did.
+                                    signAs: u.signAs.metadata,
+                                },
+                            ],
+                        }),
+                    );
                     u.keyEpoch = from;
                     nodeEnvelopes = {
                         keyEnvelope: nodes[0]!.keyEnvelope,
@@ -1464,29 +1468,31 @@ export function createTransferManager(options: TransferManagerOptions) {
         const from = await takeEpoch(workspaceId);
         const { id: nodeId, seed: nodeIdSeed } = await newId('node', workspaceId);
         const name = conflictCopyName(u.item.name);
-        const { nodes } = await rpc('driveCreateNodes', {
-            workspaceId,
-            nodes: [
-                {
-                    id: nodeId,
-                    kind: 'file',
-                    parentId: parent.id,
-                    parentKeyEpoch: parent.keyEpoch,
-                    keyEpoch: from,
-                    metadata: {
-                        name,
-                        mime: u.item.mime,
-                        size: u.item.size,
-                        modified: u.file?.lastModified
-                            ? new Date(u.file.lastModified).toISOString()
-                            : null,
-                        // The copy kept beside the version it found stands for the same file.
-                        ...(u.attributes ? { attributes: u.attributes } : {}),
+        const { nodes } = await holdFolder(rpc, workspaceId, parent, () =>
+            rpc('driveCreateNodes', {
+                workspaceId,
+                nodes: [
+                    {
+                        id: nodeId,
+                        kind: 'file',
+                        parentId: parent.id,
+                        parentKeyEpoch: parent.keyEpoch,
+                        keyEpoch: from,
+                        metadata: {
+                            name,
+                            mime: u.item.mime,
+                            size: u.item.size,
+                            modified: u.file?.lastModified
+                                ? new Date(u.file.lastModified).toISOString()
+                                : null,
+                            // The copy kept beside the version it found stands for the same file.
+                            ...(u.attributes ? { attributes: u.attributes } : {}),
+                        },
+                        signAs: u.signAs.metadata,
                     },
-                    signAs: u.signAs.metadata,
-                },
-            ],
-        });
+                ],
+            }),
+        );
         const { contentKeyEnvelope, versionSignature } = await rpc('driveUploadRewrap', {
             workspaceId,
             objectId: u.objectId,

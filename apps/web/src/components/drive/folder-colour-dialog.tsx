@@ -1,4 +1,10 @@
-import { FOLDER_COLOURS, folderColour, type DriveNode, type TagColour } from '@hushos/drive/client';
+import {
+    COLOUR_NAMES,
+    FOLDER_COLOURS,
+    folderColour,
+    type DriveNode,
+    type TagColour,
+} from '@hushos/drive/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { CheckIcon } from 'lucide-react';
 import { cn } from 'cn';
@@ -27,8 +33,6 @@ import { cue } from '@/lib/sounds';
 
 /* Where Custom starts: the plum the swatches leave out. */
 const FIRST_CUSTOM = '#7c5cbf';
-/* The swatches' names, in FOLDER_COLOURS' order, for screen readers. */
-const SWATCH_NAMES = ['Blue', 'Mint', 'Coral', 'Violet', 'Teal', 'Pink', 'Lime', 'Orange'];
 
 export function FolderColourDialog({
     nodes,
@@ -157,13 +161,13 @@ function ColourForm({
                             )}
                         </span>
                     </label>
-                    {FOLDER_COLOURS.map((colour, index) => (
+                    {FOLDER_COLOURS.map((colour) => (
                         <label key={colour} className={ring(value === colour)}>
                             <input
                                 type="radio"
                                 name={id}
                                 value={colour}
-                                aria-label={SWATCH_NAMES[index]}
+                                aria-label={COLOUR_NAMES[colour]}
                                 checked={value === colour}
                                 onChange={() => {
                                     setCustomOpen(false);
@@ -190,8 +194,9 @@ function ColourForm({
                             aria-label="Custom colour"
                             checked={!swatch}
                             onChange={() => {
+                                // With the editor already open its colour stands; it reads a value only as it opens.
+                                if (swatch && !customOpen) setValue(FIRST_CUSTOM);
                                 setCustomOpen(true);
-                                if (swatch) setValue(FIRST_CUSTOM);
                             }}
                             onClick={() => setCustomOpen(true)}
                             className="absolute inset-0 size-full cursor-pointer appearance-none rounded-full"
@@ -209,9 +214,10 @@ function ColourForm({
                 </div>
                 {customOpen && (
                     <div className="border-t border-rule pt-3">
+                        {/* The editor holds the hex chosen, a swatch's included, so typing one keeps it in place. */}
                         <CustomColour
-                            key={swatch ? 'swatch' : 'custom'}
-                            value={swatch ? FIRST_CUSTOM : value!}
+                            key={value === null ? 'plain' : 'hex'}
+                            value={(value ?? FIRST_CUSTOM) as TagColour}
                             disabled={pending}
                             onChoose={(hex: TagColour) => setValue(hex.toLowerCase())}
                         />

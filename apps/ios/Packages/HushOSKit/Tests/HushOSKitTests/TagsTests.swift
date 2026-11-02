@@ -35,6 +35,20 @@ struct TagRegistryTests {
         (document["items"] as? [String: Any])?[id] as? [String]
     }
 
+    @Test func newTagsTakeTheFolderSwatchesInTurnAndOldPresetsAreKept() throws {
+        var registry = try TagRegistry(json: Data(document.utf8))
+        #expect(registry.tags.first { $0.id == work }?.colour == "blue")
+        var colours: [String] = []
+        for index in 0 ... TagRegistry.offered.count { colours.append(try registry.add(name: "Tag \(index)").colour) }
+        // Two tags are there already, so the cycle starts at the third swatch and comes round.
+        let expected = (0 ... TagRegistry.offered.count).map { TagRegistry.offered[($0 + 2) % TagRegistry.offered.count] }
+        #expect(colours == expected)
+        #expect(TagRegistry.offered.allSatisfy { $0.hasPrefix("#") && $0.count == 7 && $0 == $0.lowercased() })
+        #expect(TagRegistry.colourName("#e488be") == "Pink")
+        #expect(TagRegistry.colourName("teal") == "Teal")
+        #expect(TagRegistry.colourName("#123456") == "Custom")
+    }
+
     @Test func unknownFieldsSurviveAddRenameRemoveAndAssign() throws {
         var registry = try TagRegistry(json: Data(document.utf8))
         let added = try registry.add(name: "Taxes")
