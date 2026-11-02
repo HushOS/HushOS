@@ -316,6 +316,33 @@ extension OnFakeDrive {
             ResealTo.remove([maya])
         }
 
+        /*
+         * The words are shown over the pin looked up; another device saves a pin of her with other keys
+         * (its Continue) before They match is pressed here. That pin is its act: nothing is written and
+         * the words are compared again. Fails if They match decides over the pin as it reads it at the
+         * save rather than the one the words were shown with.
+         */
+        @Test func theyMatchOverAPinAnotherDeviceMovedMeanwhileWritesNothing() async throws {
+            defer { done() }
+            let server = server(maya: try makeIdentity(maya).envelope)
+            let phone = await phone(server)
+            let first = try await phone.vault.lookup(email: "maya@example.com")
+            _ = try await phone.vault.theyMatch(first)
+            let found = try await phone.vault.lookup(email: "maya@example.com")
+            var document = try server.document(root: root)
+            var contacts = document["contacts"] as? [String: Any] ?? [:]
+            var pin = try #require(contacts[maya] as? [String: Any])
+            pin["signingPublicKey"] = "other-device-signing"
+            pin["encryptionPublicKey"] = "other-device-encryption"
+            pin["fingerprint"] = ""
+            contacts[maya] = pin
+            document["contacts"] = contacts
+            try server.replace(document, root: root)
+            await #expect(throws: ContactError.moved) { _ = try await phone.vault.theyMatch(found) }
+            let stored = try #require((try server.document(root: root)["contacts"] as? [String: Any])?[maya] as? [String: Any])
+            #expect(stored["signingPublicKey"] as? String == "other-device-signing", "They match undid another device's pin")
+        }
+
         @Test func settingsReplacedByANewerCopyAreAChangeNeverFirstUse() async throws {
             defer { done() }
             let identity = try makeIdentity(maya)

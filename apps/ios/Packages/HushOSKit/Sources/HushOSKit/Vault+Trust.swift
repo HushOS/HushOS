@@ -509,6 +509,9 @@ extension Vault {
         let pin = try await withGuardTurn {
             let settings = try await loadSettings()
             let before = settings.pin(of: contact.userId)
+            // Over the pin the words were shown with (the lookup's): another device's Continue or check since moved the settings
+            // pin, not this phone's guard, and is its own act. Compared again.
+            guard Self.samePin(before, found.pinned) else { throw ContactError.moved }
             let (entry, _) = try guardFor(contact.userId, pin: before, at: settings.version)
             let held = base(before, entry, contact.userId)
             let moved = held.map { $0.signing != contact.signingPublicKey } == true
