@@ -269,14 +269,14 @@ fun Mark(item: Opened, bitmap: ImageBitmap?, box: Dp = 36.dp) {
     }
     if (item.isFolder) {
         // Its own colour: the shades the Rust core works out from its `colour` attribute,
-        // or from its id when it has none (the web's FolderMark draws the same).
-        val shades = remember(item.id, item.metadata.attributes) { folderShades(item.id, item.metadata.attributes) }
-        val front = Color(
-            (if (alpine.dark) { if (alpine.high) shades.darkHighFront else shades.darkFront } else { if (alpine.high) shades.lightHighFront else shades.lightFront }).toInt(),
-        )
-        val back = Color(
-            (if (alpine.dark) { if (alpine.high) shades.darkHighBack else shades.darkBack } else { if (alpine.high) shades.lightHighBack else shades.lightBack }).toInt(),
-        )
+        // or the plain folder colour when it has none (the web's FolderMark draws the same).
+        val shades = remember(item.metadata.attributes) { folderShades(item.metadata.attributes) }
+        val front = shades?.let {
+            Color((if (alpine.dark) { if (alpine.high) it.darkHighFront else it.darkFront } else { if (alpine.high) it.lightHighFront else it.lightFront }).toInt())
+        } ?: alpine.folderFront
+        val back = shades?.let {
+            Color((if (alpine.dark) { if (alpine.high) it.darkHighBack else it.darkBack } else { if (alpine.high) it.lightHighBack else it.lightBack }).toInt())
+        } ?: alpine.folderBack
         Canvas(Modifier.size(box)) {
             val w = size.width * 0.86f
             val s = w / 56f

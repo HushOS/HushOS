@@ -3,14 +3,13 @@
 //! and of the folder steps in `apps/web/src/styles.css` (the lightness and vividness
 //! it is drawn at in each scheme). The colour is the folder's `colour` attribute,
 //! a lowercase `#rrggbb`; a folder without one, or with one this client cannot
-//! read, shows a default worked out from its id, the same on every device.
+//! read, is drawn in the plain folder colour (the Alpine folder tokens).
 
 use std::collections::HashMap;
 
 const COLOUR_ATTRIBUTE: &str = "colour";
 
-/// The swatches offered for a folder and the colours a new one starts with, in
-/// the web's order: the default indexes into this list.
+/// The swatches offered for a folder beside the plain folder colour, in the web's order.
 pub const FOLDER_COLOURS: [&str; 8] =
     ["#70adfb", "#53c48e", "#f28881", "#aa9cf7", "#00c3cb", "#e488be", "#8fbb5f", "#e99355"];
 
@@ -48,37 +47,18 @@ fn is_colour(value: &str) -> bool {
         && value[1..].bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// FNV-1a over the id's UTF-8 bytes, as the web computes it.
-fn fnv1a(text: &str) -> u32 {
-    let mut hash: u32 = 0x811c_9dc5;
-    for byte in text.bytes() {
-        hash ^= u32::from(byte);
-        hash = hash.wrapping_mul(0x0100_0193);
-    }
-    hash
+/// A folder's own colour, or `None` when it is drawn in the plain folder colour.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn folder_colour(attributes: HashMap<String, String>) -> Option<String> {
+    attributes.get(COLOUR_ATTRIBUTE).filter(|own| is_colour(own)).cloned()
 }
 
-/// The colour a folder with none of its own shows.
+/// A folder's sheets in every scheme from its attributes, or `None` for the plain folder colour.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn default_folder_colour(node_id: String) -> String {
-    FOLDER_COLOURS[fnv1a(&node_id) as usize % FOLDER_COLOURS.len()].to_owned()
-}
-
-/// The colour a folder is drawn in: its own, or its default when it has none it can use.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn folder_colour(node_id: String, attributes: HashMap<String, String>) -> String {
-    match attributes.get(COLOUR_ATTRIBUTE) {
-        Some(own) if is_colour(own) => own.clone(),
-        _ => default_folder_colour(node_id),
-    }
-}
-
-/// A folder's sheets in every scheme, from its id and its attributes.
-#[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn folder_shades(node_id: String, attributes: HashMap<String, String>) -> FolderShades {
-    let (hue, strength) = hue_of(&folder_colour(node_id, attributes));
+pub fn folder_shades(attributes: HashMap<String, String>) -> Option<FolderShades> {
+    let (hue, strength) = hue_of(&folder_colour(attributes)?);
     let draw = |l: f64, c: f64| argb(l, c * strength, hue);
-    FolderShades {
+    Some(FolderShades {
         light_front: draw(LIGHT.front_l, LIGHT.front_c),
         light_back: draw(LIGHT.back_l, LIGHT.back_c),
         dark_front: draw(DARK.front_l, DARK.front_c),
@@ -87,7 +67,7 @@ pub fn folder_shades(node_id: String, attributes: HashMap<String, String>) -> Fo
         light_high_back: draw(LIGHT_HIGH.back_l, LIGHT_HIGH.back_c),
         dark_high_front: draw(DARK_HIGH.front_l, DARK_HIGH.front_c),
         dark_high_back: draw(DARK_HIGH.back_l, DARK_HIGH.back_c),
-    }
+    })
 }
 
 fn to_linear(channel: u8) -> f64 {
@@ -134,15 +114,6 @@ fn argb(lightness: f64, chroma: f64, hue: f64) -> u32 {
 mod tests {
     use super::*;
 
-    /// The same ids and colours `packages/drive/src/colour.test.ts` pins.
-    const PINNED: [(&str, &str); 5] = [
-        ("00000000-0000-4000-8000-000000000000", "#e488be"),
-        ("11111111-1111-4111-8111-111111111111", "#aa9cf7"),
-        ("0195f3a2-7c4e-7b1a-9d2e-3f4a5b6c7d8e", "#f28881"),
-        ("root", "#e488be"),
-        ("é-ünïcode-✓", "#8fbb5f"),
-    ];
-
     fn colour(value: &str) -> HashMap<String, String> {
         HashMap::from([(COLOUR_ATTRIBUTE.to_owned(), value.to_owned())])
     }
@@ -157,26 +128,19 @@ mod tests {
     }
 
     #[test]
-    fn the_default_matches_the_web() {
-        for (id, expected) in PINNED {
-            assert_eq!(default_folder_colour(id.into()), expected, "{id}");
-        }
-    }
-
-    #[test]
-    fn its_own_colour_wins_and_one_it_cannot_read_shows_the_default() {
-        let (id, fallback) = PINNED[1];
-        assert_eq!(folder_colour(id.into(), colour("#123456")), "#123456");
+    fn its_own_colour_wins_and_none_or_one_it_cannot_read_is_the_plain_colour() {
+        assert_eq!(folder_colour(colour("#123456")).as_deref(), Some("#123456"));
         for bad in ["blue", "#fff", "#ABCDEF", " #123456", "#1234567", "#12345g"] {
-            assert_eq!(folder_colour(id.into(), colour(bad)), fallback, "{bad}");
+            assert_eq!(folder_colour(colour(bad)), None, "{bad}");
+            assert_eq!(folder_shades(colour(bad)), None, "{bad}");
         }
-        assert_eq!(folder_colour(id.into(), HashMap::new()), fallback);
+        assert_eq!(folder_shades(HashMap::new()), None);
     }
 
     #[test]
     fn the_back_sheet_is_darker_than_the_front_in_every_scheme() {
         for swatch in FOLDER_COLOURS {
-            let s = folder_shades("x".into(), colour(swatch));
+            let s = folder_shades(colour(swatch)).unwrap();
             for (front, back) in [
                 (s.light_front, s.light_back),
                 (s.dark_front, s.dark_back),
@@ -194,7 +158,7 @@ mod tests {
 
     #[test]
     fn a_grey_stays_grey() {
-        let s = folder_shades("x".into(), colour("#808080"));
+        let s = folder_shades(colour("#808080")).unwrap();
         let (r, g, b) = channels(s.light_front);
         assert!((r - g).abs() <= 1 && (g - b).abs() <= 1, "{r} {g} {b}");
     }
@@ -202,10 +166,10 @@ mod tests {
     #[test]
     fn a_swatch_keeps_its_hue_when_drawn() {
         // The light front of the blue swatch is blue: more blue than red or green.
-        let (r, g, b) = channels(folder_shades("x".into(), colour(FOLDER_COLOURS[0])).light_front);
+        let (r, g, b) = channels(folder_shades(colour(FOLDER_COLOURS[0])).unwrap().light_front);
         assert!(b > r && b > g, "{r} {g} {b}");
         // And the coral one is red-led.
-        let (r, g, b) = channels(folder_shades("x".into(), colour(FOLDER_COLOURS[2])).light_front);
+        let (r, g, b) = channels(folder_shades(colour(FOLDER_COLOURS[2])).unwrap().light_front);
         assert!(r > g && r > b, "{r} {g} {b}");
     }
 }

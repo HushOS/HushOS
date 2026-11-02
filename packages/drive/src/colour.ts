@@ -6,14 +6,14 @@
  * change it. Clients draw it at their own lightness for each theme, so only
  * its hue and how vivid it is carry over.
  *
- * A folder with no colour, or one this client cannot read, shows a default
- * worked out from its id, the same on every device (the Rust core keeps the
- * twin of these rules: crates/hushos-core/src/colour.rs).
+ * A folder with no colour, or one this client cannot read, is drawn in the
+ * plain folder colour of the theme; a new folder starts that way. (The Rust
+ * core keeps the twin of these rules: crates/hushos-core/src/colour.rs.)
  */
 
 export const COLOUR_ATTRIBUTE = 'colour';
 
-/* The swatches offered for a folder, and the colours a new folder starts with. */
+/* The swatches offered for a folder, beside the plain folder colour. */
 export const FOLDER_COLOURS = [
     '#70adfb',
     '#53c48e',
@@ -37,33 +37,12 @@ export function toColour(value: string): string | null {
     return COLOUR.test(lower) ? lower : null;
 }
 
-/* FNV-1a over the id's UTF-8 bytes: small, and simple to keep identical in Rust. */
-function fnv1a(text: string) {
-    let hash = 0x811c9dc5;
-    for (const byte of new TextEncoder().encode(text)) {
-        hash ^= byte;
-        hash = Math.imul(hash, 0x01000193) >>> 0;
-    }
-    return hash;
-}
-
-export function defaultFolderColour(id: string): string {
-    return FOLDER_COLOURS[fnv1a(id) % FOLDER_COLOURS.length]!;
-}
-
-/* The colour a folder is drawn in: its own, or its default when it has none it can use. */
+/* A folder's own colour, or null when it is drawn in the plain folder colour. */
 export function folderColour(node: {
-    id: string;
     metadata?: { attributes?: Record<string, string> } | null;
-}): string {
+}): string | null {
     const own = node.metadata?.attributes?.[COLOUR_ATTRIBUTE];
-    return isColour(own) ? own : defaultFolderColour(node.id);
-}
-
-/* A new folder's colour: one of the swatches, at random. */
-export function randomFolderColour(random: () => number = Math.random): string {
-    const index = Math.min(FOLDER_COLOURS.length - 1, Math.floor(random() * FOLDER_COLOURS.length));
-    return FOLDER_COLOURS[index]!;
+    return isColour(own) ? own : null;
 }
 
 /*

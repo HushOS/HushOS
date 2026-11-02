@@ -19,8 +19,8 @@ import { clientFor, driveError, invalidateFolders } from '@/lib/drive';
 import { cue } from '@/lib/sounds';
 
 /*
- * A folder's colour: the swatches as round buttons and one of your own, the tag
- * picker's square, hue strip and hex. Choosing only marks the choice; Save seals
+ * A folder's colour: the plain folder colour every folder starts with, the swatches
+ * as round buttons, and one of your own, the tag picker's square, hue strip and hex. Choosing only marks the choice; Save seals
  * it into each folder's record, one signed write per folder rather than one per
  * swatch tried.
  */
@@ -61,8 +61,9 @@ function ColourForm({
 }) {
     const queryClient = useQueryClient();
     const id = useId();
-    const [value, setValue] = useState(() => folderColour(nodes[0]!));
-    const swatch = (FOLDER_COLOURS as readonly string[]).includes(value);
+    // null is the plain folder colour: no colour of its own.
+    const [value, setValue] = useState<string | null>(() => folderColour(nodes[0]!));
+    const swatch = value === null || (FOLDER_COLOURS as readonly string[]).includes(value);
     const [customOpen, setCustomOpen] = useState(!swatch);
     const [pending, setPending] = useState(false);
     const [error, setError] = useState('');
@@ -131,6 +132,31 @@ function ColourForm({
                 className="m-0 flex min-w-0 flex-col gap-3 border-0 p-0"
             >
                 <div className="flex flex-wrap items-center gap-1">
+                    <label className={ring(value === null)}>
+                        <input
+                            type="radio"
+                            name={id}
+                            value="default"
+                            aria-label="Default"
+                            checked={value === null}
+                            onChange={() => {
+                                setCustomOpen(false);
+                                setValue(null);
+                            }}
+                            className="absolute inset-0 size-full cursor-pointer appearance-none rounded-full"
+                        />
+                        <span
+                            aria-hidden="true"
+                            className="pointer-events-none flex size-6 items-center justify-center rounded-full bg-(--folder-front)"
+                        >
+                            {value === null && (
+                                <CheckIcon
+                                    className="size-3.5 text-(--folder-back)"
+                                    strokeWidth={3}
+                                />
+                            )}
+                        </span>
+                    </label>
                     {FOLDER_COLOURS.map((colour, index) => (
                         <label key={colour} className={ring(value === colour)}>
                             <input
@@ -176,7 +202,7 @@ function ColourForm({
                             style={{
                                 background: swatch
                                     ? `conic-gradient(${FOLDER_COLOURS.map(swatchColour).join(', ')}, ${swatchColour(FOLDER_COLOURS[0])})`
-                                    : swatchColour(value),
+                                    : swatchColour(value!),
                             }}
                         />
                     </label>
@@ -185,7 +211,7 @@ function ColourForm({
                     <div className="border-t border-rule pt-3">
                         <CustomColour
                             key={swatch ? 'swatch' : 'custom'}
-                            value={swatch ? FIRST_CUSTOM : value}
+                            value={swatch ? FIRST_CUSTOM : value!}
                             disabled={pending}
                             onChoose={(hex: TagColour) => setValue(hex.toLowerCase())}
                         />

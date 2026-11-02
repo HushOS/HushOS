@@ -263,6 +263,29 @@ describe('a folder’s colour', () => {
         expect(renamed).toEqual([{ nodeId: FOLDER, metadataVersion: 1 }]);
     });
 
+    test('back to the plain colour drops the colour and keeps every other attribute', async () => {
+        const { client, folder, sealed } = await opened();
+        await client.recolour(folder, null);
+        expect(sealed.map((s) => s.metadata)).toEqual([
+            {
+                name: FOLDER,
+                mime: null,
+                size: 3,
+                modified: '2026-10-01T00:00:00.000Z',
+                attributes: { 'zz-unknown': 'from a newer client' },
+            },
+        ]);
+    });
+
+    test('back to the plain colour with nothing else set leaves no attributes', async () => {
+        const { client, sealed } = await opened();
+        const inner = (await client.listFolder(FOLDER)).children.find((c) => c.id === INNER)!;
+        await client.recolour(inner, null);
+        expect(sealed.map((s) => s.metadata)).toEqual([
+            { name: INNER, mime: null, size: 3, modified: '2026-10-01T00:00:00.000Z' },
+        ]);
+    });
+
     test.each(['#fff', 'purple', 'oklch(0.7 0.1 250)', ''])(
         'a colour that is not one (%j) is refused before anything is sealed',
         async (colour) => {

@@ -1116,23 +1116,24 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     }
 
     /*
-     * Sets a folder's colour (see colour.ts): the record is sealed again as a rename
-     * seals it, the name and every other attribute carried over, so it is checked and
+     * Sets a folder's colour (see colour.ts), or with null takes it back to the plain
+     * folder colour: the record is sealed again as a rename seals it, the name and every other attribute carried over, so it is checked and
      * signed by the same rules and the server sees only a new envelope.
      */
-    async function recolour(node: DriveNode, colour: string) {
+    async function recolour(node: DriveNode, colour: string | null) {
         if (node.kind !== 'folder') throw new Error('Only a folder has a colour.');
         // Its name would be lost: a folder whose record did not open is renamed first.
         if (!node.metadata)
             throw new Error('This folder could not be opened, so it cannot be changed.');
-        const clean = toColour(colour);
-        if (!clean) throw new Error('Choose a colour.');
+        const clean = colour === null ? null : toColour(colour);
+        if (colour !== null && !clean) throw new Error('Choose a colour.');
         const { name } = node.metadata;
-        return reseal(node, (metadata) => ({
-            ...metadata,
-            name,
-            attributes: { ...metadata.attributes, [COLOUR_ATTRIBUTE]: clean },
-        }));
+        return reseal(node, ({ attributes, ...metadata }) => {
+            const { [COLOUR_ATTRIBUTE]: _, ...others } = attributes ?? {};
+            const next = clean ? { ...others, [COLOUR_ATTRIBUTE]: clean } : others;
+            // Back to the plain colour with nothing else set leaves no attributes at all.
+            return { ...metadata, name, ...(Object.keys(next).length ? { attributes: next } : {}) };
+        });
     }
 
     /*

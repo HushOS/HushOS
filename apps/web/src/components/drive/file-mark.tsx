@@ -36,7 +36,7 @@ export function FileMark({ node, kind, name, size = 'row', className }: FileMark
         return (
             <FolderMark
                 box={box}
-                colour={node ? folderColour(node) : undefined}
+                colour={(node && folderColour(node)) ?? undefined}
                 className={className}
             />
         );

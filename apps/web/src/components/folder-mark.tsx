@@ -5,7 +5,7 @@ import type { CSSProperties } from 'react';
 /*
  * A folder: two solid sheets, the back darker than the front (DESIGN.md → Shapes).
  * With `colour` (a folder's own, see @hushos/drive colour.ts) the sheets take its
- * hue at the theme's folder steps (styles.css); without, the Hush blue tokens.
+ * hue at the theme's folder steps (styles.css); without, the plain folder tokens.
  */
 export function FolderMark({
     box,

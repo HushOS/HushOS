@@ -381,11 +381,14 @@ func formatSpace(_ value: Int64) -> String {
 
 /*
  * A folder in its own colour: the shades the Rust core works out from its `colour`
- * attribute, or from its id when it has none (the web's FolderMark draws the same).
+ * attribute, or the plain folder colour when it has none (the web's FolderMark draws the same).
  */
 extension FolderGlyph {
     init(folder item: Opened) {
-        let shades = folderShades(nodeId: item.id, attributes: item.metadata.attributes)
+        guard let shades = folderShades(attributes: item.metadata.attributes) else {
+            self.init()
+            return
+        }
         self.init(
             front: Color(alpineLight: shades.lightFront, dark: shades.darkFront, lightHigh: shades.lightHighFront, darkHigh: shades.darkHighFront),
             back: Color(alpineLight: shades.lightBack, dark: shades.darkBack, lightHigh: shades.lightHighBack, darkHigh: shades.darkHighBack)
