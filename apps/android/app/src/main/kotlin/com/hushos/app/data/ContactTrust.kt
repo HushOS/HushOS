@@ -424,6 +424,9 @@ fun Vault.theyMatch(found: Lookup): ContactPin {
     val pin = GuardTurn.run {
         val settings = loadSettings()
         val before = settings.pinOf(contact.userId)
+        // Over the very pin the words were shown against (the lookup's), never one another device saved since (its
+        // Continue, its own check): that is another look at them, and nothing is written.
+        if (!ContactPin.sameKeys(before, found.pinned)) throw ContactMoved()
         val (entry, _) = guardFor(contact.userId, before, settings.version)
         val held = base(before, entry, contact.userId)
         val moved = (held != null && held.first != contact.signingPublicKey) || (before != null && before.encryptionPublicKey != contact.encryptionPublicKey)

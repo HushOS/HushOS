@@ -78,6 +78,33 @@ class FamilyCheckTest {
     }
 
     /*
+     * #247 check, round 9: this phone holds Sam first-seen at K1 with a guard entry; the words are shown and match. While
+     * the member list is read for the match, another device saves Sam at K2 (its Continue). They match then writes
+     * nothing: not a verified K1 over K2, not the check record. Fails if the save is made over whatever pin it finds then
+     * rather than the exact pin the match was judged over.
+     */
+    @Test
+    fun theyMatchWritesNothingWhenAnotherDeviceMovedThePinMeanwhile() {
+        val k1 = ContactPin.of(sam.userId, sam.email, sam.name, com.hushos.core.pinOfServed(family.creator.servedKeys(), false), "2026-10-30T00:00:00Z", "added")
+        phone.vault.commitTrust(sam.userId, null, k1) { it.setPin(k1, ifOver = null) }
+        val code = phone.sync.checkCode(family.summary, sam.userId).code as FamilyCheckCode.Code
+        val other = newPerson()
+        val k2 = ContactPin.of(sam.userId, sam.email, sam.name, com.hushos.core.pinOfServed(other.servedKeys(), false), "2026-10-31T00:00:00Z", "added")
+        var moved = false
+        server.beforeAnswer = { method, path ->
+            if (!moved && method == "GET" && path.startsWith("groups/${family.groupId}/rosters")) { moved = true; server.editSettings { it.pin(k2) } }
+        }
+        val saved = phone.sync.checkMatch(family.groupId, sam, code.rosterVersion, code.code)
+        server.beforeAnswer = null
+        assertTrue("the other device's save never landed", moved)
+        assertEquals(false to false, saved)
+        val settings = server.settings()
+        assertTrue("They match wrote over the other device's pin", ContactPin.sameKeys(settings.pinOf(sam.userId), k2))
+        assertEquals(PinTrust.SEEN, settings.pinOf(sam.userId)?.trust)
+        assertNull(settings.familyCheckWith(family.groupId))
+    }
+
+    /*
      * A verified pin that agrees with this phone's guard but holds other keys than Sam's entry: Sam is not Verified,
      * decided from one guarded read. Fails if the label skips the comparison with the entry.
      */

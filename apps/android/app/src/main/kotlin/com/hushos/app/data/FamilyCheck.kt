@@ -95,7 +95,7 @@ fun FamilySync.checkCode(summary: GroupSummary, memberId: String): CheckStart {
 fun FamilySync.checkMatch(groupId: String, member: FamilyMemberRef, rosterVersion: ULong, code: List<String>): Pair<Boolean, Boolean> {
     // Read first, so the ledger holds the settings pin of them it compares with.
     vault.familyPin(groupId)
-    val (held, revision) = vault.contactGuardState(member.userId)
+    val (held, revision, judged) = vault.contactGuardState(member.userId)
     // A not-member here is a removal: let go of as a sync's, and passed on with what it left (Wiped, or refused when
     // its guard couldn't be stored) and its revision, so the sheet shows that.
     val served = try {
@@ -106,7 +106,9 @@ fun FamilySync.checkMatch(groupId: String, member: FamilyMemberRef, rosterVersio
     }
     val match = ledger.pairMatch(vault.ownIdentities(), groupId, member.userId.lowercase(), served.rosters, rosterVersion, code, held, FamilySync.checkTime(now()))
     val check = match.check ?: return false to false
-    val verified = vault.saveFamilyCheck(groupId, member, check, match.pin, revision)
+    // Saved only over the very pin of them the match was judged with: another device's Continue or check since stops it,
+    // and the sheet asks for the words again (checked false).
+    val verified = vault.saveFamilyCheck(groupId, member, check, match.pin, revision, judged) ?: return false to false
     vouched[groupId] = true
     return true to verified
 }
@@ -118,31 +120,47 @@ fun FamilySync.checkedFamilyWith(groupId: String): String? = runCatching { vault
  * This phone's guard entry for a person, with an act left pending settled first, for a family check, and the revision it
  * is at. A guard that can't be read is Unreadable (the core then writes no pin), never none.
  */
-internal fun Vault.contactGuardState(contactId: String): Pair<GuardState, ULong> = GuardTurn.run {
+internal fun Vault.contactGuardState(contactId: String): Triple<GuardState, ULong, ContactPin?> = GuardTurn.run {
     val settings = loadSettings()
+    val pin = settings.pinOf(contactId)
     val entry = try {
-        guardFor(contactId, settings.pinOf(contactId), settings.version).first
+        guardFor(contactId, pin, settings.version).first
     } catch (_: GuardUnreadable) {
-        return@run GuardState.Unreadable to 0uL
+        return@run Triple(GuardState.Unreadable, 0uL, pin)
     }
-    (entry?.let { GuardState.Held(it) } ?: GuardState.Absent) to (entry?.revision ?: 0uL)
+    Triple(entry?.let { GuardState.Held(it) } ?: GuardState.Absent, entry?.revision ?: 0uL, pin)
 }
 
 /*
  * They match in a family check, saved (the web's saveFamilyCheck): with no keys, only the check record (and the marker);
  * with keys, a verified pin of them committed from the guard entry the match was decided over, the check record in the
  * same save. A guard that moved meanwhile (a Continue or a check since) stops it before anything is saved. True when the
- * pin was written.
+ * pin was written; null when their pin moved from the one the match was judged over (nothing saved).
  */
-internal fun Vault.saveFamilyCheck(groupId: String, member: FamilyMemberRef, check: FamilyCheck, keys: PinKeys?, decidedOver: ULong): Boolean {
+/* The pin a family check was judged over moved before its save: nothing is saved. */
+private class JudgedPinMoved : Exception()
+
+internal fun Vault.saveFamilyCheck(groupId: String, member: FamilyMemberRef, check: FamilyCheck, keys: PinKeys?, decidedOver: ULong, judged: ContactPin?): Boolean? {
+    val contactId = member.userId
     if (keys == null) {
-        updateSettings { it.setFamilyCheck(groupId, check) }
+        // Only the check record, and only while their pin is the one judged (on every attempt of the save): a pin moved
+        // since is another look at them, and nothing is saved.
+        try {
+            updateSettings { settings ->
+                if (!ContactPin.sameKeys(settings.pinOf(contactId), judged)) throw JudgedPinMoved()
+                settings.setFamilyCheck(groupId, check)
+            }
+        } catch (_: JudgedPinMoved) {
+            return null
+        }
         return false
     }
-    val contactId = member.userId
-    GuardTurn.run {
+    val saved = GuardTurn.run {
         val settings = loadSettings()
         val before = settings.pinOf(contactId)
+        // Over the very pin the match was judged with (its keys), whether or not this phone holds a guard entry for them:
+        // another device's Continue or check since is its own act, and the words are compared again.
+        if (!ContactPin.sameKeys(before, judged)) return@run false
         val (entry, _) = guardFor(contactId, before, settings.version)
         // Decided over this very entry, or not at all: a Continue or a check since is its own act.
         if ((entry?.revision ?: 0uL) != decidedOver) throw ContactMoved()
@@ -153,7 +171,9 @@ internal fun Vault.saveFamilyCheck(groupId: String, member: FamilyMemberRef, che
             settings.setPin(target, ifOver = before, verify = true)
             settings.setFamilyCheck(groupId, check)
         }
+        true
     }
+    if (!saved) return null
     clearChange(contactId)
     forgetLookups(contactId)
     return true
