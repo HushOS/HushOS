@@ -1,0 +1,35 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DriveAPI.swift
+  s_566b8e0c4467a4::t_c928d6af1180cc 64-65,110-129,131,170,366-377
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_566b8e0c4467a4::t_376b9ef3c527af 25-51,81-108,144-157,162-176,188-209,212-217,219-255,260-264,282-308,328-340,342-344,372-386,391-395,399-401,410-412,416-422,645-674,676-678,680-692,723-724,738-758,790,809-816,837-840,948-954,956,958,960-984
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Families.swift
+  s_9a0dff1047278c::t_2515cd6d033863 288,299-302,306,310-333,403-423
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_9a0dff1047278c::t_f3207b0ce3eb82 198,877-880
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyWriteTests.swift
+  s_9a0dff1047278c::t_6ea310a6c100f1 663-731
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "02facfb1a2de36dd82233d8a42d74660ca9a7351",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_9a0dff1047278c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a97937941d32e71eb",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
