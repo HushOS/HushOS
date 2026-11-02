@@ -1,0 +1,39 @@
+apps/android/app/src/test/kotlin/com/hushos/app/LinkFilterTest.kt
+  s_566b8e0c4467a4::t_531cdf87abadbd 1-80
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_bc272972ac9b26 85
+apps/android/app/src/main/AndroidManifest.xml
+  s_566b8e0c4467a4::t_fad8e3398266ef 63,82-83
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_0c3adcda827974 132
+apps/ios/App/HushOSApp.swift
+  s_566b8e0c4467a4::t_2e96234091c4da 72
+apps/web/src/lib/app-links.server.test.ts
+  s_566b8e0c4467a4::t_2a27e5757c80bf 1-97
+apps/web/src/lib/app-links.server.ts
+  s_566b8e0c4467a4::t_ba9941bf2eeaba 6-7,25
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_ba9ed5219515ae 168,170
+docs/release/checklist.md
+  s_566b8e0c4467a4::t_739a295d6c6486 47,50
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_122e7eae227b0e 290-314
+turbo.json
+  s_566b8e0c4467a4::t_f9a73a9607a316 21-23,89-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b36484f147977f32b9c437962bc3e0f0ac75e1db",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
