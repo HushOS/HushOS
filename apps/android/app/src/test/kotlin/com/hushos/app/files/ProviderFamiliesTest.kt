@@ -150,7 +150,7 @@ class ProviderFamiliesTest {
         assertEquals("marker-family", read(provider, file))
         val copies = FamilyCopies.folder(app.cacheDir, family.workspaceId)!!
         assertTrue(copies.exists())
-        val edit = familiesOf(provider).editCopy(FamilyDoc.of(file) as FamilyDoc.Node, reads = true)
+        val edit = familiesOf(provider).editCopy(FamilyDoc.of(file) as FamilyDoc.Node, keepContents = true)
         val phone = family.phone()
         assertTrue(phone.sync.sync(family.summary) is FamilyState.Accepted)
         // The app's acceptance told Files too; the provider looked since, and still shows the family.
@@ -242,7 +242,7 @@ class ProviderFamiliesTest {
         assertEquals("Trips", server.record(trips.nodeId).name)
         rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
         val families = familiesOf(provider)
-        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, reads = true)
+        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, keepContents = true)
         assertTrue(edit.path.startsWith(FamilyCopies.edits(app.cacheDir, family.workspaceId)!!.path))
         assertEquals("marker-family", edit.readText())
         edit.writeText("edited in another app")
@@ -271,7 +271,7 @@ class ProviderFamiliesTest {
         val provider = provider()
         rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
         val families = familiesOf(provider)
-        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, reads = false).apply { writeText("not sent") }
+        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, keepContents = false).apply { writeText("not sent") }
         val sent = server.requests.size
         families.vault.oweFamilyGuard(family.groupId)
         assertThrows(FileNotFoundException::class.java) { provider.createDocument(folder, Document.MIME_TYPE_DIR, "Trips") }
@@ -288,7 +288,7 @@ class ProviderFamiliesTest {
         val provider = provider()
         rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
         val families = familiesOf(provider)
-        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, reads = false).apply { writeText("not sent") }
+        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, keepContents = false).apply { writeText("not sent") }
         val phone = family.phone()
         assertTrue(phone.sync.sync(family.summary) is FamilyState.Accepted)
         assertEquals(listOf("family:${family.groupId}"), familyRoots(provider))
@@ -311,7 +311,7 @@ class ProviderFamiliesTest {
         val provider = provider()
         rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
         val families = familiesOf(provider)
-        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, reads = false).apply { writeText("not sent") }
+        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, keepContents = false).apply { writeText("not sent") }
         val phone = family.phone()
         assertTrue(phone.sync.sync(family.summary) is FamilyState.Accepted)
         // Another vault's first sweep (the app starting while Files writes) leaves an edit under way alone.
@@ -337,7 +337,7 @@ class ProviderFamiliesTest {
         val provider = provider()
         rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
         val families = familiesOf(provider)
-        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, reads = false).apply { writeText("not sent") }
+        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, keepContents = false).apply { writeText("not sent") }
         val version = server.node(family.fileId).version
         var sent = 0
         families.vault.beforeWriteGate = {
@@ -348,6 +348,138 @@ class ProviderFamiliesTest {
         assertThrows(SessionEnded::class.java) { families.writeBack(FamilyDoc.of(file) as FamilyDoc.Node, edit) }
         assertEquals(emptyList<String>(), driveWritesSince(sent))
         assertEquals(version, server.node(family.fileId).version)
+    }
+
+    /*
+     * Another app writing a family file in each mode: "wa" appends to what the file held and "rw" writes over it in place,
+     * so both keep it; "w", "wt" and "rwt" truncate. The writer is played with the platform's own reading of the mode
+     * (ParcelFileDescriptor.parseMode), and the new version is read back from the server. Fails if a mode that keeps the
+     * contents starts the edit empty (the new version would hold only the appended bytes) or one that truncates doesn't.
+     */
+    @Test
+    fun eachWriteModeKeepsOrDropsWhatTheFileHeld() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        for (mode in listOf("wa", "rw", "rwt", "wt", "w")) {
+            val before = families.readCopy(doc).readText()
+            val wrote = "[$mode]"
+            val edit = families.editFor(doc, mode)
+            writeAs(mode, edit, wrote)
+            families.writeBack(doc, edit)
+            val expected = when (mode) {
+                "wa" -> before + wrote
+                "rw" -> wrote + before.drop(wrote.length)
+                else -> wrote
+            }
+            assertEquals("mode $mode", expected, families.readCopy(doc).readText())
+        }
+        // Another phone reads what the last write left.
+        val other = family.phone()
+        assertTrue(other.sync.sync(family.summary) is FamilyState.Accepted)
+        val recipes = other.vault.listChildren(family.rootId, family.workspaceId).single { it.id == family.fileId }
+        val out = File(app.cacheDir, "read-${System.nanoTime()}")
+        other.vault.download(recipes.id, out, workspaceId = family.workspaceId)
+        assertEquals("[w]", out.readText())
+    }
+
+    /*
+     * The drive's own files take the same rule: an edit for "wa" or "rw" starts from the current version, one for "w",
+     * "wt" or "rwt" starts empty. Fails if the personal path seeds by "r" alone (an append would replace the file).
+     */
+    @Test
+    fun aPersonalFileOpenedToAppendKeepsWhatItHeld() {
+        val notes = server.file(server.root, "Notes.txt", "personal notes".toByteArray())
+        val provider = provider()
+        rows(provider.queryChildDocuments("root", null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val vault = HushOSDocumentsProvider::class.java.getDeclaredField("vault").apply { isAccessible = true }.get(provider) as Vault
+        for (mode in listOf("wa", "rw")) assertEquals(mode, "personal notes", provider.personalEdit(vault, notes, mode).readText())
+        // The platform makes the file when it opens it for a truncating mode: nothing of the old version is in it.
+        for (mode in listOf("w", "wt", "rwt")) assertEquals(mode, "", provider.personalEdit(vault, notes, mode).let { if (it.exists()) it.readText() else "" })
+    }
+
+    /* Plays another app writing `text` into a file it opened in `mode`, as the platform opens it. */
+    private fun writeAs(mode: String, file: File, text: String) {
+        val flags = ParcelFileDescriptor.parseMode(mode)
+        java.io.RandomAccessFile(file, "rw").use { out ->
+            if (flags and ParcelFileDescriptor.MODE_TRUNCATE != 0) out.setLength(0)
+            out.seek(if (flags and ParcelFileDescriptor.MODE_APPEND != 0) out.length() else 0)
+            out.write(text.toByteArray())
+        }
+    }
+
+    /*
+     * A tree Files kept (a family folder granted to an app) reopened by a fresh provider after a restart, its index of
+     * parents gone: a document two levels down still opens, its parents found through the ledger by listing where the
+     * folder's change feed puts them. A document outside the tree is still refused. Fails if tree membership is judged
+     * from the rows this process happens to hold.
+     */
+    @Test
+    fun aTreeKeptAcrossARestartOpensItsChildrenAndNothingOutside() {
+        val first = provider()
+        val trips = first.createDocument(folder, Document.MIME_TYPE_DIR, "Trips")
+        val notes = first.createDocument(trips, "text/plain", "Notes.txt")
+        // The process restarts: a fresh provider and vault, and no index of where nodes sit.
+        File(app.filesDir, "files-parents.json").delete()
+        val fresh = provider()
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, folder)
+        ParcelFileDescriptor.AutoCloseInputStream(fresh.openFile(DocumentsContract.buildDocumentUriUsingTree(tree, notes), "r")).use { assertEquals(0, it.readBytes().size) }
+        assertTrue(fresh.isChildDocument(folder, notes))
+        // A tree at Trips holds Notes.txt but not Sam's file beside Trips.
+        val tripsTree = DocumentsContract.buildTreeDocumentUri(authority, trips)
+        assertFalse(fresh.isChildDocument(trips, file))
+        assertThrows(SecurityException::class.java) { fresh.openFile(DocumentsContract.buildDocumentUriUsingTree(tripsTree, file), "r") }
+    }
+
+    /*
+     * The last sync got no answer: the root stays, readable, but writes nothing, neither offered (no create on its folders)
+     * nor taken, until the family is accepted again. Fails if a root kept on no answer still writes.
+     */
+    @Test
+    fun aRootKeptWithoutAnAnswerIsReadOnlyUntilAcceptedAgain() {
+        var now = 0L
+        val vault = Vault(app, DriveApi(Shared.session(app)!!))
+        val families = ProviderFamilies(vault, FamilySync(vault, sweeps = false, tellsFiles = false)) { now }
+        val top = FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId)
+        assertTrue(families.load().single().folders.single().writable)
+        // Route 5 drops every request: no answer.
+        server.beforeAnswer = { _, path -> if (path.startsWith("groups/") && path.endsWith("/rosters")) throw IllegalStateException("dropped") }
+        now += 6 * 60_000L
+        val kept = families.load().single()
+        assertFalse(kept.folders.single().writable)
+        assertTrue(kept.unanswered)
+        assertEquals(0, families.document(top).flags and Document.FLAG_DIR_SUPPORTS_CREATE)
+        assertEquals(listOf("Recipes.txt"), families.children(top).map { it.name })
+        val sent = server.requests.size
+        assertThrows(FileNotFoundException::class.java) { families.create(top, Document.MIME_TYPE_DIR, "Trips") }
+        assertThrows(FileNotFoundException::class.java) { families.editCopy(FamilyDoc.Node(family.groupId, family.workspaceId, family.fileId), keepContents = false) }
+        assertEquals(emptyList<String>(), driveWritesSince(sent))
+        // Answered again: writable again.
+        server.beforeAnswer = null
+        now += 60_000L
+        assertTrue(families.load().single().folders.single().writable)
+        families.create(top, Document.MIME_TYPE_DIR, "Trips")
+    }
+
+    /*
+     * A family folder Files shows, changed on another device (a new file): the next poll lists it again and tells Files,
+     * and a poll that finds nothing new tells nothing. Fails if polling refreshes only the personal drive.
+     */
+    @Test
+    fun aPollTellsFilesOfAFamilyFolderChangedElsewhere() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val listing = DocumentsContract.buildChildDocumentsUri(authority, family.rootId)
+        fun told() = shadowOf(app.contentResolver).notifiedUris.count { it.uri == listing }
+        assertTrue(provider.pollOnce())
+        val before = told()
+        server.file(family.rootId, "Budget.txt", "from the web".toByteArray())
+        assertTrue(provider.pollOnce())
+        assertEquals(before + 1, told())
+        assertTrue(provider.pollOnce())
+        assertEquals(before + 1, told())
+        assertTrue("Budget.txt" in rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DISPLAY_NAME))
     }
 
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =

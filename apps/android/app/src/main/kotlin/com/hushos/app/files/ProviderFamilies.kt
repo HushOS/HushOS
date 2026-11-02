@@ -63,13 +63,20 @@ sealed interface FamilyDoc {
 }
 
 /* A family's root as Files shows it: its folders the ones route 25 proved and this vault's ledger opened. */
-data class FamilyRoot(val groupId: String, val name: String, val folders: List<Folder>) {
+data class FamilyRoot(
+    val groupId: String, val name: String, val folders: List<Folder>,
+    /* Kept from an earlier load because the last sync got no answer: readable, written to only once accepted again. */
+    val unanswered: Boolean = false,
+) {
     data class Folder(val workspaceId: String, val rootId: String, val name: String, val writable: Boolean)
 
     val documentId: String get() = FamilyDoc.Top(groupId).id
     val rootId: String get() = FamilyDoc.PREFIX + groupId
 
     fun folder(workspaceId: String): Folder? = folders.firstOrNull { it.workspaceId.equals(workspaceId, ignoreCase = true) }
+
+    /* The same root, read only until the family is accepted again. */
+    fun readOnly(): FamilyRoot = copy(folders = folders.map { it.copy(writable = false) }, unanswered = true)
 
     companion object {
         /* An accepted family's root: only folders that opened through the ledger, writable as the app has them. */
@@ -133,7 +140,9 @@ class ProviderFamilies internal constructor(
         val next = listed.filter { it.state == "active" }.mapNotNull { summary ->
             when (val state = sync.sync(summary)) {
                 is FamilyState.Accepted -> FamilyRoot.of(summary.id, summary.name, state.view)
-                is FamilyState.Failed -> if (state.words == FamilyWords.NO_ANSWER) { failed = true; kept[summary.id.lowercase()] } else null
+                // No answer: the root it had stays readable (its ledger kept the family), but nothing is written into it
+                // until a sync accepts the family again.
+                is FamilyState.Failed -> if (state.words == FamilyWords.NO_ANSWER) { failed = true; kept[summary.id.lowercase()]?.readOnly() } else null
                 else -> null
             }
         }
@@ -177,9 +186,38 @@ class ProviderFamilies internal constructor(
      */
     fun node(doc: FamilyDoc.Node): Opened {
         folderOf(doc)
-        vault.item(doc.workspaceId, doc.nodeId)?.let { return it }
-        vault.parents[doc.nodeId]?.let { parent -> vault.listChildren(parent, doc.workspaceId) }
-        return vault.item(doc.workspaceId, doc.nodeId) ?: throw FileNotFoundException("This item no longer exists.")
+        return held(doc.workspaceId, doc.nodeId) ?: throw FileNotFoundException("This item no longer exists.")
+    }
+
+    /*
+     * A family folder's node as the ledger opened it. One this process doesn't hold yet (a restart, Files reopening a
+     * remembered document or tree) is found by listing, through the ledger, the folder it was last seen in, else the
+     * folder the workspace's change feed puts it in (the feed only says where to look: the row kept is the listing's).
+     * Listing a folder opens every folder above it too. Null when no listing holds it.
+     */
+    private fun held(workspaceId: String, id: String): Opened? {
+        vault.item(workspaceId, id)?.let { return it }
+        vault.parents[id]?.let { parent -> runCatching { vault.listChildren(parent, workspaceId) } }
+        vault.item(workspaceId, id)?.let { return it }
+        val parent = parentInFeed(workspaceId, id) ?: return null
+        vault.listChildren(parent, workspaceId)
+        return vault.item(workspaceId, id)
+    }
+
+    /* The folder the workspace's change feed last puts `id` in, read from the start; null when it names none or it was trashed. */
+    private fun parentInFeed(workspaceId: String, id: String): String? {
+        var cursor = 0
+        var parent: String? = null
+        repeat(MAX_FEED_PAGES) {
+            val page = vault.api.changes(workspaceId, cursor)
+            for (change in page.changes) {
+                val node = change.node ?: continue
+                if (node.id == id && node.workspaceId.equals(workspaceId, ignoreCase = true)) parent = node.parentId.takeIf { node.trashedAt == null }
+            }
+            if (!page.hasMore || page.nextCursor <= cursor) return parent
+            cursor = page.nextCursor
+        }
+        return parent
     }
 
     /* The document a family id names, as a row. */
@@ -204,9 +242,45 @@ class ProviderFamilies internal constructor(
         is FamilyDoc.Node -> {
             val (root, folder) = folderOf(doc)
             val listed = vault.listChildren(doc.nodeId, folder.workspaceId).filter { it.node.workspaceId.equals(folder.workspaceId, ignoreCase = true) }
+            // On display in Files now: polls list it again and tell Files when it changed (refreshShown).
+            shown[doc] = clock() to signature(listed)
             val summaries = summaries(root.groupId, listed)
             listed.mapIndexed { index, item -> rowOf(root, folder, item, summaries[index]) }
         }
+    }
+
+    /* The family folders Files listed lately, with when and what they held. */
+    private val shown = java.util.concurrent.ConcurrentHashMap<FamilyDoc.Node, Pair<Long, String>>()
+
+    private fun signature(items: List<Opened>): String =
+        items.map { "${it.id}|${it.node.parentId}|${it.node.metadataVersion}|${it.node.keyEpoch}|${it.node.currentVersion?.id}" }.sorted().joinToString("\n")
+
+    /*
+     * A poll (FilesPoll) for the family folders Files listed within `window`: each listed again through the ledger, and
+     * Files told of every one whose children changed (another member's upload, rename, move or trash), as the personal
+     * drive's feed tells it of its own. Family folders have no feed here, so this is how a folder on display stays
+     * current. The folders told.
+     */
+    fun refreshShown(window: Long): List<FamilyDoc.Node> {
+        val now = clock()
+        val told = ArrayList<FamilyDoc.Node>()
+        for ((doc, seen) in shown) {
+            if (now - seen.first >= window) { shown.remove(doc); continue }
+            val listed = try {
+                folderOf(doc)
+                vault.listChildren(doc.nodeId, doc.workspaceId).filter { it.node.workspaceId.equals(doc.workspaceId, ignoreCase = true) }
+            } catch (error: NotAuthenticated) {
+                throw error
+            } catch (_: Exception) {
+                continue
+            }
+            val signature = signature(listed)
+            if (signature == seen.second) continue
+            shown[doc] = seen.first to signature
+            told.add(doc)
+            runCatching { vault.context.contentResolver.notifyChange(DocumentsContract.buildChildDocumentsUri(FilesRoots.authority(vault.context), doc.nodeId), null) }
+        }
+        return told
     }
 
     /* Each row's mark as the family's member list judges it (the app's family rows), in the mark's own word. */
@@ -237,18 +311,21 @@ class ProviderFamilies internal constructor(
         if (parent is FamilyDoc.Top) return true
         parent as FamilyDoc.Node
         if (!parent.workspaceId.equals(folder.workspaceId, ignoreCase = true)) return false
+        // Up its own parents, each found through the ledger when this process doesn't hold it yet (a tree Files kept across
+        // a restart); anything not under the tree's folder is outside it.
         var current: String? = doc.nodeId
         repeat(MAX_DEPTH) {
             val id = current ?: return false
             if (id == parent.nodeId) return true
-            current = vault.item(folder.workspaceId, id)?.node?.parentId
+            current = held(folder.workspaceId, id)?.node?.parentId
         }
         return false
     }
 
     /* A writable family folder's node: refused, with the app's words, where the app offers no change. */
     private fun writable(doc: FamilyDoc.Node): Pair<FamilyRoot.Folder, Opened> {
-        val (_, folder) = folderOf(doc)
+        val (root, folder) = folderOf(doc)
+        if (root.unanswered) throw FileNotFoundException(FamilyWords.NO_ANSWER)
         if (!folder.writable) throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
         return folder to node(doc)
     }
@@ -270,12 +347,15 @@ class ProviderFamilies internal constructor(
     /*
      * Where another app writes a family file's new bytes: its own file under the family folder's edits (edits/family/
      * <workspace>/<node>/<random>, which every forget of the folder deletes, and no allowlist sweep), made under the
-     * copies lock only while the folder stands and the session lasts, holding the current version first when the app
-     * reads too.
+     * copies lock only while the folder stands and the session lasts, holding the current version first when the mode
+     * keeps the contents (WriteModes: appending, or reading and writing without truncating).
      */
-    fun editCopy(doc: FamilyDoc.Node, reads: Boolean): File {
+    /* The edit for another app opening a family file in `mode` (WriteModes). */
+    fun editFor(doc: FamilyDoc.Node, mode: String): File = editCopy(doc, WriteModes.keepsContents(mode))
+
+    fun editCopy(doc: FamilyDoc.Node, keepContents: Boolean): File {
         val (folder, item) = writable(doc)
-        val source = if (reads) readCopy(doc) else null
+        val source = if (keepContents) readCopy(doc) else null
         val epoch = vault.familyEpoch(folder.workspaceId)
         val edits = FamilyCopies.edits(vault.context.cacheDir, folder.workspaceId) ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
         val edit = File(edits, "${item.id.lowercase()}/${java.util.UUID.randomUUID()}")
@@ -347,6 +427,7 @@ class ProviderFamilies internal constructor(
         private const val TTL_MS = 5 * 60_000L
         private const val RETRY_MS = 30_000L
         private const val MAX_DEPTH = 256
+        private const val MAX_FEED_PAGES = 1_000
 
         fun mimeOf(item: Opened): String {
             if (item.isFolder) return Document.MIME_TYPE_DIR

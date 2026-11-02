@@ -31,6 +31,15 @@ import java.io.File
 import java.io.FileNotFoundException
 
 /*
+ * How a mode another app opens a file in treats what the file holds (ParcelFileDescriptor.parseMode): "w", "wt" and
+ * "rwt" truncate, so the write starts empty; "wa" appends and "rw" writes over it in place, so both start from the
+ * current version, or the new version would lose everything the other app didn't write again.
+ */
+object WriteModes {
+    fun keepsContents(mode: String): Boolean = mode.contains('a') || (mode.contains('r') && !mode.contains('t'))
+}
+
+/*
  * HushOS in Android's Files and every app's file picker. Runs in the app's
  * process: the session and the remembered device come from the encrypted
  * shared store, every key is opened in the Rust core, and content is fetched
@@ -311,6 +320,8 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         runCatching { vault.sync() }
         // The family roots as well, when due: a family that went disappears from Files while it looks.
         if (families?.takeIf { it.vault === vault }?.due() != false) loadFamiliesLater()
+        // The family folders Files shows, listed again (they have no feed here): each that changed is told.
+        families?.takeIf { it.vault === vault }?.let { shown -> runCatching { shown.refreshShown(FilesPoll.WINDOW_MS) } }
         return true
     }
 
@@ -389,13 +400,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             if (!file.exists()) vault.download(id, file)
             return@guarded ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         }
-        // Written by another app: the bytes land in a file of their own and go up as a new version when it closes.
-        // Never the version's read copy: if the upload fails, a later read must not show edits the server never got.
-        val edit = File(context!!.cacheDir, "edits/$id/${java.util.UUID.randomUUID()}").also { it.parentFile?.mkdirs() }
-        if (mode.contains("r")) {
-            if (!file.exists()) vault.download(id, file)
-            file.copyTo(edit, overwrite = true)
-        }
+        val edit = personalEdit(vault, id, mode)
         val handler = Handler(Looper.getMainLooper())
         ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), handler) { error ->
             if (error != null) { edit.delete(); return@open }
@@ -416,13 +421,30 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     }
 
     /*
+     * Where another app writes a file of the drive: a file of its own that goes up as a new version when it closes, never
+     * the version's read copy (if the upload fails, a later read must not show edits the server never got). It starts
+     * from the current version whenever the mode keeps the contents (WriteModes): appending, or reading and writing
+     * without truncating.
+     */
+    internal fun personalEdit(vault: Vault, id: String, mode: String): File {
+        val item = vault.resolve(id)
+        val edit = File(context!!.cacheDir, "edits/$id/${java.util.UUID.randomUUID()}").also { it.parentFile?.mkdirs() }
+        if (WriteModes.keepsContents(mode)) {
+            val file = cacheFile(id, item.node.currentVersion?.id)
+            if (!file.exists()) vault.download(id, file)
+            file.copyTo(edit, overwrite = true)
+        }
+        return edit
+    }
+
+    /*
      * A family file: read from the family folder's copies; written into an edit of its own there, which goes up as a new
      * version through the family write path when the other app closes it. A failed write-back is not queued (on this
      * build the transfer queue opens no family): its edit is deleted, as the family's plaintext never outlives the try.
      */
     private fun openFamily(families: ProviderFamilies, doc: FamilyDoc.Node, documentId: String, mode: String): ParcelFileDescriptor {
         if (mode.contains("r") && !mode.contains("w")) return ParcelFileDescriptor.open(families.readCopy(doc), ParcelFileDescriptor.MODE_READ_ONLY)
-        val edit = families.editCopy(doc, reads = mode.contains("r"))
+        val edit = families.editFor(doc, mode)
         val handler = Handler(Looper.getMainLooper())
         return ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), handler) { error ->
             if (error != null) { edit.delete(); return@open }
