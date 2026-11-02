@@ -20,7 +20,7 @@ settings:
         # One version and one build number for the app and its four extensions (App Store Connect
         # refuses an upload whose extensions disagree with the app); every Info.plist reads these.
         # The version is the product's (the root package.json): the release pull request sets it.
-        MARKETING_VERSION: '0.10.0' # x-release-please-version
+        MARKETING_VERSION: '0.11.0' # x-release-please-version
         # Xcode's own builds say 1; archive.sh passes the build number from scripts/build-number.sh.
         CURRENT_PROJECT_VERSION: '1'
 # Project-wide settings that a fork may override (APP_GROUP_ID), with App/Local.xcconfig on top.
