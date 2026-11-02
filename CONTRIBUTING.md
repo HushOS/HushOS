@@ -56,7 +56,7 @@ To add a component, write a function in `src/dev/demos/` that returns a `<Demo i
 
 ## Database
 
-Import the shared `db` instance from `@hushos/db` in API/server code. `packages/db/src/client.ts` initializes it once per process from `DATABASE_URL`; Drizzle creates the underlying PostgreSQL pool. The Nitro database plugin closes that client during shutdown with `db.$client.end()`.
+Import the shared `db` instance from `@hushos/db` in API/server code. `packages/db/src/client.ts` initializes it from `DATABASE_URL`; Drizzle creates the underlying PostgreSQL pool. The web build bundles that module twice, once with Nitro's plugins and once with the app, so the web process holds two pools; the Nitro database plugin ends both during shutdown with `endPools()`. Nitro runs only the plugins `apps/web/nitro.config.ts` lists: add a new one there.
 
 The pinned Drizzle v1 RC registers the tables from `packages/db/src/schema/index.ts` through `relations: defineRelations(schema)`. This enables typed queries such as `db.query.workspaces.findMany()`. The schema barrel exports `auth.ts`, `workspaces.ts`, `workspace-keys.ts`, `storage.ts`, and `relations.ts`. Keep SQL queries in the database package; web and auth code use its repository exports.
 
