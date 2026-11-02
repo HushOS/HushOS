@@ -1,0 +1,41 @@
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyUploadsTest.kt
+  s_566b8e0c4467a4::t_9b9144fef0ff55 1-180
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyUploads.kt
+  s_566b8e0c4467a4::t_a923b80efe2559 1-102
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_997c0e35e1c6aa 84
+apps/android/app/src/main/kotlin/com/hushos/app/data/FailedTransfers.kt
+  s_566b8e0c4467a4::t_6e05e958ec36ca 18-19,48,53
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_566b8e0c4467a4::t_a43da58429c549 144-148,334
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_566b8e0c4467a4::t_6b28fa430084d6 68-70,72,77-108,122-123,158-159,166,170-174,177,294,296,317-319,322-323,327,337-346,353,360-374,380-394
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_d911d39ddc44b9 275-279,1810-1813,1815-1817,1821,1887
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_566b8e0c4467a4::t_053a31c0a9bd52 179-181
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_1c030f488b5dc8 18,84-85,213-218,353,374-375,392,448-455,1909-1911,1913
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_d149a2dd02a57f 116-117,414,429
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_566b8e0c4467a4::t_0225b3d459c160 593-594
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_a4c90e8cb26286 216-217
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8fcd0a8a9bfc2c869827447c5fcac41df78d9702",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
