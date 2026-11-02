@@ -33,7 +33,8 @@ export function TagColourPicker({
     className,
 }: {
     value: TagColour;
-    onChange: (colour: TagColour) => void;
+    /* `swatch`: chosen by a swatch, not by the custom editor (whose hex may match one). */
+    onChange: (colour: TagColour, swatch: boolean) => void;
     disabled?: boolean;
     className?: string;
 }) {
@@ -67,7 +68,7 @@ export function TagColourPicker({
                             checked={value === preset}
                             onChange={() => {
                                 setOpen(false);
-                                onChange(preset);
+                                onChange(preset, true);
                             }}
                             className="absolute inset-0 size-full cursor-pointer appearance-none rounded-full"
                         />
@@ -93,7 +94,7 @@ export function TagColourPicker({
                         onChange={() => {
                             // Choosing Custom chooses a colour at once; the square then refines it.
                             // With the editor already open its colour stands; it reads a value only as it opens.
-                            if (!custom && !open) onChange(FIRST_CUSTOM);
+                            if (!custom && !open) onChange(FIRST_CUSTOM, false);
                             setOpen(true);
                         }}
                         onClick={() => setOpen(true)}
@@ -120,7 +121,7 @@ export function TagColourPicker({
                         key={value.startsWith('#') ? 'hex' : 'preset'}
                         value={value.startsWith('#') ? value : FIRST_CUSTOM}
                         disabled={disabled}
-                        onChoose={(hex) => onChange(hex)}
+                        onChoose={(hex) => onChange(hex, false)}
                     />
                 </div>
             )}
@@ -375,9 +376,9 @@ export function TagColourButton({
                 <span className="text-sm font-bold">Colour</span>
                 <TagColourPicker
                     value={value}
-                    onChange={(colour) => {
+                    onChange={(colour, swatch) => {
                         onChange(colour);
-                        if (OFFERED_COLOURS.includes(colour)) setOpen(false);
+                        if (swatch) setOpen(false);
                     }}
                 />
             </PopoverContent>
