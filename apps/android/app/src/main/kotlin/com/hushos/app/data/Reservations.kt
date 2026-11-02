@@ -67,6 +67,13 @@ object Reservations {
     @Volatile var generation = 0L
         private set
 
+    /*
+     * `body`, under the lock a wipe moves the generation in, only while no wipe happened since `generation`: a transfer
+     * job's writes after a blocking call (its failed row, its notification, its marks) either land before the wipe, which
+     * then deletes them, or not at all. Null when the account left meanwhile.
+     */
+    fun <T> whileAccount(generation: Long, body: () -> T): T? = synchronized(lock) { if (generation != this.generation) null else body() }
+
     /* The account leaves the phone (AccountStore.wipe): the ledger and what was held go, under the ledger's own lock. */
     fun wipe(filesDir: File) = synchronized(lock) {
         generation++

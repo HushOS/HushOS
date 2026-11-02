@@ -452,4 +452,56 @@ class UploadWorkerTest {
         assertTrue(refused)
         assertNotNull("the wait wasn't the job's own", waits.since(worker))
     }
+
+    /*
+     * #251 last pass: a job's account signs out, and another signs in, while the job's abort is on its way (its first
+     * sweep). The job finds the family gone and ends, but writes nothing for the account that left: the new account's
+     * failed list and notifications have nothing of it. Fails if a job writes its row or notice after its account left.
+     */
+    @Test
+    fun aRemovedJobWhoseAccountLeftWritesNothingForTheNextOne() = accountLeavesMidJob(removed = true)
+
+    /* As above for a job that fails another way (its account's family state gone with the wipe): no row, no notice. */
+    @Test
+    fun aFailedJobWhoseAccountLeftWritesNothingForTheNextOne() = accountLeavesMidJob(removed = false)
+
+    private fun accountLeavesMidJob(removed: Boolean) {
+        org.robolectric.Shadows.shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val notices = org.robolectric.Shadows.shadowOf(app.getSystemService(android.app.NotificationManager::class.java))
+        val id = UUID.randomUUID()
+        val file = staged(id)
+        leftReserved(id)
+        if (removed) {
+            family.listed = false
+            family.notMember = true
+        } else {
+            // Its begin refused for good once it gets there: a failure that is said, not the network's.
+            val inner = server.extraRoutes!!
+            server.extraRoutes = { method, segments, query, body ->
+                if (method == "POST" && segments == listOf("drive", "uploads")) 400 to org.json.JSONObject().put("message", "Invalid upload.")
+                else inner(method, segments, query, body)
+            }
+        }
+        val inAbort = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        var held = false
+        server.beforeAnswer = { _, path ->
+            if (!held && path.endsWith("/abort")) { held = true; inAbort.countDown(); release.await(10, java.util.concurrent.TimeUnit.SECONDS) }
+        }
+        val job = worker(id, file)
+        var result: ListenableWorker.Result? = null
+        val running = Thread { result = run(job) }.apply { start() }
+        assertTrue(inAbort.await(10, java.util.concurrent.TimeUnit.SECONDS))
+        // Sign-out (its session cleared, the account's files wiped), then another account signs in.
+        Shared.clearSession(app)
+        AccountStore(app.filesDir, app.cacheDir, app.noBackupFilesDir).wipe()
+        Shared.writeSession(app, Shared.Session(server.origin, "another-token", UUID.randomUUID().toString(), "sam@example.org"))
+        val before = notices.allNotifications.size
+        release.countDown()
+        running.join(30_000)
+        assertNotNull("the job didn't end", result)
+        assertEquals("the old account's job wrote a row for the new one", emptyList<FailedTransfer>(), FailedTransfers.of(app).all())
+        assertEquals("the old account's job posted a notice to the new one", before, notices.allNotifications.size)
+        assertFalse(File(app.filesDir, TransferNotices.OUTCOMES).exists())
+    }
 }

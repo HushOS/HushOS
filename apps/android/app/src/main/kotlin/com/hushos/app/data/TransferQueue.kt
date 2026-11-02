@@ -91,6 +91,13 @@ object TransferQueue {
     /* The session's tag on each upload it queues: a digest, as the family walks' (FamilyWalkWork.sessionKey). */
     internal fun sessionTag(session: Shared.Session) = "session:" + FamilyWalkWork.sessionKey(session)
 
+    /* Whether the job tagged `tags` belongs to the session signed in now (an untagged one: whether anyone is). */
+    internal fun sessionCurrent(context: Context, tags: Set<String>): Boolean {
+        val now = Shared.session(context) ?: return false
+        val tag = tags.firstOrNull { it.startsWith("session:") } ?: return true
+        return tag == sessionTag(now)
+    }
+
     /* Whether `session` is still the one signed in on this phone. */
     private fun signedIn(context: Context, session: Shared.Session) =
         Shared.session(context)?.let { it.token == session.token && it.userId.equals(session.userId, ignoreCase = true) } == true
@@ -275,19 +282,20 @@ object TransferQueue {
      * run under way (which may have missed the change) rather than being dropped.
      */
     fun keep(context: Context, nodeId: String, name: String, folder: Boolean = false, again: Boolean = false, shareRoot: String? = null) {
-        val request = keepRequest(nodeId, folder, shareRoot)
+        val request = keepRequest(nodeId, folder, shareRoot, Shared.session(context)?.let(::sessionTag))
         // Kept by the app, never in WorkManager's database, which sign-out can't empty (JobNames).
         JobNames.of(context).put(request.id.toString(), name)
         WorkManager.getInstance(context).enqueueUniqueWork("keep-$nodeId", if (again) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP, request)
     }
 
     /* A keep's job as WorkManager keeps it: the item's id, never its name. */
-    internal fun keepRequest(nodeId: String, folder: Boolean, shareRoot: String?) =
+    internal fun keepRequest(nodeId: String, folder: Boolean, shareRoot: String?, session: String? = null) =
         OneTimeWorkRequestBuilder<KeepWorker>()
             .setConstraints(constraints())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .setInputData(workDataOf("kind" to KEEP, "node" to nodeId, "folder" to folder, "share" to shareRoot))
             .addTag(TAG).addTag("kind:$KEEP").addTag("node:$nodeId")
+            .apply { if (session != null) addTag(session) }
             .apply { if (folder) addTag("folder") }
             .build()
 
@@ -358,7 +366,15 @@ private fun jobVault(context: Context): Vault? = Vault.fromShared(context)?.also
  * What to do after a failure: try again later for anything the network caused, give up otherwise.
  * A failure carries `inputs` along, so the panel can queue the same work again.
  */
-private fun CoroutineWorker.outcome(error: Exception, inputs: androidx.work.Data = androidx.work.Data.EMPTY): androidx.work.ListenableWorker.Result = when {
+/*
+ * A job's writes after a blocking call (its failed row, its notification, its marks, its waits): only for the account it
+ * ran for, still on the phone (no wipe since `generation`, its session tag the one signed in), under the wipe's own lock.
+ * False, with nothing written, once that account left: nothing of it shows to the next.
+ */
+internal fun CoroutineWorker.forItsAccount(generation: Long, body: () -> Unit): Boolean =
+    Reservations.whileAccount(generation) { if (TransferQueue.sessionCurrent(applicationContext, tags)) { body(); true } else false } == true
+
+private fun CoroutineWorker.outcome(error: Exception, inputs: androidx.work.Data = androidx.work.Data.EMPTY, generation: Long): androidx.work.ListenableWorker.Result = when {
     Resumable.retryable(error) && error !is NotAuthenticated -> androidx.work.ListenableWorker.Result.retry()
     // Whom this person trusts didn't load, so a replaced file's name couldn't be checked: tried again a few times, then said.
     error is TrustUnavailable && runAttemptCount < TransferQueue.TRUST_RETRIES -> androidx.work.ListenableWorker.Result.retry()
@@ -367,7 +383,7 @@ private fun CoroutineWorker.outcome(error: Exception, inputs: androidx.work.Data
         error is ApiError && error.status == 402 -> TransferQueue.NO_ROOM
         // Words for the transfers sheet; the exception's own text goes to the log.
         else -> Problems.say(error.also { android.util.Log.w("HushOS", "transfer failed", it) }, "The transfer failed.")
-    }, inputs)
+    }, inputs, generation)
 }
 
 /*
@@ -377,8 +393,14 @@ private fun CoroutineWorker.outcome(error: Exception, inputs: androidx.work.Data
 /* The job's file or folder name: the app's record of it (JobNames), or an older version's input. */
 internal fun CoroutineWorker.jobName(): String = JobNames.of(applicationContext).get(id.toString()) ?: inputData.getString("name") ?: "File"
 
-private fun CoroutineWorker.failed(message: String, inputs: androidx.work.Data = inputData): androidx.work.ListenableWorker.Result {
+private fun CoroutineWorker.failed(message: String, inputs: androidx.work.Data = inputData, generation: Long): androidx.work.ListenableWorker.Result {
     val kind = inputData.getString("kind") ?: TransferQueue.UPLOAD
+    // Its row and notification only for the account it ran for: one that left meanwhile gets neither.
+    forItsAccount(generation) { recordFailure(kind, message) }
+    return androidx.work.ListenableWorker.Result.failure(androidx.work.Data.Builder().putAll(inputs).putString("message", message).build())
+}
+
+private fun CoroutineWorker.recordFailure(kind: String, message: String) {
     FailedTransfers.of(applicationContext).record(FailedTransfer(
         id = id.toString(), kind = kind, name = jobName(), reason = message, at = System.currentTimeMillis(),
         file = inputData.getString("file"), mime = inputData.getString("mime"), folder = inputData.getString("folder"), replacing = inputData.getString("replacing"),
@@ -387,7 +409,6 @@ private fun CoroutineWorker.failed(message: String, inputs: androidx.work.Data =
     ))
     KeyChangeWaits.of(applicationContext).forget(id.toString())
     TransferNotices.ended(applicationContext, TransferNotices.Outcome(id.toString(), jobName(), kind == TransferQueue.UPLOAD, TransferQueue.reasonWords(message), inputData.getString("folder")))
-    return androidx.work.ListenableWorker.Result.failure(androidx.work.Data.Builder().putAll(inputs).putString("message", message).build())
 }
 
 class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
@@ -401,28 +422,34 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
     private suspend fun work(): Result {
         // A rerun of a run that landed after its stop: already uploaded and said; its copy is gone, so nothing else is looked at.
         if (LandedJobs.of(applicationContext).take(id.toString())) return Result.success()
+        // The account it runs for: the one signed in when it started (the generation every later write is checked against).
+        // A job another session queued does nothing and writes nothing here.
+        val generation = Reservations.generation
+        if (!TransferQueue.sessionCurrent(applicationContext, tags)) return Result.failure()
         // Whose reservations this job holds: its own id, or the first job's that a Retry carried.
         val ledger = inputData.getString("ledger") ?: id.toString()
-        val file = File(inputData.getString("file") ?: return failed("The file isn’t there any more. Pick it again."))
+        val file = File(inputData.getString("file") ?: return failed("The file isn’t there any more. Pick it again.", generation = generation))
         val folder = inputData.getString("folder")!!
         val waits = KeyChangeWaits.of(applicationContext)
         // An earlier run's completion landed though its answer was lost (Reservations' landed row): done, said, its copy
         // gone, the row used up last. Looked at first, and again before the job reserves (Vault.upload).
         fun landedEarlier(): Result {
-            // The success kept first (LandedJobs), before anything is deleted: a stop anywhere after this ends a rerun as uploaded.
-            LandedJobs.of(applicationContext).markOrLog(this@UploadWorker.id.toString())
-            waits.forget(this@UploadWorker.id.toString())
-            file.parentFile?.deleteRecursively()
-            TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = folder))
-            Reservations.forgetLanded(applicationContext, ledger)
+            forItsAccount(generation) {
+                // The success kept first (LandedJobs), before anything is deleted: a stop anywhere after this ends a rerun as uploaded.
+                LandedJobs.of(applicationContext).markOrLog(this@UploadWorker.id.toString())
+                waits.forget(this@UploadWorker.id.toString())
+                file.parentFile?.deleteRecursively()
+                TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = folder))
+                Reservations.forgetLanded(applicationContext, ledger)
+            }
             return Result.success()
         }
         // An unreadable ledger decides nothing: the job runs again later.
         if (runCatching { Reservations.landed(applicationContext, ledger) }.getOrElse { return Result.retry() }) return landedEarlier()
-        if (!file.exists()) return failed("The file isn’t there any more. Pick it again.")
+        if (!file.exists()) return failed("The file isn’t there any more. Pick it again.", generation = generation)
         // Refused from the background (Android denies it there): the job runs as an ordinary one. A stop goes on.
         attempt { setForeground(getForegroundInfo()) }
-        val vault = jobVault(applicationContext) ?: return outcome(NotAuthenticated(), inputData)
+        val vault = jobVault(applicationContext) ?: return outcome(NotAuthenticated(), inputData, generation)
         val family = inputData.getString("family")
         val familyWorkspace = inputData.getString("familyWorkspace")
         return withContext(Dispatchers.IO) {
@@ -448,13 +475,15 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 is JobEnd.Done -> {
                     // Landed, so it's said, and marked first whether or not this run was stopped: a rerun WorkManager schedules
                     // after a stop (during the last step, or during what follows, when it ignores this result) does nothing:
-                    // no duplicate, no same-name failure, never "pick it again" for a copy deleted here.
-                    LandedJobs.of(applicationContext).markOrLog(this@UploadWorker.id.toString())
-                    waits.forget(this@UploadWorker.id.toString())
-                    file.parentFile?.deleteRecursively()
-                    TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = folder))
-                    // Its landed row (written at the completion) goes last: a death before here ends a rerun as uploaded.
-                    Reservations.forgetLanded(applicationContext, ledger)
+                    // no duplicate, no same-name failure, never "pick it again" for a copy deleted here. Only for its account.
+                    forItsAccount(generation) {
+                        LandedJobs.of(applicationContext).markOrLog(this@UploadWorker.id.toString())
+                        waits.forget(this@UploadWorker.id.toString())
+                        file.parentFile?.deleteRecursively()
+                        TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = folder))
+                        // Its landed row (written at the completion) goes last: a death before here ends a rerun as uploaded.
+                        Reservations.forgetLanded(applicationContext, ledger)
+                    }
                     Result.success()
                 }
                 // Nothing said, nothing recorded: WorkManager drops a cancelled job and reschedules one whose constraint went.
@@ -468,12 +497,14 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                         TransferQueue.endFamily(applicationContext, family, vault.api.session, except = this@UploadWorker.id, still = { !isStopped }) { uploadId, workspaceId ->
                             vault.api.abortUpload(uploadId, workspaceId)
                         }
-                        // Its own end through the same path: what it reserved settled or kept on record, then its folder.
+                        // Its own end through the same path, only while its account is still the one here (asked again after
+                        // each blocking step): what it reserved settled or kept on record, then its folder, then its row.
+                        if (!forItsAccount(generation) {}) return@withContext Result.failure()
                         TransferQueue.dropJob(applicationContext, ledger, file.parentFile) { uploadId, workspaceId -> vault.api.abortUpload(uploadId, workspaceId) }
-                        failed(FamilyWords.NOT_IN_FAMILY, androidx.work.Data.EMPTY)
+                        failed(FamilyWords.NOT_IN_FAMILY, androidx.work.Data.EMPTY, generation)
                     }
                     // A failure keeps the copy: the panel can retry from it, and removes it when the row goes.
-                    else -> outcome(end.error, inputData)
+                    else -> outcome(end.error, inputData, generation)
                 }
             }
         }
@@ -505,9 +536,12 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     private suspend fun work(): Result {
         // A rerun of a run that kept the item after its stop: done already. The next keep queued behind it runs as usual.
         if (LandedJobs.of(applicationContext).take(id.toString())) return Result.success()
+        // As an upload's: the account it runs for, and nothing done or written for another session's job.
+        val generation = Reservations.generation
+        if (!TransferQueue.sessionCurrent(applicationContext, tags)) return Result.failure()
         // Refused from the background (Android denies it there): the job runs as an ordinary one. A stop goes on.
         attempt { setForeground(getForegroundInfo()) }
-        val vault = jobVault(applicationContext) ?: return failed("Sign in again to finish this.")
+        val vault = jobVault(applicationContext) ?: return failed("Sign in again to finish this.", generation = generation)
         return withContext(Dispatchers.IO) {
             // Done(null): kept, and said; Done(a result): ended another way (the folder or share went), said by that result.
             val end = stoppable({ isStopped }) { checkStop ->
@@ -543,14 +577,14 @@ class KeepWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             when (end) {
                 is JobEnd.Done -> {
                     // Kept all the same: said, and marked so a rerun does nothing (the chain behind it isn't cancelled).
-                    if (end.stopped) LandedJobs.of(applicationContext).markOrLog(this@KeepWorker.id.toString())
+                    if (end.stopped) forItsAccount(generation) { LandedJobs.of(applicationContext).markOrLog(this@KeepWorker.id.toString()) }
                     end.value ?: run {
-                        TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@KeepWorker.id.toString(), name, upload = false))
+                        forItsAccount(generation) { TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@KeepWorker.id.toString(), name, upload = false)) }
                         Result.success()
                     }
                 }
                 JobEnd.Stopped -> Result.retry()
-                is JobEnd.Failed -> outcome(end.error)
+                is JobEnd.Failed -> outcome(end.error, generation = generation)
             }
         }
     }
