@@ -285,6 +285,7 @@ extension Vault {
     /* What family folders don't offer (sharing, links, reports, keeping, versions): refused before anything is sent. */
     func refuseFamilyWrite(_ workspaceId: String) throws {
         if isFamilyWorkspace(workspaceId) { throw FamilyWriteError.unavailable }
+        WriteIntent.record(workspaceId, family: false)
     }
 
     /*
@@ -295,11 +296,39 @@ extension Vault {
      * family is opened again; it never falls back to the personal key path.
      */
     func familyTarget(_ workspaceId: String) throws -> Bool {
-        guard isFamilyWorkspace(workspaceId) else { return false }
+        guard isFamilyWorkspace(workspaceId) else {
+            WriteIntent.record(workspaceId, family: false)
+            return false
+        }
         guard areaLedger.isArea(workspaceId: workspaceId) else { throw FamilyWriteError.notOpen }
         try requireGuardKept(workspaceId)
         try areaLedger.requireWritable(workspaceId: workspaceId)
+        WriteIntent.record(workspaceId, family: true)
         return true
+    }
+
+    /*
+     * The last check every write passes, right before it is sent (DriveAPI.perform): never into a
+     * workspace a family whose guard is owed holds, and into a family folder only a write that decided
+     * at its entry to write as the family's (familyTarget, under the ledger's keys), still writable
+     * now. A write begun on a share's or this account's path (sealed under their keys) into a folder
+     * proven a family's since is refused, as is any write that declared nothing.
+     */
+    func finalGate(_ workspaceId: String) async throws {
+        #if DEBUG
+        if let beforeGate { await beforeGate(workspaceId) }
+        #endif
+        // Nothing awaited from here to the send's start: a proof or a guard landing now is seen.
+        let id = workspaceId.lowercased()
+        if heldUnderOwedGuard(id) { throw GuardError.unsaved }
+        guard isFamilyWorkspace(id) else { return }
+        guard WriteIntent.decision(id) == true else { throw FamilyFailure(message: FamilyWords.couldntCheckKeys) }
+        _ = try familyTarget(id)
+    }
+
+    /* A write's body, with its own record of what it decided at entry (WriteIntent), for the final gate. */
+    func writing<T>(_ body: () async throws -> T) async rethrows -> T {
+        try await WriteIntent.$entry.withValue(WriteEntry(), operation: body)
     }
 
     /*
@@ -370,4 +399,25 @@ extension Vault {
     func lookAgain(_ folderId: String) async throws {
         _ = try await listChildren(of: folderId)
     }
+}
+
+/*
+ * What a write decided at its entry for each workspace it writes into: the first decision stands
+ * (a check run again later never changes it). Carried to the final gate in a task-local.
+ */
+final class WriteEntry: @unchecked Sendable {
+    private let lock = NSLock()
+    private var decided: [String: Bool] = [:]
+
+    func record(_ workspaceId: String, family: Bool) {
+        lock.withLock { if decided[workspaceId.lowercased()] == nil { decided[workspaceId.lowercased()] = family } }
+    }
+
+    func decision(_ workspaceId: String) -> Bool? { lock.withLock { decided[workspaceId.lowercased()] } }
+}
+
+enum WriteIntent {
+    @TaskLocal static var entry: WriteEntry?
+    static func record(_ workspaceId: String, family: Bool) { entry?.record(workspaceId, family: family) }
+    static func decision(_ workspaceId: String) -> Bool? { entry?.decision(workspaceId) }
 }

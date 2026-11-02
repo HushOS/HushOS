@@ -22,31 +22,33 @@ extension Vault {
      * `attributes` are a copied folder's source's, carried whole (keys this app doesn't know included); none for a new one.
      */
     public func createFolder(in parentId: String, name: String, signing: Signing = .own, attributes: [String: String] = [:]) async throws -> Opened {
-        _ = try await loadWorkspace()
-        let parent = try await resolve(parentId)
-        let family = try familyTarget(parent.node.workspaceId)
-        // Shared folders belong to the granter's workspace; an editor writes there.
-        let workspace = Target(workspaceId: parent.node.workspaceId)
-        let epochs = try await api.allocateEpochs(workspaceId: workspace.workspaceId, count: 1)
-        let made = try mint(.node, in: workspace.workspaceId)
-        let id = made.id
-        let (key, wrapped) = try newKey(id, under: parent, keyEpoch: epochs.from, family: family)
-        do {
-            let metadata = NodeMetadata(name: name, mime: nil, size: nil, modified: nil, attributes: attributes)
-            let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
-            let signature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .folder, version: 1, envelope: sealed, signing: signing)
-            // Right before it leaves: a sync may have committed while this awaited (FamilyGuard.swift).
-            try sendingIntoFamily(workspace.workspaceId)
-            let nodes = try await api.createFolders(workspaceId: workspace.workspaceId, folders: [[
-                "id": id, "idSeed": made.seed, "parentId": parent.node.id, "keyEpoch": epochs.from, "parentKeyEpoch": parent.node.keyEpoch,
-                "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataEnvelope": base64urlEncode(bytes: sealed), "metadataSignature": signature,
-            ]])
-            guard let node = nodes.first else { throw DriveAPIError.server(500, "No folder returned") }
-            return try adopt(node, nodeKey: key, metadata: metadata, in: workspace.workspaceId)
-        } catch {
-            // The server didn't take it: the key the ledger made for it goes (the web's forgetNodeKey).
-            if family { areaLedger.forgetNodeKey(workspaceId: workspace.workspaceId, nodeId: id) }
-            throw error
+        return try await writing {
+            _ = try await loadWorkspace()
+            let parent = try await resolve(parentId)
+            let family = try familyTarget(parent.node.workspaceId)
+            // Shared folders belong to the granter's workspace; an editor writes there.
+            let workspace = Target(workspaceId: parent.node.workspaceId)
+            let epochs = try await api.allocateEpochs(workspaceId: workspace.workspaceId, count: 1)
+            let made = try mint(.node, in: workspace.workspaceId)
+            let id = made.id
+            let (key, wrapped) = try newKey(id, under: parent, keyEpoch: epochs.from, family: family)
+            do {
+                let metadata = NodeMetadata(name: name, mime: nil, size: nil, modified: nil, attributes: attributes)
+                let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
+                let signature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .folder, version: 1, envelope: sealed, signing: signing)
+                // Right before it leaves: a sync may have committed while this awaited (FamilyGuard.swift).
+                try sendingIntoFamily(workspace.workspaceId)
+                let nodes = try await api.createFolders(workspaceId: workspace.workspaceId, folders: [[
+                    "id": id, "idSeed": made.seed, "parentId": parent.node.id, "keyEpoch": epochs.from, "parentKeyEpoch": parent.node.keyEpoch,
+                    "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataEnvelope": base64urlEncode(bytes: sealed), "metadataSignature": signature,
+                ]])
+                guard let node = nodes.first else { throw DriveAPIError.server(500, "No folder returned") }
+                return try adopt(node, nodeKey: key, metadata: metadata, in: workspace.workspaceId)
+            } catch {
+                // The server didn't take it: the key the ledger made for it goes (the web's forgetNodeKey).
+                if family { areaLedger.forgetNodeKey(workspaceId: workspace.workspaceId, nodeId: id) }
+                throw error
+            }
         }
     }
 
@@ -76,33 +78,35 @@ extension Vault {
     }
 
     public func rename(_ nodeId: String, to name: String) async throws -> Opened {
-        let item = try await resolve(nodeId)
-        let family = try familyTarget(item.node.workspaceId)
-        let key: Data
-        if family {
-            key = try writableKey(of: item)
-        } else {
-            guard let opened = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
-            key = opened
+        return try await writing {
+            let item = try await resolve(nodeId)
+            let family = try familyTarget(item.node.workspaceId)
+            let key: Data
+            if family {
+                key = try writableKey(of: item)
+            } else {
+                guard let opened = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
+                key = opened
+            }
+            // Everything but the name as it was, attributes this app doesn't know included.
+            let metadata = NodeMetadata(name: name, mime: item.metadata.mime, size: item.metadata.size, modified: item.metadata.modified,
+                                        attributes: item.metadata.attributes)
+            let sealed = try metadataSeal(
+                ctx: MetadataContext(workspaceId: item.node.workspaceId, nodeId: nodeId, metadataVersion: item.node.metadataVersion + 1),
+                nodeKey: key, metadata: metadata
+            )
+            // The new name goes out beside the record's other fields (type, size, date), which this signature vouches for
+            // too: ordinary only when the record verified as it was, re-sealed otherwise, and nothing sent without the check.
+            let prior = try await priorMetadata(of: item.node, family: family)
+            let signature = try await signMetadata(workspaceId: item.node.workspaceId, nodeId: nodeId, kind: item.isFolder ? .folder : .file,
+                                                   version: item.node.metadataVersion + 1, envelope: sealed, signing: .after(prior))
+            try sendingIntoFamily(item.node.workspaceId)
+            let node = try await api.rename(
+                nodeId: nodeId, workspaceId: item.node.workspaceId, metadataVersion: item.node.metadataVersion,
+                keyEpoch: item.node.keyEpoch, metadataEnvelope: base64urlEncode(bytes: sealed), metadataSignature: signature
+            )
+            return try adopt(node, nodeKey: key, metadata: metadata, in: item.node.workspaceId)
         }
-        // Everything but the name as it was, attributes this app doesn't know included.
-        let metadata = NodeMetadata(name: name, mime: item.metadata.mime, size: item.metadata.size, modified: item.metadata.modified,
-                                    attributes: item.metadata.attributes)
-        let sealed = try metadataSeal(
-            ctx: MetadataContext(workspaceId: item.node.workspaceId, nodeId: nodeId, metadataVersion: item.node.metadataVersion + 1),
-            nodeKey: key, metadata: metadata
-        )
-        // The new name goes out beside the record's other fields (type, size, date), which this signature vouches for
-        // too: ordinary only when the record verified as it was, re-sealed otherwise, and nothing sent without the check.
-        let prior = try await priorMetadata(of: item.node, family: family)
-        let signature = try await signMetadata(workspaceId: item.node.workspaceId, nodeId: nodeId, kind: item.isFolder ? .folder : .file,
-                                               version: item.node.metadataVersion + 1, envelope: sealed, signing: .after(prior))
-        try sendingIntoFamily(item.node.workspaceId)
-        let node = try await api.rename(
-            nodeId: nodeId, workspaceId: item.node.workspaceId, metadataVersion: item.node.metadataVersion,
-            keyEpoch: item.node.keyEpoch, metadataEnvelope: base64urlEncode(bytes: sealed), metadataSignature: signature
-        )
-        return try adopt(node, nodeKey: key, metadata: metadata, in: item.node.workspaceId)
     }
 
     private func rewrap(_ item: Opened, under parent: Opened) throws -> String {
@@ -137,35 +141,39 @@ extension Vault {
      * (docs/families-shared-pool.md 3.8; the server's pool-neutral `moveOf` isn't built yet).
      */
     public func relocate(_ nodeId: String, to parentId: String, progress: @Sendable (Double) -> Void = { _ in }) async throws -> (item: Opened, across: Bool) {
-        guard try await movesAcross(nodeId, to: parentId) else { return (try await move(nodeId, to: parentId), false) }
-        // A family folder that may not be written now gives nothing up: checked before anything is copied out of it.
-        let source = try await resolve(nodeId)
-        _ = try familyTarget(source.node.workspaceId)
-        let copied = try await copyAcross(nodeId, to: parentId, progress: progress)
-        do {
-            try await trash(nodeId)
-        } catch {
-            // The copy landed: said as such, never as a move that failed and changed nothing.
-            let why = ErrorWords.say(error, otherwise: "Try again.") ?? "Try again."
-            throw DriveAPIError.server(409, "Copied, but the original couldn’t be moved to the Trash. \(why)")
+        return try await writing {
+            guard try await movesAcross(nodeId, to: parentId) else { return (try await move(nodeId, to: parentId), false) }
+            // A family folder that may not be written now gives nothing up: checked before anything is copied out of it.
+            let source = try await resolve(nodeId)
+            _ = try familyTarget(source.node.workspaceId)
+            let copied = try await copyAcross(nodeId, to: parentId, progress: progress)
+            do {
+                try await trash(nodeId)
+            } catch {
+                // The copy landed: said as such, never as a move that failed and changed nothing.
+                let why = ErrorWords.say(error, otherwise: "Try again.") ?? "Try again."
+                throw DriveAPIError.server(409, "Copied, but the original couldn’t be moved to the Trash. \(why)")
+            }
+            return (copied, true)
         }
-        return (copied, true)
     }
 
     public func move(_ nodeId: String, to parentId: String) async throws -> Opened {
-        let item = try await resolve(nodeId)
-        let parent = try await resolve(parentId)
-        // Within one family folder through the ledger (see `rewrap`); across spaces the store copies and trashes instead.
-        _ = try familyTarget(item.node.workspaceId)
-        _ = try familyTarget(parent.node.workspaceId)
-        guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
-        try sendingIntoFamily(item.node.workspaceId)
-        try sendingIntoFamily(parent.node.workspaceId)
-        let node = try await api.move(
-            nodeId: nodeId, workspaceId: item.node.workspaceId, parentId: parent.id,
-            parentKeyEpoch: parent.node.keyEpoch, keyEnvelope: try rewrap(item, under: parent)
-        )
-        return try adopt(node, nodeKey: key, metadata: item.metadata, in: item.node.workspaceId)
+        return try await writing {
+            let item = try await resolve(nodeId)
+            let parent = try await resolve(parentId)
+            // Within one family folder through the ledger (see `rewrap`); across spaces the store copies and trashes instead.
+            _ = try familyTarget(item.node.workspaceId)
+            _ = try familyTarget(parent.node.workspaceId)
+            guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
+            try sendingIntoFamily(item.node.workspaceId)
+            try sendingIntoFamily(parent.node.workspaceId)
+            let node = try await api.move(
+                nodeId: nodeId, workspaceId: item.node.workspaceId, parentId: parent.id,
+                parentKeyEpoch: parent.node.keyEpoch, keyEnvelope: try rewrap(item, under: parent)
+            )
+            return try adopt(node, nodeKey: key, metadata: item.metadata, in: item.node.workspaceId)
+        }
     }
 
     /*
@@ -177,79 +185,83 @@ extension Vault {
      * they couldn't confirm. Without whom to trust, nothing is copied.
      */
     public func copy(_ nodeId: String, to parentId: String, name: String? = nil, progress: @Sendable (Int) -> Void = { _ in }) async throws -> Opened {
-        let source = try await resolve(nodeId)
-        let parent = try await resolve(parentId)
-        // A family folder's records are judged by its member list, not the personal trust set; the server copies
-        // within one workspace, so a family folder's item is copied in place only within that folder.
-        let sourceFamily = isFamilyWorkspace(source.node.workspaceId)
-        let family = try familyTarget(parent.node.workspaceId)
-        if sourceFamily || family, source.node.workspaceId.lowercased() != parent.node.workspaceId.lowercased() {
-            throw DriveAPIError.server(400, "Items can only be copied within one drive here.")
-        }
-        let trusted: TrustedSigners? = family ? nil : try await copySigners()
-        func prior(_ record: ServedRecord, _ personal: (TrustedSigners) -> Integrity) async throws -> Integrity {
-            if let trusted { return personal(trusted) }
-            return try await familyPrior(record, in: source.node.workspaceId, copying: true)
-        }
-        _ = try await loadWorkspace()
-        let workspace = Target(workspaceId: parent.node.workspaceId)
-        let newName = try checkName(name: name ?? source.name)
-        var done = 0
-        if source.isFolder {
-            let made = try await createFolder(in: parent.id, name: newName, signing: .copy(try await prior(FamilySync.metadataRecord(of: source.node)) { $0.metadata(of: source.node) }),
-                                              attributes: source.metadata.attributes)
-            done += 1
-            progress(done)
-            for child in try await children(of: source.id) {
-                _ = try await copy(child.id, to: made.id) { _ in }
+        return try await writing {
+            let source = try await resolve(nodeId)
+            let parent = try await resolve(parentId)
+            // A family folder's records are judged by its member list, not the personal trust set; the server copies
+            // within one workspace, so a family folder's item is copied in place only within that folder.
+            let sourceFamily = isFamilyWorkspace(source.node.workspaceId)
+            let family = try familyTarget(parent.node.workspaceId)
+            if sourceFamily || family, source.node.workspaceId.lowercased() != parent.node.workspaceId.lowercased() {
+                throw DriveAPIError.server(400, "Items can only be copied within one drive here.")
+            }
+            let trusted: TrustedSigners? = family ? nil : try await copySigners()
+            func prior(_ record: ServedRecord, _ personal: (TrustedSigners) -> Integrity) async throws -> Integrity {
+                if let trusted { return personal(trusted) }
+                return try await familyPrior(record, in: source.node.workspaceId, copying: true)
+            }
+            _ = try await loadWorkspace()
+            let workspace = Target(workspaceId: parent.node.workspaceId)
+            let newName = try checkName(name: name ?? source.name)
+            var done = 0
+            if source.isFolder {
+                let made = try await createFolder(in: parent.id, name: newName, signing: .copy(try await prior(FamilySync.metadataRecord(of: source.node)) { $0.metadata(of: source.node) }),
+                                                  attributes: source.metadata.attributes)
                 done += 1
                 progress(done)
+                for child in try await children(of: source.id) {
+                    _ = try await copy(child.id, to: made.id) { _ in }
+                    done += 1
+                    progress(done)
+                }
+                return made
             }
-            return made
+            guard let version = source.node.currentVersion else { throw DriveAPIError.notFound("This file has no content yet.") }
+            let opened = try openVersion(source)
+            let epochs = try await api.allocateEpochs(workspaceId: workspace.workspaceId, count: 1)
+            // The object stays the source's (the server shares it), so only the node and version are new.
+            let made = try mint(.node, in: workspace.workspaceId)
+            let madeVersion = try mint(.version, in: workspace.workspaceId)
+            let (id, versionId) = (made.id, madeVersion.id)
+            let metadataPrior = try await prior(FamilySync.metadataRecord(of: source.node)) { $0.metadata(of: source.node) }
+            let versionPrior = try await prior(FamilySync.versionRecord(version, of: source.node)) { $0.version(version, of: source.node) }
+            let (key, keyEnvelope) = try newKey(id, under: parent, keyEpoch: epochs.from, family: family)
+            defer { if family, self.opened[NodeRef(workspaceId: workspace.workspaceId, nodeId: id)] == nil { areaLedger.forgetNodeKey(workspaceId: workspace.workspaceId, nodeId: id) } }
+            let metadata = NodeMetadata(name: newName, mime: source.metadata.mime, size: source.metadata.size, modified: source.metadata.modified,
+                                        attributes: source.metadata.attributes)
+            let metadataEnvelope = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
+            let contentKeyEnvelope = try versionReseal(
+                ctx: VersionContext(workspaceId: workspace.workspaceId, nodeId: id, versionId: versionId, objectId: version.objectId),
+                suite: version.contentSuite, nodeKey: key,
+                content: ContentKey(key: opened.content.key, plaintextSize: opened.content.plaintextSize, thumbnailBytes: opened.content.thumbnailBytes)
+            )
+            // Signed where they land: the copy's node and version, over the source's object and its suite, by the source's verdicts.
+            let metadataSignature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .file, version: 1, envelope: metadataEnvelope,
+                                                           signing: .copy(metadataPrior))
+            let versionSignature = try await signVersion(workspaceId: workspace.workspaceId, nodeId: id, versionId: versionId, objectId: version.objectId,
+                                                         suite: version.contentSuite, envelope: contentKeyEnvelope,
+                                                         signing: .copy(versionPrior))
+            try sendingIntoFamily(workspace.workspaceId)
+            let node = try await api.copy(sourceNodeId: source.id, workspaceId: workspace.workspaceId, body: [
+                "sourceVersionId": version.id,
+                "node": ["id": id, "idSeed": made.seed, "parentId": parent.id, "parentKeyEpoch": parent.node.keyEpoch, "keyEpoch": epochs.from,
+                         "keyEnvelope": base64urlEncode(bytes: keyEnvelope), "metadataEnvelope": base64urlEncode(bytes: metadataEnvelope),
+                         "metadataSignature": metadataSignature],
+                "versionId": versionId, "versionIdSeed": madeVersion.seed,
+                "contentKeyEnvelope": base64urlEncode(bytes: contentKeyEnvelope),
+                "versionSignature": versionSignature,
+            ])
+            progress(done + 1)
+            return try adopt(node, nodeKey: key, metadata: metadata, in: workspace.workspaceId)
         }
-        guard let version = source.node.currentVersion else { throw DriveAPIError.notFound("This file has no content yet.") }
-        let opened = try openVersion(source)
-        let epochs = try await api.allocateEpochs(workspaceId: workspace.workspaceId, count: 1)
-        // The object stays the source's (the server shares it), so only the node and version are new.
-        let made = try mint(.node, in: workspace.workspaceId)
-        let madeVersion = try mint(.version, in: workspace.workspaceId)
-        let (id, versionId) = (made.id, madeVersion.id)
-        let metadataPrior = try await prior(FamilySync.metadataRecord(of: source.node)) { $0.metadata(of: source.node) }
-        let versionPrior = try await prior(FamilySync.versionRecord(version, of: source.node)) { $0.version(version, of: source.node) }
-        let (key, keyEnvelope) = try newKey(id, under: parent, keyEpoch: epochs.from, family: family)
-        defer { if family, self.opened[NodeRef(workspaceId: workspace.workspaceId, nodeId: id)] == nil { areaLedger.forgetNodeKey(workspaceId: workspace.workspaceId, nodeId: id) } }
-        let metadata = NodeMetadata(name: newName, mime: source.metadata.mime, size: source.metadata.size, modified: source.metadata.modified,
-                                    attributes: source.metadata.attributes)
-        let metadataEnvelope = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
-        let contentKeyEnvelope = try versionReseal(
-            ctx: VersionContext(workspaceId: workspace.workspaceId, nodeId: id, versionId: versionId, objectId: version.objectId),
-            suite: version.contentSuite, nodeKey: key,
-            content: ContentKey(key: opened.content.key, plaintextSize: opened.content.plaintextSize, thumbnailBytes: opened.content.thumbnailBytes)
-        )
-        // Signed where they land: the copy's node and version, over the source's object and its suite, by the source's verdicts.
-        let metadataSignature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .file, version: 1, envelope: metadataEnvelope,
-                                                       signing: .copy(metadataPrior))
-        let versionSignature = try await signVersion(workspaceId: workspace.workspaceId, nodeId: id, versionId: versionId, objectId: version.objectId,
-                                                     suite: version.contentSuite, envelope: contentKeyEnvelope,
-                                                     signing: .copy(versionPrior))
-        try sendingIntoFamily(workspace.workspaceId)
-        let node = try await api.copy(sourceNodeId: source.id, workspaceId: workspace.workspaceId, body: [
-            "sourceVersionId": version.id,
-            "node": ["id": id, "idSeed": made.seed, "parentId": parent.id, "parentKeyEpoch": parent.node.keyEpoch, "keyEpoch": epochs.from,
-                     "keyEnvelope": base64urlEncode(bytes: keyEnvelope), "metadataEnvelope": base64urlEncode(bytes: metadataEnvelope),
-                     "metadataSignature": metadataSignature],
-            "versionId": versionId, "versionIdSeed": madeVersion.seed,
-            "contentKeyEnvelope": base64urlEncode(bytes: contentKeyEnvelope),
-            "versionSignature": versionSignature,
-        ])
-        progress(done + 1)
-        return try adopt(node, nodeKey: key, metadata: metadata, in: workspace.workspaceId)
     }
 
     public func trash(_ nodeId: String) async throws {
-        let workspace = opened[nodeId]?.node.workspaceId
-        try await sendTrash(nodeId)
-        remove(nodeId, in: workspace)
+        try await writing {
+            let workspace = opened[nodeId]?.node.workspaceId
+            try await sendTrash(nodeId)
+            remove(nodeId, in: workspace)
+        }
     }
 
     /* The single route's trash, without forgetting the row: the caller forgets it once the lists let go. */
@@ -267,31 +279,33 @@ extension Vault {
      * server without it. A family folder takes it only while this device may write there.
      */
     public func trashMany(_ ids: [String], moved: @escaping @Sendable ([String]) async -> Void = { _ in }) async -> [Result<TrashBatch.Move, Error>] {
-        var items: [(id: String, workspace: String)] = []
-        for id in ids {
-            let workspace: String
-            if let known = opened[id] { workspace = known.node.workspaceId }
-            else if let found = try? await resolve(id) { workspace = found.node.workspaceId }
-            else { workspace = (try? await loadWorkspace().workspaceId) ?? "" }
-            items.append((id, workspace))
+        return await writing {
+            var items: [(id: String, workspace: String)] = []
+            for id in ids {
+                let workspace: String
+                if let known = opened[id] { workspace = known.node.workspaceId }
+                else if let found = try? await resolve(id) { workspace = found.node.workspaceId }
+                else { workspace = (try? await loadWorkspace().workspaceId) ?? "" }
+                items.append((id, workspace))
+            }
+            // Each id's own workspace: what lands is removed there, never under the same id elsewhere.
+            let workspaces = Dictionary(items.map { ($0.id, $0.workspace) }, uniquingKeysWith: { a, _ in a })
+            // The folders each sits in, as far as this device knows, read before anything is forgotten.
+            let chains = Dictionary(ids.map { id in (id, opened[id].map { ancestorIds(of: $0) } ?? []) }, uniquingKeysWith: { a, _ in a })
+            return await TrashBatch.trashInBatches(
+                items,
+                send: { workspace, chunk in try await self.sendTrashBatch(workspace, chunk) },
+                // One request an item: each row leaves the lists, then this device forgets it, as for a batch.
+                sequential: { chunk in
+                    await TrashBatch.trashEach(chunk, trash: { id in try await self.sendTrash(id) }, moved: { id in await moved([id]); await self.remove([id], in: workspaces) })
+                        .map { $0.map { TrashBatch.Move.trashed } }
+                },
+                ancestors: { chains[$0] ?? [] },
+                // Called after `moved`: the row leaves the lists first, then this device lets it go as confirmed gone.
+                forget: { ids in await self.remove(ids, in: workspaces) },
+                moved: { landed in await moved(landed.map(\.id)) }
+            )
         }
-        // Each id's own workspace: what lands is removed there, never under the same id elsewhere.
-        let workspaces = Dictionary(items.map { ($0.id, $0.workspace) }, uniquingKeysWith: { a, _ in a })
-        // The folders each sits in, as far as this device knows, read before anything is forgotten.
-        let chains = Dictionary(ids.map { id in (id, opened[id].map { ancestorIds(of: $0) } ?? []) }, uniquingKeysWith: { a, _ in a })
-        return await TrashBatch.trashInBatches(
-            items,
-            send: { workspace, chunk in try await self.sendTrashBatch(workspace, chunk) },
-            // One request an item: each row leaves the lists, then this device forgets it, as for a batch.
-            sequential: { chunk in
-                await TrashBatch.trashEach(chunk, trash: { id in try await self.sendTrash(id) }, moved: { id in await moved([id]); await self.remove([id], in: workspaces) })
-                    .map { $0.map { TrashBatch.Move.trashed } }
-            },
-            ancestors: { chains[$0] ?? [] },
-            // Called after `moved`: the row leaves the lists first, then this device lets it go as confirmed gone.
-            forget: { ids in await self.remove(ids, in: workspaces) },
-            moved: { landed in await moved(landed.map(\.id)) }
-        )
     }
 
     private func sendTrashBatch(_ workspace: String, _ ids: [String]) async throws -> [TrashBatch.Answer] {
@@ -311,22 +325,24 @@ extension Vault {
      * server without it. One outcome per item in order, the restored row on success.
      */
     public func restoreMany(_ items: [Opened]) async -> [Result<Opened, Error>] {
-        let given = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        let depths = Dictionary(items.map { item in (item.id, ancestorIds(of: item).filter { given[$0] != nil }.count) }, uniquingKeysWith: { a, _ in a })
-        let outcomes = await TrashBatch.restoreInBatches(
-            items.map { ($0.id, $0.node.workspaceId) },
-            depth: { depths[$0] ?? 0 },
-            send: { workspace, chunk in try await self.sendRestoreBatch(workspace, chunk, given: given) },
-            sequential: { chunk in
-                var results: [Result<Void, Error>] = []
-                for id in chunk {
-                    do { _ = try await self.restore(given[id]!, parentTrashed: false); results.append(.success(())) } catch { results.append(.failure(error)) }
+        return await writing {
+            let given = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            let depths = Dictionary(items.map { item in (item.id, ancestorIds(of: item).filter { given[$0] != nil }.count) }, uniquingKeysWith: { a, _ in a })
+            let outcomes = await TrashBatch.restoreInBatches(
+                items.map { ($0.id, $0.node.workspaceId) },
+                depth: { depths[$0] ?? 0 },
+                send: { workspace, chunk in try await self.sendRestoreBatch(workspace, chunk, given: given) },
+                sequential: { chunk in
+                    var results: [Result<Void, Error>] = []
+                    for id in chunk {
+                        do { _ = try await self.restore(given[id]!, parentTrashed: false); results.append(.success(())) } catch { results.append(.failure(error)) }
+                    }
+                    return results
                 }
-                return results
+            )
+            return zip(items, outcomes).map { item, outcome in
+                outcome.map { opened[item.id] ?? item }
             }
-        )
-        return zip(items, outcomes).map { item, outcome in
-            outcome.map { opened[item.id] ?? item }
         }
     }
 
@@ -353,30 +369,36 @@ extension Vault {
 
     /* Back where it was, or under the root when its old folder is in the trash too. */
     public func restore(_ item: Opened, parentTrashed: Bool) async throws -> Opened {
-        // In a family folder only back where it was (a trash's Undo): under the top folder would re-wrap under the family's root.
-        if isFamilyWorkspace(item.node.workspaceId) {
-            if parentTrashed { throw FamilyWriteError.unavailable }
-            _ = try familyTarget(item.node.workspaceId)
+        return try await writing {
+            // In a family folder only back where it was (a trash's Undo): under the top folder would re-wrap under the family's root.
+            if isFamilyWorkspace(item.node.workspaceId) {
+                if parentTrashed { throw FamilyWriteError.unavailable }
+                _ = try familyTarget(item.node.workspaceId)
+            }
+            guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
+            var toRoot: (UInt64, String)? = nil
+            if parentTrashed {
+                let root = try await resolve(try rootId())
+                toRoot = (root.node.keyEpoch, try rewrap(item, under: root))
+            }
+            try sendingIntoFamily(item.node.workspaceId)
+            let node = try await api.restore(nodeId: item.id, workspaceId: item.node.workspaceId, toRoot: toRoot)
+            return try adopt(node, nodeKey: key, metadata: item.metadata, in: item.node.workspaceId)
         }
-        guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
-        var toRoot: (UInt64, String)? = nil
-        if parentTrashed {
-            let root = try await resolve(try rootId())
-            toRoot = (root.node.keyEpoch, try rewrap(item, under: root))
-        }
-        try sendingIntoFamily(item.node.workspaceId)
-        let node = try await api.restore(nodeId: item.id, workspaceId: item.node.workspaceId, toRoot: toRoot)
-        return try adopt(node, nodeKey: key, metadata: item.metadata, in: item.node.workspaceId)
     }
 
     public func purge(_ nodeId: String) async throws {
-        let workspace = try await loadWorkspace()
-        try await api.purge(nodeId: nodeId, workspaceId: workspace.workspaceId)
-        remove(nodeId, in: workspace.workspaceId)
+        try await writing {
+            let workspace = try await loadWorkspace()
+            try await api.purge(nodeId: nodeId, workspaceId: workspace.workspaceId)
+            remove(nodeId, in: workspace.workspaceId)
+        }
     }
 
     public func emptyTrash() async throws -> EmptyTrashResult {
-        try await api.emptyTrash(workspaceId: try workspaceId())
+        return try await writing {
+            try await api.emptyTrash(workspaceId: try workspaceId())
+        }
     }
 
     /* What fills the space beside the files: the trash and earlier versions, as the server counts them. */
@@ -385,15 +407,19 @@ extension Vault {
     }
 
     public func discardEarlierVersions() async throws -> EmptyTrashResult {
-        try await api.discardSuperseded(workspaceId: try workspaceId())
+        return try await writing {
+            try await api.discardSuperseded(workspaceId: try workspaceId())
+        }
     }
 
     public func restoreVersion(_ version: VersionListView, of nodeId: String) async throws -> Opened {
-        let item = try await resolve(nodeId)
-        try refuseFamilyWrite(item.node.workspaceId)
-        guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
-        let node = try await api.restoreVersion(version.id, workspaceId: item.node.workspaceId)
-        return try adopt(node, nodeKey: key, metadata: item.metadata, in: item.node.workspaceId)
+        return try await writing {
+            let item = try await resolve(nodeId)
+            try refuseFamilyWrite(item.node.workspaceId)
+            guard let key = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
+            let node = try await api.restoreVersion(version.id, workspaceId: item.node.workspaceId)
+            return try adopt(node, nodeKey: key, metadata: item.metadata, in: item.node.workspaceId)
+        }
     }
 
     /*
@@ -616,53 +642,55 @@ extension Vault {
         thumbnail: Data? = nil, signing: (metadata: Signing, version: Signing) = (.own, .own), attributes: [String: String] = [:],
         progress: @Sendable (Double) -> Void = { _ in }
     ) async throws -> Opened {
-        let begun = try await begin(fileURL: fileURL, name: name, mime: mime, parentId: parentId, replacing: replacing,
-                                    thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: signing, attributes: attributes)
-        var urls = begun.urls
-        let handle = try FileHandle(forReadingFrom: fileURL)
-        defer { try? handle.close() }
-        var etags: [Int: String] = [:]
-        do {
-            for index in 0 ..< begun.chunkCount {
-                try Task.checkCancellation()
-                let partNumber = Int(index) + 1
-                if urls[partNumber] == nil {
-                    let more = try await api.partUrls(uploadId: begun.uploadId, workspaceId: begun.workspaceId, from: partNumber, count: 64)
-                    for part in more.parts { urls[part.partNumber] = part }
+        return try await writing {
+            let begun = try await begin(fileURL: fileURL, name: name, mime: mime, parentId: parentId, replacing: replacing,
+                                        thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: signing, attributes: attributes)
+            var urls = begun.urls
+            let handle = try FileHandle(forReadingFrom: fileURL)
+            defer { try? handle.close() }
+            var etags: [Int: String] = [:]
+            do {
+                for index in 0 ..< begun.chunkCount {
+                    try Task.checkCancellation()
+                    let partNumber = Int(index) + 1
+                    if urls[partNumber] == nil {
+                        let more = try await api.partUrls(uploadId: begun.uploadId, workspaceId: begun.workspaceId, from: partNumber, count: 64)
+                        for part in more.parts { urls[part.partNumber] = part }
+                    }
+                    guard let part = urls[partNumber], let url = URL(string: part.url) else {
+                        throw DriveAPIError.server(500, "No URL for part \(partNumber)")
+                    }
+                    let sealed = try sealPart(begun, index: index, from: handle, thumbnail: thumbnail)
+                    // A part the network dropped is sent again; an expired address is fetched fresh first.
+                    var partURL = url
+                    let etag = try await Resumable.run(onExpired: {
+                        let more = try await api.partUrls(uploadId: begun.uploadId, workspaceId: begun.workspaceId, from: partNumber, count: 64)
+                        for part in more.parts { urls[part.partNumber] = part }
+                        if let fresh = urls[partNumber].flatMap({ URL(string: $0.url) }) { partURL = fresh }
+                    }) {
+                        try await api.putPart(partURL, data: sealed)
+                    }
+                    etags[partNumber] = etag
+                    progress(FileProgress.fraction(size: begun.plaintextSize, through: index + 1))
                 }
-                guard let part = urls[partNumber], let url = URL(string: part.url) else {
-                    throw DriveAPIError.server(500, "No URL for part \(partNumber)")
-                }
-                let sealed = try sealPart(begun, index: index, from: handle, thumbnail: thumbnail)
-                // A part the network dropped is sent again; an expired address is fetched fresh first.
-                var partURL = url
-                let etag = try await Resumable.run(onExpired: {
-                    let more = try await api.partUrls(uploadId: begun.uploadId, workspaceId: begun.workspaceId, from: partNumber, count: 64)
-                    for part in more.parts { urls[part.partNumber] = part }
-                    if let fresh = urls[partNumber].flatMap({ URL(string: $0.url) }) { partURL = fresh }
-                }) {
-                    try await api.putPart(partURL, data: sealed)
-                }
-                etags[partNumber] = etag
-                progress(FileProgress.fraction(size: begun.plaintextSize, through: index + 1))
+            } catch {
+                await api.abortUpload(uploadId: begun.uploadId, workspaceId: begun.workspaceId)
+                throw error
             }
-        } catch {
-            await api.abortUpload(uploadId: begun.uploadId, workspaceId: begun.workspaceId)
-            throw error
-        }
-        do {
-            return try await complete(uploadId: begun.uploadId, workspaceId: begun.workspaceId, nodeId: begun.nodeId, parentId: begun.parentId,
-                                      replacing: begun.replacing, final: begun.final, nodeKey: begun.nodeKey, etags: etags, landing: begun.landing)
-        } catch let landed as UploadLanded {
-            // Here and now there is no queue to come back: the name is repaired once if it can be, and the item is
-            // answered as the server holds it (a caller such as Files must never take a landed version for a failure and
-            // send it again). Only a row that can't be looked up at all is thrown, still as landed.
-            if let published = landed.published {
-                _ = try? await repairLanded(nodeId: begun.nodeId, workspaceId: begun.workspaceId, final: begun.final, published: published)
+            do {
+                return try await complete(uploadId: begun.uploadId, workspaceId: begun.workspaceId, nodeId: begun.nodeId, parentId: begun.parentId,
+                                          replacing: begun.replacing, final: begun.final, nodeKey: begun.nodeKey, etags: etags, landing: begun.landing)
+            } catch let landed as UploadLanded {
+                // Here and now there is no queue to come back: the name is repaired once if it can be, and the item is
+                // answered as the server holds it (a caller such as Files must never take a landed version for a failure and
+                // send it again). Only a row that can't be looked up at all is thrown, still as landed.
+                if let published = landed.published {
+                    _ = try? await repairLanded(nodeId: begun.nodeId, workspaceId: begun.workspaceId, final: begun.final, published: published)
+                }
+                try? await lookAgain(begun.parentId)
+                guard let item = opened[NodeRef(workspaceId: begun.workspaceId, nodeId: begun.nodeId)] else { throw landed }
+                return item
             }
-            try? await lookAgain(begun.parentId)
-            guard let item = opened[NodeRef(workspaceId: begun.workspaceId, nodeId: begun.nodeId)] else { throw landed }
-            return item
         }
     }
 
@@ -692,6 +720,8 @@ extension Vault {
         public var urls: [Int: String]
         /* A replacement's version and the name record it replaces (nil for a new file, or a record kept before it was stored). */
         public var landing: Landing? = nil
+        /* Whether the upload was begun as the family's (under its ledger's keys): what its completion is gated against. */
+        public var family: Bool? = nil
 
         /* The record this upload seals when it lands, attributes and all. */
         var final: NodeMetadata { NodeMetadata(name: name, mime: mime, size: size, modified: modified, attributes: attributes ?? [:]) }
@@ -705,25 +735,27 @@ extension Vault {
      */
     public func sealUpload(fileURL: URL, name: String, mime: String?, in parentId: String, replacing: Opened?,
                            thumbnail: Data?, into directory: URL, waiting: KeyChangeWait.Policy? = nil) async throws -> SealedUpload {
-        let target: String
-        if let replacing { target = replacing.node.workspaceId } else { target = try await resolve(parentId).node.workspaceId }
-        var since = waiting?.since
-        var attempt = 0
-        while true {
-            do {
-                return try await sealUploadOnce(fileURL: fileURL, name: name, mime: mime, in: parentId, replacing: replacing,
-                                                thumbnail: thumbnail, into: directory, waited: since != nil)
-            } catch {
-                guard let waiting, isFamilyWorkspace(target), KeyChangeWait.meets(error, waited: since != nil) else { throw error }
-                let start = since ?? waiting.now()
-                since = start
-                waiting.waiting(start)
-                if waiting.now().timeIntervalSince(start) >= KeyChangeWait.giveUp { throw DriveAPIError.server(409, KeyChangeWait.gaveUp) }
-                attempt += 1
-                try await waiting.pause(attempt)
-                if waiting.now().timeIntervalSince(start) >= KeyChangeWait.giveUp { throw DriveAPIError.server(409, KeyChangeWait.gaveUp) }
-                // The family checked again: a walk's roster (the folder's next key) is accepted before the next look.
-                await familyJudge?.recheck(target)
+        return try await writing {
+            let target: String
+            if let replacing { target = replacing.node.workspaceId } else { target = try await resolve(parentId).node.workspaceId }
+            var since = waiting?.since
+            var attempt = 0
+            while true {
+                do {
+                    return try await sealUploadOnce(fileURL: fileURL, name: name, mime: mime, in: parentId, replacing: replacing,
+                                                    thumbnail: thumbnail, into: directory, waited: since != nil)
+                } catch {
+                    guard let waiting, isFamilyWorkspace(target), KeyChangeWait.meets(error, waited: since != nil) else { throw error }
+                    let start = since ?? waiting.now()
+                    since = start
+                    waiting.waiting(start)
+                    if waiting.now().timeIntervalSince(start) >= KeyChangeWait.giveUp { throw DriveAPIError.server(409, KeyChangeWait.gaveUp) }
+                    attempt += 1
+                    try await waiting.pause(attempt)
+                    if waiting.now().timeIntervalSince(start) >= KeyChangeWait.giveUp { throw DriveAPIError.server(409, KeyChangeWait.gaveUp) }
+                    // The family checked again: a walk's roster (the folder's next key) is accepted before the next look.
+                    await familyJudge?.recheck(target)
+                }
             }
         }
     }
@@ -755,7 +787,7 @@ extension Vault {
                 partCount: Int(begun.chunkCount), replacing: begun.replacing,
                 name: begun.final.name, mime: begun.final.mime, size: begun.final.size, modified: begun.final.modified,
                 attributes: begun.final.attributes.isEmpty ? nil : begun.final.attributes,
-                urls: urls.mapValues(\.url), landing: begun.landing
+                urls: urls.mapValues(\.url), landing: begun.landing, family: WriteIntent.decision(begun.workspaceId)
             )
         } catch {
             await api.abortUpload(uploadId: begun.uploadId, workspaceId: begun.workspaceId)
@@ -774,9 +806,14 @@ extension Vault {
     }
 
     public func finishUpload(_ sealed: SealedUpload, etags: [Int: String]) async throws -> Opened {
-        try await complete(uploadId: sealed.uploadId, workspaceId: sealed.workspaceId, nodeId: sealed.nodeId, parentId: sealed.parentId,
-                                  replacing: sealed.replacing,
-                                  final: sealed.final, nodeKey: nil, etags: etags, landing: sealed.landing)
+        return try await writing {
+            // Completed as it was begun: a share's or this account's upload into a folder proven a family's since is refused.
+            // One queued by an earlier version says nothing, and is judged by its folder now.
+            WriteIntent.record(sealed.workspaceId, family: sealed.family ?? isFamilyWorkspace(sealed.workspaceId))
+            return try await complete(uploadId: sealed.uploadId, workspaceId: sealed.workspaceId, nodeId: sealed.nodeId, parentId: sealed.parentId,
+                                      replacing: sealed.replacing,
+                                      final: sealed.final, nodeKey: nil, etags: etags, landing: sealed.landing)
+        }
     }
 
     /* A new version as the server published it: its name record is repaired only while both are still these. */
@@ -797,8 +834,10 @@ extension Vault {
      */
     @discardableResult
     public func repairLanded(_ sealed: SealedUpload, published: Published) async throws -> Bool {
-        try await repairLanded(nodeId: sealed.nodeId, workspaceId: sealed.workspaceId,
-                               final: sealed.final, published: published)
+        return try await writing {
+            try await repairLanded(nodeId: sealed.nodeId, workspaceId: sealed.workspaceId,
+                                   final: sealed.final, published: published)
+        }
     }
 
     func repairLanded(nodeId: String, workspaceId: String, final: NodeMetadata, published: Published) async throws -> Bool {
@@ -906,40 +945,42 @@ extension Vault {
      */
     public func copyAcross(_ nodeId: String, to parentId: String, name: String? = nil,
                            progress: @Sendable (Double) -> Void = { _ in }) async throws -> Opened {
-        let source = try await resolve(nodeId)
-        // Out of a family folder each record is judged by the family's member list (`copy_form`): a former member's
-        // file, or keys that don't match, is re-sealed as the copier's and never vouched for. Elsewhere by the trust set.
-        let family = isFamilyWorkspace(source.node.workspaceId)
-        let trusted: TrustedSigners? = family ? nil : try await copySigners()
-        let metadata: Signing
-        if let trusted {
-            metadata = .copy(trusted.metadata(of: source.node))
-        } else {
-            metadata = .copy(try await familyPrior(FamilySync.metadataRecord(of: source.node), in: source.node.workspaceId, copying: true))
-        }
-        if source.isFolder {
-            let made = try await createFolder(in: parentId, name: name ?? source.name, signing: metadata, attributes: source.metadata.attributes)
-            for child in try await children(of: source.id) { _ = try await copyAcross(child.id, to: made.id, progress: progress) }
-            return made
-        }
-        // A file without a version has nothing to vouch for: whatever it is, it isn't verified.
-        let version: Signing
-        if let current = source.node.currentVersion {
+        return try await writing {
+            let source = try await resolve(nodeId)
+            // Out of a family folder each record is judged by the family's member list (`copy_form`): a former member's
+            // file, or keys that don't match, is re-sealed as the copier's and never vouched for. Elsewhere by the trust set.
+            let family = isFamilyWorkspace(source.node.workspaceId)
+            let trusted: TrustedSigners? = family ? nil : try await copySigners()
+            let metadata: Signing
             if let trusted {
-                version = .copy(trusted.version(current, of: source.node))
+                metadata = .copy(trusted.metadata(of: source.node))
             } else {
-                version = .copy(try await familyPrior(FamilySync.versionRecord(current, of: source.node), in: source.node.workspaceId, copying: true))
+                metadata = .copy(try await familyPrior(FamilySync.metadataRecord(of: source.node), in: source.node.workspaceId, copying: true))
             }
-        } else {
-            version = .copy(.unsigned)
+            if source.isFolder {
+                let made = try await createFolder(in: parentId, name: name ?? source.name, signing: metadata, attributes: source.metadata.attributes)
+                for child in try await children(of: source.id) { _ = try await copyAcross(child.id, to: made.id, progress: progress) }
+                return made
+            }
+            // A file without a version has nothing to vouch for: whatever it is, it isn't verified.
+            let version: Signing
+            if let current = source.node.currentVersion {
+                if let trusted {
+                    version = .copy(trusted.version(current, of: source.node))
+                } else {
+                    version = .copy(try await familyPrior(FamilySync.versionRecord(current, of: source.node), in: source.node.workspaceId, copying: true))
+                }
+            } else {
+                version = .copy(.unsigned)
+            }
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("copy-" + UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let file = directory.appendingPathComponent(source.name)
+            try await download(source.id, to: file) { progress($0 / 2) }
+            let thumbnail = try? await thumbnail(source.id)
+            return try await upload(fileURL: file, name: name ?? source.name, mime: source.metadata.mime, in: parentId, replacing: nil, thumbnail: thumbnail,
+                                    signing: (metadata, version), attributes: source.metadata.attributes) { progress(0.5 + $0 / 2) }
         }
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("copy-" + UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let file = directory.appendingPathComponent(source.name)
-        try await download(source.id, to: file) { progress($0 / 2) }
-        let thumbnail = try? await thumbnail(source.id)
-        return try await upload(fileURL: file, name: name ?? source.name, mime: source.metadata.mime, in: parentId, replacing: nil, thumbnail: thumbnail,
-                                signing: (metadata, version), attributes: source.metadata.attributes) { progress(0.5 + $0 / 2) }
     }
 }

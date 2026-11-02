@@ -204,6 +204,7 @@ public actor Vault {
     public init(api: DriveAPI, session: SharedKeychain.Session) {
         self.api = api
         self.session = session
+        defer { api.writeGate.set { [weak self] workspaceId in try await self?.finalGate(workspaceId) } }
         // In the group's `local` folder, which is out of backups however these files are rewritten.
         let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: SharedKeychain.accessGroup).map { _ in Unbacked.local }
         indexURL = container?.appendingPathComponent("files-parents.json")
@@ -882,6 +883,10 @@ public actor Vault {
     }
 
     #if DEBUG
+    /* Tests only: runs as a write reaches the final gate, before its checks (a family's proof landing mid-write). */
+    var beforeGate: (@Sendable (String) async -> Void)?
+    func setBeforeGate(_ hook: (@Sendable (String) async -> Void)?) { beforeGate = hook }
+
     /* Tests only: runs before each chunk of a download is fetched (a family's proof landing mid-download). */
     var beforeChunk: (@Sendable (UInt64) async -> Void)?
     func setBeforeChunk(_ hook: (@Sendable (UInt64) async -> Void)?) { beforeChunk = hook }

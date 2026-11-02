@@ -61,6 +61,8 @@ public final class DriveAPI: Sendable {
 
     public let session: SharedKeychain.Session
     private let http: URLSession
+    /* The last check every write passes right before it is sent (the vault's final gate, Vault.finalGate). */
+    let writeGate = WriteGateBox()
 
     /*
      * A request that got no answer: the network's (`transport`, the offline line, retried by the
@@ -105,7 +107,28 @@ public final class DriveAPI: Sendable {
         return request
     }
 
+    /* The workspace a write names: its body's `workspaceId`, or a `/workspaces/<id>/` path. */
+    static func workspace(of request: URLRequest) -> String? {
+        if let body = request.httpBody, let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+           let workspaceId = json["workspaceId"] as? String { return workspaceId }
+        let parts = request.url?.pathComponents ?? []
+        if let at = parts.firstIndex(of: "workspaces"), parts.indices.contains(at + 1) { return parts[at + 1] }
+        return nil
+    }
+
+    /*
+     * Every Drive write, right before it is sent: the vault's final gate (a family folder proven, or a
+     * guard owed, since the write decided how to write). An abort writes nothing, and goes; the group
+     * routes are the families' own.
+     */
+    private func gate(_ request: URLRequest) async throws {
+        guard let method = request.httpMethod, method != "GET", let url = request.url, url.path.contains("/api/drive/"),
+              url.lastPathComponent != "abort", let workspaceId = Self.workspace(of: request) else { return }
+        try await writeGate.check(workspaceId)
+    }
+
     private func perform<T: Decodable>(_ request: URLRequest, as type: T.Type) async throws -> T {
+        try await gate(request)
         let (data, response): (Data, URLResponse)
         do {
             (data, response) = try await http.data(for: request)
@@ -144,6 +167,7 @@ public final class DriveAPI: Sendable {
 
     /* The status and body as they came, for callers that read the refusal's code themselves; no answer at all throws `transport`. */
     func send(_ request: URLRequest) async throws -> (status: Int, data: Data) {
+        try await gate(request)
         do {
             let (data, response) = try await http.data(for: request)
             return ((response as? HTTPURLResponse)?.statusCode ?? 0, data)
@@ -337,5 +361,17 @@ public final class DriveAPI: Sendable {
             throw DriveAPIError.server(500, "The store returned no ETag")
         }
         return etag
+    }
+}
+
+/* The vault's final gate, as the API it writes through holds it: set once by the vault that owns the API. */
+final class WriteGateBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var gate: (@Sendable (String) async throws -> Void)?
+
+    func set(_ gate: @escaping @Sendable (String) async throws -> Void) { lock.withLock { self.gate = gate } }
+
+    func check(_ workspaceId: String) async throws {
+        if let gate = lock.withLock({ gate }) { try await gate(workspaceId) }
     }
 }

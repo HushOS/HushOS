@@ -660,6 +660,75 @@ extension OnFakeDrive {
             await vault.setBeforeChunk(nil)
         }
 
+        /* The photo held as a share's row before its folder is proven a family's (a share mount's), content served. */
+        private func photoAsShare(_ family: FamilyFixture, _ server: FamilyServer, _ vault: Vault) async throws -> Opened {
+            server.put(family.photo)
+            server.objects[try #require(family.photo.currentVersion).id] = family.photoObject
+            try await vault.admitShare(share(into: family.workspaceId, family.photo))
+            return try await vault.adopt(family.photo, nodeKey: family.photoKey,
+                                         metadata: NodeMetadata(name: "Beach.jpg", mime: "image/jpeg", size: nil, modified: nil, attributes: [:]),
+                                         in: family.workspaceId, fromShare: true)
+        }
+
+        /*
+         * Writes that decided at entry not to write as a family's (a share's rename, a trash batch) and
+         * a write that declared nothing (as share() and the link and tag writes are) reach the final gate
+         * as route 25 proves their folder a family's: each is refused there, and nothing is sent. A write
+         * into a folder a family whose guard is owed named is refused too. Fails if any write goes out on
+         * its entry check alone.
+         */
+        @Test func writesDecidedBeforeAProofAreRefusedAtTheFinalGate() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            let photo = try await photoAsShare(family, server, vault)
+            let (sync, summary) = (phone.sync, family.summary)
+            await vault.setBeforeGate { _ in _ = await sync.sync(summary) }
+            server.clearRequests()
+            await #expect(throws: (any Error).self) { _ = try await vault.rename(photo.id, to: "Renamed.jpg") }
+            #expect(server.writes.isEmpty, "a rename begun on a share's path went out: \(server.writes)")
+            await vault.setBeforeGate(nil)
+            #expect(await vault.isFamilyWorkspace(family.workspaceId))
+            // Proven now: a write that declared nothing (as share() and the link and tag writes send) is refused too.
+            await #expect(throws: (any Error).self) { _ = try await vault.api.trash(nodeId: photo.id, workspaceId: family.workspaceId) }
+            #expect(server.writes.isEmpty)
+        }
+
+        /* A trash batch begun on a share's path, its folder proven at the final gate: refused, nothing sent. */
+        @Test func aTrashBatchDecidedBeforeAProofIsRefusedAtTheFinalGate() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            let photo = try await photoAsShare(family, server, vault)
+            let (sync, summary) = (phone.sync, family.summary)
+            await vault.setBeforeGate { _ in _ = await sync.sync(summary) }
+            server.clearRequests()
+            let trashed = await vault.trashMany([photo.id])
+            await vault.setBeforeGate(nil)
+            #expect(trashed.allSatisfy { if case .failure = $0 { true } else { false } })
+            #expect(server.writes.isEmpty, "a trash batch begun on a share's path went out: \(server.writes)")
+        }
+
+        /* A workspace a member list named, while that family's guard is owed: any write into it waits, whatever it decided. */
+        @Test func aWriteIntoAWorkspaceHeldUnderAnOwedGuardIsRefusedAtTheFinalGate() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            let vault = phone.vault
+            let named = UUID().uuidString.lowercased()
+            await vault.holdAsFamilyWorkspaces([named], of: family.groupId)
+            await vault.oweFamilyGuard(family.groupId)
+            server.clearRequests()
+            await #expect(throws: GuardError.unsaved) { _ = try await vault.api.trash(nodeId: family.fileId, workspaceId: named) }
+            #expect(server.writes.isEmpty)
+            await vault.familyGuardKept(family.groupId)
+        }
+
         /* An own-drive row with `id`, under the member's top folder. */
         private func ownRow(_ id: String, _ family: FamilyFixture, kind: NodeKind, name: String) throws -> NodeView {
             try FamilyFixture.node(id: id, in: family.personal, parent: family.personalRoot.id, parentKey: family.personalRootKey,
