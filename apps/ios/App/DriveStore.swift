@@ -19,7 +19,16 @@ final class DriveStore {
     /* Bumped when the catalogue changes what lists show. */
     var catalogueVersion = 0
     var names: [String: String] = [:]
+    /* Home's Recent rows: the chip's type, a recent folder standing in for what it holds. */
     var recents: [Opened] = []
+    /* The newest changes as they are (every type, nothing folded in): what search falls back on before the catalogue. */
+    var latest: [Opened] = []
+    /*
+     * Home's type chip. A recent folder stands in for what it holds (`Opened.collapsedRecents`), so
+     * the chip narrows Recent before that, in the vault: filtered after, images inside a recent
+     * folder would never show.
+     */
+    private(set) var recentsFilter: HomeFilter = .all
     var trash: [(item: Opened, parentTrashed: Bool)] = []
     /* Trash rows being restored or deleted, and the whole trash being emptied: each shows it is under way. */
     var trashWorking: Set<String> = []
@@ -425,7 +434,7 @@ final class DriveStore {
             let ticket = listingOrder.begin()
             if let children = try? await vault.children(of: id, in: workspace(ofFolder: id)), listingOrder.admits(ticket, of: id) { folders[id] = children }
         }
-        recents = (try? await vault.recents()) ?? recents
+        try? await loadRecents(nil)
         await reloadCatalogue()
         catalogueVersion += 1
         // The build took in every change since the last run, so every kept file is checked against it.
@@ -483,7 +492,7 @@ final class DriveStore {
             folders[id] = listed
         }
         guard current(session) else { return nil }
-        if let latest = try? await inSession(session, { try await $0.recents() }), current(session) { recents = latest }
+        try? await loadRecents(session)
         guard current(session) else { return nil }
         await reloadCatalogue()
         catalogueVersion += 1
@@ -528,7 +537,7 @@ final class DriveStore {
     func known(_ id: String) -> Opened? {
         if let item = catalogue[id] { return item }
         for list in folders.values { if let item = list.first(where: { $0.id == id }) { return item } }
-        return recents.first { $0.id == id }
+        return latest.first { $0.id == id } ?? recents.first { $0.id == id }
     }
 
     /* Everything inside a folder at any depth, as far as this phone knows it: "Search in Lisbon 2026". */
@@ -919,11 +928,29 @@ final class DriveStore {
         guard let session = session ?? beginSession() else { return }
         do {
             await sync(session: session)
-            guard let latest = try await inSession(session, { try await $0.recents() }) else { return }
-            recents = latest
+            try await loadRecents(session)
         } catch {
             report(error)
         }
+    }
+
+    /* A chip chosen on Home: Recent again from what the phone holds, without a sync. */
+    func showRecents(_ filter: HomeFilter) async {
+        guard filter != recentsFilter else { return }
+        recentsFilter = filter
+        try? await loadRecents(nil)
+    }
+
+    /*
+     * Recent under the chip chosen now, in `session` (the session now when nil, `inSession`): an
+     * answer for a session that ended is dropped, and Home's rows for a chip no longer chosen.
+     */
+    private func loadRecents(_ session: Session?) async throws {
+        let filter = recentsFilter
+        guard let loaded = try await inSession(session, { try await $0.recents { filter.matches($0) } }) else { return }
+        if let session, !current(session) { return }
+        latest = loaded.latest
+        if filter == recentsFilter { recents = loaded.rows }
     }
 
     func refreshTrash() async {
@@ -957,7 +984,7 @@ final class DriveStore {
     /* Every item this session has opened, for search across folders. */
     var everything: [Opened] {
         var seen: Set<String> = []
-        return (folders.values.flatMap { $0 } + recents).filter { seen.insert($0.id).inserted }
+        return (folders.values.flatMap { $0 } + latest).filter { seen.insert($0.id).inserted }
     }
 
     func thumbnail(for item: Opened) {
@@ -1045,7 +1072,7 @@ final class DriveStore {
      */
     private func caughtUp() async {
         await reloadCatalogue()
-        recents = (try? await vault.recents()) ?? recents
+        try? await loadRecents(nil)
         catalogueVersion += 1
     }
 
@@ -1075,6 +1102,7 @@ final class DriveStore {
                     let ok = await perform(in: folder, failed: { why = $0 }) { _ = try await vault.relocate(item.id, to: folder) { fraction in Task { @MainActor in self.progress(ticket, fraction) } } }
                     finish(ticket, failed: !ok, message: why)
                     recents.removeAll { $0.id == item.id }
+                    latest.removeAll { $0.id == item.id }
                 } else {
                     // Signed by what the original verified as: someone's share is vouched for only from a checked contact, a family
                     // folder's file only as its member list judges it.
@@ -1449,6 +1477,7 @@ final class DriveStore {
     func dropRows(_ ids: Set<String>) {
         for (id, rows) in folders where rows.contains(where: { ids.contains($0.id) }) { folders[id] = rows.filter { !ids.contains($0.id) } }
         recents.removeAll { ids.contains($0.id) }
+        latest.removeAll { ids.contains($0.id) }
         for id in ids { catalogue[id] = nil }
         catalogueVersion += 1
     }
@@ -1573,6 +1602,7 @@ final class DriveStore {
                 if ok {
                     moved.append(item)
                     recents.removeAll { $0.id == item.id }
+                    latest.removeAll { $0.id == item.id }
                     if let from = item.node.parentId { await refresh(folder: from) }
                 }
             }

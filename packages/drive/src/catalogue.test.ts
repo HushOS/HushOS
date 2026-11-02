@@ -52,14 +52,19 @@ const ids = (nodes: DriveNode[]) => nodes.map((entry) => entry.id);
 
 describe('recent', () => {
     test('lists newest first, breaks ties by name, and leaves out the top folder', () => {
-        expect(ids(drive().recent(10))).toEqual(['old.pdf', 'notes.md', 'plan.md', 'deep', 'work']);
+        // Work stands in for deep and old.pdf, at old.pdf's time: newer than notes.md and plan.md.
+        expect(ids(drive().recent(10))).toEqual(['work', 'notes.md', 'plan.md']);
     });
 
     test('stops at the limit and passes only what keep lets through', () => {
+        // The window closes before work and deep are reached, so they hide nothing: old.pdf shows itself.
         expect(ids(drive().recent(2))).toEqual(['old.pdf', 'notes.md']);
-        expect(ids(drive().recent(10, (entry) => entry.kind === 'folder'))).toEqual([
-            'deep',
-            'work',
+        expect(ids(drive().recent(10, (entry) => entry.kind === 'folder'))).toEqual(['work']);
+        // With the folders filtered out, nothing stands in for old.pdf: it shows itself.
+        expect(ids(drive().recent(10, (entry) => entry.kind === 'file'))).toEqual([
+            'old.pdf',
+            'notes.md',
+            'plan.md',
         ]);
     });
 
@@ -72,7 +77,7 @@ describe('recent', () => {
         catalogue.upsert(
             node('work', 'root', { kind: 'folder', updatedAt: '2026-10-01T09:00:00.000Z' }),
         );
-        expect(ids(catalogue.recent(10))).toContain('old.pdf');
+        expect(ids(catalogue.recent(10))).toEqual(['work', 'notes.md', 'plan.md']);
     });
 });
 

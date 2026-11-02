@@ -142,6 +142,8 @@ fun HomeScreen(model: DriveViewModel, state: DriveState, screen: String, go: (St
         state.rootId?.takeIf { model.pasteProblem(it) == null }?.let { root -> (if (items.size == 1) "Paste “${items[0].name}”" else "Paste ${items.size} items") to { model.paste(root); Unit } }
     }
     LaunchedEffect(Unit) { model.refreshRecents(); model.refreshTags(); model.refreshOffline(); model.refreshAccess() }
+    // Recent is narrowed to the chip before a folder stands in for what it holds.
+    LaunchedEffect(filter) { model.showRecents(filter) }
     // Back online after an offline start: who can open each row comes back without a relaunch.
     LaunchedEffect(state.unreachable) { if (!state.unreachable) model.refreshAccess() }
     // A tag that went away (deleted here or elsewhere) stops filtering.
