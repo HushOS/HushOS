@@ -332,6 +332,8 @@ const NOT_STORAGE = new Set([
     'hushos-api',
     'hushos-api-context',
     'hushos.logging.stripped',
+    // The server's registry of Postgres pools, a Symbol.for key (packages/db/src/client.ts).
+    'hushos.db.pools',
     'hushos-1-0',
 ]);
 const NAME = /(['"`])((?:hushos[-.:]|upload-stash|tsr-|sidebar_)[^'"`$\s]*)(\1|\$\{)/g;
