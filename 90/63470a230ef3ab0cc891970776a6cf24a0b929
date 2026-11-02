@@ -1,0 +1,45 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_32b2ddfee9b6aa 85
+apps/android/app/src/main/AndroidManifest.xml
+  s_566b8e0c4467a4::t_4dae9d9892e65c 63,82-83
+apps/android/app/src/test/kotlin/com/hushos/app/LinkFilterTest.kt
+  s_566b8e0c4467a4::t_11c63c1dcda2af 1-80
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_521aa7bf5b8123 132
+apps/ios/App/HushOSApp.swift
+  s_566b8e0c4467a4::t_cfae59003f541d 72
+apps/web/src/components/drive/folder-view.tsx
+  s_566b8e0c4467a4::t_243dac060c4379 32,99,858-859,861-862,864-888,890-912,914-939,943-957,1012,1270,1400,1425-1428,1631-1633,1645,1652,1655-1656,1662,1664-1668,1670-1686
+apps/web/src/components/folder-mark.tsx
+  s_566b8e0c4467a4::t_91b0facaecfdac 19,23,25,41-57
+apps/web/src/lib/app-links.server.test.ts
+  s_566b8e0c4467a4::t_182c1d727d8e1c 1-97
+apps/web/src/lib/app-links.server.ts
+  s_566b8e0c4467a4::t_69e2d075e7dd2e 6-7,25
+apps/web/src/styles.css
+  s_566b8e0c4467a4::t_7863b025ccd75b 533-603
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_3b6a08b68d5d90 168,170
+docs/release/checklist.md
+  s_566b8e0c4467a4::t_7e53a1c318c748 47,50
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_5442ee3db9bddb 290-314
+turbo.json
+  s_566b8e0c4467a4::t_1f8ebfdf72fb5c 21-23,89-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9063470a230ef3ab0cc891970776a6cf24a0b929",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
