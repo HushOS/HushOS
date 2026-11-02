@@ -12,6 +12,7 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
@@ -104,6 +105,23 @@ object TransferQueue {
         return tag == accountTag(now)
     }
 
+    /*
+     * Rows for jobs WorkManager failed that the app has no row of (the panel's watchQueue): only this account's, each written
+     * under the wipe's lock while it is still the one here, and never one whose upload landed (its LandedJobs mark, left
+     * when a removal ended it as uploaded), so a pruned-late FAILED entry never says "pick it again" for a file that's there.
+     */
+    internal fun recordUnrecordedFailures(context: Context, infos: List<WorkInfo>, hidden: Set<UUID>, generation: Long, nameOf: (WorkInfo) -> String) {
+        val records = FailedTransfers.of(context)
+        val landed = LandedJobs.of(context)
+        for (info in infos) {
+            if (info.state != WorkInfo.State.FAILED || info.id in hidden || !sessionCurrent(context, info.tags)) continue
+            Reservations.whileAccount(generation) {
+                if (sessionCurrent(context, info.tags) && !records.has(info.id.toString()) && !landed.has(info.id.toString()))
+                    records.record(FailedTransfer.fromWork(info, nameOf(info)))
+            }
+        }
+    }
+
     /* Tests: runs inside a cleanup's guarded write, right before it writes (a sign-out landing there). */
     @Volatile internal var beforeCleanupWrite: (() -> Unit)? = null
 
@@ -148,8 +166,12 @@ object TransferQueue {
             current()
             return landed
         }
-        // A job whose upload landed ends as uploaded: said as one, never a failure row.
-        fun uploaded(workId: String) = TransferNotices.ended(context, TransferNotices.Outcome(workId, JobNames.of(context).get(workId) ?: "File", upload = true))
+        // A job whose upload landed ends as uploaded: marked so (LandedJobs, which the panel's rebuild from a FAILED entry
+        // respects), said as one, never a failure row.
+        fun uploaded(workId: String) {
+            LandedJobs.of(context).markOrLog(workId)
+            TransferNotices.ended(context, TransferNotices.Outcome(workId, JobNames.of(context).get(workId) ?: "File", upload = true))
+        }
         // Only this account's jobs (its tag): another account's upload into the same family is never ended here.
         val infos = runCatching { work.getWorkInfosByTag("family:${groupId.lowercase()}").get() }.getOrDefault(emptyList()).filter { tag in it.tags }
         current()
@@ -170,7 +192,11 @@ object TransferQueue {
                 }
                 current()
                 cancel(info.id)
-                drop(ledgerOf(info), info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:"), workId)
+                // The second settle (dropJob's) may hear what the first didn't: a landing then ends it as uploaded after all,
+                // its removal row replaced, before the landed row it read is gone.
+                if (drop(ledgerOf(info), info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:"), workId) && !landed) {
+                    write { records.forget(workId); uploaded(workId) }
+                }
             }
             // Failed ones kept for a Retry (their jobs perhaps pruned already): their copies go, their rows say why.
             current()
@@ -275,8 +301,9 @@ object TransferQueue {
      * after a day, and a failed upload's copy would outlive it. Young folders are left
      * alone, since a copy lands before its job is queued.
      */
-    fun sweep(context: Context, inUse: Set<String>) {
-        LandedJobs.of(context).sweep()
+    fun sweep(context: Context, inUse: Set<String>, known: Set<String> = emptySet()) {
+        // A landed job's mark stays while WorkManager still lists the job: its FAILED entry is never read as a failure again.
+        LandedJobs.of(context).sweep(keep = known)
         val cutoff = System.currentTimeMillis() - 10 * 60 * 1000
         // A failed upload on the app's own record keeps its copy for Retry, however old its job.
         val recorded = FailedTransfers.of(context).all().mapNotNull { it.file?.let { path -> File(path).parent } }.toSet()

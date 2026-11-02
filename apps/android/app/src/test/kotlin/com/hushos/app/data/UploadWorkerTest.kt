@@ -665,4 +665,50 @@ class UploadWorkerTest {
         assertTrue("the run never asked about its family", asked)
         assertTrue(FailedTransfers.of(app).all().none { it.id == id.toString() })
     }
+
+    /*
+     * #268 review, item 1: a family ends while a queued upload's abort gets no clear answer the first time it is settled,
+     * then "already finished" when its job is dropped. The second answer counts: the job ends as uploaded, its removal row
+     * replaced. Fails if the drop's landing is thrown away.
+     */
+    @Test
+    fun aLandingHeardOnlyByTheSecondSettleEndsAsUploaded() {
+        val (id, _) = queued()
+        Reservations.reserved(app, "00000000-0000-4000-8000-0000000000f2", family.workspaceId, id.toString(), System.currentTimeMillis(), null)
+        Reservations.idle("00000000-0000-4000-8000-0000000000f2")
+        var asked = 0
+        TransferQueue.endFamily(app, family.groupId, Shared.session(app)!!) { _, _ ->
+            if (++asked == 1) Reservations.Abort.PENDING else Reservations.Abort.COMPLETED
+        }
+        assertEquals(2, asked)
+        assertTrue("a landing the second settle heard was failed", FailedTransfers.of(app).all().none { it.id == id.toString() })
+        assertTrue(LandedJobs.of(app).has(id.toString()))
+        assertEquals(emptyList<Reservations.Record>(), records())
+    }
+
+    /*
+     * #268 review, item 2: a failed job whose upload landed after all ends as uploaded when its family ends, while
+     * WorkManager still lists its FAILED entry. The panel's rebuild of rows from that entry never brings the failure back,
+     * and the mark that says so outlives the day while the entry is still listed. Fails if a landed job's row reappears.
+     */
+    @Test
+    fun aLandedJobsFailedEntryNeverBringsItsRowBack() {
+        val id = UUID.randomUUID()
+        Reservations.reserved(app, "00000000-0000-4000-8000-0000000000f3", family.workspaceId, id.toString(), System.currentTimeMillis(), null)
+        Reservations.idle("00000000-0000-4000-8000-0000000000f3")
+        Reservations.completed(app, "00000000-0000-4000-8000-0000000000f3")
+        val request = TransferQueue.uploadRequest(id, staged(id), "text/plain", family.rootId, null, familyOf, session = TransferQueue.accountTag(Shared.session(app)!!))
+        FailedTransfers.of(app).record(FailedTransfer(id.toString(), TransferQueue.UPLOAD, "Notes.txt", "Sign in again to finish this.", 0L,
+            file = File(app.filesDir, "queue/$id/content").path, mime = "text/plain", folder = family.rootId, family = family.groupId.lowercase(),
+            familyWorkspace = family.workspaceId))
+        TransferQueue.endFamily(app, family.groupId, Shared.session(app)!!) { _, _ -> Reservations.Abort.RELEASED }
+        assertTrue(FailedTransfers.of(app).all().none { it.id == id.toString() })
+        // The change signal: the panel rebuilds rows from WorkManager's FAILED entries it has no row of.
+        val failedEntry = WorkInfo(id, WorkInfo.State.FAILED, request.tags, androidx.work.Data.Builder().putAll(request.workSpec.input).putString("message", "x").build())
+        TransferQueue.recordUnrecordedFailures(app, listOf(failedEntry), emptySet(), Reservations.generation) { "Notes.txt" }
+        assertTrue("a landed job's failure came back from WorkManager", FailedTransfers.of(app).all().none { it.id == id.toString() })
+        // A day on, while WorkManager still lists it, the mark stays.
+        LandedJobs.of(app).sweep(now = System.currentTimeMillis() + 3 * 24 * 60 * 60 * 1000L, keep = setOf(id.toString()))
+        assertTrue(LandedJobs.of(app).has(id.toString()))
+    }
 }

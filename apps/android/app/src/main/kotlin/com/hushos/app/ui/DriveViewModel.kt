@@ -384,13 +384,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                 // Only this account's jobs, and only while it is still the one here: each row lands before a wipe or not at all.
                 val generation = vault?.ledgerGeneration
                 withContext(Dispatchers.IO) {
-                    infos.filter { it.state == androidx.work.WorkInfo.State.FAILED && it.id !in hidden && !records.has(it.id.toString()) &&
-                        com.hushos.app.data.TransferQueue.sessionCurrent(context, it.tags) }.forEach { info ->
-                        if (generation != null) com.hushos.app.data.Reservations.whileAccount(generation) {
-                            if (com.hushos.app.data.TransferQueue.sessionCurrent(context, info.tags)) records.record(com.hushos.app.data.FailedTransfer.fromWork(info, nameOf(info)))
-                        }
-                    }
-                    com.hushos.app.data.TransferQueue.sweep(context, inUse)
+                    if (generation != null) com.hushos.app.data.TransferQueue.recordUnrecordedFailures(context, infos, hidden, generation, nameOf)
+                    com.hushos.app.data.TransferQueue.sweep(context, inUse, infos.map { it.id.toString() }.toSet())
                     jobNames.retain(infos.map { it.id.toString() }.toSet())
                 }
                 // Failed rows come from the app's own record, which outlives WorkManager's; its FAILED jobs are not shown twice.
