@@ -1,4 +1,10 @@
-import { FOLDER_COLOURS, folderColour, type DriveNode, type TagColour } from '@hushos/drive/client';
+import {
+    COLOUR_NAMES,
+    FOLDER_COLOURS,
+    folderColour,
+    type DriveNode,
+    type TagColour,
+} from '@hushos/drive/client';
 import { useQueryClient } from '@tanstack/react-query';
 import { CheckIcon } from 'lucide-react';
 import { cn } from 'cn';
@@ -27,8 +33,6 @@ import { cue } from '@/lib/sounds';
 
 /* Where Custom starts: the plum the swatches leave out. */
 const FIRST_CUSTOM = '#7c5cbf';
-/* The swatches' names, in FOLDER_COLOURS' order, for screen readers. */
-const SWATCH_NAMES = ['Blue', 'Mint', 'Coral', 'Violet', 'Teal', 'Pink', 'Lime', 'Orange'];
 
 export function FolderColourDialog({
     nodes,
@@ -157,13 +161,13 @@ function ColourForm({
                             )}
                         </span>
                     </label>
-                    {FOLDER_COLOURS.map((colour, index) => (
+                    {FOLDER_COLOURS.map((colour) => (
                         <label key={colour} className={ring(value === colour)}>
                             <input
                                 type="radio"
                                 name={id}
                                 value={colour}
-                                aria-label={SWATCH_NAMES[index]}
+                                aria-label={COLOUR_NAMES[colour]}
                                 checked={value === colour}
                                 onChange={() => {
                                     setCustomOpen(false);

@@ -489,9 +489,7 @@ enum TagColour {
         }
     }
 
-    static func label(_ value: String) -> String {
-        TagRegistry.presets.contains(value) ? value.prefix(1).uppercased() + value.dropFirst() : "Custom"
-    }
+    static func label(_ value: String) -> String { TagRegistry.colourName(value) }
 }
 
 /*

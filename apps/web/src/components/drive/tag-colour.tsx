@@ -1,9 +1,9 @@
-import { TAG_PRESETS, type TagColour, type TagPreset } from '@hushos/drive/client';
+import type { TagColour } from '@hushos/drive/client';
 import { CheckIcon, ChevronDownIcon } from 'lucide-react';
 import { cn } from 'cn';
 import { useId, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { OFFERED_COLOURS, swatchProps, TAG_COLOUR_LABEL } from '@/lib/tags';
+import { OFFERED_COLOURS, swatchProps, tagColourLabel } from '@/lib/tags';
 
 /* A tag's colour as a square, whichever way it was chosen. */
 export function Swatch({ colour, className }: { colour: TagColour | null; className?: string }) {
@@ -38,7 +38,8 @@ export function TagColourPicker({
     className?: string;
 }) {
     const id = useId();
-    const custom = !(TAG_PRESETS as readonly string[]).includes(value);
+    // An older tag's Ledger preset is neither a swatch on offer nor one of its own: nothing is ticked.
+    const custom = value.startsWith('#') && !OFFERED_COLOURS.includes(value);
     const [open, setOpen] = useState(custom);
     const ring = (on: boolean) =>
         cn(
@@ -51,18 +52,18 @@ export function TagColourPicker({
             disabled={disabled}
             className={cn('m-0 flex min-w-0 flex-col gap-2 border-0 p-0', className)}
         >
-            <div className="flex items-center gap-1">
+            <div className="flex flex-wrap items-center gap-1">
                 {OFFERED_COLOURS.map((preset) => (
                     <label
                         key={preset}
-                        title={TAG_COLOUR_LABEL[preset]}
+                        title={tagColourLabel(preset) ?? undefined}
                         className={ring(value === preset)}
                     >
                         <input
                             type="radio"
                             name={id}
                             value={preset}
-                            aria-label={TAG_COLOUR_LABEL[preset]}
+                            aria-label={tagColourLabel(preset) ?? undefined}
                             checked={value === preset}
                             onChange={() => {
                                 setOpen(false);
@@ -103,15 +104,13 @@ export function TagColourPicker({
                         style={{
                             background: custom
                                 ? value
-                                : 'conic-gradient(#b4503b, #c9962b, #23766d, #4a64c8, #7c5cbf, #b4503b)',
+                                : `conic-gradient(${OFFERED_COLOURS.join(', ')}, ${OFFERED_COLOURS[0]})`,
                         }}
                     />
                 </label>
             </div>
             <span className="text-[13px] text-muted-foreground">
-                {custom
-                    ? `Custom colour · ${value.toUpperCase()}`
-                    : (TAG_COLOUR_LABEL[value as TagPreset] ?? '')}
+                {custom ? `Custom colour · ${value.toUpperCase()}` : (tagColourLabel(value) ?? '')}
             </span>
             {open && (
                 <div className="border-t border-rule pt-3">
@@ -351,13 +350,16 @@ export function TagColourButton({
                 <Swatch colour={value} className="size-[18px] rounded-full" />
                 <ChevronDownIcon className="size-4 text-muted-foreground" aria-hidden="true" />
             </PopoverTrigger>
-            <PopoverContent align="start" className="flex w-[292px] flex-col gap-3 p-4">
+            <PopoverContent
+                align="start"
+                className="flex w-[min(392px,calc(100vw_-_32px))] max-w-none flex-col gap-3 p-4"
+            >
                 <span className="text-sm font-bold">Colour</span>
                 <TagColourPicker
                     value={value}
                     onChange={(colour) => {
                         onChange(colour);
-                        if ((TAG_PRESETS as readonly string[]).includes(colour)) setOpen(false);
+                        if (OFFERED_COLOURS.includes(colour)) setOpen(false);
                     }}
                 />
             </PopoverContent>
