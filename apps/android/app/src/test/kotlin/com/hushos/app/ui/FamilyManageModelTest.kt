@@ -173,4 +173,51 @@ class FamilyManageModelTest {
         until("Cancel invitation's 401 went to the lost session") { host.lostSessions == 3 }
         assertTrue(host.notices.none { it.startsWith("Couldn’t cancel it.") })
     }
+
+    /*
+     * A refresh's read of the invitations is still on its way, made before Ada's invitation was cancelled, when the cancel
+     * lands and its own reload shows her gone; then the old answer arrives. It is dropped: the cancelled invitation stays
+     * gone. Fails if a late answer overwrites the state a later change left.
+     */
+    @Test
+    fun aRefreshAnsweredAfterACancelNeverBringsTheInvitationBack() {
+        val id = UUID.randomUUID().toString()
+        val ada = JSONObject().put("id", id).put("email", "ada@example.org").put("invitedBy", JSONObject.NULL).put("expiresAt", "2026-11-10T00:00:00.000Z")
+        family.invitationRows.add(ada)
+        runBlocking { model.loadManaged(family.groupId) }
+        assertEquals(listOf(id), model.invitations[family.groupId]?.map { it.id })
+        val arrived = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        var held = false
+        server.beforeAnswer = { method, path ->
+            if (!held && method == "GET" && path == "groups/${family.groupId}/invitations") {
+                held = true
+                // Read now, before the cancel; answered once released.
+                family.readBefore.set(listOf(ada))
+                arrived.countDown()
+                release.await(10, java.util.concurrent.TimeUnit.SECONDS)
+            }
+        }
+        val refresh = Thread { runBlocking { model.loadManaged(family.groupId) } }.apply { start() }
+        assertTrue(arrived.await(10, java.util.concurrent.TimeUnit.SECONDS))
+        model.cancelInvitation(family.groupId, model.invitations[family.groupId]!!.single())
+        until("the cancel's own reload shows it gone") { model.invitations[family.groupId]?.isEmpty() == true }
+        release.countDown()
+        refresh.join(10_000)
+        server.beforeAnswer = null
+        assertTrue(model.invitations[family.groupId]!!.isEmpty())
+        assertTrue(family.invitationRows.isEmpty())
+    }
+
+    /*
+     * Who waits fails as any request can, and the invitations answer 401: the lost session wins, whichever read failed
+     * first. Fails if the first failure's words are shown and the sign-out is dropped.
+     */
+    @Test
+    fun aLostSessionFromEitherListIsALostSession() {
+        family.pendingAnswer = 503 to JSONObject().put("message", "Drive is temporarily unavailable. Please try again.")
+        family.invitationsAnswer = 401 to JSONObject().put("message", "Sign in again.")
+        runBlocking { model.loadManaged(family.groupId) }
+        assertEquals(1, host.lostSessions)
+    }
 }

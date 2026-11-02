@@ -132,8 +132,15 @@ class FamilyFixture(val server: FakeDrive) {
     val admitAnswers = java.util.concurrent.ConcurrentLinkedQueue<(JSONObject) -> Pair<Int, JSONObject>?>()
     /* Routes 11, 13 and 26 (invite, cancel an invitation, turn down): answered with this while set, else taken. */
     @Volatile var manageAnswer: Pair<Int, JSONObject>? = null
-    /* Route 12: the invitations still open, as JSON rows. */
+    /* Route 12: the invitations still open, as JSON rows; route 13 takes one away. */
     val invitationRows = java.util.Collections.synchronizedList(ArrayList<JSONObject>())
+    /* Route 12's answer instead of the rows (a failure, a lost session), while set. */
+    @Volatile var invitationsAnswer: Pair<Int, JSONObject>? = null
+    /*
+     * Rows a request answered on this thread reads instead of the current ones: a read made before a change whose answer
+     * arrives after it (set from FakeDrive.beforeAnswer, which runs on the request's own thread).
+     */
+    val readBefore = ThreadLocal<List<JSONObject>?>()
     /* Route 16's answer instead of the rows (a failure, a lost session), while set. */
     @Volatile var pendingAnswer: Pair<Int, JSONObject>? = null
     /* Route 22: each grants post (workspace, body), and how it is answered (null: taken). */
@@ -217,9 +224,11 @@ class FamilyFixture(val server: FakeDrive) {
             method == "GET" && path == "groups/$groupId/key-seal" -> keySeal?.let { 200 to it }
                 ?: (409 to JSONObject().put("code", "no-seal").put("message", "Nobody has sealed the current group key to you yet."))
             method == "POST" && path == "groups/$groupId/invitations" -> manageAnswer ?: (201 to JSONObject())
-            method == "DELETE" && segments.size == 4 && path.startsWith("groups/$groupId/invitations/") -> manageAnswer ?: (200 to JSONObject())
+            method == "DELETE" && segments.size == 4 && path.startsWith("groups/$groupId/invitations/") -> manageAnswer
+                ?: (200 to JSONObject()).also { invitationRows.removeIf { it.optString("id") == segments[3] } }
             method == "POST" && segments.size == 5 && path.startsWith("groups/$groupId/members/") && segments[4] == "decline" -> manageAnswer ?: (200 to JSONObject())
-            method == "GET" && path == "groups/$groupId/invitations" -> 200 to JSONObject().put("invitations", JSONArray(invitationRows.toList()))
+            method == "GET" && path == "groups/$groupId/invitations" -> invitationsAnswer
+                ?: (200 to JSONObject().put("invitations", JSONArray((readBefore.get()?.also { readBefore.remove() } ?: invitationRows).toList())))
             method == "GET" && path == "groups/$groupId/pending" -> pendingAnswer ?: (200 to JSONObject().put("pending", JSONArray(pendingRows.toList())))
             method == "POST" && segments.size == 5 && path.startsWith("groups/$groupId/areas/") && segments[4] == "grants" -> {
                 grantPosts.add(segments[3] to body.toString())

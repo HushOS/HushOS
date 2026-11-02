@@ -248,17 +248,27 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
      * do) and says why above them, with Try again; a lost session goes where every other one does.
      */
     private suspend fun reloadManaged(groupId: String, s: FamilySession) {
+        val load = supersedeLoads(groupId)
         val pending = gate.run(s) { s.owner.families.pending(groupId) } ?: return
         val open = gate.run(s) { s.owner.families.invitations(groupId) } ?: return
-        if (!gate.current(s)) return
+        // Superseded (a later load, or an invite, a cancel, a turn-down or a Let them in begun since): its answer may
+        // predate that change, and never overwrites what came after it.
+        if (!gate.current(s) || managedLoads[groupId.lowercase()] != load) return
+        val failures = listOfNotNull(pending.exceptionOrNull(), open.exceptionOrNull())
+        failures.forEach { it.rethrowIfCancelled() }
+        // A lost session from either read first, whatever the other's failure was.
+        if (failures.any { it is NotAuthenticated }) { model.lostSession(); return }
         pending.onSuccess { waiting[groupId] = it }
         open.onSuccess { invitations[groupId] = it }
-        val failed = pending.exceptionOrNull() ?: open.exceptionOrNull()
-        if (failed == null) { managedErrors.remove(groupId); return }
-        failed.rethrowIfCancelled()
-        if (failed is NotAuthenticated) { model.lostSession(); return }
-        managedErrors[groupId] = FamilyWords.error(failed)
+        val failed = failures.firstOrNull()
+        if (failed == null) managedErrors.remove(groupId) else managedErrors[groupId] = FamilyWords.error(failed)
     }
+
+    /* Each family's latest manager-list load or change, by number: an answer from an earlier one is dropped. */
+    private val managedLoads = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /* A new load or change of the family's lists begins: every load begun before it is superseded. */
+    private fun supersedeLoads(groupId: String): Long = managedLoads.merge(groupId.lowercase(), 1L, Long::plus)!!
 
     /* Why a manager's lists last failed to load, by family: said on the page until a read succeeds. */
     val managedErrors = mutableStateMapOf<String, String>()
@@ -272,6 +282,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         if (waitingRows[key]?.busy != null) return
         val summary = list?.firstOrNull { it.id == groupId } ?: return
         val s = begin() ?: return
+        supersedeLoads(groupId)
         waitingRows[key] = WaitingRow(busy = "send")
         val first = com.hushos.app.data.firstNameOf(person.name)
         model.familyScope.launch {
@@ -309,6 +320,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         val key = rowKey(groupId, person.userId)
         val family = name(groupId)
         val s = begin() ?: return
+        supersedeLoads(groupId)
         waitingRows[key] = WaitingRow(busy = "decline")
         model.familyScope.launch {
             val result = gate.run(s) { s.owner.families.turnDown(groupId, person.userId) } ?: return@launch
@@ -332,6 +344,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
     fun cancelInvitation(groupId: String, invitation: com.hushos.app.data.OpenInvitation) {
         cancelling = null
         val s = begin() ?: return
+        supersedeLoads(groupId)
         model.familyScope.launch {
             val result = gate.run(s) { s.owner.families.cancelInvitation(groupId, invitation.id) } ?: return@launch
             if (!gate.current(s)) return@launch
@@ -356,6 +369,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         if (ask.busy || ask.email.isBlank()) return
         val s = begin() ?: return
         val address = ask.email.trim()
+        supersedeLoads(ask.groupId)
         inviting = ask.copy(busy = true, error = null)
         model.familyScope.launch {
             val result = gate.run(s) { s.owner.families.invite(ask.groupId, address) } ?: return@launch
@@ -916,7 +930,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         states.clear(); names.clear(); shown.clear(); details.clear(); syncing.clear(); refreshed.clear(); problems.clear(); verdicts.reset()
         checkedAt.clear(); joining.clear(); syncedAt = 0L; folders = FamilyFolders(); held = null; heldStack = emptyMap(); shownRevision.clear()
         walks.clear(); walking.clear(); walkEnded.clear(); leaving = null; leftFamily = null
-        waiting.clear(); invitations.clear(); managedErrors.clear(); waitingRows.clear(); inviting = null; turningDown = null; cancelling = null
+        waiting.clear(); invitations.clear(); managedErrors.clear(); managedLoads.clear(); waitingRows.clear(); inviting = null; turningDown = null; cancelling = null
     }
 
     /*
