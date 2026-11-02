@@ -459,6 +459,34 @@ class FakeDrive : AutoCloseable {
         rotations[nodeId] = Rotation(node(nodeId).workspaceId, target, hashSetOf(nodeId))
     }
 
+    /*
+     * Another device walking the run from `runRoot` re-keys `id` first, as its own batch would: a fresh key wrapped under its
+     * parent's key at the target, its name sealed again under it and signed by `by`. Its children stay where they were.
+     */
+    fun walkedElsewhere(runRoot: String, id: String, by: Person) = synchronized(lock) {
+        val rotation = rotations.getValue(runRoot)
+        val node = node(id)
+        val ws = node.workspaceId
+        val old = keyOf(id)
+        previousKeys[id to node.keyEpoch] = old
+        if (node.previous == null) node.previous = Triple(node.keyEnvelope, node.keyEpoch, node.parentKeyEpoch)
+        val fresh = randomBytes(32u)
+        val metadata = metadataOpen(MetadataContext(ws, id, node.metadataVersion.toULong()), old, base64urlDecode(node.metadataEnvelope))
+        val sealed = metadataSeal(MetadataContext(ws, id, node.metadataVersion.toULong()), fresh, metadata)
+        node.keyEnvelope = base64urlEncode(nodeWrap(NodeKeyContext(ws, id, node.parentId!!, rotation.target.toULong(), rotation.target.toULong()), keyOf(node.parentId!!), fresh))
+        node.parentKeyEpoch = rotation.target
+        node.keyEpoch = rotation.target
+        node.metadataEnvelope = base64urlEncode(sealed)
+        node.signature = base64urlEncode(metadataSign(by.keys.signingSeed, MetadataStatement(ws, id, if (node.kind == "folder") NodeKind.FOLDER else NodeKind.FILE, node.metadataVersion.toULong()), sealed))
+        node.signer = by.id
+        node.metadataRekey = null
+        bump(node)
+        rotation.applied.add(id)
+    }
+
+    /* Runs as a rotation send arrives, before anything of it is applied (another device's batch landing first). */
+    @Volatile var beforeRotationSend: ((ids: List<String>) -> Unit)? = null
+
     /* Whether the run from `nodeId` is still running (route 25 names it). */
     fun running(nodeId: String): Boolean = synchronized(lock) { rotations[nodeId]?.finished == false }
 
@@ -719,6 +747,7 @@ class FakeDrive : AutoCloseable {
                 val wires = body.getJSONArray("nodes")
                 rotationBatches.add((0 until wires.length()).map { wires.getJSONObject(it).getString("id") })
                 if (failRotationSend || send in failRotationSends) return 500 to JSONObject().put("message", "The connection dropped")
+                beforeRotationSend?.invoke(rotationBatches.last())
                 val rotation = rotations.getValue(segments[2])
                 val results = JSONArray()
                 for (i in 0 until wires.length()) {
@@ -726,6 +755,13 @@ class FakeDrive : AutoCloseable {
                     val node = node(wire.getString("id"))
                     // A node sent at a change order the server has moved past (another device's walk applied it): stale.
                     if (!wire.isNull("changeSeq") && wire.optInt("changeSeq") != node.changeSeq) { results.put(JSONObject().put("id", node.id).put("status", "stale")); continue }
+                    // Below the run's top: the parent must be re-keyed already, and at the epoch the node was wrapped under
+                    // (packages/db rotateNodeIn). Each node is judged on its own, so a batch can land in part.
+                    if (node.id != segments[2] && node.parentId != null) {
+                        val parent = node(node.parentId!!)
+                        if (parent.keyEpoch < rotation.target) { results.put(JSONObject().put("id", node.id).put("status", "parent-not-ready")); continue }
+                        if (parent.keyEpoch != wire.getLong("parentKeyEpoch")) { results.put(JSONObject().put("id", node.id).put("status", "stale")); continue }
+                    }
                     val rotated = wire.optJSONObject("rotated")
                     // Its key before, kept for the children the walk hasn't reached: they are still wrapped under it.
                     if (rotated != null) {

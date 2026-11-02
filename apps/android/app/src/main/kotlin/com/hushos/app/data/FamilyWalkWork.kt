@@ -65,15 +65,23 @@ object FamilyWalkWork {
     /*
      * One pass (the worker's body): route 2 with every family it no longer lists asked about (a removal wipes), each
      * family it lists synced, and each run this phone has its own reason to walk walked, one folder at a time in the
-     * process. RETRY when any walk or sync didn't finish for a reason that may pass (no answer, a stop); SIGNED_OUT
-     * when there is no session.
+     * process. RETRY when any walk, sync or removal didn't finish for a reason that may pass (no answer, a stop, a family
+     * still kept that the server hasn't confirmed this account left); SIGNED_OUT when there is no session.
      */
-    fun run(context: Context, vault: Vault? = Shared.session(context)?.let { LiveVaults.of(it) ?: Vault.fromShared(context) }): Outcome {
+    fun run(
+        context: Context,
+        vault: Vault? = Shared.session(context)?.let { LiveVaults.of(it) ?: Vault.fromShared(context) },
+        /* What lets the background check go (tests watch it). */
+        stop: () -> Unit = { cancel(context) },
+    ): Outcome {
         val session = vault ?: return Outcome.SIGNED_OUT
         val families = session.families
         return try {
-            val (listed, _) = families.listReconciling()
-            var again = false
+            val (listed, gone) = families.listReconciling()
+            // A removal not settled (no answer to route 5, or a wipe that couldn't finish) is asked about again: its record
+            // and copies stay until the server's not-member lets them go.
+            val unsettled = families.unsettled(listed)
+            var again = unsettled.isNotEmpty() || gone.any { it.state != FamilyState.Wiped }
             for (summary in listed.filter { it.state == "active" }) {
                 val view = when (val state = families.sync(summary)) {
                     is FamilyState.Accepted -> state.view
@@ -90,7 +98,8 @@ object FamilyWalkWork {
                     }
                 }
             }
-            if (listed.isEmpty()) cancel(context)
+            // Nothing left to check only once no family is listed and none is kept on this phone.
+            if (listed.isEmpty() && unsettled.isEmpty() && !again) stop()
             if (again) Outcome.RETRY else Outcome.DONE
         } catch (_: NotAuthenticated) {
             Outcome.SIGNED_OUT

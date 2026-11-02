@@ -104,6 +104,32 @@ class FamilyWalksTest {
     }
 
     /*
+     * Two devices walk the same run, and the server judges each node on its own: Sam's device re-keys the subfolder just
+     * before this phone's batch lands. The phone never sends the subfolder's child beside the subfolder, so nothing it
+     * sends is sealed under a key the server refused: the child goes in a later batch, under the key Sam's device put
+     * there, and every file reads afterwards. Fails if a child is sealed under its parent's pending key in the same batch
+     * (the server then takes the child and refuses the parent, and the child is lost).
+     */
+    @Test
+    fun aParentAnotherDeviceWinsNeverLeavesItsChildUnderAKeyNobodyKept() {
+        val phone = opened()
+        family.replaceKeys()
+        val target = accepted(phone).areas.single().walkTarget()!!
+        var raced = false
+        server.beforeRotationSend = { ids ->
+            if (!raced && sub in ids) {
+                raced = true
+                server.walkedElsewhere(family.rootId, sub, family.creator)
+            }
+        }
+        assertEquals(WalkEnd.WALKED, phone.sync.walk(family.groupId, target))
+        assertTrue("Sam's device won the subfolder", raced)
+        // The child never went out beside its parent.
+        assertFalse(server.rotationBatches.any { sub in it && deep in it })
+        walkedEverything()
+    }
+
+    /*
      * A batch that doesn't land (the connection drops) leaves no fresh key pending, so the same phone's next walk sends
      * those nodes again under keys of its own; and a batch that landed with its answer lost, then the process killed, is
      * finished by a fresh process that lists the re-keyed folder through its ledger. Fails if a stopped batch's keys stay
@@ -183,6 +209,31 @@ class FamilyWalksTest {
         assertEquals(3uL, accepted(phone).rosterVersion)
         assertEquals(WalkEnd.WALKED, phone.sync.walk(family.groupId, target))
         walkedEverything()
+    }
+
+    /*
+     * Route 2 stops listing the family while the app is closed, and the roster request that would confirm the removal
+     * gets no answer: the phone keeps the family's record and copies, so the background pass asks to run again rather
+     * than calling it done (which would stop every later check). Once the server says not-member, the wipe happens and
+     * the pass is done. Fails if a removal the server hasn't confirmed lets the background check go.
+     */
+    @Test
+    fun anUnconfirmedRemovalKeepsTheBackgroundCheckGoing() {
+        val app = Vault(this.app, DriveApi(Shared.session(this.app)!!))
+        assertTrue(app.families.sync(family.summary) is FamilyState.Accepted)
+        val records = FamilyRecords.of(this.app)
+        var stopped = 0
+        val pass = { FamilyWalkWork.run(this.app, Vault.fromShared(this.app)) { stopped++ } }
+        family.listed = false
+        family.rostersFail = true
+        assertEquals(FamilyWalkWork.Outcome.RETRY, pass())
+        assertEquals("the background check stays", 0, stopped)
+        assertNotNull("kept until the server says", records.read(family.member.id, family.groupId))
+        family.rostersFail = false
+        family.notMember = true
+        assertEquals(FamilyWalkWork.Outcome.DONE, pass())
+        assertEquals(null, records.read(family.member.id, family.groupId))
+        assertEquals("nothing left to check", 1, stopped)
     }
 
     /*

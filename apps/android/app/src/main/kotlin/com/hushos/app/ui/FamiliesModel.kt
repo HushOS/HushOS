@@ -263,14 +263,15 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
     suspend fun refreshFamilies(force: Boolean = false, maxAgeMs: Long = 60_000, session: FamilySession? = null) {
         val s = session ?: begin() ?: return
         if (!gate.current(s) || !familiesDue(now(), syncedAt, list != null, force, maxAgeMs)) return
-        val result = gate.run(s) { s.owner.families.listReconciling() } ?: return
-        result.onSuccess { (listed, gone) ->
+        val result = gate.run(s) { s.owner.families.let { sync -> sync.listReconciling().let { (listed, gone) -> Triple(listed, gone, sync.unsettled(listed)) } } } ?: return
+        result.onSuccess { (listed, gone, unsettled) ->
             listed.forEach { names[it.id] = it.name }
             list = listed
             served = true
             syncedAt = now()
-            // A family this account is in has its due work checked in the background too, the app closed or not.
-            model.familyWork(listed.any { it.state == "active" })
+            // A family this account is in has its due work checked in the background too, the app closed or not; so does
+            // one this phone still keeps whose removal isn't settled (only a confirmed not-member lets it go).
+            model.familyWork(listed.any { it.state == "active" } || unsettled.isNotEmpty() || gone.any { it.state != FamilyState.Wiped })
             gone.forEach { if (it.state == FamilyState.Wiped) removed(it.groupId!!, s, it.revision) else unlistedFailed(it.groupId!!, it.state, s, it.revision) }
             for (summary in listed) {
                 if (!gate.current(s)) return

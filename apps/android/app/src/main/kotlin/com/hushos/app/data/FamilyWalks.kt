@@ -130,8 +130,14 @@ internal fun Vault.walkFamilyFolder(target: WalkTarget, progress: (Int) -> Unit 
             runCatching { listChildren(parentId, ws) }
         }
         // A family folder takes no shares or links (design 3.4): a node with any is refused by the core alike, and left.
-        val sending = work.nodes.filter { it.shares.isEmpty() && it.links.isEmpty() }
-        if (sending.size < work.nodes.size) shared = true
+        val unshared = work.nodes.filter { it.shares.isEmpty() && it.links.isEmpty() }
+        if (unshared.size < work.nodes.size) shared = true
+        // Only nodes whose parent's key at the target is the server's already: never one beside its parent in the same
+        // batch. The server applies each node on its own, so another device walking the same run can win the parent
+        // (ours `stale`) while ours wins the child (`ok`), which would leave the child sealed under a key nobody kept.
+        // The children wait for a later batch, once the parent's key is confirmed (committed here, or listed as the
+        // other device's).
+        val sending = deferChildren(unshared)
         val made = ArrayList<String>()
         val kept = HashSet<String>()
         var sent = false
@@ -181,6 +187,16 @@ internal fun Vault.walkFamilyFolder(target: WalkTarget, progress: (Int) -> Unit 
         cursor = if (kept.size == work.nodes.size) work.nextCursor else null
     }
     done
+}
+
+/*
+ * The nodes of a batch that may be sealed now: none whose parent is in the same batch (its fresh key would still be
+ * pending, so the server could take the child and refuse the parent). Parents come first in the work, so a later batch
+ * brings each deferred child once its parent's key is confirmed.
+ */
+internal fun deferChildren(nodes: List<RotationWorkNode>): List<RotationWorkNode> {
+    val inBatch = nodes.map { it.node.id.lowercase() }.toSet()
+    return nodes.filter { entry -> entry.node.parentId?.lowercase()?.let { it in inBatch } != true }
 }
 
 /* A node of the work as the ledger's walk takes it: its parent's key at the target, or the top folder's own. */

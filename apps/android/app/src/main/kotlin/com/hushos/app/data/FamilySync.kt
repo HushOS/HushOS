@@ -190,6 +190,16 @@ class FamilySync(
         return listed to wiped
     }
 
+    /*
+     * Families this phone still keeps a device record of that `listed` doesn't name: a removal not settled yet (the
+     * server's not-member never came, or the wipe couldn't finish). Only a confirmed not-member lets go of one, so until
+     * this is empty the background check stays scheduled.
+     */
+    fun unsettled(listed: List<GroupSummary>): List<String> {
+        val shown = listed.map { it.id.lowercase() }.toSet()
+        return records.groups(userId).filter { it !in shown }
+    }
+
     private fun askUnlisted(groupId: String): FamilyState? {
         val after = records.read(userId, groupId)?.rosterVersion?.toInt() ?: 0
         return try {
