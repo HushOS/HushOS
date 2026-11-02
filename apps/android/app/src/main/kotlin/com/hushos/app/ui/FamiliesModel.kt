@@ -22,6 +22,14 @@ import com.hushos.app.data.drainFamilyPurged
 import com.hushos.app.data.familyEpoch
 import com.hushos.app.data.forgetFamilyCopies
 import com.hushos.app.data.walk
+import com.hushos.app.data.resumeOutbox
+import com.hushos.app.data.pending
+import com.hushos.app.data.invitations
+import com.hushos.app.data.letIn
+import com.hushos.app.data.turnDown
+import com.hushos.app.data.cancelInvitation
+import com.hushos.app.data.invite
+import com.hushos.app.data.dropKeptAdmission
 import com.hushos.app.data.walkTarget
 import com.hushos.app.data.rethrowIfCancelled
 import kotlinx.coroutines.CoroutineScope
@@ -123,7 +131,15 @@ interface FamilyHost {
     fun notice(text: String, untilRead: Boolean) {}
     /* The account's storage and plan changed (a leave ended the family's pool and plan for it): read them again. */
     fun accountChanged() {}
+    /* Someone's account changed since this phone pinned them: the changed-account notice (ContactStep.Changed). */
+    fun accountChangedFor(change: com.hushos.app.data.AccountChange) {}
 }
+
+/* Invite someone's dialog, kept by the model so a rotation or a fold redraws it as it was. */
+data class InviteAsk(val groupId: String, val busy: Boolean = false, val error: String? = null)
+
+/* One waiting person's row: Let them in or Not now under way, its words, and an earlier Let them in kept for other keys. */
+data class WaitingRow(val busy: String? = null, val error: String? = null, val keptOther: Boolean = false)
 
 /*
  * The leave dialog's state, kept by the model so a rotation or a fold redraws it as it was: whose family, a request under
@@ -171,6 +187,142 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
     private var ticks = 0
     /* Join screens open per family (a count): while any is open the screen owns the family; background checks wait. */
     private val joining = HashMap<String, Int>()
+
+    /* A manager's view of each family: who waits to be let in (route 16) and the invitations still open (route 12). */
+    val waiting = mutableStateMapOf<String, List<com.hushos.app.data.PendingPerson>>()
+    val invitations = mutableStateMapOf<String, List<com.hushos.app.data.OpenInvitation>>()
+    /* Each waiting person's row, by family and person. */
+    val waitingRows = mutableStateMapOf<String, WaitingRow>()
+    var inviting by mutableStateOf<InviteAsk?>(null)
+        private set
+    /* Not now's and Cancel invitation's confirmations on screen. */
+    var turningDown by mutableStateOf<Pair<String, com.hushos.app.data.PendingPerson>?>(null)
+    var cancelling by mutableStateOf<Pair<String, com.hushos.app.data.OpenInvitation>?>(null)
+
+    private fun rowKey(groupId: String, userId: String) = groupId.lowercase() + "|" + userId.lowercase()
+    fun waitingRow(groupId: String, userId: String): WaitingRow = waitingRows[rowKey(groupId, userId)] ?: WaitingRow()
+
+    /* Whether this account manages the family, as route 2 says: what the screens offer (the server and the core still judge). */
+    fun manages(groupId: String): Boolean = list?.firstOrNull { it.id == groupId }?.let { it.state == "active" && "members" in it.roles } == true
+
+    /*
+     * A manager's family page: whatever the outbox kept for the family sent again first (a Let them in that got no answer
+     * before a lock or a relaunch), then who waits and the invitations still open read again.
+     */
+    suspend fun loadManaged(groupId: String, session: FamilySession? = null) {
+        val s = session ?: begin() ?: return
+        val summary = list?.firstOrNull { it.id == groupId } ?: return
+        if (!manages(groupId)) return
+        gate.run(s) { s.owner.families.resumeOutbox(summary) }
+        reloadManaged(groupId, s)
+    }
+
+    private suspend fun reloadManaged(groupId: String, s: FamilySession) {
+        gate.run(s) { s.owner.families.pending(groupId) }?.getOrNull()?.let { if (gate.current(s)) waiting[groupId] = it }
+        gate.run(s) { s.owner.families.invitations(groupId) }?.getOrNull()?.let { if (gate.current(s)) invitations[groupId] = it }
+    }
+
+    /*
+     * Let them in (6.8): one press, in the families' scope (the row may be redrawn meanwhile). What it came to is said on
+     * the row, or as a notice; an account that changed opens the changed-account notice first.
+     */
+    fun letIn(groupId: String, person: com.hushos.app.data.PendingPerson, dropKept: Boolean = false) {
+        val key = rowKey(groupId, person.userId)
+        if (waitingRows[key]?.busy != null) return
+        val summary = list?.firstOrNull { it.id == groupId } ?: return
+        val s = begin() ?: return
+        waitingRows[key] = WaitingRow(busy = "send")
+        val first = com.hushos.app.data.firstNameOf(person.name)
+        model.familyScope.launch {
+            val result = gate.run(s) {
+                if (dropKept) s.owner.families.dropKeptAdmission(groupId, person.userId)
+                s.owner.families.letIn(summary, person)
+            } ?: return@launch
+            if (!gate.current(s)) return@launch
+            val outcome = result.getOrElse { error ->
+                error.rethrowIfCancelled()
+                if (error is NotAuthenticated) { model.lostSession(); return@launch }
+                waitingRows[key] = WaitingRow(error = FamilyWords.error(error))
+                return@launch
+            }
+            waitingRows[key] = WaitingRow()
+            when (outcome) {
+                com.hushos.app.data.LetIn.Landed -> {
+                    model.notice("$first is in ${summary.name}", untilRead = false)
+                    reloadManaged(groupId, s)
+                    refreshFamily(summary, session = s)
+                }
+                is com.hushos.app.data.LetIn.Pending ->
+                    model.notice("Saved on this device. HushOS couldn’t reach the server. $first is let in once it can.", untilRead = false)
+                is com.hushos.app.data.LetIn.Refused -> waitingRows[key] = WaitingRow(error = outcome.words)
+                is com.hushos.app.data.LetIn.Changed -> model.accountChangedFor(outcome.change)
+                com.hushos.app.data.LetIn.KeptOther -> waitingRows[key] = WaitingRow(keptOther = true)
+                com.hushos.app.data.LetIn.Wiped -> refreshFamilies(force = true, session = s)
+            }
+        }
+    }
+
+    /* Not now (route 26), once confirmed: they need a new invitation to join. */
+    fun turnDown(groupId: String, person: com.hushos.app.data.PendingPerson) {
+        turningDown = null
+        val key = rowKey(groupId, person.userId)
+        val family = name(groupId)
+        val s = begin() ?: return
+        waitingRows[key] = WaitingRow(busy = "decline")
+        model.familyScope.launch {
+            val result = gate.run(s) { s.owner.families.turnDown(groupId, person.userId) } ?: return@launch
+            if (!gate.current(s)) return@launch
+            result.onSuccess {
+                waitingRows.remove(key)
+                model.notice("${com.hushos.app.data.firstNameOf(person.name)} won’t join $family. You can invite them again.", untilRead = false)
+                reloadManaged(groupId, s)
+            }.onFailure { error ->
+                error.rethrowIfCancelled()
+                waitingRows[key] = WaitingRow(error = FamilyWords.error(error))
+            }
+        }
+    }
+
+    fun askTurnDown(groupId: String, person: com.hushos.app.data.PendingPerson) { turningDown = groupId to person }
+    fun askCancel(groupId: String, invitation: com.hushos.app.data.OpenInvitation) { cancelling = groupId to invitation }
+
+    /* Cancel invitation (route 13), once confirmed. */
+    fun cancelInvitation(groupId: String, invitation: com.hushos.app.data.OpenInvitation) {
+        cancelling = null
+        val s = begin() ?: return
+        model.familyScope.launch {
+            val result = gate.run(s) { s.owner.families.cancelInvitation(groupId, invitation.id) } ?: return@launch
+            if (!gate.current(s)) return@launch
+            result.onSuccess { model.notice(invitation.email?.let { "Invitation to $it cancelled" } ?: "Invitation cancelled", untilRead = false) }
+                .onFailure { error -> error.rethrowIfCancelled(); model.notice("Couldn’t cancel it. ${FamilyWords.error(error)}", untilRead = false) }
+            reloadManaged(groupId, s)
+        }
+    }
+
+    /* Invite someone's dialog: opened, closed (never while sending), and sent. */
+    fun askInvite(groupId: String) { if (inviting?.busy != true) inviting = InviteAsk(groupId) }
+    fun dismissInvite() { if (inviting?.busy != true) inviting = null }
+    fun clearInviteError() { inviting = inviting?.copy(error = null) }
+
+    fun sendInvite(email: String) {
+        val ask = inviting ?: return
+        if (ask.busy || email.isBlank()) return
+        val s = begin() ?: return
+        val address = email.trim()
+        inviting = ask.copy(busy = true, error = null)
+        model.familyScope.launch {
+            val result = gate.run(s) { s.owner.families.invite(ask.groupId, address) } ?: return@launch
+            if (!gate.current(s) || inviting?.groupId != ask.groupId) return@launch
+            result.onSuccess {
+                inviting = null
+                model.notice("Invitation sent to $address", untilRead = false)
+                reloadManaged(ask.groupId, s)
+            }.onFailure { error ->
+                error.rethrowIfCancelled()
+                inviting = ask.copy(busy = false, error = inviteWords(error))
+            }
+        }
+    }
 
     /* The leave dialog on screen, if any (LeaveAsk), and the family a leave landed for, until its page has moved on. */
     var leaving by mutableStateOf<LeaveAsk?>(null)
@@ -716,6 +868,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         states.clear(); names.clear(); shown.clear(); details.clear(); syncing.clear(); refreshed.clear(); problems.clear(); verdicts.reset()
         checkedAt.clear(); joining.clear(); syncedAt = 0L; folders = FamilyFolders(); held = null; heldStack = emptyMap(); shownRevision.clear()
         walks.clear(); walking.clear(); walkEnded.clear(); leaving = null; leftFamily = null
+        waiting.clear(); invitations.clear(); waitingRows.clear(); inviting = null; turningDown = null; cancelling = null
     }
 
     /*
@@ -865,6 +1018,18 @@ fun walkWords(error: Throwable): String = when (error) {
     is com.hushos.app.data.WalkStopped -> error.message ?: "The rotation could not finish. Try again."
     is com.hushos.app.data.ApiError -> error.message ?: "The rotation could not finish. Try again."
     else -> FamilyWords.error(error)
+}
+
+/* Why an invitation wasn't sent, in the web's words (invite-dialog.tsx, copy.ts). */
+fun inviteWords(error: Throwable): String {
+    val refused = error as? com.hushos.app.data.GroupsApiError ?: return FamilyWords.error(error)
+    return when (refused.code) {
+        "invalid" -> "Enter their whole email address, like them@example.com."
+        "exists" -> "That address already has an open invitation."
+        "already-member" -> "That person is already in the family."
+        "rate-limited" -> refused.message ?: refused.words
+        else -> if (refused.status == 409 || refused.status == 402) refused.message ?: refused.words else refused.words
+    }
 }
 
 /* How old a families pass may be at the live sync's minute tick: under the minute, so a pass stamped at its end never skips a tick. */

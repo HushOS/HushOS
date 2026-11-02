@@ -156,6 +156,16 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
         standings = read?.getOrNull()
         checkedWith = with.getOrNull()
     }
+    // A manager's page: what the outbox kept sent again, who waits and the open invitations read, at each open.
+    val manages = families.manages(groupId)
+    LaunchedEffect(groupId, manages, view?.rosterDigest) {
+        if (!manages) return@LaunchedEffect
+        val session = families.begin() ?: return@LaunchedEffect
+        families.loadManaged(groupId, session)
+    }
+    families.inviting?.takeIf { it.groupId == groupId }?.let { InviteDialog(model, it) }
+    families.turningDown?.takeIf { it.first == groupId }?.let { (_, person) -> TurnDownDialog(model, groupId, person, name) }
+    families.cancelling?.takeIf { it.first == groupId }?.let { (_, invitation) -> CancelInvitationDialog(model, groupId, invitation) }
     // The leave dialog lives in the model: redrawn as it was after a rotation or a fold, whatever the page shows below it.
     families.leaving?.takeIf { it.groupId == groupId }?.let { LeaveDialog(model, it, name) }
     // A leave that landed: the page moves on, once, whichever composition is on screen when it lands.
@@ -174,6 +184,8 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
                         Alerts(model, groupId, name, state, organizer)
                         KeyChanges(model, groupId, name, view)
                         Folders(view, openFolder)
+                        // A manager's: Invite someone, and who waits to be let in (6.8).
+                        if (manages) { InviteRow(model, groupId); Waiting(model, groupId, name) }
                         Subheader("Members")
                         for (member in view.members) {
                             val who = served(member.userId)
@@ -186,6 +198,7 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
                                 else if (summary != null) families.checking = MemberCheck(summary, ref, served(me)?.name?.let(::firstNameOf) ?: "you", organizer)
                             }
                         }
+                        if (manages) Invitations(model, groupId)
                         TechnicalDetailsRow(view)
                         Leaving(model, groupId, me)
                     }
@@ -286,6 +299,137 @@ private fun LeaveDialog(model: DriveViewModel, ask: LeaveAsk, family: String) {
         },
         confirmButton = { TextButton(onClick = { families.confirmLeave(family) }, enabled = !busy) { Text(if (busy) "Leaving" else "Leave family", color = alpine.danger) } },
         dismissButton = { TextButton(onClick = { families.dismissLeave() }, enabled = !busy) { Text("Cancel") } },
+    )
+}
+
+/* Invite someone: the page's one blue button for a manager (the web's header button). */
+@Composable
+private fun InviteRow(model: DriveViewModel, groupId: String) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2)) {
+        androidx.compose.material3.Button(onClick = { model.families.askInvite(groupId) }, modifier = Modifier.heightIn(min = 44.dp)) { Text("Invite someone") }
+    }
+}
+
+/*
+ * Waiting to join (the web's PendingList): each person who accepted, with Let them in (one press, no words) and Not now;
+ * someone already in another family can't be let in. An earlier Let them in kept for their keys before their account
+ * changed is said, with Drop it and let them in.
+ */
+@Composable
+private fun Waiting(model: DriveViewModel, groupId: String, family: String) {
+    val alpine = Alpine.colors
+    val families = model.families
+    val people = families.waiting[groupId].orEmpty()
+    if (people.isEmpty()) return
+    Subheader("Waiting to join")
+    for (person in people) {
+        val row = families.waitingRow(groupId, person.userId)
+        val first = firstNameOf(person.name)
+        Column(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                PersonAvatar(person.name, person.userId)
+                Column(Modifier.weight(1f).padding(start = AlpineSpace.S4)) {
+                    Text(person.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(person.email, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (person.inFamily) Text("Already in a family", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+                }
+            }
+            if (!person.inFamily) Row(Modifier.fillMaxWidth().padding(start = 56.dp, top = AlpineSpace.S2), horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+                androidx.compose.material3.OutlinedButton(onClick = { families.askTurnDown(groupId, person) }, enabled = row.busy == null, modifier = Modifier.heightIn(min = 44.dp)) {
+                    Text(if (row.busy == "decline") "Turning down" else "Not now")
+                }
+                androidx.compose.material3.Button(onClick = { families.letIn(groupId, person) }, enabled = row.busy == null && !row.keptOther, modifier = Modifier.heightIn(min = 44.dp)) {
+                    Text(if (row.busy == "send") "Letting them in" else "Let them in")
+                }
+            }
+            if (row.keptOther) Column(Modifier.fillMaxWidth().padding(start = 56.dp, top = AlpineSpace.S2).background(alpine.warningSoft, RoundedCornerShape(12.dp)).padding(AlpineSpace.S3),
+                verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+                Text("An earlier Let them in for $first hasn’t reached the server, and it was made before $first’s account changed. Drop it and let $first in again.",
+                    style = MaterialTheme.typography.bodyMedium, color = alpine.ink)
+                androidx.compose.material3.OutlinedButton(onClick = { families.letIn(groupId, person, dropKept = true) }, enabled = row.busy == null, modifier = Modifier.heightIn(min = 44.dp)) {
+                    Text("Drop it and let them in")
+                }
+            }
+            row.error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.danger, modifier = Modifier.padding(start = 56.dp, top = AlpineSpace.S1)) }
+        }
+    }
+}
+
+/* The invitations still open (the web's InvitationList): who, until when, by whom, and Cancel invitation. */
+@Composable
+private fun Invitations(model: DriveViewModel, groupId: String) {
+    val alpine = Alpine.colors
+    val families = model.families
+    val open = families.invitations[groupId].orEmpty()
+    if (open.isEmpty()) return
+    val members = families.details[groupId]?.members.orEmpty()
+    fun inviter(id: String?) = members.firstOrNull { it.userId.equals(id, ignoreCase = true) }?.let { m -> m.name + (m.email?.let { " ($it)" } ?: "") } ?: "a manager"
+    Subheader("Invitations")
+    for (invitation in open) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(start = AlpineSpace.S4, end = AlpineSpace.S2, top = AlpineSpace.S2, bottom = AlpineSpace.S2),
+            verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(invitation.email ?: "Someone invited", style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("Open until ${dayOf(invitation.expiresAt)}", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+                Text("Invited by ${inviter(invitation.invitedBy)}", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+            }
+            TextButton(onClick = { families.askCancel(groupId, invitation) }, modifier = Modifier.heightIn(min = 44.dp)) { Text("Cancel invitation", color = alpine.danger) }
+        }
+    }
+}
+
+/* "4 Nov", or "4 Nov 2027" in another year, as the web's formatDay. */
+private fun dayOf(iso: String): String = runCatching {
+    val at = java.time.Instant.parse(iso).atZone(java.time.ZoneId.systemDefault())
+    val pattern = if (at.year == java.time.LocalDate.now().year) "d MMM" else "d MMM yyyy"
+    java.time.format.DateTimeFormatter.ofPattern(pattern).format(at)
+}.getOrDefault(iso)
+
+/* Invite someone (the web's InviteDialog), drawn from the model's InviteAsk. */
+@Composable
+private fun InviteDialog(model: DriveViewModel, ask: InviteAsk) {
+    val alpine = Alpine.colors
+    val families = model.families
+    var email by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { families.dismissInvite() },
+        title = { Text("Invite someone") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
+                Text("We’ll email them a link. Once they accept, you let them in.")
+                androidx.compose.material3.OutlinedTextField(value = email, onValueChange = { email = it; families.clearInviteError() }, singleLine = true,
+                    label = { Text("Email") }, placeholder = { Text("them@example.com") }, isError = ask.error != null, enabled = !ask.busy,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Email),
+                    supportingText = { Text(ask.error ?: "The invitation is open for 7 days.", color = if (ask.error != null) alpine.danger else alpine.inkMuted) })
+            }
+        },
+        confirmButton = { TextButton(onClick = { families.sendInvite(email) }, enabled = !ask.busy && email.isNotBlank()) { Text(if (ask.busy) "Sending" else "Send invitation") } },
+        dismissButton = { TextButton(onClick = { families.dismissInvite() }, enabled = !ask.busy) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun TurnDownDialog(model: DriveViewModel, groupId: String, person: com.hushos.app.data.PendingPerson, family: String) {
+    val alpine = Alpine.colors
+    val first = firstNameOf(person.name)
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { model.families.turningDown = null },
+        title = { Text("Turn $first down?") },
+        text = { Text("They’ll need a new invitation to join $family. To decide later, close this instead: nothing is lost.") },
+        confirmButton = { TextButton(onClick = { model.families.turnDown(groupId, person) }) { Text("Turn down", color = alpine.danger) } },
+        dismissButton = { TextButton(onClick = { model.families.turningDown = null }) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun CancelInvitationDialog(model: DriveViewModel, groupId: String, invitation: com.hushos.app.data.OpenInvitation) {
+    val alpine = Alpine.colors
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { model.families.cancelling = null },
+        title = { Text(invitation.email?.let { "Cancel the invitation to $it?" } ?: "Cancel this invitation?") },
+        text = { Text("The link in their email stops working. You can invite them again.") },
+        confirmButton = { TextButton(onClick = { model.families.cancelInvitation(groupId, invitation) }) { Text("Cancel invitation", color = alpine.danger) } },
+        dismissButton = { TextButton(onClick = { model.families.cancelling = null }) { Text("Keep invitation") } },
     )
 }
 

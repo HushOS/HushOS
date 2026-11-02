@@ -657,7 +657,7 @@ class FamilySync(
     }
 
     /* Route 6, every page: each member's identity and links, by lowercase user id. */
-    private fun fetchIdentities(groupId: String): Map<String, MemberIdentity> {
+    internal fun fetchIdentities(groupId: String): Map<String, MemberIdentity> {
         val out = HashMap<String, MemberIdentity>()
         var after: String? = null
         repeat(64) {
