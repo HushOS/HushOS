@@ -61,8 +61,10 @@ class NodeCache(private val ownWorkspace: () -> String?) {
         return row
     }
 
+    /* A key alone (a rotation's): never one the ledger opened, so the entry is no longer answered as the ledger's. */
     fun putKey(workspaceId: String, nodeId: String, key: ByteArray) {
         keys.getOrPut(nodeId) { ConcurrentHashMap() }[workspaceId] = key
+        ledgerOpened.remove(entry(workspaceId, nodeId))
     }
 
     /* Drops a key this device held for no row before (a rotation's batch that never reached the server). */

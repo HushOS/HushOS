@@ -107,12 +107,24 @@ internal fun Vault.accountKeyVersion(): ULong = loadWorkspace().grant?.grant?.ke
 /* Route 25 named these as family folders of `groupId`: never opened under a key from the personal path, for the session. */
 internal fun Vault.noteFamilyWorkspaces(ids: List<String>, groupId: String) {
     val own = ownWorkspaceId?.lowercase()
-    for (id in ids.map { it.lowercase() }) {
-        if (id == own) continue
-        // Newly proven a family folder: whatever this phone held of it came some other way (a share mount), never through
-        // the family's ledger, and goes.
-        if (familyAreas.put(id, groupId.lowercase()) == null) forgetParents(nodes.forgetWorkspace(id))
+    // Under the lock a share mount, an open and a write's answer keep their rows under: proven and emptied at once, so
+    // nothing kept by another way lands between the two.
+    val gone = HashSet<String>()
+    synchronized(familyCopiesLock) {
+        for (id in ids.map { it.lowercase() }) {
+            if (id == own) continue
+            // Newly proven a family folder: whatever this phone held of it came some other way (a share mount), never
+            // through the family's ledger, and goes.
+            if (familyAreas.put(id, groupId.lowercase()) == null) gone.addAll(nodes.forgetWorkspace(id))
+        }
     }
+    forgetParents(gone)
+}
+
+/* A share into a family's folder: proven, let go of, or held by a barrier still up. Checked again where it is kept. */
+internal fun Vault.shareIntoFamily(workspaceId: String): Boolean {
+    val id = workspaceId.lowercase()
+    return isFamilyWorkspace(id) || familyEpochs.containsKey(id) || heldUnderOwedGuard(id)
 }
 
 /*
@@ -121,7 +133,9 @@ internal fun Vault.noteFamilyWorkspaces(ids: List<String>, groupId: String) {
  */
 internal fun Vault.holdAsFamilyWorkspaces(ids: Collection<String>, groupId: String) {
     val own = ownWorkspaceId?.lowercase()
-    for (id in ids.map { it.lowercase() }) if (id != own) familyHeld.computeIfAbsent(id) { ConcurrentHashMap.newKeySet() }.add(groupId.lowercase())
+    synchronized(familyCopiesLock) {
+        for (id in ids.map { it.lowercase() }) if (id != own) familyHeld.computeIfAbsent(id) { ConcurrentHashMap.newKeySet() }.add(groupId.lowercase())
+    }
 }
 
 /* Held by a family whose guard is still owed: the barrier is up over it. Never past the guard's store, never ownership. */

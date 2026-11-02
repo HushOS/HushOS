@@ -197,6 +197,9 @@ private fun FamilySync.acceptJoin(groupId: String, first: ServedChain, matched: 
             is JoinAcceptance.NotAdmitted -> return JoinOutcome.Waiting
             is JoinAcceptance.Fork -> return JoinOutcome.Fork(FamilySync.fork(result.of, result.version, result.sides))
             is JoinAcceptance.Accepted -> {
+                // Its folders held for the barrier before the guard is stored, as a sync's acceptance holds them: a guard
+                // that can't be stored keeps writes into them (a share mounted there) refused. Never a family folder by it.
+                vault.holdAsFamilyWorkspaces(result.chain.areaKeys().keys, groupId)
                 try {
                     result.guard?.let { vault.keepFamilyGuard(groupId, it) }
                     vault.familyGuardKept(groupId)

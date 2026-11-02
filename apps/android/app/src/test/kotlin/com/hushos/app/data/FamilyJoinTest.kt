@@ -65,6 +65,24 @@ class FamilyJoinTest {
     }
 
     /*
+     * #247 check, round 5: a first-use join commits but its guard can't be stored. Writes into the family's folder (a
+     * share of it mounted before the join) are held by the barrier, though route 25 never proved the folder. Fails if
+     * the join's failure path doesn't hold the member list's folders before storing the guard.
+     */
+    @Test
+    fun aJoinWhoseGuardCantBeStoredHoldsWritesIntoItsFolders() {
+        val phone = family.phone()
+        server.shareWithMe(family.fileId)
+        server.pinGrace()
+        assertNull(phone.vault.mountShares().single().error)
+        phone.vault.familyGuardWrites = { false }
+        assertTrue(runCatching { phone.sync.joinStatus(family.groupId) }.exceptionOrNull() is GuardUnsaved)
+        assertFalse(phone.vault.isFamilyWorkspace(family.workspaceId))
+        assertThrows(GuardUnsaved::class.java) { phone.vault.refuseFamilyWrite(family.workspaceId) }
+        assertThrows(GuardUnsaved::class.java) { phone.vault.sendingIntoFamily(family.workspaceId) }
+    }
+
+    /*
      * Round 7, item 2: after a first-use join, Sam's file reads as written by someone nobody checked. No mark, and Info
      * gets its attribution from the family's verdict: Sam by the name and address the family serves, by account id, so
      * "Added by Sam Lindqvist · Not verified · Check it's Sam" opens the family's check. Fails if the verdict carries no

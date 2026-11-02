@@ -202,6 +202,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
     internal var afterFamilyGuard: (() -> Unit)? = null
     /* Tests: runs right after the ledger opened a family node's key, before it is kept (a forget landing there). */
     internal var afterFamilyOpen: (() -> Unit)? = null
+    /* Tests: runs right before a row opened by a share's or this account's keys is kept (a family's proof landing there). */
+    internal var beforeKept: ((workspaceId: String) -> Unit)? = null
     /* The family guard (FamilyGuard.kt), sealed under the settings key as the contact guard is. */
     internal val familyGuard: FamilyGuardStore
         get() = FamilyGuardStore.of(context, api.session, familyGuardWrites) { kept, create -> marksKey(kept, create, served = null) }
@@ -988,7 +990,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
                 // only through its area ledger, never under a key a share hands over. A member list's word alone outlasts
                 // nothing: once that family's guard is stored, a share it named mounts as any other.
                 val target = share.workspaceId.lowercase()
-                if (isFamilyWorkspace(target) || familyEpochs.containsKey(target) || heldUnderOwedGuard(target)) throw ShareRefused("This share could not be checked.")
+                if (shareIntoFamily(target)) throw ShareRefused("This share could not be checked.")
                 checkSuite(share.node.envelopeSuite)
                 val name = share.granterName.ifEmpty { share.granterEmail }
                 val granter = try {
@@ -1001,7 +1003,16 @@ class Vault(internal val context: Context, val api: DriveApi) {
                 val metadata = metadataOpen(MetadataContext(share.node.workspaceId, share.node.id, share.node.metadataVersion), key, base64urlDecode(share.node.metadataEnvelope))
                 // Kept under the granter's workspace only (NodeCache.adoptShare). The root's parent is the granter's and
                 // opens nothing here: it stays out of the parents index, which a share naming one of this drive's ids would rewrite.
-                ShareMount(share, nodes.adoptShare(share, own, openedRow(share.node, metadata, key), key), null)
+                val row = openedRow(share.node, metadata, key)
+                beforeKept?.invoke(target)
+                // Checked again where it is kept, under the lock a family's proof, a forget and a session's end take: a
+                // family proven, let go of or held meanwhile (while the granter was judged) gets nothing of the share.
+                val kept = synchronized(familyCopiesLock) {
+                    if (closed) throw SessionEnded()
+                    if (shareIntoFamily(target)) throw ShareRefused("This share could not be checked.")
+                    nodes.adoptShare(share, own, row, key)
+                }
+                ShareMount(share, kept, null)
             }.getOrElse {
                 if (it is NotAuthenticated || it is Unreachable) throw it
                 ShareMount(share, null, it.message ?: "This share could not be opened.", it as? GranterTrust, explained = it is Refused)
@@ -1096,7 +1107,15 @@ class Vault(internal val context: Context, val api: DriveApi) {
                 if (held != null && nodes.viaLedger(node.workspaceId, node.id) && node.olderThan(held.node)) return held
                 nodes.put(result, key, viaLedger = true)
             }
-        } else nodes.put(result, key)
+        } else {
+            beforeKept?.invoke(node.workspaceId)
+            // Under the lock a family's proof takes: a folder proven a family's since this open began keeps nothing opened
+            // under a share's or this account's keys (its rows open through the ledger alone).
+            synchronized(familyCopiesLock) {
+                if (isFamilyWorkspace(node.workspaceId)) throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
+                nodes.put(result, key)
+            }
+        }
         node.parentId?.let { parents[node.id] = it }
         return result
     }
@@ -1105,8 +1124,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
     private fun adopt(node: NodeView, key: ByteArray, metadata: NodeMetadata): Opened {
         checkSuite(node.envelopeSuite)
         val result = openedRow(node, metadata, key)
+        // A write's answer into a folder proven a family's while it was sent is not kept: the ledger opens it when listed.
+        val kept = synchronized(familyCopiesLock) {
+            !isFamilyWorkspace(node.workspaceId) && run { nodes.put(result, key); true }
+        }
+        if (!kept) return result
         fileWritten(node)
-        nodes.put(result, key)
         node.parentId?.let { rememberParent(node.id, it) }
         return result
     }
@@ -1237,6 +1260,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
                 lock = familyCopiesLock, check = {
                     if (closed) throw SessionEnded()
                     if (family) requireFamilyEpoch(ws, epoch)
+                    // Proven a family's folder since this began (a share's): nothing more is written under the share's key.
+                    else if (isFamilyWorkspace(ws)) throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
                 },
             ) { index -> chunkDecrypt(v.content, index, api.range(url, chunkRange(v.content.suite, v.content.plaintextSize, v.content.thumbnailBytes, index))) }
         } catch (error: Throwable) {

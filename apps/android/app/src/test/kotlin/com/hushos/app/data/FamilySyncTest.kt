@@ -334,6 +334,83 @@ class FamilySyncTest {
     }
 
     /*
+     * #247 check, round 5: a share into the family's folder is checked and its granter judged before route 25 proved the
+     * folder; the sync proves it (and empties it) while the mount is between the granter and keeping the row. The mount
+     * resumes and keeps nothing, and the family's file is the ledger's alone. Fails if the last check isn't made where
+     * the share is kept, under the lock the proof takes.
+     */
+    @Test
+    fun aShareMountedWhileItsFolderIsProvenKeepsNothing() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        server.shareWithMe(family.fileId)
+        server.pinGrace()
+        var proven = false
+        phone.vault.beforeKept = { ws -> if (!proven && ws.equals(family.workspaceId, ignoreCase = true)) { proven = true; accepted(phone) } }
+        val mount = phone.vault.mountShares().single()
+        phone.vault.beforeKept = null
+        assertTrue("the sync never ran while the share was mounted", proven)
+        assertNotNull("a share was kept in a folder proven a family's while it mounted", mount.error)
+        assertNull(phone.vault.nodes.row(family.workspaceId, family.fileId))
+        assertNull(phone.vault.nodes.key(family.workspaceId, family.fileId))
+        phone.vault.listChildren(family.rootId, family.workspaceId)
+        assertTrue(phone.vault.nodes.viaLedger(family.workspaceId, family.fileId))
+    }
+
+    /*
+     * #247 check, round 5: a share of the family's top folder, mounted before route 25 proved it, is listed; the sync
+     * proves the folder (its ledger opens the folder and file) while the listing opens them under the share's keys. What
+     * the listing opened is not kept over the ledger's. Fails if a row opened outside the ledger is kept without
+     * checking, where it is kept, that its folder isn't a family's now.
+     */
+    @Test
+    fun aShareListingWhileItsFolderIsProvenKeepsNothingOverTheLedger() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        server.shareWithMe(family.rootId)
+        server.pinGrace()
+        assertNull(phone.vault.mountShares().single().error)
+        var proven = false
+        phone.vault.beforeKept = { ws -> if (!proven && ws.equals(family.workspaceId, ignoreCase = true)) { proven = true; accepted(phone) } }
+        runCatching { phone.vault.listChildren(family.rootId, family.workspaceId) }
+        phone.vault.beforeKept = null
+        assertTrue("the sync never ran while the share was listed", proven)
+        for (id in listOf(family.rootId, family.fileId)) {
+            if (phone.vault.nodes.row(family.workspaceId, id) != null) {
+                assertTrue("a row opened under the share's keys replaced the ledger's", phone.vault.nodes.viaLedger(family.workspaceId, id))
+            }
+        }
+    }
+
+    /*
+     * #247 check, round 5: a share of the family's file downloads while route 25 proves its folder. The download stops
+     * with the family's words, and nothing is written under the share's key. Fails if a download that began as a share's
+     * goes on writing once its folder is proven a family's.
+     */
+    @Test
+    fun aShareDownloadStopsWhenItsFolderIsProven() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        server.shareWithMe(family.fileId)
+        server.pinGrace()
+        assertNull(phone.vault.mountShares().single().error)
+        val cache = org.robolectric.RuntimeEnvironment.getApplication().cacheDir
+        val destination = File(cache, "opened/elsewhere/Recipes.txt")
+        val (waiting, release) = holdVersionUrl()
+        var failure: Throwable? = null
+        val download = kotlin.concurrent.thread {
+            failure = runCatching { phone.vault.download(family.fileId, destination, workspaceId = family.workspaceId) }.exceptionOrNull()
+        }
+        assertTrue("the download never asked for its address", waiting.await(10, java.util.concurrent.TimeUnit.SECONDS))
+        accepted(phone)
+        release.countDown()
+        download.join(10_000)
+        server.beforeAnswer = null
+        assertTrue("a share's download went on in a folder proven a family's: $failure", failure is FamilyFailure)
+        assertFalse(destination.exists())
+    }
+
+    /*
      * Round 16, item 2: another member moves the file from the family's top folder into a subfolder. The subfolder's
      * newer listing opens it first; the top folder's older listing (answered before the move) lands after. The file shows
      * only in its new folder. Fails if a listing keeps a cached row whose parent is now another folder.
