@@ -145,6 +145,8 @@ class FamilyFixture(val server: FakeDrive) {
     @Volatile var groupsFail = false
     @Volatile var rostersFail = false
     @Volatile var groupState = "active"
+    /* Maya's roles as route 2 lists them (`members` once Sam makes her a manager). */
+    @Volatile var listedRoles: List<String> = emptyList()
     /* The member's self-grant as route 23 stored it, served back on route 25. */
     @Volatile var selfGrant: JSONObject? = null
     /* The node route 25 names as the area's top folder (a server's choice): the family's own unless a test names another. */
@@ -183,7 +185,7 @@ class FamilyFixture(val server: FakeDrive) {
                 groupsFail -> 503 to JSONObject().put("message", "Drive is temporarily unavailable. Please try again.")
                 !listed -> 200 to JSONObject().put("groups", JSONArray())
                 else -> 200 to JSONObject().put("groups", JSONArray().put(JSONObject().put("id", groupId).put("kind", "family").put("name", "Lindqvist family")
-                    .put("roles", JSONArray()).put("state", groupState).put("rosterVersion", chain.size).put("groupKeyVersion", 1)))
+                    .put("roles", JSONArray(listedRoles)).put("state", groupState).put("rosterVersion", chain.size).put("groupKeyVersion", 1)))
             }
             method == "GET" && path == "groups/$groupId" -> if (notMember) notMemberAnswer() else 200 to JSONObject()
                 .put("head", JSONObject().put("version", chain.size).put("revision", chain.size)).put("members", JSONArray()
@@ -210,6 +212,7 @@ class FamilyFixture(val server: FakeDrive) {
                 callBodies.add(body.toString())
                 // A scripted answer first (another manager's win, a lost answer), else applied as the server would.
                 admitAnswers.poll()?.invoke(body)?.let { return it }
+                if (notMember) return notMemberAnswer()
                 apply(body, segments[3])
             }
             method == "POST" && path == "groups/$groupId/leave" -> {
@@ -314,6 +317,7 @@ class FamilyFixture(val server: FakeDrive) {
         val members = accepted.roster().members.map { if (it.userId == member.id.lowercase()) it.copy(roles = listOf(GroupRole.MEMBERS)) else it }
         val r3m = rosterSign(rosterNext(accepted, members, creator.id, null, null, null), groupSeed, creator.keys)
         chain = listOf(r1, r2, r3m)
+        listedRoles = listOf("members")
         val head = creatorChain()
         val sealed = groupKeySeal(groupSeed, GroupKeySealContext(groupId, 1uL, member.id.lowercase(), member.keys.keyVersion, creator.id, 3uL,
             rosterDigest(r3m.statement)), head, base64urlDecode(member.keys.kemPublicKey!!), creator.keys)

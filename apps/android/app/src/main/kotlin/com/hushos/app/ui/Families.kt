@@ -176,7 +176,7 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
         }
     }
     Scaffold(contentWindowInsets = WindowInsets(0), containerColor = alpine.ground, topBar = { DestinationBar(if (joining) waitTitle ?: "Join $name" else name, onBack = onBack) }) { padding ->
-        PullToRefreshBox(isRefreshing = families.syncing[groupId] == true, onRefresh = { scope.launch { families.refreshFamilies(force = true) } }, modifier = Modifier.padding(padding).fillMaxSize()) {
+        PullToRefreshBox(isRefreshing = families.syncing[groupId] == true, onRefresh = { scope.launch { families.refreshPage(groupId) } }, modifier = Modifier.padding(padding).fillMaxSize()) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S8)) {
                 when {
                     joining -> JoinContent(model, groupId, name, title = { waitTitle = it }, onJoined = {})

@@ -56,6 +56,13 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
         Unit
     }
 
+    /* Every entry of this account's for the family: a not-member wipe takes them with the family (the web's forgetGroup). */
+    fun deleteGroup(userId: String, groupId: String) = synchronized(FamilyCopies.LOCK) {
+        val prefix = "${userId.lowercase()}_${groupId.lowercase()}_"
+        if (open()) folder.listFiles().orEmpty().filter { it.name.startsWith(prefix) && it.name.endsWith(".call") }.forEach { it.delete() }
+        Unit
+    }
+
     /* This account's entries for the family, oldest first. */
     fun list(userId: String, groupId: String): List<Kept> {
         val prefix = "${userId.lowercase()}_${groupId.lowercase()}_"
@@ -84,8 +91,10 @@ sealed interface CallEnd {
     data object Stale : CallEnd
     /* Kept, never sent: an admission sealed to other keys than this account's pin of the person holds now. */
     data object OtherKeys : CallEnd
-    /* The server said this account is not in the family: wiped. */
+    /* The server said this account is not in the family: let go of (FamilySync.removedNow, published to the screens). */
     data object Wiped : CallEnd
+    /* Kept for someone other than the person asked about: left as it is, nothing sent. */
+    data object Other : CallEnd
 }
 
 /* What Let them in came to. */
@@ -104,7 +113,7 @@ internal val FamilySync.outbox: FamilyOutbox get() = FamilyOutbox.of(vault.conte
 
 /* The words a refusal of a roster call says (the web's refusalCopy, the codes Let them in meets). */
 internal fun callWords(answer: CallAnswer, first: String?): String = when (answer.code) {
-    "not-pending" -> "${first ?: "They"} isn’t waiting to join any more."
+    "not-pending" -> first?.let { "$it isn’t waiting to join any more." } ?: "They aren’t waiting to join any more."
     "already-member" -> "That person is already in the family."
     "forbidden" -> "Only someone who manages the family can do that."
     "held" -> "Another manager paused your changes in this family for now."
@@ -122,33 +131,44 @@ internal fun callWords(answer: CallAnswer, first: String?): String = when (answe
  * before every attempt (held while this account's pin of an admission's person no longer holds the keys it was staged
  * over; dropped when the committed chain already holds it or moved past it), then its very bytes sent. Unknown answers
  * are sent again a few times, then kept for the next open; grants a call is owed are posted first and the same bytes
- * sent again; `stale`, membership moves and refusals drop it.
+ * sent again; `stale`, membership moves and refusals drop it; not-member lets go of the family as every removal does.
+ * `only`: an admission of that person, else `Other` and nothing is touched. `names` gives a person's first name.
  */
-internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept, first: String? = null): CallEnd {
+internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept, only: String? = null, names: (String) -> String? = { null }): CallEnd {
     val groupId = summary.id
     var resends = 0
     var fixes = 0
     while (true) {
-        // The settings read again first: the core judges an admission against this account's pin of them now.
-        runCatching { vault.familyPin(groupId) }
+        // The settings read afresh first: the core judges an admission against this account's pin of them now. A read
+        // that fails sends nothing (the ledger still holds the last settings, whose pin another device may have
+        // replaced): no answer keeps the entry for the next try, anything else is passed on, the entry kept.
+        try {
+            vault.familyPin(groupId)
+        } catch (failed: Exception) {
+            if (failed is NotAuthenticated || !settingsUnavailable(failed)) throw failed
+            return CallEnd.Pending(GroupsApiError.NO_ANSWER)
+        }
         val read = try {
             ledger.outboxOpen(groupId, kept.outboxId, userId, kept.entry)
         } catch (sealed: CoreException.Sealed) {
-            // Not an entry of this account's (or not this one): never sent, deleted, said lost.
+            // Not an entry of this account's any more (sealed before a master-key change): never sent, deleted, said lost.
             outbox.delete(userId, groupId, kept.outboxId)
-            return CallEnd.Refused("A change saved on this device couldn’t be read, so it wasn’t sent.")
+            return CallEnd.Refused("A change to ${summary.name} hadn’t reached the server and couldn’t be opened on this device. Make it again.")
         }
+        val admits = (read.route() as? ChainRoute.Admit)?.userId
+        if (only != null && (admits == null || !admits.equals(only, ignoreCase = true))) return CallEnd.Other
+        val first = admits?.let(names)
         val (route, body) = when (read) {
             is OutboxCall.Send -> read.route to read.body
             is OutboxCall.Hold -> return if (read.reason == OutboxHold.OTHER_KEYS) CallEnd.OtherKeys else CallEnd.Pending("Kept on this device.")
-            is OutboxCall.Landed -> { outbox.delete(userId, groupId, kept.outboxId); run(summary); return CallEnd.Landed }
+            is OutboxCall.Landed -> { outbox.delete(userId, groupId, kept.outboxId); syncRevised(summary); return CallEnd.Landed }
             is OutboxCall.Superseded -> { outbox.delete(userId, groupId, kept.outboxId); return CallEnd.Stale }
         }
         val answer = api.sendCall(groupId, route, body)
         when (outboxStep(answer.status.toUShort(), answer.code)) {
             OutboxStep.LANDED -> {
                 outbox.delete(userId, groupId, kept.outboxId)
-                run(summary)
+                syncRevised(summary)
                 return CallEnd.Landed
             }
             OutboxStep.RESEND, OutboxStep.REBUILD -> {
@@ -161,25 +181,37 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
             }
             OutboxStep.STALE -> {
                 outbox.delete(userId, groupId, kept.outboxId)
-                run(summary)
+                syncRevised(summary)
                 return CallEnd.Stale
             }
             OutboxStep.MEMBERSHIP_MOVED -> {
                 outbox.delete(userId, groupId, kept.outboxId)
-                run(summary)
+                syncRevised(summary)
                 return CallEnd.Refused(callWords(answer, first))
             }
             OutboxStep.REFUSED -> {
                 outbox.delete(userId, groupId, kept.outboxId)
-                if (answer.code == "forbidden") run(summary)
+                if (answer.code == "forbidden") syncRevised(summary)
                 return CallEnd.Refused(callWords(answer, first))
             }
             OutboxStep.WIPED -> {
-                runCatching { wipe(groupId) }
+                // As every not-member: two-phase, its outcome (finished, or refused with a guard not stored) published.
+                removedNow(groupId)
                 return CallEnd.Wiped
             }
         }
     }
+}
+
+/* A settings read that may pass next time: no answer, or the server's for now (a timeout, throttling, a server error). */
+private fun settingsUnavailable(error: Exception): Boolean = FamilySync.transient(error) ||
+    (error is AuthFailure && (error.status == 408 || error.status == 429 || error.status >= 500))
+
+private fun OutboxCall.route(): ChainRoute = when (this) {
+    is OutboxCall.Send -> route
+    is OutboxCall.Hold -> route
+    is OutboxCall.Landed -> route
+    is OutboxCall.Superseded -> route
 }
 
 /* Route 22's grants a call was told it owes (`grants-due`'s `missing`), sealed by the core; false when they can't be. */
@@ -202,8 +234,28 @@ private fun FamilySync.sendGrants(groupId: String, data: JSONObject?): Boolean {
  * account manages: a send that got no answer before a lock, a kill or a relaunch finishes here, never signed again.
  * Each entry's end, by its outbox id.
  */
-fun FamilySync.resumeOutbox(summary: GroupSummary): Map<String, CallEnd> = exclusive(summary.id) {
-    outbox.list(userId, summary.id).associate { it.outboxId to sendKept(summary, it) }
+fun FamilySync.resumeOutbox(summary: GroupSummary, names: (String) -> String? = { null }): Map<String, CallEnd> = exclusive(summary.id) {
+    val ends = LinkedHashMap<String, CallEnd>()
+    notMemberLetsGo(summary.id, { ends }) {
+        for (kept in outbox.list(userId, summary.id)) {
+            val end = sendKept(summary, kept, names = names)
+            ends[kept.outboxId] = end
+            if (end == CallEnd.Wiped) break
+        }
+        ends
+    }
+}
+
+/*
+ * `body`, with a not-member answer from any of its reads (route 3, 6, 8 or 16) let go of as every removal is
+ * (removedNow: two-phase, published to the screens), then `wiped`.
+ */
+private fun <T> FamilySync.notMemberLetsGo(groupId: String, wiped: () -> T, body: () -> T): T = try {
+    body()
+} catch (error: GroupsApiError) {
+    if (!error.isNotMember) throw error
+    removedNow(groupId)
+    wiped()
 }
 
 /*
@@ -222,30 +274,39 @@ fun FamilySync.letIn(summary: GroupSummary, person: PendingPerson): LetIn {
         else -> {}
     }
     return exclusive(groupId) {
-        // An earlier Let them in for them, kept: sent as it is, or held, before anything new is signed.
-        for (kept in outbox.list(userId, groupId)) {
-            when (val end = sendKept(summary, kept, first)) {
-                CallEnd.OtherKeys -> return@exclusive LetIn.KeptOther
-                CallEnd.Wiped -> return@exclusive LetIn.Wiped
-                else -> if (end == CallEnd.Landed && !waiting(groupId, person.userId)) return@exclusive LetIn.Landed
-            }
-        }
-        repeat(3) {
-            when (val built = stageAdmit(summary, person.userId, served)) {
-                is Staged.Refused -> return@exclusive LetIn.Refused(built.words)
-                is Staged.Call -> when (val end = sendKept(summary, built.kept, first)) {
-                    CallEnd.Landed -> return@exclusive LetIn.Landed
-                    is CallEnd.Pending -> return@exclusive LetIn.Pending(end.reason)
-                    is CallEnd.Refused -> return@exclusive LetIn.Refused(end.words)
-                    CallEnd.OtherKeys -> return@exclusive LetIn.KeptOther
-                    CallEnd.Wiped -> return@exclusive LetIn.Wiped
-                    // Dropped and synced by the outbox: signed again over the new head.
-                    CallEnd.Stale -> if (!waiting(groupId, person.userId)) return@exclusive LetIn.Landed
-                }
-            }
-        }
-        LetIn.Refused("${names(groupId)} keeps changing. Try again in a moment.")
+        notMemberLetsGo(groupId, { LetIn.Wiped }) { admitInTurn(summary, person, served, first) }
     }
+}
+
+private fun FamilySync.admitInTurn(summary: GroupSummary, person: PendingPerson, served: com.hushos.core.PublicIdentity, first: String): LetIn {
+    val groupId = summary.id
+    // An earlier Let them in for them, kept: sent as it is, or held, before anything new is signed. Only a definite
+    // `stale` (or its roster overtaken) lets a new one be signed; one still unanswered stays the only one.
+    for (kept in outbox.list(userId, groupId)) {
+        when (val end = sendKept(summary, kept, only = person.userId, names = { first })) {
+            CallEnd.Other, CallEnd.Stale -> {}
+            CallEnd.Landed -> if (!waiting(groupId, person.userId)) return LetIn.Landed
+            is CallEnd.Pending -> return LetIn.Pending(end.reason)
+            is CallEnd.Refused -> return LetIn.Refused(end.words)
+            CallEnd.OtherKeys -> return LetIn.KeptOther
+            CallEnd.Wiped -> return LetIn.Wiped
+        }
+    }
+    repeat(3) {
+        when (val built = stageAdmit(summary, person.userId, served)) {
+            is Staged.Refused -> return LetIn.Refused(built.words)
+            is Staged.Call -> when (val end = sendKept(summary, built.kept, names = { first })) {
+                CallEnd.Landed -> return LetIn.Landed
+                is CallEnd.Pending -> return LetIn.Pending(end.reason)
+                is CallEnd.Refused -> return LetIn.Refused(end.words)
+                CallEnd.OtherKeys, CallEnd.Other -> return LetIn.KeptOther
+                CallEnd.Wiped -> return LetIn.Wiped
+                // Dropped and synced by the outbox: signed again over the new head.
+                CallEnd.Stale -> if (!waiting(groupId, person.userId)) return LetIn.Landed
+            }
+        }
+    }
+    return LetIn.Refused("${names(groupId)} keeps changing. Try again in a moment.")
 }
 
 /* Whether they are still waiting to join (route 16): one let in meanwhile, by another manager or an earlier send, isn't. */
@@ -288,7 +349,7 @@ private fun FamilySync.stageAdmit(summary: GroupSummary, userId: String, served:
             RosterCall.SyncFirst, RosterCall.OpenFoldersFirst -> {
                 if (synced) return Staged.Refused("Couldn’t check ${summary.name}. Try again.")
                 synced = true
-                if (run(summary) !is FamilyState.Accepted) return Staged.Refused("Couldn’t check ${summary.name}. Try again.")
+                if (syncRevised(summary).state !is FamilyState.Accepted) return Staged.Refused("Couldn’t check ${summary.name}. Try again.")
             }
             RosterCall.OpenKeyFirst -> {
                 if (keyOpened) return Staged.Refused("Another manager needs to open the family before you can change it. Try again later.")
@@ -319,6 +380,8 @@ private fun FamilySync.openGroupKey(groupId: String, identities: Map<String, Mem
  * dropKeptAdmission), so they can be let in again over the keys this phone holds now.
  */
 fun FamilySync.dropKeptAdmission(groupId: String, userId: String) = exclusive(groupId) {
+    // Judged with the settings read afresh, as every read of the outbox is.
+    vault.familyPin(groupId)
     for (kept in outbox.list(this.userId, groupId)) {
         val read = runCatching { ledger.outboxOpen(groupId, kept.outboxId, this.userId, kept.entry) }.getOrNull()
         val admits = (read as? OutboxCall.Hold)?.route as? ChainRoute.Admit

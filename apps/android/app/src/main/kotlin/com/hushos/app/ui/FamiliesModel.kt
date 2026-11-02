@@ -213,8 +213,33 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         val s = session ?: begin() ?: return
         val summary = list?.firstOrNull { it.id == groupId } ?: return
         if (!manages(groupId)) return
-        gate.run(s) { s.owner.families.resumeOutbox(summary) }
+        val known = waiting[groupId].orEmpty()
+        val names = { userId: String -> known.firstOrNull { it.userId.equals(userId, ignoreCase = true) }?.let { com.hushos.app.data.firstNameOf(it.name) } }
+        val resumed = gate.run(s) { s.owner.families.resumeOutbox(summary, names) } ?: return
+        if (!gate.current(s)) return
+        // What the kept sends came to, said before the lists are read again: a refusal (the server's, or an entry this
+        // phone can no longer open) in its words; one that landed shows the family as it is now. A removal is published
+        // by the sync (removedNow) and shown from there; no answer stays kept and says nothing.
+        val ends = resumed.getOrElse { error ->
+            error.rethrowIfCancelled()
+            if (error is NotAuthenticated) { model.lostSession(); return }
+            if (!FamilySync.unanswered(error)) model.notice(FamilyWords.error(error), untilRead = false)
+            emptyMap()
+        }
+        for (end in ends.values) if (end is com.hushos.app.data.CallEnd.Refused) model.notice(end.words, untilRead = false)
+        if (ends.values.any { it == com.hushos.app.data.CallEnd.Wiped }) return
+        if (ends.values.any { it == com.hushos.app.data.CallEnd.Landed || it == com.hushos.app.data.CallEnd.Stale }) refreshFamily(summary, session = s)
         reloadManaged(groupId, s)
+    }
+
+    /*
+     * Pull to refresh on a family page: the families checked again, then a manager's lists read again, since someone
+     * accepting an invitation changes who waits but not the member list.
+     */
+    suspend fun refreshPage(groupId: String) {
+        val s = begin() ?: return
+        refreshFamilies(force = true, session = s)
+        if (gate.current(s) && manages(groupId)) loadManaged(groupId, s)
     }
 
     private suspend fun reloadManaged(groupId: String, s: FamilySession) {

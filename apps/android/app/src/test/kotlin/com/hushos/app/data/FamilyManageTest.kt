@@ -4,6 +4,7 @@ import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -191,5 +192,98 @@ class FamilyManageTest {
         phone.sync.dropKeptAdmission(family.groupId, server.grace.id)
         assertEquals(LetIn.Landed, phone.sync.letIn(summary, grace))
         assertTrue(kept(phone).isEmpty())
+    }
+
+    /*
+     * Grace's admission kept unanswered; another device then follows her account change (Continue), replacing the pin this
+     * phone's ledger last read. The settings can't be read now: nothing is sent, the entry stays kept. Once they read, it
+     * is held for the old keys. Fails if a send goes out judged against the settings the ledger held before.
+     */
+    @Test
+    fun aSettingsReadThatFailsSendsNothing() {
+        val phone = phone()
+        answer(3, 503)
+        assertTrue(phone.sync.letIn(summary, grace) is LetIn.Pending)
+        val sends = family.callBodies.size
+        server.startOverGrace()
+        val other = family.phone()
+        val changed = other.vault.addContact("grace@example.org", writer = server.grace.id, firstSeen = "family")
+        assertTrue("$changed", changed is Added.Changed)
+        other.vault.continueWith((changed as Added.Changed).change)
+        server.failSettingsReads = true
+        assertEquals(listOf(CallEnd.Pending(GroupsApiError.NO_ANSWER)), phone.sync.resumeOutbox(summary).values.toList())
+        assertEquals("nothing sent", sends, family.callBodies.size)
+        assertEquals(1, kept(phone).size)
+        server.failSettingsReads = false
+        assertEquals(listOf(CallEnd.OtherKeys), phone.sync.resumeOutbox(summary).values.toList())
+        assertEquals("nothing sent to the replaced keys", sends, family.callBodies.size)
+    }
+
+    /*
+     * A kept admission answered not-member: the family is let go of as every removal is (two-phase, its record gone) and
+     * the removal published for the screens. Fails if it is wiped unannounced, or the screens keep drawing the family.
+     */
+    @Test
+    fun notMemberOnAKeptSendIsARemovalTheScreensAreTold() {
+        val phone = phone()
+        answer(3, 503)
+        assertTrue(phone.sync.letIn(summary, grace) is LetIn.Pending)
+        phone.sync.takeRemovals()
+        family.notMember = true
+        assertEquals(listOf(CallEnd.Wiped), phone.sync.resumeOutbox(summary).values.toList())
+        assertEquals(listOf(FamilyState.Wiped to family.groupId), phone.sync.takeRemovals().map { it.state to it.groupId })
+        assertNull(phone.records.read(family.member.id, family.groupId))
+        assertTrue(kept(phone).isEmpty())
+    }
+
+    /* Let them in meeting not-member on any read (here route 3): the same removal, published, and Wiped. Fails if it throws instead. */
+    @Test
+    fun notMemberWhileLettingInIsARemovalTheScreensAreTold() {
+        val phone = phone()
+        phone.sync.takeRemovals()
+        family.notMember = true
+        assertEquals(LetIn.Wiped, phone.sync.letIn(summary, grace))
+        assertEquals(listOf(FamilyState.Wiped to family.groupId), phone.sync.takeRemovals().map { it.state to it.groupId })
+        assertNull(phone.records.read(family.member.id, family.groupId))
+    }
+
+    /*
+     * Let them in pressed again while the first is unanswered: the kept one is sent again, byte for byte, and nothing new
+     * is signed. Fails if a second, competing admission is staged beside one that may still land.
+     */
+    @Test
+    fun pressingAgainWhileUnansweredSignsNothingNew() {
+        val phone = phone()
+        answer(6, 503)
+        assertTrue(phone.sync.letIn(summary, grace) is LetIn.Pending)
+        assertTrue(phone.sync.letIn(summary, grace) is LetIn.Pending)
+        assertEquals(1, kept(phone).size)
+        assertEquals(6, family.callBodies.size)
+        assertEquals(1, family.callBodies.toSet().size)
+    }
+
+    /*
+     * Grace's admission held for her old keys, then Ada waits too: Ada is let in, and Grace's held entry is neither sent
+     * nor dropped. Fails if one person's kept entry decides another's Let them in.
+     */
+    @Test
+    fun anotherPersonsKeptAdmissionIsLeftAlone() {
+        val phone = phone()
+        answer(3, 503)
+        assertTrue(phone.sync.letIn(summary, grace) is LetIn.Pending)
+        server.startOverGrace()
+        val changed = phone.sync.letIn(summary, grace)
+        phone.vault.continueWith((changed as LetIn.Changed).change)
+        val graceKept = kept(phone).single()
+        val sends = family.callBodies.size
+        val ada = server.another("ada@example.org", "Ada Lovelace")
+        family.waiting(ada, "ada@example.org", "Ada Lovelace")
+        val adaWaiting = family.pendingRows.map(PendingPerson::from).single { it.userId.equals(ada.id, ignoreCase = true) }
+        assertEquals(LetIn.Landed, phone.sync.letIn(summary, adaWaiting))
+        assertEquals("only Ada's admission sent", sends + 1, family.callBodies.size)
+        assertEquals(listOf(graceKept), kept(phone))
+        // Dropping Ada's kept admissions leaves Grace's.
+        phone.sync.dropKeptAdmission(family.groupId, ada.id)
+        assertEquals(listOf(graceKept), kept(phone))
     }
 }

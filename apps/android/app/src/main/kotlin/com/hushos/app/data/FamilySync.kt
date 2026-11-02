@@ -714,6 +714,8 @@ class FamilySync(
         // leaves the record, and the next cleanup finds them again.
         vault.forgetWorkspaces(areas, FamilyWords.NOT_IN_FAMILY)
         records.delete(userId, groupId)
+        // Roster calls kept for a family this account is no longer in can never land: they go with it.
+        outbox.deleteGroup(userId, groupId)
         accepted.remove(groupId.lowercase())
         sweepCopies()
         identities.remove(groupId)
