@@ -69,6 +69,9 @@ pub const ADMIT_AS_MEMBER: &str = "Let them in first. Roles are given afterwards
 pub const UNCHANGED: &str = "That doesn’t change their roles.";
 /// Taking `members` from oneself: the succession must be signed by someone who keeps it.
 pub const SELF_TAKE: &str = "Ask another manager to take this role from you.";
+/// The manager rule (docs/optional-verification.md 3.6), the worker's
+/// `CHECK_MANAGER_FIRST`: `members` is given only to keys this account checked.
+pub const CHECK_MANAGER_FIRST: &str = "Check it’s them first. Managers are checked before they get the role.";
 const ALREADY_IN: &str = "This person is in the family already.";
 const NOT_THE_PINNED_KEYS: &str = "These are not the keys whose words were checked.";
 const NOT_IN: &str = "This person is not in the family now.";
@@ -417,6 +420,36 @@ fn admitted_keys(admits: &serde_json::Map<String, Value>) -> Option<&str> {
     }
 }
 
+/* A contact pin a words check wrote ([`crate::pin_verified`] over its four keys), never a first-seen one. */
+fn pin_is_verified(pin: &crate::ledger_settings::ContactPin) -> bool {
+    let (Some(x), Some(ed), Some(print)) =
+        (pin.encryption_public_key.clone(), pin.signing_public_key.clone(), pin.fingerprint.clone())
+    else {
+        return false;
+    };
+    crate::contacts::pin_verified(
+        x,
+        ed,
+        pin.ml_dsa_public_key_hash.clone(),
+        pin.kem_public_key_hash.clone(),
+        print,
+    )
+}
+
+/* A roster entry's key commitment (the worker's `entryCommitment`): its four keys, the digests as hex. */
+fn entry_commitment(entry: &RosterMember) -> Option<String> {
+    crate::key_commitment(crate::PinKeys {
+        key_version: Some(entry.key_version),
+        encryption_public_key: entry.encryption_public_key.clone(),
+        signing_public_key: entry.signing_public_key.clone(),
+        ml_dsa_public_key_hash: Some(
+            crate::contacts::digest_hex(entry.ml_dsa_public_key_digest.clone()).ok()?,
+        ),
+        kem_public_key_hash: Some(crate::contacts::digest_hex(entry.kem_public_key_digest.clone()).ok()?),
+        fingerprint: String::new(),
+    })
+}
+
 /* A contact pin's key commitment ([`crate::key_commitment`]), from the fields the ledger reads. */
 fn pin_commitment(pin: &crate::ledger_settings::ContactPin) -> Option<String> {
     crate::key_commitment(crate::PinKeys {
@@ -734,6 +767,19 @@ impl AreaLedger {
                     && !after.roles.contains(&GroupRole::Members)
                 {
                     return Err(input(SELF_TAKE));
+                }
+                // The manager rule (docs/optional-verification.md 3.6), the worker's: `members` is
+                // given only to keys this account checked, its own verified pin of them (never a
+                // family's word) over the very keys their entry names now. A check made before their
+                // account changed, and a Continue since, leaves a first-seen pin: no role on it.
+                if after.roles.contains(&GroupRole::Members) && !before.roles.contains(&GroupRole::Members) {
+                    let checked = self
+                        .contact_pin(&user_id)
+                        .filter(|pin| pin.words_checked && pin_is_verified(pin))
+                        .and_then(|pin| pin_commitment(&pin));
+                    if checked.is_none() || checked != entry_commitment(&before) {
+                        return Err(input(CHECK_MANAGER_FIRST));
+                    }
                 }
                 // Someone active keeps `billing`: the server refuses a family without an organizer.
                 let others_bill =

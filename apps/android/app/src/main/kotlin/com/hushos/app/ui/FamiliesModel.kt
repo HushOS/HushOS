@@ -32,6 +32,8 @@ import com.hushos.app.data.invite
 import com.hushos.app.data.dropKeptAdmission
 import com.hushos.app.data.walkTarget
 import com.hushos.app.data.rethrowIfCancelled
+import com.hushos.app.data.changeRole
+import com.hushos.app.data.handOver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.StateFlow
@@ -142,6 +144,10 @@ interface FamilyHost {
 /* The address typed is the model's, never the screen's saved state: it goes with the session (reset), never into a bundle. */
 data class InviteAsk(val groupId: String, val busy: Boolean = false, val error: String? = null, val email: String = "")
 
+/* A role change asked for on a member's row (the web's RoleChange): letting them manage, stopping it, or the handover. */
+enum class RoleKind { MANAGE, STOP, ORGANIZER }
+data class RoleAsk(val groupId: String, val member: com.hushos.app.data.FamilyMemberRef, val kind: RoleKind)
+
 /* One waiting person's row: Let them in or Not now under way, its words, and an earlier Let them in kept for other keys. */
 data class WaitingRow(val busy: String? = null, val error: String? = null, val keptOther: Boolean = false)
 
@@ -224,13 +230,33 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         val summary = list?.firstOrNull { it.id == groupId } ?: return
         if (!manages(groupId)) return
         val known = waiting[groupId].orEmpty()
-        val names = { userId: String -> known.firstOrNull { it.userId.equals(userId, ignoreCase = true) }?.let { com.hushos.app.data.firstNameOf(it.name) } }
-        // Each refusal is all that's left of its call: said as the outbox hands it over, before its entry is deleted
-        // (so a later entry that throws can't take it along), until read, one after another.
-        val told = { end: com.hushos.app.data.CallEnd ->
-            if (end is com.hushos.app.data.CallEnd.Refused && gate.current(s)) model.notice(end.words, untilRead = true)
+        val members = details[groupId]?.members.orEmpty()
+        val names = { userId: String ->
+            (known.firstOrNull { it.userId.equals(userId, ignoreCase = true) }?.name ?: members.firstOrNull { it.userId.equals(userId, ignoreCase = true) }?.name)
+                ?.let { com.hushos.app.data.firstNameOf(it) }
         }
-        val resumed = gate.run(s) { s.owner.families.resumeOutbox(summary, names, told) } ?: return
+        // Each refusal is all that's left of its call: said as the outbox hands it over, before its entry is deleted
+        // (so a later entry that throws can't take it along), until read, one after another. A call another manager's
+        // change overtook is said too: nothing of it was made, so the person makes it again.
+        val told = { route: com.hushos.core.ChainRoute?, end: com.hushos.app.data.CallEnd ->
+            if (gate.current(s)) when {
+                end is com.hushos.app.data.CallEnd.Refused -> model.notice(end.words, untilRead = true)
+                end == com.hushos.app.data.CallEnd.Stale && route is com.hushos.core.ChainRoute.Admit ->
+                    model.notice("An earlier admission of ${names(route.userId) ?: "someone waiting to join"} wasn’t sent; let them in again.", untilRead = true)
+                end == com.hushos.app.data.CallEnd.Stale && route is com.hushos.core.ChainRoute.Member ->
+                    model.notice("${summary.name} changed while you were working on it. Try again.", untilRead = true)
+            }
+        }
+        // A handover the app stopped in the middle of, finished: said as the web's Make them the organizer says it.
+        val handed = { to: String, end: com.hushos.app.data.RoleEnd ->
+            val who = names(to) ?: "They"
+            if (gate.current(s)) when (end) {
+                com.hushos.app.data.RoleEnd.Landed -> model.notice("$who is the organizer", untilRead = false)
+                is com.hushos.app.data.RoleEnd.Refused -> model.notice("Couldn’t change that. ${end.words}", untilRead = true)
+                else -> {}
+            }
+        }
+        val resumed = gate.run(s) { s.owner.families.resumeOutbox(summary, names, told, handed) } ?: return
         if (!gate.current(s)) return
         // One that landed shows the family as it is now. A removal is published by the sync (removedNow) and shown from
         // there; no answer stays kept and says nothing. A failure part way says why; what came before it was said already.
@@ -322,6 +348,69 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                 is com.hushos.app.data.LetIn.Changed -> model.accountChangedFor(outcome.change)
                 com.hushos.app.data.LetIn.KeptOther -> waitingRows[key] = WaitingRow(keptOther = true)
                 com.hushos.app.data.LetIn.Wiped -> refreshFamilies(force = true, session = s)
+            }
+        }
+    }
+
+    /* A role change confirming, the check its manager rule asks for first, and the row whose change is under way. */
+    var roleAsk by mutableStateOf<RoleAsk?>(null)
+        private set
+    var checkFirst by mutableStateOf<RoleAsk?>(null)
+        private set
+    var roleBusy by mutableStateOf<String?>(null)
+        private set
+
+    /*
+     * A role change from a member's row: Let them manage the family waits for a check of their words first when this
+     * phone hasn't verified them (the manager rule, 3.6; the core refuses it anyway); everything else is confirmed.
+     */
+    fun askRole(ask: RoleAsk, verified: Boolean) {
+        if (roleBusy != null) return
+        if (ask.kind == RoleKind.MANAGE && !verified) checkFirst = ask else roleAsk = ask
+    }
+
+    fun dismissRole() { roleAsk = null }
+    fun dismissCheckFirst() { checkFirst = null }
+
+    /* The confirmed change, in the families' scope: said once it lands, kept here when no answer came. */
+    fun confirmRole() {
+        val ask = roleAsk ?: return
+        roleAsk = null
+        val summary = list?.firstOrNull { it.id == ask.groupId } ?: return
+        val s = begin() ?: return
+        supersedeLoads(ask.groupId)
+        val who = com.hushos.app.data.firstNameOf(ask.member.name)
+        roleBusy = rowKey(ask.groupId, ask.member.userId)
+        model.familyScope.launch {
+            val result = gate.run(s) {
+                val sync = s.owner.families
+                when (ask.kind) {
+                    RoleKind.MANAGE -> sync.changeRole(summary, ask.member.userId, who, com.hushos.core.MembersRole.GRANT)
+                    RoleKind.STOP -> sync.changeRole(summary, ask.member.userId, who, com.hushos.core.MembersRole.TAKE)
+                    RoleKind.ORGANIZER -> sync.handOver(summary, ask.member.userId, who)
+                }
+            }
+            if (result == null || !gate.current(s)) { roleBusy = null; return@launch }
+            roleBusy = null
+            val outcome = result.getOrElse { error ->
+                error.rethrowIfCancelled()
+                if (error is NotAuthenticated) { model.lostSession(); return@launch }
+                model.notice("Couldn’t change that. ${FamilyWords.error(error)}", untilRead = false)
+                return@launch
+            }
+            when (outcome) {
+                com.hushos.app.data.RoleEnd.Landed -> {
+                    model.notice(when (ask.kind) {
+                        RoleKind.MANAGE -> "$who can manage the family"
+                        RoleKind.STOP -> "$who no longer manages the family"
+                        RoleKind.ORGANIZER -> "$who is the organizer"
+                    }, untilRead = false)
+                    refreshFamily(summary, session = s)
+                }
+                is com.hushos.app.data.RoleEnd.Pending -> model.notice("Saved on this device. ${outcome.reason}", untilRead = false)
+                is com.hushos.app.data.RoleEnd.Refused -> model.notice("Couldn’t change that. ${outcome.words}", untilRead = false)
+                com.hushos.app.data.RoleEnd.CheckFirst -> checkFirst = ask
+                com.hushos.app.data.RoleEnd.Wiped -> refreshFamilies(force = true, session = s)
             }
         }
     }
@@ -945,6 +1034,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         checkedAt.clear(); joining.clear(); syncedAt = 0L; folders = FamilyFolders(); held = null; heldStack = emptyMap(); shownRevision.clear()
         walks.clear(); walking.clear(); walkEnded.clear(); leaving = null; leftFamily = null
         waiting.clear(); invitations.clear(); managedErrors.clear(); managedLoads.clear(); waitingRows.clear(); inviting = null; turningDown = null; cancelling = null
+        roleAsk = null; checkFirst = null; roleBusy = null
     }
 
     /*

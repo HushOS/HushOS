@@ -156,6 +156,14 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
         standings = read?.getOrNull()
         checkedWith = with.getOrNull()
     }
+    /*
+     * Check it's {first}, from a row or from Check it's {first} first: an account that changed, or a family check over
+     * keys that changed since, takes their own twelve words (6.10); otherwise the family check.
+     */
+    fun startCheck(ref: FamilyMemberRef, mine: Boolean, standing: MemberStanding?) {
+        if (mine || (checkedWith?.equals(ref.userId, ignoreCase = true) == true && standing != MemberStanding.VERIFIED)) model.contactStep = ContactStep.Check(ref.email, ref.name)
+        else if (summary != null) families.checking = MemberCheck(summary, ref, served(me)?.name?.let(::firstNameOf) ?: "you", organizer)
+    }
     // A manager's page: what the outbox kept sent again, who waits and the open invitations read, at each open.
     val manages = families.manages(groupId)
     LaunchedEffect(groupId, manages, view?.rosterDigest) {
@@ -166,6 +174,10 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
     families.inviting?.takeIf { it.groupId == groupId }?.let { InviteDialog(model, it) }
     families.turningDown?.takeIf { it.first == groupId }?.let { (_, person) -> TurnDownDialog(model, groupId, person, name) }
     families.cancelling?.takeIf { it.first == groupId }?.let { (_, invitation) -> CancelInvitationDialog(model, groupId, invitation) }
+    families.roleAsk?.takeIf { it.groupId == groupId }?.let { RoleConfirmDialog(model, it, name) }
+    families.checkFirst?.takeIf { it.groupId == groupId }?.let { ask ->
+        CheckFirstDialog(model, ask) { families.dismissCheckFirst(); startCheck(ask.member, false, standings?.get(ask.member.userId.lowercase())) }
+    }
     // The leave dialog lives in the model: redrawn as it was after a rotation or a fold, whatever the page shows below it.
     families.leaving?.takeIf { it.groupId == groupId }?.let { LeaveDialog(model, it, name) }
     // A leave that landed: the page moves on, once, whichever composition is on screen when it lands.
@@ -187,16 +199,21 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
                         // A manager's: Invite someone, and who waits to be let in (6.8).
                         if (manages) { InviteRow(model, groupId); ManagedError(model, groupId); Waiting(model, groupId, name) }
                         Subheader("Members")
+                        val iAmOrganizer = view.members.any { it.userId.equals(me, ignoreCase = true) && "billing" in it.roles }
                         for (member in view.members) {
                             val who = served(member.userId)
                             val you = member.userId.equals(me, ignoreCase = true)
                             val standing = standings?.get(member.userId.lowercase())
-                            MemberRow(who?.name ?: "Someone", who?.email, member.userId, FamilySync.rolesLine(member.roles), you, standing) { mine ->
-                                val ref = FamilyMemberRef(member.userId, who?.email.orEmpty(), who?.name ?: "Someone")
-                                // An account that changed, or a family check over keys that changed since: their own twelve words (6.10).
-                                if (mine || (checkedWith?.equals(member.userId, ignoreCase = true) == true && standing != MemberStanding.VERIFIED)) model.contactStep = ContactStep.Check(ref.email, ref.name)
-                                else if (summary != null) families.checking = MemberCheck(summary, ref, served(me)?.name?.let(::firstNameOf) ?: "you", organizer)
+                            val ref = FamilyMemberRef(member.userId, who?.email.orEmpty(), who?.name ?: "Someone")
+                            // A manager's role changes (the web's MemberList menu): managing the family, and the handover.
+                            val roles = if (!manages || you || who == null) emptyList() else buildList {
+                                val verified = standing == MemberStanding.VERIFIED
+                                if ("members" in member.roles) add("Stop them managing the family" to { families.askRole(RoleAsk(groupId, ref, RoleKind.STOP), verified) })
+                                else add("Let them manage the family" to { families.askRole(RoleAsk(groupId, ref, RoleKind.MANAGE), verified) })
+                                if (iAmOrganizer && "billing" !in member.roles) add("Make them the organizer" to { families.askRole(RoleAsk(groupId, ref, RoleKind.ORGANIZER), verified) })
                             }
+                            MemberRow(who?.name ?: "Someone", who?.email, member.userId, FamilySync.rolesLine(member.roles), you, standing, roles,
+                                busy = families.roleBusy != null) { mine -> startCheck(ref, mine, standing) }
                         }
                         if (manages) Invitations(model, groupId)
                         TechnicalDetailsRow(view)
@@ -419,6 +436,37 @@ private fun InviteDialog(model: DriveViewModel, ask: InviteAsk) {
     )
 }
 
+/* The web's RoleConfirm: what the change means, and its own action. */
+@Composable
+private fun RoleConfirmDialog(model: DriveViewModel, ask: RoleAsk, family: String) {
+    val who = firstNameOf(ask.member.name)
+    val (title, body, action) = when (ask.kind) {
+        RoleKind.MANAGE -> Triple("Let $who manage the family?", "$who can invite people, let them in and change who manages $family.", "Let them manage")
+        RoleKind.STOP -> Triple("Stop $who managing the family?", "$who stays in $family and keeps the family folders, but can’t change who’s in it any more.", "Stop managing")
+        RoleKind.ORGANIZER -> Triple("Make $who the organizer?", "$who takes over the family’s billing. You keep managing the family.", "Make organizer")
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { model.families.dismissRole() },
+        title = { Text(title) },
+        text = { Text(body) },
+        confirmButton = { TextButton(onClick = { model.families.confirmRole() }) { Text(action) } },
+        dismissButton = { TextButton(onClick = { model.families.dismissRole() }) { Text("Cancel") } },
+    )
+}
+
+/* The manager rule asks for a check first (the web's checkFirst dialog): the check, then Let them manage again. */
+@Composable
+private fun CheckFirstDialog(model: DriveViewModel, ask: RoleAsk, check: () -> Unit) {
+    val who = firstNameOf(ask.member.name)
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { model.families.dismissCheckFirst() },
+        title = { Text("Check it’s $who first") },
+        text = { Text("Managers can let people in and change the family, so check it’s $who before they manage it. It takes a minute on a call or in person.") },
+        confirmButton = { TextButton(onClick = check) { Text("Check it’s $who") } },
+        dismissButton = { TextButton(onClick = { model.families.dismissCheckFirst() }) { Text("Cancel") } },
+    )
+}
+
 @Composable
 private fun TurnDownDialog(model: DriveViewModel, groupId: String, person: com.hushos.app.data.PendingPerson, family: String) {
     val alpine = Alpine.colors
@@ -446,7 +494,8 @@ private fun CancelInvitationDialog(model: DriveViewModel, groupId: String, invit
 
 /* A member: avatar, name, address, role, "Account changed"; Verified or Not verified at the right; the row's menu checks them. */
 @Composable
-private fun MemberRow(name: String, email: String?, userId: String, roles: String, you: Boolean, standing: MemberStanding?, check: (personal: Boolean) -> Unit) {
+private fun MemberRow(name: String, email: String?, userId: String, roles: String, you: Boolean, standing: MemberStanding?,
+    roleItems: List<Pair<String, () -> Unit>> = emptyList(), busy: Boolean = false, check: (personal: Boolean) -> Unit) {
     val alpine = Alpine.colors
     var menu by remember { mutableStateOf(false) }
     val checkable = !you && !email.isNullOrEmpty()
@@ -472,6 +521,7 @@ private fun MemberRow(name: String, email: String?, userId: String, roles: Strin
                 menu = false
                 check(standing == MemberStanding.CHANGED)
             })
+            for ((label, act) in roleItems) DropdownMenuItem(text = { Text(label) }, enabled = !busy, onClick = { menu = false; act() })
         } }
     }
 }

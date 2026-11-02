@@ -147,6 +147,15 @@ class FamilyFixture(val server: FakeDrive) {
     val grantPosts = java.util.Collections.synchronizedList(ArrayList<Pair<String, String>>())
     @Volatile var grantsAnswer: Pair<Int, JSONObject>? = null
 
+    /* Route 18 (a role change): how each call is answered, in turn (empty: applied as the server would). */
+    val memberAnswers = java.util.concurrent.ConcurrentLinkedQueue<(JSONObject) -> Pair<Int, JSONObject>?>()
+    /* Every route 18 call, by whom it changes and its body, in order. */
+    val memberCalls = java.util.Collections.synchronizedList(ArrayList<Pair<String, String>>())
+    /* People let in since (route 17): route 6 serves their identities beside Sam's and Maya's. */
+    val joined = java.util.Collections.synchronizedList(ArrayList<FakeDrive.Person>())
+    /* The successions the chain carries (a manager role taken away replaces the family's key), served on route 5. */
+    val successions = java.util.Collections.synchronizedList(ArrayList<SignedGroupStatement>())
+
     /* Route 20's answer: null leaves (and the server then answers not-member), else this refusal. */
     @Volatile var leaveRefusal: Pair<Int, JSONObject>? = null
     /* What each leave asked to end (`endsLapsed`). */
@@ -213,13 +222,13 @@ class FamilyFixture(val server: FakeDrive) {
                 onRosters?.invoke()
                 val after = if (ignoringAfter) 0 else query["after"]?.toInt() ?: 0
                 val served = chain
-                200 to JSONObject().put("rosters", JSONArray(served.drop(after).map(::wire))).put("successions", JSONArray())
+                200 to JSONObject().put("rosters", JSONArray(served.drop(after).map(::wire))).put("successions", JSONArray(successions.toList().map(::wire)))
                     .put("firstKeys", groupPublicKey(groupSeed).let { JSONObject().put("ed25519PublicKey", it.ed25519PublicKey).put("mlDsaPublicKey", it.mlDsaPublicKey) })
                     .put("signerKeys", JSONObject(signerKeys)).put("head", JSONObject().put("version", served.size).put("digest", rosterDigest(served.last().statement)))
                     .put("next", JSONObject.NULL)
             }
             method == "GET" && path == "groups/$groupId/identities" -> if (notMember) notMemberAnswer() else
-                200 to JSONObject().put("identities", JSONArray().put(identity(creator)).put(identity(member))).put("next", JSONObject.NULL)
+                200 to JSONObject().put("identities", JSONArray().put(identity(creator)).put(identity(member)).apply { joined.forEach { put(identity(it)) } }).put("next", JSONObject.NULL)
             method == "PUT" && path == "groups/$groupId/areas/$workspaceId/self-grant" -> { selfGrant = body.getJSONObject("grant"); 200 to JSONObject() }
             method == "GET" && path == "groups/$groupId/key-seal" -> keySeal?.let { 200 to it }
                 ?: (409 to JSONObject().put("code", "no-seal").put("message", "Nobody has sealed the current group key to you yet."))
@@ -240,6 +249,12 @@ class FamilyFixture(val server: FakeDrive) {
                 admitAnswers.poll()?.invoke(body)?.let { return it }
                 if (notMember) return notMemberAnswer()
                 apply(body, segments[3])
+            }
+            method == "PATCH" && segments.size == 4 && path.startsWith("groups/$groupId/members/") -> {
+                if (notMember) return notMemberAnswer()
+                memberCalls.add(segments[3] to body.toString())
+                memberAnswers.poll()?.invoke(body)?.let { return it }
+                apply(body, null)
             }
             method == "POST" && path == "groups/$groupId/leave" -> {
                 if (notMember) return notMemberAnswer()
@@ -314,14 +329,24 @@ class FamilyFixture(val server: FakeDrive) {
      * A roster call applied as the server applies it: refused as `stale` unless it was built at the head's revision, then
      * its roster appended to the chain and the person let in.
      */
-    fun apply(body: JSONObject, userId: String): Pair<Int, JSONObject> {
+    fun apply(body: JSONObject, userId: String?): Pair<Int, JSONObject> {
         if (body.optLong("expectedRevision", -1) != chain.size.toLong())
             return 409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
         val next = signedOf(body.getJSONObject("roster"))
-        // The roster must follow the head it names (the server's verify; `invalid`/`roster-chain` otherwise).
-        if (runCatching { creatorChain(chain + next) }.isFailure)
+        val succession = body.optJSONObject("succession")?.let(::signedOf)
+        // The roster (and its succession) must follow the head it names (the server's verify; `invalid`/`roster-chain` otherwise).
+        if (runCatching { creatorChain(chain + next, successions.toList() + listOfNotNull(succession)) }.isFailure)
             return 400 to JSONObject().put("code", "invalid").put("message", "The change was refused.").put("data", JSONObject().put("reason", "roster-chain"))
         chain = chain + next
+        succession?.let(successions::add)
+        // The family's new key, sealed to Maya as a holder who stays: what route 8 serves her from now on.
+        body.optJSONArray("seals")?.let { seals ->
+            (0 until seals.length()).map(seals::getJSONObject).firstOrNull { it.optString("holderUserId").equals(member.id, ignoreCase = true) }?.let { seal ->
+                keySeal = JSONObject(seal.toString()).put("sealerUserId", member.id.lowercase()).apply { remove("holderUserId") }
+            }
+        }
+        if (userId == null) return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", chain.size))
+        (listOf(server.grace) + server.others.values.map { it.first }).firstOrNull { it.id.equals(userId, ignoreCase = true) }?.let(joined::add)
         pendingRows.removeIf { it.optString("userId").equals(userId, ignoreCase = true) }
         return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", chain.size))
     }
@@ -334,20 +359,27 @@ class FamilyFixture(val server: FakeDrive) {
     }
 
     /* The chain as Sam's device accepted it: what his next roster is built over. */
-    fun creatorChain(rosters: List<SignedGroupStatement> = chain): AcceptedRosters =
-        (acceptRosters(groupId, groupPublicKey(groupSeed), GroupAnchor.CREATED, emptyList(), rosters, emptyList(), signerKeys,
+    fun creatorChain(rosters: List<SignedGroupStatement> = chain, successions: List<SignedGroupStatement> = this.successions.toList()): AcceptedRosters =
+        (acceptRosters(groupId, groupPublicKey(groupSeed), GroupAnchor.CREATED, emptyList(), rosters, successions, signerKeys,
             OwnIdentities(creator.id, listOf(creator.servedKeys())), null) as RosterChain.Accepted).chain
 
     /*
      * Sam makes Maya a manager (roster 3, after her admission at 2) and seals the family's key to her: what she needs to
      * let anyone in. The chain from there.
      */
-    fun mayaManages(): List<SignedGroupStatement> {
+    fun mayaManages(organizer: Boolean = false): List<SignedGroupStatement> {
         val accepted = creatorChain(listOf(r1, r2))
-        val members = accepted.roster().members.map { if (it.userId == member.id.lowercase()) it.copy(roles = listOf(GroupRole.MEMBERS)) else it }
+        // As organizer, Maya holds billing as well and Sam keeps managing: what she hands over.
+        val members = accepted.roster().members.map {
+            when {
+                it.userId == member.id.lowercase() -> it.copy(roles = if (organizer) listOf(GroupRole.BILLING, GroupRole.MEMBERS) else listOf(GroupRole.MEMBERS))
+                organizer -> it.copy(roles = listOf(GroupRole.MEMBERS))
+                else -> it
+            }
+        }
         val r3m = rosterSign(rosterNext(accepted, members, creator.id, null, null, null), groupSeed, creator.keys)
         chain = listOf(r1, r2, r3m)
-        listedRoles = listOf("members")
+        listedRoles = if (organizer) listOf("billing", "members") else listOf("members")
         val head = creatorChain()
         val sealed = groupKeySeal(groupSeed, GroupKeySealContext(groupId, 1uL, member.id.lowercase(), member.keys.keyVersion, creator.id, 3uL,
             rosterDigest(r3m.statement)), head, base64urlDecode(member.keys.kemPublicKey!!), creator.keys)
@@ -361,6 +393,10 @@ class FamilyFixture(val server: FakeDrive) {
         val accepted = creatorChain()
         chain = chain + rosterSign(rosterNext(accepted, accepted.roster().members, creator.id, null, null, null), groupSeed, creator.keys)
     }
+
+    /* Maya's own words check of `person`: a verified pin of the keys HushOS serves for them now, in her settings. */
+    fun verifyPin(person: FakeDrive.Person, email: String, name: String) =
+        server.editSettings { it.pin(ContactPin.ofServed(person.id, email, name, person.served, "2026-11-03T00:00:00.000Z")!!) }
 
     /* `person` accepted an invitation and waits to be let in (route 16), with the identity HushOS serves for them now. */
     fun waiting(person: FakeDrive.Person, email: String, name: String) {
@@ -380,6 +416,16 @@ class FamilyFixture(val server: FakeDrive) {
     }
 
     companion object {
+        /*
+         * Route 18 is a PATCH, which Android's HttpURLConnection sends and the JVM's refuses: the test JVM is taught it
+         * (its list of methods, opened by build.gradle.kts's --add-opens), so role changes run here as on a phone.
+         */
+        fun allowPatch() {
+            val field = java.net.HttpURLConnection::class.java.getDeclaredField("methods").apply { isAccessible = true }
+            @Suppress("UNCHECKED_CAST") val methods = field.get(null) as Array<String>
+            if ("PATCH" !in methods) methods[methods.indexOf("TRACE")] = "PATCH"
+        }
+
         /* The account signed in on this test's phone, as the other vault tests sign in. */
         fun signIn(server: FakeDrive, prefs: String) {
             val context: Context = RuntimeEnvironment.getApplication()
