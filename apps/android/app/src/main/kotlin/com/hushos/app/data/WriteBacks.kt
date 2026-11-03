@@ -342,32 +342,32 @@ object WriteBacks {
     }
 
     /*
-     * The newest contents another app kept of the file, by save number: its pending save, or an edit whose save couldn't be
-     * kept in the slot (a failed row holds it). What every open that keeps the contents starts from, and what a read gets.
-     * A copy in `dest`; false when there is neither.
+     * The newest contents another app kept of the file, by save number, under the slot's lock (the one a landing and a
+     * cancel take, so what is chosen is never deleted before it is used): its pending save, or a closed edit whose save
+     * couldn't be kept in the slot (row or not: a row that couldn't be written leaves only the edit), never one at or
+     * below the newest landed save or a cancel's bound. Only closed edits: an edit never closed (its close's rename
+     * failed, or an open abandoned partway) is never taken for contents, though a row keeps it for a Retry. What a read,
+     * every open that keeps the contents and every listing take (`copyNewestTo`, `pendingMeta`). Null when neither.
      */
-    fun copyNewestTo(context: Context, slot: String, dest: File): Boolean {
-        // The closed edits on disk, row or not (a row that couldn't be written leaves only the edit), and any row's edit; never
-        // one at or below the newest landed save or a cancel's bound (a newer save stands, or the save was cancelled).
-        // All of it under the slot's lock a landing and a cancel take, so the edit chosen is never deleted before it is copied.
-        return lockOf(slot).withLock {
-            val settled = readNumbers(context, slot).let { maxOf(it.landed, it.cancelled) }
-            val staged = (closedEditsOf(context, slot) + runCatching { FailedTransfers.of(context).all() }.getOrDefault(emptyList())
-                .filter { it.slot == slot && it.stage != null }
-                .mapNotNull { row -> stagedNumber(row.stage!!)?.let { it to File(row.file ?: return@mapNotNull null) } })
-                .filter { it.first > settled && it.second.isFile }.maxByOrNull { it.first }
-            afterNewestChosen?.invoke()
-            val dir = dir(context, slot)
-            val pending = current(dir, slot)
-            val source = when {
-                staged != null && (pending == null || staged.first > pending.generation) -> staged.second
-                pending != null -> File(dir, pending.id + BIN)
-                else -> return@withLock false
-            }
-            dest.parentFile?.mkdirs()
-            source.copyTo(dest, overwrite = true)
-            true
+    private fun newestLocked(context: Context, slot: String): File? {
+        val settled = readNumbers(context, slot).let { maxOf(it.landed, it.cancelled) }
+        val staged = closedEditsOf(context, slot).filter { it.first > settled && it.second.isFile }.maxByOrNull { it.first }
+        val dir = dir(context, slot)
+        val pending = current(dir, slot)
+        return when {
+            staged != null && (pending == null || staged.first > pending.generation) -> staged.second
+            pending != null -> File(dir, pending.id + BIN)
+            else -> null
         }
+    }
+
+    /* The newest kept contents (newestLocked) copied to `dest`; false when there are none. */
+    fun copyNewestTo(context: Context, slot: String, dest: File): Boolean = lockOf(slot).withLock {
+        val source = newestLocked(context, slot) ?: return@withLock false
+        afterNewestChosen?.invoke()
+        dest.parentFile?.mkdirs()
+        source.copyTo(dest, overwrite = true)
+        true
     }
 
     /* A copy of the slot's newest save in `dest` (an open starts from it); false when there is none. */
@@ -622,14 +622,11 @@ object WriteBacks {
     fun notifyFolder(context: Context, target: Target) = FilesRoots.foldersChanged(context, listOf(target.folder), target.root)
 
     /*
-     * What a listing shows of a file with a pending save: that save's size and when it was kept, so the size and date
-     * Files shows are those of the bytes a read returns. Null when the file has none (no lock taken for a file without a slot).
+     * What a listing (and a family poll's signature) shows of a file another app saved: the size and date of the same
+     * newest kept contents a read returns (newestLocked: the pending save, or a retained closed edit). Null when none.
      */
-    fun pendingMeta(context: Context, slot: String): Pair<Long, Long>? {
-        val dir = dir(context, slot)
-        if (!dir.isDirectory) return null
-        return lockOf(slot).withLock { current(dir, slot)?.let { File(dir, it.id + BIN) }?.let { it.length() to it.lastModified() } }
-    }
+    fun pendingMeta(context: Context, slot: String): Pair<Long, Long>? =
+        lockOf(slot).withLock { newestLocked(context, slot)?.let { it.length() to it.lastModified() } }
 
     /*
      * A failed save's row dismissed (`file`, its generation): only that save goes. While it is still the pending one the
