@@ -233,9 +233,31 @@ public final class FamilyFilesDomains: @unchecked Sendable {
             let identifier = FamilyFileIds.domain(groupId)
             guard let existing = try? await manager.domains() else { return }
             // Adding an identifier that exists updates its name: a renamed family's location says the new one.
-            if !existing.contains(identifier) || renamed { try? await manager.add(identifier, name: name) }
+            if !existing.contains(identifier) || renamed {
+                // Another process may have let the family go while this one waited: asked again, under the store's lock,
+                // right before the add, and again after it, when a let-go that landed during the add takes the location back.
+                guard stands(groupId, owner: owner, observed: observed, session: session) else { return }
+                try? await manager.add(identifier, name: name)
+                guard stands(groupId, owner: owner, observed: observed, session: session) else {
+                    try? await manager.remove(identifier)
+                    return
+                }
+            }
             await manager.signal(identifier)
         }
+    }
+
+    /*
+     * Whether an acceptance begun at `observed` still holds, read under the store's lock: its session
+     * stands, no let-go is pending here, the record is `owner`'s, and no let-go came since.
+     */
+    private func stands(_ groupId: String, owner: AccountOwner, observed: UInt64, session: CopySession) -> Bool {
+        guard session.stands, !revocationPending(groupId) else { return false }
+        var holds = false
+        let read = records.update { stored in
+            holds = stored.records[groupId]?.owner == owner && stored.revoked[groupId, default: 0] <= observed
+        }
+        return read && holds
     }
 
     /*
@@ -477,6 +499,11 @@ public actor FamilyFilesSource {
 
     /* The record's say, before anything this process holds: a revocation on disk wins, and takes this process's copies. */
     private func admit() throws {
+        // The session this source serves ended (signed out, another account): nothing of it is answered.
+        guard vault.copySession.stands else {
+            view = nil
+            throw FamilyFilesError.otherAccount
+        }
         // A let-go this process found but couldn't write: the record on disk still stands, the family doesn't.
         if domains?.revocationPending(groupId) == true {
             view = nil
@@ -516,13 +543,20 @@ public actor FamilyFilesSource {
         } catch let error as FamilyFilesError {
             throw error
         } catch {
-            // No answer: what this process accepted stands, read only (the record was checked first).
-            if let view { return view }
+            // No answer: what this process accepted stands, read only, unless a let-go landed meanwhile (asked again).
+            if let view {
+                try admit()
+                return view
+            }
             throw error
         }
-        // Not listed, but not confirmed gone either: kept as it was until the server says not-member.
+        // Not listed, but not confirmed gone either: kept as it was until the server says not-member, and only while the
+        // record still stands (a let-go whose wipe couldn't finish takes the record without naming the family as removed).
         guard let summary = listed.first(where: { $0.id.lowercased() == groupId }) else {
-            if let view { return view }
+            if let view {
+                try admit()
+                return view
+            }
             throw FamilyFilesError.unavailable
         }
         switch await sync.sync(summary) {
@@ -534,7 +568,10 @@ public actor FamilyFilesSource {
             checkedAt = now()
             return accepted
         case .failed(let words) where words == FamilyWords.noAnswer:
-            if let view { return view }
+            if let view {
+                try admit()
+                return view
+            }
             throw FamilyFailure(message: words)
         default:
             // The sync let it go (its release took the record and asked for the location to go).

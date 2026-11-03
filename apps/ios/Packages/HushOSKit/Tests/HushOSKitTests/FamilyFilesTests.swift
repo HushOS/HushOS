@@ -9,8 +9,25 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
     private(set) var removals: [String] = []
     var removalFails = false
 
-    func domains() async throws -> [String] { lock.withLock { Array(present.keys) } }
-    func add(_ identifier: String, name: String) async throws { lock.withLock { present[identifier] = name } }
+    /* Run as the system is asked for its locations, and as a location is added: what another process does meanwhile. */
+    var duringDomains: (@Sendable () -> Void)?
+    /* Awaited before the added location appears: another process's whole let-go, its removal included, can land first. */
+    var duringAdd: (@Sendable () async -> Void)?
+    private(set) var adds: [String] = []
+
+    func domains() async throws -> [String] {
+        let hook = lock.withLock { () -> (@Sendable () -> Void)? in defer { duringDomains = nil }; return duringDomains }
+        hook?()
+        return lock.withLock { Array(present.keys) }
+    }
+    func add(_ identifier: String, name: String) async throws {
+        let hook = lock.withLock { () -> (@Sendable () async -> Void)? in defer { duringAdd = nil }; return duringAdd }
+        await hook?()
+        lock.withLock {
+            present[identifier] = name
+            adds.append(identifier)
+        }
+    }
     func remove(_ identifier: String) async throws {
         try lock.withLock {
             removals.append(identifier)
@@ -175,6 +192,30 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         #expect(!domains.revocationPending(Self.group))
         #expect(records.admission(Self.group, owner: Self.maya) == .letGo, "an acceptance begun before the pending let-go wrote the record back")
         #expect(manager.names.isEmpty)
+    }
+
+    /*
+     * Another process lets the family go while this one waits on the system for its locations, or
+     * while the location is being added: the acceptance adds nothing, or takes back what it added.
+     * Fails if an acceptance checked only before it waited re-adds a revoked family's location.
+     */
+    @Test func aLetGoWhileTheLocationIsBeingAddedLeavesNoLocation() async throws {
+        let app = self.domains
+        let extensionProcess = FamilyFilesDomains(records: records, manager: manager)
+        let session = TemporaryCopies.session(CopyEpoch())
+        let (group, maya) = (Self.group, Self.maya)
+        manager.duringDomains = { _ = extensionProcess.letGo(group, owner: maya) }
+        await app.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value
+        await extensionProcess.settled()
+        #expect(manager.adds.isEmpty, "a location was added after another process let the family go")
+        #expect(manager.names.isEmpty)
+
+        manager.duringAdd = { await extensionProcess.letGo(group, owner: maya).value }
+        await app.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value
+        await extensionProcess.settled()
+        #expect(manager.adds.count == 1)
+        #expect(manager.names.isEmpty, "a location added while another process let the family go stayed")
+        #expect(records.admission(group, owner: maya) == .letGo)
     }
 
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
@@ -443,6 +484,45 @@ extension OnFakeDrive {
             await s.domains.settled()
             #expect(s.records.admission(s.family.groupId, owner: s.owner) == .admitted, "an ended session's sync took the new session's location")
             #expect(s.manager.removals.isEmpty)
+        }
+
+        /*
+         * The family is let go of while the extension checks it again, but the check answers neither
+         * a removal nor an acceptance (route 2 stops listing it while route 3 still serves it, or
+         * route 2 doesn't answer): the view held from before is never served once the record is
+         * gone. Fails if a cached fallback skips the record after an await.
+         */
+        @Test func aCachedViewIsNeverServedPastALetGoDuringTheCheck() async throws {
+            for unanswered in [false, true] {
+                let s = try await Self.source()
+                defer { s.phone.done() }
+                _ = try await s.source.folders()
+                let other = FamilyFilesDomains(records: s.records, manager: s.manager)
+                let (group, owner, server) = (s.family.groupId, s.owner, s.server)
+                server.lock.withLock {
+                    if unanswered { server.groupsFail = true } else { server.listed = false }
+                    server.manage.beforeAnswer = { method, path in
+                        guard method == "GET", path == "/api/groups" else { return }
+                        server.lock.withLock { server.manage.beforeAnswer = nil }
+                        _ = other.letGo(group, owner: owner)
+                    }
+                }
+                s.clock.now = s.clock.now.addingTimeInterval(120)
+                await #expect(throws: FamilyFilesError.letGo) { _ = try await s.source.folders() }
+            }
+        }
+
+        /*
+         * The session the source serves ended (a sign-out, another account): even a fresh view held
+         * from a moment ago isn't served. Fails if admission asks only the record.
+         */
+        @Test func anEndedSessionsSourceServesNothing() async throws {
+            let account = CopyEpoch()
+            let s = try await Self.source(account: account)
+            defer { s.phone.done() }
+            _ = try await s.source.folders()
+            TemporaryCopies.endAccount(account)
+            await #expect(throws: FamilyFilesError.otherAccount) { _ = try await s.source.folders() }
         }
 
         /*
