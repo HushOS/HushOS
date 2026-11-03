@@ -422,8 +422,9 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
      * deletes the location of an acceptance that landed while it ran.
      */
     @Test func anAcceptanceDuringTheRemovalGetsItsLocationBack() async throws {
+        signIn(Self.maya)
         let app = self.domains
-        let extensionProcess = FamilyFilesDomains(records: records, manager: manager)
+        let extensionProcess = domains
         let session = TemporaryCopies.session(CopyEpoch())
         let (group, maya, records) = (Self.group, Self.maya, self.records)
         await app.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value
@@ -471,9 +472,10 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
      * added: once added it is taken back. Fails if the restoring add skips the check after it.
      */
     @Test func aRevocationDuringTheRestoringAddTakesTheLocationBack() async throws {
+        signIn(Self.maya)
         let app = self.domains
-        let extensionProcess = FamilyFilesDomains(records: records, manager: manager)
-        let third = FamilyFilesDomains(records: records, manager: manager)
+        let extensionProcess = domains
+        let third = domains
         let session = TemporaryCopies.session(CopyEpoch())
         let (group, maya, records) = (Self.group, Self.maya, self.records)
         await app.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value
@@ -599,6 +601,7 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
      * location. Fails if the add's rollback removes unconditionally.
      */
     @Test func anAddsRollbackLeavesAFresherAcceptancesLocation() async throws {
+        signIn(Self.maya)
         // The add's own session ends while it adds: its record stays (whose the sign-out decides), its location doesn't.
         let ending = CopyEpoch()
         let endingSession = TemporaryCopies.session(ending)
@@ -608,7 +611,7 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         #expect(manager.names[FamilyFileIds.domain(endingGroup)] == nil, "the rollback gave an ended session's add its location back")
 
         let app = self.domains
-        let again = FamilyFilesDomains(records: records, manager: manager)
+        let again = domains
         let session = TemporaryCopies.session(CopyEpoch())
         let (group, maya, records, manager) = (UUID().uuidString.lowercased(), Self.maya, self.records, self.manager)
         manager.duringAdd = {
@@ -663,6 +666,41 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         #expect(try records.read()[old] == nil)
         #expect(try records.read()[fresh]?.owner == sam, "the wipe dropped a record written after it began")
         #expect(manager.names[FamilyFileIds.domain(fresh)] != nil)
+    }
+
+    /*
+     * Maya's removal of a family location is paused on the system while Sam signs in and accepts the
+     * same family (finding the location still there, adding nothing): once the removal finishes, Sam,
+     * who holds the record and the keychain now, gets the location back, whichever removal it was. An
+     * acceptance for an account not signed in gets nothing back. Fails if the restore only matches the
+     * account that started the removal.
+     */
+    @Test func whoeverHoldsTheRecordNowGetsTheLocationBackAfterARemoval() async throws {
+        let samSession = SharedKeychain.Session(origin: Self.sam.origin, token: "sam", userId: Self.sam.userId)
+        for (path, switches) in [("let-go", true), ("reconcile", true), ("let-go", false)] {
+            signIn(Self.maya)
+            let remover = domains
+            let sam = FamilyFilesDomains(records: records, manager: manager, sharedSession: { samSession })
+            let session = TemporaryCopies.session(CopyEpoch())
+            let (group, records, keychain) = (UUID().uuidString.lowercased(), self.records, self.keychain)
+            if path == "let-go" {
+                await remover.accepted(group, name: "Lindqvist family", owner: Self.maya, observed: records.generation(group), session: session).value
+            } else {
+                manager.put(FamilyFileIds.domain(group), name: "Lindqvist family")
+            }
+            manager.duringRemove = {
+                if switches { keychain.session = samSession }
+                await sam.accepted(group, name: "Lindqvist family", owner: Self.sam, observed: records.generation(group), session: session,
+                                   signedIn: switches ? samSession : nil).value
+            }
+            if path == "let-go" { await remover.letGo(group, owner: Self.maya).value } else { await remover.reconcile(owner: Self.maya).value }
+            #expect(try records.read()[group]?.owner == Self.sam)
+            if switches {
+                #expect(manager.names[FamilyFileIds.domain(group)] != nil, "Sam's acceptance during Maya's \(path) removal lost its location")
+            } else {
+                #expect(manager.names[FamilyFileIds.domain(group)] == nil, "a location came back for an account that isn't signed in")
+            }
+        }
     }
 
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */

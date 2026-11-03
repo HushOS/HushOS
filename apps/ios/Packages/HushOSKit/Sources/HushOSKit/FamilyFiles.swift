@@ -265,7 +265,7 @@ public final class FamilyFilesDomains: @unchecked Sendable {
             // for an identifier that exists updates its name. Compared with the system's name, never the record's.
             if existing[identifier] != name {
                 // Another process may have let the family go (or signed out or in) while this one waited.
-                guard await addVerified(groupId, name: name, from: written,
+                guard await addVerified(groupId, name: name,
                                         holds: { stands(groupId, owner: owner, observed: observed, session: session, signedIn: signedIn) })
                 else { return }
             }
@@ -325,55 +325,52 @@ public final class FamilyFilesDomains: @unchecked Sendable {
             // Left pending: the generation its write reached since, if it did (until then nothing is accepted).
             let generation = wrote ?? lock.withLock { landed[groupId] }
             guard mayRemove(groupId, owner: owner, session: session, after: generation) else { return }
-            // Kept: a record written at the let-go's generation or later (an acceptance that came after it).
-            await removeVerified(groupId) { [self] record in
-                guard let generation = generation ?? lock.withLock({ landed[groupId] }), let written = record.generation else { return false }
-                return written >= generation
-            }
+            // An acceptance that came after the let-go and landed during the removal keeps its location (`removeVerified`).
+            await removeVerified(groupId)
         }
     }
 
     /*
-     * Every removal of one family's location but the account wipe (`removeAll`) goes through here: the
-     * location is removed, then its record is read again under the store's lock, and one that `keeps`
-     * (an acceptance this removal didn't decide against, landed while the system removed the location
-     * in a process that found it still there) gets its location back through `addVerified`. True when
-     * the location is gone.
+     * Every removal of one family's location but the account wipe (`removeAll`) goes through here,
+     * whoever started it: the record is noted, the location removed, and then the record and the
+     * shared keychain are read again under the store's lock. A record written while the system removed
+     * the location (an acceptance in a process that found the location still there, the next account's
+     * included) and owned by whoever the keychain holds now gets its location back through `addVerified`.
+     * True when the location is gone.
      */
     @discardableResult
-    private func removeVerified(_ groupId: String, keeps: @escaping (FamilyDomainRecord) -> Bool) async -> Bool {
+    private func removeVerified(_ groupId: String) async -> Bool {
         let identifier = FamilyFileIds.domain(groupId)
+        var before: FamilyDomainRecord?
+        guard records.update({ stored in before = stored.records[groupId] }) else { return (try? await manager.remove(identifier)) != nil }
         let removed = (try? await manager.remove(identifier)) != nil
-        func kept() -> FamilyDomainRecord? {
-            var record: FamilyDomainRecord?
-            guard records.update({ stored in record = stored.records[groupId] }), let record, keeps(record) else { return nil }
-            return record
-        }
-        guard let record = kept() else { return removed }
-        return !(await addVerified(groupId, name: record.name, from: record.generation ?? 0, holds: { kept() != nil }))
+        // The record now, if it was written during the removal; `addVerified` adds only while it stands, the signed-in account's.
+        var now: FamilyDomainRecord?
+        guard records.update({ stored in now = stored.records[groupId] }), let record = now, record != before else { return removed }
+        return !(await addVerified(groupId, name: record.name, holds: {
+            var now: FamilyDomainRecord?
+            guard records.update({ stored in now = stored.records[groupId] }), now == record, let signedIn = sharedSession() else { return false }
+            return record.owner == AccountOwner(signedIn)
+        }))
     }
 
     /*
      * A location added only while `holds` (read under the store's lock): asked right before the add,
-     * and again after it, when a revocation that landed during the add takes the location back.
+     * and again after it, when a revocation (or a session's end) that landed during the add takes the
+     * location back, through `removeVerified`, which gives it back only to a record written since.
      * False when it doesn't stand.
      */
     @discardableResult
-    private func addVerified(_ groupId: String, name: String, from start: UInt64, holds: () -> Bool) async -> Bool {
+    private func addVerified(_ groupId: String, name: String, holds: () -> Bool) async -> Bool {
         let identifier = FamilyFileIds.domain(groupId)
         guard holds() else { return false }
         try? await manager.add(identifier, name: name)
         guard holds() else {
-            // Lost (a revocation, a session that ended): taken back through `removeVerified`, which gives the location back
-            // only to a record newer than both the one this add was for (`start`) and whatever beat it (the generation now).
-            let beaten = records.generation(groupId) ?? .max
-            let fresher = max(start == .max ? .max : start &+ 1, beaten)
-            await removeVerified(groupId) { ($0.generation ?? 0) >= fresher }
+            await removeVerified(groupId)
             return false
         }
         return true
     }
-
 
     /*
      * Whether a let-go of `owner` and `session`, which moved the family's generation to `generation`,
@@ -481,8 +478,8 @@ public final class FamilyFilesDomains: @unchecked Sendable {
                     continue
                 }
                 guard current() else { return }
-                // Kept: this account's record, an acceptance that landed while the location was removed.
-                let gone = if let groupId { await removeVerified(groupId) { $0.owner == owner } } else { (try? await manager.remove(identifier)) != nil }
+                // Whoever's acceptance landed while the location was removed keeps it, if they are signed in (`removeVerified`).
+                let gone = if let groupId { await removeVerified(groupId) } else { (try? await manager.remove(identifier)) != nil }
                 if gone { present.remove(identifier) }
             }
             records.update { stored in
@@ -541,8 +538,8 @@ public final class FamilyFilesDomains: @unchecked Sendable {
                 guard records.update({ stored in record = stored.records[groupId] }), let record else { return false }
                 return record.owner != current && signedIn()
             }
-            // Kept: the account signed in now's record, an acceptance that landed while the location was removed.
-            guard foreign(), await removeVerified(groupId, keeps: { $0.owner == current }) else { return }
+            // Whoever's acceptance landed while the location was removed keeps it, if they are signed in (`removeVerified`).
+            guard foreign(), await removeVerified(groupId) else { return }
             records.update { stored in
                 if let record = stored.records[groupId], record.owner != current, signedIn() { stored.records[groupId] = nil }
             }
