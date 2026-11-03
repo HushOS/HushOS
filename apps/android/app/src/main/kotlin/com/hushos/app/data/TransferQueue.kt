@@ -20,6 +20,7 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 
 /*
@@ -493,7 +494,7 @@ object TransferQueue {
         // whole file's copy: first those saves go, under the lock, then the job is cancelled (until then it is unfinished,
         // so no sweep queues the slot again), then a save left gets a job of its own (the cancelled one would have sent it).
         val slot = dir.name
-        val cancelled = WriteBacks.publishedId(context, slot)
+        val cancelled = WriteBacks.publishedSave(context, slot)
         return cleanups.submit {
             WriteBacks.cancelThrough(context, slot, cancelled)
             afterCancelCleans?.invoke()
@@ -701,46 +702,52 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 if (left == null) Reservations.forgetLandedWhere(applicationContext) { WriteBacks.ledgerOf(slot, it) } else Reservations.forgetLanded(applicationContext, ledger)
             }
             attempt { setForeground(getForegroundInfo()) }
-            val end = withContext(Dispatchers.IO) {
-                // Stopped by WorkManager, or by a cancel that took this save meanwhile (another job's): never landed then.
-                stoppable({ isStopped || WriteBacks.isCancelled(applicationContext, slot, pending.generation) }) { checkStop ->
-                    var shown = 0
-                    val progress = { fraction: Float ->
-                        checkStop()
-                        setProgressAsync(workDataOf("fraction" to fraction))
-                        val percent = (fraction * 100).toInt()
-                        if (percent - shown >= 5) {
-                            shown = percent
-                            runCatching { setForegroundAsync(TransferQueue.foreground(applicationContext, id.hashCode(), fraction)) }
+            // The upload and what its end means (the landing's bookkeeping above all) in one block nothing cancels: WorkManager
+            // stopping the job while a completion is in flight never throws away an upload that landed. The block's answer
+            // is null to look at the slot again, else the job's result.
+            val decided: Result? = withContext(NonCancellable) {
+                val end = withContext(Dispatchers.IO) {
+                    // Stopped by WorkManager, or by a cancel that took this save meanwhile (another job's): never landed then.
+                    stoppable({ isStopped || WriteBacks.isCancelled(applicationContext, slot, pending.generation) }) { checkStop ->
+                        var shown = 0
+                        val progress = { fraction: Float ->
+                            checkStop()
+                            setProgressAsync(workDataOf("fraction" to fraction))
+                            val percent = (fraction * 100).toInt()
+                            if (percent - shown >= 5) {
+                                shown = percent
+                                runCatching { setForegroundAsync(TransferQueue.foreground(applicationContext, id.hashCode(), fraction)) }
+                            }
+                        }
+                        TransferQueue.runUpload(applicationContext, vault, ledger, sending, target.name, target.mime, target.folder, target.nodeId,
+                            if (target.family != null && target.familyWorkspace != null) TransferQueue.Family(target.family, target.familyWorkspace) else null, waits,
+                            pause = { ms -> var left = ms; while (left > 0) { checkStop(); Thread.sleep(minOf(left, 1_000L)); left -= 1_000L } },
+                            waiting = { setProgressAsync(workDataOf("fraction" to 0f)) }, progress = progress, waitKey = this@UploadWorker.id.toString())
+                    }
+                }
+                // A landing keeps it (as the read copy) or deletes it with the slot (WriteBacks.landed).
+                if (end !is JobEnd.Done && !(end is JobEnd.Failed && end.error is Reservations.Landed)) sending.delete()
+                when (end) {
+                    is JobEnd.Done -> if (!landed(end.value.node.currentVersion?.id)) Result.success() else null
+                    // Its save cancelled while it went up: nothing landed; whatever the slot holds now is next.
+                    JobEnd.Stopped -> if (!isStopped && WriteBacks.isCancelled(applicationContext, slot, pending.generation)) null else Result.retry()
+                    is JobEnd.Failed -> when {
+                        // Its completion landed after all (its answer lost, or a step after it failed): landed.
+                        end.error is Reservations.Landed -> if (!landed()) Result.success() else null
+                        // Not in the family any more: the family's uploads end, this slot with them.
+                        familyOf != null && FamilyUploads.removed(end.error) -> removed()
+                        // A newer save arrived meanwhile: this one's failure is moot (never sent now), and the newer gets its own try.
+                        WriteBacks.pending(applicationContext, slot)?.id.let { it != null && it != pending.id } -> null
+                        // A failure keeps the slot: its row (naming the failed save's own generation) Retries whatever it holds then.
+                        else -> {
+                            TransferQueue.beforeSlotFails?.invoke()
+                            outcome(end.error, androidx.work.Data.Builder().putAll(inputData)
+                                .putString("file", java.io.File(WriteBacks.dir(applicationContext, slot), pending.id + ".bin").path).build(), generation)
                         }
                     }
-                    TransferQueue.runUpload(applicationContext, vault, ledger, sending, target.name, target.mime, target.folder, target.nodeId,
-                        if (target.family != null && target.familyWorkspace != null) TransferQueue.Family(target.family, target.familyWorkspace) else null, waits,
-                        pause = { ms -> var left = ms; while (left > 0) { checkStop(); Thread.sleep(minOf(left, 1_000L)); left -= 1_000L } },
-                        waiting = { setProgressAsync(workDataOf("fraction" to 0f)) }, progress = progress, waitKey = this@UploadWorker.id.toString())
                 }
             }
-            // A landing keeps it (as the read copy) or deletes it with the slot (WriteBacks.landed).
-            if (end !is JobEnd.Done && !(end is JobEnd.Failed && end.error is Reservations.Landed)) sending.delete()
-            when (end) {
-                is JobEnd.Done -> if (!landed(end.value.node.currentVersion?.id)) return Result.success()
-                // Its save cancelled while it went up: nothing landed; whatever the slot holds now is next.
-                JobEnd.Stopped -> if (!isStopped && WriteBacks.isCancelled(applicationContext, slot, pending.generation)) continue else return Result.retry()
-                is JobEnd.Failed -> when {
-                    // Its completion landed after all (its answer lost, or a step after it failed): landed.
-                    end.error is Reservations.Landed -> if (!landed()) return Result.success()
-                    // Not in the family any more: the family's uploads end, this slot with them.
-                    familyOf != null && FamilyUploads.removed(end.error) -> return removed()
-                    // A newer save arrived meanwhile: this one's failure is moot (never sent now), and the newer gets its own try.
-                    WriteBacks.pending(applicationContext, slot)?.id.let { it != null && it != pending.id } -> continue
-                    // A failure keeps the slot: its row (naming the failed save's own generation) Retries whatever it holds then.
-                    else -> {
-                        TransferQueue.beforeSlotFails?.invoke()
-                        return outcome(end.error, androidx.work.Data.Builder().putAll(inputData)
-                            .putString("file", java.io.File(WriteBacks.dir(applicationContext, slot), pending.id + ".bin").path).build(), generation)
-                    }
-                }
-            }
+            if (decided != null) return decided
         }
     }
 

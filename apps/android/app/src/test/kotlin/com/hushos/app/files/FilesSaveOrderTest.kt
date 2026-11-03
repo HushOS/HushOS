@@ -25,10 +25,12 @@ import com.hushos.app.data.WriteBacks
 import com.hushos.app.data.buildCatalogue
 import com.hushos.app.data.sync
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -1028,6 +1030,95 @@ class FilesSaveOrderTest {
         TransferQueue.dismiss(app, FailedTransfers.of(app).all().single())
         assertNull(WriteBacks.pending(app, slot))
         assertTrue("a dismiss didn't tell Files", shadowOf(app.contentResolver).notifiedUris.any { it.uri == watched })
+    }
+
+    /*
+     * Cancel pressed while the file's job is completing the save's upload: WorkManager stops the job, yet the completion
+     * lands on the server. The job still does its landing's bookkeeping, so a read with no answer serves the landed bytes,
+     * not the cached version before. Fails if stopping the job throws away an upload that landed.
+     */
+    @Test
+    fun aJobStoppedDuringItsCompletionStillKeepsTheLanding() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        assertEquals("original", opened(provider, notes, "r"))
+        save(provider, notes, "landed save")
+        val job = jobs(slot).single()
+        val file = job.tags.first { it.startsWith("file:") }.removePrefix("file:")
+        val session = TransferQueue.accountTag(Shared.session(app)!!)
+        val request = TransferQueue.slotRequest(job.id, slot, File(file), session = session)
+        val worker = TestListenableWorkerBuilder<UploadWorker>(app).setId(job.id).setInputData(request.workSpec.input).setTags(request.tags.toList()).build()
+        runBlocking {
+            val run = async(kotlinx.coroutines.Dispatchers.Default) { worker.doWork() }
+            server.beforeAnswer = { method, path ->
+                if (method == "POST" && path.endsWith("/complete")) {
+                    server.beforeAnswer = null
+                    TransferQueue.cancel(app, job.id, file).get(5, TimeUnit.SECONDS)
+                    run.cancel()
+                }
+            }
+            runCatching { run.await() }
+        }
+        assertNotNull("the landing's bookkeeping didn't run", WriteBacks.landing(app, slot))
+        server.dropReply = { _, path -> path.endsWith("/changes") }
+        assertEquals("landed save", opened(provider, notes, "r"))
+    }
+
+    /*
+     * A job is sending a save when Cancel is pressed for it, and the other app saves again before the cancel's cleanup
+     * runs (its newer save replaces the cancelled one's files): the cancel still holds for the save it was pressed for, so
+     * the sending job stops before landing it, and the newer save is sent. Fails if a cancel finds its bound from the
+     * cancelled save's files (gone by then), so the job already sending it completes it.
+     */
+    @Test
+    fun aCancelHoldsWhenANewerSaveReplacesTheCancelledOne() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "cancelled save")
+        val waiting = jobs(slot).single()
+        val target = WriteBacks.pending(app, slot)!!.target
+        var pressed = false
+        server.beforeAnswer = { method, path ->
+            if (!pressed && method == "POST" && path == "drive/uploads") {
+                pressed = true
+                val holding = CountDownLatch(1)
+                val release = CountDownLatch(1)
+                WriteBacks.afterContent = { WriteBacks.afterContent = null; holding.countDown(); release.await(5, TimeUnit.SECONDS) }
+                val saving = Thread { WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "newer").apply { writeText("newer save") }) }.apply { start() }
+                assertTrue(holding.await(5, TimeUnit.SECONDS))
+                val cleanup = TransferQueue.cancel(app, waiting.id, waiting.tags.first { it.startsWith("file:") }.removePrefix("file:"))
+                release.countDown()
+                saving.join(5_000)
+                cleanup.get(5, TimeUnit.SECONDS)
+            }
+        }
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertTrue(pressed)
+        assertEquals("newer save", serverText(notes))
+        assertEquals("the cancelled save was completed", 1, server.requests.count { it.startsWith("POST ") && it.endsWith("/complete") })
+    }
+
+    /*
+     * Cancel pressed for a save that then lands before the cancel's cleanup runs, and the other app saves the file again
+     * (the slot made afresh, its saves counted from one again): the late cleanup takes nothing of the new slot. Fails if a
+     * cancel's bound, read on an earlier slot of the file, is applied to the slot that replaced it.
+     */
+    @Test
+    fun aCancelPressedOnAnEarlierSlotTakesNothingOfTheNext() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "landed save")
+        val pressed = WriteBacks.publishedSave(app, slot)!!
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertFalse(WriteBacks.dir(app, slot).exists())
+        save(provider, notes, "next save")
+        assertEquals(pressed.generation, WriteBacks.pending(app, slot)!!.generation)
+        WriteBacks.cancelThrough(app, slot, pressed)
+        assertEquals("next save", WriteBacks.contentOf(app, slot).readText())
+        assertFalse(WriteBacks.isCancelled(app, slot, WriteBacks.pending(app, slot)!!.generation))
     }
 
     /*
