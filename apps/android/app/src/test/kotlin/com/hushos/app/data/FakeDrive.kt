@@ -193,6 +193,20 @@ class FakeDrive : AutoCloseable {
     /* Requests no route answered: a test that ends with one here drove a path the fake does not know. */
     val unknown = ArrayList<String>()
 
+    /*
+     * Everything thrown off the test's thread while this fake runs: by a handler (a route, a hook a test set such as
+     * `beforeAnswer`, `dropReply` or `extraRoutes`, an assertion in one) and by any other thread that dies of it (the
+     * default handler, set while the fake runs). `close` (every test's @After) throws them on the test's thread, so an
+     * assertion that failed on a handler thread never lets the test pass. A client that hung up (an I/O error answering
+     * it, or a hook dropping the connection with one, as tests do to lose an answer) is not one.
+     */
+    private val failures = java.util.Collections.synchronizedList(ArrayList<Throwable>())
+    private val uncaught: Thread.UncaughtExceptionHandler? = Thread.getDefaultUncaughtExceptionHandler()
+
+    private fun failed(error: Throwable) {
+        if (error !is java.io.IOException) failures.add(error)
+    }
+
     val root: String
     val graceWorkspace = UUID.randomUUID().toString()
     val graceRoot: String
@@ -207,15 +221,27 @@ class FakeDrive : AutoCloseable {
         // A request may be held before it is answered (`beforeAnswer`) while others are answered meanwhile, one at a time.
         server.executor = workers
         server.createContext("/") { exchange ->
-            beforeAnswer?.invoke(exchange.requestMethod, exchange.requestURI.path.removePrefix("/api/"))
-            synchronized(lock) { answer(exchange) }
+            try {
+                beforeAnswer?.invoke(exchange.requestMethod, exchange.requestURI.path.removePrefix("/api/"))
+                synchronized(lock) { answer(exchange) }
+            } catch (error: Throwable) {
+                // The connection dropped unanswered, as a hook throwing has always done (a test's way to lose an answer:
+                // an IOException, which is no failure); anything else thrown is one.
+                failed(error)
+                exchange.close()
+            }
         }
+        Thread.setDefaultUncaughtExceptionHandler { _, error -> failed(error) }
         server.start()
     }
 
     override fun close() {
+        val thrown = synchronized(failures) { failures.toList() }
         server.stop(0)
         workers.shutdownNow()
+        Thread.setDefaultUncaughtExceptionHandler(uncaught)
+        if (thrown.isNotEmpty()) throw AssertionError("${thrown.size} thrown off the test's thread, first: ${thrown.first()}", thrown.first())
+            .apply { thrown.drop(1).forEach(::addSuppressed) }
     }
 
     // Seeding: records another client wrote, signed by the workspace's owner.
@@ -539,6 +565,7 @@ class FakeDrive : AutoCloseable {
             } else send(exchange, reply.first, reply.second)
         } catch (error: Throwable) {
             unknown.add("$method $path threw $error")
+            failed(error)
             send(exchange, 500, JSONObject().put("message", error.toString()))
         }
     }
