@@ -975,8 +975,22 @@ extension Vault {
                     // A key change this device hasn't followed yet: no verdict on the node. The batch fails with its cursor
                     // where it was, and the family is checked again before Files asks again.
                     throw FamilyFilesError.keyChange
-                } catch DriveAPIError.notFound, DriveAPIError.trashed, is CoreError {
+                } catch DriveAPIError.notFound, DriveAPIError.trashed {
                     deleted.append(node.id)
+                } catch is CoreError {
+                    // A row of the listing didn't open, maybe a sibling's: the node's own envelope decides, never another's.
+                    let parentOpen = node.parentId.map { ledgerOpened.contains(NodeRef(workspaceId: workspaceId, nodeId: $0)) } ?? true
+                    do {
+                        updated.append(try open(node, replacing: true))
+                    } catch let error where FamilyFilesError.keyChanging(error) {
+                        throw FamilyFilesError.keyChange
+                    } catch is CoreError where parentOpen {
+                        // Its folder opened and it didn't: no longer openable here, it leaves the location.
+                        deleted.append(node.id)
+                    } catch {
+                        // Not to be pinned on the node: nothing of the batch is answered, and Files asks again.
+                        throw FamilyFilesError.unavailable
+                    }
                 }
             case "tombstone":
                 if let id = change.nodeId {

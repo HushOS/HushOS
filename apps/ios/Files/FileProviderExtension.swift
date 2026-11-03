@@ -26,6 +26,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
             // Someone is signed in again (from the Files sheet or the app): the next refusal may ask again.
             if owner != nil { SignInPrompt.reset() }
         },
+        // The drive's location is another account's (before the app replaces it): copies not of the account signed in go.
+        refusedForeign: { owner in TemporaryCopies.claim(owner) },
         make: { Vault(api: DriveAPI(session: $0), session: $0) }
     )
 
@@ -44,6 +46,12 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
             changed: { owner in
                 TemporaryCopies.claim(owner)
                 if owner != nil { SignInPrompt.reset() }
+            },
+            // Another account's family location (it outlived a switch): refused alone and taken away; the account signed
+            // in keeps its copies and its other families' sources.
+            refusedForeign: { owner in
+                TemporaryCopies.claim(owner)
+                FamilyFilesDomains.shared.dropForeign(groupId, current: owner)
             },
             make: { session in
                 let vault = Vault.shared(for: session)

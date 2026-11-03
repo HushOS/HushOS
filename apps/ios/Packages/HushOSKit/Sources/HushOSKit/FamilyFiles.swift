@@ -183,7 +183,7 @@ public final class FamilyFilesDomains: @unchecked Sendable {
      * with whose record they take: written again before anything else is decided about the family, and
      * until then its acceptances add nothing and this process's extension calls refuse.
      */
-    private var pending: [String: AccountOwner?] = [:]
+    private var pending: [String: (owner: AccountOwner?, session: CopySession?)] = [:]
 
     public init(records: FamilyDomainRecords, manager: any FamilyDomainManaging, temporary: URL = FileManager.default.temporaryDirectory) {
         self.records = records
@@ -272,12 +272,30 @@ public final class FamilyFilesDomains: @unchecked Sendable {
         if let session, !session.stands { return enqueue {} }
         let written = lock.withLock { () -> Bool in
             let written = (0 ..< 3).contains { _ in write(groupId, owner: owner, session: session) }
-            if !written { pending[groupId] = owner }
+            if !written { pending[groupId] = (owner, session) }
             return written
         }
         _ = written
-        // The location goes whether or not the store took the let-go: Files drops what it holds of it.
-        return enqueue { [manager] in try? await manager.remove(FamilyFileIds.domain(groupId)) }
+        // The location goes whether or not the store took the let-go (Files drops what it holds of it), unless by then the
+        // family's record is someone else's: another account, or a session after this one, added the family since.
+        return enqueue { [self] in
+            guard mayRemove(groupId, owner: owner, session: session) else { return }
+            try? await manager.remove(FamilyFileIds.domain(groupId))
+        }
+    }
+
+    /*
+     * Whether a let-go of `owner` and `session` may still remove the family's location: read under the
+     * store's lock, the record is gone, or is still `owner`'s while that session stands. A store that
+     * can't be read removes it (fail-safe: Files only drops a cache).
+     */
+    private func mayRemove(_ groupId: String, owner: AccountOwner?, session: CopySession?) -> Bool {
+        var record: FamilyDomainRecord?
+        guard records.update({ stored in record = stored.records[groupId] }) else { return true }
+        guard let record else { return true }
+        if let owner, record.owner != owner { return false }
+        if let session, !session.stands { return false }
+        return true
     }
 
     /* One let-go written: the generation moved and `owner`'s record (nil: whoever's) gone, its copies here with it; false when the store refused. */
@@ -306,8 +324,9 @@ public final class FamilyFilesDomains: @unchecked Sendable {
     public func revocationPending(_ groupId: String) -> Bool {
         let groupId = groupId.lowercased()
         return lock.withLock {
-            guard let owner = pending[groupId] else { return false }
-            if write(groupId, owner: owner, session: nil) { pending[groupId] = nil }
+            guard let held = pending[groupId] else { return false }
+            // Written as the session it came from: one that ended since is dropped, never written over the next session's.
+            if write(groupId, owner: held.owner, session: held.session) { pending[groupId] = nil }
             return pending[groupId] != nil
         }
     }
@@ -350,6 +369,27 @@ public final class FamilyFilesDomains: @unchecked Sendable {
             for identifier in identifiers where (try? await manager.remove(identifier)) != nil { present.remove(identifier) }
             records.update { stored in stored.records = stored.records.filter { present.contains(FamilyFileIds.domain($0.key)) } }
         }.value
+    }
+
+    /*
+     * A family location whose record is another account's met the account signed in now (it outlived
+     * a switch): that location goes, and its record once it has, while the record still isn't
+     * `current`'s. Nothing of the account signed in now is touched.
+     */
+    @discardableResult
+    public func dropForeign(_ groupId: String, current: AccountOwner) -> Task<Void, Never> {
+        let groupId = groupId.lowercased()
+        return enqueue { [self] in
+            func foreign() -> Bool {
+                var record: FamilyDomainRecord?
+                guard records.update({ stored in record = stored.records[groupId] }), let record else { return false }
+                return record.owner != current
+            }
+            guard foreign(), (try? await manager.remove(FamilyFileIds.domain(groupId))) != nil else { return }
+            records.update { stored in
+                if let record = stored.records[groupId], record.owner != current { stored.records[groupId] = nil }
+            }
+        }
     }
 
     /* Files is told a family's location changed (the app saw its folders change). */

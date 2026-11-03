@@ -72,25 +72,32 @@ public final class FilesGate<Value>: @unchecked Sendable {
     private let session: () -> SharedKeychain.Session?
     private let make: (SharedKeychain.Session) -> Value?
     private let changed: (AccountOwner?) -> Void
+    /* A session of `owner` met a location recorded for someone else: that location alone is let go of. */
+    private let refusedForeign: (AccountOwner) -> Void
     private let account: CopyEpoch
     private let lock = NSLock()
     private var cached: (session: SharedKeychain.Session, value: Value)?
 
     public init(owner: @escaping () -> AccountOwner?, session: @escaping () -> SharedKeychain.Session?, account: CopyEpoch = .process,
-                changed: @escaping (AccountOwner?) -> Void = { _ in }, make: @escaping (SharedKeychain.Session) -> Value?) {
+                changed: @escaping (AccountOwner?) -> Void = { _ in }, refusedForeign: @escaping (AccountOwner) -> Void = { _ in },
+                make: @escaping (SharedKeychain.Session) -> Value?) {
         self.owner = owner
         self.session = session
         self.account = account
         self.changed = changed
+        self.refusedForeign = refusedForeign
         self.make = make
     }
 
     public func open() throws -> Value {
         lock.lock()
         defer { lock.unlock() }
-        guard let admitted = FilesDomainOwner.admit(recorded: owner(), session: session()) else {
+        let stored = session()
+        guard let admitted = FilesDomainOwner.admit(recorded: owner(), session: stored) else {
             if cached != nil { cached = nil }
-            changed(nil)
+            // Only nobody signed in clears what this process holds; a location of another account than the one signed in
+            // (one that outlived a switch) is refused alone, and the account signed in now keeps its copies and sessions.
+            if stored == nil { changed(nil) } else { refusedForeign(AccountOwner(stored!)) }
             throw NSFileProviderError(.notAuthenticated)
         }
         // A session that replaced the one served before (another token, the same account included) ends that one here first.

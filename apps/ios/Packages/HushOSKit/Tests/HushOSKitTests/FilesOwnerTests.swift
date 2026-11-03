@@ -72,10 +72,12 @@ import Testing
         var session: SharedKeychain.Session?
         var made: [SharedKeychain.Session] = []
         var served: [AccountOwner?] = []
+        var foreign: [AccountOwner] = []
         lazy var gate = FilesGate<String>(
             owner: { [unowned self] in owner },
             session: { [unowned self] in session },
             changed: { [unowned self] in served.append($0) },
+            refusedForeign: { [unowned self] in foreign.append($0) },
             make: { [unowned self] in made.append($0); return "vault for \($0.userId)" }
         )
     }
@@ -143,6 +145,31 @@ import Testing
         #expect(harness.made.isEmpty)
     }
 
+    /*
+     * A location recorded for another account than the one signed in (a family location that
+     * outlived a switch) is refused alone: the account signed in keeps its copies and the sessions
+     * its other sources hold. Only nobody signed in clears the process. Fails if one foreign location
+     * ends the live account's session in the extension.
+     */
+    @Test func aForeignLocationLeavesTheSignedInAccountAlone() throws {
+        let account = CopyEpoch()
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("foreign-\(UUID().uuidString)", isDirectory: true)
+        TemporaryCopies.claim(alice, in: temporary, account: account)
+        let live = TemporaryCopies.session(account)
+        final class Signed: @unchecked Sendable { var session: SharedKeychain.Session?; init(_ s: SharedKeychain.Session?) { session = s } }
+        let signed = Signed(session(alice))
+        let bob = self.bob
+        let gate = FilesGate<String>(owner: { bob }, session: { signed.session }, account: account,
+                                     changed: { TemporaryCopies.claim($0, in: temporary, account: account) },
+                                     refusedForeign: { TemporaryCopies.claim($0, in: temporary, account: account) },
+                                     make: { _ in "a vault" })
+        #expect(throws: NSFileProviderError.self) { _ = try gate.open() }
+        #expect(live.stands, "another account's location ended the signed-in account's session here")
+        signed.session = nil
+        #expect(throws: NSFileProviderError.self) { _ = try gate.open() }
+        #expect(!live.stands, "nobody signed in left the last account's session standing")
+    }
+
     @Test func aVaultMadeForOneAccountIsNotHandedOutOnceAnotherSignsIn() throws {
         let harness = Harness()
         harness.owner = alice
@@ -157,8 +184,10 @@ import Testing
         harness.owner = bob
         #expect(try harness.gate.open() == "vault for \(bob.userId)")
         #expect(harness.made.map(\.userId) == [alice.userId, bob.userId])
-        // Every change of account told the extension, so it dropped what it decrypted for the last one.
-        #expect(harness.served == [alice, nil, bob])
+        // Every change of account told the extension, so it dropped what it decrypted for the last one: Bob's session over
+        // Alice's location claims for Bob (what isn't his goes) without the sign-out that would end his own sources too.
+        #expect(harness.served == [alice, bob])
+        #expect(harness.foreign == [bob])
     }
 
     // MARK: - The queue

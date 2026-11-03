@@ -287,6 +287,51 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         #expect(FamilySync.cause(of: FamilyFailure(message: "The chain didn’t check.")) == .refusal)
     }
 
+    /*
+     * A let-go the store refused is kept with the session it came from: once that session ended (the
+     * account signed in again), its retry writes nothing, and the new session's record stays. Fails if
+     * a pending let-go is retried as whoever's and takes the next session's location.
+     */
+    @Test func aPendingLetGoOfAnEndedSessionIsDroppedNotWritten() async throws {
+        let domains = self.domains
+        let account = CopyEpoch()
+        let old = TemporaryCopies.session(account)
+        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, observed: records.generation(Self.group), session: old).value
+        let held = open(records.lockPath, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        #expect(flock(held, LOCK_EX | LOCK_NB) == 0)
+        _ = domains.letGo(Self.group, owner: Self.maya, session: old)
+        TemporaryCopies.endAccount(account)
+        flock(held, LOCK_UN)
+        close(held)
+        #expect(!domains.revocationPending(Self.group))
+        #expect(records.admission(Self.group, owner: Self.maya) == .admitted, "an ended session's pending let-go took the record")
+        #expect(records.generation(Self.group) == 0)
+    }
+
+    /*
+     * An old process's let-go of the family reaches its queued removal after another account added
+     * the same family: that account's location stays. Fails if a removal doesn't ask whose the
+     * family's record is by then.
+     */
+    @Test func aQueuedRemovalLeavesAnotherAccountsLocation() async throws {
+        let old = FamilyFilesDomains(records: records, manager: manager)
+        let session = TemporaryCopies.session(CopyEpoch())
+        let (group, maya, sam, records, manager) = (Self.group, Self.maya, Self.sam, self.records, self.manager)
+        await old.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value
+        // Keep the old process's queue busy until Sam's account has added the family (as the app would after the switch).
+        let other = UUID().uuidString.lowercased()
+        manager.duringDomains = {
+            records.update { $0.records[group] = FamilyDomainRecord(owner: sam, name: "Lindqvist family") }
+            manager.put(FamilyFileIds.domain(group), name: "Lindqvist family")
+        }
+        let busy = old.accepted(other, name: "Holm family", owner: maya, observed: records.generation(other), session: session)
+        let removal = old.letGo(group, owner: maya)
+        await busy.value
+        await removal.value
+        #expect(manager.names[FamilyFileIds.domain(group)] != nil, "the old account's let-go removed Sam's location")
+        #expect(try records.read()[group]?.owner == sam)
+    }
+
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
     @Test func aRenamedFamilysLocationTakesTheNewName() async throws {
         let domains = self.domains
@@ -707,6 +752,27 @@ extension OnFakeDrive {
             #expect(await vault.item(s.family.photo.ref)?.node.currentVersion?.id == newer.currentVersion?.id, "the listing didn't learn the newer version")
             #expect(item.node.currentVersion?.id == started.id, "the bytes of one version were handed out under another's row")
             #expect(try Data(contentsOf: file) == s.family.photoBytes)
+        }
+
+        /*
+         * A sibling that doesn't open sits beside a healthy file that changed: the feed keeps the
+         * healthy file and deletes only the broken one. Fails if a listing's failure on any row is
+         * blamed on the node being looked at.
+         */
+        @Test func aBrokenSiblingIsNotBlamedOnAHealthyChangedFile() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            _ = try await s.source.folders()
+            let f = s.family
+            let brokenId = try newId(kind: .node, scopeId: f.workspaceId).id
+            let broken = try FamilyFixture.node(id: brokenId, in: f.workspaceId, parent: f.rootId, parentKey: f.rootKey, key: randomBytes(length: 32),
+                                                kind: .file, name: "Broken.txt", writer: f.creator, keyEpoch: 3)
+                .with(metadataEnvelope: base64urlEncode(bytes: try randomBytes(length: 80)))
+            s.server.put(broken)
+            let changes = try #require(try await s.source.changes(since: FamilyAnchor(folders: [f.workspaceId: .init(root: f.rootId, cursor: 0)])))
+            #expect(!changes.deleted.contains(FamilyFileIds.item(f.photo.ref)), "a healthy file was deleted for a broken sibling")
+            #expect(changes.updated.contains { $0.ref == f.photo.ref })
+            #expect(changes.deleted.contains(FamilyFileIds.item(NodeRef(workspaceId: f.workspaceId, nodeId: brokenId))))
         }
 
         /*
