@@ -1142,7 +1142,7 @@ class FilesSaveOrderTest {
         save(provider, notes, "next save")
         // Saves are numbered past the slot that went, so the next save is above the bound pressed on the earlier one.
         assertTrue(WriteBacks.pending(app, slot)!!.generation > pressed.generation)
-        WriteBacks.cancelThrough(app, slot, pressed)
+        WriteBacks.cancelThrough(app, slot, pressed, Reservations.generation)
         assertEquals("next save", WriteBacks.contentOf(app, slot).readText())
         assertFalse(WriteBacks.isCancelled(app, slot, WriteBacks.pending(app, slot)!!.generation))
     }
@@ -1902,5 +1902,61 @@ class FilesSaveOrderTest {
         assertTrue(TransferQueue.retry(app, row))
         assertEquals(ListenableWorker.Result.success(), runSlot(slot))
         assertEquals("saved on a full disk", serverText(notes))
+    }
+
+    /*
+     * #274 P2 (sign-out): another app closes a file it opened before the account signed out. Nothing of the account is
+     * written after the wipe: no save number, no edit, no slot, no row. Fails if numbering the close recreates the slot's
+     * numbers file (the old account's workspace and node ids) after the sign-out.
+     */
+    @Test
+    fun aCloseAfterSignOutWritesNothingOfTheAccount() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        val vault = vaultOf(provider)
+        val opened = vault.resolve(notes)
+        val edit = provider.personalEdit(vault, notes, "w").apply { writeText("written as the account left") }
+        AccountStore.of(app).wipe()
+        provider.onEditClosed(null, vault, edit, opened)
+        assertFalse("a close after sign-out wrote the file's numbers", File(app.filesDir, WriteBacks.NUMBERS).exists())
+        assertFalse(File(app.filesDir, WriteBacks.EDITS).exists())
+        assertFalse(WriteBacks.dir(app, slot).exists())
+        assertTrue(FailedTransfers.of(app).all().isEmpty())
+    }
+
+    /*
+     * #266 P2 (shared): a cancel's cleanup died after its bound, leaving the cancelled save's generation on disk, and then
+     * the slot's numbers file can't be read. Until the bounds are rebuilt nothing is pending and nothing is sent (the job
+     * tries again later), and the generation is kept; once a start rebuilds them, the old save is never published or
+     * sent. Fails if an unreadable numbers file reads as no bounds at all, republishing the cancelled save.
+     */
+    @Test
+    fun aSlotWhoseNumbersCantBeReadNeverRepublishesAnOldSave() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "cancelled save")
+        WriteBacks.fault = { if (it == "cancel") throw IllegalStateException("died after the bound") }
+        assertThrows(IllegalStateException::class.java) { WriteBacks.cancelThrough(app, slot, WriteBacks.publishedSave(app, slot), Reservations.generation) }
+        WriteBacks.fault = null
+        val numbers = File(app.filesDir, "${WriteBacks.NUMBERS}/$slot")
+        assertTrue(numbers.isFile)
+        numbers.writeText("not the numbers")
+        val left = { WriteBacks.dir(app, slot).listFiles().orEmpty().count { it.name.endsWith(".bin") } }
+        assertEquals("the cancelled generation should be on disk for this test", 1, left())
+        // Unreadable, and the disk refuses the rebuild: nothing pending, nothing sent, nothing tidied away.
+        WriteBacks.fault = { if (it == "numbers") throw java.io.IOException("No space left on device") }
+        assertNull("an unreadable slot republished its cancelled save", WriteBacks.pending(app, slot))
+        assertEquals(ListenableWorker.Result.retry(), runSlot(slot))
+        assertEquals(0, begins())
+        assertEquals(1, left())
+        WriteBacks.fault = null
+        // The next start rebuilds them: the old save stays passed.
+        TransferQueue.reconcileEdits(app, startup = true)
+        assertNull(WriteBacks.pending(app, slot))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals(0, begins())
+        assertEquals("original", serverText(notes))
     }
 }

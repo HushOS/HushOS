@@ -353,7 +353,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             // left the fresh row here, so a row taken before that is never served.
             val landing = WriteBacks.landing(context!!, slot)
             val item = if (landing == null) vault.resolve(id) else {
-                runCatching { currentVersion(vault, id) }.getOrNull()?.also { WriteBacks.caughtUp(context!!, slot, landing.id) } ?: run {
+                runCatching { currentVersion(vault, id) }.getOrNull()?.also { WriteBacks.caughtUp(context!!, slot, landing.id, vault.ledgerGeneration) } ?: run {
                     val landed = landing.version?.let { cacheFile(id, it) }?.takeIf { it.isFile }
                         ?: throw FileNotFoundException(com.hushos.app.data.GroupsApiError.NO_ANSWER)
                     return@guarded ParcelFileDescriptor.open(landed, ParcelFileDescriptor.MODE_READ_ONLY)
@@ -390,16 +390,21 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         val ctx = context!!
         val target = WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime, opened.node.parentId ?: vault.rootId, root = vault.rootId)
         val slot = WriteBacks.slotOf(target.workspaceId, target.nodeId)
-        // Its order among the file's saves (only read, never fails), then the edit marked as that save by one rename (no room
-        // needed): from here it goes only once kept, dismissed, or with the account.
-        val number = WriteBacks.reserve(ctx, slot)
-        val closed = WriteBacks.close(edit, number)
+        // Its order among the file's saves (never fails), then the edit marked as that save by one rename (no room needed):
+        // from here it goes only once kept, dismissed, or with the account. Both only while the account it was opened in is
+        // still here (under the wipe's lock): after a sign-out nothing of it is written, not even its number (a counter
+        // naming the account's file would outlive the account).
+        // The account left meanwhile: the edit goes (deleting writes nothing of it back).
+        val number = WriteBacks.reserve(ctx, slot, vault.ledgerGeneration) ?: run { WriteBacks.discardEdit(edit); return }
+        val closed = com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) { WriteBacks.close(edit, number) } ?: run { WriteBacks.discardEdit(edit); return }
         val kept = try {
             WriteBacks.stage(ctx, vault.ledgerGeneration, target, closed, number)
         } catch (failure: Exception) {
             android.util.Log.w("HushOSFiles", "a save couldn't be kept: ${failure.javaClass.name}")
             // A row to retry it, when one can be written; when not, the closed edit waits for the next reconcile.
             com.hushos.app.data.TransferQueue.stagingFailed(ctx, target, closed, failure, vault.ledgerGeneration, number)
+            // Its listing shows the kept edit's size and date (what a read returns) now.
+            WriteBacks.notifyFolder(ctx, target)
             return
         }
         // The account left meanwhile: nothing of it is kept.
