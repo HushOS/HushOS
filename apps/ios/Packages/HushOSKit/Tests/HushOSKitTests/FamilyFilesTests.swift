@@ -439,6 +439,12 @@ extension OnFakeDrive {
             var now = Date()
         }
 
+        /* The session the shared keychain holds, as every process reads it. */
+        final class Shared: @unchecked Sendable {
+            var session: SharedKeychain.Session?
+            init(_ session: SharedKeychain.Session?) { self.session = session }
+        }
+
         struct Source {
             let family: FamilyFixture
             let server: FamilyServer
@@ -449,6 +455,7 @@ extension OnFakeDrive {
             let clock: Clock
             let source: FamilyFilesSource
             let temporary: URL
+            let shared: Shared
             var owner: AccountOwner { AccountOwner(userId: family.member.userId, origin: "https://family.test") }
         }
 
@@ -467,8 +474,11 @@ extension OnFakeDrive {
                                    session: phone.vault.copySession).value
             let clock = Clock()
             let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("family-src-\(UUID().uuidString)", isDirectory: true)
-            let source = FamilyFilesSource(groupId: family.groupId, vault: phone.vault, sync: phone.sync, records: records, temporary: temporary, now: { clock.now })
-            return Source(family: family, server: server, phone: phone, domains: domains, manager: manager, records: records, clock: clock, source: source, temporary: temporary)
+            let shared = Shared(await phone.vault.session)
+            let source = FamilyFilesSource(groupId: family.groupId, vault: phone.vault, sync: phone.sync, records: records, temporary: temporary, now: { clock.now },
+                                           sharedSession: { shared.session })
+            return Source(family: family, server: server, phone: phone, domains: domains, manager: manager, records: records, clock: clock, source: source,
+                          temporary: temporary, shared: shared)
         }
 
         /*
@@ -773,6 +783,42 @@ extension OnFakeDrive {
             #expect(!changes.deleted.contains(FamilyFileIds.item(f.photo.ref)), "a healthy file was deleted for a broken sibling")
             #expect(changes.updated.contains { $0.ref == f.photo.ref })
             #expect(changes.deleted.contains(FamilyFileIds.item(NodeRef(workspaceId: f.workspaceId, nodeId: brokenId))))
+        }
+
+        /*
+         * The app signs out (or in again) while a read in the extension waits: the final check reads
+         * the shared session, refuses, and leaves no copy. Fails if the extension trusts only its own
+         * process's view of the session.
+         */
+        @Test func aSessionChangedByAnotherProcessIsRefusedAtTheFinalCheck() async throws {
+            for next in [nil, SharedKeychain.Session(origin: "https://family.test", token: "new", userId: UUID().uuidString)] as [SharedKeychain.Session?] {
+                let s = try await Self.source()
+                defer { s.phone.done() }
+                _ = try await s.source.children(of: NodeRef(workspaceId: s.family.workspaceId, nodeId: s.family.rootId))
+                let shared = s.shared
+                await s.source.setLastAwait { shared.session = next }
+                await #expect(throws: FamilyFilesError.otherAccount) { _ = try await s.source.download(s.family.photo.ref) }
+                let copies = s.temporary.appendingPathComponent("opened/family/\(s.family.workspaceId)")
+                #expect(!FileManager.default.fileExists(atPath: copies.path), "a copy outlived the session another process ended")
+                #expect(!s.phone.vault.copySession.stands, "the extension's session wasn't ended")
+            }
+        }
+
+        /*
+         * The server's cursors move after the folders were checked: the anchor Files gets is the one
+         * read with the folders it was shown, so a change in between is still reported. Fails if an
+         * anchor's cursors are read later than its folders.
+         */
+        @Test func anAnchorUsesTheCursorsReadWithTheFolders() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            _ = try await s.source.folders()
+            s.server.lock.withLock { s.server.areaChangeSeq = 7 }
+            let anchor = try await s.source.anchor()
+            #expect(anchor.folders[s.family.workspaceId]?.cursor == 2, "the anchor sat past changes the folders shown don't hold")
+            // A folder new to Files is anchored the same way.
+            let fresh = try #require(try await s.source.changes(since: FamilyAnchor()))
+            #expect(fresh.next.folders[s.family.workspaceId]?.cursor == 2)
         }
 
         /*

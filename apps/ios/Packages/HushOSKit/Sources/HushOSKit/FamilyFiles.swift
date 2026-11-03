@@ -516,6 +516,11 @@ public actor FamilyFilesSource {
     let domains: FamilyFilesDomains?
     let owner: AccountOwner
     let now: @Sendable () -> Date
+    /* The session this source serves, and the one stored for every process now (the shared keychain's): two that differ refuse. */
+    let session: SharedKeychain.Session
+    let sharedSession: @Sendable () -> SharedKeychain.Session?
+    /* Each folder's feed cursor as read just before the folders held were checked: the anchors Files gets match what it was shown. */
+    private var snapshotHeads: [String: Int] = [:]
     /* This process's temporary folder: its `opened/family/<workspace>` holds the family's decrypted copies. */
     let temporary: URL
     private var view: FamilyView?
@@ -526,8 +531,11 @@ public actor FamilyFilesSource {
     static let fresh: TimeInterval = 60
 
     public init(groupId: String, vault: Vault, sync: FamilySync, records: FamilyDomainRecords = .shared, domains: FamilyFilesDomains? = nil,
-                temporary: URL = FileManager.default.temporaryDirectory, now: @escaping @Sendable () -> Date = { Date() }) {
+                temporary: URL = FileManager.default.temporaryDirectory, now: @escaping @Sendable () -> Date = { Date() },
+                sharedSession: @escaping @Sendable () -> SharedKeychain.Session? = { SharedKeychain.session }) {
         self.groupId = groupId.lowercased()
+        session = vault.session
+        self.sharedSession = sharedSession
         self.vault = vault
         self.sync = sync
         self.records = records
@@ -547,6 +555,14 @@ public actor FamilyFilesSource {
         // The session this source serves ended (signed out, another account): nothing of it is answered.
         guard vault.copySession.stands else {
             view = nil
+            throw FamilyFilesError.otherAccount
+        }
+        // Another process signed out or in meanwhile (the app): this process's view of the session lags, the keychain doesn't.
+        // The session ends here, and every copy made for it goes.
+        guard sharedSession() == session else {
+            view = nil
+            TemporaryCopies.endAccount(vault.copySession.account)
+            dropCopies()
             throw FamilyFilesError.otherAccount
         }
         // A let-go this process found but couldn't write: the record on disk still stands, the family doesn't.
@@ -651,10 +667,13 @@ public actor FamilyFilesSource {
             if let view { return view }
             throw FamilyFilesError.unavailable
         }
+        // The cursors first, then the folders: an anchor from them never sits past a change the folders don't show.
+        let heads = try? await heads()
         let revised = await sync.syncRevised(summary)
         switch revised.state {
         case .accepted(let accepted):
             view = accepted
+            snapshotHeads = heads ?? [:]
             known.formUnion(accepted.areas.map { $0.workspaceId.lowercased() })
             checkedAt = now()
             return accepted
@@ -757,12 +776,12 @@ public actor FamilyFilesSource {
     /* Where each folder's feed stands now (route 25's change sequences), for a new anchor. */
     public func anchor() async throws -> FamilyAnchor {
         try await serving {
+            // The folders Files is shown, with the cursors read with them (none read: from the start, which only repeats).
             let folders = try await openFolders()
-            let heads = try await heads()
             var anchor = FamilyAnchor()
             for area in folders {
                 guard let root = area.root else { continue }
-                anchor.folders[area.workspaceId.lowercased()] = .init(root: root.id.lowercased(), cursor: heads[area.workspaceId.lowercased()] ?? 0)
+                anchor.folders[area.workspaceId.lowercased()] = .init(root: root.id.lowercased(), cursor: snapshotHeads[area.workspaceId.lowercased()] ?? 0)
             }
             return anchor
         }
@@ -795,15 +814,14 @@ public actor FamilyFilesSource {
         for (workspace, folder) in anchor.folders where !open.contains(workspace) {
             deleted.append(FamilyFileIds.item(NodeRef(workspaceId: workspace, nodeId: folder.root)))
         }
-        var heads: [String: Int]?
         for area in folders {
             guard let root = area.root else { continue }
             let workspace = area.workspaceId.lowercased()
             guard let held = anchor.folders[workspace], held.root == root.id.lowercased() else {
-                if heads == nil { heads = try await self.heads() }
                 if let held = anchor.folders[workspace] { deleted.append(FamilyFileIds.item(NodeRef(workspaceId: workspace, nodeId: held.root))) }
                 added.append(area)
-                next.folders[workspace] = .init(root: root.id.lowercased(), cursor: heads?[workspace] ?? 0)
+                // The cursor read with the folders this item comes from, so nothing between the two is skipped.
+                next.folders[workspace] = .init(root: root.id.lowercased(), cursor: snapshotHeads[workspace] ?? 0)
                 continue
             }
             let feed: Vault.Changes?

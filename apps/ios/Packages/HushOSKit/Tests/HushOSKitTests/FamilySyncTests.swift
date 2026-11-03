@@ -1238,6 +1238,8 @@ final class FamilyServer: @unchecked Sendable {
     var malformedGrant = false
     /* The family folder's key version and the member's grant at it, as route 25 serves them. */
     var areaVersion: UInt64 = 1
+    /* Route 25's change sequence for the family folder (its feed's head). */
+    var areaChangeSeq = 2
     var areaGrant: (rosterVersion: UInt64, rosterDigest: String, envelope: Data)
     /* Every node either drive holds, by id: listings, route 25's top folder and every write go through it. */
     var tree: [String: NodeView] = [:]
@@ -1508,7 +1510,7 @@ final class FamilyServer: @unchecked Sendable {
                 (200, ["spaces": [
                     ["space": ["kind": "personal"], "areas": [["workspaceId": f.personal, "workspaceKeyVersion": 1, "changeSeq": 0, "root": NSNull(), "rotation": NSNull()]]],
                     ["space": ["kind": "group", "groupId": f.groupId, "name": "Lindqvist family"], "areas": !areaListed ? [] : [[
-                        "workspaceId": f.workspaceId, "idSeed": f.workspaceSeed, "workspaceKeyVersion": areaVersion, "changeSeq": 2,
+                        "workspaceId": f.workspaceId, "idSeed": f.workspaceSeed, "workspaceKeyVersion": areaVersion, "changeSeq": areaChangeSeq,
                         "root": tree[servedRootId ?? f.rootId].map(json) ?? NSNull(), "rotation": rotationJSON(),
                         "grant": ["workspaceKeyVersion": areaVersion, "granteeKeyVersion": f.member.keys.keyVersion, "granterUserId": f.creator.userId,
                                   "rosterVersion": areaGrant.rosterVersion, "rosterDigest": areaGrant.rosterDigest,

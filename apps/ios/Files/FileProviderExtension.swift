@@ -68,7 +68,10 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
     func requireFamily() throws -> FamilyFilesSource {
         guard let family, let familyGate else { throw NSFileProviderError(.noSuchItem) }
         switch FamilyDomainRecords.shared.admission(family, owner: SharedKeychain.session.map(AccountOwner.init)) {
-        case .letGo: throw FamilyFilesError.letGo
+        case .letGo:
+            // Let go of (by a process that couldn't reach this one's copies): what this process decrypted of it goes first.
+            FamilyFilesDomains.shared.sweepUnrecorded()
+            throw FamilyFilesError.letGo
         case .unreadable: throw GuardError.unreadable
         case .admitted, .otherAccount: break
         }
