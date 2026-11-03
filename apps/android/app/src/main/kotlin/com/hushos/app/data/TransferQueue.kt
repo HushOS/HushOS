@@ -315,6 +315,18 @@ object TransferQueue {
             UPLOAD -> if (failed.stage != null) {
                 val target = failed.stage.let(WriteBacks::decodeTarget) ?: return false
                 val edit = failed.file?.let(::File) ?: return false
+                // Kept with the number its app closed it under: no newer than what the slot holds or landed, it is never kept
+                // (Superseded) and its row and edit go, so an older save can't replace a newer one.
+                val number = WriteBacks.stagedNumber(failed.stage) ?: return false
+                var superseded = false
+                fun stage(): WriteBacks.Pending? = try {
+                    WriteBacks.stage(context, Reservations.generation, target, edit, number)
+                } catch (_: WriteBacks.Superseded) {
+                    superseded = true
+                    null
+                } catch (_: Exception) {
+                    null
+                }
                 val kept = if (target.familyWorkspace != null) {
                     // A family's edit: kept only under the copies lock a revocation's cleanup takes, while the folder hasn't
                     // been let go of since the row was made (its revocation count, as a family save checks it; a count lower
@@ -327,7 +339,7 @@ object TransferQueue {
                         val now = state.epochs[target.familyWorkspace.lowercase()]?.first ?: 0L
                         revoked = state.closed || !edit.isFile || now > (WriteBacks.stagedEpoch(failed.stage) ?: 0L)
                         if (revoked) { edit.delete(); null }
-                        else runCatching { WriteBacks.save(context, Reservations.generation, target, edit) }.getOrNull()
+                        else stage()
                     }
                     if (revoked) {
                         records.record(failed.copy(reason = FamilyWords.NOT_IN_FAMILY, stage = null))
@@ -335,7 +347,13 @@ object TransferQueue {
                         return false
                     }
                     saved
-                } else edit.takeIf { it.isFile }?.let { runCatching { WriteBacks.save(context, Reservations.generation, target, it) }.getOrNull() }
+                } else if (edit.isFile) stage() else null
+                if (superseded) {
+                    edit.delete()
+                    records.forget(failed.id)
+                    FailedTransfers.changed()
+                    return false
+                }
                 kept ?: return false
                 enqueueSlot(context, kept.slot, target.name, target.family)
                 WriteBacks.notifyFolder(context, target)
@@ -540,13 +558,14 @@ object TransferQueue {
      * is, the only copy of what the app believes it saved, and a row says so, whose Retry keeps it in the slot and sends it.
      * Only while the account it was made under is still here. Whether the row was made (else the edit can go).
      */
-    fun stagingFailed(context: Context, target: WriteBacks.Target, edit: File, error: Exception, accountGeneration: Long, familyEpoch: Long? = null): Boolean =
+    fun stagingFailed(context: Context, target: WriteBacks.Target, edit: File, error: Exception, accountGeneration: Long, number: Long,
+                      familyEpoch: Long? = null): Boolean =
         Reservations.whileAccount(accountGeneration) {
             if (!edit.isFile) return@whileAccount false
             FailedTransfers.of(context).record(FailedTransfer(UUID.randomUUID().toString(), UPLOAD, target.name, Problems.say(error, "The transfer failed."),
                 System.currentTimeMillis(), file = edit.path, mime = target.mime, folder = target.folder, replacing = target.nodeId,
                 family = target.family, familyWorkspace = target.familyWorkspace, slot = WriteBacks.slotOf(target.workspaceId, target.nodeId),
-                stage = WriteBacks.encodeTarget(target, familyEpoch)))
+                stage = WriteBacks.encodeTarget(target, familyEpoch, number)))
             FailedTransfers.changed()
             true
         } == true
@@ -748,8 +767,15 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             // family's copies are its folder's to make), and a read serves those until it caught up (WriteBacks.landing).
             fun landed(version: String? = null): Boolean = forItsAccount(generation) {
                 val readCopy = if (target.family == null && version != null) java.io.File(applicationContext.cacheDir, "files/${target.nodeId}/$version") else null
-                val left = WriteBacks.landed(applicationContext, slot, pending.id, version, readCopy)
-                val obsolete = FailedTransfers.of(applicationContext).all().filter { it.slot == slot && WriteBacks.idOf(it.file) != left?.id }.map { it.id }.toSet()
+                val left = WriteBacks.landed(applicationContext, slot, pending.id, version, readCopy, pending.generation)
+                // Obsolete: a failed save's row that isn't the one still pending, and a save never kept in the slot (its edit
+                // kept for a Retry) numbered at or below the one that landed, whose edit goes too.
+                val rows = FailedTransfers.of(applicationContext).all().filter { it.slot == slot }
+                val stale = rows.filter { row ->
+                    if (row.stage != null) (WriteBacks.stagedNumber(row.stage) ?: 0L) <= pending.generation else WriteBacks.idOf(row.file) != left?.id
+                }
+                stale.filter { it.stage != null }.forEach { row -> row.file?.let { java.io.File(it).delete() } }
+                val obsolete = stale.map { it.id }.toSet()
                 FailedTransfers.of(applicationContext).forgetWhere { it.id in obsolete }
                 // Their failures still waiting to be summed up go too: a file that uploaded is never said not to have.
                 TransferNotices.retire(applicationContext, obsolete)
@@ -782,8 +808,12 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                             waiting = { setProgressAsync(workDataOf("fraction" to 0f)) }, progress = progress, waitKey = this@UploadWorker.id.toString())
                     }
                 }
+                // Its completion landed, whatever the end says (stopped by a cancel mid-completion, a step after it failing):
+                // landed, its bookkeeping run, never discarded as stopped (its version unknown then: reads ask the server).
+                val landedAnyway = end !is JobEnd.Done && runCatching { Reservations.landed(applicationContext, ledger) }.getOrDefault(false)
                 // A landing keeps it (as the read copy) or deletes it with the slot (WriteBacks.landed).
-                if (end !is JobEnd.Done && !(end is JobEnd.Failed && end.error is Reservations.Landed)) sending.delete()
+                if (end !is JobEnd.Done && !landedAnyway && !(end is JobEnd.Failed && end.error is Reservations.Landed)) sending.delete()
+                if (landedAnyway) return@withContext if (!landed()) Result.success() else null
                 when (end) {
                     is JobEnd.Done -> if (!landed(end.value.node.currentVersion?.id)) Result.success() else null
                     // Its save cancelled while it went up: nothing landed; whatever the slot holds now is next.

@@ -69,7 +69,7 @@ class AccountStore(private val files: File, private val cache: File, private val
          * awaiting a notification, and the upload reservations ledger: another account's session can't settle them (a
          * workspace's 404 would read as released), so they go with the account, and the server's expiry releases them.
          */
-        private val ACCOUNT_FILES = listOf("offline", "queue", "files-parents.json", FailedTransfers.FILE, TransferNotices.OUTCOMES, ShareSeals.FILE, PendingRotations.FILE, LandedJobs.DIR, WriteBacks.LANDINGS, JobNames.FILE, JobNames.STAGED, Reservations.FILE, Reservations.NEXT)
+        private val ACCOUNT_FILES = listOf("offline", "queue", "files-parents.json", FailedTransfers.FILE, TransferNotices.OUTCOMES, ShareSeals.FILE, PendingRotations.FILE, LandedJobs.DIR, WriteBacks.LANDINGS, WriteBacks.NUMBERS, JobNames.FILE, JobNames.STAGED, Reservations.FILE, Reservations.NEXT)
 
         fun of(context: Context): AccountStore = AccountStore(context.filesDir, context.cacheDir, context.noBackupFilesDir) {
             // Jobs queued for that account would run under the next one's session.

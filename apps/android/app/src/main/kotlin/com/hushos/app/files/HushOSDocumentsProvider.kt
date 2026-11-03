@@ -345,7 +345,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             // A save of it still pending (waiting, retrying, failed) is what another app last wrote: read that, never the
             // server's older version, which an app that reads then truncates would write the save away with.
             val pending = File(context!!.cacheDir, "files/$id/pending-${java.util.UUID.randomUUID()}")
-            if (WriteBacks.copyTo(context!!, slot, pending)) return@guarded ParcelFileDescriptor.open(pending, ParcelFileDescriptor.MODE_READ_ONLY).also { pending.delete() }
+            if (WriteBacks.copyNewestTo(context!!, slot, pending)) return@guarded ParcelFileDescriptor.open(pending, ParcelFileDescriptor.MODE_READ_ONLY).also { pending.delete() }
             // A save of it landed from its job's own vault since: this vault may still hold the version before. The version is
             // checked with the server first; without an answer, the landed bytes are read (kept as that version's read copy),
             // or nothing is: never the version before, which an app that reads then saves would write over the landed save.
@@ -381,15 +381,17 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         // A save that couldn't be kept leaves its edit (the only copy of what the app believes it saved) and a row to retry
         // it; one the sign-out overtook keeps nothing.
         var keep = false
+        // Its order among the file's saves, given now, before anything is kept: a Retry of it keeps that order.
+        val number = WriteBacks.reserve(context!!, WriteBacks.slotOf(target.workspaceId, target.nodeId))
         try {
-            if (WriteBacks.save(context!!, vault.ledgerGeneration, target, edit) != null) {
+            if (WriteBacks.stage(context!!, vault.ledgerGeneration, target, edit, number) != null) {
                 com.hushos.app.data.TransferQueue.enqueueSlot(context!!, WriteBacks.slotOf(target.workspaceId, target.nodeId), opened.name)
                 // Its listing shows the save's size and date now: Files reads the folder again.
                 WriteBacks.notifyFolder(context!!, target)
             }
         } catch (failure: Exception) {
             android.util.Log.w("HushOSFiles", "a save couldn't be kept: ${failure.javaClass.name}")
-            keep = com.hushos.app.data.TransferQueue.stagingFailed(context!!, target, edit, failure, vault.ledgerGeneration)
+            keep = com.hushos.app.data.TransferQueue.stagingFailed(context!!, target, edit, failure, vault.ledgerGeneration, number)
         } finally {
             if (!keep) edit.delete()
         }
@@ -405,7 +407,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     internal fun personalEdit(vault: Vault, id: String, mode: String): File {
         val edit = File(context!!.cacheDir, "edits/$id/${java.util.UUID.randomUUID()}").also { it.parentFile?.mkdirs() }
         if (WriteModes.keepsContents(mode)) {
-            if (WriteBacks.copyTo(context!!, WriteBacks.slotOf(vault.resolve(id).node.workspaceId, id), edit)) return edit
+            if (WriteBacks.copyNewestTo(context!!, WriteBacks.slotOf(vault.resolve(id).node.workspaceId, id), edit)) return edit
             val item = currentVersion(vault, id)
             val file = cacheFile(id, item.node.currentVersion?.id)
             if (!file.exists()) vault.download(id, file)

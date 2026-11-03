@@ -71,6 +71,7 @@ class FilesSaveOrderTest {
     fun close() {
         WriteBacks.afterContent = null
         WriteBacks.beforeSlotId = null
+        WriteBacks.fault = null
         TransferQueue.beforeSlotFails = null
         TransferQueue.afterCancelCleans = null
         TransferQueue.beforeSweepRemoves = null
@@ -1121,8 +1122,8 @@ class FilesSaveOrderTest {
 
     /*
      * Cancel pressed for a save that then lands before the cancel's cleanup runs, and the other app saves the file again
-     * (the slot made afresh, its saves counted from one again): the late cleanup takes nothing of the new slot. Fails if a
-     * cancel's bound, read on an earlier slot of the file, is applied to the slot that replaced it.
+     * (the slot made afresh): the late cleanup takes nothing of the new slot. Fails if a cancel's bound, read on an earlier
+     * slot of the file, takes a save of the slot that replaced it.
      */
     @Test
     fun aCancelPressedOnAnEarlierSlotTakesNothingOfTheNext() {
@@ -1134,7 +1135,8 @@ class FilesSaveOrderTest {
         assertEquals(ListenableWorker.Result.success(), runSlot(slot))
         assertFalse(WriteBacks.dir(app, slot).exists())
         save(provider, notes, "next save")
-        assertEquals(pressed.generation, WriteBacks.pending(app, slot)!!.generation)
+        // Saves are numbered past the slot that went, so the next save is above the bound pressed on the earlier one.
+        assertTrue(WriteBacks.pending(app, slot)!!.generation > pressed.generation)
         WriteBacks.cancelThrough(app, slot, pressed)
         assertEquals("next save", WriteBacks.contentOf(app, slot).readText())
         assertFalse(WriteBacks.isCancelled(app, slot, WriteBacks.pending(app, slot)!!.generation))
@@ -1235,6 +1237,109 @@ class FilesSaveOrderTest {
         assertTrue(FailedTransfers.of(app).all().isEmpty())
         assertEquals(ListenableWorker.Result.success(), runSlot(slot))
         assertEquals("save the disk refused", serverText(notes))
+    }
+
+    /*
+     * A save that fails at each step of being kept in its slot (copying the edit, syncing it, writing its description,
+     * publishing the record): its edit, or a generation the slot publishes, always survives, and the save lands in the end.
+     * A failure to delete the edit after the save was kept leaves the save kept. Fails if any step can lose the edit
+     * before the save is recoverable.
+     */
+    @Test
+    fun aSaveFailingAtAnyStepOfBeingKeptIsNeverLost() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        for (step in listOf("copy", "fsync", "json", "record")) {
+            val text = "save that failed at $step"
+            WriteBacks.fault = { at -> if (at == step) { WriteBacks.fault = null; throw java.io.IOException("No space left on device") } }
+            save(provider, notes, text)
+            val row = FailedTransfers.of(app).all().single()
+            assertEquals("the edit was lost at $step", text, File(row.file!!).readText())
+            TransferQueue.retry(app, row)
+            assertEquals("not kept after $step", text, WriteBacks.contentOf(app, slot).readText())
+            assertTrue(FailedTransfers.of(app).all().isEmpty())
+            assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+            assertEquals(text, serverText(notes))
+        }
+        WriteBacks.fault = { at -> if (at == "delete") { WriteBacks.fault = null; throw java.io.IOException("The edit couldn't be deleted") } }
+        save(provider, notes, "kept, its edit not deleted")
+        assertTrue(FailedTransfers.of(app).all().isEmpty())
+        assertEquals("kept, its edit not deleted", WriteBacks.contentOf(app, slot).readText())
+    }
+
+    /*
+     * A save couldn't be kept in its slot (its edit kept for a Retry); the other app then opens the file to read, and to
+     * append: both start from that edit, the newest contents it saved, not the server's older version. Fails if an open
+     * that keeps the contents skips an edit whose save couldn't be kept.
+     */
+    @Test
+    fun anOpenAfterASaveCouldntBeKeptStartsFromIt() {
+        val provider = provider()
+        val notes = notes(provider)
+        WriteBacks.fault = { at -> if (at == "json") { WriteBacks.fault = null; throw java.io.IOException("No space left on device") } }
+        save(provider, notes, "kept for a retry")
+        assertEquals("kept for a retry", opened(provider, notes, "r"))
+        assertEquals("kept for a retry", opened(provider, notes, "rw"))
+    }
+
+    /*
+     * A save couldn't be kept in its slot; a newer save of the file is then kept, and the older one's Retry is pressed:
+     * nothing older is kept over it (its row and edit go), and the newer lands. When the newer lands first, the older
+     * row goes with that landing. Fails if a Retry of an older save can replace a newer one.
+     */
+    @Test
+    fun aRetryOfAnOlderSaveNeverReplacesANewerOne() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.fault = { at -> if (at == "copy") { WriteBacks.fault = null; throw java.io.IOException("No space left on device") } }
+        save(provider, notes, "older save")
+        val older = FailedTransfers.of(app).all().single()
+        save(provider, notes, "newer save")
+        assertFalse(TransferQueue.retry(app, older))
+        assertEquals("newer save", WriteBacks.contentOf(app, slot).readText())
+        assertTrue(FailedTransfers.of(app).all().isEmpty())
+        assertFalse(File(older.file!!).exists())
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("newer save", serverText(notes))
+        // The same, the newer landing first: its landing retires the older row.
+        WriteBacks.fault = { at -> if (at == "copy") { WriteBacks.fault = null; throw java.io.IOException("No space left on device") } }
+        save(provider, notes, "older again")
+        val again = FailedTransfers.of(app).all().single()
+        save(provider, notes, "newer again")
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertTrue("an older save's row outlived a newer landing", FailedTransfers.of(app).all().isEmpty())
+        assertFalse(TransferQueue.retry(app, again))
+        assertEquals("newer again", serverText(notes))
+    }
+
+    /*
+     * Cancel pressed while a save's completion is in flight, and the rename after the completion fails: the upload landed
+     * though the job ends stopped. Its landing is still recorded and its reservation settled. Fails if a stopped end is
+     * taken over a landed one.
+     */
+    @Test
+    fun aLandingAJobStoppedDuringIsNeverDiscarded() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "landed save")
+        val job = jobs(slot).single()
+        server.beforeAnswer = { method, path ->
+            if (method == "POST" && path.endsWith("/complete")) {
+                server.beforeAnswer = null
+                TransferQueue.cancel(app, job.id, job.tags.first { it.startsWith("file:") }.removePrefix("file:")).get(5, TimeUnit.SECONDS)
+                server.extraRoutes = { m, segments, _, _ ->
+                    if (m != "GET" && segments.size == 4 && segments[1] == "nodes" && segments[3] == "metadata") 500 to JSONObject().put("message", "The connection dropped") else null
+                }
+            }
+        }
+        runSlot(slot)
+        server.extraRoutes = null
+        assertNotNull("the landing wasn't recorded", WriteBacks.landing(app, slot))
+        assertTrue(Reservations.all(app).none { WriteBacks.ledgerOf(slot, it.job) })
+        assertEquals("landed save", serverText(notes))
     }
 
     /*

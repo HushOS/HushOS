@@ -123,10 +123,13 @@ object WriteBacks {
     @Volatile internal var beforeSlotId: (() -> Unit)? = null
 
     /* A save's file as a failed row keeps it (FailedTransfer.stage), and back. */
-    fun encodeTarget(t: Target, familyEpoch: Long? = null): String = JSONObject().put("workspaceId", t.workspaceId).put("nodeId", t.nodeId).put("name", t.name)
+    fun encodeTarget(t: Target, familyEpoch: Long? = null, number: Long? = null): String = JSONObject().put("number", number ?: JSONObject.NULL).put("workspaceId", t.workspaceId).put("nodeId", t.nodeId).put("name", t.name)
         .put("mime", t.mime ?: JSONObject.NULL).put("folder", t.folder).put("family", t.family ?: JSONObject.NULL)
         .put("familyWorkspace", t.familyWorkspace ?: JSONObject.NULL).put("root", t.root ?: JSONObject.NULL)
         .put("familyEpoch", familyEpoch ?: JSONObject.NULL).toString()
+
+    /* The save number a staging row's save was given as its app closed the file. */
+    fun stagedNumber(json: String): Long? = runCatching { JSONObject(json).opt("number") as? Number }.getOrNull()?.toLong()
 
     /* The family folder's revocation count a staging row was made under (null for this account's own drive). */
     fun stagedEpoch(json: String): Long? = runCatching { JSONObject(json).opt("familyEpoch") as? Number }.getOrNull()?.toLong()
@@ -146,35 +149,117 @@ object WriteBacks {
      * names is still the one on the phone (Reservations.whileAccount: an account wipe moves it, so a save racing a sign-out
      * writes nothing back). Null when the account left.
      */
-    fun save(context: Context, accountGeneration: Long, target: Target, edit: File): Pending? = Reservations.whileAccount(accountGeneration) {
+    fun save(context: Context, accountGeneration: Long, target: Target, edit: File): Pending? =
+        stage(context, accountGeneration, target, edit, reserve(context, slotOf(target.workspaceId, target.nodeId)))
+
+    /* A save older than what its file's slot already holds or landed: never kept (a newer one stands). */
+    class Superseded : Exception("A newer save of this file stands.")
+
+    /* Tests: runs at each step of keeping a save ("copy", "fsync", "json", "record", "delete"), to fail it there. */
+    @Volatile internal var fault: ((String) -> Unit)? = null
+
+    /*
+     * `edit`'s bytes become the slot's save numbered `number` (its order, given as the app closed the file: `reserve`):
+     * copied into a generation of its own and synced, its description written and synced, then published by the record's
+     * rename, under the slot's lock and only while the account `accountGeneration` names is still the one on the phone
+     * (Reservations.whileAccount: a save racing a sign-out writes nothing back). The edit is deleted only after all that,
+     * so a failure at any step leaves it whole for the caller to keep (and the earlier save pending as it was). A number
+     * no newer than the slot's newest save, landed or pending, keeps nothing (Superseded). Null when the account left.
+     */
+    fun stage(context: Context, accountGeneration: Long, target: Target, edit: File, number: Long): Pending? = Reservations.whileAccount(accountGeneration) {
         val slot = slotOf(target.workspaceId, target.nodeId)
         lockOf(slot).withLock {
             val dir = dir(context, slot).also { it.mkdirs() }
-            // The slot's own id for as long as it exists (its generations count from one again once it is gone): what tells a
-            // cancel pressed on an earlier slot of the file from this one.
+            // The slot's own id for as long as it exists: what tells a cancel pressed on an earlier slot of the file from this one.
             File(dir, INCARNATION).takeIf { !it.isFile }?.let { file ->
                 beforeSlotId?.invoke()
                 val incoming = File(dir, "$INCARNATION.incoming").apply { writeText(java.util.UUID.randomUUID().toString()) }
                 check(incoming.renameTo(file)) { "The save couldn't be kept." }
             }
-            // Above every generation the slot holds (a cancelled record's newer saves included) and every one a cancel took,
-            // so it is the newest and never taken for a cancelled one.
-            val generation = maxOf(current(dir, slot)?.generation ?: 0L, cancelledThrough(dir),
-                dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty().mapNotNull { read(it, slot)?.generation }.maxOrNull() ?: 0L) + 1
+            if (number <= maxOf(current(dir, slot)?.generation ?: 0L, readNumbers(context, slot).landed, cancelledThrough(dir))) throw Superseded()
             val id = java.util.UUID.randomUUID().toString()
             val contents = File(dir, "$id$BIN.incoming")
-            if (!edit.renameTo(contents)) edit.copyTo(contents, overwrite = true)
+            fault?.invoke("copy")
+            java.io.FileOutputStream(contents).use { out ->
+                edit.inputStream().use { it.copyTo(out) }
+                fault?.invoke("fsync")
+                out.fd.sync()
+            }
             check(contents.renameTo(File(dir, id + BIN))) { "The save couldn't be kept." }
-            val description = JSONObject().put("generation", generation).put("id", id).put("workspaceId", target.workspaceId).put("nodeId", target.nodeId)
+            val description = JSONObject().put("generation", number).put("id", id).put("workspaceId", target.workspaceId).put("nodeId", target.nodeId)
                 .put("name", target.name).put("mime", target.mime ?: JSONObject.NULL).put("folder", target.folder)
                 .put("family", target.family ?: JSONObject.NULL).put("familyWorkspace", target.familyWorkspace ?: JSONObject.NULL)
                 .put("root", target.root ?: JSONObject.NULL)
-            val written = File(dir, "$id$META.incoming").apply { writeText(description.toString()) }
+            fault?.invoke("json")
+            val written = File(dir, "$id$META.incoming")
+            java.io.FileOutputStream(written).use { out -> out.write(description.toString().toByteArray()); out.fd.sync() }
             check(written.renameTo(File(dir, id + META))) { "The save couldn't be kept." }
             afterContent?.invoke()
+            fault?.invoke("record")
             publish(dir, id)
             current(dir, slot)
-            Pending(slot, generation, id, target)
+            // Kept: only now does the edit go (a failure to delete it leaves a stray copy, never a lost save).
+            runCatching { fault?.invoke("delete"); edit.delete() }
+            Pending(slot, number, id, target)
+        }
+    }
+
+    const val NUMBERS = "writeback-numbers"
+
+    /* Per slot, kept past the slot itself (an account file a sign-out wipes): the last number given and the newest landed. */
+    private data class Numbers(val reserved: Long, val landed: Long)
+
+    private val reservedHere = ConcurrentHashMap<String, Long>()
+
+    private fun numbersFile(context: Context, slot: String) = File(context.filesDir, "$NUMBERS/$slot")
+
+    private fun readNumbers(context: Context, slot: String): Numbers = runCatching {
+        val parts = numbersFile(context, slot).readText().trim().split(" ")
+        Numbers(parts[0].toLong(), parts[1].toLong())
+    }.getOrDefault(Numbers(0L, 0L))
+
+    private fun writeNumbers(context: Context, slot: String, numbers: Numbers) {
+        val file = numbersFile(context, slot).also { it.parentFile?.mkdirs() }
+        val incoming = File(file.parentFile, "$slot.incoming").apply { writeText("${numbers.reserved} ${numbers.landed}") }
+        check(incoming.renameTo(file)) { "The save's number couldn't be kept." }
+    }
+
+    /*
+     * A save's order, given as the app closes the file and before anything is kept: above every number the file's saves
+     * had, pending, landed or given before (kept on disk past the slot, and in memory, so a disk that refuses the write
+     * still gives an increasing number). Never fails.
+     */
+    fun reserve(context: Context, slot: String): Long = lockOf(slot).withLock {
+        val held = readNumbers(context, slot)
+        val dir = dir(context, slot)
+        val onDisk = maxOf(held.reserved, held.landed, current(dir, slot)?.generation ?: 0L, cancelledThrough(dir),
+            dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty().mapNotNull { read(it, slot)?.generation }.maxOrNull() ?: 0L)
+        val number = maxOf(onDisk, reservedHere[slot] ?: 0L) + 1
+        reservedHere[slot] = number
+        runCatching { writeNumbers(context, slot, held.copy(reserved = number)) }
+        number
+    }
+
+    /*
+     * The newest contents another app kept of the file, by save number: its pending save, or an edit whose save couldn't be
+     * kept in the slot (a failed row holds it). What every open that keeps the contents starts from, and what a read gets.
+     * A copy in `dest`; false when there is neither.
+     */
+    fun copyNewestTo(context: Context, slot: String, dest: File): Boolean {
+        val staged = FailedTransfers.of(context).all().filter { it.slot == slot && it.stage != null }
+            .mapNotNull { row -> stagedNumber(row.stage!!)?.let { it to File(row.file ?: return@mapNotNull null) } }
+            .filter { it.second.isFile }.maxByOrNull { it.first }
+        return lockOf(slot).withLock {
+            val dir = dir(context, slot)
+            val pending = current(dir, slot)
+            val source = when {
+                staged != null && (pending == null || staged.first > pending.generation) -> staged.second
+                pending != null -> File(dir, pending.id + BIN)
+                else -> return@withLock false
+            }
+            dest.parentFile?.mkdirs()
+            source.copyTo(dest, overwrite = true)
+            true
         }
     }
 
@@ -210,8 +295,10 @@ object WriteBacks {
      * by id, so a save made after the slot emptied (its generation counting from one again) is never taken for it. Under
      * the slot's lock, inside the account's (the caller's forItsAccount). The save still pending after, if any.
      */
-    fun landed(context: Context, slot: String, id: String, version: String? = null, readCopy: File? = null): Pending? = lockOf(slot).withLock {
+    fun landed(context: Context, slot: String, id: String, version: String? = null, readCopy: File? = null, generation: Long = 0L): Pending? = lockOf(slot).withLock {
         val dir = dir(context, slot)
+        // The newest number landed, kept past the slot: a save numbered at or below it (a staging retry) is never kept again.
+        readNumbers(context, slot).let { held -> if (generation > held.landed) runCatching { writeNumbers(context, slot, held.copy(landed = generation)) } }
         // What a read of the file is served from now on until it has caught up with the server (`landing`): the landed
         // bytes, moved from the copy that was sent to the read copy of the version they became, when that is known.
         val sending = File(dir, "sending-$id")
