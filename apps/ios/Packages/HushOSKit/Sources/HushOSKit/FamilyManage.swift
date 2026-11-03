@@ -314,8 +314,17 @@ extension FamilySync {
             // `operation`: on that route, only the same change is its own; another (or one kept with no note) is the gate's.
             if let operation, try records.outboxOperation(userId: userId, groupId: groupId, outboxId: outboxId) != operation.rawValue { return .other }
             switch opened {
-            case .hold(_, _, let reason):
-                return reason == .otherKeys ? .otherKeys : .pending(ManageWords.keptOnDevice)
+            case .hold(_, let held, let reason):
+                guard reason == .otherKeys else { return .pending(ManageWords.keptOnDevice) }
+                // Held for keys they had before, for someone who no longer waits: retired, so it never holds back every change.
+                switch try await retireOrphan(groupId, route: held) {
+                case nil: return .otherKeys
+                // The sync let go of the family (not-member): the wipe took the entry with it.
+                case .wiped?: return .wiped
+                case let end?:
+                    try await drop(end, held)
+                    return end
+                }
             case .landed:
                 try await drop(.landed, route)
                 await syncInTurn(groupId)
@@ -494,6 +503,42 @@ extension FamilySync {
             guard let served = now.identity else { throw StageRefused(words: ManageWords.keysUnread) }
             return try self.ledger.admitBody(me: try await self.vault.ownIdentities(), identity: try await self.vault.currentIdentityEnvelope(), groupId: summary.id,
                                              expectedRevision: revision, userId: person.userId.lowercased(), served: served, roles: [], kems: kems)
+        }
+    }
+
+    /*
+     * An admission held for keys this phone no longer pins (`otherKeys`) whose person no longer waits
+     * to join, per reads that answered (Android #281's retireOrphan): in the member list just synced,
+     * they joined (`landed`, quiet: the list says it); neither waiting nor a member, they were turned
+     * down or went (`stale`, said as an admission that wasn't sent). Nil keeps it held: they still
+     * wait (their row offers Drop it and let them in), or a read didn't answer. Definite answers are
+     * never swallowed: route 16's not-member and a lost session are thrown, and a sync that let go of
+     * the family is `wiped`. Runs in the family's turn.
+     */
+    private func retireOrphan(_ groupId: String, route: ChainRoute) async throws -> CallEnd? {
+        guard case .admit(let person) = route else { return nil }
+        let waiting: [PendingPerson]
+        do {
+            waiting = try await api.pending(groupId)
+        } catch {
+            if let refused = error as? GroupsAPIError, refused.isNotMember { throw error }
+            if case DriveAPIError.notAuthenticated = error { throw error }
+            if case AuthError.sessionEnded = error { throw error }
+            return nil
+        }
+        if waiting.contains(where: { $0.userId.lowercased() == person.lowercased() }) { return nil }
+        let state = await syncInTurn(groupId)
+        switch state {
+        case .accepted(let view)?:
+            return view.members.contains { $0.userId.lowercased() == person.lowercased() } ? .landed : .stale
+        case .wiped?:
+            return .wiped
+        default:
+            if case .failed? = state, let ended = endedBy {
+                if case DriveAPIError.notAuthenticated = ended { throw ended }
+                if case AuthError.sessionEnded = ended { throw ended }
+            }
+            return nil
         }
     }
 

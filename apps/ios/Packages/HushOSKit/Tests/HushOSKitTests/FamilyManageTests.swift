@@ -566,6 +566,40 @@ extension OnFakeDrive {
         }
 
         /*
+         * Codex #285 round 4 (Android #281 round 4's retireOrphan): Grace's Let them in is kept
+         * unanswered, then her account changes and this phone follows it, so the kept call is held
+         * for keys she no longer has. While she still waits, it stays held and nothing new is staged
+         * over it. Once another device turned her down (not waiting, not a member), the gate retires
+         * it as an admission that wasn't sent, kept to be said, and Ada is let in. Fails if a held
+         * admission nobody can drop (its row gone) blocks every later change, or one still waiting
+         * is let go of.
+         */
+        @Test func aHeldAdmissionOfSomeoneTurnedDownElsewhereIsRetired() async throws {
+            let m = try await Self.managed()
+            defer { m.phone.done() }
+            m.server.lock.withLock { m.server.manage.admitAnswers = [Self.noAnswer, Self.noAnswer, Self.noAnswer] }
+            _ = try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) }
+            let graceId = m.grace.userId.lowercased()
+            let renewed = try await onLargeStack { [userId = m.grace.userId] in try FamilyPerson(userId: userId, keyVersion: 2) }
+            m.server.waiting(renewed, email: Self.graceEmail, name: "Grace Holm")
+            _ = try await m.phone.vault.continueWith(AccountChange(contactId: graceId, name: "Grace Holm", email: Self.graceEmail))
+            m.server.lock.withLock { m.server.manage.admitAnswers = [] }
+            let ada = try await onLargeStack { try FamilyPerson() }
+            m.server.waiting(ada, email: "ada@example.com", name: "Ada Lindqvist")
+            let adaRow = try #require(try await m.phone.sync.waitingToJoin(m.family.groupId).first { $0.userId == ada.userId.lowercased() })
+            let held = try m.kept
+            // Still waiting: held, and the gate stages nothing over it.
+            #expect(try await Self.quickly { try await m.phone.sync.letIn(m.summary, adaRow) } == .refused(ManageWords.earlierWaiting("Lindqvist family")))
+            #expect(try m.kept.map(\.entry) == held.map(\.entry), "a held admission of someone still waiting was let go of")
+            // Turned down on another device: her row is gone, and she isn't a member.
+            m.server.lock.withLock { m.server.manage.pendingRows.removeAll { $0["userId"] as? String == graceId } }
+            #expect(try await Self.quickly { try await m.phone.sync.letIn(m.summary, adaRow) } == .landed, "the held admission still blocks the family")
+            #expect(try m.kept.isEmpty)
+            let ends = try await m.phone.sync.keptEnds()
+            #expect(ends.map(\.end) == [.stale] && ends.map(\.route) == [.admit(userId: graceId)], "the retired admission went unsaid")
+        }
+
+        /*
          * Said once, and only what was said goes: reading the ends lets go of none; an entry that
          * comes back (the app stopped after keeping its end, before deleting it) and ends the same
          * way again is kept once; letting go of what a screen said keeps an end kept after it looked.
