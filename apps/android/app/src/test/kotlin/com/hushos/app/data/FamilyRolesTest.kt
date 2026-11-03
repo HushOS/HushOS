@@ -291,6 +291,30 @@ class FamilyRolesTest {
     }
 
     /*
+     * Make them the organizer kept unanswered (its record staged), confirmed again for Grace while still unanswered: the
+     * record stays staged. Then the kept billing call is refused; the next open takes that as the handover's end and signs
+     * no fresh billing change. Fails if confirming again resets the record to unstaged, so a definite refusal is followed by
+     * a new billing call.
+     */
+    @Test
+    fun confirmingTheSameHandoverAgainKeepsItStaged() {
+        val phone = phone(organizer = true)
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        answer(6, 503)
+        assertTrue(phone.sync.handOver(summary, graceId, "Grace") is RoleEnd.Pending)
+        assertEquals(FamilyOutbox.KeptHandover(graceId, staged = true), phone.sync.outbox.handover(family.member.id, family.groupId))
+        assertTrue(phone.sync.handOver(summary, graceId, "Grace") is RoleEnd.Pending)
+        assertEquals("confirming again reset the handover to unstaged",
+            FamilyOutbox.KeptHandover(graceId, staged = true), phone.sync.outbox.handover(family.member.id, family.groupId))
+        val billing = bodies().toSet()
+        family.memberAnswers.add { _ -> 409 to JSONObject().put("code", "held").put("message", "Paused.") }
+        phone.sync.resumeOutbox(summary, names = { "Grace" })
+        assertEquals("a fresh billing change was signed after the kept one was refused", billing, bodies().toSet())
+        assertNull(phone.sync.outbox.handover(family.member.id, family.groupId))
+        assertTrue("billing" !in rolesOf(phone, graceId))
+    }
+
+    /*
      * The half-finished handover: billing given to Grace, then the app stops before Maya lets go of it (here, her
      * connection drops). On relaunch the family page's resume finishes it: one organizer, Grace, and the person told.
      * Fails if a handover stopped in the middle leaves two organizers for good.

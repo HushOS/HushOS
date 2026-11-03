@@ -1028,7 +1028,9 @@ fun FamilySync.handOver(summary: GroupSummary, to: String, first: String, names:
             if (outbox.handover(userId, summary.id) != null) return@notMemberLetsGo RoleEnd.Refused("Finish handing over to $them first.")
             if (settled == RoleEnd.Landed) return@notMemberLetsGo RoleEnd.Refused("$them is the organizer now.")
         }
-        outbox.markHandover(userId, summary.id, to)
+        // Confirmed again for the same person: the record stays as it is (`staged` once billing's call is kept), so a kept
+        // call later refused or overtaken is never taken for one never staged, and billing signed afresh at the next open.
+        if (outbox.handover(userId, summary.id)?.to?.equals(to, ignoreCase = true) != true) outbox.markHandover(userId, summary.id, to)
         giveThenStepDown(summary, to, first, names)
     }
 }
