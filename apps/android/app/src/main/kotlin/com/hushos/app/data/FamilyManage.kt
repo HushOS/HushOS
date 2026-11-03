@@ -62,6 +62,106 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
         val target = file(userId, groupId, outboxId) ?: return@synchronized
         if (!target.delete() && target.exists()) throw OutboxUnsaved()
         File(target.path.removeSuffix(".call") + ".cleared").delete()
+        File(target.path.removeSuffix(".call") + ".recheck").delete()
+    }
+
+    /*
+     * Documents the core carried on empty in an entry that hasn't been read again yet: written before the entry, removed only
+     * once the read-again finished and its clearing notes are written (`noteCleared`). While it stands the entry is never
+     * sent (sendKept finishes the recheck first), whatever process or open finds it.
+     */
+    fun markRecheck(userId: String, groupId: String, outboxId: String, replaced: Collection<com.hushos.core.ReplacedDocument>) = synchronized(FamilyCopies.LOCK) {
+        if (replaced.isEmpty()) return@synchronized
+        if (!open()) throw OutboxUnsaved()
+        val target = file(userId, groupId, outboxId)?.let { File(it.path.removeSuffix(".call") + ".recheck") } ?: throw OutboxUnsaved()
+        try {
+            folder.mkdirs()
+            val next = File(target.path + ".next")
+            next.writeText(replaced.joinToString("\n") { it.workspaceId.lowercase() + " " + it.kind })
+            if (!next.renameTo(target)) throw java.io.IOException("not moved")
+        } catch (_: Exception) {
+            throw OutboxUnsaved()
+        }
+    }
+
+    /* The documents an entry still has to read again; none when it doesn't. One that can't be read throws, never reads as none. */
+    fun recheck(userId: String, groupId: String, outboxId: String): List<com.hushos.core.ReplacedDocument> {
+        val target = file(userId, groupId, outboxId)?.let { File(it.path.removeSuffix(".call") + ".recheck") } ?: return emptyList()
+        if (!target.exists()) return emptyList()
+        val lines = try { target.readLines().filter { it.isNotBlank() } } catch (_: Exception) { throw OutboxUnreadable() }
+        return lines.map { line ->
+            val parts = line.split(" ").takeIf { it.size == 2 } ?: throw OutboxUnreadable()
+            com.hushos.core.ReplacedDocument(parts[0], parts[1])
+        }
+    }
+
+    fun clearRecheck(userId: String, groupId: String, outboxId: String) = synchronized(FamilyCopies.LOCK) {
+        if (!open()) return@synchronized
+        val target = file(userId, groupId, outboxId)?.let { File(it.path.removeSuffix(".call") + ".recheck") } ?: return@synchronized
+        if (!target.delete() && target.exists()) throw OutboxUnsaved()
+    }
+
+    /*
+     * A removal the person confirmed and that hasn't ended: whom, the lapsed plans they confirmed end (ids), whether they asked
+     * to stop them managing first, and their first name. Kept before anything of it changes, and dropped only at a definite
+     * end, so a removal stopped part way (a departure to mark left first, a demotion with no answer, a process killed) goes
+     * on at the next open (resumeOutbox).
+     */
+    data class Removal(val userId: String, val first: String, val endsLapsed: List<String>, val demote: Boolean)
+
+    private fun removalsFile(userId: String, groupId: String): File? {
+        val ids = listOf(userId.lowercase(), groupId.lowercase())
+        if (ids.any { !FamilyRecords.valid(it) }) return null
+        return File(folder, "${ids[0]}_${ids[1]}.removals")
+    }
+
+    /* The removals under way, oldest first; a file that can't be read throws (never read as none: a promise would be lost). */
+    fun removals(userId: String, groupId: String): List<Removal> {
+        val file = removalsFile(userId, groupId) ?: return emptyList()
+        if (!file.exists()) return emptyList()
+        return try {
+            val list = org.json.JSONArray(file.readText())
+            (0 until list.length()).map { i ->
+                val row = list.getJSONObject(i)
+                val plans = row.getJSONArray("endsLapsed")
+                Removal(row.getString("userId").takeIf(FamilyRecords::valid) ?: throw OutboxUnreadable(), row.getString("first"),
+                    (0 until plans.length()).map(plans::getString), row.getBoolean("demote"))
+            }
+        } catch (unreadable: OutboxUnreadable) {
+            throw unreadable
+        } catch (_: Exception) {
+            throw OutboxUnreadable()
+        }
+    }
+
+    private fun writeRemovals(userId: String, groupId: String, list: List<Removal>) {
+        if (!open()) throw OutboxUnsaved()
+        val file = removalsFile(userId, groupId) ?: throw OutboxUnsaved()
+        try {
+            if (list.isEmpty()) {
+                if (!file.delete() && file.exists()) throw java.io.IOException("not deleted")
+                return
+            }
+            folder.mkdirs()
+            val json = org.json.JSONArray(list.map {
+                JSONObject().put("userId", it.userId.lowercase()).put("first", it.first).put("endsLapsed", org.json.JSONArray(it.endsLapsed)).put("demote", it.demote)
+            })
+            val next = File(file.path + ".next")
+            next.writeText(json.toString())
+            if (!next.renameTo(file)) throw java.io.IOException("not moved")
+        } catch (_: Exception) {
+            throw OutboxUnsaved()
+        }
+    }
+
+    fun keepRemoval(userId: String, groupId: String, removal: Removal) = synchronized(FamilyCopies.LOCK) {
+        writeRemovals(userId, groupId, removals(userId, groupId).filter { !it.userId.equals(removal.userId, ignoreCase = true) } + removal)
+    }
+
+    fun dropRemoval(userId: String, groupId: String, target: String) = synchronized(FamilyCopies.LOCK) {
+        val now = removals(userId, groupId)
+        if (now.none { it.userId.equals(target, ignoreCase = true) }) return@synchronized
+        writeRemovals(userId, groupId, now.filter { !it.userId.equals(target, ignoreCase = true) })
     }
 
     /*
@@ -95,8 +195,10 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
         for (file in entries(userId, groupId)) {
             if (!file.delete() && file.exists()) throw OutboxUnsaved()
             File(file.path.removeSuffix(".call") + ".cleared").delete()
+            File(file.path.removeSuffix(".call") + ".recheck").delete()
         }
         clearHandover(userId, groupId)
+        removalsFile(userId, groupId)?.let { if (!it.delete() && it.exists()) throw OutboxUnsaved() }
     }
 
     /*
@@ -299,6 +401,14 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
         on = read.route()
         if (only != null && !sameRoute(read.route(), only)) return CallEnd.Other
         val first = personOf(read.route())?.let(names)
+        // Documents still to be read again: done first (read, rebuilt, noted), and the entry read again before anything is sent.
+        if (read is OutboxCall.Send) {
+            val replaced = outbox.recheck(userId, groupId, current.outboxId)
+            if (replaced.isNotEmpty()) {
+                current = readAgain(groupId, current, replaced)
+                continue
+            }
+        }
         val (route, body) = when (read) {
             is OutboxCall.Send -> read.route to read.body
             // AwaitingCheck and Committed are the web's own entries (an earlier web version's held-back admission, a
@@ -450,7 +560,7 @@ private fun FamilySync.sendGrants(summary: GroupSummary, data: JSONObject?): Gra
  * it ended, before its record goes).
  */
 fun FamilySync.resumeOutbox(summary: GroupSummary, names: (String) -> String? = { null }, told: (ChainRoute?, CallEnd) -> Unit = { _, _ -> },
-    handed: (String, RoleEnd) -> Unit = { _, _ -> }): Map<String, CallEnd> = exclusive(summary.id) {
+    handed: (String, RoleEnd) -> Unit = { _, _ -> }, continued: (FamilyOutbox.Removal, RemovalEnd) -> Unit = { _, _ -> }): Map<String, CallEnd> = exclusive(summary.id) {
     val ends = LinkedHashMap<String, CallEnd>()
     notMemberLetsGo(summary.id, { ends }) {
         for (kept in outbox.list(userId, summary.id)) {
@@ -459,6 +569,8 @@ fun FamilySync.resumeOutbox(summary: GroupSummary, names: (String) -> String? = 
             if (end == CallEnd.Wiped) return@notMemberLetsGo ends
         }
         finishHandover(summary, names, handed)
+        // Removals stopped part way go on, once nothing is kept unresolved (each is staged through the same gate).
+        if (outbox.list(userId, summary.id).isEmpty()) continueRemovals(summary, names, continued)
         ends
     }
 }
@@ -470,6 +582,8 @@ fun FamilySync.resumeOutbox(summary: GroupSummary, names: (String) -> String? = 
 private fun FamilySync.finishHandover(summary: GroupSummary, names: (String) -> String?, handed: (String, RoleEnd) -> Unit) {
     val groupId = summary.id
     val kept = outbox.handover(userId, groupId) ?: return
+    // Nothing new while any change is kept unresolved here (the staging gate would refuse it): the record waits for the next open.
+    if (outbox.list(userId, groupId).isNotEmpty()) return
     val to = kept.to
     // Its first call (or a change for them kept before it) still waits for an answer: the next open goes on.
     val waiting = outbox.list(userId, groupId).any { kept ->
@@ -549,6 +663,7 @@ private fun FamilySync.admitInTurn(summary: GroupSummary, person: PendingPerson,
             Staged.CheckFirst -> return LetIn.Refused(CHECK_MANAGER_FIRST)
             Staged.Unchanged -> return LetIn.Refused(UNCHANGED)
             Staged.Wiped -> return LetIn.Wiped
+            Staged.Waiting -> return LetIn.Refused(earlierWaiting(summary.name))
             is Staged.Call -> when (val end = sendKept(summary, built.kept, names = { first })) {
                 CallEnd.Landed -> return LetIn.Landed
                 is CallEnd.Pending -> return LetIn.Pending(end.reason)
@@ -601,7 +716,12 @@ internal sealed interface Staged {
     /* Nothing to change: they already have, or don't have, the role. */
     data object Unchanged : Staged
     data object Wiped : Staged
+    /* A change kept here earlier is still unresolved: nothing new is staged over it (it would overtake it unseen). */
+    data object Waiting : Staged
 }
+
+/* A change asked for while an earlier one waits for an answer: refused, nothing kept for it, nothing promised. */
+internal fun earlierWaiting(family: String) = "An earlier change to $family hasn’t reached the server yet. Try again once it has."
 
 /* The core's words for the two refusals a role change answers differently (roster_calls.rs). */
 internal const val CHECK_MANAGER_FIRST = "Check it’s them first. Managers are checked before they get the role."
@@ -621,6 +741,13 @@ private class CheckFirstNeeded : Exception()
  */
 internal fun FamilySync.stageCall(summary: GroupSummary, build: (view: FamilyView, revision: ULong, kems: Map<String, String>) -> RosterCall): Staged {
     val groupId = summary.id
+    // The outbox's one gate, for every roster call: whatever is kept for the family goes first, each as it was signed (what
+    // it comes to is said: takeKeptEnds). If anything is still unresolved, nothing new is staged: a new roster would overtake
+    // it, and its next resume would drop it as superseded, unseen.
+    for (kept in outbox.list(userId, groupId)) {
+        if (sendKept(summary, kept, told = { route, end -> keptEnds.add(Triple(groupId, route, end)) }) == CallEnd.Wiped) return Staged.Wiped
+    }
+    if (outbox.list(userId, groupId).isNotEmpty()) return Staged.Waiting
     var keyOpened = false
     repeat(4) {
         val view = when (val state = syncRevised(summary).state) {
@@ -653,6 +780,8 @@ internal fun FamilySync.stageCall(summary: GroupSummary, build: (view: FamilyVie
         }
         when (call) {
             is RosterCall.Staged -> {
+                // Documents it carried on empty are marked for a read-again before the entry exists: never sendable unchecked.
+                outbox.markRecheck(this.userId, groupId, call.call.outboxId, call.call.replaced)
                 outbox.put(this.userId, groupId, call.call.outboxId, call.call.entry)
                 return Staged.Call(FamilyOutbox.Kept(call.call.outboxId, call.call.entry), call.call.replaced)
             }
@@ -834,6 +963,7 @@ internal fun FamilySync.callFor(summary: GroupSummary, person: String, first: St
             Staged.CheckFirst -> return RoleEnd.CheckFirst
             Staged.Unchanged -> return if (moved) RoleEnd.Landed else RoleEnd.Refused(UNCHANGED)
             Staged.Wiped -> return RoleEnd.Wiped
+            Staged.Waiting -> return RoleEnd.Refused(earlierWaiting(summary.name))
             is Staged.Call -> when (val end = sendKept(summary, built.kept.also { onStaged() }, names = { first })) {
                 CallEnd.Landed -> return RoleEnd.Landed
                 is CallEnd.Pending -> return RoleEnd.Pending(end.reason)

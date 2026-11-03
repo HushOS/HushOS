@@ -300,11 +300,18 @@ class FamilyManageModelTest {
         assertTrue(host.vault.families.letIn(family.summary, grace) is LetIn.Pending)
         val outbox = FamilyOutbox.of(RuntimeEnvironment.getApplication())
         val graceEntry = outbox.list(family.member.id, family.groupId).single()
+        // Two kept calls, as an earlier version's outbox could hold them (this one stages nothing over a kept call): Grace's
+        // set aside while Ada's is made, then put back.
+        val outboxFolder = java.io.File(java.io.File(RuntimeEnvironment.getApplication().noBackupFilesDir, com.hushos.app.data.FamilyRecords.FOLDER), "outbox")
+        val graceFile = outboxFolder.listFiles()!!.single { it.name.contains(graceEntry.outboxId) }
+        val aside = java.io.File(graceFile.path + ".aside")
+        assertTrue(graceFile.renameTo(aside))
         val ada = server.another("ada@example.org", "Ada Lovelace")
         family.waiting(ada, "ada@example.org", "Ada Lovelace")
         val adaWaiting = family.pendingRows.map(PendingPerson::from).single { it.userId.equals(ada.id, ignoreCase = true) }
         answers(3, 503)
         assertTrue(host.vault.families.letIn(family.summary, adaWaiting) is LetIn.Pending)
+        assertTrue(aside.renameTo(graceFile))
         // Grace's is the older: sent first.
         val folder = java.io.File(java.io.File(RuntimeEnvironment.getApplication().noBackupFilesDir, com.hushos.app.data.FamilyRecords.FOLDER), "outbox")
         folder.listFiles()!!.single { it.name.contains(graceEntry.outboxId) }.setLastModified(System.currentTimeMillis() - 60_000)
@@ -341,10 +348,17 @@ class FamilyManageModelTest {
         assertTrue(host.vault.families.letIn(family.summary, grace) is LetIn.Pending)
         val outbox = FamilyOutbox.of(RuntimeEnvironment.getApplication())
         val graceEntry = outbox.list(family.member.id, family.groupId).single()
+        // Two kept calls, as an earlier version's outbox could hold them (this one stages nothing over a kept call): Grace's
+        // set aside while Ada's is made, then put back.
+        val outboxFolder = java.io.File(java.io.File(RuntimeEnvironment.getApplication().noBackupFilesDir, com.hushos.app.data.FamilyRecords.FOLDER), "outbox")
+        val graceFile = outboxFolder.listFiles()!!.single { it.name.contains(graceEntry.outboxId) }
+        val aside = java.io.File(graceFile.path + ".aside")
+        assertTrue(graceFile.renameTo(aside))
         val ada = server.another("ada@example.org", "Ada Lovelace")
         family.waiting(ada, "ada@example.org", "Ada Lovelace")
         answers(3, 503)
         assertTrue(host.vault.families.letIn(family.summary, family.pendingRows.map(PendingPerson::from).single { it.userId.equals(ada.id, ignoreCase = true) }) is LetIn.Pending)
+        assertTrue(aside.renameTo(graceFile))
         val folder = File(File(RuntimeEnvironment.getApplication().noBackupFilesDir, com.hushos.app.data.FamilyRecords.FOLDER), "outbox")
         folder.listFiles()!!.single { it.name.contains(graceEntry.outboxId) }.setLastModified(System.currentTimeMillis() - 60_000)
         family.samChangesTheList()

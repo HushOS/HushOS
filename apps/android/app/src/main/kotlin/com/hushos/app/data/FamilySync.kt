@@ -180,6 +180,11 @@ class FamilySync(
     /* What landed rotations carried on empty, in the web's documents-cleared words, for whoever draws the families next. */
     internal val clearedSaid = java.util.concurrent.ConcurrentLinkedQueue<String>()
 
+    /* What kept calls the staging gate sent first came to (family, route, end), for whoever draws the families next to say. */
+    internal val keptEnds = java.util.concurrent.ConcurrentLinkedQueue<Triple<String, com.hushos.core.ChainRoute?, CallEnd>>()
+
+    fun takeKeptEnds(): List<Triple<String, com.hushos.core.ChainRoute?, CallEnd>> = generateSequence { keptEnds.poll() }.toList()
+
     /* The documents-cleared words gathered since the last call, each once. */
     fun takeCleared(): List<String> = generateSequence { clearedSaid.poll() }.toList().distinct()
 

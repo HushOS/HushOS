@@ -274,12 +274,14 @@ class FamilyManageTest {
     }
 
     /*
-     * Grace's admission held for her old keys, then Ada waits too: Ada is let in, and Grace's held entry is neither sent
-     * nor dropped. Fails if one person's kept entry decides another's Let them in.
+     * Grace's admission held for her old keys, then Ada waits too: nothing new is staged while Grace's is unresolved (the
+     * outbox's gate: Ada's admission would overtake it unseen), so Ada's Let them in is refused and nothing sent; once the
+     * person drops Grace's, Ada is let in. Fails if a new call is staged over an unresolved kept one.
      */
     @Test
-    fun anotherPersonsKeptAdmissionIsLeftAlone() {
+    fun anUnresolvedKeptAdmissionHoldsNewCallsBack() {
         val phone = phone()
+        val graceId = grace.userId
         answer(3, 503)
         assertTrue(phone.sync.letIn(summary, grace) is LetIn.Pending)
         server.startOverGrace()
@@ -290,12 +292,13 @@ class FamilyManageTest {
         val ada = server.another("ada@example.org", "Ada Lovelace")
         family.waiting(ada, "ada@example.org", "Ada Lovelace")
         val adaWaiting = family.pendingRows.map(PendingPerson::from).single { it.userId.equals(ada.id, ignoreCase = true) }
+        assertEquals(LetIn.Refused(earlierWaiting(summary.name)), phone.sync.letIn(summary, adaWaiting))
+        assertEquals("nothing sent", sends, family.callBodies.size)
+        assertEquals(listOf(graceKept), kept(phone))
+        // Dropped on the person's say: Ada is let in.
+        phone.sync.dropKeptAdmission(family.groupId, graceId)
         assertEquals(LetIn.Landed, phone.sync.letIn(summary, adaWaiting))
-        assertEquals("only Ada's admission sent", sends + 1, family.callBodies.size)
-        assertEquals(listOf(graceKept), kept(phone))
-        // Dropping Ada's kept admissions leaves Grace's.
-        phone.sync.dropKeptAdmission(family.groupId, ada.id)
-        assertEquals(listOf(graceKept), kept(phone))
+        assertTrue(kept(phone).isEmpty())
     }
 
     /*

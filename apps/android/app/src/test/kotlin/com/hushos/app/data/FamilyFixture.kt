@@ -198,6 +198,9 @@ class FamilyFixture(val server: FakeDrive) {
     @Volatile var previewPlans: JSONArray = JSONArray()
     /* The family folder's workspace documents by kind: (version, envelope). */
     val documents = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, String>>()
+    /* Document reads so far, and the first one (counted from 1) answered 503 from then on: a read that fails part way. */
+    val documentReads = java.util.concurrent.atomic.AtomicInteger()
+    @Volatile var documentsFailFrom = Int.MAX_VALUE
     /* Routes 19, 7, 24 and the deletion: each call (its route's last segment, its body) in order, and scripted answers in turn. */
     val rotatingCalls = java.util.Collections.synchronizedList(ArrayList<Pair<String, String>>())
     val rotatingAnswers = java.util.concurrent.ConcurrentLinkedQueue<(String, JSONObject) -> Pair<Int, JSONObject>?>()
@@ -310,7 +313,7 @@ class FamilyFixture(val server: FakeDrive) {
             method == "GET" && path == "groups/$groupId/areas/$workspaceId/root" -> if (notMember) notMemberAnswer() else
                 200 to server.node(servedRootId ?: rootId).json().put("depth", 0).put("versions", JSONArray()).put("shares", JSONArray()).put("links", JSONArray())
             method == "GET" && segments.size == 5 && path.startsWith("drive/workspaces/$workspaceId/documents/") ->
-                200 to JSONObject().put("document", documents[segments[4]]?.let { (version, envelope) ->
+                if (documentReads.incrementAndGet() >= documentsFailFrom) 503 to JSONObject().put("message", "Unavailable.") else 200 to JSONObject().put("document", documents[segments[4]]?.let { (version, envelope) ->
                     JSONObject().put("kind", segments[4]).put("version", version).put("envelope", envelope).put("envelopeSuite", 1)
                 } ?: JSONObject.NULL)
             method == "GET" && path == "drive/spaces" -> 200 to JSONObject().put("spaces", JSONArray()

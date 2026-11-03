@@ -268,17 +268,10 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         // Each refusal is all that's left of its call: said as the outbox hands it over, before its entry is deleted
         // (so a later entry that throws can't take it along), until read, one after another. A call another manager's
         // change overtook is said too: nothing of it was made, so the person makes it again.
-        val told = { route: com.hushos.core.ChainRoute?, end: com.hushos.app.data.CallEnd ->
-            if (gate.current(s)) when {
-                end is com.hushos.app.data.CallEnd.Refused -> model.notice(end.words, untilRead = true)
-                end == com.hushos.app.data.CallEnd.Stale && route is com.hushos.core.ChainRoute.Admit ->
-                    model.notice("An earlier admission of ${names(route.userId) ?: "someone waiting to join"} wasn’t sent; let them in again.", untilRead = true)
-                // A role change, removal or folder deletion another change overtook: nothing of it was made. (Due work, marking
-                // someone left or a folder's new keys, is worked out again from route 3 and needs no word.)
-                end == com.hushos.app.data.CallEnd.Stale && (route is com.hushos.core.ChainRoute.Member || route is com.hushos.core.ChainRoute.Remove ||
-                    route is com.hushos.core.ChainRoute.Delete) ->
-                    model.notice("${summary.name} changed while you were working on it. Try again.", untilRead = true)
-            }
+        val told = { route: com.hushos.core.ChainRoute?, end: com.hushos.app.data.CallEnd -> if (gate.current(s)) sayEnd(summary, route, end, names) }
+        // A removal confirmed earlier that stopped part way and went on now: said as it ended, unless it is still pending.
+        val continued = { removal: com.hushos.app.data.FamilyOutbox.Removal, end: com.hushos.app.data.RemovalEnd ->
+            if (gate.current(s)) removalNotice(end, removal.first, summary.name, removal.userId)?.let { model.notice(it, untilRead = true) }
         }
         // A handover the app stopped in the middle of, finished: said as the web's Make them the organizer says it, and the
         // family read again so its page shows who the organizer is now.
@@ -294,7 +287,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                 else -> {}
             }
         }
-        val resumed = gate.run(s) { s.owner.families.resumeOutbox(summary, names, told, handed) } ?: return
+        val resumed = gate.run(s) { s.owner.families.resumeOutbox(summary, names, told, handed, continued) } ?: return
         if (!gate.current(s)) return
         // One that landed shows the family as it is now. A removal is published by the sync (removedNow) and shown from
         // there; no answer stays kept and says nothing. A failure part way says why; what came before it was said already.
@@ -313,9 +306,47 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         reloadManaged(groupId, s)
     }
 
-    /* Documents landed rotations carried on empty (FamilySync.takeCleared), each said until read. */
+    /*
+     * What a kept call came to, said as the outbox hands it over: each refusal (all that's left of its call), and a call
+     * another manager's change overtook (nothing of it was made, so the person makes it again).
+     */
+    private fun sayEnd(summary: GroupSummary, route: com.hushos.core.ChainRoute?, end: com.hushos.app.data.CallEnd, names: (String) -> String?) {
+        when {
+            end is com.hushos.app.data.CallEnd.Refused -> model.notice(end.words, untilRead = true)
+            end == com.hushos.app.data.CallEnd.Stale && route is com.hushos.core.ChainRoute.Admit ->
+                model.notice("An earlier admission of ${names(route.userId) ?: "someone waiting to join"} wasn’t sent; let them in again.", untilRead = true)
+            // A role change, removal or folder deletion another change overtook: nothing of it was made. (Due work, marking
+            // someone left or a folder's new keys, is worked out again from route 3 and needs no word.)
+            end == com.hushos.app.data.CallEnd.Stale && (route is com.hushos.core.ChainRoute.Member || route is com.hushos.core.ChainRoute.Remove ||
+                route is com.hushos.core.ChainRoute.Delete) ->
+                model.notice("${summary.name} changed while you were working on it. Try again.", untilRead = true)
+        }
+    }
+
+    /*
+     * A continued removal's end as a notice, in the web's removal words; none for one still pending, or that found them
+     * gone already (done before a process was killed, or by someone else).
+     */
+    private fun removalNotice(end: com.hushos.app.data.RemovalEnd, who: String, family: String, targetId: String): String? = when (end) {
+        com.hushos.app.data.RemovalEnd.Removed -> "$who is no longer in $family."
+        is com.hushos.app.data.RemovalEnd.Failed -> end.words
+        is com.hushos.app.data.RemovalEnd.Held -> end.heldBy?.takeIf { !it.equals(targetId, ignoreCase = true) }?.let(::memberName)
+            ?.let { "$it paused your changes in $family for now, so $who wasn’t removed. Try again later, or ask $it." }
+            ?: "Your changes in $family are paused for now, so $who wasn’t removed. Try again later, or ask the family’s other managers."
+        is com.hushos.app.data.RemovalEnd.EndsLapsed -> "$who wasn’t removed: a plan they pay for would end. Remove them again to confirm it."
+        else -> null
+    }
+
+    /*
+     * Documents landed rotations carried on empty (FamilySync.takeCleared), and what kept calls the staging gate sent first came
+     * to (takeKeptEnds), each said until read.
+     */
     private fun sayCleared(s: FamilySession) {
         if (!gate.current(s)) return
+        for ((groupId, route, end) in s.owner.families.takeKeptEnds()) {
+            val summary = list?.firstOrNull { it.id.equals(groupId, ignoreCase = true) } ?: continue
+            sayEnd(summary, route, end, ::memberName)
+        }
         s.owner.families.takeCleared().forEach { model.notice(it, untilRead = true) }
     }
 
@@ -406,6 +437,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                 s.owner.families.letIn(summary, person)
             } ?: return@launch
             if (!gate.current(s)) return@launch
+            sayCleared(s)
             val outcome = result.getOrElse { error ->
                 error.rethrowIfCancelled()
                 if (error is NotAuthenticated) { model.lostSession(); return@launch }
@@ -485,6 +517,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             // An ended session's answer touches nothing: the next session's own change may be under way.
             if (result == null || !gate.current(s)) return@launch
             roleBusy = null
+            sayCleared(s)
             val outcome = result.getOrElse { error ->
                 error.rethrowIfCancelled()
                 if (error is NotAuthenticated) { model.lostSession(); return@launch }
@@ -593,6 +626,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         model.familyScope.launch {
             val result = gate.run(s) { s.owner.families.deleteFolder(summary, ask.workspaceId) } ?: return@launch
             if (!gate.current(s)) return@launch
+            sayCleared(s)
             val end = result.getOrElse { error ->
                 error.rethrowIfCancelled()
                 if (error is NotAuthenticated) { deletingFolder = null; model.lostSession(); return@launch }

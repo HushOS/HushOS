@@ -285,44 +285,92 @@ class FamilyRemovalTest {
     }
 
     /*
-     * Codex #281 1: a removal kept unanswered, then the next open's due work (a folder owed new keys): nothing new is staged
-     * while the removal is kept, so it can't be overtaken; it lands at the next resume, and its rotation was what was due. Fails if a
-     * due roster overtakes a kept removal, which the next resume would drop as superseded, leaving the person in.
+     * Codex #281 1: a removal kept unanswered, then the next open's due work (a folder owed new keys) while the server still
+     * doesn't answer: the kept removal goes first and, still unanswered, nothing new is staged (DueDone.deferred). Answered, it
+     * lands, and its rotation was what was due. Fails if a due roster overtakes a kept removal, leaving the person in.
      */
     @Test
     fun dueWorkWaitsWhileAKeptRemovalIsUnresolved() {
         val phone = phone()
-        repeat(3) { family.rotatingAnswers.add { _, _ -> 503 to JSONObject().put("message", "Unavailable.") } }
+        repeat(6) { family.rotatingAnswers.add { _, _ -> 503 to JSONObject().put("message", "Unavailable.") } }
         assertTrue(remove(phone) is RemovalEnd.Pending)
         family.dueRotations = listOf(family.workspaceId)
-        assertEquals(DueDone(deferred = true), phone.sync.runDue(summary))
+        assertTrue(phone.sync.runDue(summary).deferred)
         assertTrue(bodies("rotations").isEmpty())
         assertEquals(listOf(CallEnd.Landed), phone.sync.resumeOutbox(summary).values.toList())
         assertFalse(view(phone).members.any { it.userId.equals(graceId, ignoreCase = true) })
-        // The removal gave the folder its new keys: nothing is due any more, and no second key change is made.
         assertEquals(DueDone(), phone.sync.runDue(summary))
         assertTrue(bodies("rotations").isEmpty())
     }
 
     /*
-     * Codex #281 1, the mark-left path: Bob's admission is kept unanswered when the removal meets `left-due`; the departed
-     * aren't marked left over it (that roster would overtake the admission unseen). The removal waits for the next open.
-     * Fails if a removal's mark-left is staged while another change is kept.
+     * Codex #281 round 2, 1: a removal kept unanswered holds every new call back, whatever it is (here a folder's deletion),
+     * after a relaunch too: while it is unanswered the deletion is refused and nothing of it sent; answered, the removal goes
+     * first and lands, then the deletion. Fails if any call is staged over a kept one (the removal would be dropped as
+     * overtaken and its person stay in the family).
      */
     @Test
-    fun leftDueWaitsWhileAnotherChangeIsKept() {
-        val phone = phone()
+    fun aKeptRemovalHoldsEveryNewCallBackAndGoesFirstAfterARelaunch() {
+        val first = phone()
+        repeat(6) { family.rotatingAnswers.add { _, _ -> 503 to JSONObject().put("message", "Unavailable.") } }
+        assertTrue(remove(first) is RemovalEnd.Pending)
+        assertEquals(FolderEnd.Refused(earlierWaiting(summary.name)), first.sync.deleteFolder(summary, family.workspaceId))
+        assertTrue(bodies("delete").isEmpty())
+        assertEquals(1, kept(first).size)
+        val next = phone(first.folder)
+        assertEquals(FolderEnd.Landed, next.sync.deleteFolder(summary, family.workspaceId))
+        assertTrue(family.rotatingCalls.indexOfLast { it.first == "remove" } < family.rotatingCalls.indexOfFirst { it.first == "delete" })
+        val now = view(next)
+        assertFalse(now.members.any { it.userId.equals(graceId, ignoreCase = true) })
+        assertTrue(now.areas.isEmpty())
+    }
+
+    /*
+     * Codex #281 round 2, 2: the folder's tags don't open when the removal is staged, and reading them again fails (the
+     * process could as well have died there): the entry is kept marked for its recheck, never sendable as it is. After a
+     * relaunch the resume reads them again first, notes what still didn't open, then sends; it lands and says so. Fails if
+     * an entry carrying emptied documents is sent without the read-again and its word.
+     */
+    @Test
+    fun anEntryWithEmptiedDocumentsIsNeverSentBeforeItsRecheckAfterARelaunch() {
+        val first = phone()
+        family.documents["tags"] = 1 to com.hushos.core.base64urlEncode(ByteArray(80) { 7 })
+        family.documentsFailFrom = 2
+        assertTrue(runCatching { remove(first) }.isFailure)
+        assertEquals(1, kept(first).size)
+        assertTrue(bodies("remove").isEmpty())
+        family.documentsFailFrom = Int.MAX_VALUE
+        val reads = family.documentReads.get()
+        val next = phone(first.folder)
+        assertEquals(listOf(CallEnd.Landed), next.sync.resumeOutbox(summary).values.toList())
+        assertEquals("read again before it was sent", reads + 1, family.documentReads.get())
+        assertEquals(listOf(clearedWords("tags")), next.sync.takeCleared())
+        assertFalse(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
+    }
+
+    /*
+     * Codex #281 round 2, 3: removing Grace meets `left-due` for Ada, and marking Ada left gets no answer. Grace's removal is
+     * kept as an intent on the phone; after a relaunch the resume sends the kept mark-left, then goes on with Grace's removal,
+     * which lands. Fails if "remove Grace next time" lives only in a return value and dies with the process.
+     */
+    @Test
+    fun aRemovalStoppedByADepartureGoesOnAfterARelaunch() {
+        val first = phone()
         val ada = server.another("ada@example.org", "Ada Lovelace")
         family.waiting(ada, "ada@example.org", "Ada Lovelace")
-        assertEquals(LetIn.Landed, phone.sync.letIn(summary, family.pendingRows.map(PendingPerson::from).single()))
-        val bob = server.another("bob@example.org", "Bob Lindqvist")
-        family.waiting(bob, "bob@example.org", "Bob Lindqvist")
-        repeat(3) { family.admitAnswers.add { _ -> 503 to JSONObject().put("message", "Unavailable.") } }
-        assertTrue(phone.sync.letIn(summary, family.pendingRows.map(PendingPerson::from).single()) is LetIn.Pending)
-        family.rotatingAnswers.add { _, _ -> refuse("left-due", JSONObject().put("userIds", JSONArray().put(ada.id.lowercase()))) }
-        assertTrue(remove(phone) is RemovalEnd.Pending)
-        assertTrue(bodies("rosters").isEmpty())
-        assertEquals(1, kept(phone).size)
+        assertEquals(LetIn.Landed, first.sync.letIn(summary, family.pendingRows.map(PendingPerson::from).single()))
+        val adaId = ada.id.lowercase()
+        family.rotatingAnswers.add { _, _ -> refuse("left-due", JSONObject().put("userIds", JSONArray().put(adaId))) }
+        repeat(3) { family.rotatingAnswers.add { _, _ -> 503 to JSONObject().put("message", "Unavailable.") } }
+        assertTrue(remove(first) is RemovalEnd.Pending)
+        assertEquals(listOf(graceId), first.sync.outbox.removals(family.member.id, family.groupId).map { it.userId })
+        val next = phone(first.folder)
+        val continued = ArrayList<Pair<String, RemovalEnd>>()
+        next.sync.resumeOutbox(summary, continued = { removal, end -> continued.add(removal.userId to end) })
+        assertEquals(listOf(graceId to RemovalEnd.Removed), continued)
+        val members = view(next).members.map { it.userId.lowercase() }
+        assertFalse(adaId in members || graceId in members)
+        assertTrue(next.sync.outbox.removals(family.member.id, family.groupId).isEmpty())
     }
 
     /*

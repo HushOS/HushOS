@@ -158,11 +158,12 @@ class FamilyRolesTest {
     }
 
     /*
-     * Grace's grant kept unanswered, then Ada is made a manager: Ada's call alone is sent, and Grace's stays kept, never
-     * sent in its place. Fails if one person's kept role change decides another's.
+     * Grace's grant kept unanswered, then Ada is made a manager: Grace's goes first (the outbox's gate). Still unanswered,
+     * Ada's is refused and nothing of it sent; answered, Grace's lands and then Ada's. Fails if a new call is staged over an
+     * unresolved kept one, which the next resume would then drop as overtaken.
      */
     @Test
-    fun anotherPersonsKeptRoleChangeIsLeftAlone() {
+    fun anotherPersonsKeptRoleChangeGoesFirst() {
         val phone = phone()
         val ada = server.another("ada@example.org", "Ada Lovelace")
         family.waiting(ada, "ada@example.org", "Ada Lovelace")
@@ -172,9 +173,14 @@ class FamilyRolesTest {
         answer(3, 503)
         assertTrue(grant(phone) is RoleEnd.Pending)
         val graceKept = kept(phone).single()
-        assertEquals(RoleEnd.Landed, phone.sync.changeRole(summary, ada.id, "Ada", MembersRole.GRANT))
-        assertEquals(List(3) { graceId } + ada.id.lowercase(), family.memberCalls.map { it.first.lowercase() })
+        answer(3, 503)
+        assertEquals(RoleEnd.Refused(earlierWaiting(summary.name)), phone.sync.changeRole(summary, ada.id, "Ada", MembersRole.GRANT))
+        assertEquals(List(6) { graceId }, family.memberCalls.map { it.first.lowercase() })
         assertEquals(listOf(graceKept), kept(phone))
+        assertEquals(RoleEnd.Landed, phone.sync.changeRole(summary, ada.id, "Ada", MembersRole.GRANT))
+        assertEquals(List(7) { graceId } + ada.id.lowercase(), family.memberCalls.map { it.first.lowercase() })
+        assertTrue(kept(phone).isEmpty())
+        assertTrue("members" in rolesOf(phone, graceId) && "members" in rolesOf(phone, ada.id.lowercase()))
     }
 
     /*
