@@ -1514,6 +1514,86 @@ class FilesSaveOrderTest {
     }
 
     /*
+     * On a full disk, a save is kept only as its closed edit (no row); a newer save is then kept and lands. The older edit
+     * goes with that landing, and a read after it is the landed version, never the older edit. Fails if a closed edit no
+     * row names outlives a newer landing (an editor would read it and save it back over the landed save).
+     */
+    @Test
+    fun aNewerLandingRetiresAnOlderClosedEditNoRowNames() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.fault = { at -> if (at == "copy") throw java.io.IOException("No space left on device") }
+        FailedTransfers.beforeWrite = { throw java.io.IOException("No space left on device") }
+        save(provider, notes, "older, only a closed edit")
+        WriteBacks.fault = null
+        FailedTransfers.beforeWrite = null
+        save(provider, notes, "newer, landed")
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertTrue("the older closed edit outlived the newer landing", closedEdits().isEmpty())
+        assertEquals("newer, landed", opened(provider, notes, "r"))
+    }
+
+    /*
+     * A save's staging fails while publishing its record, so a complete generation of it sits in the slot beside its kept
+     * edit; its row is then dismissed. Nothing of it is recovered afterwards: the slot holds no save, no job sends it, a
+     * read gets the server's version. Fails if dismissing a row leaves a generation a later look publishes.
+     */
+    @Test
+    fun aDismissedSaveIsNeverRecoveredFromTheSlot() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.fault = { at -> if (at == "record") { WriteBacks.fault = null; throw java.io.IOException("No space left on device") } }
+        save(provider, notes, "dismissed save")
+        TransferQueue.dismiss(app, FailedTransfers.of(app).all().single())
+        assertNull(WriteBacks.pending(app, slot))
+        TransferQueue.sweep(app, inUse = emptySet())
+        assertNull(WriteBacks.pending(app, slot))
+        assertEquals("original", opened(provider, notes, "r"))
+    }
+
+    /*
+     * The process dies after a save was kept in its slot and before its job was queued, and the next start is the Files
+     * app's alone (no transfers panel): the start's sweep gives the save its job, which lands it. Fails if only the panel
+     * recovers a kept save without a job.
+     */
+    @Test
+    fun aKeptSaveWithoutAJobIsQueuedAtTheNextStart() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        val opened = vaultOf(provider).resolve(notes)
+        WriteBacks.save(app, Reservations.generation, WriteBacks.Target(opened.node.workspaceId, notes, opened.name, opened.metadata.mime, opened.node.parentId!!),
+            File(app.cacheDir, "kept").apply { writeText("kept before the death") })
+        assertTrue(jobs(slot).isEmpty())
+        TransferQueue.startupSweep(app)
+        assertEquals(WorkInfo.State.ENQUEUED, jobs(slot).single().state)
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("kept before the death", serverText(notes))
+    }
+
+    /*
+     * A cancel kept its bound and then stopped before deleting the cancelled save (the process killed there): the save is
+     * never taken as pending again, and the job finds nothing to send rather than taking it and stopping over and over.
+     * Fails if a look at the slot doesn't honour the durable cancel bound.
+     */
+    @Test
+    fun aCancelBoundKeptBeforeItsCleanupHoldsForEveryLook() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "cancelled save")
+        val job = jobs(slot).single()
+        WriteBacks.fault = { at -> if (at == "cancel") { WriteBacks.fault = null; throw java.io.IOException("Killed") } }
+        assertTrue(runCatching { TransferQueue.cancel(app, job.id, job.tags.first { it.startsWith("file:") }.removePrefix("file:")).get(5, TimeUnit.SECONDS) }.isFailure)
+        assertNull(WriteBacks.pending(app, slot))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("the cancelled save was sent", 0, begins())
+        assertEquals("original", opened(provider, notes, "r"))
+    }
+
+    /*
      * A save kept while its file's running job is about to fail for good, after the job's last look at the slot: the
      * save's own job is untouched by that failure (WorkManager runs both here, on a thread of its own) and lands it, with
      * no transfers panel and no sweep. Fails if a newer save's job is chained behind a running one, which WorkManager

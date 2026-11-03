@@ -384,7 +384,12 @@ object TransferQueue {
         FailedTransfers.of(context).forget(failed.id)
         // A save that was never kept in its slot: its edit goes. A file's failed save: only that save goes (the slot with it
         // while it is still the pending one), never a newer one.
-        if (failed.kind == UPLOAD && failed.stage != null) failed.file?.let { WriteBacks.discardEdit(File(it)) }
+        if (failed.kind == UPLOAD && failed.stage != null) {
+            failed.file?.let { WriteBacks.discardEdit(File(it)) }
+            // And whatever of it reached the slot (a generation whose record wasn't published), so no look recovers it.
+            val number = WriteBacks.stagedNumber(failed.stage)
+            if (failed.slot != null && number != null) WriteBacks.dismissSave(context, failed.slot, number)
+        }
         else if (failed.kind == UPLOAD && failed.slot != null) WriteBacks.discard(context, failed.slot, failed.file)
         else if (failed.kind == UPLOAD) discard(context, failed.file)
     }
@@ -443,6 +448,17 @@ object TransferQueue {
      * after a day, and a failed upload's copy would outlive it. Young folders are left
      * alone, since a copy lands before its job is queued.
      */
+    /*
+     * As the process starts (the app, a queued job, the Files app's provider): edits set right (reconcileEdits), then the
+     * queue swept as the transfers panel sweeps it, so a save kept in its slot whose job was never queued (a death between
+     * the two) is sent without the app being opened. Only while an account is signed in.
+     */
+    fun startupSweep(context: Context) {
+        if (Shared.session(context) == null) return
+        runCatching { reconcileEdits(context, startup = true) }
+        runCatching { sweep(context, WorkManager.getInstance(context).getWorkInfosByTag(TAG).get()) }
+    }
+
     fun sweep(context: Context, infos: List<WorkInfo>) {
         runCatching { reconcileEdits(context, startup = false) }
         val dirOf = { info: WorkInfo -> info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:")?.let { File(it).parent } }

@@ -15,9 +15,9 @@ class HushOSApplication : Application() {
         val cache = cacheDir
         Thread({
             runCatching { DecryptedCopies.sweep(cache) }
-            // Saves another app closed that weren't kept before the process stopped: each gets its row (an edit never closed
-            // and over a day old is an open nobody holds any more, and goes).
-            runCatching { com.hushos.app.data.TransferQueue.reconcileEdits(this, startup = true) }
+            // Saves another app closed that weren't kept before the process stopped get their rows (an edit never closed and
+            // over a day old is an open nobody holds any more, and goes), and a kept save whose job was never queued gets one.
+            runCatching { com.hushos.app.data.TransferQueue.startupSweep(this) }
         }, "HushOSSweep").start()
     }
 }
