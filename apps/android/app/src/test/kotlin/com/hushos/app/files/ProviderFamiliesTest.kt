@@ -2025,6 +2025,29 @@ class ProviderFamiliesTest {
         assertEquals("its record never written", serverText())
     }
 
+    /*
+     * #266 P2: a family save's generation is complete but its record is missing (a death before its rename), so reads find
+     * the save; Cancel is pressed. That save is what is cancelled: nothing is pending after, no job is queued again, and
+     * nothing is sent. Fails if a cancel captures only a save the record names, then queues the unpublished one again.
+     */
+    @Test
+    fun aCancelTakesASaveWhoseRecordIsMissing() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("cancelled, its record missing") })
+        File(WriteBacks.dir(app, slot), "record.json").delete()
+        assertNotNull(WriteBacks.pending(app, slot))
+        val job = jobs(slot).single()
+        val sent = begins()
+        TransferQueue.cancel(app, job.id, WriteBacks.contentOf(app, slot).path).get()
+        assertNull("a cancelled save is still pending", WriteBacks.pending(app, slot))
+        assertEquals("a cancelled save was queued again", emptyList<String>(), jobs(slot).filter { !it.state.isFinished }.map { it.id.toString() })
+        assertEquals(sent, begins())
+        assertEquals("marker-family", serverText())
+    }
+
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =
         HushOSDocumentsProvider::class.java.getDeclaredField("families").apply { isAccessible = true }.get(provider) as ProviderFamilies
 }

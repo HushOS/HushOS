@@ -863,15 +863,19 @@ object WriteBacks {
     private const val INCARNATION = "slot-id"
 
     /*
-     * The save the slot's record names now, read without its lock (the record and the slot's id each change by one rename,
-     * so they are whole): what a cancel pressed now cancels, before any save that arrives after it, by its generation,
-     * which no later save can take away. Null when none is published.
+     * The save the slot holds as Cancel is pressed: what it cancels, before any save that arrives after it, by its
+     * generation, which no later save can take away. Never waiting for the slot's lock (Cancel is pressed on the main
+     * thread, and the lock may be held for a whole file's copy): when nothing holds it, the save every read finds
+     * (`current`: the record's, or a complete generation whose record was never written, a death before its rename);
+     * while something does (a save being kept, whose generation arrives after the press), the one the record names (the
+     * record and the slot's id each change by one rename, so they are whole). Null when it holds none.
      */
     fun publishedSave(context: Context, slot: String): Captured? {
         val dir = dir(context, slot)
         val incarnation = runCatching { File(dir, INCARNATION).readText() }.getOrNull() ?: return null
-        val record = read(File(dir, RECORD), slot) ?: return null
-        return Captured(incarnation, record.generation, record.id, record.target)
+        val lock = lockOf(slot)
+        val pending = if (lock.tryLock()) try { current(dir, slot) } finally { lock.unlock() } else read(File(dir, RECORD), slot)
+        return pending?.let { Captured(incarnation, it.generation, it.id, it.target) }
     }
 
     /*
