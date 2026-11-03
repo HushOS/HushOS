@@ -149,6 +149,8 @@ private fun Vault.purgeShareCopies(workspaceId: String, held: Set<String>): Set<
     // Node ids name folders here only when they are ids (never "family", "..", or a path).
     for (id in ids.filter { FamilyRecords.valid(it) }) {
         for (place in listOf("opened", "files", "edits", "thumbnails")) File(File(context.cacheDir, place), id.lowercase()).deleteRecursively()
+        // The Files app's edits of it, kept under filesDir (WriteBacks.EDITS), go with the rest.
+        File(context.filesDir, "${WriteBacks.EDITS}/personal/${id.lowercase()}").deleteRecursively()
         if (id != id.lowercase()) for (place in listOf("opened", "files", "edits", "thumbnails")) File(File(context.cacheDir, place), id).deleteRecursively()
     }
     return ids

@@ -45,6 +45,8 @@ class AccountStore(private val files: File, private val cache: File, private val
         // The upload ledger under its own lock first: an upload still on its way adds nothing back after this.
         Reservations.wipe(files)
         for (name in ACCOUNT_FILES) File(files, name).deleteRecursively()
+        // What this process held of the account's saves (numbers given, bounds last read) goes with them.
+        WriteBacks.forgetHere()
         // The rollback marks, sealed, and the plaintext file earlier versions kept across sign-outs: a phone signed back
         // in trusts the server as a new device does, the cost the web accepted too (docs/integrity-design.md).
         SettingsMark.deleteAll(noBackup)
@@ -69,7 +71,7 @@ class AccountStore(private val files: File, private val cache: File, private val
          * awaiting a notification, and the upload reservations ledger: another account's session can't settle them (a
          * workspace's 404 would read as released), so they go with the account, and the server's expiry releases them.
          */
-        private val ACCOUNT_FILES = listOf("offline", "queue", "files-parents.json", FailedTransfers.FILE, TransferNotices.OUTCOMES, ShareSeals.FILE, PendingRotations.FILE, LandedJobs.DIR, JobNames.FILE, JobNames.STAGED, Reservations.FILE, Reservations.NEXT)
+        private val ACCOUNT_FILES = listOf("offline", "queue", "files-parents.json", FailedTransfers.FILE, TransferNotices.OUTCOMES, ShareSeals.FILE, PendingRotations.FILE, LandedJobs.DIR, WriteBacks.LANDINGS, WriteBacks.NUMBERS, WriteBacks.EDITS, JobNames.FILE, JobNames.STAGED, Reservations.FILE, Reservations.NEXT)
 
         fun of(context: Context): AccountStore = AccountStore(context.filesDir, context.cacheDir, context.noBackupFilesDir) {
             // Jobs queued for that account would run under the next one's session.
