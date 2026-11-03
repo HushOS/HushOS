@@ -198,6 +198,10 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
                         Folders(view, openFolder)
                         // A manager's: Invite someone, and who waits to be let in (6.8).
                         if (manages) { InviteRow(model, groupId); ManagedError(model, groupId); Waiting(model, groupId, name) }
+                        // A handover left half done (billing given, not yet let go of here): the page offers its last step.
+                        if (manages) com.hushos.app.data.handoverToFinish(view, me)?.let { other ->
+                            served(other)?.let { who -> FinishHandover(model, groupId, FamilyMemberRef(other, who.email.orEmpty(), who.name)) }
+                        }
                         Subheader("Members")
                         val iAmOrganizer = view.members.any { it.userId.equals(me, ignoreCase = true) && "billing" in it.roles }
                         for (member in view.members) {
@@ -436,6 +440,17 @@ private fun InviteDialog(model: DriveViewModel, ask: InviteAsk) {
     )
 }
 
+/* Both organizers after a handover's last step didn't land: the web's words for that state, and the plan's Finish handing over. */
+@Composable
+private fun FinishHandover(model: DriveViewModel, groupId: String, member: FamilyMemberRef) {
+    val who = firstNameOf(member.name)
+    Column(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+        Text("$who is an organizer now, and so are you still.", style = MaterialTheme.typography.bodyMedium)
+        androidx.compose.material3.Button(onClick = { model.families.finishHandingOver(groupId, member) }, enabled = model.families.roleBusy == null,
+            modifier = Modifier.heightIn(min = 44.dp)) { Text("Finish handing over to $who") }
+    }
+}
+
 /* The web's RoleConfirm: what the change means, and its own action. */
 @Composable
 private fun RoleConfirmDialog(model: DriveViewModel, ask: RoleAsk, family: String) {
@@ -443,7 +458,7 @@ private fun RoleConfirmDialog(model: DriveViewModel, ask: RoleAsk, family: Strin
     val (title, body, action) = when (ask.kind) {
         RoleKind.MANAGE -> Triple("Let $who manage the family?", "$who can invite people, let them in and change who manages $family.", "Let them manage")
         RoleKind.STOP -> Triple("Stop $who managing the family?", "$who stays in $family and keeps the family folders, but can’t change who’s in it any more.", "Stop managing")
-        RoleKind.ORGANIZER -> Triple("Make $who the organizer?", "$who takes over the family’s billing. You keep managing the family.", "Make organizer")
+        RoleKind.ORGANIZER, RoleKind.FINISH -> Triple("Make $who the organizer?", "$who takes over the family’s billing. You keep managing the family.", "Make organizer")
     }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = { model.families.dismissRole() },

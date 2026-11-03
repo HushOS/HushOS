@@ -34,6 +34,7 @@ import com.hushos.app.data.walkTarget
 import com.hushos.app.data.rethrowIfCancelled
 import com.hushos.app.data.changeRole
 import com.hushos.app.data.handOver
+import com.hushos.app.data.finishHandingOver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.StateFlow
@@ -153,7 +154,7 @@ fun personalCheck(userId: String, standing: com.hushos.app.data.MemberStanding?,
         (checkedWith?.equals(userId, ignoreCase = true) == true && standing != com.hushos.app.data.MemberStanding.VERIFIED)
 
 /* A role change asked for on a member's row (the web's RoleChange): letting them manage, stopping it, or the handover. */
-enum class RoleKind { MANAGE, STOP, ORGANIZER }
+enum class RoleKind { MANAGE, STOP, ORGANIZER, FINISH }
 data class RoleAsk(val groupId: String, val member: com.hushos.app.data.FamilyMemberRef, val kind: RoleKind)
 
 /* One waiting person's row: Let them in or Not now under way, its words, and an earlier Let them in kept for other keys. */
@@ -380,10 +381,22 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         if (roleBusy != null) return
         // Both promotions wait for a check (the web's needsCheckFor): managing holds the family's key, and the organizer
         // runs its plan. The data layer reads their standing again before anything is signed.
-        if (ask.kind != RoleKind.STOP && !verified) checkFirst = ask else roleAsk = ask
+        if ((ask.kind == RoleKind.MANAGE || ask.kind == RoleKind.ORGANIZER) && !verified) checkFirst = ask else roleAsk = ask
     }
 
     fun dismissRole() { roleAsk = null }
+
+    /* Finish handing over to {first} (a handover whose last step didn't land): the step the person already asked for. */
+    fun finishHandingOver(groupId: String, member: com.hushos.app.data.FamilyMemberRef) {
+        if (roleBusy != null) return
+        roleAsk = RoleAsk(groupId, member, RoleKind.FINISH)
+        confirmRole()
+    }
+
+    /* A member's first name as route 3 or route 16 last named them, for a sentence about them. */
+    private fun memberName(userId: String): String? =
+        (details.values.flatMap { it.members }.firstOrNull { it.userId.equals(userId, ignoreCase = true) }?.name
+            ?: waiting.values.flatten().firstOrNull { it.userId.equals(userId, ignoreCase = true) }?.name)?.let { com.hushos.app.data.firstNameOf(it) }
     fun dismissCheckFirst() { checkFirst = null }
 
     /* The confirmed change, in the families' scope: said once it lands, kept here when no answer came. */
@@ -401,7 +414,8 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                 when (ask.kind) {
                     RoleKind.MANAGE -> sync.changeRole(summary, ask.member.userId, who, com.hushos.core.MembersRole.GRANT)
                     RoleKind.STOP -> sync.changeRole(summary, ask.member.userId, who, com.hushos.core.MembersRole.TAKE)
-                    RoleKind.ORGANIZER -> sync.handOver(summary, ask.member.userId, who)
+                    RoleKind.ORGANIZER -> sync.handOver(summary, ask.member.userId, who, ::memberName)
+                    RoleKind.FINISH -> sync.finishHandingOver(summary, ask.member.userId, who)
                 }
             }
             if (result == null || !gate.current(s)) { roleBusy = null; return@launch }
@@ -417,7 +431,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                     model.notice(when (ask.kind) {
                         RoleKind.MANAGE -> "$who can manage the family"
                         RoleKind.STOP -> "$who no longer manages the family"
-                        RoleKind.ORGANIZER -> "$who is the organizer"
+                        RoleKind.ORGANIZER, RoleKind.FINISH -> "$who is the organizer"
                     }, untilRead = false)
                     refreshFamily(summary, session = s)
                 }

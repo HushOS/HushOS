@@ -316,4 +316,52 @@ class FamilyRolesTest {
         assertTrue("billing" !in rolesOf(phone, family.member.id))
         assertNull(phone.sync.outbox.handover(family.member.id, family.groupId))
     }
+
+    private fun organizers(phone: FamilyFixture.Phone): Set<String> =
+        (phone.sync.sync(summary) as FamilyState.Accepted).view.members.filter { "billing" in it.roles }.map { it.userId.lowercase() }.toSet()
+
+    /*
+     * The handover's last step refused (billing given to Grace, Maya's own step not): both organizers, the record gone.
+     * The page offers Finish handing over to Grace, and that step lands: one organizer. Fails if a handover left half done
+     * leaves no way to finish it.
+     */
+    @Test
+    fun aHandoverLeftHalfDoneCanBeFinished() {
+        val phone = phone(organizer = true)
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        family.memberAnswers.add { body -> family.apply(body, null) }
+        family.memberAnswers.add { _ -> 409 to JSONObject().put("code", "held").put("message", "Paused.") }
+        val end = phone.sync.handOver(summary, graceId, "Grace")
+        assertEquals(RoleEnd.Refused("Grace is an organizer now, and so are you still: Another manager paused your changes in this family for now."), end)
+        assertNull(phone.sync.outbox.handover(family.member.id, family.groupId))
+        val view = (phone.sync.sync(summary) as FamilyState.Accepted).view
+        assertEquals(graceId, handoverToFinish(view, family.member.id)?.lowercase())
+        assertEquals(RoleEnd.Landed, phone.sync.finishHandingOver(summary, graceId, "Grace"))
+        assertEquals(setOf(graceId), organizers(phone))
+        assertNull(handoverToFinish((phone.sync.sync(summary) as FamilyState.Accepted).view, family.member.id))
+    }
+
+    /*
+     * A handover to Grace whose answer was lost (kept, unanswered), then Make them the organizer on Ada: Grace's is settled
+     * first (sent again, and finished), and Ada's refused, never staged. Fails if a second handover replaces the first's
+     * record and two people end up organizers beside each other.
+     */
+    @Test
+    fun aSecondHandoverSettlesTheFirstAndNeverMakesTwoOrganizers() {
+        val phone = phone(organizer = true)
+        val ada = server.another("ada@example.org", "Ada Lovelace")
+        family.waiting(ada, "ada@example.org", "Ada Lovelace")
+        assertEquals(LetIn.Landed, phone.sync.letIn(summary, family.pendingRows.map(PendingPerson::from).single()))
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        family.verifyPin(ada, "ada@example.org", "Ada Lovelace")
+        // Billing to Grace lands, its answer lost, and the next two sends get none either.
+        family.memberAnswers.add { body -> family.apply(body, null); 503 to JSONObject().put("message", "Lost.") }
+        answer(2, 503)
+        assertTrue(phone.sync.handOver(summary, graceId, "Grace") is RoleEnd.Pending)
+        val end = phone.sync.handOver(summary, ada.id, "Ada", names = { if (it.equals(graceId, ignoreCase = true)) "Grace" else null })
+        assertEquals(RoleEnd.Refused("Grace is the organizer now."), end)
+        assertEquals(setOf(graceId), organizers(phone))
+        assertTrue("Ada's handover never staged", family.memberCalls.none { it.first.equals(ada.id, ignoreCase = true) })
+        assertNull(phone.sync.outbox.handover(family.member.id, family.groupId))
+    }
 }

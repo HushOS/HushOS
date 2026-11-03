@@ -335,9 +335,12 @@ class FamilyFixture(val server: FakeDrive) {
      * its roster appended to the chain and the person let in.
      */
     fun apply(body: JSONObject, userId: String?): Pair<Int, JSONObject> {
+        val next = signedOf(body.getJSONObject("roster"))
+        // A call the server took already, sent again (its answer was lost): answered with the head, as the server replays it.
+        if (chain.any { it.statement.contentEquals(next.statement) })
+            return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", chain.size))
         if (body.optLong("expectedRevision", -1) != chain.size.toLong())
             return 409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
-        val next = signedOf(body.getJSONObject("roster"))
         val succession = body.optJSONObject("succession")?.let(::signedOf)
         // The roster (and its succession) must follow the head it names (the server's verify; `invalid`/`roster-chain` otherwise).
         if (runCatching { creatorChain(chain + next, successions.toList() + listOfNotNull(succession)) }.isFailure)

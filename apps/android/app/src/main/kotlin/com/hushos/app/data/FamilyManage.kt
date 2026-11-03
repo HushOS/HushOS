@@ -637,11 +637,42 @@ fun FamilySync.changeRole(summary: GroupSummary, userId: String, first: String, 
  * let go of here. The handover is kept on this device before its first call, so one the app stopped in the middle of is
  * finished at the next open (resumeOutbox).
  */
-fun FamilySync.handOver(summary: GroupSummary, to: String, first: String): RoleEnd = exclusive(summary.id) {
+fun FamilySync.handOver(summary: GroupSummary, to: String, first: String, names: (String) -> String? = { null }): RoleEnd = exclusive(summary.id) {
     notMemberLetsGo(summary.id, { RoleEnd.Wiped }) {
+        // A handover to someone else still unfinished is settled first (its kept calls sent, its last step taken), never
+        // replaced: two handovers under way could leave two organizers. One that is still waiting refuses this one.
+        outbox.handover(userId, summary.id)?.takeIf { !it.to.equals(to, ignoreCase = true) }?.let { earlier ->
+            val them = names(earlier.to) ?: "someone else"
+            var settled: RoleEnd? = null
+            for (kept in outbox.list(userId, summary.id)) {
+                val read = try { ledger.outboxOpen(summary.id, kept.outboxId, userId, kept.entry) } catch (_: CoreException.Sealed) { continue }
+                val about = personOf(read.route())
+                if (about.equals(earlier.to, ignoreCase = true) || about.equals(userId, ignoreCase = true)) {
+                    if (sendKept(summary, kept, names = names) == CallEnd.Wiped) return@notMemberLetsGo RoleEnd.Wiped
+                }
+            }
+            finishHandover(summary, names) { _, end -> settled = end }
+            if (outbox.handover(userId, summary.id) != null) return@notMemberLetsGo RoleEnd.Refused("Finish handing over to $them first.")
+            if (settled == RoleEnd.Landed) return@notMemberLetsGo RoleEnd.Refused("$them is the organizer now.")
+        }
         outbox.markHandover(userId, summary.id, to)
         giveThenStepDown(summary, to, first)
     }
+}
+
+/*
+ * Finish handing over to {first}: this account and they both hold billing (a handover whose second step was refused,
+ * or never sent), and this account lets go of it now, as the handover's last step.
+ */
+fun FamilySync.finishHandingOver(summary: GroupSummary, to: String, first: String): RoleEnd = exclusive(summary.id) {
+    notMemberLetsGo(summary.id, { RoleEnd.Wiped }) { stepDown(summary, first) }
+}
+
+/* Who else holds billing beside this account, on a member list where this account does too: a handover left half done. */
+fun handoverToFinish(view: FamilyView, me: String): String? {
+    val members = view.members
+    if (members.none { it.userId.equals(me, ignoreCase = true) && "billing" in it.roles }) return null
+    return members.firstOrNull { !it.userId.equals(me, ignoreCase = true) && "billing" in it.roles }?.userId
 }
 
 /*
@@ -757,4 +788,14 @@ fun FamilySync.cancelInvitation(groupId: String, invitationId: String) = api.rev
 
 /* Who accepted and waits to be let in (route 16), and Not now on one of them (route 26). */
 fun FamilySync.pending(groupId: String): List<PendingPerson> = api.pending(groupId)
-fun FamilySync.turnDown(groupId: String, userId: String) = api.decline(groupId, userId)
+fun FamilySync.turnDown(groupId: String, userId: String) = exclusive(groupId) {
+    // A Let them in for them kept here must never admit them after they're turned down (if they accept a new invitation),
+    // so every kept admission of theirs goes first, in the family's turn, and only then is the decline sent: a decline
+    // whose answer is lost, or a cleanup that can't finish (a delete that doesn't hold throws), never leaves one to replay.
+    for (kept in outbox.list(this.userId, groupId)) {
+        val read = try { ledger.outboxOpen(groupId, kept.outboxId, this.userId, kept.entry) } catch (_: CoreException.Sealed) { continue }
+        val admits = read.route() as? ChainRoute.Admit ?: continue
+        if (admits.userId.equals(userId, ignoreCase = true)) outbox.delete(this.userId, groupId, kept.outboxId)
+    }
+    api.decline(groupId, userId)
+}
