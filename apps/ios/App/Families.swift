@@ -88,6 +88,17 @@ extension DriveStore {
         listenedFamilies?.detach()
         listenedFamilies = nil
         sessionGate.reset()
+        // A manager's lists, dialogs and notices are the ended session's.
+        waitingToJoin = [:]
+        familyInvitations = [:]
+        waitingRows = [:]
+        inviting = nil
+        turningDown = nil
+        cancellingInvitation = nil
+        managedErrors = [:]
+        manageChange = nil
+        manageNotices.clear()
+        managedLoads.reset()
         for groupId in familyStates.keys { familyGenerations.published(groupId) }
         familyRevisions = FamilyRevisions()
         familyList = nil
@@ -840,7 +851,9 @@ struct FamilyPage: View {
             } else if let view {
                 alerts
                 folders(view)
+                if store.manages(groupId), let summary { FamilyManageSections(summary: summary) }
                 members(view)
+                if store.manages(groupId) { FamilyInvitationsSection(groupId: groupId) }
                 technical(view)
                 leavingSection
             } else if state == nil || store.familySyncing.contains(groupId) {
@@ -856,10 +869,17 @@ struct FamilyPage: View {
         .alpineGrouped()
         .listSectionSpacing(Alpine.Space.s4)
         .screenChrome(title: joining ? (waitTitle ?? "Join \(name)") : name)
-        .refreshable { await store.refreshFamilies(force: true) }
+        // Pulled: the family checked again, and a manager's lists read again.
+        .refreshable { await store.refreshManagedPage(groupId) }
         .task {
             if store.familyList == nil { await store.refreshFamilies() } else if let summary { await store.refreshFamily(summary) }
         }
+        // A manager's lists: kept calls sent again, then who waits and the open invitations, again whenever the member list moves.
+        .task(id: "\(groupId)-\(store.manages(groupId))-\(view?.rosterDigest ?? "")") {
+            guard store.manages(groupId), let summary else { return }
+            await store.loadManaged(summary)
+        }
+        .modifier(FamilyManageDialogs(groupId: groupId))
         // The labels are read again after every finished check of the family (pull to refresh included), every trust
         // reload and every check made here: a pin changed on another device never leaves someone shown Verified.
         .task(id: "\(view?.rosterDigest ?? "")-\(checks)-\(store.familyRefreshed[groupId] ?? 0)-\(store.trustGeneration)") {

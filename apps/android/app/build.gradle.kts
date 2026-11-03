@@ -69,7 +69,7 @@ android {
         targetSdk = 36
         versionCode = buildNumber
         // The product version (the root package.json): the release pull request sets it.
-        versionName = "0.12.0" // x-release-please-version
+        versionName = "0.13.0" // x-release-please-version
     }
 
     signingConfigs {
@@ -177,4 +177,7 @@ val hostCore = tasks.register<Exec>("hostCore") {
 tasks.withType<Test>().configureEach {
     dependsOn(hostCore)
     systemProperty("jna.library.path", File(repoRoot, "target/release").path)
+    // The JVM's HttpURLConnection has no PATCH (Android's has): FamilyFixture.allowPatch adds it to the test JVM only,
+    // so route 18's role changes run in unit tests as on a phone.
+    jvmArgs("--add-opens=java.base/java.net=ALL-UNNAMED")
 }

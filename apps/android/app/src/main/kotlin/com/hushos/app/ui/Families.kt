@@ -20,11 +20,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
@@ -156,6 +159,14 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
         standings = read?.getOrNull()
         checkedWith = with.getOrNull()
     }
+    /*
+     * Check it's {first}, from a row or from Check it's {first} first: an account that changed, or a family check over
+     * keys that changed since, takes their own twelve words (6.10); otherwise the family check.
+     */
+    fun startCheck(ref: FamilyMemberRef, standing: MemberStanding?) {
+        if (personalCheck(ref.userId, standing, checkedWith)) model.contactStep = ContactStep.Check(ref.email, ref.name)
+        else if (summary != null) families.checking = MemberCheck(summary, ref, served(me)?.name?.let(::firstNameOf) ?: "you", organizer)
+    }
     // A manager's page: what the outbox kept sent again, who waits and the open invitations read, at each open.
     val manages = families.manages(groupId)
     LaunchedEffect(groupId, manages, view?.rosterDigest) {
@@ -166,6 +177,13 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
     families.inviting?.takeIf { it.groupId == groupId }?.let { InviteDialog(model, it) }
     families.turningDown?.takeIf { it.first == groupId }?.let { (_, person) -> TurnDownDialog(model, groupId, person, name) }
     families.cancelling?.takeIf { it.first == groupId }?.let { (_, invitation) -> CancelInvitationDialog(model, groupId, invitation) }
+    families.roleAsk?.takeIf { it.groupId == groupId }?.let { RoleConfirmDialog(model, it, name) }
+    families.checkFirst?.takeIf { it.groupId == groupId }?.let { ask ->
+        CheckFirstDialog(model, ask) { families.dismissCheckFirst(); startCheck(ask.member, standings?.get(ask.member.userId.lowercase())) }
+    }
+    // Remove from family and Delete family folder live in the model too: a removal runs on whatever the page shows.
+    families.removal?.takeIf { it.groupId == groupId }?.let { RemoveDialog(model, it, name) }
+    families.deletingFolder?.takeIf { it.groupId == groupId }?.let { DeleteFolderDialog(model, it, name) }
     // The leave dialog lives in the model: redrawn as it was after a rotation or a fold, whatever the page shows below it.
     families.leaving?.takeIf { it.groupId == groupId }?.let { LeaveDialog(model, it, name) }
     // A leave that landed: the page moves on, once, whichever composition is on screen when it lands.
@@ -182,21 +200,44 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
                     joining -> JoinContent(model, groupId, name, title = { waitTitle = it }, onJoined = {})
                     view != null -> {
                         Alerts(model, groupId, name, state, organizer)
+                        // Someone left (or their account went) and isn't marked left yet: a manager's phone finishes it.
+                        if (manages) families.details[groupId]?.due?.markLeft?.takeIf { it.isNotEmpty() }?.let { gone ->
+                            // Named as route 3 names them, whatever their state now (they left): the web's firstNames.
+                            val everyone = families.details[groupId]?.members.orEmpty()
+                            val who = gone.map { id -> everyone.firstOrNull { it.userId.equals(id, ignoreCase = true) }?.name?.let(::firstNameOf) ?: "Someone" }
+                            Notice("${namesInWords(who)} left the family. A manager needs to finish that before anyone can join or roles change.",
+                                if (families.dueRunning[groupId] == true) "HushOS is finishing it on this device now."
+                                else "HushOS finishes it on this device the next time it checks the family.")
+                        }
                         KeyChanges(model, groupId, name, view)
-                        Folders(view, openFolder)
+                        Folders(view, openFolder, delete = if (manages) { area -> families.askDeleteFolder(groupId, area.workspaceId, area.name ?: "Family folder") } else null)
                         // A manager's: Invite someone, and who waits to be let in (6.8).
                         if (manages) { InviteRow(model, groupId); ManagedError(model, groupId); Waiting(model, groupId, name) }
+                        // A handover left half done (billing given, not yet let go of here): the page offers its last step.
+                        if (manages) com.hushos.app.data.handoverToFinish(view, me)?.let { other ->
+                            served(other)?.let { who -> FinishHandover(model, groupId, FamilyMemberRef(other, who.email.orEmpty(), who.name)) }
+                        }
                         Subheader("Members")
+                        val iAmOrganizer = view.members.any { it.userId.equals(me, ignoreCase = true) && "billing" in it.roles }
                         for (member in view.members) {
                             val who = served(member.userId)
                             val you = member.userId.equals(me, ignoreCase = true)
                             val standing = standings?.get(member.userId.lowercase())
-                            MemberRow(who?.name ?: "Someone", who?.email, member.userId, FamilySync.rolesLine(member.roles), you, standing) { mine ->
-                                val ref = FamilyMemberRef(member.userId, who?.email.orEmpty(), who?.name ?: "Someone")
-                                // An account that changed, or a family check over keys that changed since: their own twelve words (6.10).
-                                if (mine || (checkedWith?.equals(member.userId, ignoreCase = true) == true && standing != MemberStanding.VERIFIED)) model.contactStep = ContactStep.Check(ref.email, ref.name)
-                                else if (summary != null) families.checking = MemberCheck(summary, ref, served(me)?.name?.let(::firstNameOf) ?: "you", organizer)
+                            val ref = FamilyMemberRef(member.userId, who?.email.orEmpty(), who?.name ?: "Someone")
+                            // A manager's role changes (the web's MemberList menu): managing the family, and the handover.
+                            val roles = if (!manages || you || who == null) emptyList() else buildList {
+                                val verified = standing == MemberStanding.VERIFIED
+                                if ("members" in member.roles) add("Stop them managing the family" to { families.askRole(RoleAsk(groupId, ref, RoleKind.STOP), verified) })
+                                else add("Let them manage the family" to { families.askRole(RoleAsk(groupId, ref, RoleKind.MANAGE), verified) })
+                                // Not while a handover is left half done: Finish handing over is the way on from there.
+                                if (iAmOrganizer && "billing" !in member.roles && com.hushos.app.data.handoverToFinish(view, me) == null)
+                                    add("Make them the organizer" to { families.askRole(RoleAsk(groupId, ref, RoleKind.ORGANIZER), verified) })
                             }
+                            // Last on a manager's menu (the web's MemberList): Remove from family, or why it can't be done yet.
+                            val remove = if (!manages || you || who == null) null
+                                else RemoveItem(removeBlocker(member.userId, firstNameOf(who.name), named)) { families.askRemove(groupId, ref, member) }
+                            MemberRow(who?.name ?: "Someone", who?.email, member.userId, FamilySync.rolesLine(member.roles), you, standing, roles,
+                                busy = families.roleBusy != null, remove = remove) { _ -> startCheck(ref, standing) }
                         }
                         if (manages) Invitations(model, groupId)
                         TechnicalDetailsRow(view)
@@ -419,6 +460,48 @@ private fun InviteDialog(model: DriveViewModel, ask: InviteAsk) {
     )
 }
 
+/* Both organizers after a handover's last step didn't land: the web's words for that state, and the plan's Finish handing over. */
+@Composable
+private fun FinishHandover(model: DriveViewModel, groupId: String, member: FamilyMemberRef) {
+    val who = firstNameOf(member.name)
+    Column(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+        Text("$who is an organizer now, and so are you still.", style = MaterialTheme.typography.bodyMedium)
+        androidx.compose.material3.Button(onClick = { model.families.finishHandingOver(groupId, member) }, enabled = model.families.roleBusy == null,
+            modifier = Modifier.heightIn(min = 44.dp)) { Text("Finish handing over to $who") }
+    }
+}
+
+/* The web's RoleConfirm: what the change means, and its own action. */
+@Composable
+private fun RoleConfirmDialog(model: DriveViewModel, ask: RoleAsk, family: String) {
+    val who = firstNameOf(ask.member.name)
+    val (title, body, action) = when (ask.kind) {
+        RoleKind.MANAGE -> Triple("Let $who manage the family?", "$who can invite people, let them in and change who manages $family.", "Let them manage")
+        RoleKind.STOP -> Triple("Stop $who managing the family?", "$who stays in $family and keeps the family folders, but can’t change who’s in it any more.", "Stop managing")
+        RoleKind.ORGANIZER, RoleKind.FINISH -> Triple("Make $who the organizer?", "$who takes over the family’s billing. You keep managing the family.", "Make organizer")
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { model.families.dismissRole() },
+        title = { Text(title) },
+        text = { Text(body) },
+        confirmButton = { TextButton(onClick = { model.families.confirmRole() }) { Text(action) } },
+        dismissButton = { TextButton(onClick = { model.families.dismissRole() }) { Text("Cancel") } },
+    )
+}
+
+/* The manager rule asks for a check first (the web's checkFirst dialog): the check, then Let them manage again. */
+@Composable
+private fun CheckFirstDialog(model: DriveViewModel, ask: RoleAsk, check: () -> Unit) {
+    val who = firstNameOf(ask.member.name)
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { model.families.dismissCheckFirst() },
+        title = { Text("Check it’s $who first") },
+        text = { Text("Managers can let people in and change the family, so check it’s $who before they manage it. It takes a minute on a call or in person.") },
+        confirmButton = { TextButton(onClick = check) { Text("Check it’s $who") } },
+        dismissButton = { TextButton(onClick = { model.families.dismissCheckFirst() }) { Text("Cancel") } },
+    )
+}
+
 @Composable
 private fun TurnDownDialog(model: DriveViewModel, groupId: String, person: com.hushos.app.data.PendingPerson, family: String) {
     val alpine = Alpine.colors
@@ -446,7 +529,8 @@ private fun CancelInvitationDialog(model: DriveViewModel, groupId: String, invit
 
 /* A member: avatar, name, address, role, "Account changed"; Verified or Not verified at the right; the row's menu checks them. */
 @Composable
-private fun MemberRow(name: String, email: String?, userId: String, roles: String, you: Boolean, standing: MemberStanding?, check: (personal: Boolean) -> Unit) {
+private fun MemberRow(name: String, email: String?, userId: String, roles: String, you: Boolean, standing: MemberStanding?,
+    roleItems: List<Pair<String, () -> Unit>> = emptyList(), busy: Boolean = false, remove: RemoveItem? = null, check: (personal: Boolean) -> Unit) {
     val alpine = Alpine.colors
     var menu by remember { mutableStateOf(false) }
     val checkable = !you && !email.isNullOrEmpty()
@@ -472,13 +556,25 @@ private fun MemberRow(name: String, email: String?, userId: String, roles: Strin
                 menu = false
                 check(standing == MemberStanding.CHANGED)
             })
+            for ((label, act) in roleItems) DropdownMenuItem(text = { Text(label) }, enabled = !busy, onClick = { menu = false; act() })
+            remove?.let { item ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text("Remove from family", color = if (item.blocked == null) alpine.danger else alpine.inkMuted)
+                            item.blocked?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted) }
+                        }
+                    },
+                    enabled = item.blocked == null && !busy, onClick = { menu = false; item.act() },
+                )
+            }
         } }
     }
 }
 
 /* The family's folders: each opens as the Files list, read only; one that didn't open says why, as the web's row. */
 @Composable
-private fun Folders(view: FamilyView, open: (com.hushos.app.data.NodeView) -> Unit) {
+private fun Folders(view: FamilyView, open: (com.hushos.app.data.NodeView) -> Unit, delete: ((com.hushos.app.data.FamilyArea) -> Unit)? = null) {
     val alpine = Alpine.colors
     Subheader("Family folders")
     if (view.areas.isEmpty()) Column(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2)) {
@@ -494,9 +590,148 @@ private fun Folders(view: FamilyView, open: (com.hushos.app.data.NodeView) -> Un
                 Text(area.name ?: "Family folder", style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(area.line, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, maxLines = 2)
             }
-            if (root != null) Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = alpine.inkMuted)
+            // A manager's: the folder's menu, with Delete family folder (the web's family space row).
+            if (delete != null) Box {
+                var menu by remember { mutableStateOf(false) }
+                IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "More for ${area.name ?: "Family folder"}", tint = alpine.inkMuted) }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, shape = RoundedCornerShape(16.dp), containerColor = alpine.menu) {
+                    DropdownMenuItem(text = { Text("Delete family folder", color = alpine.danger) }, onClick = { menu = false; delete(area) })
+                }
+            } else if (root != null) Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = alpine.inkMuted)
         }
     }
+}
+
+/* Remove from family on a member's menu: why it can't be done yet (the web's removeBlocker), or what it does. */
+class RemoveItem(val blocked: String?, val act: () -> Unit)
+
+/* The web's removeBlocker: the family's only billing holder stays until someone else is the organizer. */
+private fun removeBlocker(targetId: String, who: String, members: List<com.hushos.app.data.GroupDetail.Member>): String? {
+    val active = members.filter { it.state == "active" }
+    val target = active.firstOrNull { it.userId.equals(targetId, ignoreCase = true) } ?: return null
+    if ("billing" !in target.roles) return null
+    if (active.any { it !== target && "billing" in it.roles }) return null
+    return "$who is the only one who manages the family’s plan. Make someone else the organizer first."
+}
+
+/* The web's namesInWords: "Sam", "Sam and Maya", "Sam, Maya and Lea". */
+private fun namesInWords(names: List<String>): String =
+    if (names.size <= 1) names.firstOrNull().orEmpty() else names.dropLast(1).joinToString(", ") + " and " + names.last()
+
+/* The web's RemoveDialog: asked once (and again for a plan it ends), then the removal's steps and what it came to. */
+@Composable
+private fun RemoveDialog(model: DriveViewModel, sheet: RemovalSheet, family: String) {
+    val alpine = Alpine.colors
+    val families = model.families
+    val who = firstNameOf(sheet.member.name)
+    val about = "$who loses the family folders straight away. HushOS replaces their keys, which can take a few minutes."
+    val phase = sheet.phase
+    val plan = phase as? RemovalPhase.ConfirmPlan
+    val asking = phase == RemovalPhase.Confirm || plan != null
+    val running = phase is RemovalPhase.Running
+    val removed = phase is RemovalPhase.Done && phase.end is com.hushos.app.data.RemovalEnd.Removed
+    val demoted = when (phase) { is RemovalPhase.Running -> phase.demote; is RemovalPhase.Done -> phase.demoted; else -> false }
+    val finished = when (phase) { is RemovalPhase.Running -> phase.finished; is RemovalPhase.Done -> phase.finished; else -> false }
+    val steps = buildList {
+        if (demoted) add(com.hushos.app.data.RemovalStep.DEMOTE to "Stopping $who managing the family")
+        add(com.hushos.app.data.RemovalStep.HOLD to "Pausing $who’s changes")
+        if (finished) add(com.hushos.app.data.RemovalStep.FINISH to "Finishing an earlier key change")
+        add(com.hushos.app.data.RemovalStep.REMOVE to "Removing $who")
+    }
+    val at = (phase as? RemovalPhase.Running)?.let { r -> steps.indexOfFirst { it.first == r.step } } ?: -1
+    // One dialog throughout, its contents changing with the phase: never closed and opened again between them (a flicker).
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { families.dismissRemove() },
+        title = { Text(when { plan != null -> "Remove $who and end the plan?"; asking -> "Remove $who from $family?"; else -> "Remove $who" }) },
+        text = {
+            if (asking) Text(plan?.line ?: about)
+            else Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
+                Text(about)
+                Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+                    steps.forEachIndexed { index, (_, label) ->
+                        val done = removed || (at >= 0 && index < at)
+                        val current = index == at
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+                                when {
+                                    done -> Icon(Icons.Outlined.Check, null, tint = alpine.primary, modifier = Modifier.size(16.dp))
+                                    current -> androidx.compose.material3.CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = alpine.inkMuted)
+                                    else -> Box(Modifier.size(6.dp).background(alpine.inkMuted.copy(alpha = 0.4f), RoundedCornerShape(3.dp)))
+                                }
+                            }
+                            Spacer(Modifier.width(AlpineSpace.S2))
+                            Text(label, color = if (current || done) alpine.ink else alpine.inkMuted)
+                        }
+                    }
+                }
+                if (phase is RemovalPhase.Done) RemovalOutcome(phase.end, who, family, sheet.member.userId, { id ->
+                    families.details[sheet.groupId]?.members?.firstOrNull { it.userId.equals(id, ignoreCase = true) }?.name?.let(::firstNameOf)
+                }) { families.runRemove(demote = true) }
+                if (phase is RemovalPhase.Error) Text(phase.words, color = alpine.danger)
+            }
+        },
+        confirmButton = {
+            when {
+                plan != null -> TextButton(onClick = { families.runRemove(plan.demote, plan.ids, plan.carried) }) { Text("Remove and end the plan", color = alpine.danger) }
+                asking -> TextButton(onClick = { families.runRemove(demote = false) }) { Text("Remove from family", color = alpine.danger) }
+                else -> TextButton(onClick = { families.dismissRemove() }, enabled = !running) { Text(if (removed) "Done" else "Close") }
+            }
+        },
+        dismissButton = when {
+            asking -> ({ TextButton(onClick = { families.dismissRemove() }) { Text("Cancel") } })
+            phase is RemovalPhase.Error -> ({ TextButton(onClick = { families.runRemove(demote = false) }) { Text("Try again") } })
+            else -> null
+        },
+    )
+}
+
+/* What a removal came to, in the web's words (its RemoveDialog's Outcome). */
+@Composable
+private fun RemovalOutcome(end: com.hushos.app.data.RemovalEnd, who: String, family: String, targetId: String, nameOf: (String) -> String?, demoteThenRemove: () -> Unit) {
+    val alpine = Alpine.colors
+    when (end) {
+        is com.hushos.app.data.RemovalEnd.Removed ->
+            Text("$who is no longer in $family. HushOS is replacing the family folders’ keys in the background; you can close this.")
+        is com.hushos.app.data.RemovalEnd.Held -> {
+            val by = end.heldBy
+            // Named only as route 3 names them; nobody is blamed on a guess.
+            val holder = by?.takeIf { !it.equals(targetId, ignoreCase = true) }?.let(nameOf)
+            if (by == null || !by.equals(targetId, ignoreCase = true) || !end.targetManages)
+                Text(holder?.let { "$it paused your changes in $family for now, so $who wasn’t removed. Try again later, or ask $it." }
+                    ?: "Your changes in $family are paused for now, so $who wasn’t removed. Try again later, or ask the family’s other managers.")
+            else Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+                Text("$who manages $family too and paused your changes, so you can’t remove them yet. Stop them managing the family first: that ends their pause, then HushOS removes them.")
+                TextButton(onClick = demoteThenRemove) { Text("Stop managing, then remove", color = alpine.danger) }
+            }
+        }
+        com.hushos.app.data.RemovalEnd.Changed -> Text("$who isn’t in $family any more, so there was nothing to remove.")
+        // Still in the family, not as confirmed: the web's members-changed words, nothing changed.
+        com.hushos.app.data.RemovalEnd.Moved -> Text("$family changed while you were working on it. Try again.")
+        is com.hushos.app.data.RemovalEnd.Pending -> Text(end.words)
+        com.hushos.app.data.RemovalEnd.Wiped -> Text("You’re not in $family any more.")
+        is com.hushos.app.data.RemovalEnd.Failed -> Text(end.words, color = alpine.danger)
+        // Asked in its own step (ConfirmPlan), never shown as an outcome.
+        is com.hushos.app.data.RemovalEnd.EndsLapsed -> {}
+    }
+}
+
+/* The web's DeleteFamilyFolderDialog: what deleting means for everyone, asked once; its refusal stays on it. */
+@Composable
+private fun DeleteFolderDialog(model: DriveViewModel, ask: FolderAsk, family: String) {
+    val alpine = Alpine.colors
+    val families = model.families
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { families.dismissDeleteFolder() },
+        title = { Text("Delete “${ask.name}”?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+                Text("It disappears for everyone in $family now. Its files are deleted from the server, normally after 30 days, and their space is freed when they are. Anyone who kept copies or keys keeps them, as after someone is removed. The folder can’t be restored.")
+                ask.error?.let { Text(it, color = alpine.danger) }
+            }
+        },
+        confirmButton = { TextButton(onClick = { families.confirmDeleteFolder() }, enabled = !ask.busy) { Text("Delete", color = if (ask.busy) alpine.inkMuted else alpine.danger) } },
+        dismissButton = { TextButton(onClick = { families.dismissDeleteFolder() }, enabled = !ask.busy) { Text("Cancel") } },
+    )
 }
 
 /* The folder mark the lists draw, without an item. */

@@ -106,7 +106,10 @@ struct SaveView: View {
     }
 }
 
-/* The folders of your drive, walked from Files; Save here picks the one you're in. */
+/*
+ * The folders of your drive, walked from Files, and below Files' own, each family you're in under its name with its
+ * folders (a family folder walks within its family); Save here picks the one you're in.
+ */
 private struct FolderPicker: View {
     let model: SaveModel
     let here: Places.Folder
@@ -127,15 +130,19 @@ private struct FolderPicker: View {
                     .padding(.vertical, 40).listRowBackground(Color.clear)
             case let .success(list):
                 Section {
+                    // A family folder's folders are its family's: walked within the same family and workspace.
                     ForEach(list, id: \.id) { folder in
-                        NavigationLink(value: Places.Folder(id: folder.id, name: folder.name)) {
-                            HStack(spacing: Alpine.Space.s3) {
-                                FolderGlyph().frame(width: Theme.mark * 0.9, height: Theme.mark * 0.9 * 46 / 56).frame(width: Theme.mark, height: Theme.mark)
-                                Text(folder.name).font(Theme.Text.body).foregroundStyle(Alpine.ink).lineLimit(1)
-                            }
-                            .frame(minHeight: Theme.row)
-                        }
-                        .alpineRow()
+                        row(Places.Folder(id: folder.id, name: folder.name, groupId: here.groupId, workspaceId: here.workspaceId))
+                    }
+                }
+            }
+            // Below Files' own: each family you're in, by its name, with the folders you may save into.
+            if here == model.root {
+                ForEach(model.families) { family in
+                    Section {
+                        ForEach(family.folders, id: \.id) { folder in row(folder) }
+                    } header: {
+                        Text(family.name).font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
                     }
                 }
             }
@@ -159,8 +166,19 @@ private struct FolderPicker: View {
                 }
             }
         }
-        .task(id: here.id) {
-            do { folders = .success(try await model.folders(in: here.id)) } catch where !ErrorWords.isCancellation(error) { folders = .failure(error) } catch {}
+        .task(id: here) {
+            do { folders = .success(try await model.folders(in: here)) } catch where !ErrorWords.isCancellation(error) { folders = .failure(error) } catch {}
         }
+    }
+
+    private func row(_ folder: Places.Folder) -> some View {
+        NavigationLink(value: folder) {
+            HStack(spacing: Alpine.Space.s3) {
+                FolderGlyph().frame(width: Theme.mark * 0.9, height: Theme.mark * 0.9 * 46 / 56).frame(width: Theme.mark, height: Theme.mark)
+                Text(folder.name).font(Theme.Text.body).foregroundStyle(Alpine.ink).lineLimit(1)
+            }
+            .frame(minHeight: Theme.row)
+        }
+        .alpineRow()
     }
 }

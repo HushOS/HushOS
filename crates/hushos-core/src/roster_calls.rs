@@ -29,7 +29,9 @@
 //! deletion, the previous-root repair, and the staged chain they keep per
 //! call to judge their rotations.
 
-use crate::area_ledger::{AreaLedger, CallState, HeldArea, NOT_THIS_ACCOUNT, NO_ACCOUNT, NO_CHAIN};
+use crate::area_ledger::{
+    area_write_version_of, AreaLedger, CallState, HeldArea, NOT_THIS_ACCOUNT, NO_ACCOUNT, NO_CHAIN,
+};
 use crate::bytes::{decode, encode, random};
 use crate::canonical::uuid;
 use crate::consent::{served_keys_of, NOT_OWN_IDENTITY};
@@ -41,8 +43,8 @@ use crate::group_trust::{
 };
 use crate::groups::{
     area_grant_seal, group_key_open, group_key_seal, group_public_key, group_succession_sign, parse_roster,
-    roster_digest, roster_sign, AreaGrantContext, GroupKeySealContext, GroupKeySuccession, GroupRole,
-    RosterMember, SignedGroupStatement, SignerHistory,
+    roster_digest, roster_sign, AreaGrantContext, AreaKey, GroupKeySealContext, GroupKeySuccession,
+    GroupRole, MemberStatus, RosterMember, SignedGroupStatement, SignerHistory,
 };
 use crate::identity::{identity_open, IdentityEnvelope, IdentityKeys, PublicIdentity, ServedKeys};
 use crate::join::{admitted_at, code_at};
@@ -55,6 +57,8 @@ use zeroize::Zeroizing;
 
 /* The worker's words for RosterCall::OpenFoldersFirst (unreachable here: stage answers it first). */
 const NOT_OPENED: &str = "Open every family folder first.";
+/* The same words, for the ledger's rotation root key. */
+pub(crate) const NOT_OPENED_FOLDERS: &str = NOT_OPENED;
 /// A role change that would leave nobody active holding `billing`.
 pub const ORGANIZER_FIRST: &str = "Make someone else the organizer first.";
 /// Someone without `members` asked for a roster call: nothing is signed.
@@ -69,6 +73,9 @@ pub const ADMIT_AS_MEMBER: &str = "Let them in first. Roles are given afterwards
 pub const UNCHANGED: &str = "That doesn’t change their roles.";
 /// Taking `members` from oneself: the succession must be signed by someone who keeps it.
 pub const SELF_TAKE: &str = "Ask another manager to take this role from you.";
+/// The manager rule (docs/optional-verification.md 3.6), the worker's
+/// `CHECK_MANAGER_FIRST`: `members` is given only to keys this account checked.
+pub const CHECK_MANAGER_FIRST: &str = "Check it’s them first. Managers are checked before they get the role.";
 const ALREADY_IN: &str = "This person is in the family already.";
 const NOT_THE_PINNED_KEYS: &str = "These are not the keys whose words were checked.";
 const NOT_IN: &str = "This person is not in the family now.";
@@ -113,12 +120,24 @@ pub struct ServedKeySeal {
 pub enum ChainRoute {
     Create,
     Rosters,
-    Admit { user_id: String },
-    Member { user_id: String },
-    Remove { user_id: String },
+    Admit {
+        user_id: String,
+    },
+    Member {
+        user_id: String,
+    },
+    /// `ends_lapsed`: the lapsed plans (ids) the remover confirmed end, sent with the call.
+    Remove {
+        user_id: String,
+        ends_lapsed: Vec<String>,
+    },
     Areas,
-    Rotation { workspace_id: String },
-    Delete { workspace_id: String },
+    Rotation {
+        workspace_id: String,
+    },
+    Delete {
+        workspace_id: String,
+    },
 }
 
 /// A signed roster call: `body`, the JSON to send to `route`, and `entry`,
@@ -132,6 +151,8 @@ pub struct StagedCall {
     pub route: ChainRoute,
     pub body: String,
     pub entry: String,
+    /// The workspace documents a rotation could not open and carried on empty (Core 5b): said, never silent.
+    pub replaced: Vec<ReplacedDocument>,
 }
 
 /// What a roster call builder answers: the signed call, or what this device
@@ -344,7 +365,12 @@ fn route_json(route: &ChainRoute) -> Value {
         ChainRoute::Rosters => json!({ "kind": "rosters" }),
         ChainRoute::Admit { user_id } => json!({ "kind": "admit", "userId": user_id }),
         ChainRoute::Member { user_id } => json!({ "kind": "member", "userId": user_id }),
-        ChainRoute::Remove { user_id } => json!({ "kind": "remove", "userId": user_id }),
+        ChainRoute::Remove { user_id, ends_lapsed } if ends_lapsed.is_empty() => {
+            json!({ "kind": "remove", "userId": user_id })
+        }
+        ChainRoute::Remove { user_id, ends_lapsed } => {
+            json!({ "kind": "remove", "userId": user_id, "endsLapsed": ends_lapsed })
+        }
         ChainRoute::Areas => json!({ "kind": "areas" }),
         ChainRoute::Rotation { workspace_id } => json!({ "kind": "rotation", "workspaceId": workspace_id }),
         ChainRoute::Delete { workspace_id } => json!({ "kind": "delete", "workspaceId": workspace_id }),
@@ -362,7 +388,18 @@ fn route_of(value: &Value) -> Option<ChainRoute> {
         "rosters" => ChainRoute::Rosters,
         "admit" => ChainRoute::Admit { user_id: id("userId")? },
         "member" => ChainRoute::Member { user_id: id("userId")? },
-        "remove" => ChainRoute::Remove { user_id: id("userId")? },
+        "remove" => ChainRoute::Remove {
+            user_id: id("userId")?,
+            // Absent is none; anything there must be a list of strings, or the entry is no entry.
+            ends_lapsed: match value.get("endsLapsed") {
+                None => vec![],
+                Some(list) => list
+                    .as_array()?
+                    .iter()
+                    .map(|id| id.as_str().map(str::to_string))
+                    .collect::<Option<Vec<String>>>()?,
+            },
+        },
         "areas" => ChainRoute::Areas,
         "rotation" => ChainRoute::Rotation { workspace_id: id("workspaceId")? },
         "delete" => ChainRoute::Delete { workspace_id: id("workspaceId")? },
@@ -415,6 +452,36 @@ fn admitted_keys(admits: &serde_json::Map<String, Value>) -> Option<&str> {
         Some(keys) => keys.as_str(),
         None => admits.get("fingerprint")?.as_str(),
     }
+}
+
+/* A contact pin a words check wrote ([`crate::pin_verified`] over its four keys), never a first-seen one. */
+fn pin_is_verified(pin: &crate::ledger_settings::ContactPin) -> bool {
+    let (Some(x), Some(ed), Some(print)) =
+        (pin.encryption_public_key.clone(), pin.signing_public_key.clone(), pin.fingerprint.clone())
+    else {
+        return false;
+    };
+    crate::contacts::pin_verified(
+        x,
+        ed,
+        pin.ml_dsa_public_key_hash.clone(),
+        pin.kem_public_key_hash.clone(),
+        print,
+    )
+}
+
+/* A roster entry's key commitment (the worker's `entryCommitment`): its four keys, the digests as hex. */
+fn entry_commitment(entry: &RosterMember) -> Option<String> {
+    crate::key_commitment(crate::PinKeys {
+        key_version: Some(entry.key_version),
+        encryption_public_key: entry.encryption_public_key.clone(),
+        signing_public_key: entry.signing_public_key.clone(),
+        ml_dsa_public_key_hash: Some(
+            crate::contacts::digest_hex(entry.ml_dsa_public_key_digest.clone()).ok()?,
+        ),
+        kem_public_key_hash: Some(crate::contacts::digest_hex(entry.kem_public_key_digest.clone()).ok()?),
+        fingerprint: String::new(),
+    })
 }
 
 /* A contact pin's key commitment ([`crate::key_commitment`]), from the fields the ledger reads. */
@@ -564,8 +631,34 @@ struct Caller {
 /* The change a call makes to the roster (one per call, moved straight in: its size does not matter). */
 #[allow(clippy::large_enum_variant)]
 enum Change {
-    Admit { user_id: String, served: PublicIdentity, roles: Vec<GroupRole> },
-    Roles { user_id: String, roles: fn(&[GroupRole]) -> Vec<GroupRole> },
+    Admit {
+        user_id: String,
+        served: PublicIdentity,
+        roles: Vec<GroupRole>,
+    },
+    Roles {
+        user_id: String,
+        roles: fn(&[GroupRole]) -> Vec<GroupRole>,
+    },
+    /* `account_key_version`: the account key's version, which each rotation's self-grant names. */
+    Remove {
+        user_id: String,
+        ends_lapsed: Vec<String>,
+        rotations: Vec<AreaRotation>,
+        account_key_version: u64,
+    },
+    MarkLeft {
+        user_ids: Vec<String>,
+        rotations: Vec<AreaRotation>,
+        account_key_version: u64,
+    },
+    Rotate {
+        rotation: AreaRotation,
+        account_key_version: u64,
+    },
+    Retire {
+        workspace_id: String,
+    },
 }
 
 fn with_role(roles: &[GroupRole], role: GroupRole, on: bool) -> Vec<GroupRole> {
@@ -686,7 +779,52 @@ impl AreaLedger {
             members.retain(|at| at.user_id != entry.user_id);
             members.push(entry);
         };
+        // Core 5b: the folders a call rotates (each with its keys), and the one a deletion retires.
+        let mut rotations: Vec<AreaRotation> = vec![];
+        let mut rotate_one: Option<String> = None;
+        let mut retire: Option<String> = None;
+        // The account key's version a rotation's self-grant names (the worker's unlocked().keyVersion):
+        // never the identity's, which moves on its own (a succession) and the server refuses.
+        let mut self_grant_version: Option<u64> = None;
+        let active = |members: &[RosterMember], user_id: &str| -> CoreResult<RosterMember> {
+            members
+                .iter()
+                .find(|at| at.user_id == user_id)
+                .filter(|at| at.active_with(None))
+                .cloned()
+                .ok_or_else(|| input(NOT_IN))
+        };
         let (route, admits) = match change {
+            Change::Remove { user_id, ends_lapsed, rotations: named, account_key_version } => {
+                let entry = active(&members, &user_id)?;
+                put(&mut members, RosterMember { status: MemberStatus::Left, ..entry });
+                rotations = named;
+                self_grant_version = Some(account_key_version);
+                (ChainRoute::Remove { user_id, ends_lapsed }, None)
+            }
+            Change::MarkLeft { user_ids, rotations: named, account_key_version } => {
+                for user_id in &user_ids {
+                    let entry = active(&members, user_id)?;
+                    put(&mut members, RosterMember { status: MemberStatus::Left, ..entry });
+                }
+                rotations = named;
+                self_grant_version = Some(account_key_version);
+                (ChainRoute::Rosters, None)
+            }
+            Change::Rotate { rotation, account_key_version } => {
+                let workspace_id = rotation.workspace_id.clone();
+                rotate_one = Some(workspace_id.clone());
+                rotations = vec![rotation];
+                self_grant_version = Some(account_key_version);
+                (ChainRoute::Rotation { workspace_id }, None)
+            }
+            Change::Retire { workspace_id } => {
+                if area_write_version_of(&chain, &workspace_id).is_none() {
+                    return Err(input(NOT_ON_LIST));
+                }
+                retire = Some(workspace_id.clone());
+                (ChainRoute::Delete { workspace_id }, None)
+            }
             Change::Admit { user_id, served: newcomer, roles } => {
                 if chain.roster.entry(&user_id).is_some_and(|e| e.active_with(None)) {
                     return Err(input(ALREADY_IN));
@@ -735,6 +873,19 @@ impl AreaLedger {
                 {
                     return Err(input(SELF_TAKE));
                 }
+                // The manager rule (docs/optional-verification.md 3.6), the worker's: `members` is
+                // given only to keys this account checked, its own verified pin of them (never a
+                // family's word) over the very keys their entry names now. A check made before their
+                // account changed, and a Continue since, leaves a first-seen pin: no role on it.
+                if after.roles.contains(&GroupRole::Members) && !before.roles.contains(&GroupRole::Members) {
+                    let checked = self
+                        .contact_pin(&user_id)
+                        .filter(|pin| pin.words_checked && pin_is_verified(pin))
+                        .and_then(|pin| pin_commitment(&pin));
+                    if checked.is_none() || checked != entry_commitment(&before) {
+                        return Err(input(CHECK_MANAGER_FIRST));
+                    }
+                }
                 // Someone active keeps `billing`: the server refuses a family without an organizer.
                 let others_bill =
                     members.iter().any(|e| e.user_id != user_id && e.active_with(Some(GroupRole::Billing)));
@@ -748,14 +899,52 @@ impl AreaLedger {
                 (ChainRoute::Member { user_id }, None)
             }
         };
-        let roster =
-            roster_next(Arc::clone(&chain), members, me_id.clone(), None, None, Some(ROSTER_FORMAT))?;
+        // A family's removal rotates every live folder (areas_to_rotate), a key replacement the one it
+        // names; the rotations must be exactly those, before any key is made (the worker's check).
+        let to_rotate = match &rotate_one {
+            Some(workspace_id) => vec![workspace_id.clone()],
+            None => crate::groups::areas_to_rotate(Arc::clone(&chain), members.clone()),
+        };
+        check_rotations(&chain, &to_rotate, &rotations)?;
+        let fresh: Vec<(String, RotationKeys)> = to_rotate
+            .iter()
+            .map(|workspace_id| {
+                (
+                    workspace_id.clone(),
+                    RotationKeys { area: Zeroizing::new(random(32)), root: Zeroizing::new(random(32)) },
+                )
+            })
+            .collect();
+        // Format 2 (design 2.10): each new key commits to its root's key too.
+        let area_keys: Vec<AreaKey> = fresh
+            .iter()
+            .map(|(workspace_id, at)| AreaKey {
+                workspace_id: workspace_id.clone(),
+                workspace_key: at.area.to_vec(),
+                root_key: Some(at.root.to_vec()),
+            })
+            .collect();
+        let roster = roster_next(
+            Arc::clone(&chain),
+            members,
+            me_id.clone(),
+            (!area_keys.is_empty()).then_some(area_keys),
+            retire.map(|workspace_id| vec![workspace_id]),
+            Some(ROSTER_FORMAT),
+        )?;
         // Every one of these calls is signed with the open identity, which the entry before must name.
         if !entry_names(chain.roster.entry(&me_id), &served) {
             return Err(input(STALE_ENTRY));
         }
         // An admission grants every live folder's key: each must be open here, before anything is signed.
         if matches!(route, ChainRoute::Admit { .. }) && state.areas.iter().any(|(_, held)| held.is_none()) {
+            return Ok(RosterCall::OpenFoldersFirst);
+        }
+        // A rotation re-keys a folder under the key it is open at here: each must be open first.
+        let held = |workspace_id: &str| -> Option<HeldArea> {
+            state.areas.iter().find(|(id, _)| id == workspace_id).and_then(|(_, held)| held.clone())
+        };
+        if fresh.iter().any(|(workspace_id, _)| held(workspace_id).is_none()) {
             return Ok(RosterCall::OpenFoldersFirst);
         }
         let signed = roster_sign(roster.clone(), seed.to_vec(), keys.clone())?;
@@ -812,6 +1001,97 @@ impl AreaLedger {
         for (key, value) in body {
             call.insert(key, value);
         }
+        // Core 5b: each new key to every member active on the staged roster, and the rotations.
+        let mut replaced = vec![];
+        if !fresh.is_empty() {
+            let account = self.served_account().ok_or_else(|| input(NO_ACCOUNT))?;
+            let account_root = self.account_root().ok_or_else(|| input(NO_ACCOUNT))?;
+            let at = (staged.roster.roster_version, staged.roster_digest.clone());
+            let kem_for = |user_id: &str| -> CoreResult<Vec<u8>> {
+                let value = if user_id == me_id { Some(&served.kem_public_key) } else { kems.get(user_id) };
+                decode("kemPublicKey", value.ok_or_else(|| input(KEYS_MISSING))?, None)
+            };
+            let version_of =
+                |workspace_id: &str| staged.area_keys.get(workspace_id).map(Vec::len).unwrap_or(0) as u64;
+            let mut grants = vec![];
+            for (workspace_id, keys_at) in &fresh {
+                let (_, _, id_seed) = held(workspace_id).ok_or_else(|| input(NOT_OPENED))?;
+                let version = version_of(workspace_id);
+                for member in staged.roster.members.iter().filter(|entry| entry.active_with(None)) {
+                    let ctx = AreaGrantContext {
+                        group_id: staged.group_id.clone(),
+                        workspace_id: workspace_id.clone(),
+                        workspace_key_version: version,
+                        grantee_user_id: member.user_id.clone(),
+                        grantee_key_version: member.key_version,
+                        granter_user_id: me_id.clone(),
+                        roster_version: at.0,
+                        roster_digest: at.1.clone(),
+                    };
+                    let envelope = area_grant_seal(
+                        keys_at.area.to_vec(),
+                        ctx,
+                        Arc::clone(&staged),
+                        id_seed.clone(),
+                        kem_for(&member.user_id)?,
+                        keys.clone(),
+                    )?;
+                    grants.push(json!({
+                        "workspaceId": workspace_id,
+                        "workspaceKeyVersion": version,
+                        "granteeUserId": member.user_id,
+                        "granteeKeyVersion": member.key_version,
+                        "rosterVersion": at.0,
+                        "rosterDigest": at.1,
+                        "envelope": encode(&envelope),
+                    }));
+                }
+            }
+            let mut wires = vec![];
+            for rotation in &rotations {
+                let workspace_id = rotation.workspace_id.as_str();
+                let keys_at =
+                    &fresh.iter().find(|(id, _)| id == workspace_id).ok_or_else(|| input(EVERY_FOLDER))?.1;
+                let version = version_of(workspace_id);
+                let (from_version, from_key, _) = held(workspace_id).ok_or_else(|| input(NOT_OPENED))?;
+                if from_version + 1 != version {
+                    return Err(input(NOT_OPENED));
+                }
+                let self_grant = self_grant_wire(
+                    &keys_at.area,
+                    &account_root,
+                    &account.user_id,
+                    &chain.group_id,
+                    workspace_id,
+                    self_grant_version.ok_or_else(|| input(EVERY_FOLDER))?,
+                    version,
+                )?;
+                let old = || self.rotation_root_key(workspace_id, &rotation.root);
+                wires.push(rotation_wire(
+                    rotation,
+                    from_version,
+                    &from_key,
+                    old,
+                    keys_at,
+                    self_grant,
+                    &keys.signing_seed,
+                    &mut replaced,
+                )?);
+            }
+            if rotate_one.is_some() {
+                call.insert("rotation".into(), wires.into_iter().next().ok_or_else(|| input(EVERY_FOLDER))?);
+            } else if !wires.is_empty() {
+                call.insert("rotations".into(), Value::Array(wires));
+            }
+            if !grants.is_empty() {
+                call.insert("grants".into(), Value::Array(grants));
+            }
+        }
+        if let ChainRoute::Remove { ends_lapsed, .. } = &route {
+            if !ends_lapsed.is_empty() {
+                call.insert("endsLapsed".into(), json!(ends_lapsed));
+            }
+        }
         let body = Value::Object(call).to_string();
         // Tests only: a lock, another account, or a commit while the call was signed.
         #[cfg(test)]
@@ -832,10 +1112,14 @@ impl AreaLedger {
             (ChainRoute::Admit { user_id }, Some(keys)) => Some((user_id.as_str(), keys.as_str())),
             _ => None,
         };
-        let entry = entry_json(&outbox_id, &chain.group_id, &route, &body, admits, digests);
+        let mut entry = entry_json(&outbox_id, &chain.group_id, &route, &body, admits, digests);
+        // A rotating call's keys, for a rebuild with the same roster (sealed with the entry, never sent).
+        if !fresh.is_empty() {
+            entry["rotationKeys"] = keys_json(&fresh);
+        }
         let plaintext = Zeroizing::new(entry.to_string().into_bytes());
         let entry = seal_bytes(&store_key, &user_id, &chain.group_id, OUTBOX, &plaintext)?;
-        Ok(RosterCall::Staged { call: StagedCall { outbox_id, route, body, entry } })
+        Ok(RosterCall::Staged { call: StagedCall { outbox_id, route, body, entry, replaced } })
     }
 }
 
@@ -1448,6 +1732,9 @@ thread_local! {
     static AFTER_SIGNING: std::cell::RefCell<LedgerHook> = const { std::cell::RefCell::new(None) };
     static AFTER_OPENING: std::cell::RefCell<LedgerHook> = const { std::cell::RefCell::new(None) };
 }
+
+mod removal;
+pub use removal::*;
 
 #[cfg(test)]
 mod tests;

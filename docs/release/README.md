@@ -10,6 +10,7 @@ How HushOS, Inc. gets the iPhone and Android apps onto the App Store and Google 
 | [signing.md](signing.md)                 | Certificates, bundle IDs, the app group, the Android upload key, and where the Team ID and fingerprints go.                                                   |
 | [store-listing.md](store-listing.md)     | Ready-to-paste copy, the screenshot plan, and what the apps may say about plans.                                                                              |
 | [privacy-answers.md](privacy-answers.md) | Apple App Privacy and Google Data safety answers, each with its reason from the code; the iOS privacy manifest.                                               |
+| [google-play-ci.md](google-play-ci.md)   | The Android release workflow: each release's bundle to Google Play internal testing, promotion to production, and its one-time setup.                         |
 | `scripts/release-wizard.sh`              | Walks you through the steps only you can do, one at a time, and checks what a Mac can check. Run it again any time.                                           |
 | `scripts/store-screenshots.sh`           | Takes the store screenshots from the simulator and emulator, guided.                                                                                          |
 | `bun run ios:archive`                    | Archives and uploads the iPhone app (`apps/ios/scripts/archive.sh`), at package.json's version and the commit's build number.                                 |

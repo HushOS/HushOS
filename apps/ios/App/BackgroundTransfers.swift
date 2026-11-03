@@ -579,11 +579,11 @@ final class BackgroundTransfers {
         ShareHandoff.sweepOrphans(keeping: Set(records.map(\.id)))
         var added = false
         // What goes once the records naming it are on disk (ShareHandoff.adopt): each note and the parts it brought.
-        var taken: [UUID: [Int]] = [:]
+        var taken: [UUID: (upload: String, parts: [Int])] = [:]
         let signedIn = AccountOwner.signedIn
         for note in notes {
             // Recorded before, and the app stopped before the note went: only the note goes now.
-            if records.contains(where: { $0.id == note.id }) { taken[note.id] = []; continue }
+            if records.contains(where: { $0.id == note.id }) { taken[note.id] = (note.sealed.uploadId, []); continue }
             switch TransferOwnership.of(note.owner, signedIn: signedIn) {
             case .run:
                 break
@@ -596,13 +596,16 @@ final class BackgroundTransfers {
             }
             var record = Record(id: note.id, kind: .upload, name: note.name, folderId: note.folderId, mime: note.mime)
             record.owner = note.owner
+            // A family folder's: the queue's family upload, finished (or sealed again from its kept plaintext) through FamilyUploads.
+            record.family = note.family
             record.state = .sending
             record.sealed = note.sealed
             record.size = note.size
-            record.etags = ShareHandoff.landedParts(note.id)
+            // Only the parts of the upload the note names: a part of any other (aborted, sealed again) is none of its.
+            record.etags = ShareHandoff.landedParts(note.id, upload: note.sealed.uploadId)
             if record.etags.count == note.sealed.partCount { record.state = .finishing }
             records.append(record)
-            taken[note.id] = Array(record.etags.keys)
+            taken[note.id] = (note.sealed.uploadId, Array(record.etags.keys))
             added = true
         }
         guard !taken.isEmpty else { return }
@@ -651,8 +654,9 @@ final class BackgroundTransfers {
 
     /* Parts the extension saw land after its upload was adopted (it may still be open). */
     private func takeLanded(_ id: UUID) {
-        guard let record = record(id), record.kind == .upload, record.state == .sending else { return }
-        let landed = ShareHandoff.takeLanded(id)
+        guard let record = record(id), record.kind == .upload, record.state == .sending, let upload = record.sealed?.uploadId else { return }
+        // The record's own upload's parts only: one the extension saw land for an upload since sealed again is left unread.
+        let landed = ShareHandoff.takeLanded(id, upload: upload)
         guard !landed.isEmpty else { return }
         update(id) { $0.etags.merge(landed) { old, _ in old } }
         if let current = self.record(id), current.landed == current.total { update(id) { $0.state = .finishing } }

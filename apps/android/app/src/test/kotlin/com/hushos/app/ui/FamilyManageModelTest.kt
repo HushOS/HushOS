@@ -6,11 +6,13 @@ import com.hushos.app.data.FamilyFixture
 import com.hushos.app.data.FamilyOutbox
 import com.hushos.app.data.FamilyState
 import com.hushos.app.data.LetIn
+import com.hushos.app.data.outbox
 import com.hushos.app.data.Opened
 import com.hushos.app.data.PendingPerson
 import com.hushos.app.data.Shared
 import com.hushos.app.data.Vault
 import com.hushos.app.data.letIn
+import com.hushos.app.data.changeRole
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,6 +24,7 @@ import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -68,6 +71,7 @@ class FamilyManageModelTest {
 
     @Before
     fun signIn() {
+        FamilyFixture.allowPatch()
         FamilyFixture.signIn(server, "family-manage-model-test")
         family = FamilyFixture(server)
         family.storePin(family.pin(family.mayaManages()))
@@ -299,11 +303,18 @@ class FamilyManageModelTest {
         assertTrue(host.vault.families.letIn(family.summary, grace) is LetIn.Pending)
         val outbox = FamilyOutbox.of(RuntimeEnvironment.getApplication())
         val graceEntry = outbox.list(family.member.id, family.groupId).single()
+        // Two kept calls, as an earlier version's outbox could hold them (this one stages nothing over a kept call): Grace's
+        // set aside while Ada's is made, then put back.
+        val outboxFolder = java.io.File(java.io.File(RuntimeEnvironment.getApplication().noBackupFilesDir, com.hushos.app.data.FamilyRecords.FOLDER), "outbox")
+        val graceFile = outboxFolder.listFiles()!!.single { it.name.contains(graceEntry.outboxId) }
+        val aside = java.io.File(graceFile.path + ".aside")
+        assertTrue(graceFile.renameTo(aside))
         val ada = server.another("ada@example.org", "Ada Lovelace")
         family.waiting(ada, "ada@example.org", "Ada Lovelace")
         val adaWaiting = family.pendingRows.map(PendingPerson::from).single { it.userId.equals(ada.id, ignoreCase = true) }
         answers(3, 503)
         assertTrue(host.vault.families.letIn(family.summary, adaWaiting) is LetIn.Pending)
+        assertTrue(aside.renameTo(graceFile))
         // Grace's is the older: sent first.
         val folder = java.io.File(java.io.File(RuntimeEnvironment.getApplication().noBackupFilesDir, com.hushos.app.data.FamilyRecords.FOLDER), "outbox")
         folder.listFiles()!!.single { it.name.contains(graceEntry.outboxId) }.setLastModified(System.currentTimeMillis() - 60_000)
@@ -327,5 +338,115 @@ class FamilyManageModelTest {
         model.letIn(family.groupId, grace)
         until("Let them in finished") { model.waitingRow(family.groupId, grace.userId).busy == null && host.shown != null }
         assertEquals(listOf("Saved on this device. That’s been tried too often. Wait a little, then try again."), host.read())
+    }
+
+    /*
+     * Two kept calls: Grace's admission, which another manager's change then overtook, and Ada's, whose settings can't be
+     * read on the resume. The overtaken one is still said, before its entry goes, so the person lets Grace in again.
+     * Fails if an overtaken admission is dropped without a word, or its word is lost to a later call that throws.
+     */
+    @Test
+    fun anOvertakenAdmissionIsSaidEvenWhenALaterCallThrows() {
+        answers(3, 503)
+        assertTrue(host.vault.families.letIn(family.summary, grace) is LetIn.Pending)
+        val outbox = FamilyOutbox.of(RuntimeEnvironment.getApplication())
+        val graceEntry = outbox.list(family.member.id, family.groupId).single()
+        // Two kept calls, as an earlier version's outbox could hold them (this one stages nothing over a kept call): Grace's
+        // set aside while Ada's is made, then put back.
+        val outboxFolder = java.io.File(java.io.File(RuntimeEnvironment.getApplication().noBackupFilesDir, com.hushos.app.data.FamilyRecords.FOLDER), "outbox")
+        val graceFile = outboxFolder.listFiles()!!.single { it.name.contains(graceEntry.outboxId) }
+        val aside = java.io.File(graceFile.path + ".aside")
+        assertTrue(graceFile.renameTo(aside))
+        val ada = server.another("ada@example.org", "Ada Lovelace")
+        family.waiting(ada, "ada@example.org", "Ada Lovelace")
+        answers(3, 503)
+        assertTrue(host.vault.families.letIn(family.summary, family.pendingRows.map(PendingPerson::from).single { it.userId.equals(ada.id, ignoreCase = true) }) is LetIn.Pending)
+        assertTrue(aside.renameTo(graceFile))
+        val folder = File(File(RuntimeEnvironment.getApplication().noBackupFilesDir, com.hushos.app.data.FamilyRecords.FOLDER), "outbox")
+        folder.listFiles()!!.single { it.name.contains(graceEntry.outboxId) }.setLastModified(System.currentTimeMillis() - 60_000)
+        family.samChangesTheList()
+        // Grace's entry is read with the settings as they are; every read after it is refused.
+        server.onNextSettingsGet = { server.settingsReadAnswer = 400 to JSONObject().put("message", "Bad request.") }
+        runBlocking { model.loadManaged(family.groupId) }
+        server.settingsReadAnswer = null
+        assertTrue(host.read().contains("An earlier admission of Grace wasn’t sent; let them in again."))
+    }
+
+    /*
+     * Let them manage the family from a member's row: not verified on this phone, it asks for the check first and signs
+     * nothing; the core refuses it the same way when the screen thought otherwise; once Maya's words check of Grace is
+     * in, it lands and says so. Fails if a manager is made, or the role change sent, before a check.
+     */
+    @Test
+    fun managingTheFamilyAsksForACheckFirstThenSaysItLanded() {
+        assertEquals(LetIn.Landed, host.vault.families.letIn(family.summary, grace))
+        runBlocking { model.refreshFamilies(force = true) }
+        val ref = com.hushos.app.data.FamilyMemberRef(server.grace.id, "grace@example.org", "Grace Hopper")
+        val manage = RoleAsk(family.groupId, ref, RoleKind.MANAGE)
+        model.askRole(manage, verified = false)
+        assertEquals(manage, model.checkFirst)
+        assertEquals(null, model.roleAsk)
+        model.dismissCheckFirst()
+        // The screen thought them checked; the core's manager rule still asks.
+        model.askRole(manage, verified = true)
+        model.confirmRole()
+        until("the core asked for the check") { model.checkFirst == manage }
+        assertTrue(family.memberCalls.isEmpty())
+        model.dismissCheckFirst()
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        model.askRole(manage, verified = true)
+        model.confirmRole()
+        until("it landed") { model.roleBusy == null && host.shown != null }
+        assertEquals(listOf("Grace can manage the family"), host.read())
+        assertEquals(1, family.memberCalls.size)
+    }
+
+    /*
+     * Codex #281 round 3, 2: a removal Maya confirmed is left only as its intent (no kept call). At the page's open it is
+     * continued and lands; the family is read again, so the page drops Grace (and starts walking the folders' new keys), and
+     * says it. Fails if a removal continued from its intent alone leaves the page showing the person removed.
+     */
+    @Test
+    fun aContinuedRemovalShowsTheFamilyAsItIsNow() {
+        val graceId = server.grace.id.lowercase()
+        assertEquals(LetIn.Landed, host.vault.families.letIn(family.summary, grace))
+        runBlocking { model.refreshFamilies(force = true) }
+        fun shown() = (model.states[family.groupId] as FamilyState.Accepted).view.members.map { it.userId.lowercase() }
+        assertTrue(graceId in shown())
+        val entry = (model.states[family.groupId] as FamilyState.Accepted).view.members.single { it.userId.equals(graceId, ignoreCase = true) }
+        host.vault.families.outbox.keepRemoval(family.member.id, family.groupId,
+            com.hushos.app.data.FamilyOutbox.Removal(graceId, "Grace", emptyList(), false, com.hushos.app.data.FamilyOutbox.Membership.of(entry)))
+        runBlocking { model.loadManaged(family.groupId) }
+        assertFalse(graceId in shown())
+        assertTrue(host.read().contains("Grace is no longer in Lindqvist family."))
+    }
+
+    /*
+     * Codex #281 round 12, 1: Remove from family on Grace, who manages the family: taking that from her lands, then the
+     * removal meets `ends-lapsed` and the sheet asks about her plan. Remove and end the plan goes on with the same removal
+     * (its demotion still its own) and she is removed. Fails if the confirmation starts a fresh removal from the row as it
+     * was drawn, which takes her demoted entry for a change nobody confirmed and stops as moved.
+     */
+    @Test
+    fun confirmingAPlanAfterADemotionStillRemoves() {
+        val graceId = server.grace.id.lowercase()
+        assertEquals(LetIn.Landed, host.vault.families.letIn(family.summary, grace))
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        assertEquals(com.hushos.app.data.RoleEnd.Landed, host.vault.families.changeRole(family.summary, graceId, "Grace", com.hushos.core.MembersRole.GRANT))
+        runBlocking { model.refreshFamilies(force = true) }
+        val entry = (model.states[family.groupId] as FamilyState.Accepted).view.members.single { it.userId.equals(graceId, ignoreCase = true) }
+        assertTrue("members" in entry.roles)
+        family.rotatingAnswers.add { _, _ ->
+            409 to JSONObject().put("code", "ends-lapsed").put("message", "A plan would end.")
+                .put("data", JSONObject().put("plans", org.json.JSONArray().put(JSONObject().put("id", "plan-1").put("name", "Family Pro (monthly)").put("standing", "paused"))))
+        }
+        model.askRemove(family.groupId, com.hushos.app.data.FamilyMemberRef(graceId, "grace@example.org", "Grace Hopper"), entry)
+        model.runRemove(demote = true)
+        until("the plan asked about") { model.removal?.phase is RemovalPhase.ConfirmPlan }
+        val plan = model.removal!!.phase as RemovalPhase.ConfirmPlan
+        model.runRemove(plan.demote, plan.ids, plan.carried)
+        until("the removal ended") { model.removal?.phase is RemovalPhase.Done }
+        assertEquals(com.hushos.app.data.RemovalEnd.Removed, (model.removal!!.phase as RemovalPhase.Done).end)
+        assertEquals("plan-1", JSONObject(family.rotatingCalls.last { it.first == "remove" }.second).getJSONArray("endsLapsed").getString(0))
     }
 }
