@@ -1,0 +1,37 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_280c6233f95c1f 88
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_566b8e0c4467a4::t_acbf418291d011 152-153,157-159,250-257,569,571-575,578-581,618,623
+apps/android/app/src/main/kotlin/com/hushos/app/data/WriteBacks.kt
+  s_3f90351ac8c4c4::t_7fea773d96383e 180-185
+apps/android/app/src/main/kotlin/com/hushos/app/files/HushOSDocumentsProvider.kt
+  s_3f90351ac8c4c4::t_732149d7addb37 24,470-471
+apps/android/app/src/main/kotlin/com/hushos/app/files/ProviderFamilies.kt
+  s_566b8e0c4467a4::t_4d0e9a05f84ab5 143,149-153,161-163,173-179
+apps/android/app/src/test/kotlin/com/hushos/app/files/ProviderFamiliesTest.kt
+  s_566b8e0c4467a4::t_e2ba50eb2dfed6 259-291,870,900,912,1092-1116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a8101a52c285b41a3e2412d38250ac097c93f49b",
+  "prompts": {},
+  "sessions": {
+    "s_3f90351ac8c4c4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1a0a9-de27-7982-b228-41e2a5d0ad08",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
