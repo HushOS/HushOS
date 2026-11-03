@@ -25,6 +25,7 @@ import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -205,5 +206,104 @@ class FilesSaveOrderTest {
         save(provider, notes, "first save"); runSpawned()
         dropBegins(false)
         assertEquals("first save", opened(provider, notes, "rw"))
+    }
+
+    /*
+     * A job whose earlier run landed ends (its landed row: the account's lock, then the document's) while a save of the
+     * same file is uploading (the document's lock, then the upload ledger's, the account's): both finish. Fails if the two
+     * paths take the locks in opposite orders (a deadlock that also holds up sign-out).
+     */
+    @Test
+    fun aLandedJobEndingAndASaveUploadingNeverWaitOnEachOther() {
+        val provider = provider()
+        val notes = notes(provider)
+        val vault = HushOSDocumentsProvider::class.java.getDeclaredField("vault").apply { isAccessible = true }.get(provider) as Vault
+        val chain = WriteBacks.chainOf(vault.resolve(notes).node.workspaceId, notes)
+        val job = java.util.UUID.randomUUID()
+        val staged = File(app.filesDir, "queue/$job/content").apply { parentFile!!.mkdirs(); writeText("landed before") }
+        val upload = "00000000-0000-4000-8000-0000000000cc"
+        com.hushos.app.data.Reservations.reserved(app, upload, vault.resolve(notes).node.workspaceId, job.toString(), System.currentTimeMillis(), null)
+        com.hushos.app.data.Reservations.idle(upload)
+        com.hushos.app.data.Reservations.completed(app, upload)
+        val request = TransferQueue.uploadRequest(job, staged, "text/plain", server.root, notes, session = TransferQueue.accountTag(Shared.session(app)!!),
+            chain = chain, order = WriteBacks.nextOrder(app))
+        val worker = TestListenableWorkerBuilder<UploadWorker>(app).setId(job).setInputData(request.workSpec.input).setTags(request.tags.toList()).build()
+        val holding = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val uploader = Thread {
+            WriteBacks.land(app, chain, WriteBacks.nextOrder(app)) { holding.countDown(); release.await(); com.hushos.app.data.Reservations.all(app) }
+        }.apply { isDaemon = true; start() }
+        holding.await()
+        var ended: ListenableWorker.Result? = null
+        val ender = Thread { ended = runBlocking { worker.doWork() } }.apply { isDaemon = true; start() }
+        // The ending job goes as far as it can while the save holds the document.
+        Thread.sleep(500)
+        release.countDown()
+        uploader.join(10_000)
+        ender.join(10_000)
+        assertFalse("the save uploading never finished", uploader.isAlive)
+        assertFalse("the landed job's end never finished", ender.isAlive)
+        assertEquals(ListenableWorker.Result.success(), ended)
+    }
+
+    /*
+     * Saves made before the phone's clock moved back, so far back that the clock now reads less than their places, and the
+     * app restarted: a new save still outranks them and lands. Fails if a save's place comes from the clock (a new save
+     * would be superseded by older ones).
+     */
+    @Test
+    fun aNewSaveOutranksOlderOnesAfterARestartAndTheClockMovingBack() {
+        val provider = provider()
+        val notes = notes(provider)
+        val vault = HushOSDocumentsProvider::class.java.getDeclaredField("vault").apply { isAccessible = true }.get(provider) as Vault
+        val chain = WriteBacks.chainOf(vault.resolve(notes).node.workspaceId, notes)
+        // Places handed out while the clock read a day ahead: kept on disk, the newest landed.
+        val ahead = (System.currentTimeMillis() + 86_400_000L) * 1000
+        app.getSharedPreferences("write-back-order", android.content.Context.MODE_PRIVATE).edit().putLong("next", ahead).commit()
+        WriteBacks.markLanded(app, chain, ahead)
+        // The process restarts: nothing it held in memory survives.
+        WriteBacks::class.java.declaredFields.filter { it.name == "last" }.forEach { it.isAccessible = true; it.setLong(WriteBacks, 0L) }
+        assertTrue(WriteBacks.nextOrder(app) > ahead)
+        save(provider, notes, "after the restart")
+        runSpawned()
+        assertEquals("after the restart", serverText(notes))
+    }
+
+    /*
+     * A superseded save's job ends as done and its copy goes; WorkManager runs it again (it died after the copy went, before
+     * its end was recorded): the rerun ends as done too. Fails if a superseded job deletes its copy before keeping its
+     * success (the rerun would fail as "pick it again").
+     */
+    @Test
+    fun aSupersededSaveRerunAfterItsCopyWentEndsAsDone() {
+        val provider = provider()
+        val notes = notes(provider)
+        dropBegins(true)
+        save(provider, notes, "first save"); runSpawned()
+        dropBegins(false)
+        save(provider, notes, "second save"); runSpawned()
+        assertEquals("second save", serverText(notes))
+        val first = queued().single()
+        assertEquals(ListenableWorker.Result.success(), runJob(first, notes))
+        assertFalse(File(first.tags.first { it.startsWith("file:") }.removePrefix("file:")).exists())
+        assertEquals(ListenableWorker.Result.success(), runJob(first, notes))
+        assertEquals("second save", serverText(notes))
+    }
+
+    /*
+     * Signing out (the account's wipe) takes every file's landed place with it: nothing of the account stays. Fails if the
+     * landed places outlive the sign-out.
+     */
+    @Test
+    fun signingOutForgetsWhichSavesLanded() {
+        val provider = provider()
+        val notes = notes(provider)
+        save(provider, notes, "a save"); runSpawned()
+        val vault = HushOSDocumentsProvider::class.java.getDeclaredField("vault").apply { isAccessible = true }.get(provider) as Vault
+        val chain = WriteBacks.chainOf(vault.resolve(notes).node.workspaceId, notes)
+        assertTrue(WriteBacks.landed(app, chain) > 0)
+        com.hushos.app.data.AccountStore.of(app).wipe()
+        assertEquals(0L, WriteBacks.landed(app, chain))
+        assertTrue(File(app.applicationInfo.dataDir, "shared_prefs/write-backs.xml").let { !it.exists() || !it.readText().contains(chain) })
     }
 }
