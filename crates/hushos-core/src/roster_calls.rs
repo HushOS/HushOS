@@ -699,19 +699,11 @@ impl AreaLedger {
                 if !roles.is_empty() {
                     return Err(input(ADMIT_AS_MEMBER));
                 }
+                // Let in over a first-seen pin as over a verified one (docs/optional-verification.md
+                // 3.2, the worker's groupStage since #231): roster_entry_new builds from either, never
+                // from a family's word (`checked` refuses a pin trusted via a group). Always as a
+                // plain member: a role is a role change afterwards, under the manager rule (3.6).
                 let pin = found.checked().ok_or_else(|| input(NOT_THE_PINNED_KEYS))?;
-                // roster_entry_new builds from a first-seen pin too (design 3.3), but letting
-                // someone in over one waits for the manager rule beside it (3.6, the web's PR 4):
-                // until then an admission still takes a words check alone, as the worker's stage.
-                if !crate::contacts::pin_verified(
-                    pin.encryption_public_key.clone(),
-                    pin.signing_public_key.clone(),
-                    Some(pin.ml_dsa_public_key_hash.clone()),
-                    Some(pin.kem_public_key_hash.clone()),
-                    pin.fingerprint.clone(),
-                ) {
-                    return Err(input(NOT_THE_PINNED_KEYS));
-                }
                 // The newcomer's ML-KEM key is the one their entry is made from.
                 kems.insert(user_id.clone(), newcomer.kem_public_key.clone());
                 let entry = roster_entry_new(pin.clone(), newcomer, roles, next)?;
