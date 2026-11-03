@@ -1,0 +1,197 @@
+.github/actions/android-toolchain/action.yml
+  s_566b8e0c4467a4::t_0c6672f1a55464 1-40
+.github/workflows/android-release.yml
+  s_566b8e0c4467a4::t_13cb533aff85cf 1-337
+.github/workflows/release.yml
+  s_566b8e0c4467a4::t_3929fc9ca23c7f 247-252
+.release-please-manifest.json
+  s_566b8e0c4467a4::t_0a05e886d31f6b 2
+CHANGELOG.md
+  s_566b8e0c4467a4::t_fd62cda9fc8386 3-10
+CONTRIBUTING.md
+  s_566b8e0c4467a4::t_f0741091083f8a 147-148
+Cargo.lock
+  s_566b8e0c4467a4::t_06d05aff10d73e 753
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_48ec38a95147af 89-98
+apps/android/app/build.gradle.kts
+  s_566b8e0c4467a4::t_e8f6c54bf0f861 72,180-182
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyManage.kt
+  s_566b8e0c4467a4::t_f4611e064dc06a 6-7,42-67,70-75,77-78,85-95,98,106-291,294-340,352,365-367,383-387,465-468,470-471,475-477,479-492,506,511-521,526-534,545,550-559,574,579,592-626,631-653,712-713,715-716,722,724-726,731-766,771,803,815-817,819,826-837,844-858,863-871,873-874,877-889,891,893-894,896-897,899-905,911-913,916-917,919,924-928,930-934,938-943,948,954-1139,1174-1184,1186,1189-1190,1193-1206
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyRemoval.kt
+  s_566b8e0c4467a4::t_88222f7b5a4fcd 1-686
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_566b8e0c4467a4::t_ff2a2a72030cf1 92-93,181-196,882
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyWalks.kt
+  s_566b8e0c4467a4::t_4697fa7dff0402 279
+apps/android/app/src/main/kotlin/com/hushos/app/data/GroupsApi.kt
+  s_566b8e0c4467a4::t_f812bd183e2544 87-98,138,141-148,153-162,380-406,413-414,418,422-425
+apps/android/app/src/main/kotlin/com/hushos/app/data/Places.kt
+  s_566b8e0c4467a4::t_3663312c1184ca 13-16,21-25,28-32
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveTargets.kt
+  s_566b8e0c4467a4::t_9ee6c497b8ec45 1-108
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_bec43e1602ed91 1936-1937,1939-1941
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Families.kt
+  s_566b8e0c4467a4::t_cdd9c33260506f 23-24,30,162-169,180-186,203-211,213,216-219,221,226-234,236-240,463-504,532-533,559-570,577,593-705,707-714,718-736
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_8f7d4fea65b912 8-10,38-40,151-162,171-190,265-269,271-279,281-295,303-304,307,309-310,314-390,449,473-658,1278-1280
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SaveToHushOS.kt
+  s_566b8e0c4467a4::t_c62b677287cc3d 66-67,88-89,92,169-172,179,182-185,193-194,196-208,211-215,220,222,225-231,233-243,326-329,337,355-361,368-377
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyFixture.kt
+  s_566b8e0c4467a4::t_6a642283cb211a 150-162,175-176,189-207,210-217,249-251,253-254,258,262,268,290-295,306-322,386,388-395,398-406,408-509,520-521,528,530-537,540,549-592,599-602,621-630
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyManageTest.kt
+  s_566b8e0c4467a4::t_b8c4683466e19e 208-282,352-354,357,359,370-371,373-376,575-689
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyRemovalTest.kt
+  s_566b8e0c4467a4::t_d4f54ce1d5112e 1-851
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyRolesTest.kt
+  s_566b8e0c4467a4::t_85612f43366395 1-514
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveTargetsTest.kt
+  s_566b8e0c4467a4::t_15bfad3827a5d9 1-125
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyManageModelTest.kt
+  s_566b8e0c4467a4::t_f0df0f55c5459c 9,15,27,74,306-311,317,342-451
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyRemovalModelTest.kt
+  s_566b8e0c4467a4::t_6e3b49b5721a49 1-51
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyRolesModelTest.kt
+  s_566b8e0c4467a4::t_703a9d8fb1fbba 1-248
+apps/android/app/src/test/kotlin/com/hushos/app/ui/PersonalCheckTest.kt
+  s_566b8e0c4467a4::t_0f34aea5e95d20 1-24
+apps/android/scripts/check-bundle.sh
+  s_566b8e0c4467a4::t_9eb8bc30a3211b 1-94
+apps/android/scripts/play-publish.sh
+  s_566b8e0c4467a4::t_15b1fd3dbc9842 1-229
+apps/android/scripts/previous-apk.sh
+  s_566b8e0c4467a4::t_d558ef743da982 1-59
+apps/android/scripts/release-apk.sh
+  s_566b8e0c4467a4::t_36ae099112a59b 7-9
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_67e2278a863d23 22,139
+apps/ios/App/BackgroundTransfers.swift
+  s_566b8e0c4467a4::t_32c136ea0b0880 582,586,599-600,604-605,608,657-659
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_17bf1d0354b14c 173-188,1922-1923
+apps/ios/App/Families.swift
+  s_566b8e0c4467a4::t_68e503ef073a05 91-101,854,856,872-873,877-882
+apps/ios/App/FamilyManaging.swift
+  s_566b8e0c4467a4::t_94950f15d022ff 1-475
+apps/ios/App/MainView.swift
+  s_566b8e0c4467a4::t_4c3da955943087 152-153
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyManage.swift
+  s_566b8e0c4467a4::t_c6029c42707cb6 1-636
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_566b8e0c4467a4::t_5a9e3ca707be2d 209,211,220,666-677,679-681,739,1077-1078
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/GroupsAPI+Manage.swift
+  s_566b8e0c4467a4::t_46292048e0d16d 1-306
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Places.swift
+  s_566b8e0c4467a4::t_9db1331444a8a6 10,12,15-16,21-31,37-39,41
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SaveTargets.swift
+  s_566b8e0c4467a4::t_7dfb379ecc5e91 1-149
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SessionGate.swift
+  s_566b8e0c4467a4::t_e5fc7956727bad 12-17,94-103
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ShareHandoff.swift
+  s_566b8e0c4467a4::t_fc3d2404ab93d7 12-16,36-41,45-46,54,169-185,194,196,198-199,205-207,210-213,216-229,231
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/StagedSave.swift
+  s_566b8e0c4467a4::t_905b1c30ada7a2 13-23,29-34,37,40
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyManageStub.swift
+  s_566b8e0c4467a4::t_5f158ef93d9e88 1-252
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyManageTests.swift
+  s_566b8e0c4467a4::t_e65af431b55d1f 1-810
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilySyncTests.swift
+  s_566b8e0c4467a4::t_90431d337ca211 977-980,1190-1191,1439,1481,1485-1486,1494-1495
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveTargetsTests.swift
+  s_566b8e0c4467a4::t_91938a0b0506f6 1-182
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SessionGateTests.swift
+  s_566b8e0c4467a4::t_e1b3a4e9dbec52 64-96
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ShareSweepTests.swift
+  s_566b8e0c4467a4::t_5d58a099053417 102-104,106,109,111,114-115,120-145
+apps/ios/Share/SaveModel.swift
+  s_566b8e0c4467a4::t_d7ebb3ce0ebec5 10-12,35-36,42,54-55,57,69-72,77-79,84,87-96,225,228-243,253-267,269,285,294-301
+apps/ios/Share/SaveView.swift
+  s_566b8e0c4467a4::t_5d0a458644c940 109-112,133,135-145,169-180,182
+apps/ios/Share/ShareUploads.swift
+  s_566b8e0c4467a4::t_7f4235d0b201d2 8-10,17-18,27,29,36,44,47-48,50
+apps/ios/project.yml
+  s_566b8e0c4467a4::t_09bf844b0e097b 23
+apps/web/src/components/families/remove-dialog.tsx
+  s_566b8e0c4467a4::t_6af8912501f042 316-321
+apps/web/src/lib/groups/removal.test.ts
+  s_566b8e0c4467a4::t_eafc0250be1dae 279,282-283,286-303
+apps/web/src/lib/groups/removal.ts
+  s_566b8e0c4467a4::t_8aba567c3bba83 40-45,66-89,115,154,192,215,229,294,298,302,307
+crates/hushos-core/AGENTS.md
+  s_566b8e0c4467a4::t_b284f5eb5f705f 160-168,193,200
+crates/hushos-core/Cargo.toml
+  s_566b8e0c4467a4::t_54204c43586d5b 3
+crates/hushos-core/examples/roster_call_fixtures.rs
+  s_566b8e0c4467a4::t_60273853765743 5-7,17-18,33-36
+crates/hushos-core/fixtures/web-roster-calls.json
+  s_566b8e0c4467a4::t_793bf481c31d00 29,31,37,39,45,47,53,55,61,63,69,71,77,79,128,130,140,149,194,196,204,238,240,243,245-246,248,257,292,294,426,430,930-931,946-947,962-963,978-979,994-995,1009-1010,1024-1025,1041-1042,1058-1059,1070,1082-1083,1094-1095,1106-2177,2186-2187,2192-2193,2226-2227,2232-2233,2253-2254,2259-2260,2280-2281,2286-2287,2320-2321,2326-2327,2362-2363,2368-2369,2390-2391,2396-2397,2432-2433,2438-2439,2460-2461,2466-2467,2487-2488,2493-2494,2514-2515,2520-2521,2541-2542,2547-2548,2581-2582,2587-2588,2604-2605,2610-2611,2627-2628,2633-2634,2650-2651,2656-2657,2673-2674,2691-2692,2697-2698,2703-2704,2743-2744,2749-2750,2755-2756,2761-2762,2800-2801,2806-2807,2812-2813,2818-2819,2857-2858,2863-2864,2869-2870,2875-2876,2881-2882,2887-2888,2908-2909,2914-2915,2948-2949,2954-2955,2975-2976,2981-2982,3002-3003,3008-3009,3014-3015,3020-3021,3059-3060,3065-3066,3086-3087,3092-3093,3116-3117,3141-3143,3161-3163,3189-3191,3205-3207,3217-3219,3233-3235,3249-3251,3269-3271,3285-3287,3301-3303,3313-3315,3329-3331,3345-3347,3361-3363,3373-3375,3409-3411
+crates/hushos-core/fuzz/Cargo.lock
+  s_566b8e0c4467a4::t_c998304efcbfbe 566
+crates/hushos-core/fuzz/src/lib.rs
+  s_566b8e0c4467a4::t_811881ecd46809 36-40
+crates/hushos-core/fuzz/src/targets.rs
+  s_566b8e0c4467a4::t_1164622d3a1165 680-681,1789-1876
+crates/hushos-core/src/area_ledger.rs
+  s_566b8e0c4467a4::t_198b08e71d6167 1319,2193-2257
+crates/hushos-core/src/drive.rs
+  s_566b8e0c4467a4::t_d455e12430f16d 634-647,651-652,654-655
+crates/hushos-core/src/roster_calls.rs
+  s_566b8e0c4467a4::t_5b984913fce927 32-34,46-47,60-61,76-78,123-133,135-140,154-155,368-373,391-402,457-486,634-661,782-796,798-827,876-888,902-934,943-949,1004-1094,1115-1119,1122,1736-1738
+crates/hushos-core/src/roster_calls/removal.rs
+  s_566b8e0c4467a4::t_74a2f7fbaa5c16 1-746
+crates/hushos-core/src/roster_calls/tests.rs
+  s_566b8e0c4467a4::t_240cda694aa110 15,626-655,1397-1872
+crates/hushos-core/tests/common/mod.rs
+  s_566b8e0c4467a4::t_5c8b6cafe9a37f 8
+crates/hushos-core/tests/common/removal_calls.rs
+  s_566b8e0c4467a4::t_eb40bdd1d6e9cc 1-615
+crates/hushos-core/tests/common/roster_calls.rs
+  s_566b8e0c4467a4::t_25004bfff92e81 49,465-474,505-522,623-628
+crates/hushos-core/tests/roster_call_fixtures.rs
+  s_566b8e0c4467a4::t_99b077ac5dddf9 31-50
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_a3c7b86fafaab3 109,136-142,197,234-237,265
+docs/release/README.md
+  s_566b8e0c4467a4::t_dcbd8e40eec21d 13
+docs/release/google-play-ci.md
+  s_566b8e0c4467a4::t_fef85f665681d8 1-127
+docs/release/google.md
+  s_566b8e0c4467a4::t_389fc67e56ac0c 183-184
+docs/release/signing.md
+  s_566b8e0c4467a4::t_cc8fe2320ef1f7 115
+package.json
+  s_566b8e0c4467a4::t_bdcadd70ca98e8 3
+packages/crypto/fuzz/seeds.ts
+  s_566b8e0c4467a4::t_2123cacf9470ee 754-766
+packages/crypto/fuzz/verdicts.ts
+  s_566b8e0c4467a4::t_a99eceb3bcea0d 120-125,1124-1127,2259-2334
+packages/crypto/scripts/roster-call-fixtures.ts
+  s_566b8e0c4467a4::t_0c99dff598aeac 2,17,20-22
+packages/crypto/src/__fixtures__/core-roster-calls.json
+  s_566b8e0c4467a4::t_1d3c7c466a791c 14,19-20,34,39-40,62,67-68,71,76-77,86,91-92,102,107-108,122,127-128,138,143-144,158,163-164,167,172-173,182,187-188,198,203-204,218,223-224,227,232-233,242,247-248,275,280-281,315,324,336,338,392,402,404,438,440,445,455-456,458-459,492,494,647,649,655,657,663,665,671,673,679,681,687,689,695,697,731,735,973,983,989,999,1005,1015,1021,1031,1037,1047,1053,1062,1068,1077,1084,1094,1101,1111,1118,1130,1135,1142,1147,1154,1159,1416-2485,2515-2516,2521-2522,2542-2543,2548-2549,2569-2570,2575-2576,2609-2610,2615-2616,2651-2652,2657-2658,2679-2680,2685-2686,2721-2722,2727-2728,2749-2750,2755-2756,2776-2777,2782-2783,2803-2804,2809-2810,2830-2831,2836-2837,2870-2871,2876-2877,2893-2894,2899-2900,2916-2917,2922-2923,2939-2940,2945-2946,2962-2963,2968-2969,2986-2987,3025-3026,3031-3032,3038-3039,3077-3078,3083-3084,3089-3090,3095-3096,3134-3135,3140-3141,3146-3147,3152-3153,3173-3174,3179-3180,3185-3186,3191-3192,3197-3198,3203-3204,3237-3238,3243-3244,3264-3265,3270-3271,3291-3292,3297-3298,3336-3337,3342-3343,3348-3349,3354-3355,3375-3376,3381-3382,3402-3403,3408-3409,3429-3430
+packages/crypto/src/removal-calls-testkit.ts
+  s_566b8e0c4467a4::t_417369002058ea 1-669
+packages/crypto/src/roster-call-fixtures.test.ts
+  s_566b8e0c4467a4::t_253299b40276a0 4,36-46
+packages/crypto/src/roster-calls-testkit.ts
+  s_566b8e0c4467a4::t_106caeaeaf83ff 43,99-102,257-258,266-270,279-297,606-617,644-647,649-655
+packages/groups/src/server.test.ts
+  s_566b8e0c4467a4::t_44ac7693dffccb 3,661-737,3605,3651,3677-3849
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "770d8ce769c6c1d10098cb6b94706552d8e9dd2c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
