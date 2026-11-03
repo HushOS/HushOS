@@ -1,0 +1,23 @@
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_fdbafc149e09db 139
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyManage.swift
+  s_566b8e0c4467a4::t_d853a02922856b 317-327,509-544
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyManageTests.swift
+  s_566b8e0c4467a4::t_3068366c0e3454 568-601
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "531d8848b487fe095a53860f543ccaa942926957",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
