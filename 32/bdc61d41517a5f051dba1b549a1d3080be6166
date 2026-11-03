@@ -1,0 +1,31 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_ce0dee87025084 88
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_566b8e0c4467a4::t_bb1bc99226d3c5 633
+apps/android/app/src/main/kotlin/com/hushos/app/data/WriteBacks.kt
+  s_566b8e0c4467a4::t_d29a37d9c1e8f1 221-231,248-259,384-385,388-411,413-414,419,477-478,560-571
+apps/android/app/src/main/kotlin/com/hushos/app/files/HushOSDocumentsProvider.kt
+  s_566b8e0c4467a4::t_feeeda3b5c8a47 453,455
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_566b8e0c4467a4::t_c66b9110412c67 176-178,583
+apps/android/app/src/test/kotlin/com/hushos/app/files/FilesTreeGrantsTest.kt
+  s_566b8e0c4467a4::t_7ade51475e8bef 121-135
+apps/android/app/src/test/kotlin/com/hushos/app/files/ProviderFamiliesTest.kt
+  s_566b8e0c4467a4::t_15815f3ad989db 1859-1880
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "32bdc61d41517a5f051dba1b549a1d3080be6166",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
