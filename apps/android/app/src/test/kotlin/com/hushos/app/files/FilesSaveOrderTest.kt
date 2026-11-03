@@ -117,16 +117,17 @@ class FilesSaveOrderTest {
 
     /*
      * The slot's job run as WorkManager starts it: a run of it (each with its own id, as a rerun or the next job behind it
-     * would be), its request what TransferQueue queued for the slot (WorkManager holds a job with those tags).
+     * would be), its request what TransferQueue queued for the slot (WorkManager holds a job with those tags), naming the
+     * generation the slot held when it was queued, however many saves replaced it since.
      */
     private fun runSlot(slot: String): ListenableWorker.Result {
         val session = TransferQueue.accountTag(Shared.session(app)!!)
         val queued = jobs(slot)
         assertTrue("no job was queued for the slot", queued.isNotEmpty())
-        val expected = TransferQueue.slotRequest(queued.last().id, slot, WriteBacks.contentOf(app, slot), session = session).tags
-        assertTrue(queued.any { it.tags == expected })
+        val file = File(queued.last().tags.first { it.startsWith("file:") }.removePrefix("file:"))
+        assertEquals(TransferQueue.slotRequest(queued.last().id, slot, file, session = session).tags, queued.last().tags)
         val id = java.util.UUID.randomUUID()
-        val request = TransferQueue.slotRequest(id, slot, WriteBacks.contentOf(app, slot), session = session)
+        val request = TransferQueue.slotRequest(id, slot, file, session = session)
         val worker = TestListenableWorkerBuilder<UploadWorker>(app).setId(id).setInputData(request.workSpec.input).setTags(request.tags.toList()).build()
         return runBlocking { worker.doWork() }
     }
@@ -477,6 +478,154 @@ class FilesSaveOrderTest {
         assertEquals(WorkInfo.State.ENQUEUED, jobs(slot).single().state)
         assertEquals(ListenableWorker.Result.success(), runSlot(slot))
         assertEquals("saved, then the process died", serverText(notes))
+    }
+
+    /*
+     * A save cut short after its contents and description were written and before the record named them (the process
+     * killed there), right after the save before it landed with its answer lost: the slot never holds the new bytes under
+     * the earlier save's identity. The next look publishes the newer save under its own id, the next run settles the
+     * earlier one as landed and sends the newer. Fails if a save's bytes and identity can change apart, so the newer bytes
+     * pass for the landed save and are cleared unsent, or the cut-short save is lost.
+     */
+    @Test
+    fun aSaveCutShortBeforeItsRecordIsNeitherLostNorMislabelled() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "first save")
+        val first = WriteBacks.pending(app, slot)!!
+        dropFromTheCompletion()
+        assertEquals(ListenableWorker.Result.retry(), runSlot(slot))
+        server.dropReply = null
+        class Killed : Error()
+        WriteBacks.afterContent = { WriteBacks.afterContent = null; throw Killed() }
+        val edit = File(app.cacheDir, "cut-short").apply { writeText("second save") }
+        try {
+            WriteBacks.save(app, Reservations.generation, first.target, edit)
+            throw AssertionError("the save wasn't cut short")
+        } catch (_: Killed) {
+        }
+        val second = WriteBacks.pending(app, slot)!!
+        assertTrue(second.id != first.id)
+        assertEquals("second save", WriteBacks.contentOf(app, slot).readText())
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("second save", serverText(notes))
+        assertEquals(2, begins())
+    }
+
+    /*
+     * A file read once (its version cached here), then saved, and the save's job lands it from its own vault: the next
+     * read gets the new bytes, not the provider's cached version from before. Fails if a read-only open answers from the
+     * provider's own row once the slot has emptied.
+     */
+    @Test
+    fun aReadAfterTheSaveLandsReadsTheNewVersion() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        assertEquals("original", opened(provider, notes, "r"))
+        save(provider, notes, "landed save")
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertNull(WriteBacks.pending(app, slot))
+        assertEquals("landed save", opened(provider, notes, "r"))
+    }
+
+    /*
+     * A save fails for good (its row), then a newer one lands: the failed save's row goes, and WorkManager's failed entry
+     * for it, read by the panel, never makes it again. Fails if a row the slot made obsolete stays, or comes back.
+     */
+    @Test
+    fun aLandedSaveRetiresTheRowsOfTheFailedOnesBeforeIt() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "failed save")
+        val failedFile = WriteBacks.contentOf(app, slot).path
+        refuseBegins(true)
+        assertEquals(ListenableWorker.Result.failure()::class, runSlot(slot)::class)
+        refuseBegins(false)
+        val row = FailedTransfers.of(app).all().single()
+        assertEquals(failedFile, row.file)
+        save(provider, notes, "newer save")
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertTrue(FailedTransfers.of(app).all().isEmpty())
+        val session = TransferQueue.accountTag(Shared.session(app)!!)
+        val request = TransferQueue.slotRequest(java.util.UUID.fromString(row.id), slot, File(failedFile), session = session)
+        val entry = WorkInfo(request.id, WorkInfo.State.FAILED, request.tags, androidx.work.Data.Builder().putAll(request.workSpec.input).putString("message", "Refused.").build())
+        TransferQueue.recordUnrecordedFailures(app, listOf(entry), emptySet(), Reservations.generation) { "Notes.txt" }
+        assertTrue("a pruned-late entry made the obsolete row again", FailedTransfers.of(app).all().isEmpty())
+    }
+
+    /*
+     * A save fails for good (its row), a newer save is pending, and the failed save's row is dismissed: only the failed
+     * save goes, the newer one stays and lands. Dismissing the row of a failed save that is still the pending one drops
+     * it. Fails if a dismissal deletes the slot's current contents, or leaves a failed pending save behind.
+     */
+    @Test
+    fun dismissingAFailedSaveNeverTakesANewerOne() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "failed save")
+        refuseBegins(true)
+        runSlot(slot)
+        refuseBegins(false)
+        save(provider, notes, "pending save")
+        TransferQueue.dismiss(app, FailedTransfers.of(app).all().single())
+        assertEquals("pending save", opened(provider, notes, "r"))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("pending save", serverText(notes))
+        save(provider, notes, "failed again")
+        refuseBegins(true)
+        runSlot(slot)
+        refuseBegins(false)
+        TransferQueue.dismiss(app, FailedTransfers.of(app).all().single())
+        assertNull(WriteBacks.pending(app, slot))
+    }
+
+    /*
+     * A save's completion lands but the step after it fails (its name signed again), so the run counts it landed; a newer
+     * save arrived meanwhile and goes out in the same run. It replaces the version that just landed. Fails if the next
+     * save is sent from the vault that still holds the version before (the server refuses a replacement of a stale version).
+     */
+    @Test
+    fun theNextSaveAfterARecoveredLandingReplacesTheVersionThatLanded() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "first save")
+        val target = WriteBacks.pending(app, slot)!!.target
+        server.extraRoutes = { method, segments, _, _ ->
+            if (method != "GET" && segments.size == 4 && segments[1] == "nodes" && segments[3] == "metadata") {
+                server.extraRoutes = null
+                WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "meanwhile").apply { writeText("second save") })
+                500 to JSONObject().put("message", "The connection dropped")
+            } else null
+        }
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("second save", serverText(notes))
+        assertNull(WriteBacks.pending(app, slot))
+    }
+
+    /*
+     * A file's earlier save's job finished (WorkManager still lists it), and a new save landed in the slot without its job
+     * (the process died first): the next sweep queues one, since a finished job owns nothing. Fails if a finished job's
+     * folder counts as owning the slot.
+     */
+    @Test
+    fun aSaveWhoseOnlyJobHadFinishedGetsOneAtTheNextSweep() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "first save")
+        val finished = jobs(slot).single()
+        WorkManager.getInstance(app).cancelWorkById(finished.id).result.get()
+        val target = WriteBacks.pending(app, slot)!!.target
+        WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "unqueued").apply { writeText("second save") })
+        TransferQueue.sweep(app, WorkManager.getInstance(app).getWorkInfosByTag(TransferQueue.TAG).get())
+        assertEquals(WorkInfo.State.ENQUEUED, jobs(slot).single { it.id != finished.id }.state)
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("second save", serverText(notes))
     }
 
     /*

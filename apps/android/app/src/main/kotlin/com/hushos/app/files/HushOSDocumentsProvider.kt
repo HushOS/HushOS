@@ -342,6 +342,9 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             // server's older version, which an app that reads then truncates would write the save away with.
             val pending = File(context!!.cacheDir, "files/$id/pending-${java.util.UUID.randomUUID()}")
             if (WriteBacks.copyTo(context!!, slot, pending)) return@guarded ParcelFileDescriptor.open(pending, ParcelFileDescriptor.MODE_READ_ONLY).also { pending.delete() }
+            // A save of it landed from its job's own vault since: this vault may still hold the version before, so the
+            // version is checked with the server first (without an answer, the row held is read).
+            val item = if (!WriteBacks.landedSince(slot)) item else runCatching { currentVersion(vault, id) }.getOrNull()?.also { WriteBacks.caughtUp(slot) } ?: item
             val file = cacheFile(id, item.node.currentVersion?.id)
             // A kept file opens from the phone, network or not; anything else comes down, or resumes, once per version.
             Offline.localCopy(context!!, item)?.let { return@guarded ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY) }

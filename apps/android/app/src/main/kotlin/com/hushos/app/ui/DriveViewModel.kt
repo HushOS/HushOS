@@ -375,7 +375,6 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
             kotlinx.coroutines.flow.combine(work.getWorkInfosByTagFlow(com.hushos.app.data.TransferQueue.TAG), hiddenWork, failedChanged,
                 com.hushos.app.data.FailedTransfers.changes) { infos, hidden, _, _ -> infos to hidden }.collectLatest { (infos, hidden) ->
                 lastInfos = infos
-                val inUse = infos.mapNotNull { info -> info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:")?.let { File(it).parent } }.toSet()
                 val records = com.hushos.app.data.FailedTransfers.of(context)
                 val waits = com.hushos.app.data.KeyChangeWaits.of(context)
                 val jobNames = com.hushos.app.data.JobNames.of(context)
@@ -387,7 +386,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                 val generation = vault?.ledgerGeneration
                 withContext(Dispatchers.IO) {
                     if (generation != null) com.hushos.app.data.TransferQueue.recordUnrecordedFailures(context, infos, hidden, generation, nameOf)
-                    com.hushos.app.data.TransferQueue.sweep(context, inUse, infos.map { it.id.toString() }.toSet())
+                    com.hushos.app.data.TransferQueue.sweep(context, infos)
                     jobNames.retain(infos.map { it.id.toString() }.toSet())
                 }
                 // Failed rows come from the app's own record, which outlives WorkManager's; its FAILED jobs are not shown twice.

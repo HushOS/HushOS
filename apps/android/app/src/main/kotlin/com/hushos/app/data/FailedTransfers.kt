@@ -44,7 +44,9 @@ data class FailedTransfer(
     }
 
     /* An upload whose staged copy is gone can't be sent again: the row says to pick it again. */
-    fun sourceGone(): Boolean = kind == TransferQueue.UPLOAD && (file == null || !File(file).exists())
+    fun sourceGone(): Boolean = kind == TransferQueue.UPLOAD && (file == null ||
+        // A file's failed save: gone once its slot holds no save (Retry sends whatever the slot holds, its own or newer).
+        if (slot != null) !File(File(file).parentFile, "record.json").exists() else !File(file).exists())
 }
 
 /* The record on disk: one transfer per line, each field percent-encoded, so no format library is needed. */
@@ -61,6 +63,12 @@ class FailedTransfers(private val store: File) {
     }
 
     fun has(id: String) = all().any { it.id == id }
+
+    /* Every row `matches` picks goes (a landed slot's obsolete failures). */
+    fun forgetWhere(matches: (FailedTransfer) -> Boolean) {
+        val list = all()
+        if (list.any(matches)) write(list.filterNot(matches))
+    }
 
     @Synchronized
     private fun write(list: List<FailedTransfer>) {
