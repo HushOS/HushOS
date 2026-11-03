@@ -38,7 +38,8 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
             present[identifier] = nil
         }
     }
-    func signal(_ identifier: String) async {}
+    private(set) var signals: [String] = []
+    func signal(_ identifier: String) async { lock.withLock { signals.append(identifier) } }
     private(set) var resolutions: [String] = []
     func resolved(_ identifier: String) async { lock.withLock { resolutions.append(identifier) } }
 
@@ -332,6 +333,61 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         #expect(try records.read()[group]?.owner == sam)
     }
 
+    /*
+     * The extension's let-go of the family waits behind another of its calls while the app accepts
+     * the family again (the member was let back in), at the generation that let-go moved it to: the
+     * removal, when its turn comes, leaves the fresh location, whether the let-go was written at once
+     * or left pending and written by a later call. Fails if a queued removal can't tell a record
+     * written after its let-go from one written before.
+     */
+    @Test func anOldQueuedRemovalLeavesAFamilyAcceptedAfterIt() async throws {
+        for pendingFirst in [false, true] {
+            let app = self.domains
+            let extensionProcess = FamilyFilesDomains(records: records, manager: manager)
+            let session = TemporaryCopies.session(CopyEpoch())
+            let (group, maya, records) = (UUID().uuidString.lowercased(), Self.maya, self.records)
+            await app.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value
+            let held = pendingFirst ? open(records.lockPath, O_RDWR | O_CREAT | O_CLOEXEC, 0o600) : -1
+            let (entered, enter) = AsyncStream<Void>.makeStream()
+            let (letGoCalled, called) = AsyncStream<Void>.makeStream()
+            // The extension's queue is busy until the app has accepted the family again.
+            manager.duringAdd = {
+                enter.yield()
+                for await _ in letGoCalled { break }
+                if pendingFirst {
+                    flock(held, LOCK_UN)
+                    close(held)
+                    // The extension's next call writes the let-go it couldn't.
+                    #expect(!extensionProcess.revocationPending(group))
+                }
+                await app.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value
+            }
+            let busy = extensionProcess.accepted(UUID().uuidString.lowercased(), name: "Holm family", owner: maya, observed: 0, session: session)
+            for await _ in entered { break }
+            // The store refuses the let-go (its lock held elsewhere): it is left pending.
+            if pendingFirst { #expect(flock(held, LOCK_EX | LOCK_NB) == 0) }
+            let removal = extensionProcess.letGo(group, owner: maya, session: session)
+            #expect(extensionProcess.revocationPending(group) == pendingFirst)
+            called.yield()
+            called.finish()
+            await busy.value
+            await removal.value
+            #expect(records.admission(group, owner: maya) == .admitted)
+            #expect(manager.names[FamilyFileIds.domain(group)] != nil, "an old let-go's removal took a location accepted after it (pending first: \(pendingFirst))")
+        }
+    }
+
+    /*
+     * An upload into a family folder finishes (in a background launch too): the family's location is
+     * told, so Files shows it. Fails if a family upload only signals the drive's location.
+     */
+    @Test func aFamilyUploadThatLandsTellsItsFamilysLocation() async throws {
+        let domains = self.domains
+        FilesDomain.signalLanded(folderId: UUID().uuidString.lowercased(), familyGroup: Self.group.uppercased(), families: domains)
+        await domains.settled()
+        #expect(manager.signals == [FamilyFileIds.domain(Self.group)])
+    }
+
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
     @Test func aRenamedFamilysLocationTakesTheNewName() async throws {
         let domains = self.domains
@@ -590,6 +646,48 @@ extension OnFakeDrive {
             let again = try #require(try await s.source.changes(since: anchor))
             #expect(again.deleted.isEmpty, "items were deleted after the key change")
             #expect(again.updated.contains { $0.ref == s.family.photo.ref })
+        }
+
+        /*
+         * A folder the family still lists stops opening here for a moment (a key change between the
+         * member list and the folders): its feed and its items are asked again, never called deleted,
+         * and come back where they were; once the family stops listing it, it goes. Fails if a
+         * folder that can't open yet is taken for one the family dropped.
+         */
+        @Test func aFolderThatCantOpenYetKeepsItsPlaceAndOneNoLongerListedGoes() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            let workspace = s.family.workspaceId.lowercased()
+            let root = NodeRef(workspaceId: s.family.workspaceId, nodeId: s.family.rootId)
+            let anchor = try await s.source.anchor()
+            #expect(anchor.folders[workspace] != nil)
+
+            s.server.servedRootId = s.family.fileId
+            s.clock.now = s.clock.now.addingTimeInterval(120)
+            do {
+                let changes = try await s.source.changes(since: anchor)
+                Issue.record("a folder that can't open yet answered \(changes?.deleted ?? []) deleted")
+            } catch {
+                #expect(error as? FamilyFilesError == .keyChange)
+            }
+            // Open again: the next read checks the family first (no minute waited), and the folder is where it was.
+            s.server.servedRootId = nil
+            let again = try #require(try await s.source.changes(since: anchor))
+            #expect(again.deleted.isEmpty, "the folder was deleted after it opened again")
+            #expect(again.next.folders[workspace]?.root == anchor.folders[workspace]?.root)
+
+            s.server.servedRootId = s.family.fileId
+            s.clock.now = s.clock.now.addingTimeInterval(120)
+            await #expect(throws: FamilyFilesError.keyChange) { _ = try await s.source.children(of: root) }
+            await #expect(throws: FamilyFilesError.keyChange) { _ = try await s.source.item(s.family.photo.ref) }
+            s.server.servedRootId = nil
+            #expect(try await s.source.item(s.family.photo.ref).ref == s.family.photo.ref)
+
+            s.server.areaListed = false
+            s.clock.now = s.clock.now.addingTimeInterval(120)
+            let gone = try #require(try await s.source.changes(since: anchor))
+            #expect(gone.deleted.contains(FamilyFileIds.item(NodeRef(workspaceId: workspace, nodeId: s.family.rootId.lowercased()))),
+                    "a folder the family no longer lists stayed")
         }
 
         /*

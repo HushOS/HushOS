@@ -192,6 +192,18 @@ public enum FilesDomain {
     }
 
     /* Tells Files something changed; it re-enumerates through the change feed. */
+    /*
+     * An upload finished, maybe in a background launch before any screen exists: the location it went
+     * into is told, so Files reads its feed. A family folder's upload is its family's location's, never the drive's.
+     */
+    public static func signalLanded(folderId: String?, familyGroup: String?, families: FamilyFilesDomains = .shared) {
+        if let familyGroup {
+            families.signal(familyGroup)
+        } else {
+            signal(folderId: folderId)
+        }
+    }
+
     public static func signal(folderId: String? = nil) {
         let domain = NSFileProviderDomain(identifier: identifier, displayName: "HushOS")
         guard let manager = NSFileProviderManager(for: domain) else { return }

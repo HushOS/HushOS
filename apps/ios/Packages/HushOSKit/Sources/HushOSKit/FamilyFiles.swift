@@ -44,11 +44,17 @@ public struct FamilyDomainRecord: Codable, Sendable, Equatable {
     public let owner: AccountOwner
     public let name: String
     public var workspaces: [String]?
+    /*
+     * The family's revocation generation when the record was written: a let-go that moved it to this
+     * or below came before the record (nil: a record from before generations were kept).
+     */
+    public var generation: UInt64?
 
-    public init(owner: AccountOwner, name: String, workspaces: [String]? = nil) {
+    public init(owner: AccountOwner, name: String, workspaces: [String]? = nil, generation: UInt64? = nil) {
         self.owner = owner
         self.name = name
         self.workspaces = workspaces
+        self.generation = generation
     }
 }
 
@@ -184,6 +190,8 @@ public final class FamilyFilesDomains: @unchecked Sendable {
      * until then its acceptances add nothing and this process's extension calls refuse.
      */
     private var pending: [String: (owner: AccountOwner?, session: CopySession?)] = [:]
+    /* The generation each family's pending let-go moved it to once written: what the removal it queued is tagged with. */
+    private var landed: [String: UInt64] = [:]
 
     public init(records: FamilyDomainRecords, manager: any FamilyDomainManaging, temporary: URL = FileManager.default.temporaryDirectory) {
         self.records = records
@@ -224,7 +232,8 @@ public final class FamilyFilesDomains: @unchecked Sendable {
             let wrote = records.update { stored in
                 guard stored.revoked[groupId, default: 0] <= observed else { return }
                 if let record = stored.records[groupId], record.owner != owner { return }
-                stored.records[groupId] = FamilyDomainRecord(owner: owner, name: name, workspaces: workspaces.map { $0.lowercased() }.sorted())
+                stored.records[groupId] = FamilyDomainRecord(owner: owner, name: name, workspaces: workspaces.map { $0.lowercased() }.sorted(),
+                                                             generation: stored.revoked[groupId, default: 0])
                 ours = true
             }
             guard wrote, ours, session.stands else { return }
@@ -270,51 +279,76 @@ public final class FamilyFilesDomains: @unchecked Sendable {
         let groupId = groupId.lowercased()
         // A late let-go of a session that ended (the account signed in again since) touches nothing of the session now.
         if let session, !session.stands { return enqueue {} }
-        let written = lock.withLock { () -> Bool in
-            let written = (0 ..< 3).contains { _ in write(groupId, owner: owner, session: session) }
-            if !written { pending[groupId] = (owner, session) }
-            return written
+        let wrote = lock.withLock { () -> UInt64? in
+            for _ in 0 ..< 3 {
+                switch write(groupId, owner: owner, session: session) {
+                case .at(let generation): return generation
+                case .stale: return nil
+                case .refused: continue
+                }
+            }
+            pending[groupId] = (owner, session)
+            landed[groupId] = nil
+            return nil
         }
-        _ = written
         // The location goes whether or not the store took the let-go (Files drops what it holds of it), unless by then the
-        // family's record is someone else's: another account, or a session after this one, added the family since.
+        // family's record is someone else's (another account, or a session after this one, added the family since) or was
+        // written after the let-go (an acceptance that came once it landed, run while this removal waited its turn).
         return enqueue { [self] in
-            guard mayRemove(groupId, owner: owner, session: session) else { return }
+            // Left pending: the generation its write reached since, if it did (until then nothing is accepted).
+            let generation = wrote ?? lock.withLock { landed[groupId] }
+            guard mayRemove(groupId, owner: owner, session: session, after: generation) else { return }
             try? await manager.remove(FamilyFileIds.domain(groupId))
         }
     }
 
     /*
-     * Whether a let-go of `owner` and `session` may still remove the family's location: read under the
-     * store's lock, the record is gone, or is still `owner`'s while that session stands. A store that
-     * can't be read removes it (fail-safe: Files only drops a cache).
+     * Whether a let-go of `owner` and `session`, which moved the family's generation to `generation`,
+     * may still remove its location: read under the store's lock, the record is gone, or was written
+     * before the let-go and is still `owner`'s while that session stands. A store that can't be read
+     * removes it (fail-safe: Files only drops a cache).
      */
-    private func mayRemove(_ groupId: String, owner: AccountOwner?, session: CopySession?) -> Bool {
+    private func mayRemove(_ groupId: String, owner: AccountOwner?, session: CopySession?, after generation: UInt64?) -> Bool {
         var record: FamilyDomainRecord?
         guard records.update({ stored in record = stored.records[groupId] }) else { return true }
         guard let record else { return true }
+        // Written at the generation the let-go moved the family to, or later: an acceptance that came after it.
+        if let generation, let written = record.generation, written >= generation { return false }
         if let owner, record.owner != owner { return false }
         if let session, !session.stands { return false }
         return true
     }
 
-    /* One let-go written: the generation moved and `owner`'s record (nil: whoever's) gone, its copies here with it; false when the store refused. */
-    private func write(_ groupId: String, owner: AccountOwner?, session: CopySession?) -> Bool {
+    /* What writing a let-go came to. */
+    private enum Written {
+        /* The store couldn't be locked, read or written. */
+        case refused
+        /* Its session ended: nothing is written over the session now. */
+        case stale
+        /* Written: the family's generation is now this one. */
+        case at(UInt64)
+    }
+
+    /* One let-go written: the generation moved and `owner`'s record (nil: whoever's) gone, its copies here with it. */
+    private func write(_ groupId: String, owner: AccountOwner?, session: CopySession?) -> Written {
         var workspaces: [String] = []
         var stale = false
+        var generation: UInt64 = 0
         let wrote = records.update { stored in
             if let session, !session.stands {
                 stale = true
                 return
             }
             stored.revoked[groupId, default: 0] += 1
+            generation = stored.revoked[groupId, default: 0]
             if let record = stored.records[groupId], owner == nil || record.owner == owner {
                 workspaces = record.workspaces ?? []
                 stored.records[groupId] = nil
             }
         }
         if !workspaces.isEmpty { TemporaryCopies.forgetFamily(workspaces, in: temporary) }
-        return wrote || stale
+        if stale { return .stale }
+        return wrote ? .at(generation) : .refused
     }
 
     /*
@@ -326,7 +360,13 @@ public final class FamilyFilesDomains: @unchecked Sendable {
         return lock.withLock {
             guard let held = pending[groupId] else { return false }
             // Written as the session it came from: one that ended since is dropped, never written over the next session's.
-            if write(groupId, owner: held.owner, session: held.session) { pending[groupId] = nil }
+            switch write(groupId, owner: held.owner, session: held.session) {
+            case .at(let generation):
+                pending[groupId] = nil
+                landed[groupId] = generation
+            case .stale: pending[groupId] = nil
+            case .refused: break
+            }
             return pending[groupId] != nil
         }
     }
@@ -695,13 +735,22 @@ public actor FamilyFilesSource {
     /* The family's folders that open here, as the location's top level. */
     public func folders() async throws -> [FamilyArea] { try await serving { try await openFolders() } }
 
-    private func openFolders() async throws -> [FamilyArea] {
-        try await currentView().areas.filter(\.openable).sorted { ($0.name ?? "").localizedStandardCompare($1.name ?? "") == .orderedAscending }
+    private func openFolders() async throws -> [FamilyArea] { Self.open(in: try await currentView()) }
+
+    private static func open(in view: FamilyView) -> [FamilyArea] {
+        view.areas.filter(\.openable).sorted { ($0.name ?? "").localizedStandardCompare($1.name ?? "") == .orderedAscending }
     }
 
+    /*
+     * The family's folder `ref` is in. One the family still lists that doesn't open here yet (a key
+     * change between the member list and the folders, read one after the other) is asked again,
+     * never answered as gone: Files would drop what it holds of it.
+     */
     private func area(_ ref: NodeRef, in view: FamilyView) throws -> FamilyArea {
-        guard let area = view.areas.first(where: { $0.workspaceId.lowercased() == ref.workspaceId && $0.openable }) else {
-            throw FamilyFilesError.notInFamily
+        guard let area = view.areas.first(where: { $0.workspaceId.lowercased() == ref.workspaceId }) else { throw FamilyFilesError.notInFamily }
+        guard area.openable else {
+            checkedAt = nil
+            throw FamilyFilesError.keyChange
         }
         return area
     }
@@ -804,14 +853,23 @@ public actor FamilyFilesSource {
     }
 
     private func changesSince(_ anchor: FamilyAnchor) async throws -> FamilyChanges? {
-        let folders = try await openFolders()
+        let view = try await currentView()
+        let folders = Self.open(in: view)
         var next = FamilyAnchor()
         var added: [FamilyArea] = []
         var updated: [Opened] = []
         var deleted: [String] = []
         var more = false
         let open = Set(folders.map { $0.workspaceId.lowercased() })
+        let listed = Set(view.areas.map { $0.workspaceId.lowercased() })
         for (workspace, folder) in anchor.folders where !open.contains(workspace) {
+            // Still listed but not open here yet (a key change between the member list and the folders): nothing of the
+            // batch is answered, so the folder keeps its place and its cursor, and the next call checks the family first.
+            if listed.contains(workspace) {
+                checkedAt = nil
+                throw FamilyFilesError.keyChange
+            }
+            // No longer the family's: it leaves the location.
             deleted.append(FamilyFileIds.item(NodeRef(workspaceId: workspace, nodeId: folder.root)))
         }
         for area in folders {
