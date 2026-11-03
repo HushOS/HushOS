@@ -336,48 +336,53 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         val vault = requireVault()
         val id = nodeId(documentId, vault)
         val item = vault.resolve(id)
-        val file = cacheFile(id, item.node.currentVersion?.id)
+        val slot = WriteBacks.slotOf(item.node.workspaceId, id)
         if (mode.contains("r") && !mode.contains("w")) {
+            // A save of it still pending (waiting, retrying, failed) is what another app last wrote: read that, never the
+            // server's older version, which an app that reads then truncates would write the save away with.
+            val pending = File(context!!.cacheDir, "files/$id/pending-${java.util.UUID.randomUUID()}")
+            if (WriteBacks.copyTo(context!!, slot, pending)) return@guarded ParcelFileDescriptor.open(pending, ParcelFileDescriptor.MODE_READ_ONLY).also { pending.delete() }
+            val file = cacheFile(id, item.node.currentVersion?.id)
             // A kept file opens from the phone, network or not; anything else comes down, or resumes, once per version.
             Offline.localCopy(context!!, item)?.let { return@guarded ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY) }
             if (!file.exists()) vault.download(id, file)
             return@guarded ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         }
         val edit = personalEdit(vault, id, mode)
-        val chain = WriteBacks.chainOf(item.node.workspaceId, id)
         val handler = Handler(Looper.getMainLooper())
-        ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), handler) { error -> onEditClosed(error, vault, id, documentId, edit, item, chain) }
+        ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), handler) { error -> onEditClosed(error, vault, edit, item) }
     }
 
-    /* Tests: where a closed edit's write-back runs (a thread of its own). */
-    internal var spawn: (Runnable) -> Unit = { Thread(it).start() }
-
     /*
-     * The other app closed what it wrote. Its place among the document's saves is taken here, in the close callback,
-     * before anything runs on another thread: two closes back to back keep their order whichever write-back gets further
-     * first (WriteBacks.land supersedes the older if the newer lands first).
+     * The other app closed what it wrote: it becomes the file's pending save (WriteBacks.save, in the close callback
+     * itself, so saves land in the order the app closed them), and the file's job is queued to send it. Nothing is sent
+     * from here: the job sends the newest save, and the provider never uploads past it. A save the account's sign-out
+     * overtook keeps nothing.
      */
-    internal fun onEditClosed(error: java.io.IOException?, vault: Vault, id: String, documentId: String, edit: File, opened: com.hushos.app.data.Opened, chain: String) {
+    internal fun onEditClosed(error: java.io.IOException?, vault: Vault, edit: File, opened: com.hushos.app.data.Opened) {
         if (error != null) { edit.delete(); return }
-        val order = WriteBacks.nextOrder(context!!)
-        WriteBacks.closing(chain, order, edit)
-        spawn(Runnable { personalWriteBack(vault, id, documentId, edit, opened, chain, order) })
+        try {
+            val target = WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime, opened.node.parentId ?: vault.rootId)
+            if (WriteBacks.save(context!!, vault.ledgerGeneration, target, edit) != null)
+                com.hushos.app.data.TransferQueue.enqueueSlot(context!!, WriteBacks.slotOf(target.workspaceId, target.nodeId), opened.name)
+        } catch (failure: Exception) {
+            android.util.Log.w("HushOSFiles", "a save couldn't be kept: ${failure.javaClass.name}")
+        } finally {
+            edit.delete()
+        }
     }
 
     /*
-     * Where another app writes a file of the drive: a file of its own that goes up as a new version when it closes, never
-     * the version's read copy (if the upload fails, a later read must not show edits the server never got). It starts
-     * from the current version whenever the mode keeps the contents (WriteModes): appending, or reading and writing
-     * without truncating. That is the newest save of it not landed yet when there is one (WriteBacks: never the server's
-     * older version, which that save would then replace, dropping this edit's start); else the server's, checked first
-     * (currentVersion), so an edit never builds on a version that was replaced since, as one a queued write-back landed
-     * from its own vault.
+     * Where another app writes a file of the drive: a file of its own that becomes the file's pending save when it
+     * closes, never the version's read copy. It starts from the current contents whenever the mode keeps them (WriteModes):
+     * appending, or reading and writing without truncating. Those are the file's pending save when it has one (what the
+     * app last wrote, not landed yet); else the server's version, checked first (currentVersion), so an edit never builds
+     * on a version replaced since.
      */
     internal fun personalEdit(vault: Vault, id: String, mode: String): File {
         val edit = File(context!!.cacheDir, "edits/$id/${java.util.UUID.randomUUID()}").also { it.parentFile?.mkdirs() }
         if (WriteModes.keepsContents(mode)) {
-            val pending = WriteBacks.newestPending(context!!, WriteBacks.chainOf(vault.resolve(id).node.workspaceId, id))
-            if (pending != null && runCatching { pending.copyTo(edit, overwrite = true) }.isSuccess) return edit
+            if (WriteBacks.copyTo(context!!, WriteBacks.slotOf(vault.resolve(id).node.workspaceId, id), edit)) return edit
             val item = currentVersion(vault, id)
             val file = cacheFile(id, item.node.currentVersion?.id)
             if (!file.exists()) vault.download(id, file)
@@ -398,38 +403,6 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             if (vault.sync() == null) throw FileNotFoundException(com.hushos.app.data.GroupsApiError.NO_ANSWER)
         } else held.node.parentId?.let { vault.listChildren(it, ws) }
         return vault.resolve(id)
-    }
-
-    /*
-     * What another app wrote, once it closed the file: a new version, landing only while no newer save of the file has
-     * (WriteBacks.land; a newer one that landed first supersedes it, nothing sent). Not sent now (no network, the name it
-     * keeps couldn't be checked, or the file's row couldn't be looked up now): the queue takes the edit with its place and
-     * tries again, rather than the edit being dropped; `opened` is the file as it was when the app opened it, which the
-     * queued job is told of when the lookup fails, and the job looks it up again itself.
-     */
-    internal fun personalWriteBack(vault: Vault, id: String, documentId: String, edit: File, opened: com.hushos.app.data.Opened, chain: String, order: Long) {
-        try {
-            val fresh = runCatching { vault.resolve(id) }.getOrNull()
-            val sent = fresh != null && try {
-                WriteBacks.land(context!!, chain, order) {
-                    vault.upload(edit, fresh.name, fresh.metadata.mime, fresh.node.parentId ?: vault.rootId, fresh, vault.makeThumbnail(edit, fresh.metadata.mime))
-                }
-                context!!.contentResolver.notifyChange(DocumentsContract.buildDocumentUri(authority, documentId), null)
-                true
-            } catch (_: WriteBacks.Superseded) {
-                true
-            } catch (_: Exception) {
-                false
-            }
-            if (!sent) runCatching {
-                val known = fresh ?: opened
-                com.hushos.app.data.TransferQueue.upload(context!!, edit, known.name, known.metadata.mime, known.node.parentId ?: vault.rootId, known.id,
-                    chain = chain, order = order)
-            }
-        } finally {
-            WriteBacks.settled(chain, order)
-            edit.delete()
-        }
     }
 
     /* Through a pipe, never a plaintext file in the cache: the decrypted JPEG exists only in memory and in transit. */

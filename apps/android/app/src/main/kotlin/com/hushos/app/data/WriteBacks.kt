@@ -1,112 +1,135 @@
 package com.hushos.app.data
 
 import android.content.Context
-import androidx.work.WorkManager
+import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 /*
- * Another app's saves of one document through the Files app, landed newest last. Each save takes its place among the
- * document's saves (`nextOrder`) in the close callback itself, before anything runs on another thread, so two closes
- * back to back keep their order whichever thread gets further first. A save then lands only through `land`: under the
- * document's lock, and only while no newer save of it has landed (the newest landed is kept on disk, per document). A
- * save that finds a newer one landed is superseded: it is not sent, and nothing is lost, since a save is the whole file
- * as the app last wrote it. Saves are not chained to each other: one cancelled, failed for good or still retrying never
- * stops a newer one from landing, and a Retry (TransferQueue.retry) keeps its save's place, so an old save retried after
- * a newer one landed is superseded rather than landing over it.
+ * Another app's saves of one file through the Files app, coalesced: each file has at most one pending slot, the newest
+ * save's whole contents (`content`) and a small record (`record.json`: its generation and what the upload needs), in the
+ * transfer queue's folder (queue/<slot>, so cancel, dismiss, a family's end and every account wipe take it with the
+ * rest of the queue). A save replaces the slot's contents and then its record, each with one rename, under the slot's
+ * lock and only while the account that made it is still the one on the phone; it never makes a second upload. One job
+ * per slot (TransferQueue.enqueueSlot) sends whatever the slot holds when it runs, and clears the slot only when the
+ * slot still holds the generation it sent; a newer save that arrived meanwhile is sent next. So only the newest contents
+ * are ever sent, an older one can never land after a newer one, and the newest always gets its chance: a failed send
+ * keeps the slot for Retry, and a cancel or a dismiss drops it.
  *
- * An edit that keeps the contents ("wa", "rw") starts from the newest save not landed yet (`newestPending`: one in flight
- * in this process, or queued) when it is newer than the newest landed; otherwise from the server. Ids and paths only.
+ * Every open of the file (to read, or to write keeping the contents) starts from the slot while there is one, so what
+ * another app reads is what it last saved, whether its upload is waiting, retrying, failed or its job long pruned. Ids
+ * and paths only, beside the record's name and type (the queue's other copies keep the same).
  */
 object WriteBacks {
-    const val CHAIN = "chain:"
-    const val ORDER = "order:"
-    private const val PREFS = "write-backs"
-    /* The save counter: no account data, so it outlives a sign-out and keeps increasing. */
-    private const val COUNTER = "write-back-order"
+    const val SLOT = "slot:"
+    private const val CONTENT = "content"
+    private const val RECORD = "record.json"
 
-    /* A document's saves: its workspace and node, both ids. */
-    fun chainOf(workspaceId: String, nodeId: String): String = "writeback-${workspaceId.lowercase()}-${nodeId.lowercase()}"
+    /* A file's slot: its workspace and node, both ids; also its folder's name and its job's unique name. */
+    fun slotOf(workspaceId: String, nodeId: String): String = "writeback-${workspaceId.lowercase()}-${nodeId.lowercase()}"
+
+    /* What a slot's upload needs: the file, as it was when the app opened it (the job looks it up again), and its family. */
+    data class Target(
+        val workspaceId: String, val nodeId: String, val name: String, val mime: String?, val folder: String,
+        val family: String? = null, val familyWorkspace: String? = null,
+    )
 
     /*
-     * A save's place among every save made on this phone: a counter kept on disk and moved with one atomic write before it
-     * is handed out, so it only ever increases, across a restart and whatever the clock does.
+     * A save: its generation (counts up while the slot holds saves, to tell newer from older) and its id, never reused,
+     * not even after the slot empties and counts from one again (its upload's ledger key, and what landing compares).
      */
-    @Synchronized fun nextOrder(context: Context): Long {
-        val prefs = context.getSharedPreferences(COUNTER, Context.MODE_PRIVATE)
-        val next = prefs.getLong("next", 0L) + 1
-        check(prefs.edit().putLong("next", next).commit()) { "The save counter couldn't be kept." }
-        return next
+    data class Pending(val slot: String, val generation: Long, val id: String, val target: Target) {
+        /* The upload ledger's key for this save: its landed row, if an answer was lost, belongs to this save alone. */
+        val ledger get() = "$slot#$id"
     }
+
+    /* The ledger keys of every save `slot` has had: its landed rows, superseded saves' included, go when it empties. */
+    fun ledgerOf(slot: String, job: String) = job.startsWith("$slot#")
 
     private val locks = ConcurrentHashMap<String, ReentrantLock>()
-    private fun lockOf(chain: String) = locks.getOrPut(chain) { ReentrantLock() }
+    private fun lockOf(slot: String) = locks.getOrPut(slot) { ReentrantLock() }
 
-    private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    fun dir(context: Context, slot: String) = File(context.filesDir, "queue/$slot")
 
-    /* The place of the newest save of the document that landed; 0 when none did (as far as this phone knows). */
-    fun landed(context: Context, chain: String): Long = prefs(context).getLong(chain, 0L)
+    /* Where the slot's contents are: what a failed row and the panel name as the job's copy. */
+    fun contentOf(context: Context, slot: String) = File(dir(context, slot), CONTENT)
 
-    /*
-     * The account is gone from this phone (sign-out, deletion, another account): every document's landed place goes with
-     * it, and nothing in flight here is the next account's.
-     */
-    fun forgetAll(context: Context) {
-        prefs(context).edit().clear().commit()
-        inFlight.clear()
-    }
+    private fun readRecord(dir: File, slot: String): Pending? = runCatching {
+        val json = JSONObject(File(dir, RECORD).readText())
+        if (!File(dir, CONTENT).exists()) return null
+        Pending(slot, json.getLong("generation"), json.getString("id"), Target(
+            json.getString("workspaceId"), json.getString("nodeId"), json.getString("name"), json.opt("mime") as? String, json.getString("folder"),
+            json.opt("family") as? String, json.opt("familyWorkspace") as? String,
+        ))
+    }.getOrNull()
 
-    /*
-     * `body` under the document's lock, when there is one: taken before any lock of the account's or its upload ledger
-     * (Reservations), the order every landing (`land`) takes them in, so no two paths ever wait on each other.
-     */
-    fun <T> underLock(chain: String?, body: () -> T): T = if (chain == null) body() else lockOf(chain).withLock(body)
+    /* The slot's pending save, if it has one (contents and record both there). */
+    fun pending(context: Context, slot: String): Pending? = lockOf(slot).withLock { readRecord(dir(context, slot), slot) }
 
-    class Superseded : Exception("A newer save of this file landed first.")
+    /* Tests: runs right after a save's contents are in place, before its record is. */
+    @Volatile internal var afterContent: (() -> Unit)? = null
 
     /*
-     * `send` (the upload) only while no newer save of the document has landed, under the document's lock so a check and a
-     * landing never interleave with another save's; then this save's place is kept as the newest landed. Throws
-     * Superseded, having sent nothing, when a newer one landed first.
+     * `edit`'s bytes become the slot's newest save: its contents renamed into place, then its record (written beside and
+     * renamed), under the slot's lock and only while the account `accountGeneration` names is still the one on the phone
+     * (Reservations.whileAccount: an account wipe moves it, so a save racing a sign-out writes nothing back). The slot is
+     * never without contents in between: the old ones are replaced by a rename. Null when the account left.
      */
-    fun <T> land(context: Context, chain: String, order: Long, send: () -> T): T = lockOf(chain).withLock {
-        if (landed(context, chain) > order) throw Superseded()
-        val result = send()
-        if (landed(context, chain) < order) prefs(context).edit().putLong(chain, order).commit()
-        result
-    }
-
-    /* A save found landed by other means (an earlier run's completion whose answer was lost): kept as landed, never lowered. */
-    fun markLanded(context: Context, chain: String, order: Long) = lockOf(chain).withLock {
-        if (landed(context, chain) < order) prefs(context).edit().putLong(chain, order).commit()
-    }
-
-    /* Saves closed in this process and not queued or landed yet, by document: each one's place and contents. */
-    private val inFlight = ConcurrentHashMap<String, MutableMap<Long, File>>()
-
-    /* In the close callback, right after `nextOrder`: the save's contents count as the document's until it is queued or landed. */
-    fun closing(chain: String, order: Long, file: File) { inFlight.getOrPut(chain) { ConcurrentHashMap() }[order] = file }
-
-    /* Queued (its contents now the job's staged copy) or landed or dropped: no longer in flight here. */
-    fun settled(chain: String, order: Long) { inFlight[chain]?.remove(order) }
-
-    /*
-     * The contents of the newest save of the document that hasn't landed, when it is newer than the newest landed: one in
-     * flight in this process, or a queued job's staged copy. Null when the server's version is the newest.
-     */
-    fun newestPending(context: Context, chain: String): File? {
-        val candidates = HashMap<Long, File>()
-        inFlight[chain]?.let { candidates.putAll(it) }
-        val queued = runCatching { WorkManager.getInstance(context).getWorkInfosByTag(CHAIN + chain).get() }.getOrDefault(emptyList())
-        for (info in queued) {
-            if (info.state.isFinished) continue
-            val order = info.tags.firstOrNull { it.startsWith(ORDER) }?.removePrefix(ORDER)?.toLongOrNull() ?: continue
-            val path = info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:") ?: continue
-            candidates[order] = File(path)
+    fun save(context: Context, accountGeneration: Long, target: Target, edit: File): Pending? = Reservations.whileAccount(accountGeneration) {
+        val slot = slotOf(target.workspaceId, target.nodeId)
+        lockOf(slot).withLock {
+            val dir = dir(context, slot).also { it.mkdirs() }
+            val generation = (readRecord(dir, slot)?.generation ?: 0L) + 1
+            val incoming = File(dir, "$CONTENT.incoming")
+            if (!edit.renameTo(incoming)) edit.copyTo(incoming, overwrite = true)
+            check(incoming.renameTo(File(dir, CONTENT))) { "The save couldn't be kept." }
+            afterContent?.invoke()
+            val id = java.util.UUID.randomUUID().toString()
+            val record = JSONObject().put("generation", generation).put("id", id).put("workspaceId", target.workspaceId).put("nodeId", target.nodeId)
+                .put("name", target.name).put("mime", target.mime ?: JSONObject.NULL).put("folder", target.folder)
+                .put("family", target.family ?: JSONObject.NULL).put("familyWorkspace", target.familyWorkspace ?: JSONObject.NULL)
+            val written = File(dir, "$RECORD.incoming").apply { writeText(record.toString()) }
+            check(written.renameTo(File(dir, RECORD))) { "The save couldn't be kept." }
+            Pending(slot, generation, id, target)
         }
-        val landed = landed(context, chain)
-        return candidates.filterKeys { it > landed }.entries.sortedByDescending { it.key }.map { it.value }.firstOrNull { it.exists() }
+    }
+
+    /* A copy of the slot's newest save in `dest` (an open starts from it); false when there is none. */
+    fun copyTo(context: Context, slot: String, dest: File): Boolean = lockOf(slot).withLock {
+        if (readRecord(dir(context, slot), slot) == null) return false
+        dest.parentFile?.mkdirs()
+        contentOf(context, slot).copyTo(dest, overwrite = true)
+        true
+    }
+
+    /*
+     * The newest save to send: its record and a copy of its contents of its own (sending-<id>), so a newer save
+     * replacing the slot's contents meanwhile never changes the bytes under the upload. Null when the slot is empty.
+     */
+    fun take(context: Context, slot: String): Pair<Pending, File>? = lockOf(slot).withLock {
+        val dir = dir(context, slot)
+        val pending = readRecord(dir, slot) ?: return null
+        val sending = File(dir, "sending-${pending.id}")
+        File(dir, CONTENT).copyTo(sending, overwrite = true)
+        pending to sending
+    }
+
+    /* The slot's saves dropped (cancelled): under its lock, so a save landing in it meanwhile is either kept whole or gone. */
+    fun drop(context: Context, slot: String) = lockOf(slot).withLock { dir(context, slot).deleteRecursively() }
+
+    /*
+     * The save `id` landed: the slot is cleared only while it still holds that save (a newer save stays to be sent next),
+     * by id, so a save made after the slot emptied (its generation counting from one again) is never taken for it. Under
+     * the slot's lock, inside the account's (the caller's forItsAccount). True when the slot is now empty.
+     */
+    fun landed(context: Context, slot: String, id: String): Boolean = lockOf(slot).withLock {
+        val dir = dir(context, slot)
+        val held = readRecord(dir, slot)
+        if (held == null || held.id == id) { dir.deleteRecursively(); true } else {
+            dir.listFiles()?.filter { it.name.startsWith("sending-") }?.forEach { it.delete() }
+            false
+        }
     }
 }

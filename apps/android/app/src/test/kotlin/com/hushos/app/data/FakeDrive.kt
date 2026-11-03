@@ -135,6 +135,8 @@ class FakeDrive : AutoCloseable {
 
     /* `id` goes to the Trash, as the server keeps it: its parent's listing leaves it out, the trash listing has it. */
     fun trash(id: String) = synchronized(lock) { node(id).trashedAt = "2026-10-30T00:00:00Z"; bump(node(id)) }
+    /* `id` purged by another device: gone from the server, its feed included. */
+    fun purgeAs(id: String) = synchronized(lock) { nodes.remove(id); Unit }
     private var workListed = false
 
     class Version(
