@@ -149,10 +149,14 @@ object TransferQueue {
 
     /*
      * A failed slot job whose save is no longer the slot's pending one (it landed, a newer save replaced it, or it was
-     * dismissed): its row would only retry or show what is gone, so WorkManager's entry never makes one again.
+     * dismissed), or one that never ran: its row would only retry or show what is gone, or keep a save nobody tried from
+     * its job, so WorkManager's entry never makes one.
      */
     private fun obsolete(context: Context, info: WorkInfo): Boolean {
         val slot = info.tags.firstOrNull { it.startsWith(WriteBacks.SLOT) }?.removePrefix(WriteBacks.SLOT) ?: return false
+        // Failed without running (WorkManager failed it with the job it was queued behind, so its output says nothing): no
+        // failure of its own, and no row, so the sweep gives its save a job of its own.
+        if (info.outputData.getString("message") == null) return true
         val file = info.outputData.getString("file") ?: info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:")
         return WriteBacks.idOf(file) != WriteBacks.pending(context, slot)?.id
     }
@@ -241,6 +245,14 @@ object TransferQueue {
                 write {
                     if (landed) { records.forget(failed.id); uploaded(failed.id) }
                     else records.record(failed.copy(file = null, reason = FamilyWords.NOT_IN_FAMILY))
+                }
+            }
+            // Saves of the family's files left with neither a job nor a row (a death between a save and its job): their
+            // contents go too, never kept past the family.
+            File(context.filesDir, "queue").listFiles()?.forEach { dir ->
+                if (WriteBacks.pending(context, dir.name)?.target?.family.equals(groupId, ignoreCase = true)) {
+                    current()
+                    write { WriteBacks.drop(context, dir.name) }
                 }
             }
             KeyChangeWaits.of(context).forgetAll(infos.map { it.id.toString() })
@@ -554,9 +566,19 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         val waits = KeyChangeWaits.of(applicationContext)
         var vault = jobVault(applicationContext) ?: return outcome(NotAuthenticated(), inputData, generation)
         val familyOf = inputData.getString("family")
+        var first = true
         while (true) {
+            // Every save after the first in a run goes out from a vault opened afresh (its catalogue pulled again): whatever
+            // the save before it did (landed, its answer lost, or failed with a newer one waiting), the next replaces the
+            // version the server holds now, never the one this vault held before.
+            if (!first) vault = jobVault(applicationContext) ?: return Result.retry()
+            first = false
             val settled = runCatching { Reservations.settleAll(applicationContext) { uploadId, workspaceId -> vault.api.abortUpload(uploadId, workspaceId) } }
             if (settled.isFailure) return Result.retry()
+            // An earlier save of this file whose reservation is still unsettled (its abort unanswered, or still completing
+            // after a lost connection) is waited for: no other save of it starts while it could still land.
+            val unsettled = runCatching { Reservations.all(applicationContext).any { !it.landed && WriteBacks.ledgerOf(slot, it.job) } }
+            if (unsettled.getOrDefault(true)) return Result.retry()
             val (pending, sending) = WriteBacks.take(applicationContext, slot) ?: return Result.success()
             val target = pending.target
             val ledger = pending.ledger
@@ -571,13 +593,6 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 waits.forget(this@UploadWorker.id.toString())
                 TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = target.folder))
                 if (left == null) Reservations.forgetLandedWhere(applicationContext) { WriteBacks.ledgerOf(slot, it) } else Reservations.forgetLanded(applicationContext, ledger)
-            }
-            // After a landing the next save goes out from a vault opened afresh (its catalogue pulled again), so it replaces
-            // the version that just landed, never the one this vault held before it (whose answer may have been lost).
-            fun next(): Boolean {
-                if (!landed()) return false
-                vault = jobVault(applicationContext) ?: return false
-                return true
             }
             attempt { setForeground(getForegroundInfo()) }
             val end = withContext(Dispatchers.IO) {
@@ -600,12 +615,12 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             }
             sending.delete()
             when (end) {
-                is JobEnd.Done -> if (!next()) return Result.success()
+                is JobEnd.Done -> if (!landed()) return Result.success()
                 // Nothing said, nothing recorded: the slot stays for the next run.
                 JobEnd.Stopped -> return Result.retry()
                 is JobEnd.Failed -> when {
                     // Its completion landed after all (its answer lost, or a step after it failed): landed.
-                    end.error is Reservations.Landed -> if (!next()) return Result.success()
+                    end.error is Reservations.Landed -> if (!landed()) return Result.success()
                     // Not in the family any more: the family's uploads end, this slot with them.
                     familyOf != null && FamilyUploads.removed(end.error) -> {
                         TransferQueue.endFamily(applicationContext, familyOf, vault.api.session, except = this@UploadWorker.id, still = { !isStopped }) { uploadId, workspaceId ->

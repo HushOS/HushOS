@@ -257,6 +257,39 @@ class ProviderFamiliesTest {
     }
 
     /*
+     * Removed by the server while only the Files app looked, with a family file's save failed for good (its row kept for
+     * Retry) and another left without a job: the provider's load that confirms the removal ends the family's transfers,
+     * as the app's sync does. No save's plaintext is left in the queue, and the row says why, with nothing to retry.
+     * Fails if a confirmed removal leaves a pending save's contents or a Retry behind.
+     */
+    @Test
+    fun aRemovalTheProviderConfirmsEndsTheFamilysSaves() {
+        var now = 0L
+        val vault = Vault(app, DriveApi(Shared.session(app)!!))
+        val families = ProviderFamilies(vault, FamilySync(vault, sweeps = false, tellsFiles = false)) { now }
+        families.load()
+        val doc = FamilyDoc.Node(family.groupId, family.workspaceId, family.fileId)
+        families.children(FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId))
+        val slot = writeBack(families, doc, families.editFor(doc, "w").apply { writeText("failed save") })
+        val inner = server.extraRoutes!!
+        server.extraRoutes = { method, segments, query, body ->
+            if (method == "POST" && segments == listOf("drive", "uploads")) 400 to org.json.JSONObject().put("message", "Refused.") else inner(method, segments, query, body)
+        }
+        assertEquals(ListenableWorker.Result.failure()::class, runJob(slot)::class)
+        server.extraRoutes = inner
+        val stray = WriteBacks.save(app, Reservations.generation, WriteBacks.Target(family.workspaceId, UUID.randomUUID().toString(), "Other.txt", "text/plain",
+            family.rootId, family.groupId.lowercase(), family.workspaceId.lowercase()), File(app.cacheDir, "stray").apply { writeText("left without a job") })!!.slot
+        family.notMember = true
+        family.listed = false
+        now += 6 * 60_000L
+        assertEquals(emptyList<FamilyRoot>(), families.load())
+        assertFalse("a failed save's plaintext outlived the removal", WriteBacks.dir(app, slot).exists())
+        assertFalse("a save without a job outlived the removal", WriteBacks.dir(app, stray).exists())
+        val rows = com.hushos.app.data.FailedTransfers.of(app).all()
+        assertTrue(rows.isNotEmpty() && rows.all { it.reason == com.hushos.app.data.FamilyWords.NOT_IN_FAMILY && it.sourceGone() })
+    }
+
+    /*
      * A family Files showed whose member list the server now shows differently (a fork), or that the server says this
      * account isn't in while route 2 still lists it: its root goes at the provider's next load, its ledger refuses it and
      * its copies go. Fails if a root outlives its family's acceptance.
@@ -834,7 +867,7 @@ class ProviderFamiliesTest {
         val families = familiesOf(provider)
         for (text in listOf("first save", "second save")) {
             ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write(text.toByteArray()) }
-            org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+            org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
         }
         assertEquals("second save", WriteBacks.contentOf(app, slot).readText())
         val sent = begins()
@@ -864,7 +897,7 @@ class ProviderFamiliesTest {
         assertTrue(provider.pollOnce())
         assertNull("the poll kept the moved file where it was", families.vault.item(family.workspaceId, family.fileId)?.takeIf { it.node.parentId == family.rootId })
         ParcelFileDescriptor.AutoCloseOutputStream(pfd).use { it.write("saved after the move".toByteArray()) }
-        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
         assertEquals(ListenableWorker.Result.success(), runJob(slot))
         val out = File(app.cacheDir, "read-${System.nanoTime()}")
         other.vault.listChildren(trips.id, family.workspaceId)
@@ -876,7 +909,7 @@ class ProviderFamiliesTest {
         families.vault.parents.remove(family.fileId)
         server.beforeAnswer = { _, path -> if (path.endsWith("/children") || path.endsWith("/changes")) throw IllegalStateException("dropped") }
         ParcelFileDescriptor.AutoCloseOutputStream(again).use { it.write("saved offline".toByteArray()) }
-        org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
         server.beforeAnswer = null
         assertEquals("saved offline", WriteBacks.contentOf(app, slot).readText())
     }
@@ -1054,6 +1087,31 @@ class ProviderFamiliesTest {
         assertEquals(ListenableWorker.Result.success(), runJob(slot))
         families.children(FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId))
         assertEquals("second save", families.readCopy(doc).readText())
+    }
+
+    /*
+     * A family save's completion answer is lost, and the next run can't settle it (its abort unanswered): the newer save
+     * waits rather than starting while the earlier one could still land under it, then goes once it settles. Fails if a
+     * save starts while an earlier save of the file has a reservation unsettled.
+     */
+    @Test
+    fun aNewerFamilySaveWaitsWhileAnEarlierOnesReservationIsUnsettled() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("first save") })
+        var dropping = false
+        server.dropReply = { method, path -> (dropping || (method == "POST" && path.endsWith("/complete"))).also { if (it) dropping = true } }
+        assertEquals(ListenableWorker.Result.retry(), runJob(slot))
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("second save") })
+        server.dropReply = { _, path -> path.endsWith("/abort") }
+        val sent = begins()
+        assertEquals(ListenableWorker.Result.retry(), runJob(slot))
+        assertEquals("a newer save started over an unsettled one", sent, begins())
+        server.dropReply = null
+        assertEquals(ListenableWorker.Result.success(), runJob(slot))
+        assertEquals("second save", serverText())
     }
 
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =

@@ -21,6 +21,7 @@ import com.hushos.app.data.NotAuthenticated
 import com.hushos.app.data.Opened
 import com.hushos.app.data.Shared
 import com.hushos.app.data.Vault
+import com.hushos.app.data.WriteBacks
 import com.hushos.app.data.sync
 import com.hushos.app.data.buildCatalogue
 import com.hushos.app.data.Offline
@@ -466,8 +467,8 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         }
         val edit = families.editFor(doc, mode)
         val opened = families.node(doc)
-        val handler = Handler(Looper.getMainLooper())
-        return ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), handler) { error -> onFamilyEditClosed(error, families, doc, edit, opened) }
+        // On the saves' own thread (WriteBacks.closes), in close order, never the main one.
+        return ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), WriteBacks.closes) { error -> onFamilyEditClosed(error, families, doc, edit, opened) }
     }
 
     /*

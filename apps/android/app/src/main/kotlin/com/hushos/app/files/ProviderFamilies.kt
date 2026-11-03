@@ -140,12 +140,17 @@ class ProviderFamilies internal constructor(
             return before.orEmpty()
         }
         var failed = false
+        val wiped = HashSet<String>()
         val next = listed.filter { it.state == "active" }.mapNotNull { summary ->
             when (val state = sync.sync(summary)) {
                 is FamilyState.Accepted -> FamilyRoot.of(summary.id, summary.name, state.view)
                 // No answer: the root it had stays readable (its ledger kept the family), but nothing is written into it
                 // until a sync accepts the family again.
-                is FamilyState.Failed -> if (state.words == FamilyWords.NO_ANSWER) { failed = true; kept[summary.id.lowercase()]?.readOnly() } else null
+                is FamilyState.Failed -> {
+                    if (state.removal) wiped.add(summary.id.lowercase())
+                    if (state.words == FamilyWords.NO_ANSWER) { failed = true; kept[summary.id.lowercase()]?.readOnly() } else null
+                }
+                FamilyState.Wiped -> { wiped.add(summary.id.lowercase()); null }
                 else -> null
             }
         }
@@ -153,6 +158,9 @@ class ProviderFamilies internal constructor(
         // route 5 not answered): its root stays, read only, until a not-member confirms the removal, so an edit open in it
         // still reaches the queue.
         val removed = gone.filter { it.state == FamilyState.Wiped || (it.state as? FamilyState.Failed)?.removal == true }.mapNotNull { it.groupId?.lowercase() }.toSet()
+        // A removal this load confirmed: the family's transfers end as the app's own sync ends them (its pending saves and
+        // their plaintext, their jobs and rows), only while this session is still the one signed in.
+        for (groupId in removed + wiped) endTransfers(groupId)
         val shown = listed.map { it.id.lowercase() }.toSet()
         val pending = before.orEmpty().filter { it.groupId.lowercase() !in shown && it.groupId.lowercase() !in removed }.map { it.readOnly() }
         if (pending.isNotEmpty()) failed = true
@@ -160,6 +168,13 @@ class ProviderFamilies internal constructor(
         snapshot = Snapshot(roots, clock(), signal, failed)
         tell(before, roots)
         return roots
+    }
+
+    /* A removed family's transfers ended (TransferQueue.endFamily), only while this session is still the one signed in. */
+    private fun endTransfers(groupId: String) {
+        runCatching {
+            TransferQueue.endFamily(vault.context, groupId, vault.api.session, still = { !vault.closed }) { uploadId, workspaceId -> vault.api.abortUpload(uploadId, workspaceId) }
+        }.onFailure { android.util.Log.w("HushOSFiles", "a removed family's transfers didn't end: ${it.javaClass.name}") }
     }
 
     /* Files asks for the roots again when one appeared, went or was renamed, and for a family's folders when they changed. */
