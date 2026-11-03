@@ -448,7 +448,7 @@ class ProviderFamilies internal constructor(
         // must answer (no fallback to that row: an app that reads then saves would write over the landed save).
         val landing = WriteBacks.landing(vault.context, slotOf(doc))
         val item = current(doc, strict || landing != null)
-        landing?.let { WriteBacks.caughtUp(vault.context, slotOf(doc), it.id) }
+        landing?.let { WriteBacks.caughtUp(vault.context, slotOf(doc), it.id, vault.ledgerGeneration) }
         afterAccessChecked?.invoke()
         val version = item.node.currentVersion?.id ?: throw FileNotFoundException("This file has no content yet.")
         val copies = FamilyCopies.folder(vault.context.cacheDir, folder.workspaceId) ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
@@ -561,10 +561,12 @@ class ProviderFamilies internal constructor(
         if (!edit.exists()) return false
         val parent = opened.node.parentId ?: return false
         val target = WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime, parent, doc.groupId.lowercase(), doc.workspaceId.lowercase())
-        // Its order among the file's saves (only read, never fails), then the edit marked as that save by one rename (no room
-        // needed): from here it goes only once kept, dismissed, or let go of with its family or account.
-        val number = WriteBacks.reserve(vault.context, slotOf(doc))
-        val closed = WriteBacks.close(edit, number)
+        // Its order among the file's saves (never fails), then the edit marked as that save by one rename (no room needed):
+        // from here it goes only once kept, dismissed, or let go of with its family or account. Both only while the account
+        // it was opened in is still here (under the wipe's lock): after a sign-out nothing of it is written.
+        // The account left meanwhile: the edit goes (deleting writes nothing of it back).
+        val number = WriteBacks.reserve(vault.context, slotOf(doc), vault.ledgerGeneration) ?: run { WriteBacks.discardEdit(edit); return false }
+        val closed = com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) { WriteBacks.close(edit, number) } ?: run { WriteBacks.discardEdit(edit); return false }
         // Kept only while the folder's invalidation count is still the one the open read before it checked anything, and
         // the session lasts, under the copies lock a removal's cleanup takes: a family let go of since keeps no plaintext.
         val kept = synchronized(FamilyCopies.LOCK) {

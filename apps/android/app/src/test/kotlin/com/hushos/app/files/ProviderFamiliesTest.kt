@@ -1777,6 +1777,33 @@ class ProviderFamiliesTest {
         }
     }
 
+    /*
+     * #266 P2: a cancel's cleanup died after its bound, leaving a family save's cancelled generation on disk, and then the
+     * slot's numbers file can't be read. Nothing is pending or sent while the bounds can't be rebuilt, and once a start
+     * rebuilds them the old save is never published or sent. Fails if an unreadable numbers file reads as no bounds.
+     */
+    @Test
+    fun aFamilySlotWhoseNumbersCantBeReadNeverRepublishesAnOldSave() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("cancelled family save".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
+        WriteBacks.fault = { at -> if (at == "cancel") throw IllegalStateException("died after the bound") }
+        assertThrows(IllegalStateException::class.java) { WriteBacks.cancelThrough(app, slot, WriteBacks.publishedSave(app, slot), Reservations.generation) }
+        WriteBacks.fault = null
+        File(app.filesDir, "${WriteBacks.NUMBERS}/$slot").writeText("not the numbers")
+        WriteBacks.fault = { at -> if (at == "numbers") throw java.io.IOException("No space left on device") }
+        assertNull("an unreadable slot republished its cancelled save", WriteBacks.pending(app, slot))
+        val sent = begins()
+        assertEquals(ListenableWorker.Result.retry(), runJob(slot))
+        WriteBacks.fault = null
+        TransferQueue.reconcileEdits(app, startup = true)
+        assertNull(WriteBacks.pending(app, slot))
+        assertEquals(ListenableWorker.Result.success(), runJob(slot))
+        assertEquals(sent, begins())
+        assertEquals("marker-family", serverText())
+    }
+
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =
         HushOSDocumentsProvider::class.java.getDeclaredField("families").apply { isAccessible = true }.get(provider) as ProviderFamilies
 }

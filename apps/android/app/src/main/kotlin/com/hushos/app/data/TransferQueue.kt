@@ -354,7 +354,7 @@ object TransferQueue {
                         else stage()
                     }
                     if (revoked) {
-                        records.record(failed.copy(reason = FamilyWords.NOT_IN_FAMILY, stage = null))
+                        Reservations.whileAccount(generation) { records.record(failed.copy(reason = FamilyWords.NOT_IN_FAMILY, stage = null)) }
                         FailedTransfers.changed()
                         return false
                     }
@@ -362,7 +362,7 @@ object TransferQueue {
                 } else if (edit.isFile) stage() else null
                 if (superseded) {
                     WriteBacks.discardEdit(edit)
-                    records.forget(failed.id)
+                    Reservations.whileAccount(generation) { records.forget(failed.id) }
                     FailedTransfers.changed()
                     return false
                 }
@@ -393,6 +393,13 @@ object TransferQueue {
 
     /* Removed from the list: the record, and the copy an upload kept for its retry. */
     fun dismiss(context: Context, failed: FailedTransfer) {
+        // For the account it's pressed in, under the wipe's lock: after a sign-out nothing of it is written (a row list
+        // rewritten after the wipe would bring the account's rows back).
+        val generation = Reservations.generation
+        Reservations.whileAccount(generation) { dismissHere(context, failed) }
+    }
+
+    private fun dismissHere(context: Context, failed: FailedTransfer) {
         // What the row holds goes first, the row last: a death between them leaves a row whose save is gone (dismissed
         // again, its Retry does nothing), never a save without its row that a start would queue or give a row again.
         // A save that was never kept in its slot: whatever of it reached the slot (a generation whose record wasn't
@@ -400,8 +407,10 @@ object TransferQueue {
         // while it is still the pending one), never a newer one.
         if (failed.kind == UPLOAD && failed.stage != null) {
             val number = WriteBacks.stagedNumber(failed.stage)
-            if (failed.slot != null && number != null) WriteBacks.dismissSave(context, failed.slot, number)
-            failed.file?.let { WriteBacks.discardEdit(File(it)) }
+            if (failed.slot != null && number != null) WriteBacks.dismissSave(context, failed.slot, number, failed.file?.let(::File))
+            else failed.file?.let { WriteBacks.discardEdit(File(it)) }
+            // Its listing no longer shows the dismissed save's size and date.
+            WriteBacks.decodeTarget(failed.stage)?.let { WriteBacks.notifyFolder(context, it) }
         }
         else if (failed.kind == UPLOAD && failed.slot != null) WriteBacks.discard(context, failed.slot, failed.file)
         else if (failed.kind == UPLOAD) discard(context, failed.file)
@@ -579,7 +588,7 @@ object TransferQueue {
         val generation = Reservations.generation
         val cancelled = WriteBacks.publishedSave(context, slot)
         return cleanups.submit {
-            WriteBacks.cancelThrough(context, slot, cancelled)
+            WriteBacks.cancelThrough(context, slot, cancelled, generation)
             afterCancelCleans?.invoke()
             WorkManager.getInstance(context).cancelWorkById(id).result.get()
             // Read again once the cancel is done: a save made meanwhile may have found the cancelled job still waiting and
@@ -619,6 +628,8 @@ object TransferQueue {
         // First every landing the ledger knows of that reads don't yet (a reservation settled as completed whose recording
         // was refused), then what a landing's bookkeeping left (rows a death kept), for the account it started in.
         Reservations.whileAccount(generation) {
+            // Numbers that can't be read rebuilt first, so nothing old is published again from what they bounded.
+            File(context.filesDir, WriteBacks.NUMBERS).listFiles()?.filter { !it.name.endsWith(".incoming") }?.forEach { runCatching { WriteBacks.repair(context, it.name) } }
             runCatching { Reservations.all(context) }.getOrDefault(emptyList()).filter { it.landed }.forEach { runCatching { WriteBacks.recoveredLanding(context, it.job) } }
             runCatching { FailedTransfers.of(context).all() }.getOrDefault(emptyList()).mapNotNull { it.slot }.toSet()
                 .forEach { slot -> runCatching { retireLanded(context, slot) } }
@@ -628,7 +639,7 @@ object TransferQueue {
         val edits = File(context.filesDir, WriteBacks.EDITS).walkTopDown().filter { it.isFile && it.name.endsWith(".closed") }.mapNotNull { closed ->
             runCatching { WriteBacks.decodeTarget(WriteBacks.sidecarOf(closed).readText()) }.getOrNull()?.let { WriteBacks.slotOf(it.workspaceId, it.nodeId) }
         }
-        (rows.filter { it.stage != null }.mapNotNull { it.slot } + edits).toSet().forEach { WriteBacks.retireSettled(context, it) }
+        Reservations.whileAccount(generation) { (rows.filter { it.stage != null }.mapNotNull { it.slot } + edits).toSet().forEach { WriteBacks.retireSettled(context, it) } }
         val named = runCatching { FailedTransfers.of(context).all().mapNotNull { it.file }.toSet() }.getOrElse { return }
         val dayAgo = System.currentTimeMillis() - 86_400_000L
         File(context.filesDir, WriteBacks.EDITS).walkTopDown().filter { it.isFile }.toList().forEach { file ->
@@ -661,7 +672,7 @@ object TransferQueue {
                     val epoch = target.familyWorkspace?.let { ws ->
                         synchronized(FamilyCopies.LOCK) { if (!file.isFile) return@forEach; FamilySessions.of(session).epochs[ws.lowercase()]?.first ?: 0L }
                     }
-                    stagingFailed(context, target, file, Exception("The save wasn't kept."), generation, WriteBacks.reserve(context, slot), epoch)
+                    stagingFailed(context, target, file, Exception("The save wasn't kept."), generation, WriteBacks.reserve(context, slot, generation) ?: return@forEach, epoch)
                 }
             }
         }
@@ -864,7 +875,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             // Its own copy to send (a full disk, say, can stop it): a failure of its own, with a row for the save kept, which
             // a Retry sends; the partial copy gone (WriteBacks.take).
             val taken = try {
-                WriteBacks.take(applicationContext, slot)
+                WriteBacks.take(applicationContext, slot, generation)
             } catch (error: Exception) {
                 val kept = WriteBacks.pending(applicationContext, slot) ?: return Result.retry()
                 return failed(Problems.say(error, "The transfer failed."), androidx.work.Data.Builder().putAll(inputData)
