@@ -426,13 +426,16 @@ class ProviderFamilies internal constructor(
 
     fun editCopy(doc: FamilyDoc.Node, keepContents: Boolean): File {
         val (folder, item) = writable(doc)
-        val chain = WriteBacks.chainOf(doc.workspaceId, doc.nodeId)
-        // The newest save of it not landed yet (in flight here, or queued) is what the file holds now: the server's
-        // version is older than it, and an edit built on that would drop the save.
-        return editCopy(doc, folder, item, if (keepContents) WriteBacks.newestPending(vault.context, chain) ?: readCopy(doc, strict = true) else null)
+        if (!keepContents) return editCopy(folder, item) { it.createNewFile(); true }!!
+        // The file's pending save, when it has one (what another app last wrote, not landed yet, whatever its job's state):
+        // the server's version is older than it, and an edit built on that would drop the save.
+        editCopy(folder, item) { WriteBacks.copyTo(vault.context, slotOf(doc), it) }?.let { return it }
+        val source = readCopy(doc, strict = true)
+        return editCopy(folder, item) { source.copyTo(it, overwrite = true); true }!!
     }
 
-    private fun editCopy(doc: FamilyDoc.Node, folder: FamilyRoot.Folder, item: Opened, source: File?): File {
+    /* An edit filled by `fill` under the copies lock, only while the folder stands and the session lasts; null if `fill` had nothing. */
+    private fun editCopy(folder: FamilyRoot.Folder, item: Opened, fill: (File) -> Boolean): File? {
         val epoch = vault.familyEpoch(folder.workspaceId)
         val edits = FamilyCopies.edits(vault.context.cacheDir, folder.workspaceId) ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
         val edit = File(edits, "${item.id.lowercase()}/${java.util.UUID.randomUUID()}")
@@ -440,41 +443,43 @@ class ProviderFamilies internal constructor(
             if (vault.closed) throw SessionEnded()
             vault.familyWordsSince(folder.workspaceId, epoch)?.let { throw FileNotFoundException(it) }
             edit.parentFile?.mkdirs()
-            if (source != null) source.copyTo(edit, overwrite = true) else edit.createNewFile()
+            if (!fill(edit)) { edit.delete(); return null }
         }
         return edit
     }
 
+    private fun slotOf(doc: FamilyDoc.Node) = WriteBacks.slotOf(doc.workspaceId, doc.nodeId)
+
     /*
-     * What another app wrote, queued as a new version of the file (TransferQueue.upload with its Family, #251's): the job
-     * opens the family in its own vault, sends through the family write path and its gates, keeps its reservation on the
-     * ledger (Reservations) from begin until settled, waits out a key change, and is retried by WorkManager until it lands
-     * or the family lets the account go (endFamily), so a write-back that fails or whose process dies is never dropped.
-     * Refused here only when the family let go of it (checked again if anything moved since: a removal or a leave, or a
-     * refusal such as a fork, each of which deletes the family's copies and edits) or the session ended. Anything that
-     * blocks a write only for now (no answer, so the root is read only; a guard owed; keys still being checked) is the
-     * job's to wait out with its own gates: queued, never dropped. The edit moves into the queue's own folder. The job's id.
+     * The file's pending save for an app reading it (`r`): a copy of its own under the family folder's copies (which every
+     * forget of the folder deletes), made only while the family still holds the folder. Null when it has none.
      */
-    fun writeBack(doc: FamilyDoc.Node, edit: File, order: Long = WriteBacks.nextOrder(vault.context), opened: Opened? = null): java.util.UUID {
-        if (!edit.exists()) throw FileNotFoundException(FamilyWords.OPEN_AGAIN)
-        if (vault.closed) throw SessionEnded()
-        require(doc.groupId)
-        // Where the file is now: this vault's row, else found through the ledger or the feed (another device moved it, and
-        // a listing since forgot it here); when that can't be asked now, as it was when the app opened it. The job looks it
-        // up again itself.
-        val item = vault.item(doc.workspaceId, doc.nodeId)
-            ?: runCatching { held(doc.workspaceId, doc.nodeId) }.getOrNull()
-            ?: opened ?: throw FileNotFoundException(FamilyWords.OPEN_AGAIN)
-        val parent = item.node.parentId ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
-        // Its place among the file's saves (WriteBacks), taken in the close callback: it lands only while no newer save
-        // of the file has, and no other save's fate (cancelled, failed, retrying) holds it up.
-        val chain = WriteBacks.chainOf(doc.workspaceId, doc.nodeId)
-        return queue(edit, item.name, item.metadata.mime, parent, item.id, TransferQueue.Family(doc.groupId.lowercase(), doc.workspaceId.lowercase()), chain, order)
+    fun pendingRead(doc: FamilyDoc.Node): File? {
+        val (_, folder) = folderOf(doc)
+        val copies = FamilyCopies.folder(vault.context.cacheDir, folder.workspaceId) ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
+        val file = File(copies, "pending/${doc.nodeId.lowercase()}/${java.util.UUID.randomUUID()}")
+        return synchronized(FamilyCopies.LOCK) { file.takeIf { WriteBacks.copyTo(vault.context, slotOf(doc), it) } }
     }
 
-    /* Tests: what queues a write-back (TransferQueue.upload), so a test can run the job it queued. */
-    internal var queue: (file: File, name: String, mime: String?, folder: String, replacingId: String, family: TransferQueue.Family, chain: String, order: Long) -> java.util.UUID =
-        { file, name, mime, folder, replacingId, family, chain, order -> TransferQueue.upload(vault.context, file, name, mime, folder, replacingId, family, chain = chain, order = order) }
+    /*
+     * What another app wrote, once it closed the file (in the close callback itself, so saves keep the order the app
+     * closed them in): the file's pending save (WriteBacks), and its slot's job queued (TransferQueue.enqueueSlot, with its
+     * Family, #251's). The job sends the newest save the slot holds through the family write path and its gates: it opens
+     * the family in its own vault, finds the file by workspace and node where it is now, keeps its reservation on the
+     * ledger from begin until settled, waits out a key change, and is retried until it lands or the family lets the
+     * account go (endFamily, which takes the slot with it). Nothing here asks the network: whatever blocks a write only
+     * for now is the job's to wait out. A family that let go of the file before the close deleted its edits, so there is
+     * nothing to save; a sign-out since the open keeps nothing (WriteBacks.save). `opened` is the file as the app opened
+     * it. False when nothing was kept.
+     */
+    fun save(doc: FamilyDoc.Node, edit: File, opened: Opened): Boolean {
+        if (!edit.exists()) return false
+        val target = WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime,
+            opened.node.parentId ?: return false, doc.groupId.lowercase(), doc.workspaceId.lowercase())
+        WriteBacks.save(vault.context, vault.ledgerGeneration, target, edit) ?: return false
+        TransferQueue.enqueueSlot(vault.context, slotOf(doc), opened.name, target.family)
+        return true
+    }
 
     /* A new folder, or an empty file whose bytes follow through a write, in a writable family folder. Its document id. */
     fun create(parentDoc: FamilyDoc.Node, mimeType: String, name: String): String {

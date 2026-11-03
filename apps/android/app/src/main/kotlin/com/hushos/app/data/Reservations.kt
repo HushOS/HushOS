@@ -214,10 +214,13 @@ object Reservations {
     fun landed(context: Context, job: String): Boolean = job.isNotEmpty() && all(context).any { it.job == job && it.landed }
 
     /* The job ended (as uploaded, or for good): its landed rows go. Never a reservation's record. */
-    fun forgetLanded(context: Context, job: String) = synchronized(lock) {
+    fun forgetLanded(context: Context, job: String) = forgetLandedWhere(context) { it == job }
+
+    /* Every landed row whose job `matches` goes (a write-back slot's, superseded saves' included, once the slot is empty). */
+    fun forgetLandedWhere(context: Context, matches: (String) -> Boolean) = synchronized(lock) {
         val records = runCatching { all(context) }.getOrNull() ?: return@synchronized
-        if (records.none { it.job == job && it.landed }) return@synchronized
-        runCatching { write(context, records.filterNot { it.job == job && it.landed }) }
+        if (records.none { it.landed && matches(it.job) }) return@synchronized
+        runCatching { write(context, records.filterNot { it.landed && matches(it.job) }) }
         Unit
     }
 

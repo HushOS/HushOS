@@ -21,7 +21,6 @@ import com.hushos.app.data.NotAuthenticated
 import com.hushos.app.data.Opened
 import com.hushos.app.data.Shared
 import com.hushos.app.data.Vault
-import com.hushos.app.data.WriteBacks
 import com.hushos.app.data.sync
 import com.hushos.app.data.buildCatalogue
 import com.hushos.app.data.Offline
@@ -459,33 +458,31 @@ class HushOSDocumentsProvider : DocumentsProvider() {
      * refuses before it is queued is deleted, as the family's plaintext never outlives the try.
      */
     private fun openFamily(families: ProviderFamilies, doc: FamilyDoc.Node, mode: String): ParcelFileDescriptor {
-        if (mode.contains("r") && !mode.contains("w")) return ParcelFileDescriptor.open(families.readCopy(doc), ParcelFileDescriptor.MODE_READ_ONLY)
+        if (mode.contains("r") && !mode.contains("w")) {
+            // A save of it still pending (waiting, retrying, failed) is what another app last wrote: read that, never the
+            // server's older version.
+            families.pendingRead(doc)?.let { pending -> return ParcelFileDescriptor.open(pending, ParcelFileDescriptor.MODE_READ_ONLY).also { pending.delete() } }
+            return ParcelFileDescriptor.open(families.readCopy(doc), ParcelFileDescriptor.MODE_READ_ONLY)
+        }
         val edit = families.editFor(doc, mode)
         val opened = families.node(doc)
-        val chain = WriteBacks.chainOf(doc.workspaceId, doc.nodeId)
         val handler = Handler(Looper.getMainLooper())
-        return ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), handler) { error ->
-            if (error != null) { edit.delete(); return@open }
-            // Its place among the file's saves, taken here in the close callback before anything runs elsewhere (WriteBacks):
-            // two closes back to back keep their order whichever thread gets further first.
-            val order = WriteBacks.nextOrder(context!!)
-            WriteBacks.closing(chain, order, edit)
-            spawn(Runnable {
-                // Queued: the job tells Files once it lands (Vault.foldersChanged). Refused (the family let go of it, the
-                // session ended): nothing goes, and the edit with it.
-                try {
-                    runCatching { families.writeBack(doc, edit, order, opened) }
-                        .onFailure { android.util.Log.w("HushOSFiles", "family write-back refused: ${it.javaClass.name}") }
-                } finally {
-                    WriteBacks.settled(chain, order)
-                    edit.delete()
-                }
-            })
-        }
+        return ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), handler) { error -> onFamilyEditClosed(error, families, doc, edit, opened) }
     }
 
-    /* Tests: where a closed edit's write-back runs (a thread of its own). */
-    internal var spawn: (Runnable) -> Unit = { Thread(it).start() }
+    /*
+     * The other app closed a family file it wrote: it becomes the file's pending save, here in the close callback so saves
+     * keep the order they were closed in (ProviderFamilies.save). Nothing is sent from here; the slot's job sends it.
+     */
+    internal fun onFamilyEditClosed(error: java.io.IOException?, families: ProviderFamilies, doc: FamilyDoc.Node, edit: File, opened: com.hushos.app.data.Opened) {
+        try {
+            if (error == null && !families.save(doc, edit, opened)) android.util.Log.w("HushOSFiles", "a family save wasn't kept")
+        } catch (failure: Exception) {
+            android.util.Log.w("HushOSFiles", "a family save couldn't be kept: ${failure.javaClass.name}")
+        } finally {
+            edit.delete()
+        }
+    }
 
     /*
      * The file as the server holds it now: this account's own drive brought up to the feed's head (Vault.sync), a share's
