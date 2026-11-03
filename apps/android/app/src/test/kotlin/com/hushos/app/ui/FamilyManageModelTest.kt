@@ -412,7 +412,8 @@ class FamilyManageModelTest {
         runBlocking { model.refreshFamilies(force = true) }
         fun shown() = (model.states[family.groupId] as FamilyState.Accepted).view.members.map { it.userId.lowercase() }
         assertTrue(graceId in shown())
-        host.vault.families.outbox.keepRemoval(family.member.id, family.groupId, com.hushos.app.data.FamilyOutbox.Removal(graceId, "Grace", emptyList(), false))
+        val since = (model.states[family.groupId] as FamilyState.Accepted).view.members.single { it.userId.equals(graceId, ignoreCase = true) }.since
+        host.vault.families.outbox.keepRemoval(family.member.id, family.groupId, com.hushos.app.data.FamilyOutbox.Removal(graceId, "Grace", emptyList(), false, since.toLong()))
         runBlocking { model.loadManaged(family.groupId) }
         assertFalse(graceId in shown())
         assertTrue(host.read().contains("Grace is no longer in Lindqvist family."))

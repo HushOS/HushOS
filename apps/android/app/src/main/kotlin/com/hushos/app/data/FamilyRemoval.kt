@@ -230,10 +230,15 @@ private const val MAX_REBUILDS = 3
  * first (route 7) and removes again; another manager's change (`stale`) is built over. A removal kept unanswered goes first:
  * a second press signs nothing new while it waits.
  */
-fun FamilySync.removeMember(summary: GroupSummary, userId: String, first: String, demoteFirst: Boolean = false, endsLapsed: List<String> = emptyList(),
+fun FamilySync.removeMember(summary: GroupSummary, userId: String, first: String, since: ULong, demoteFirst: Boolean = false, endsLapsed: List<String> = emptyList(),
     names: (String) -> String? = { null }, onStep: (RemovalStep) -> Unit = {}): RemovalEnd = exclusive(summary.id) {
-    notMemberLetsGo(summary.id, { RemovalEnd.Wiped }) { removeKept(summary, FamilyOutbox.Removal(userId.lowercase(), first, endsLapsed, demoteFirst), names, onStep) }
+    notMemberLetsGo(summary.id, { RemovalEnd.Wiped }) {
+        removeKept(summary, FamilyOutbox.Removal(userId.lowercase(), first, endsLapsed, demoteFirst, since.toLong()), names, onStep)
+    }
 }
+
+/* A removal's member list moved to a state nobody confirmed (FamilyOutbox.Removal.bound): thrown from a build, nothing staged. */
+private class NotConfirmed : Exception("not the membership confirmed")
 
 /*
  * One removal's turn. Its intent is kept on this device first, before any read or call (a write that may not be on disk
@@ -246,7 +251,9 @@ fun FamilySync.removeMember(summary: GroupSummary, userId: String, first: String
 private fun FamilySync.removeKept(summary: GroupSummary, removal: FamilyOutbox.Removal, names: (String) -> String?, onStep: (RemovalStep) -> Unit): RemovalEnd {
     outbox.keepRemoval(userId, summary.id, removal)
     val end = try {
-        removeInTurn(summary, removal.userId, removal.first, removal.demote, removal.endsLapsed, names, onStep)
+        removeInTurn(summary, removal, names, onStep)
+    } catch (_: NotConfirmed) {
+        RemovalEnd.Changed
     } catch (error: Exception) {
         if (error is NotAuthenticated || error is kotlinx.coroutines.CancellationException || !FamilySync.transient(error)) throw error
         return RemovalEnd.Pending(keptForLater(summary.name))
@@ -287,8 +294,19 @@ private fun inFamily(view: FamilyView, userId: String) = view.members.any { it.u
 private fun keptForLater(family: String) =
     "HushOS couldn’t finish this yet. This device keeps the change and sends it the next time you open $family."
 
-private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first: String, demoteFirst: Boolean, endsLapsed: List<String>,
-    names: (String) -> String?, onStep: (RemovalStep) -> Unit): RemovalEnd {
+/*
+ * Every read the removal acts on is checked against the membership confirmed (`bound`): a person let in again elsewhere, or
+ * whose entry another manager or their own account changed, is Changed (nothing staged over them), never removed unasked.
+ * The builds check the very list the call is signed over.
+ */
+private fun FamilySync.removeInTurn(summary: GroupSummary, confirmed: FamilyOutbox.Removal, names: (String) -> String?, onStep: (RemovalStep) -> Unit): RemovalEnd {
+    val userId = confirmed.userId
+    val first = confirmed.first
+    val demoteFirst = confirmed.demote
+    val endsLapsed = confirmed.endsLapsed
+    var removal = confirmed
+    fun entry(view: FamilyView) = view.members.firstOrNull { it.userId.equals(userId, ignoreCase = true) }
+    fun requireBound(view: FamilyView) { entry(view)?.let { if (!removal.bound(it)) throw NotConfirmed() } }
     val groupId = summary.id
     val family = summary.name
     val named = { id: String -> if (id.equals(userId, ignoreCase = true)) first else names(id) }
@@ -296,10 +314,11 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
     for (kept in outbox.list(this.userId, groupId)) {
         when (val end = sendKept(summary, kept, only = ChainRoute.Remove(userId, emptyList()), names = named)) {
             CallEnd.Other, CallEnd.Stale -> {}
+            // Their kept removal landed (its intent retired as it did): done, whatever the family became since.
             CallEnd.Landed -> {
                 val (view, stop) = syncedView(summary)
-                if (view == null) return stop!!
-                if (!inFamily(view, userId)) return RemovalEnd.Removed
+                if (view == null && stop == RemovalEnd.Wiped) return stop
+                return RemovalEnd.Removed
             }
             is CallEnd.Pending -> return RemovalEnd.Pending(keptForLater(family))
             // Refused as kept: a departure still to mark left is done below (staged anew); the rest is definite.
@@ -316,6 +335,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
     var (view, stop) = syncedView(summary)
     if (view == null) return stop!!
     if (!inFamily(view, userId)) return RemovalEnd.Changed
+    requireBound(view!!)
     // Asked first, before anything changes: the plans they pay for that give nothing, which removing them ends. One not
     // confirmed yet stops here; one that can't be ended is said in the server's words.
     val plans = try {
@@ -328,7 +348,10 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
 
     if (demoteFirst && manages(view, userId)) {
         onStep(RemovalStep.DEMOTE)
-        when (val demoted = callFor(summary, userId, first, unchangedIsDone = true) { revision, kems ->
+        when (val demoted = callFor(summary, userId, first, unchangedIsDone = true, before = ::requireBound) { revision, kems ->
+            // The version this demotion takes if it lands, kept before it is staged: the entry it leaves is still the one confirmed.
+            removal = removal.copy(demotedAt = revision.toLong() + 1)
+            outbox.keepRemoval(this.userId, groupId, removal)
             ledger.rolesBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, revision, userId, MembersRole.TAKE, kems)
         }) {
             RoleEnd.Landed -> {}
@@ -341,6 +364,8 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
         }
         // Read again: the view from before would still say they manage the family.
         syncedView(summary).let { (now, stopped) -> view = now ?: return stopped!! }
+        if (!inFamily(view!!, userId)) return RemovalEnd.Changed
+        requireBound(view!!)
     }
 
     onStep(RemovalStep.HOLD)
@@ -350,6 +375,8 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
     // Finish: a walk running in a folder would make the removal answer `rotating`, and one that re-keyed anything can't be
     // taken over. Said as a step only when one was running.
     syncedView(summary).let { (now, stopped) -> view = now ?: return stopped!! }
+    if (!inFamily(view!!, userId)) return RemovalEnd.Changed
+    requireBound(view!!)
     var finishing = false
     for (area in view!!.areas) {
         val running = area.rotation ?: continue
@@ -366,7 +393,9 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
     repeat(MAX_REBUILDS) {
         // Placed again right before the folders are read: a long finish must not let it lapse while the epochs are drawn.
         placeHold(summary, userId, view!!)?.let { return it }
-        val sent = rotatingCall(summary, named) { _, revision, kems ->
+        val sent = rotatingCall(summary, named) { signedOver, revision, kems ->
+            if (!inFamily(signedOver, userId)) throw NotConfirmed()
+            requireBound(signedOver)
             ledger.removalBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, revision, userId, gatherLive(groupId), endsLapsed,
                 vault.accountKeyVersion(), kems)
         }
@@ -410,6 +439,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
         }
         syncedView(summary).let { (now, stopped) -> view = now ?: return stopped!! }
         if (!inFamily(view!!, userId)) return RemovalEnd.Removed
+        requireBound(view!!)
     }
     return RemovalEnd.Pending("$family kept changing. Try again in a moment.")
 }

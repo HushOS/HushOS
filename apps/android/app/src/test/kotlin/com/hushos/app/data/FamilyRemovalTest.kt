@@ -65,8 +65,10 @@ class FamilyRemovalTest {
 
     private fun view(phone: FamilyFixture.Phone) = (phone.sync.sync(summary) as FamilyState.Accepted).view
     private fun kept(phone: FamilyFixture.Phone) = phone.sync.outbox.list(family.member.id, family.groupId)
+    /* Grace's entry as Maya's page shows it: the membership a removal is confirmed against. */
+    private fun graceSince(phone: FamilyFixture.Phone) = view(phone).members.single { it.userId.equals(graceId, ignoreCase = true) }.since
     private fun remove(phone: FamilyFixture.Phone, endsLapsed: List<String> = emptyList(), steps: MutableList<RemovalStep> = ArrayList()) =
-        phone.sync.removeMember(summary, graceId, "Grace", endsLapsed = endsLapsed) { steps.add(it) }
+        phone.sync.removeMember(summary, graceId, "Grace", graceSince(phone), endsLapsed = endsLapsed) { steps.add(it) }
     private fun bodies(kind: String) = family.rotatingCalls.filter { it.first == kind }.map { JSONObject(it.second) }
     private fun roster(body: JSONObject) = rosterParse(base64urlDecode(body.getJSONObject("roster").getString("statement")))
     private fun rotation(body: JSONObject) = (body.optJSONArray("rotations")?.getJSONObject(0) ?: body.getJSONObject("rotation"))
@@ -409,7 +411,7 @@ class FamilyRemovalTest {
     @Test
     fun aRemovalIntentOutlivesATransientFailureAndAProcess() {
         val first = phone()
-        first.sync.outbox.keepRemoval(family.member.id, family.groupId, FamilyOutbox.Removal(graceId, "Grace", emptyList(), false))
+        first.sync.outbox.keepRemoval(family.member.id, family.groupId, FamilyOutbox.Removal(graceId, "Grace", emptyList(), false, graceSince(first).toLong()))
         family.rostersFail = true
         val ended = ArrayList<RemovalEnd>()
         first.sync.resumeOutbox(summary, continued = { _, end -> ended.add(end) })
@@ -447,8 +449,9 @@ class FamilyRemovalTest {
     @Test
     fun aFirstRemovalIsKeptBeforeAnythingIsAskedOfTheServer() {
         val first = phone()
+        val since = graceSince(first)
         family.rostersFail = true
-        assertTrue(remove(first) is RemovalEnd.Pending)
+        assertTrue(first.sync.removeMember(summary, graceId, "Grace", since) is RemovalEnd.Pending)
         assertTrue("nothing asked", family.holdsAsked.isEmpty())
         assertEquals(listOf(graceId), first.sync.outbox.removals(family.member.id, family.groupId).map { it.userId })
         family.rostersFail = false
@@ -476,7 +479,7 @@ class FamilyRemovalTest {
                 409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
             }
         }
-        val end = first.sync.removeMember(summary, graceId, "Grace", demoteFirst = true)
+        val end = first.sync.removeMember(summary, graceId, "Grace", graceSince(first), demoteFirst = true)
         assertTrue("$end", end is RemovalEnd.Pending)
         assertEquals(listOf(graceId), first.sync.outbox.removals(family.member.id, family.groupId).map { it.userId })
         assertTrue("members" in view(first).members.single { it.userId.equals(graceId, ignoreCase = true) }.roles)
@@ -510,5 +513,98 @@ class FamilyRemovalTest {
         assertEquals(listOf(CallEnd.Landed), next.sync.resumeOutbox(summary).values.toList())
         assertTrue(next.sync.takeCleared(family.groupId).isEmpty())
         assertFalse(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
+    }
+
+    /*
+     * Codex #281 round 6, 1: Grace's removal lands but every reply is lost, so the phone keeps the call and the intent. Sam
+     * then lets her in again on his device. After a relaunch the replay is recognised as landed: the intent is retired with
+     * it, before its entry goes, and nothing continues it. Fails if the intent outlives the landing and a second removal,
+     * which nobody confirmed, is signed over her new membership.
+     */
+    @Test
+    fun aLandedRemovalWhoseReplyWasLostIsNeverMadeAgainAfterAReadmission() {
+        val first = phone()
+        family.repliesLost = 4
+        assertTrue(remove(first) is RemovalEnd.Pending)
+        assertEquals(listOf(graceId), first.sync.outbox.removals(family.member.id, family.groupId).map { it.userId })
+        assertEquals(1, kept(first).size)
+        family.samLetsInAgain(server.grace)
+        val removes = bodies("remove").size
+        val next = phone(first.folder)
+        val continued = ArrayList<RemovalEnd>()
+        next.sync.resumeOutbox(summary, continued = { _, end -> continued.add(end) })
+        assertEquals("nothing continued", emptyList<RemovalEnd>(), continued)
+        assertEquals("no second removal", removes, bodies("remove").size)
+        assertTrue(next.sync.outbox.removals(family.member.id, family.groupId).isEmpty())
+        assertTrue(kept(next).isEmpty())
+        assertTrue(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
+    }
+
+    /*
+     * Codex #281 round 6, 2: a removal of Grace is kept as an intent against her entry as Maya saw it, and Sam changes that
+     * entry before the next open (here he gives her billing; leaving and being let in again moves it the same way). The
+     * continued removal acts on nothing it wasn't confirmed against: it ends as changed, nothing staged, the intent gone.
+     * Fails if an intent removes whatever membership the person has by then.
+     */
+    @Test
+    fun anIntentNeverActsOnAMembershipNobodyConfirmed() {
+        val first = phone()
+        first.sync.outbox.keepRemoval(family.member.id, family.groupId, FamilyOutbox.Removal(graceId, "Grace", emptyList(), false, graceSince(first).toLong()))
+        family.samGivesBilling(graceId)
+        val next = phone(first.folder)
+        val continued = ArrayList<RemovalEnd>()
+        next.sync.resumeOutbox(summary, continued = { _, end -> continued.add(end) })
+        assertEquals(listOf<RemovalEnd>(RemovalEnd.Changed), continued)
+        assertTrue("nothing staged", family.rotatingCalls.isEmpty())
+        assertTrue(family.holdsAsked.isEmpty())
+        assertTrue(next.sync.outbox.removals(family.member.id, family.groupId).isEmpty())
+        assertTrue(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
+    }
+
+    /*
+     * Codex #281 round 6, 3: Grace manages the family; taking that from her lands but every reply is lost, and the process
+     * dies. The intent already names the version that demotion takes, so after a relaunch the replayed demotion is
+     * recognised and her entry as it left her is still the membership confirmed: she is removed. Fails if the binding to
+     * the demotion lives only in memory and the removal is dropped as changed.
+     */
+    @Test
+    fun aRemovalWhoseDemotionLandedUnheardGoesOnAfterARelaunch() {
+        val first = phone()
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        assertEquals(RoleEnd.Landed, first.sync.changeRole(summary, graceId, "Grace", MembersRole.GRANT))
+        repeat(4) {
+            family.memberAnswers.add { body ->
+                family.apply(body, null)
+                503 to JSONObject().put("message", "Unavailable.")
+            }
+        }
+        val end = first.sync.removeMember(summary, graceId, "Grace", graceSince(first), demoteFirst = true)
+        assertTrue("$end", end is RemovalEnd.Pending)
+        assertTrue("demoted on the server", "members" !in family.creatorChain().roster().members.single { it.userId.equals(graceId, ignoreCase = true) }.roles.map { it.name.lowercase() })
+        val next = phone(first.folder)
+        val continued = ArrayList<RemovalEnd>()
+        next.sync.resumeOutbox(summary, continued = { _, it -> continued.add(it) })
+        assertEquals(listOf<RemovalEnd>(RemovalEnd.Removed), continued)
+        assertFalse(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
+    }
+
+    /*
+     * Codex #281 round 6, 4: Sam changes Grace's entry after the removal's last read but before the call is built (as its
+     * hold is placed again). The build checks the very list the call is signed over: nothing is staged, and the removal
+     * ends as changed. Fails if a removal is signed over a membership nobody confirmed because it changed in that gap.
+     */
+    @Test
+    fun aRemovalIsNeverSignedOverAnEntryThatChangedBeforeTheBuild() {
+        val phone = phone()
+        val since = graceSince(phone)
+        var holds = 0
+        server.beforeAnswer = { method, path ->
+            if (method == "POST" && path.endsWith("/hold") && ++holds == 2) family.samGivesBilling(graceId)
+        }
+        assertEquals(RemovalEnd.Changed, phone.sync.removeMember(summary, graceId, "Grace", since))
+        server.beforeAnswer = null
+        assertTrue("nothing staged", bodies("remove").isEmpty())
+        assertTrue(phone.sync.outbox.removals(family.member.id, family.groupId).isEmpty())
+        assertTrue(view(phone).members.any { it.userId.equals(graceId, ignoreCase = true) })
     }
 }

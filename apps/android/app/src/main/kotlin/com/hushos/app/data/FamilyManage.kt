@@ -116,8 +116,17 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
      * to stop them managing first, and their first name. Kept before anything of it changes, and dropped only at a definite
      * end, so a removal stopped part way (a departure to mark left first, a demotion with no answer, a process killed) goes
      * on at the next open (resumeOutbox).
+     *
+     * Bound to the membership confirmed: `since` is their entry's version on the row the person pressed (any change to it,
+     * a role, their keys, leaving and being let in again, moves it), and `demotedAt` the version this removal's own demotion
+     * takes when it lands (written before it is staged). An entry at neither is a state nobody confirmed: the intent ends
+     * without acting on it (bound). -1 is an intent kept before the binding: never acted on.
      */
-    data class Removal(val userId: String, val first: String, val endsLapsed: List<String>, val demote: Boolean)
+    data class Removal(val userId: String, val first: String, val endsLapsed: List<String>, val demote: Boolean, val since: Long, val demotedAt: Long? = null) {
+        /* Whether `member` (their active entry now) is the membership this removal was confirmed against. */
+        fun bound(member: FamilyMember): Boolean =
+            since >= 0 && (member.since.toLong() == since || (demote && demotedAt != null && member.since.toLong() == demotedAt && "members" !in member.roles))
+    }
 
     private fun removalsFile(userId: String, groupId: String): File? {
         val ids = listOf(userId.lowercase(), groupId.lowercase())
@@ -135,7 +144,8 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
                 val row = list.getJSONObject(i)
                 val plans = row.getJSONArray("endsLapsed")
                 Removal(row.getString("userId").takeIf(FamilyRecords::valid) ?: throw OutboxUnreadable(), row.getString("first"),
-                    (0 until plans.length()).map(plans::getString), row.getBoolean("demote"))
+                    (0 until plans.length()).map(plans::getString), row.getBoolean("demote"), row.optLong("since", -1L),
+                    row.optLong("demotedAt", -1L).takeIf { it >= 0 })
             }
         } catch (unreadable: OutboxUnreadable) {
             throw unreadable
@@ -155,6 +165,7 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
             folder.mkdirs()
             val json = org.json.JSONArray(list.map {
                 JSONObject().put("userId", it.userId.lowercase()).put("first", it.first).put("endsLapsed", org.json.JSONArray(it.endsLapsed)).put("demote", it.demote)
+                    .put("since", it.since).apply { it.demotedAt?.let { at -> put("demotedAt", at) } }
             })
             val next = File(file.path + ".next")
             next.writeText(json.toString())
@@ -450,6 +461,9 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
         told(on, end)
         // Documents a landed rotation carried on empty: kept to be said (FamilySync.takeCleared) before its notes go with the entry.
         if (end == CallEnd.Landed) outbox.keepUnsaid(userId, groupId, outbox.cleared(userId, groupId, current.outboxId).map(::clearedWords))
+        // A removal that landed (answered, or recognised as landed on a replay) is done: its intent goes first, durably, so
+        // nothing continues it over whatever the family became since (they may have been let in again elsewhere).
+        if (end == CallEnd.Landed) (on as? ChainRoute.Remove)?.let { outbox.dropRemoval(userId, groupId, it.userId) }
         outbox.delete(userId, groupId, current.outboxId)
         return end
     }

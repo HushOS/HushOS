@@ -413,6 +413,18 @@ class FamilyFixture(val server: FakeDrive) {
      * Maya's grant and self-grant of the new key served), and a deleted folder no longer listed.
      */
     private fun applyRotating(kind: String, body: JSONObject): Pair<Int, JSONObject> {
+        val answer = applyRotatingNow(kind, body)
+        if (repliesLost > 0) {
+            repliesLost--
+            return 503 to JSONObject().put("message", "Unavailable.")
+        }
+        return answer
+    }
+
+    /* The next this many 5b calls are applied (or answered) as usual, and their replies lost: the phone hears a 503. */
+    @Volatile var repliesLost = 0
+
+    private fun applyRotatingNow(kind: String, body: JSONObject): Pair<Int, JSONObject> {
         if (notMember) return notMemberAnswer()
         rotatingCalls.add(kind to body.toString())
         rotatingAnswers.poll()?.invoke(kind, body)?.let { return it }
@@ -543,6 +555,16 @@ class FamilyFixture(val server: FakeDrive) {
             if (it.userId.equals(userId, ignoreCase = true)) it.copy(roles = (it.roles + GroupRole.BILLING).distinct().sortedBy { role -> role.ordinal }) else it
         }
         chain = chain + rosterSign(rosterNext(accepted, members, creator.id, null, null, null), groupSeed, creator.keys)
+    }
+
+    /* Sam, on his own device, lets `person` (marked left) in again: a new membership, active with no roles. */
+    fun samLetsInAgain(person: FakeDrive.Person) {
+        val accepted = creatorChain()
+        val members = accepted.roster().members.map {
+            if (it.userId.equals(person.id, ignoreCase = true)) it.copy(status = MemberStatus.ACTIVE, roles = emptyList()) else it
+        }
+        chain = chain + rosterSign(rosterNext(accepted, members, creator.id, null, null, null), groupSeed, creator.keys)
+        joined.add(person)
     }
 
     /* Sam changes the member list himself (a roster that only re-signs it): what another manager's win looks like. */

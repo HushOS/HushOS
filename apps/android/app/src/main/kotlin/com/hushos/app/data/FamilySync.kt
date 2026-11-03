@@ -89,7 +89,8 @@ data class FamilyArea(
 }
 
 /* A member as the accepted member list names them: roles are the list's, names come from route 3. */
-data class FamilyMember(val userId: String, val roles: List<String>, val commitment: String?)
+/* `since`: the member list version their entry last changed at (keys, roles or status): which membership a row shows. */
+data class FamilyMember(val userId: String, val roles: List<String>, val commitment: String?, val since: ULong)
 
 /* Folders this family's member list names that aren't its own (the ledger's foreign_listings), one notice per owner. */
 data class ForeignNotice(val owner: String?, val count: Int) {
@@ -878,7 +879,7 @@ class FamilySync(
         val owners = ledger.foreignListings().filter { it.groupId.equals(groupId, ignoreCase = true) }.groupingBy { it.openedBy }.eachCount()
         return FamilyView(
             groupId, roster.rosterVersion, chain.rosterDigest(), chain.groupKeyVersion(),
-            roster.members.filter { it.status == MemberStatus.ACTIVE }.map { FamilyMember(it.userId, it.roles.map(::role), commitment(it)) },
+            roster.members.filter { it.status == MemberStatus.ACTIVE }.map { FamilyMember(it.userId, it.roles.map(::role), commitment(it), it.sinceVersion) },
             areas, reset, chain.ownEntryWrongAt().isNotEmpty(), chain.ownEntryBehindAt().isNotEmpty(),
             owners.map { ForeignNotice(it.key, it.value) }.sortedBy { it.owner.orEmpty() },
         )
