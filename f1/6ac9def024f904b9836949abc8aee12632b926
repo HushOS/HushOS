@@ -1,0 +1,31 @@
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_3c4b3ed3a9b752 22
+apps/ios/App/BackgroundTransfers.swift
+  s_566b8e0c4467a4::t_a026d25159c382 582,586,604-605,608,657-659
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ShareHandoff.swift
+  s_566b8e0c4467a4::t_8a1d3786de691e 12-16,169-185,194,196,198-199,205-207,210-213,216-229,231
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/StagedSave.swift
+  s_566b8e0c4467a4::t_7adf1f6a934025 14-21,29-34,37,40
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveTargetsTests.swift
+  s_566b8e0c4467a4::t_a871d9157aef26 77-118
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ShareSweepTests.swift
+  s_566b8e0c4467a4::t_18f235f3e6476a 102-104,106,109,111,114-115,120-145
+apps/ios/Share/ShareUploads.swift
+  s_566b8e0c4467a4::t_e578d56b5ec0ea 8-10,17-18,27,29,36,44,47-48,50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f16ac9def024f904b9836949abc8aee12632b926",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
