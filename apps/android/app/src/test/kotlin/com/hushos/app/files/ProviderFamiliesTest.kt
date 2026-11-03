@@ -80,6 +80,7 @@ class ProviderFamiliesTest {
         WriteBacks.beforeSlotId = null
         WriteBacks.fault = null
         WriteBacks.afterNewestChosen = null
+        WriteBacks.afterStaged = null
         TransferQueue.beforeSlotEnqueued = null
         com.hushos.app.data.FailedTransfers.beforeWrite = null
         Reservations.forgetHeld()
@@ -1922,6 +1923,29 @@ class ProviderFamiliesTest {
         reads.forEach { it.join(30_000) }
         server.beforeAnswer = null
         assertEquals(listOf("marker-family", "marker-family"), results.toList())
+    }
+
+    /*
+     * #266 P2: the file's earlier save lands while a newer family save is staged (copied, its publication still to come):
+     * the newer save stays and is published, nothing to Retry. Fails if clearing the landed slot deletes a newer save's
+     * staged copy.
+     */
+    @Test
+    fun aLandingDuringANewerFamilySavesStagingKeepsIt() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("first save") })
+        val first = WriteBacks.pending(app, slot)!!
+        WriteBacks.afterStaged = {
+            WriteBacks.afterStaged = null
+            WriteBacks.landed(app, slot, first.id, null, null, first.generation)
+        }
+        ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("newer save".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
+        assertTrue("the newer save was left for a Retry", com.hushos.app.data.FailedTransfers.of(app).all().isEmpty())
+        assertEquals("newer save", WriteBacks.contentOf(app, slot).readText())
     }
 
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =

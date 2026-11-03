@@ -325,25 +325,48 @@ object TransferQueue {
      * job's id): it settles what that key reserved first, or ends as uploaded by its landed row, never sending the file
      * again. Nothing is moved, so a process dying anywhere in a Retry leaves nothing behind but the row to retry again.
      */
-    fun retry(context: Context, failed: FailedTransfer): Boolean {
+    /* A Retry's outcome: sent (queued again), its file gone, or a save that still couldn't be kept (its edit and row intact). */
+    enum class Retry { SENT, GONE, NOT_KEPT }
+
+    fun retry(context: Context, failed: FailedTransfer): Boolean = retryOutcome(context, failed) == Retry.SENT
+
+    fun retryOutcome(context: Context, failed: FailedTransfer): Retry {
         // The account it's pressed in: what it keeps and queues is that account's, or nothing (a sign-out since took the slot).
         val generation = Reservations.generation
         val records = FailedTransfers.of(context)
         when (failed.kind) {
             // A save that couldn't be kept in its slot: kept now (its edit as it was left), then sent. Not kept again: the row stays.
             UPLOAD -> if (failed.stage != null) {
-                val target = failed.stage.let(WriteBacks::decodeTarget) ?: return false
-                val edit = failed.file?.let(::File) ?: return false
+                val target = failed.stage.let(WriteBacks::decodeTarget) ?: return Retry.GONE
+                val edit = failed.file?.let(::File) ?: return Retry.GONE
                 // Kept with the number its app closed it under: no newer than what the slot holds or landed, it is never kept
                 // (Superseded) and its row and edit go, so an older save can't replace a newer one.
-                val number = WriteBacks.stagedNumber(failed.stage) ?: return false
+                val own = WriteBacks.stagedNumber(failed.stage) ?: return Retry.GONE
                 var superseded = false
+                // Kept aside by a rebuild of unreadable bounds: sent only if nothing newer of the file was kept aside or
+                // retained (else it is moot, and goes), under a number newer than everything on disk (its own is within
+                // the rebuilt bounds), so it lands as the file's newest save and retires the older ones kept aside.
+                val number = if (WriteBacks.quarantinedAt(failed.stage) == null) own else {
+                    val slot = WriteBacks.slotOf(target.workspaceId, target.nodeId)
+                    val newer = records.all().any { it.id != failed.id && it.slot == slot && it.stage != null && (WriteBacks.stagedNumber(it.stage) ?: 0L) > own } ||
+                        WriteBacks.closedEditsOf(context, slot).any { it.first > own }
+                    if (newer) {
+                        WriteBacks.discardEdit(edit)
+                        Reservations.whileAccount(generation) { records.forget(failed.id) }
+                        FailedTransfers.changed()
+                        return Retry.GONE
+                    }
+                    WriteBacks.reserve(context, slot, generation) ?: return Retry.GONE
+                }
+                // Kept or not, the edit stays when this try fails (a disk still full): the row and its reason stand.
+                var notKept = false
                 fun stage(publishUnder: ((() -> WriteBacks.Pending?) -> WriteBacks.Pending?)? = null): WriteBacks.Pending? = try {
                     WriteBacks.stage(context, generation, target, edit, number, publishUnder)
                 } catch (_: WriteBacks.Superseded) {
                     superseded = true
                     null
                 } catch (_: Exception) {
+                    notKept = true
                     null
                 }
                 val kept = if (target.familyWorkspace != null) {
@@ -352,7 +375,7 @@ object TransferQueue {
                     // would have deleted the edit) and the edit is still there, checked under the copies lock a revocation's
                     // cleanup takes before the copy and again as it is published (the copy itself made outside that lock).
                     // Let go of: nothing is kept, the edit goes, and the row says why.
-                    val session = Shared.session(context) ?: return false
+                    val session = Shared.session(context) ?: return Retry.GONE
                     val state = FamilySessions.of(session)
                     var revoked = false
                     fun letGo(): Boolean {
@@ -366,7 +389,7 @@ object TransferQueue {
                     if (revoked) {
                         Reservations.whileAccount(generation) { records.record(failed.copy(reason = FamilyWords.NOT_IN_FAMILY, stage = null)) }
                         FailedTransfers.changed()
-                        return false
+                        return Retry.GONE
                     }
                     saved
                 } else if (edit.isFile) stage() else null
@@ -374,24 +397,25 @@ object TransferQueue {
                     WriteBacks.discardEdit(edit)
                     Reservations.whileAccount(generation) { records.forget(failed.id) }
                     FailedTransfers.changed()
-                    return false
+                    return Retry.GONE
                 }
-                kept ?: return false
+                if (kept == null && notKept && edit.isFile) return Retry.NOT_KEPT
+                kept ?: return Retry.GONE
                 enqueueSlot(context, kept.slot, target.name, target.family, generation)
                 WriteBacks.notifyFolder(context, target)
             // A file's slot: its job again, sending whatever the slot holds now (the newest save), never an older one.
             } else if (failed.slot != null) {
-                if (WriteBacks.pending(context, failed.slot) == null) return false
+                if (WriteBacks.pending(context, failed.slot) == null) return Retry.GONE
                 enqueueSlot(context, failed.slot, failed.name, failed.family, generation)
             } else if (!retryUpload(failed) { id, ledger ->
                     enqueueUpload(context, id, File(failed.file!!), failed.name, failed.mime, failed.folder!!, failed.replacing,
                         failed.family?.let { group -> failed.familyWorkspace?.let { Family(group, it) } }, ledger)
-                }) return false
-            KEEP -> keep(context, failed.node ?: return false, failed.name, folder = failed.isFolder, again = true, shareRoot = failed.shareRoot)
-            else -> return false
+                }) return Retry.GONE
+            KEEP -> keep(context, failed.node ?: return Retry.GONE, failed.name, folder = failed.isFolder, again = true, shareRoot = failed.shareRoot)
+            else -> return Retry.GONE
         }
         records.forget(failed.id)
-        return true
+        return Retry.SENT
     }
 
     /* An upload's retry: a new job id, queued (`enqueue`) under the failed one's ledger key; false when its copy is gone. */
@@ -613,14 +637,14 @@ object TransferQueue {
      * Only while the account it was made under is still here. Whether the row was made (else the edit can go).
      */
     fun stagingFailed(context: Context, target: WriteBacks.Target, edit: File, error: Exception, accountGeneration: Long, number: Long,
-                      familyEpoch: Long? = null): Boolean = runCatching {
+                      familyEpoch: Long? = null, quarantined: Long? = null): Boolean = runCatching {
         // Never throws: a row that can't be written (the same full disk) leaves the closed edit for the next reconcile.
         Reservations.whileAccount(accountGeneration) {
             if (!edit.isFile) return@whileAccount false
             FailedTransfers.of(context).record(FailedTransfer(UUID.randomUUID().toString(), UPLOAD, target.name, Problems.say(error, "The transfer failed."),
                 System.currentTimeMillis(), file = edit.path, mime = target.mime, folder = target.folder, replacing = target.nodeId,
                 family = target.family, familyWorkspace = target.familyWorkspace, slot = WriteBacks.slotOf(target.workspaceId, target.nodeId),
-                stage = WriteBacks.encodeTarget(target, familyEpoch, number)))
+                stage = WriteBacks.encodeTarget(target, familyEpoch, number, quarantined = quarantined)))
             FailedTransfers.changed()
             true
         } == true
@@ -641,6 +665,8 @@ object TransferQueue {
         Reservations.whileAccount(generation) {
             // Numbers that can't be read rebuilt first, so nothing old is published again from what they bounded.
             File(context.filesDir, WriteBacks.NUMBERS).listFiles()?.filter { !it.name.endsWith(".incoming") }?.forEach { runCatching { WriteBacks.repair(context, it.name) } }
+            // Every slot made what its reads find (an unpublished save published, generations nothing names gone).
+            File(context.filesDir, "queue").listFiles()?.filter { WriteBacks.isSlot(it.name) }?.forEach { runCatching { WriteBacks.recover(context, it.name) } }
             runCatching { Reservations.all(context) }.getOrDefault(emptyList()).filter { it.landed }.forEach { runCatching { WriteBacks.recoveredLanding(context, it.job) } }
             runCatching { FailedTransfers.of(context).all() }.getOrDefault(emptyList()).mapNotNull { it.slot }.toSet()
                 .forEach { slot -> runCatching { retireLanded(context, slot) } }
@@ -704,7 +730,7 @@ object TransferQueue {
         val records = FailedTransfers.of(context)
         val through = WriteBacks.landedThrough(context, slot)
         val stale = records.all().filter { it.slot == slot }.filter { row ->
-            if (row.stage != null) (WriteBacks.stagedNumber(row.stage) ?: Long.MAX_VALUE) <= through
+            if (row.stage != null) WriteBacks.retiredBy(row.stage, through)
             else (WriteBacks.numberOfId(WriteBacks.idOf(row.file)) ?: Long.MAX_VALUE) <= through || (superseded && WriteBacks.idOf(row.file) != keep)
         }
         if (stale.isEmpty()) return

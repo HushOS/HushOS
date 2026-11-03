@@ -448,10 +448,15 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     /* Sends a recorded failure again; its row makes way for the new job. */
     private fun retryRecorded(failed: com.hushos.app.data.FailedTransfer) = viewModelScope.launch {
         // A ledger that couldn't hand the failed job's reservations over: nothing queued, the row stays.
-        val ok = withContext(Dispatchers.IO) { runCatching { com.hushos.app.data.TransferQueue.retry(context, failed) } }
+        val ok = withContext(Dispatchers.IO) { runCatching { com.hushos.app.data.TransferQueue.retryOutcome(context, failed) } }
         failedChanged.value++
         ok.onFailure { notify("This didn’t finish. Try again.") }
-        if (ok.getOrNull() == false) notify("The file to upload is gone. Pick it again.")
+        when (ok.getOrNull()) {
+            com.hushos.app.data.TransferQueue.Retry.GONE -> notify("The file to upload is gone. Pick it again.")
+            // Still not kept (a disk still full, say): its edit and row stay, the row's own reason says why.
+            com.hushos.app.data.TransferQueue.Retry.NOT_KEPT -> notify(failed.reason)
+            else -> Unit
+        }
     }
 
     /* Takes in-app rows off the panel, and the copies failed ones kept. */
