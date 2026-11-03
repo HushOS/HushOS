@@ -690,7 +690,8 @@ class FakeDrive : AutoCloseable {
                 node.parentKeyEpoch = body.getLong("parentKeyEpoch")
                 node.keyEnvelope = body.getString("keyEnvelope")
                 bump(node)
-                ok(JSONObject().put("node", node.json()))
+                // As packages/db moveNode answers: the node's own columns, no current version joined.
+                ok(JSONObject().put("node", node.json().put("currentVersion", JSONObject.NULL)))
             }
             post && at("drive", "nodes", "*", "trash") -> { trash(segments[2]); ok(JSONObject()) }
             // The batch Undo: each id back where it was.
@@ -710,7 +711,8 @@ class FakeDrive : AutoCloseable {
                 val node = node(segments[2])
                 node.trashedAt = null
                 bump(node)
-                ok(JSONObject().put("node", node.json()))
+                // As packages/db restoreNode answers: the node's own columns, no current version joined.
+                ok(JSONObject().put("node", node.json().put("currentVersion", JSONObject.NULL)))
             }
             get && at("drive", "nodes", "*", "children") -> {
                 val folder = nodes[segments[2]]?.takeIf { it.workspaceId == query["workspaceId"] } ?: return 404 to JSONObject().put("message", "Not found")

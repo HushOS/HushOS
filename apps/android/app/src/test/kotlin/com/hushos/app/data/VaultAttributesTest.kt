@@ -3,6 +3,7 @@ package com.hushos.app.data
 import android.content.Context
 import com.hushos.core.deviceRemember
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -242,5 +243,22 @@ class VaultAttributesTest {
         assertEquals(listOf(f, sub), server.children(a).map { it.id })
         assertEquals(listOf(a, b), server.children(server.root).map { it.id })
         assertEquals(listOf(g), server.children(b).map { it.id })
+    }
+
+    /*
+     * A file renamed, moved, and trashed then restored opens straight after each, before any listing brings its row again:
+     * those writes answer with the node's own columns and no current version (packages/db renameNode, moveNode,
+     * restoreNode), and the version the row held is kept. Fails if a write's answer replaces the row's version with none.
+     */
+    @Test
+    fun aFileOpensStraightAfterARenameAMoveAndARestore() {
+        fun read(): ByteArray = File(context.cacheDir, "read-${System.nanoTime()}").also { vault.download(f, it) }.readBytes()
+        vault.rename(f, "renamed.txt")
+        assertArrayEquals(bytes(200), read())
+        vault.move(f, b)
+        assertArrayEquals(bytes(200), read())
+        vault.trash(f)
+        vault.restore(vault.trash().single { it.item.id == f })
+        assertArrayEquals(bytes(200), read())
     }
 }

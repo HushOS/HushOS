@@ -81,6 +81,7 @@ class FilesSaveOrderTest {
         TransferQueue.beforeSweepRemoves = null
         TransferQueue.beforeAsideReserve = null
         TransferQueue.beforeReconcileWalk = null
+        TransferQueue.afterLandedNoticesRetired = null
         TransferQueue.beforeSlotEnqueued = null
         server.close()
         assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
@@ -2301,5 +2302,149 @@ class FilesSaveOrderTest {
         assertTrue("a reconcile for the account that left deleted the next one's edit", theirs!!.exists())
         TransferQueue.reconcileEdits(app, startup = true)
         assertEquals(theirs!!.path, FailedTransfers.of(app).all().single().file)
+    }
+
+    /*
+     * Follow-up: the transfers panel asks each failed row whether its file is still there as it draws. That answer never
+     * waits for the slot's lock, which a save holds for a whole file's copy. Fails if a row's availability takes the lock.
+     */
+    @Test
+    fun aFailedRowsAvailabilityNeverWaitsForTheSlotsLock() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "refused save")
+        val target = WriteBacks.pending(app, slot)!!.target
+        refuseBegins(true)
+        assertEquals(ListenableWorker.Result.failure()::class, runSlot(slot)::class)
+        refuseBegins(false)
+        val row = FailedTransfers.of(app).all().single { it.slot == slot }
+        val holding = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        WriteBacks.afterContent = { WriteBacks.afterContent = null; holding.countDown(); release.await(10, TimeUnit.SECONDS) }
+        val saving = Thread { WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "held").apply { writeText("a save holding the lock") }) }.apply { start() }
+        assertTrue(holding.await(5, TimeUnit.SECONDS))
+        val asked = java.util.concurrent.Executors.newSingleThreadExecutor().submit<Boolean> { row.sourceGone() }
+        try {
+            assertFalse(asked.get(2, TimeUnit.SECONDS))
+        } finally {
+            release.countDown()
+            saving.join(10_000)
+        }
+    }
+
+    /*
+     * Follow-up: two reconciles overlap (each read the rows before the other wrote one) while a closed edit has no row.
+     * The edit gets one row, not two. Fails if overlapping sweeps each give the same edit a staging row.
+     */
+    @Test
+    fun overlappingReconcilesGiveAnEditOneRow() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.fault = { if (it == "copy") throw java.io.IOException("No space left on device") }
+        FailedTransfers.beforeWrite = { throw java.io.IOException("No space left on device") }
+        save(provider, notes, "kept only as its closed edit")
+        WriteBacks.fault = null
+        FailedTransfers.beforeWrite = null
+        TransferQueue.beforeReconcileWalk = { TransferQueue.beforeReconcileWalk = null; TransferQueue.reconcileEdits(app, startup = false) }
+        TransferQueue.reconcileEdits(app, startup = false)
+        assertEquals(1, FailedTransfers.of(app).all().count { it.slot == slot })
+    }
+
+    /*
+     * Follow-up: a failed save's row is dismissed while a closed edit of that same save is left on disk (its delete after
+     * being kept had failed), and the dismissal stops partway. The next start never brings the dismissed save back as a
+     * row. Fails if a dismissal leaves no durable mark, so a copy of the save left anywhere returns.
+     */
+    @Test
+    fun aDismissedSaveNeverComesBackThroughAClosedEditLeftBehind() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        val vault = vaultOf(provider)
+        val target = vault.resolve(notes).let { WriteBacks.Target(it.node.workspaceId, it.id, it.name, it.metadata.mime, it.node.parentId ?: vault.rootId, root = vault.rootId) }
+        save(provider, notes, "dismissed save")
+        val number = WriteBacks.pending(app, slot)!!.generation
+        refuseBegins(true)
+        assertEquals(ListenableWorker.Result.failure()::class, runSlot(slot)::class)
+        refuseBegins(false)
+        val row = FailedTransfers.of(app).all().single { it.slot == slot }
+        val left = WriteBacks.close(WriteBacks.personalEdit(app, target, Shared.session(app)!!.userId).apply { writeText("dismissed save") }, number)
+        WriteBacks.fault = { if (it == "dismiss-bound") throw IllegalStateException("died dismissing") }
+        assertThrows(IllegalStateException::class.java) { TransferQueue.dismiss(app, row) }
+        WriteBacks.fault = null
+        TransferQueue.reconcileEdits(app, startup = true)
+        assertTrue("a dismissed save came back as a row", FailedTransfers.of(app).all().none { it.file == left.path })
+        assertNull(WriteBacks.pending(app, slot))
+        assertEquals("original", opened(provider, notes, "r"))
+    }
+
+    /*
+     * Follow-up: a save's Retry dies after copying the save into the slot and before its record (its row left). The
+     * next Retry finds its own copy in the slot: it reports the save sent and queues it, never that the file is gone.
+     * Fails if a Retry superseded by its own copy reads as a missing file.
+     */
+    @Test
+    fun aRetrySupersededByItsOwnCopySendsIt() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.fault = { if (it == "copy") throw java.io.IOException("No space left on device") }
+        save(provider, notes, "retried, then cut short")
+        WriteBacks.fault = null
+        val row = FailedTransfers.of(app).all().single { it.slot == slot }
+        class Killed : Error()
+        WriteBacks.afterContent = { WriteBacks.afterContent = null; throw Killed() }
+        try {
+            TransferQueue.retryOutcome(app, row)
+            throw AssertionError("the Retry wasn't cut short")
+        } catch (_: Killed) {
+        }
+        assertEquals(TransferQueue.Retry.SENT, TransferQueue.retryOutcome(app, FailedTransfers.of(app).all().single { it.id == row.id }))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("retried, then cut short", serverText(notes))
+    }
+
+    /*
+     * Follow-up: off screen, a file's save fails for good (its failure waits in the summary), a newer save lands, and the
+     * landing's bookkeeping stops after taking the failure out of the summary but before the row goes. No failure is
+     * posted for a file that uploaded. Fails if the rows go first, leaving a failure nothing retires any more.
+     */
+    @Test
+    fun aLandingCutShortNeverPostsAFailureItMadeMoot() {
+        shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "refused save")
+        val first = jobs(slot).single().id
+        val second = secondJob(slot)
+        refuseBegins(true)
+        assertEquals(ListenableWorker.Result.failure()::class, runSlotAs(slot, first)::class)
+        refuseBegins(false)
+        WorkManager.getInstance(app).cancelWorkById(first).result.get()
+        save(provider, notes, "newer save")
+        TransferQueue.afterLandedNoticesRetired = { TransferQueue.afterLandedNoticesRetired = null; throw IllegalStateException("died in the bookkeeping") }
+        assertEquals(ListenableWorker.Result.retry(), runSlotAs(slot, second))
+        assertEquals(ListenableWorker.Result.success(), runSlotAs(slot, second))
+        assertTrue("a failure the landing made moot was posted", posted().isEmpty())
+        assertTrue(FailedTransfers.of(app).all().none { it.slot == slot })
+    }
+
+    /*
+     * Follow-up: a save that can't be kept (a full disk) leaves no empty folder for its file behind: the slot made for it
+     * goes with it. Fails if a failed staging leaves the slot's folder.
+     */
+    @Test
+    fun aSaveThatCantBeKeptLeavesNoEmptySlot() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.fault = { if (it == "copy") throw java.io.IOException("No space left on device") }
+        save(provider, notes, "not kept")
+        WriteBacks.fault = null
+        assertFalse("a failed staging left its slot's folder", WriteBacks.dir(app, slot).exists())
+        assertEquals(1, FailedTransfers.of(app).all().count { it.slot == slot })
     }
 }

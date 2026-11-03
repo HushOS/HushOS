@@ -1874,7 +1874,8 @@ class ProviderFamiliesTest {
         assertEquals("a staged copy outlived its failed write", emptyList<String>(), dir.listFiles().orEmpty().map { it.name }.filter { ".bin" in it || it.endsWith(".staged") })
         val row = com.hushos.app.data.FailedTransfers.of(app).all().single { it.slot == slot }
         assertEquals("a family save the disk refused", File(row.file!!).readText())
-        val left = File(dir, "n9-left.bin.staged").apply { writeText("plaintext a dead process left"); setLastModified(System.currentTimeMillis() - 60 * 60 * 1000L) }
+        // (The failed staging took its now empty slot folder with it: a dead process's copy is planted in one again.)
+        val left = File(dir.apply { mkdirs() }, "n9-left.bin.staged").apply { writeText("plaintext a dead process left"); setLastModified(System.currentTimeMillis() - 60 * 60 * 1000L) }
         TransferQueue.reconcileEdits(app, startup = true)
         assertFalse("a staged copy a dead process left was kept", left.exists())
     }
