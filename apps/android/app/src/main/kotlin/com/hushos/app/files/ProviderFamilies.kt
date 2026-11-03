@@ -581,7 +581,13 @@ class ProviderFamilies internal constructor(
         return synchronized(FamilyCopies.LOCK) {
             if (vault.closed) throw SessionEnded()
             vault.familyWordsSince(folder.workspaceId, epoch)?.let { throw FileNotFoundException(it) }
-            file.takeIf { WriteBacks.copyNewestTo(vault.context, slotOf(doc), it) }
+            // Only while the account it reads for is still here (the wipe's lock: an account's wipe can come before its
+            // vault closes, a deletion or the device removed), as the personal read's copy.
+            var copied: File? = null
+            com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) {
+                if (WriteBacks.copyNewestTo(vault.context, slotOf(doc), file)) copied = file
+            } ?: throw SessionEnded()
+            copied
         }
     }
 

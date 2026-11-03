@@ -1409,7 +1409,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
             Resumable.download(destination, v.layout.chunkCount, v.layout.chunkBytes.toLong(),
                 online = { Resumable.online(context) }, progress = progress, fileSize = v.content.plaintextSize.toLong(),
                 onExpired = { url = api.versionUrl(v.versionId, item.node.workspaceId) },
-                lock = familyCopiesLock, check = {
+                lock = familyCopiesLock,
+                // And only while the account it opened for is still here (the wipe's lock, after the copies lock as
+                // everywhere): an account's wipe before this vault closes (deletion, the device removed) stops it too.
+                guard = { step -> Reservations.whileAccount(ledgerGeneration) { step() } ?: throw SessionEnded() },
+                check = {
                     if (closed) throw SessionEnded()
                     if (family) {
                         requireFamilyEpoch(ws, epoch)

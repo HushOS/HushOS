@@ -2048,6 +2048,28 @@ class ProviderFamiliesTest {
         assertEquals("marker-family", serverText())
     }
 
+    /*
+     * #266 P2: the account's wipe has begun (its lock moved: a deletion, the device removed) while the vault is still open.
+     * A pending read of a family file returns nothing and copies nothing; a download of a file writes nothing either.
+     * Fails if a family copy, or any download, is written on the strength of the vault still being open.
+     */
+    @Test
+    fun aWipeBeforeTheVaultClosesStopsEveryFamilyCopy() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("pending as the account is wiped") })
+        Reservations.wipe(app.filesDir)
+        assertFalse(families.vault.closed)
+        assertThrows(Exception::class.java) { families.pendingRead(doc) }
+        val copies = FamilyCopies.folder(app.cacheDir, family.workspaceId)!!
+        assertEquals("a pending read copied after the wipe began", emptyList<String>(), copies.walkTopDown().filter { it.isFile }.map { it.name }.toList())
+        val dest = File(app.cacheDir, "opened/after-the-wipe")
+        assertThrows(Exception::class.java) { families.vault.download(family.fileId, dest, workspaceId = family.workspaceId) }
+        assertFalse("a download wrote after the wipe began", dest.exists() || File(dest.path + ".part").exists())
+    }
+
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =
         HushOSDocumentsProvider::class.java.getDeclaredField("families").apply { isAccessible = true }.get(provider) as ProviderFamilies
 }

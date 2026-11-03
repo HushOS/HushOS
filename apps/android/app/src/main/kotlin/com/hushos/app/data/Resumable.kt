@@ -92,9 +92,16 @@ object Resumable {
         // With a lock, every step that touches the disk runs under it after `check` (a family file whose folder may be let go of).
         lock: Any? = null,
         check: () -> Unit = {},
+        // With a guard, every step that touches the disk runs inside it too, after `lock` (the account's own lock, say, so a
+        // step either comes before an account's wipe, which deletes what it wrote, or not at all: the guard throws).
+        guard: ((() -> Any) -> Any)? = null,
         fetch: (ULong) -> ByteArray,
     ) {
-        fun <T> disk(step: () -> T): T = if (lock == null) step() else synchronized(lock) { check(); step() }
+        fun <T : Any> disk(step: () -> T): T {
+            @Suppress("UNCHECKED_CAST")
+            val guarded: () -> T = if (guard == null) step else ({ guard(step) as T })
+            return if (lock == null) guarded() else synchronized(lock) { check(); guarded() }
+        }
         val partial = File(destination.path + ".part")
         val opened = disk {
             destination.parentFile?.mkdirs()
