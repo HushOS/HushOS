@@ -230,6 +230,16 @@ class ProviderFamilies internal constructor(
         return listed
     }
 
+    /* `folderId` listed again (`relist`); false, with its rows forgotten, when the server says it is gone or in the trash. */
+    private fun relistUnlessGone(workspaceId: String, folderId: String): Boolean = try {
+        relist(workspaceId, folderId)
+        true
+    } catch (error: Exception) {
+        if (!com.hushos.app.data.FamilyUploads.folderGone(error)) throw error
+        for (row in vault.nodes.rowsIn(workspaceId)) if (row.node.parentId == folderId) vault.forget(row.node.workspaceId, row.id)
+        false
+    }
+
     /*
      * A node's place confirmed with the server now (a tree check): the folder this vault last saw it in listed again,
      * and kept only when that listing still holds it there; else the folder the change feed now puts it in, listed. Null
@@ -240,8 +250,8 @@ class ProviderFamilies internal constructor(
         val held = vault.item(workspaceId, id)
         if (held != null && held.node.parentId == null) return held
         val parent = held?.node?.parentId ?: vault.parents[id]
-        if (parent != null) {
-            relist(workspaceId, parent)
+        // A folder gone or in the trash holds nothing: the feed says where the node went (never a failure to answer).
+        if (parent != null && relistUnlessGone(workspaceId, parent)) {
             vault.item(workspaceId, id)?.takeIf { it.node.parentId == parent }?.let { return it }
         }
         val moved = parentInFeed(workspaceId, id) ?: return null
@@ -406,7 +416,8 @@ class ProviderFamilies internal constructor(
         val held = node(doc)
         val parent = held.node.parentId ?: return held
         try {
-            relist(doc.workspaceId, parent)
+            // Its folder gone or in the trash: the file was moved out first, so it is looked for where the feed puts it.
+            if (!relistUnlessGone(doc.workspaceId, parent)) vault.forget(doc.workspaceId, doc.nodeId)
         } catch (error: Exception) {
             if (strict || error is NotAuthenticated) throw error
             return held

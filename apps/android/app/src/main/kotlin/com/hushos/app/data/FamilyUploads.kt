@@ -71,35 +71,39 @@ object FamilyUploads {
 
     /*
      * The upload itself, after `open`: a replaced file found again in the family's workspace by its node, never by id alone,
-     * wherever it is now: the folder it was queued from, else where the feed puts it (another member moved it, and that
-     * folder may be gone). A new file goes into its folder.
+     * and listed afresh on every look (a key change finishing between looks re-keys it; a row held from an earlier look
+     * would be refused for good): where this vault last saw it, else the folder it was queued from, else where the feed
+     * puts it (another member moved it, and those folders may be gone or in the trash). A new file goes into its folder.
      */
     fun upload(vault: Vault, groupId: String, workspaceId: String, file: File, name: String, mime: String?, folderId: String, replacingId: String?,
                job: String, progress: (Float) -> Unit): Opened {
         open(vault, groupId, workspaceId, folderId.takeIf { replacingId == null })
-        val replacing = replacingId?.let {
-            vault.item(workspaceId, it) ?: inFolder(vault, workspaceId, folderId, it) ?: relocated(vault, workspaceId, it) ?: throw NotFound("This item no longer exists.")
+        val replacing = replacingId?.let { id ->
+            val last = vault.item(workspaceId, id)?.node?.parentId
+            listedIn(vault, workspaceId, last, id) ?: listedIn(vault, workspaceId, folderId.takeIf { it != last }, id)
+                ?: relocated(vault, workspaceId, id) ?: throw NotFound("This item no longer exists.")
         }
         return vault.upload(file, name, mime, folderId, replacing, vault.makeThumbnail(file, mime), job = job, progress = progress)
     }
 
-    /*
-     * The file in the folder it was queued from, listed through the ledger; null when that folder no longer holds it, is
-     * gone or is in the trash (the file was moved out first, or it would be in the trash with it).
-     */
-    private fun inFolder(vault: Vault, workspaceId: String, folderId: String, nodeId: String): Opened? {
-        try {
+    /* A folder the server says is gone or in the trash: it holds nothing to look for (never the network's failure). */
+    fun folderGone(error: Throwable): Boolean = error is NotFound || (error is ApiError && (error.status == 404 || error.code == "trashed"))
+
+    /* `nodeId` as `folderId`, listed through the ledger now, holds it; null when it doesn't, or the folder is gone or in the trash. */
+    private fun listedIn(vault: Vault, workspaceId: String, folderId: String?, nodeId: String): Opened? {
+        folderId ?: return null
+        val listed = try {
             vault.listChildren(folderId, workspaceId)
         } catch (error: Exception) {
-            if (error is NotFound || (error is ApiError && (error.status == 404 || error.code == "trashed"))) return null
+            if (folderGone(error)) return null
             throw error
         }
-        return vault.item(workspaceId, nodeId)
+        return listed.firstOrNull { it.id.equals(nodeId, ignoreCase = true) && it.node.workspaceId.equals(workspaceId, ignoreCase = true) }
     }
 
     /*
-     * A file the folder it was queued from no longer lists (another member moved it): found by its workspace and node, in
-     * the folder the workspace's change feed puts it in now, listed through the ledger. Null when the feed has it nowhere.
+     * A file the folders above no longer list (another member moved it): found by its workspace and node, in the folder
+     * the workspace's change feed puts it in now, listed through the ledger. Null when the feed has it nowhere.
      */
     private fun relocated(vault: Vault, workspaceId: String, nodeId: String): Opened? {
         var cursor = 0
@@ -113,8 +117,7 @@ object FamilyUploads {
             if (!page.hasMore || page.nextCursor <= cursor) break
             cursor = page.nextCursor
         }
-        vault.listChildren(parent ?: return null, workspaceId)
-        return vault.item(workspaceId, nodeId)
+        return listedIn(vault, workspaceId, parent, nodeId)
     }
 
     /* How long a waiting upload pauses between looks (iOS's and the web's cadence, never growing with the tries). */

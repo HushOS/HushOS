@@ -1003,6 +1003,59 @@ class ProviderFamiliesTest {
         assertEquals("marker-family", families.editFor(doc, "rw").readText())
     }
 
+    /*
+     * The folder this phone last saw a family file in went to the trash after another member moved the file out of it:
+     * an edit that keeps the contents, a read and a tree check all find the file where the feed puts it now. Fails if a
+     * folder the server says is gone or in the trash is taken for no answer (the edit refused, the tree check failing).
+     */
+    @Test
+    fun aFileWhoseFolderWentToTheTrashIsFoundWhereItIsNow() {
+        val provider = provider()
+        val other = family.phone()
+        assertTrue(other.sync.sync(family.summary) is FamilyState.Accepted)
+        other.vault.listChildren(family.rootId, family.workspaceId)
+        val first = other.vault.createFolder(family.rootId, "First")
+        other.vault.move(family.fileId, first.id)
+        val inFirst = FamilyDoc.Node(family.groupId, family.workspaceId, first.id).id
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        rows(provider.queryChildDocuments(inFirst, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        assertEquals(first.id, families.vault.item(family.workspaceId, family.fileId)!!.node.parentId)
+        val second = other.vault.createFolder(family.rootId, "Second")
+        other.vault.listChildren(first.id, family.workspaceId)
+        other.vault.move(family.fileId, second.id)
+        server.trash(first.id)
+        assertEquals("marker-family", families.editFor(doc, "rw").readText())
+        assertEquals(second.id, families.vault.item(family.workspaceId, family.fileId)!!.node.parentId)
+        families.vault.forget(family.workspaceId, family.fileId)
+        families.vault.parents[family.fileId] = first.id
+        assertTrue(provider.isChildDocument(folder, file))
+        assertEquals("marker-family", read(provider, file))
+    }
+
+    /*
+     * A family file's earlier save's job finished (WorkManager still lists it), and a new save landed in the slot without
+     * its job (the process died first): the next sweep queues one, since a finished job owns nothing, and it lands. Fails
+     * if a finished job's folder counts as owning the slot.
+     */
+    @Test
+    fun aFamilySaveWhoseOnlyJobHadFinishedGetsOneAtTheNextSweep() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("first save") })
+        val finished = jobs(slot).single()
+        WorkManager.getInstance(app).cancelWorkById(finished.id).result.get()
+        WriteBacks.save(app, Reservations.generation, WriteBacks.pending(app, slot)!!.target, File(app.cacheDir, "unqueued").apply { writeText("second save") })
+        TransferQueue.sweep(app, WorkManager.getInstance(app).getWorkInfosByTag(TransferQueue.TAG).get())
+        assertEquals(androidx.work.WorkInfo.State.ENQUEUED, jobs(slot).single { it.id != finished.id }.state)
+        assertEquals(ListenableWorker.Result.success(), runJob(slot))
+        families.children(FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId))
+        assertEquals("second save", families.readCopy(doc).readText())
+    }
+
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =
         HushOSDocumentsProvider::class.java.getDeclaredField("families").apply { isAccessible = true }.get(provider) as ProviderFamilies
 }

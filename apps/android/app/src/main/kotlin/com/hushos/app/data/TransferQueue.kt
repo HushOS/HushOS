@@ -141,10 +141,20 @@ object TransferQueue {
         for (info in infos) {
             if (info.state != WorkInfo.State.FAILED || info.id in hidden || !sessionCurrent(context, info.tags)) continue
             Reservations.whileAccount(generation) {
-                if (sessionCurrent(context, info.tags) && !records.has(info.id.toString()) && !landed.has(info.id.toString()))
+                if (sessionCurrent(context, info.tags) && !records.has(info.id.toString()) && !landed.has(info.id.toString()) && !obsolete(context, info))
                     records.record(FailedTransfer.fromWork(info, nameOf(info)))
             }
         }
+    }
+
+    /*
+     * A failed slot job whose save is no longer the slot's pending one (it landed, a newer save replaced it, or it was
+     * dismissed): its row would only retry or show what is gone, so WorkManager's entry never makes one again.
+     */
+    private fun obsolete(context: Context, info: WorkInfo): Boolean {
+        val slot = info.tags.firstOrNull { it.startsWith(WriteBacks.SLOT) }?.removePrefix(WriteBacks.SLOT) ?: return false
+        val file = info.outputData.getString("file") ?: info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:")
+        return WriteBacks.idOf(file) != WriteBacks.pending(context, slot)?.id
     }
 
     /* Tests: runs inside a cleanup's guarded write, right before it writes (a sign-out landing there). */
@@ -253,7 +263,7 @@ object TransferQueue {
         when (failed.kind) {
             // A file's slot: its job again, sending whatever the slot holds now (the newest save), never an older one.
             UPLOAD -> if (failed.slot != null) {
-                if (failed.sourceGone()) return false
+                if (WriteBacks.pending(context, failed.slot) == null) return false
                 enqueueSlot(context, failed.slot, failed.name, failed.family)
             } else if (!retryUpload(failed) { id, ledger ->
                     enqueueUpload(context, id, File(failed.file!!), failed.name, failed.mime, failed.folder!!, failed.replacing,
@@ -276,7 +286,9 @@ object TransferQueue {
     /* Removed from the list: the record, and the copy an upload kept for its retry. */
     fun dismiss(context: Context, failed: FailedTransfer) {
         FailedTransfers.of(context).forget(failed.id)
-        if (failed.kind == UPLOAD) discard(context, failed.file)
+        // A file's failed save: only that save goes (the slot with it while it is still the pending one), never a newer one.
+        if (failed.kind == UPLOAD && failed.slot != null) WriteBacks.discard(context, failed.slot, failed.file)
+        else if (failed.kind == UPLOAD) discard(context, failed.file)
     }
 
     /* Removes the copy a failed upload kept for a retry; a reservation it left stays on record (Reservations) until settled. */
@@ -331,17 +343,29 @@ object TransferQueue {
      * after a day, and a failed upload's copy would outlive it. Young folders are left
      * alone, since a copy lands before its job is queued.
      */
-    fun sweep(context: Context, inUse: Set<String>, known: Set<String> = emptySet()) {
+    fun sweep(context: Context, infos: List<WorkInfo>) {
+        val dirOf = { info: WorkInfo -> info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:")?.let { File(it).parent } }
+        sweep(context, infos.mapNotNull(dirOf).toSet(), infos.map { it.id.toString() }.toSet(), infos.filter { !it.state.isFinished }.mapNotNull(dirOf).toSet())
+    }
+
+    /*
+     * `inUse`: folders WorkManager still lists a job of (finished ones too), kept; `running`: those of unfinished jobs only,
+     * the only ones that own a slot (a finished job sends nothing more, so a slot whose job finished before its save gets one).
+     */
+    fun sweep(context: Context, inUse: Set<String>, known: Set<String> = emptySet(), running: Set<String> = inUse) {
         // A landed job's mark stays while WorkManager still lists the job: its FAILED entry is never read as a failure again.
         LandedJobs.of(context).sweep(keep = known)
         val cutoff = System.currentTimeMillis() - 10 * 60 * 1000
         // A failed upload on the app's own record keeps its copy for Retry, however old its job.
-        val recorded = FailedTransfers.of(context).all().mapNotNull { it.file?.let { path -> File(path).parent } }.toSet()
+        val rows = FailedTransfers.of(context).all()
+        val recorded = rows.mapNotNull { it.file?.let { path -> File(path).parent } }.toSet()
         File(context.filesDir, "queue").listFiles()?.forEach { dir ->
             // A file's pending save is kept until it lands, is cancelled or dismissed; one left without a job or a row (a
             // death between its save and its job) gets its job.
+            // A row owns it only while the row's failed save is still the pending one (its Retry is the person's to press).
             WriteBacks.pending(context, dir.name)?.let { pending ->
-                if (dir.path !in inUse && dir.path !in recorded) enqueueSlot(context, dir.name, pending.target.name, pending.target.family)
+                val failedHere = rows.any { it.slot == dir.name && WriteBacks.idOf(it.file) == pending.id }
+                if (dir.path !in running && !failedHere) enqueueSlot(context, dir.name, pending.target.name, pending.target.family)
                 return@forEach
             }
             if (dir.path !in inUse && dir.path !in recorded && dir.lastModified() < cutoff) dir.deleteRecursively()
@@ -494,14 +518,14 @@ internal fun CoroutineWorker.jobName(): String = JobNames.of(applicationContext)
 private fun CoroutineWorker.failed(message: String, inputs: androidx.work.Data = inputData, generation: Long): androidx.work.ListenableWorker.Result {
     val kind = inputData.getString("kind") ?: TransferQueue.UPLOAD
     // Its row and notification only for the account it ran for: one that left meanwhile gets neither.
-    forItsAccount(generation) { recordFailure(kind, message) }
+    forItsAccount(generation) { recordFailure(kind, message, inputs.getString("file")) }
     return androidx.work.ListenableWorker.Result.failure(androidx.work.Data.Builder().putAll(inputs).putString("message", message).build())
 }
 
-private fun CoroutineWorker.recordFailure(kind: String, message: String) {
+private fun CoroutineWorker.recordFailure(kind: String, message: String, file: String? = null) {
     FailedTransfers.of(applicationContext).record(FailedTransfer(
         id = id.toString(), kind = kind, name = jobName(), reason = message, at = System.currentTimeMillis(),
-        file = inputData.getString("file"), mime = inputData.getString("mime"), folder = inputData.getString("folder"), replacing = inputData.getString("replacing"),
+        file = file ?: inputData.getString("file"), mime = inputData.getString("mime"), folder = inputData.getString("folder"), replacing = inputData.getString("replacing"),
         node = inputData.getString("node"), isFolder = kind == TransferQueue.KEEP && inputData.getBoolean("folder", false), shareRoot = inputData.getString("share"),
         family = inputData.getString("family"), familyWorkspace = inputData.getString("familyWorkspace"), ledger = inputData.getString("ledger"),
         slot = inputData.getString("slot"),
@@ -528,7 +552,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
      */
     private suspend fun slotWork(slot: String, generation: Long): Result {
         val waits = KeyChangeWaits.of(applicationContext)
-        val vault = jobVault(applicationContext) ?: return outcome(NotAuthenticated(), inputData, generation)
+        var vault = jobVault(applicationContext) ?: return outcome(NotAuthenticated(), inputData, generation)
         val familyOf = inputData.getString("family")
         while (true) {
             val settled = runCatching { Reservations.settleAll(applicationContext) { uploadId, workspaceId -> vault.api.abortUpload(uploadId, workspaceId) } }
@@ -538,11 +562,22 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             val ledger = pending.ledger
             // Landed: the slot cleared only while it still holds this save, said once, the landed row used up last (once the
             // slot is empty, every landed row of its saves: a superseded save's, found landed late, too).
+            // Rows of the slot's failed saves go too, all but a still-pending save's (WorkManager's entries make none again:
+            // obsolete), and the provider hears that the file has a new version (WriteBacks.noteLanded).
             fun landed(): Boolean = forItsAccount(generation) {
-                val empty = WriteBacks.landed(applicationContext, slot, pending.id)
+                val left = WriteBacks.landed(applicationContext, slot, pending.id)
+                WriteBacks.noteLanded(slot)
+                FailedTransfers.of(applicationContext).forgetWhere { it.slot == slot && WriteBacks.idOf(it.file) != left?.id }
                 waits.forget(this@UploadWorker.id.toString())
                 TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = target.folder))
-                if (empty) Reservations.forgetLandedWhere(applicationContext) { WriteBacks.ledgerOf(slot, it) } else Reservations.forgetLanded(applicationContext, ledger)
+                if (left == null) Reservations.forgetLandedWhere(applicationContext) { WriteBacks.ledgerOf(slot, it) } else Reservations.forgetLanded(applicationContext, ledger)
+            }
+            // After a landing the next save goes out from a vault opened afresh (its catalogue pulled again), so it replaces
+            // the version that just landed, never the one this vault held before it (whose answer may have been lost).
+            fun next(): Boolean {
+                if (!landed()) return false
+                vault = jobVault(applicationContext) ?: return false
+                return true
             }
             attempt { setForeground(getForegroundInfo()) }
             val end = withContext(Dispatchers.IO) {
@@ -565,12 +600,12 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             }
             sending.delete()
             when (end) {
-                is JobEnd.Done -> if (!landed()) return Result.success()
+                is JobEnd.Done -> if (!next()) return Result.success()
                 // Nothing said, nothing recorded: the slot stays for the next run.
                 JobEnd.Stopped -> return Result.retry()
                 is JobEnd.Failed -> when {
                     // Its completion landed after all (its answer lost, or a step after it failed): landed.
-                    end.error is Reservations.Landed -> if (!landed()) return Result.success()
+                    end.error is Reservations.Landed -> if (!next()) return Result.success()
                     // Not in the family any more: the family's uploads end, this slot with them.
                     familyOf != null && FamilyUploads.removed(end.error) -> {
                         TransferQueue.endFamily(applicationContext, familyOf, vault.api.session, except = this@UploadWorker.id, still = { !isStopped }) { uploadId, workspaceId ->
@@ -584,8 +619,9 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                     }
                     // A newer save arrived meanwhile: this one's failure is moot (never sent now), and the newer gets its own try.
                     WriteBacks.pending(applicationContext, slot)?.id.let { it != null && it != pending.id } -> continue
-                    // A failure keeps the slot: its row's Retry sends whatever it holds then, and a newer save replaces it.
-                    else -> return outcome(end.error, inputData, generation)
+                    // A failure keeps the slot: its row (naming the failed save's own generation) Retries whatever it holds then.
+                    else -> return outcome(end.error, androidx.work.Data.Builder().putAll(inputData)
+                        .putString("file", java.io.File(WriteBacks.dir(applicationContext, slot), pending.id + ".bin").path).build(), generation)
                 }
             }
         }

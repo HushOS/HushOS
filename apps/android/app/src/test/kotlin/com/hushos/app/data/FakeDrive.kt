@@ -721,6 +721,12 @@ class FakeDrive : AutoCloseable {
                 ok(JSONObject().put("node", copy.json()))
             }
             post && at("drive", "uploads") -> {
+                // A new version of a file at a key epoch it no longer has (a key change re-keyed it since): `stale`, as
+                // packages/db/src/drive.ts beginUpload answers.
+                body.optJSONObject("node")?.takeIf { it.optBoolean("existing") }?.let { n ->
+                    if (nodes[n.getString("id")]?.keyEpoch != n.getLong("keyEpoch"))
+                        return 409 to JSONObject().put("code", "stale").put("message", "This item changed since you last saw it.")
+                }
                 val id = UUID.randomUUID().toString()
                 uploads[id] = Upload(body.getString("workspaceId"), body)
                 val count = minOf(body.getLong("chunkCount"), 64L).toInt()
