@@ -1,0 +1,33 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_f9ddd5293a6fd3 88
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyManage.kt
+  s_566b8e0c4467a4::t_8027e3669f33e3 640,642-657,663-677,791-801
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Families.kt
+  s_566b8e0c4467a4::t_5d71e6944a7505 201-204,443-453,461
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_b11b96084e11e0 37,157,384,388-399,417-418,434
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyFixture.kt
+  s_566b8e0c4467a4::t_c7ddb525b0eb99 338-341
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyManageTest.kt
+  s_566b8e0c4467a4::t_a47411736dfbdd 531-594
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyRolesTest.kt
+  s_566b8e0c4467a4::t_b74ea98d411d93 319-366
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_7f6b785d0f69d9 226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "23fbbe84cfff267ad5477d70c06aeac9a1e5987d",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
