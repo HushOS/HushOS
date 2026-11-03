@@ -1,0 +1,27 @@
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_84eebab2474dee 35,141
+apps/ios/App/BackgroundTransfers.swift
+  s_566b8e0c4467a4::t_dcc113a777c669 684-685
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyFiles.swift
+  s_566b8e0c4467a4::t_b576e1a2dcaae1 47-51,53,57,193-194,235-236,282-292,295-296,298-300,306-309,311,315-316,322-333,336,343,350-351,363-369,738-741,744-748,750-753,856-857,864,866-872
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FilesDomain.swift
+  s_566b8e0c4467a4::t_3c770f60c17827 195-206
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyFilesTests.swift
+  s_566b8e0c4467a4::t_2df577173041f4 41-42,336-390,651-692
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fd9a8441d5323bcf742436b36d8bb0c125c3c51c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
