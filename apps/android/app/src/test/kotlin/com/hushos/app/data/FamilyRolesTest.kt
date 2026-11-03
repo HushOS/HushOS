@@ -203,6 +203,7 @@ class FamilyRolesTest {
     @Test
     fun theHandoverGivesBillingThenLetsGoOfIt() {
         val phone = phone(organizer = true)
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
         assertEquals(RoleEnd.Landed, phone.sync.handOver(summary, graceId, "Grace"))
         assertEquals(listOf(graceId, family.member.id.lowercase()), family.memberCalls.map { it.first.lowercase() })
         assertTrue("billing" in rolesOf(phone, graceId))
@@ -218,6 +219,7 @@ class FamilyRolesTest {
     @Test
     fun aHandoverStoppedInTheMiddleIsFinishedAtTheNextOpen() {
         val first = phone(organizer = true)
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
         // Billing lands with Grace; then the connection drops before Maya's own step is staged.
         family.memberAnswers.add { body ->
             val landed = family.apply(body, null)
@@ -226,7 +228,7 @@ class FamilyRolesTest {
         }
         assertTrue(runCatching { first.sync.handOver(summary, graceId, "Grace") }.isFailure)
         family.rostersFail = false
-        assertEquals(graceId, first.sync.outbox.handover(family.member.id, family.groupId))
+        assertEquals(FamilyOutbox.KeptHandover(graceId, staged = true), first.sync.outbox.handover(family.member.id, family.groupId))
         assertEquals(1, family.memberCalls.size)
         val next = phone(organizer = true, folder = first.folder)
         val handed = ArrayList<Pair<String, RoleEnd>>()
@@ -261,5 +263,57 @@ class FamilyRolesTest {
         })
         assertEquals(listOf<Pair<ChainRoute?, CallEnd>>(ChainRoute.Admit(graceId) to CallEnd.Stale), told)
         assertTrue(kept(next).isEmpty())
+    }
+
+    /*
+     * Make them the organizer for someone this phone hasn't verified: asked to check first, nothing signed or sent, and
+     * no handover left waiting. Fails if the organizer role is handed to keys nobody checked (the web's needsCheckFor).
+     */
+    @Test
+    fun theHandoverWaitsForACheckToo() {
+        val phone = phone(organizer = true)
+        assertEquals(RoleEnd.CheckFirst, phone.sync.handOver(summary, graceId, "Grace"))
+        assertTrue(family.memberCalls.isEmpty())
+        assertTrue(kept(phone).isEmpty())
+        assertNull(phone.sync.outbox.handover(family.member.id, family.groupId))
+    }
+
+    /*
+     * Grace is verified in the settings, but this device's guard can't be read: the grant stops before anything is signed
+     * (the guard's own words), whatever the row said. Fails if a manager role is given over a pin the guard didn't vouch for.
+     */
+    @Test
+    fun aGuardThatCantBeReadStopsTheGrant() {
+        val phone = phone()
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        val guard = java.io.File(RuntimeEnvironment.getApplication().noBackupFilesDir, ContactGuard.FOLDER).listFiles()!!
+            .single { it.name.endsWith(".json") && !it.name.endsWith(".families.json") }
+        guard.writeText("not a guard")
+        val refused = runCatching { grant(phone) }.exceptionOrNull()
+        assertTrue("$refused", refused is GuardUnreadable)
+        assertTrue("nothing sent", family.memberCalls.isEmpty())
+        assertTrue(kept(phone).isEmpty())
+    }
+
+    /*
+     * A grant for Grace still unanswered when Maya makes her the organizer: the handover can't be staged yet, so it is
+     * kept, and once the grant lands the next open stages the handover and finishes it. Fails if a handover blocked behind
+     * an earlier change for the same person is dropped as though it had been refused.
+     */
+    @Test
+    fun aHandoverBlockedBehindAnEarlierChangeGoesOnOnceThatLands() {
+        val phone = phone(organizer = true)
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        answer(6, 503)
+        assertTrue(grant(phone) is RoleEnd.Pending)
+        assertTrue(phone.sync.handOver(summary, graceId, "Grace") is RoleEnd.Pending)
+        assertEquals(FamilyOutbox.KeptHandover(graceId, staged = false), phone.sync.outbox.handover(family.member.id, family.groupId))
+        val handed = ArrayList<Pair<String, RoleEnd>>()
+        phone.sync.resumeOutbox(summary, names = { "Grace" }, handed = { to, end -> handed.add(to to end) })
+        assertEquals(listOf(graceId to RoleEnd.Landed), handed)
+        assertTrue("billing" in rolesOf(phone, graceId))
+        assertTrue("members" in rolesOf(phone, graceId))
+        assertTrue("billing" !in rolesOf(phone, family.member.id))
+        assertNull(phone.sync.outbox.handover(family.member.id, family.groupId))
     }
 }

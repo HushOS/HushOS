@@ -80,25 +80,29 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
         return File(folder, "${ids[0]}_${ids[1]}.handover")
     }
 
-    fun markHandover(userId: String, groupId: String, to: String) = synchronized(FamilyCopies.LOCK) {
+    /* The handover's record: whom it goes to, and whether its first call (billing to them) was staged yet. */
+    data class KeptHandover(val to: String, val staged: Boolean)
+
+    fun markHandover(userId: String, groupId: String, to: String, staged: Boolean = false) = synchronized(FamilyCopies.LOCK) {
         if (!open() || !FamilyRecords.valid(to.lowercase())) throw OutboxUnsaved()
         val target = handoverFile(userId, groupId) ?: throw OutboxUnsaved()
         try {
             folder.mkdirs()
             val next = File(target.path + ".next")
-            next.writeText(to.lowercase())
+            next.writeText(to.lowercase() + if (staged) "\nstaged" else "")
             if (!next.renameTo(target)) throw java.io.IOException("not moved")
         } catch (_: Exception) {
             throw OutboxUnsaved()
         }
     }
 
-    /* Whom a handover under way goes to; none when none is. One that can't be read throws, never reads as none. */
-    fun handover(userId: String, groupId: String): String? {
+    /* A handover under way; none when none is. One that can't be read throws, never reads as none. */
+    fun handover(userId: String, groupId: String): KeptHandover? {
         val file = handoverFile(userId, groupId) ?: return null
         if (!file.exists()) return null
-        val to = try { file.readText().trim() } catch (_: Exception) { throw OutboxUnreadable() }
-        return to.takeIf(FamilyRecords::valid) ?: throw OutboxUnreadable()
+        val lines = try { file.readText().trim().lines() } catch (_: Exception) { throw OutboxUnreadable() }
+        val to = lines.firstOrNull()?.takeIf(FamilyRecords::valid) ?: throw OutboxUnreadable()
+        return KeptHandover(to, lines.getOrNull(1) == "staged")
     }
 
     fun clearHandover(userId: String, groupId: String) = synchronized(FamilyCopies.LOCK) {
@@ -411,8 +415,9 @@ fun FamilySync.resumeOutbox(summary: GroupSummary, names: (String) -> String? = 
  */
 private fun FamilySync.finishHandover(summary: GroupSummary, names: (String) -> String?, handed: (String, RoleEnd) -> Unit) {
     val groupId = summary.id
-    val to = outbox.handover(userId, groupId) ?: return
-    // Its first call still waits for an answer: the next open goes on.
+    val kept = outbox.handover(userId, groupId) ?: return
+    val to = kept.to
+    // Its first call (or a change for them kept before it) still waits for an answer: the next open goes on.
     val waiting = outbox.list(userId, groupId).any { kept ->
         // One the core can't open was said lost by the loop above; anything else is passed on.
         val read = try { ledger.outboxOpen(groupId, kept.outboxId, userId, kept.entry) } catch (_: CoreException.Sealed) { return@any false }
@@ -421,12 +426,16 @@ private fun FamilySync.finishHandover(summary: GroupSummary, names: (String) -> 
     if (waiting) return
     val view = (syncRevised(summary).state as? FamilyState.Accepted)?.view ?: return
     fun bills(id: String) = view.members.any { it.userId.equals(id, ignoreCase = true) && "billing" in it.roles }
-    if (!bills(userId) || !bills(to)) {
-        outbox.clearHandover(userId, groupId)
-        return
-    }
     val first = names(to) ?: "They"
-    val end = stepDown(summary, first)
+    val end = when {
+        // Let go of already (here or on another device): done.
+        !bills(userId) -> { outbox.clearHandover(userId, groupId); return }
+        bills(to) -> stepDown(summary, first)
+        // Billing never staged for them (a change for them was still waiting): the handover goes on from its start.
+        !kept.staged -> giveThenStepDown(summary, to, first)
+        // Staged and ended without landing: its refusal was said with its call.
+        else -> { outbox.clearHandover(userId, groupId); return }
+    }
     if (end is RoleEnd.Pending) return
     handed(to, end)
     if (end != RoleEnd.Wiped) outbox.clearHandover(userId, groupId)
@@ -490,12 +499,22 @@ private fun FamilySync.admitInTurn(summary: GroupSummary, person: PendingPerson,
                 is CallEnd.Refused -> return LetIn.Refused(end.words)
                 CallEnd.OtherKeys, CallEnd.Other -> return LetIn.KeptOther
                 CallEnd.Wiped -> return LetIn.Wiped
-                // Dropped and synced by the outbox: signed again over the new head.
-                CallEnd.Stale -> if (!waiting(groupId, person.userId)) return LetIn.Landed
+                // Dropped and synced by the outbox: signed again over the new head. No longer waiting is not let in:
+                // another manager may have turned them down meanwhile. Only their active entry on the synced member
+                // list is a landing.
+                CallEnd.Stale -> if (!waiting(groupId, person.userId)) {
+                    return if (activeOnChain(summary, person.userId)) LetIn.Landed else LetIn.Refused("$first isn’t waiting to join any more.")
+                }
             }
         }
     }
     return LetIn.Refused("${summary.name} keeps changing. Try again in a moment.")
+}
+
+/* Whether the family, synced now, has them as an active member: let in, by this phone or another manager. */
+private fun FamilySync.activeOnChain(summary: GroupSummary, userId: String): Boolean {
+    val view = (syncRevised(summary).state as? FamilyState.Accepted)?.view ?: return false
+    return view.members.any { it.userId.equals(userId, ignoreCase = true) }
 }
 
 /* Whether they are still waiting to join (route 16): one let in meanwhile, by another manager or an earlier send, isn't. A read that fails throws. */
@@ -519,13 +538,16 @@ internal const val UNCHANGED = "That doesn’t change their roles."
 /* A refusal staging met before anything was signed, in its words. */
 private class StageRefused(val words: String) : Exception(words)
 
+/* A promotion whose person isn't verified on this phone now (guard included): their words first. */
+private class CheckFirstNeeded : Exception()
+
 /*
  * A roster call built by the core (the web's stageLocked): the family synced first in this turn, so the call builds on
  * the head the server has, and route 3's head checked against the chain that sync accepted (another manager's change
  * since: synced and staged again). Then every member's ML-KEM key (route 6), the group key's seal opened when the core
  * asks (route 8), and `build` given the head's revision. Kept in the outbox before anything is sent.
  */
-private fun FamilySync.stageCall(summary: GroupSummary, build: (revision: ULong, kems: Map<String, String>) -> RosterCall): Staged {
+private fun FamilySync.stageCall(summary: GroupSummary, build: (view: FamilyView, revision: ULong, kems: Map<String, String>) -> RosterCall): Staged {
     val groupId = summary.id
     var keyOpened = false
     repeat(4) {
@@ -545,9 +567,11 @@ private fun FamilySync.stageCall(summary: GroupSummary, build: (revision: ULong,
         val identities = fetchIdentities(groupId)
         val kems = identities.mapNotNull { (id, member) -> member.identity?.kemPublicKey?.let { id to it } }.toMap()
         val call = try {
-            build(revision.toULong(), kems)
+            build(view, revision.toULong(), kems)
         } catch (refused: StageRefused) {
             return Staged.Refused(refused.words)
+        } catch (_: CheckFirstNeeded) {
+            return Staged.CheckFirst
         } catch (refused: CoreException) {
             return when (refused.message) {
                 CHECK_MANAGER_FIRST -> Staged.CheckFirst
@@ -576,7 +600,7 @@ private fun FamilySync.stageCall(summary: GroupSummary, build: (revision: ULong,
  * The admission: staged as every call is, with their keys as route 16 serves them now (a row drawn before their account
  * changed and this phone's Continue holds the old ones).
  */
-private fun FamilySync.stageAdmit(summary: GroupSummary, userId: String, first: String): Staged = stageCall(summary) { revision, kems ->
+private fun FamilySync.stageAdmit(summary: GroupSummary, userId: String, first: String): Staged = stageCall(summary) { _, revision, kems ->
     val waiting = api.pending(summary.id).firstOrNull { it.userId.equals(userId, ignoreCase = true) }
         ?: throw StageRefused("$first isn’t waiting to join any more.")
     val served = waiting.identity ?: throw StageRefused("HushOS couldn’t load everyone’s keys. Try again.")
@@ -602,7 +626,7 @@ sealed interface RoleEnd {
  */
 fun FamilySync.changeRole(summary: GroupSummary, userId: String, first: String, change: MembersRole): RoleEnd = exclusive(summary.id) {
     notMemberLetsGo(summary.id, { RoleEnd.Wiped }) {
-        callFor(summary, userId, first, unchangedIsDone = false) { revision, kems ->
+        callFor(summary, userId, first, unchangedIsDone = false, check = userId.takeIf { change == MembersRole.GRANT }) { revision, kems ->
             ledger.rolesBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), summary.id, revision, userId.lowercase(), change, kems)
         }
     }
@@ -616,17 +640,24 @@ fun FamilySync.changeRole(summary: GroupSummary, userId: String, first: String, 
 fun FamilySync.handOver(summary: GroupSummary, to: String, first: String): RoleEnd = exclusive(summary.id) {
     notMemberLetsGo(summary.id, { RoleEnd.Wiped }) {
         outbox.markHandover(userId, summary.id, to)
-        when (val given = callFor(summary, to, first, unchangedIsDone = true) { revision, kems ->
-            ledger.handoverBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), summary.id, revision, Handover.To(to.lowercase()), kems)
-        }) {
-            RoleEnd.Landed -> stepDown(summary, first)
-            // Kept: the next open goes on from here.
-            is RoleEnd.Pending -> given
-            RoleEnd.Wiped -> given
-            else -> { outbox.clearHandover(userId, summary.id); given }
-        }
+        giveThenStepDown(summary, to, first)
     }
 }
+
+/*
+ * The handover's two calls, its record kept: billing to them (under the same check a manager role takes, the web's
+ * needsCheckFor), the record marked staged once that call is kept, then this account lets go of it. Pending (unanswered,
+ * or a change for them kept before it) keeps the record for the next open; a refusal or a check asked for ends it.
+ */
+private fun FamilySync.giveThenStepDown(summary: GroupSummary, to: String, first: String): RoleEnd =
+    when (val given = callFor(summary, to, first, unchangedIsDone = true, check = to,
+        onStaged = { outbox.markHandover(userId, summary.id, to, staged = true) }) { revision, kems ->
+        ledger.handoverBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), summary.id, revision, Handover.To(to.lowercase()), kems)
+    }) {
+        RoleEnd.Landed -> stepDown(summary, first)
+        is RoleEnd.Pending, RoleEnd.Wiped -> given
+        else -> { outbox.clearHandover(userId, summary.id); given }
+    }
 
 /* The handover's second call: this account lets go of billing, someone else holding it now. */
 private fun FamilySync.stepDown(summary: GroupSummary, first: String): RoleEnd {
@@ -646,7 +677,7 @@ private fun FamilySync.stepDown(summary: GroupSummary, first: String): RoleEnd {
  * A change that no longer changes anything after a landing or a win is done; `unchangedIsDone` says so from the start.
  */
 private fun FamilySync.callFor(summary: GroupSummary, person: String, first: String, unchangedIsDone: Boolean,
-    build: (ULong, Map<String, String>) -> RosterCall): RoleEnd {
+    check: String? = null, onStaged: () -> Unit = {}, build: (ULong, Map<String, String>) -> RosterCall): RoleEnd {
     val route = ChainRoute.Member(person.lowercase())
     var moved = unchangedIsDone
     for (kept in outbox.list(userId, summary.id)) {
@@ -660,12 +691,18 @@ private fun FamilySync.callFor(summary: GroupSummary, person: String, first: Str
         }
     }
     repeat(3) {
-        when (val built = stageCall(summary, build)) {
+        // A promotion: where they stand on this phone now, from the settings and this device's guard read together over
+        // the member list just synced (the row's label may be old). A guard that can't be read throws: nothing is signed.
+        val built = stageCall(summary) { view, revision, kems ->
+            if (check != null && memberStandings(view)[check.lowercase()] != MemberStanding.VERIFIED) throw CheckFirstNeeded()
+            build(revision, kems)
+        }
+        when (built) {
             is Staged.Refused -> return RoleEnd.Refused(built.words)
             Staged.CheckFirst -> return RoleEnd.CheckFirst
             Staged.Unchanged -> return if (moved) RoleEnd.Landed else RoleEnd.Refused(UNCHANGED)
             Staged.Wiped -> return RoleEnd.Wiped
-            is Staged.Call -> when (val end = sendKept(summary, built.kept, names = { first })) {
+            is Staged.Call -> when (val end = sendKept(summary, built.kept.also { onStaged() }, names = { first })) {
                 CallEnd.Landed -> return RoleEnd.Landed
                 is CallEnd.Pending -> return RoleEnd.Pending(end.reason)
                 is CallEnd.Refused -> return RoleEnd.Refused(end.words)

@@ -494,4 +494,38 @@ class FamilyManageTest {
             phone.sync.letIn(summary, grace))
         assertTrue(kept(phone).isEmpty())
     }
+
+    /*
+     * Let them in meets `stale` because another manager turned Grace down meanwhile (she left route 16, and no roster lets
+     * her in): refused as no longer waiting, never said to be in. Fails if leaving the waiting list is taken for a landing.
+     */
+    @Test
+    fun overtakenByATurnDownIsRefused() {
+        val phone = phone()
+        family.admitAnswers.add { _ ->
+            family.pendingRows.clear()
+            family.samChangesTheList()
+            409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
+        }
+        assertEquals(LetIn.Refused("Grace isn’t waiting to join any more."), phone.sync.letIn(summary, grace))
+        // Sam's change on top of the three rosters, and no admission.
+        assertEquals(4, family.chain.size)
+        assertTrue(kept(phone).isEmpty())
+    }
+
+    /*
+     * Let them in meets `stale` because Grace's admission landed first (another manager's, or this very one answered
+     * late): she is on the member list, so it is a landing. Fails if a stale answer over her own admission is refused.
+     */
+    @Test
+    fun overtakenByTheirOwnAdmissionLands() {
+        val phone = phone()
+        family.admitAnswers.add { body ->
+            family.apply(body, server.grace.id)
+            409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
+        }
+        assertEquals(LetIn.Landed, phone.sync.letIn(summary, grace))
+        assertEquals(4, family.chain.size)
+        assertTrue(family.pendingRows.isEmpty())
+    }
 }

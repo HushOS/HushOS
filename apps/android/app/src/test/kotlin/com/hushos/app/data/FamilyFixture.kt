@@ -151,7 +151,11 @@ class FamilyFixture(val server: FakeDrive) {
     val memberAnswers = java.util.concurrent.ConcurrentLinkedQueue<(JSONObject) -> Pair<Int, JSONObject>?>()
     /* Every route 18 call, by whom it changes and its body, in order. */
     val memberCalls = java.util.Collections.synchronizedList(ArrayList<Pair<String, String>>())
-    /* People let in since (route 17): route 6 serves their identities beside Sam's and Maya's. */
+    /* A person's name and address as route 3 names them: Grace's, or what FakeDrive.another was given. */
+    private fun nameOf(person: FakeDrive.Person) = if (person.id == server.grace.id) "Grace Hopper" else server.others.values.firstOrNull { it.first.id == person.id }?.second ?: "Someone"
+    private fun emailOf(person: FakeDrive.Person) = if (person.id == server.grace.id) "grace@example.org" else server.others.entries.firstOrNull { it.value.first.id == person.id }?.key ?: ""
+
+    /* People let in since (route 17): routes 3 and 6 name them and serve their identities beside Sam's and Maya's. */
     val joined = java.util.Collections.synchronizedList(ArrayList<FakeDrive.Person>())
     /* The successions the chain carries (a manager role taken away replaces the family's key), served on route 5. */
     val successions = java.util.Collections.synchronizedList(ArrayList<SignedGroupStatement>())
@@ -215,7 +219,8 @@ class FamilyFixture(val server: FakeDrive) {
             method == "GET" && path == "groups/$groupId" -> if (notMember) notMemberAnswer() else 200 to JSONObject()
                 .put("head", JSONObject().put("version", chain.size).put("revision", chain.size)).put("members", JSONArray()
                 .put(JSONObject().put("userId", creator.id).put("name", "Sam Lindqvist").put("email", "sam@example.org").put("state", "active").put("roles", JSONArray().put("billing").put("members")))
-                .put(JSONObject().put("userId", member.id.lowercase()).put("name", "Maya").put("email", "me@example.org").put("state", "active").put("roles", JSONArray())))
+                .put(JSONObject().put("userId", member.id.lowercase()).put("name", "Maya").put("email", "me@example.org").put("state", "active").put("roles", JSONArray()))
+                .apply { joined.forEach { person -> put(JSONObject().put("userId", person.id.lowercase()).put("name", nameOf(person)).put("email", emailOf(person)).put("state", "active").put("roles", JSONArray())) } })
             method == "GET" && path == "groups/$groupId/rosters" -> {
                 if (notMember) return notMemberAnswer()
                 if (rostersFail) return 503 to JSONObject().put("message", "Drive is temporarily unavailable. Please try again.")

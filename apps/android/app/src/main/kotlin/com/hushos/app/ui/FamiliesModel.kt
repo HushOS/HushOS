@@ -144,6 +144,14 @@ interface FamilyHost {
 /* The address typed is the model's, never the screen's saved state: it goes with the session (reset), never into a bundle. */
 data class InviteAsk(val groupId: String, val busy: Boolean = false, val error: String? = null, val email: String = "")
 
+/*
+ * Which check of a member opens, from a row or from Check it's {first} first (6.10): their own twelve words when their
+ * account changed, or after a family check over keys that changed since; otherwise the family check. True for their own.
+ */
+fun personalCheck(userId: String, standing: com.hushos.app.data.MemberStanding?, checkedWith: String?): Boolean =
+    standing == com.hushos.app.data.MemberStanding.CHANGED ||
+        (checkedWith?.equals(userId, ignoreCase = true) == true && standing != com.hushos.app.data.MemberStanding.VERIFIED)
+
 /* A role change asked for on a member's row (the web's RoleChange): letting them manage, stopping it, or the handover. */
 enum class RoleKind { MANAGE, STOP, ORGANIZER }
 data class RoleAsk(val groupId: String, val member: com.hushos.app.data.FamilyMemberRef, val kind: RoleKind)
@@ -247,12 +255,16 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                     model.notice("${summary.name} changed while you were working on it. Try again.", untilRead = true)
             }
         }
-        // A handover the app stopped in the middle of, finished: said as the web's Make them the organizer says it.
+        // A handover the app stopped in the middle of, finished: said as the web's Make them the organizer says it, and the
+        // family read again so its page shows who the organizer is now.
+        var handedOver = false
         val handed = { to: String, end: com.hushos.app.data.RoleEnd ->
             val who = names(to) ?: "They"
+            if (end == com.hushos.app.data.RoleEnd.Landed) handedOver = true
             if (gate.current(s)) when (end) {
                 com.hushos.app.data.RoleEnd.Landed -> model.notice("$who is the organizer", untilRead = false)
                 is com.hushos.app.data.RoleEnd.Refused -> model.notice("Couldn’t change that. ${end.words}", untilRead = true)
+                com.hushos.app.data.RoleEnd.CheckFirst -> model.notice("Couldn’t change that. ${com.hushos.app.data.CHECK_MANAGER_FIRST}", untilRead = true)
                 else -> {}
             }
         }
@@ -267,7 +279,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             emptyMap()
         }
         if (ends.values.any { it == com.hushos.app.data.CallEnd.Wiped }) return
-        if (ends.values.any { it == com.hushos.app.data.CallEnd.Landed || it == com.hushos.app.data.CallEnd.Stale }) refreshFamily(summary, session = s)
+        if (handedOver || ends.values.any { it == com.hushos.app.data.CallEnd.Landed || it == com.hushos.app.data.CallEnd.Stale }) refreshFamily(summary, session = s)
         reloadManaged(groupId, s)
     }
 
@@ -366,7 +378,9 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
      */
     fun askRole(ask: RoleAsk, verified: Boolean) {
         if (roleBusy != null) return
-        if (ask.kind == RoleKind.MANAGE && !verified) checkFirst = ask else roleAsk = ask
+        // Both promotions wait for a check (the web's needsCheckFor): managing holds the family's key, and the organizer
+        // runs its plan. The data layer reads their standing again before anything is signed.
+        if (ask.kind != RoleKind.STOP && !verified) checkFirst = ask else roleAsk = ask
     }
 
     fun dismissRole() { roleAsk = null }

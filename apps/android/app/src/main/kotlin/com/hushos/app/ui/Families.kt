@@ -160,8 +160,8 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
      * Check it's {first}, from a row or from Check it's {first} first: an account that changed, or a family check over
      * keys that changed since, takes their own twelve words (6.10); otherwise the family check.
      */
-    fun startCheck(ref: FamilyMemberRef, mine: Boolean, standing: MemberStanding?) {
-        if (mine || (checkedWith?.equals(ref.userId, ignoreCase = true) == true && standing != MemberStanding.VERIFIED)) model.contactStep = ContactStep.Check(ref.email, ref.name)
+    fun startCheck(ref: FamilyMemberRef, standing: MemberStanding?) {
+        if (personalCheck(ref.userId, standing, checkedWith)) model.contactStep = ContactStep.Check(ref.email, ref.name)
         else if (summary != null) families.checking = MemberCheck(summary, ref, served(me)?.name?.let(::firstNameOf) ?: "you", organizer)
     }
     // A manager's page: what the outbox kept sent again, who waits and the open invitations read, at each open.
@@ -176,7 +176,7 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
     families.cancelling?.takeIf { it.first == groupId }?.let { (_, invitation) -> CancelInvitationDialog(model, groupId, invitation) }
     families.roleAsk?.takeIf { it.groupId == groupId }?.let { RoleConfirmDialog(model, it, name) }
     families.checkFirst?.takeIf { it.groupId == groupId }?.let { ask ->
-        CheckFirstDialog(model, ask) { families.dismissCheckFirst(); startCheck(ask.member, false, standings?.get(ask.member.userId.lowercase())) }
+        CheckFirstDialog(model, ask) { families.dismissCheckFirst(); startCheck(ask.member, standings?.get(ask.member.userId.lowercase())) }
     }
     // The leave dialog lives in the model: redrawn as it was after a rotation or a fold, whatever the page shows below it.
     families.leaving?.takeIf { it.groupId == groupId }?.let { LeaveDialog(model, it, name) }
@@ -213,7 +213,7 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
                                 if (iAmOrganizer && "billing" !in member.roles) add("Make them the organizer" to { families.askRole(RoleAsk(groupId, ref, RoleKind.ORGANIZER), verified) })
                             }
                             MemberRow(who?.name ?: "Someone", who?.email, member.userId, FamilySync.rolesLine(member.roles), you, standing, roles,
-                                busy = families.roleBusy != null) { mine -> startCheck(ref, mine, standing) }
+                                busy = families.roleBusy != null) { _ -> startCheck(ref, standing) }
                         }
                         if (manages) Invitations(model, groupId)
                         TechnicalDetailsRow(view)
