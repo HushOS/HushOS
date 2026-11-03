@@ -1,0 +1,35 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_15c5004443ffd4 20
+apps/android/app/src/main/kotlin/com/hushos/app/HushOSApplication.kt
+  s_566b8e0c4467a4::t_22818dd7b587b5 16-21
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_566b8e0c4467a4::t_93580d8ce601e8 72
+apps/android/app/src/main/kotlin/com/hushos/app/data/FailedTransfers.kt
+  s_566b8e0c4467a4::t_692e5fad3319a0 80,97-99
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_566b8e0c4467a4::t_743366eb44f231 341,352,387,447,563-564,574-607,813
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_566b8e0c4467a4::t_eec50d6e57e759 152-153
+apps/android/app/src/main/kotlin/com/hushos/app/data/WriteBacks.kt
+  s_566b8e0c4467a4::t_f2e0c2a16d88fd 114,180-181,202-204,211-255,257-258,266,271,277-278,282-286,445-448,469-486,489,491-492
+apps/android/app/src/main/kotlin/com/hushos/app/files/HushOSDocumentsProvider.kt
+  s_566b8e0c4467a4::t_70d89d2c9a1ea7 379,381-398,401-403,405-409,420-423
+apps/android/app/src/test/kotlin/com/hushos/app/files/FilesSaveOrderTest.kt
+  s_566b8e0c4467a4::t_bd7627bf43e27c 75,1346-1446
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0b3c32eada39c85740ab3e818bbd050881cf353e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
