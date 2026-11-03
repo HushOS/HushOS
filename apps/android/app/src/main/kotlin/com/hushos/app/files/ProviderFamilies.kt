@@ -369,7 +369,18 @@ class ProviderFamilies internal constructor(
                 relist(doc.workspaceId, doc.nodeId)
             } catch (error: NotAuthenticated) {
                 throw error
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                // Gone or in the trash for good (the server said so; a failure to answer stays silent): its rows forgotten,
+                // and Files told, the folder's listing and the one above it, so it shows neither the folder nor its children.
+                if (com.hushos.app.data.FamilyUploads.folderGone(error)) {
+                    val parent = vault.item(doc.workspaceId, doc.nodeId)?.node?.parentId
+                    for (row in vault.nodes.rowsIn(doc.workspaceId)) if (row.node.parentId == doc.nodeId) vault.forget(row.node.workspaceId, row.id)
+                    vault.forget(doc.workspaceId, doc.nodeId)
+                    shown.remove(doc)
+                    told.add(doc)
+                    for (id in listOfNotNull(doc.nodeId, parent))
+                        runCatching { vault.context.contentResolver.notifyChange(DocumentsContract.buildChildDocumentsUri(FilesRoots.authority(vault.context), id), null) }
+                }
                 continue
             }
             val signature = signature(listed)

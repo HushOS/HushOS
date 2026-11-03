@@ -1968,6 +1968,63 @@ class ProviderFamiliesTest {
         assertEquals("staged during the sweep", WriteBacks.contentOf(app, slot).readText())
     }
 
+    /*
+     * #266 P2: a family folder Files is showing is deleted on another device. The next poll tells Files, the folder's own
+     * listing and the one above it; a poll that only gets no answer tells nothing. Fails if a folder the server says is
+     * gone is taken for a network failure and Files keeps its children.
+     */
+    @Test
+    fun aPollTellsFilesOfAFamilyFolderGoneElsewhere() {
+        val provider = provider()
+        val made = provider.createDocument(folder, Document.MIME_TYPE_DIR, "Trips")
+        val trips = (FamilyDoc.of(made) as FamilyDoc.Node).nodeId
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        rows(provider.queryChildDocuments(made, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val itself = DocumentsContract.buildChildDocumentsUri(authority, trips)
+        val above = DocumentsContract.buildChildDocumentsUri(authority, family.rootId)
+        fun told(uri: android.net.Uri) = shadowOf(app.contentResolver).notifiedUris.count { it.uri == uri }
+        assertTrue(provider.pollOnce())
+        val before = told(itself)
+        server.beforeAnswer = { _, path -> if (path.endsWith("/children")) throw java.io.IOException("dropped") }
+        provider.pollOnce()
+        server.beforeAnswer = null
+        assertEquals("a poll with no answer told Files", before, told(itself))
+        val aboveBefore = told(above)
+        server.drop(trips)
+        assertTrue(provider.pollOnce())
+        assertEquals("a folder gone elsewhere was never told", before + 1, told(itself))
+        assertTrue("the folder above wasn't told", told(above) > aboveBefore)
+    }
+
+    /*
+     * #266 P2 (shared): a save's generation is complete but its record couldn't be written, and its job then fails for
+     * good: the row offers its Retry (the slot holds the save), and the Retry sends it. Fails if a failed save's
+     * availability is judged by its record alone.
+     */
+    @Test
+    fun aFailedSaveWithoutItsRecordStillOffersItsRetry() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("its record never written") })
+        File(WriteBacks.dir(app, slot), "record.json").delete()
+        WriteBacks.fault = { at -> if (at == "record") throw java.io.IOException("No space left on device") }
+        val inner = server.extraRoutes!!
+        server.extraRoutes = { method, segments, query, body ->
+            if (method == "POST" && segments.size == 2 && segments[0] == "drive" && segments[1] == "uploads") 400 to org.json.JSONObject().put("message", "Refused.")
+            else inner(method, segments, query, body)
+        }
+        assertEquals(ListenableWorker.Result.failure()::class, runJob(slot)::class)
+        server.extraRoutes = inner
+        WriteBacks.fault = null
+        val row = com.hushos.app.data.FailedTransfers.of(app).all().single { it.slot == slot }
+        assertFalse("a failed save its slot still holds was offered no Retry", row.sourceGone())
+        assertEquals(TransferQueue.Retry.SENT, TransferQueue.retryOutcome(app, row))
+        assertEquals(ListenableWorker.Result.success(), runJob(slot))
+        assertEquals("its record never written", serverText())
+    }
+
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =
         HushOSDocumentsProvider::class.java.getDeclaredField("families").apply { isAccessible = true }.get(provider) as ProviderFamilies
 }

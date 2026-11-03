@@ -144,6 +144,9 @@ object WriteBacks {
         check(incoming.renameTo(File(dir, RECORD))) { "The save couldn't be kept." }
     }
 
+    /* Whether the slot in `dir` holds a save to send now (a failed row's Retry has something to send). */
+    fun hasPending(dir: File, slot: String): Boolean = lockOf(slot).withLock { current(dir, slot) != null }
+
     /* The slot's pending save, if it has one. */
     fun pending(context: Context, slot: String): Pending? = lockOf(slot).withLock { current(dir(context, slot), slot) }
 
