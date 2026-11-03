@@ -199,6 +199,9 @@ object WriteBacks {
     /* A save older than what its file's slot already holds or landed: never kept (a newer one stands). */
     class Superseded : Exception("A newer save of this file stands.")
 
+    /* A save kept aside whose file has something newer now: not sent; its row stays for the person to Dismiss. */
+    class Moot : Exception("A newer save of this file stands.")
+
     /*
      * Tests: runs at each step of keeping a save ("copy", "fsync", "json", "record", "delete"), of a landing ("landed-copy",
      * "landed-mark", "landed-retire": after each), of a dismissal ("dismiss", as it begins), of a slot's clearing ("clear",
@@ -215,22 +218,22 @@ object WriteBacks {
      * no newer than the slot's newest save, landed or pending, keeps nothing (Superseded). Null when the account left.
      */
     fun stage(context: Context, accountGeneration: Long, target: Target, edit: File, number: Long,
-              publishUnder: ((() -> Pending?) -> Pending?)? = null): Pending? {
+              intoEmptyAbove: Long? = null, publishUnder: ((() -> Pending?) -> Pending?)? = null): Pending? {
         val slot = slotOf(target.workspaceId, target.nodeId)
         if (publishUnder == null) return Reservations.whileAccount(accountGeneration) {
             lockOf(slot).withLock {
-                val id = write(context, slot, target, edit, number, staged = false)
-                unlessPublished(context, slot, id) { publishGeneration(context, slot, target, edit, number, id, staged = false) }
+                val id = write(context, slot, target, edit, number, staged = false, intoEmptyAbove)
+                unlessPublished(context, slot, id) { publishGeneration(context, slot, target, edit, number, id, staged = false, intoEmptyAbove) }
             }
         }
         // A family's: copied and synced under the slot's lock alone (staged: no look publishes or removes it), then published
         // under whatever `publishUnder` holds (the copies lock a revocation's cleanup takes, its recheck first) for the short
         // rename; not published (revoked meanwhile, the account gone, a step failing), the copy goes.
-        val id = Reservations.whileAccount(accountGeneration) { lockOf(slot).withLock { write(context, slot, target, edit, number, staged = true) } } ?: return null
+        val id = Reservations.whileAccount(accountGeneration) { lockOf(slot).withLock { write(context, slot, target, edit, number, staged = true, intoEmptyAbove) } } ?: return null
         afterStaged?.invoke()
         var kept: Pending? = null
         try {
-            kept = publishUnder { Reservations.whileAccount(accountGeneration) { lockOf(slot).withLock { unlessPublished(context, slot, id) { publishGeneration(context, slot, target, edit, number, id, staged = true) } } } }
+            kept = publishUnder { Reservations.whileAccount(accountGeneration) { lockOf(slot).withLock { unlessPublished(context, slot, id) { publishGeneration(context, slot, target, edit, number, id, staged = true, intoEmptyAbove) } } } }
             return kept
         } finally {
             if (kept == null) lockOf(slot).withLock { dir(context, slot).let { File(it, id + BIN + STAGED).delete(); File(it, id + META + STAGED).delete() } }
@@ -254,7 +257,7 @@ object WriteBacks {
     private const val STAGED = ".staged"
 
     /* `edit`'s bytes and description written into a new generation of the slot (synced), named `staged` if so. Its id. */
-    private fun write(context: Context, slot: String, target: Target, edit: File, number: Long, staged: Boolean): String {
+    private fun write(context: Context, slot: String, target: Target, edit: File, number: Long, staged: Boolean, intoEmptyAbove: Long? = null): String {
         val dir = dir(context, slot).also { it.mkdirs() }
         // The slot's own id for as long as it exists: what tells a cancel pressed on an earlier slot of the file from this one.
         File(dir, INCARNATION).takeIf { !it.isFile }?.let { file ->
@@ -262,7 +265,7 @@ object WriteBacks {
             val incoming = File(dir, "$INCARNATION.incoming").apply { writeText(java.util.UUID.randomUUID().toString()) }
             check(incoming.renameTo(file)) { "The save couldn't be kept." }
         }
-        superseded(context, slot, dir, number)
+        superseded(context, slot, dir, number, intoEmptyAbove)
         val suffix = if (staged) STAGED else ""
         val id = "n$number-" + java.util.UUID.randomUUID()
         // A step failing leaves nothing of this generation (its contents are a whole plaintext copy): the edit stays.
@@ -307,16 +310,22 @@ object WriteBacks {
     }
 
     /* A number no newer than the slot's newest save, pending or landed or cancelled, keeps nothing; bounds unknown keep nothing either. */
-    private fun superseded(context: Context, slot: String, dir: File, number: Long) {
+    private fun superseded(context: Context, slot: String, dir: File, number: Long, intoEmptyAbove: Long? = null) {
         val numbers = repaired(context, slot) ?: throw IllegalStateException("The save couldn't be kept.")
-        if (number <= maxOf(recovered(dir, slot)?.generation ?: 0L, numbers.landed, numbers.cancelled)) throw Superseded()
+        val pending = recovered(dir, slot)
+        // A save kept aside (its ceiling `intoEmptyAbove`) goes only into a slot with nothing of the file newer than it:
+        // no save pending or being sent, nothing landed or cancelled since it was kept aside. Else it is moot, and stays.
+        if (intoEmptyAbove != null && (pending != null || dir.listFiles().orEmpty().any { it.name.startsWith("sending-") } ||
+                numbers.landed > intoEmptyAbove || numbers.cancelled > intoEmptyAbove)) throw Moot()
+        if (number <= maxOf(pending?.generation ?: 0L, numbers.landed, numbers.cancelled)) throw Superseded()
     }
 
     /* The generation `id` published as the slot's save (a staged one checked again and named for good first); the edit goes. */
-    private fun publishGeneration(context: Context, slot: String, target: Target, edit: File, number: Long, id: String, staged: Boolean): Pending {
+    private fun publishGeneration(context: Context, slot: String, target: Target, edit: File, number: Long, id: String, staged: Boolean,
+                                  intoEmptyAbove: Long? = null): Pending {
         val dir = dir(context, slot)
         if (staged) {
-            superseded(context, slot, dir, number)
+            superseded(context, slot, dir, number, intoEmptyAbove)
             check(File(dir, id + BIN + STAGED).renameTo(File(dir, id + BIN)) && File(dir, id + META + STAGED).renameTo(File(dir, id + META))) { "The save couldn't be kept." }
         }
         afterContent?.invoke()
@@ -378,6 +387,15 @@ object WriteBacks {
         if (runCatching { fault?.invoke("close") }.isFailure) return edit
         return if (edit.renameTo(closed)) closed else edit
     }
+
+    /*
+     * Whether `name` is an edit that holds a save (as against its target, a copy being made, or anything else): one still
+     * open or never closed (`<id>`, `rescued-<id>`), closed (`<id>.<number>.closed`) or kept aside (`<id>.q<number>`).
+     * Every sweep of edits and their targets asks this, so none deletes a target an edit still needs.
+     */
+    fun isRetainedEdit(name: String): Boolean = RETAINED.any { it.matches(name) }
+
+    private val RETAINED = listOf(Regex("^[^.]+$"), Regex("^[^.]+\\.\\d+\\.closed$"), Regex("^[^.]+\\.q\\d+$"))
 
     /* The save number a closed edit was renamed with. */
     fun closedNumber(file: File): Long? = Regex("^[^.]+\\.(\\d+)\\.closed$").find(file.name)?.groupValues?.get(1)?.toLong()
@@ -760,6 +778,8 @@ object WriteBacks {
         val dir = dir(context, slot)
         // A slot whose bounds can't be read is never empty: what it holds waits for them to be rebuilt.
         if (readNumbers(context, slot).unknown) return@withLock
+        // Nor one a family save is staged into (copied, its publication to come, into this slot's id).
+        if (dir.listFiles().orEmpty().any { it.name.endsWith(STAGED) }) return@withLock
         if (current(dir, slot) == null) dir.deleteRecursively()
     }
 

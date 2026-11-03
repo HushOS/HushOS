@@ -1948,6 +1948,26 @@ class ProviderFamiliesTest {
         assertEquals("newer save", WriteBacks.contentOf(app, slot).readText())
     }
 
+    /*
+     * #266 P2: the old-slot sweep runs while a family save is staged into a slot that holds nothing else yet (its copy made,
+     * its publication still to come): the slot stays, and the save is published with nothing to Retry. Fails if the
+     * sweep's recheck takes a slot with only a staged save in it for empty.
+     */
+    @Test
+    fun aSweepLeavesASlotAFamilySaveIsStagedInto() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        WriteBacks.afterStaged = {
+            WriteBacks.afterStaged = null
+            WriteBacks.dir(app, slot).setLastModified(System.currentTimeMillis() - 60 * 60 * 1000L)
+            TransferQueue.sweep(app, emptySet())
+        }
+        ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("staged during the sweep".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
+        assertTrue("the staged save was left for a Retry", com.hushos.app.data.FailedTransfers.of(app).all().isEmpty())
+        assertEquals("staged during the sweep", WriteBacks.contentOf(app, slot).readText())
+    }
+
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =
         HushOSDocumentsProvider::class.java.getDeclaredField("families").apply { isAccessible = true }.get(provider) as ProviderFamilies
 }
