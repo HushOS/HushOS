@@ -340,7 +340,8 @@ extension DriveStore {
             // sync does).
             let vault = session.owner
             FamilyFilesDomains.shared.accepted(summary.id, name: summary.name, workspaces: view.areas.map(\.workspaceId),
-                                               owner: AccountOwner(vault.api.session), observed: filesGeneration, session: vault.copySession)
+                                               owner: AccountOwner(vault.api.session), observed: filesGeneration, session: vault.copySession,
+                                               signedIn: vault.api.session)
             familyShown[summary.id] = view
             for root in view.areas.compactMap({ $0.root?.id.lowercased() }) { familyRoots[root] = summary.id }
             let groupId = summary.id

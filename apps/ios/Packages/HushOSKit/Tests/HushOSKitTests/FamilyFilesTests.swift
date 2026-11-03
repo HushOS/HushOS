@@ -428,6 +428,56 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         #expect(manager.names[FamilyFileIds.domain(group)] == "Lindqvist family", "the removal took the location of an acceptance that came after its let-go")
     }
 
+    /*
+     * Another process switches accounts (Sam in, every family location removed) while an old
+     * process's acceptance for Maya is still queued, its own session never told: it adds no record
+     * and no location, whether it began before the switch (the account change refuses it) or carries
+     * Maya's session after it (the shared keychain refuses it), and a switch during its add takes the
+     * location back. Fails if an acceptance asks only its own process whether its account still stands.
+     */
+    @Test func aLateAcceptanceAfterAnAccountSwitchElsewhereAddsNothing() async throws {
+        let mayaSession = SharedKeychain.Session(origin: Self.maya.origin, token: "maya", userId: Self.maya.userId)
+        let samSession = SharedKeychain.Session(origin: Self.sam.origin, token: "sam", userId: Self.sam.userId)
+        for (began, carries, duringAdd) in [(true, false, false), (false, true, false), (false, true, true)] {
+            let shared = OnFakeDrive.FamilyFilesSourceTests.Shared(mayaSession)
+            let old = FamilyFilesDomains(records: records, manager: manager, sharedSession: { shared.session })
+            let other = FamilyFilesDomains(records: records, manager: manager, sharedSession: { shared.session })
+            let session = TemporaryCopies.session(CopyEpoch())
+            let group = UUID().uuidString.lowercased()
+            let early = records.generation(group)
+            if duringAdd {
+                // Sam signs in while the location is being added, before that process removes anything.
+                manager.duringAdd = { shared.session = samSession }
+            } else {
+                shared.session = samSession
+                await other.removeAll()
+            }
+            await old.accepted(group, name: "Lindqvist family", owner: Self.maya, observed: began ? early : records.generation(group), session: session,
+                               signedIn: carries ? mayaSession : nil).value
+            #expect(manager.names[FamilyFileIds.domain(group)] == nil, "the old account's location came back (began before: \(began), during the add: \(duringAdd))")
+            if duringAdd { await other.removeAll() }
+            #expect(try records.read()[group] == nil, "the old account's record came back (began before: \(began), during the add: \(duringAdd))")
+        }
+    }
+
+    /*
+     * The location an acceptance during the removal gets back is let go of again while it is being
+     * added: once added it is taken back. Fails if the restoring add skips the check after it.
+     */
+    @Test func aRevocationDuringTheRestoringAddTakesTheLocationBack() async throws {
+        let app = self.domains
+        let extensionProcess = FamilyFilesDomains(records: records, manager: manager)
+        let third = FamilyFilesDomains(records: records, manager: manager)
+        let session = TemporaryCopies.session(CopyEpoch())
+        let (group, maya, records) = (Self.group, Self.maya, self.records)
+        await app.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value
+        manager.duringRemove = { await app.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value }
+        manager.duringAdd = { await third.letGo(group, owner: maya).value }
+        await extensionProcess.letGo(group, owner: maya).value
+        #expect(records.admission(group, owner: maya) == .letGo)
+        #expect(manager.names[FamilyFileIds.domain(group)] == nil, "a location restored over a second let-go stayed")
+    }
+
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
     @Test func aRenamedFamilysLocationTakesTheNewName() async throws {
         let domains = self.domains
@@ -773,6 +823,25 @@ extension OnFakeDrive {
             s.server.servedRootId = nil
             #expect(try await s.source.folders().map(\.workspaceId) == [s.family.workspaceId])
             #expect(try await s.source.anchor().folders[s.family.workspaceId.lowercased()] != nil)
+        }
+
+        /*
+         * A cold launch's index still holds the folder a file was in before it moved: asked for, the
+         * file isn't in that folder, and the folder may be gone too. Neither is proof the file is gone,
+         * so Files asks again (a real deletion reaches it through the feed). Fails if an item missing
+         * from its indexed folder is answered as no such item.
+         */
+        @Test func aFileMissingFromItsIndexedFolderIsAskedAgainNotGone() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            let f = s.family
+            _ = try await s.source.children(of: NodeRef(workspaceId: f.workspaceId, nodeId: f.rootId))
+            s.server.put(f.photo.with(parentId: UUID().uuidString.lowercased()))
+            await s.phone.vault.forget(f.photo.id)
+            await #expect(throws: FamilyFilesError.unavailable) { _ = try await s.source.item(f.photo.ref) }
+
+            await s.phone.vault.rememberParent(f.photo.id, parent: UUID().uuidString.lowercased())
+            await #expect(throws: FamilyFilesError.unavailable) { _ = try await s.source.item(f.photo.ref) }
         }
 
         /*

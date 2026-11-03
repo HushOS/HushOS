@@ -94,6 +94,14 @@ public struct FamilyDomainRecords: Sendable {
     struct Stored: Codable, Equatable {
         var records: [String: FamilyDomainRecord] = [:]
         var revoked: [String: UInt64] = [:]
+        /* Moved by every sign-out, account switch and deletion (`removeAll`): an acceptance begun before one is refused for every family. */
+        var accounts: UInt64?
+
+        /*
+         * The family's generation as acceptances observe it: its own let-gos plus every account change,
+         * both only ever moved up, so any of them refuses an acceptance begun before it.
+         */
+        func generation(_ groupId: String) -> UInt64 { revoked[groupId, default: 0] &+ (accounts ?? 0) }
     }
 
     /* Both maps; empty when nothing was ever kept. A file that can't be read throws, never read as none. */
@@ -116,7 +124,7 @@ public struct FamilyDomainRecords: Sendable {
     public func read() throws -> [String: FamilyDomainRecord] { try stored().records }
 
     /* The family's revocation generation now; nil when the store can't be read. */
-    public func generation(_ groupId: String) -> UInt64? { (try? stored())?.revoked[groupId.lowercased(), default: 0] }
+    public func generation(_ groupId: String) -> UInt64? { (try? stored())?.generation(groupId.lowercased()) }
 
     /* `body` over what is stored, under the lock, written back when it changed; false when that couldn't be done. */
     @discardableResult
@@ -228,7 +236,8 @@ public final class FamilyFilesDomains: @unchecked Sendable {
      * go of since the check began, here or in another process.
      */
     @discardableResult
-    public func accepted(_ groupId: String, name: String, workspaces: [String] = [], owner: AccountOwner, observed: UInt64?, session: CopySession) -> Task<Void, Never> {
+    public func accepted(_ groupId: String, name: String, workspaces: [String] = [], owner: AccountOwner, observed: UInt64?, session: CopySession,
+                         signedIn: SharedKeychain.Session? = nil) -> Task<Void, Never> {
         let groupId = groupId.lowercased()
         return enqueue { [self] in
             guard FamilyRecords.valid(groupId), let observed, session.stands else { return }
@@ -236,10 +245,12 @@ public final class FamilyFilesDomains: @unchecked Sendable {
             guard !revocationPending(groupId) else { return }
             var ours = false
             let wrote = records.update { stored in
-                guard stored.revoked[groupId, default: 0] <= observed else { return }
+                guard stored.generation(groupId) <= observed else { return }
+                // Signed out or in again elsewhere since this sync's session began: nothing of it is written.
+                if let signedIn, sharedSession() != signedIn { return }
                 if let record = stored.records[groupId], record.owner != owner { return }
                 stored.records[groupId] = FamilyDomainRecord(owner: owner, name: name, workspaces: workspaces.map { $0.lowercased() }.sorted(),
-                                                             generation: stored.revoked[groupId, default: 0])
+                                                             generation: stored.generation(groupId))
                 ours = true
             }
             guard wrote, ours, session.stands else { return }
@@ -248,14 +259,9 @@ public final class FamilyFilesDomains: @unchecked Sendable {
             // Missing, or named otherwise than the family is now (a rename, or one whose add failed before): added, which
             // for an identifier that exists updates its name. Compared with the system's name, never the record's.
             if existing[identifier] != name {
-                // Another process may have let the family go while this one waited: asked again, under the store's lock,
-                // right before the add, and again after it, when a let-go that landed during the add takes the location back.
-                guard stands(groupId, owner: owner, observed: observed, session: session) else { return }
-                try? await manager.add(identifier, name: name)
-                guard stands(groupId, owner: owner, observed: observed, session: session) else {
-                    try? await manager.remove(identifier)
-                    return
-                }
+                // Another process may have let the family go (or signed out or in) while this one waited.
+                guard await addVerified(identifier, name: name, holds: { stands(groupId, owner: owner, observed: observed, session: session, signedIn: signedIn) })
+                else { return }
             }
             await manager.signal(identifier)
         }
@@ -263,13 +269,14 @@ public final class FamilyFilesDomains: @unchecked Sendable {
 
     /*
      * Whether an acceptance begun at `observed` still holds, read under the store's lock: its session
-     * stands, no let-go is pending here, the record is `owner`'s, and no let-go came since.
+     * stands (here, and as the shared keychain holds it), no let-go is pending here, the record is
+     * `owner`'s, and no let-go or account change came since.
      */
-    private func stands(_ groupId: String, owner: AccountOwner, observed: UInt64, session: CopySession) -> Bool {
+    private func stands(_ groupId: String, owner: AccountOwner, observed: UInt64, session: CopySession, signedIn: SharedKeychain.Session?) -> Bool {
         guard session.stands, !revocationPending(groupId) else { return false }
         var holds = false
         let read = records.update { stored in
-            holds = stored.records[groupId]?.owner == owner && stored.revoked[groupId, default: 0] <= observed
+            holds = stored.records[groupId]?.owner == owner && stored.generation(groupId) <= observed && (signedIn == nil || sharedSession() == signedIn)
         }
         return read && holds
     }
@@ -317,8 +324,24 @@ public final class FamilyFilesDomains: @unchecked Sendable {
             // An acceptance that came after the let-go and landed while the system removed the location (in another
             // process, which found it still there): its record stands, so its location comes back.
             guard let generation = generation ?? lock.withLock({ landed[groupId] }), let name = acceptedSince(groupId, generation) else { return }
-            try? await manager.add(identifier, name: name)
+            await addVerified(identifier, name: name, holds: { acceptedSince(groupId, generation) != nil })
         }
+    }
+
+    /*
+     * A location added only while `holds` (read under the store's lock): asked right before the add,
+     * and again after it, when a revocation that landed during the add takes the location back.
+     * False when it doesn't stand.
+     */
+    @discardableResult
+    private func addVerified(_ identifier: String, name: String, holds: () -> Bool) async -> Bool {
+        guard holds() else { return false }
+        try? await manager.add(identifier, name: name)
+        guard holds() else {
+            try? await manager.remove(identifier)
+            return false
+        }
+        return true
     }
 
     /* The name of the family's record if it was written at `generation` or later (an acceptance after that let-go), read under the store's lock. */
@@ -375,7 +398,7 @@ public final class FamilyFilesDomains: @unchecked Sendable {
                 return
             }
             stored.revoked[groupId, default: 0] += 1
-            generation = stored.revoked[groupId, default: 0]
+            generation = stored.generation(groupId)
             if let record = stored.records[groupId], owner == nil || record.owner == owner {
                 workspaces = record.workspaces ?? []
                 stored.records[groupId] = nil
@@ -438,6 +461,8 @@ public final class FamilyFilesDomains: @unchecked Sendable {
      * its location went (one that stays is refused to anyone else). Unknown locations: nothing.
      */
     public func removeAll() async {
+        // At once, before any queued call: every acceptance begun before this (in any process) is refused from here.
+        _ = (0 ..< 3).contains { _ in records.update { $0.accounts = ($0.accounts ?? 0) &+ 1 } }
         await enqueue { [self] in
             guard let identifiers = (try? await manager.domains()).map({ Array($0.keys) }) else { return }
             var present = Set(identifiers)
@@ -840,11 +865,18 @@ public actor FamilyFilesSource {
         if let root = area.root, root.id.lowercased() == ref.nodeId {
             _ = try await vault.listChildren(of: root.id, in: ref.workspaceId)
         } else if let parent = await vault.knownParent(ref.nodeId) {
-            _ = try await vault.listChildren(of: parent, in: ref.workspaceId)
+            do {
+                _ = try await vault.listChildren(of: parent, in: ref.workspaceId)
+            } catch DriveAPIError.notFound, DriveAPIError.trashed {
+                // The folder it was indexed in is gone, not the item for certain (it may have moved out first).
+                throw FamilyFilesError.unavailable
+            }
         } else {
             throw FamilyFailure(message: FamilyWords.openAgain)
         }
-        guard let opened = await vault.item(ref) else { throw DriveAPIError.notFound("This item no longer exists.") }
+        // Not in the folder the index last saw it in: maybe moved since (an index from before a cold launch), which only
+        // the folder's feed can tell from a deletion. Files asks again; a deletion reaches it through the feed.
+        guard let opened = await vault.item(ref) else { throw FamilyFilesError.unavailable }
         return opened
     }
 
