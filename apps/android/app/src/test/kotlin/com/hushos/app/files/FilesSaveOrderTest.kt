@@ -2049,10 +2049,11 @@ class FilesSaveOrderTest {
     }
 
     /*
-     * #274 P1 (rescue order): save 1 is pending in the slot, save 2 couldn't be kept (its closed edit and row), then the
-     * slot's bounds become unreadable and the process starts again. The rescued save 1 keeps its own number, behind save
-     * 2: reads serve save 2, save 1's Retry lands without retiring save 2, and save 2 lands last. Fails if the rescue is
-     * numbered as the newest save, where its Retry wins reads and its landing deletes the newer edit.
+     * #274 P1 (rescue order), with everything ambiguous kept aside: save 1 is pending in the slot, save 2 couldn't be kept
+     * (its closed edit and row), then the slot's bounds become unreadable and the process starts again. Both are kept
+     * aside, each under its own number: neither is read as contents (reads go to the server), save 1's Retry is moot
+     * (save 2 is newer) and never touches save 2, and save 2's Retry lands it. Fails if the rescue is numbered as the
+     * newest save, or if a save kept aside is read or wins over a newer one.
      */
     @Test
     fun aRescuedSaveKeepsItsPlaceBehindANewerRetainedEdit() {
@@ -2066,17 +2067,95 @@ class FilesSaveOrderTest {
         File(app.filesDir, "${WriteBacks.NUMBERS}/$slot").writeText("not the numbers")
         WriteBacks.forgetReservedHere()
         TransferQueue.reconcileEdits(app, startup = true)
-        assertEquals("second save", opened(provider, notes, "r"))
+        assertEquals("original", opened(provider, notes, "r"))
         val rows = FailedTransfers.of(app).all().filter { it.slot == slot }
         val rescued = rows.single { File(it.file!!).readText() == "first save" }
         val newer = rows.single { File(it.file!!).readText() == "second save" }
-        assertTrue(TransferQueue.retry(app, rescued))
-        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
-        assertEquals("first save", serverText(notes))
-        assertTrue("the rescued save's landing deleted the newer edit", File(newer.file!!).isFile)
-        assertEquals("second save", opened(provider, notes, "r"))
-        assertTrue(TransferQueue.retry(app, FailedTransfers.of(app).all().single { it.id == newer.id }))
+        assertEquals(TransferQueue.Retry.GONE, TransferQueue.retryOutcome(app, rescued))
+        assertTrue("the older save's Retry touched the newer one", File(newer.file!!).isFile)
+        assertEquals(0, begins())
+        assertEquals(TransferQueue.Retry.SENT, TransferQueue.retryOutcome(app, FailedTransfers.of(app).all().single { it.id == newer.id }))
         assertEquals(ListenableWorker.Result.success(), runSlot(slot))
         assertEquals("second save", serverText(notes))
+        assertTrue(FailedTransfers.of(app).all().none { it.slot == slot })
+    }
+
+    /*
+     * #266 P2 (shared): a save couldn't be kept (a full disk), and its Retry is pressed while the disk is still full: the
+     * Retry says it still couldn't be kept (not that the file is gone), the edit and the row stay as they were, and a
+     * later Retry sends it. Fails if a Retry that couldn't keep the save reads as a missing edit.
+     */
+    @Test
+    fun aRetryThatStillCantKeepTheSaveSaysSoAndKeepsItsRow() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.fault = { if (it == "copy") throw java.io.IOException("No space left on device") }
+        save(provider, notes, "kept for a retry")
+        val row = FailedTransfers.of(app).all().single { it.slot == slot }
+        assertEquals(TransferQueue.Retry.NOT_KEPT, TransferQueue.retryOutcome(app, row))
+        WriteBacks.fault = null
+        assertEquals(listOf(row), FailedTransfers.of(app).all())
+        assertEquals("kept for a retry", File(row.file!!).readText())
+        assertEquals(TransferQueue.Retry.SENT, TransferQueue.retryOutcome(app, row))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("kept for a retry", serverText(notes))
+    }
+
+    /*
+     * #274 P2 (rebuild coverage): a save landed, but its landing's cleanup left an older closed edit no row names, and then
+     * the slot's bounds become unreadable and the process starts again. The rebuild's bounds cover that edit: it is never
+     * read as contents (a read gets the landed version) and never sent, but kept aside as a row to Retry or Dismiss.
+     * Fails if bounds rebuilt from the slot alone let a retired edit be read or sent again.
+     */
+    @Test
+    fun aRetiredEditLeftBehindIsNeverReadOrSentAfterARebuild() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        val vault = vaultOf(provider)
+        val target = vault.resolve(notes).let { WriteBacks.Target(it.node.workspaceId, it.id, it.name, it.metadata.mime, it.node.parentId ?: vault.rootId, root = vault.rootId) }
+        save(provider, notes, "landed save")
+        val landed = WriteBacks.pending(app, slot)!!.generation
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        // What an interrupted retirement left: an older save's closed edit, no row naming it.
+        val left = WriteBacks.close(WriteBacks.personalEdit(app, target, Shared.session(app)!!.userId).apply { writeText("an older save, retired") }, landed)
+        File(app.filesDir, "${WriteBacks.NUMBERS}/$slot").writeText("not the numbers")
+        WriteBacks.forgetReservedHere()
+        TransferQueue.reconcileEdits(app, startup = true)
+        assertEquals("landed save", opened(provider, notes, "r"))
+        assertNull(WriteBacks.pending(app, slot))
+        val row = FailedTransfers.of(app).all().single { it.slot == slot }
+        assertEquals("an older save, retired", File(row.file!!).readText())
+        assertFalse(left.exists())
+        val sent = begins()
+        TransferQueue.startupSweep(app)
+        assertEquals("a save kept aside was sent", sent, begins())
+    }
+
+    /*
+     * #274 P2 (read-only lookups): a save's generation is complete but its record was never written (the process died
+     * there). Reads and listings of the file find it, but write nothing: the record is written only on a path the
+     * account's lock guards. Fails if a lookup publishes (a write a sign-out's wipe could race).
+     */
+    @Test
+    fun aLookupNeverWritesTheSlot() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "first save")
+        class Killed : Error()
+        WriteBacks.afterContent = { WriteBacks.afterContent = null; throw Killed() }
+        try {
+            WriteBacks.save(app, Reservations.generation, WriteBacks.pending(app, slot)!!.target, File(app.cacheDir, "cut").apply { writeText("second save") })
+        } catch (_: Killed) {
+        }
+        val dir = WriteBacks.dir(app, slot)
+        val before = dir.listFiles().orEmpty().associate { it.name to it.lastModified() }
+        assertEquals("second save", opened(provider, notes, "r"))
+        WriteBacks.pending(app, slot)
+        WriteBacks.pendingMeta(app, slot)
+        provider.queryChildDocuments("root", null, null as String?).close()
+        assertEquals("a lookup wrote the slot", before, dir.listFiles().orEmpty().associate { it.name to it.lastModified() })
     }
 }

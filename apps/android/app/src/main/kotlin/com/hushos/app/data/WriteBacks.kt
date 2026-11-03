@@ -88,10 +88,26 @@ object WriteBacks {
     private fun read(file: File, slot: String): Pending? = runCatching { describe(JSONObject(file.readText()), slot) }.getOrNull()
 
     /*
-     * The slot's pending save, under its lock: the one the record names, its contents there; a complete newer generation
-     * a save left unpublished (it died before the record's rename) is published first. Generations neither names go.
+     * The slot's pending save, under its lock, read only (what reads and listings take; nothing is written): the one the
+     * record names, its contents there, or a complete newer generation a save left unpublished (it died before the
+     * record's rename), which `recovered` publishes on a path the account's lock guards.
      */
     private fun current(dir: File, slot: String): Pending? {
+        if (!dir.isDirectory) return null
+        val bounds = numbersOf(dir, slot).takeIf { !it.unknown } ?: return null
+        val through = maxOf(bounds.landed, bounds.cancelled)
+        val published = read(File(dir, RECORD), slot)?.takeIf { File(dir, it.id + BIN).isFile && it.generation > through }
+        val newest = dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty()
+            .mapNotNull { read(it, slot) }.filter { File(dir, it.id + BIN).isFile && it.generation > through }.maxByOrNull { it.generation }
+        return if (newest != null && (published == null || newest.generation > published.generation)) newest else published
+    }
+
+    /*
+     * The slot's pending save as `current` finds it, made so on disk: a complete newer generation published, generations
+     * neither names deleted. Only on paths the account's lock guards (a save, a take, a landing, a cancel, a dismissal,
+     * a reconcile), under the slot's lock.
+     */
+    private fun recovered(dir: File, slot: String): Pending? {
         if (!dir.isDirectory) return null
         // A save a cancel took is never pending again, whatever is left of it on disk.
         // A save at or below the slot's durable bounds (the newest landed, a cancel's) is never pending again, whatever is
@@ -135,10 +151,23 @@ object WriteBacks {
     @Volatile internal var beforeSlotId: (() -> Unit)? = null
 
     /* A save's file as a failed row keeps it (FailedTransfer.stage), and back. */
-    fun encodeTarget(t: Target, familyEpoch: Long? = null, number: Long? = null, account: String? = null): String = JSONObject().put("number", number ?: JSONObject.NULL).put("workspaceId", t.workspaceId).put("nodeId", t.nodeId).put("name", t.name)
+    fun encodeTarget(t: Target, familyEpoch: Long? = null, number: Long? = null, account: String? = null, quarantined: Long? = null): String = JSONObject().put("number", number ?: JSONObject.NULL).put("quarantined", quarantined ?: JSONObject.NULL).put("workspaceId", t.workspaceId).put("nodeId", t.nodeId).put("name", t.name)
         .put("mime", t.mime ?: JSONObject.NULL).put("folder", t.folder).put("family", t.family ?: JSONObject.NULL)
         .put("familyWorkspace", t.familyWorkspace ?: JSONObject.NULL).put("root", t.root ?: JSONObject.NULL)
         .put("familyEpoch", familyEpoch ?: JSONObject.NULL).put("account", account ?: JSONObject.NULL).toString()
+
+    /*
+     * A staging row kept aside by a rebuild of unreadable bounds (its save can't be told from one landed or cancelled):
+     * the ceiling those bounds were rebuilt at. Never read as contents, never sent unless its Retry is pressed, and
+     * retired only by a landing or cancel above that ceiling. Null for any other row.
+     */
+    fun quarantinedAt(json: String): Long? = runCatching { JSONObject(json).opt("quarantined") as? Number }.getOrNull()?.toLong()
+
+    private fun quarantine(json: String, ceiling: Long): String = JSONObject(json).put("quarantined", ceiling).toString()
+
+    /* Whether a staging row numbered `number` goes with a bound at `through`: at or below it, and not kept aside at or above it. */
+    fun retiredBy(stage: String, through: Long): Boolean =
+        (stagedNumber(stage) ?: 0L) <= through && quarantinedAt(stage).let { it == null || through > it }
 
     /* The account (its user id) an edit's target names: the one signed in as the edit was made. Null for none named. */
     fun accountOf(json: String): String? = runCatching { JSONObject(json).opt("account") as? String }.getOrNull()
@@ -198,6 +227,7 @@ object WriteBacks {
         // under whatever `publishUnder` holds (the copies lock a revocation's cleanup takes, its recheck first) for the short
         // rename; not published (revoked meanwhile, the account gone, a step failing), the copy goes.
         val id = Reservations.whileAccount(accountGeneration) { lockOf(slot).withLock { write(context, slot, target, edit, number, staged = true) } } ?: return null
+        afterStaged?.invoke()
         var kept: Pending? = null
         try {
             kept = publishUnder { Reservations.whileAccount(accountGeneration) { lockOf(slot).withLock { unlessPublished(context, slot, id) { publishGeneration(context, slot, target, edit, number, id, staged = true) } } } }
@@ -279,7 +309,7 @@ object WriteBacks {
     /* A number no newer than the slot's newest save, pending or landed or cancelled, keeps nothing; bounds unknown keep nothing either. */
     private fun superseded(context: Context, slot: String, dir: File, number: Long) {
         val numbers = repaired(context, slot) ?: throw IllegalStateException("The save couldn't be kept.")
-        if (number <= maxOf(current(dir, slot)?.generation ?: 0L, numbers.landed, numbers.cancelled)) throw Superseded()
+        if (number <= maxOf(recovered(dir, slot)?.generation ?: 0L, numbers.landed, numbers.cancelled)) throw Superseded()
     }
 
     /* The generation `id` published as the slot's save (a staged one checked again and named for good first); the edit goes. */
@@ -291,7 +321,7 @@ object WriteBacks {
         }
         afterContent?.invoke()
         publish(dir, id)
-        current(dir, slot)
+        recovered(dir, slot)
         // Kept: only now does the edit go, with its target beside it (a failure to delete it leaves a stray copy, never a
         // lost save: the next reconcile finds its number kept and deletes it).
         runCatching { fault?.invoke("delete"); discardEdit(edit) }
@@ -392,19 +422,31 @@ object WriteBacks {
         val dir = dir(context, slot)
         val generations = dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty().mapNotNull { read(it, slot) }
             .filter { File(dir, it.id + BIN).isFile }
-        val newest = generations.maxOfOrNull { it.generation } ?: 0L
-        // Not known: no generation on disk is sent again from the slot; but the newest complete one may be a save still
-        // pending, so it is kept first as an edit of its own with a staging row ("The save wasn't kept."), never read as
-        // contents (not closed), to Retry or Dismiss. It keeps its own number (its description's, as `n<number>-` names it
-        // too), so it stays behind any newer save retained on disk (a closed edit, a staging row): its Retry never wins a
-        // read over one, and its landing never retires one. Then it leaves the slot, and the bounds stop just below it.
+        val records = FailedTransfers.of(context)
+        val rows = runCatching { records.all() }.getOrDefault(emptyList()).filter { it.slot == slot && it.stage != null }
+        val closed = closedEditsOf(context, slot)
+        // Not known: whatever is on disk of the file's saves (generations, closed edits, staging rows, copies being sent)
+        // can't be told from saves landed or cancelled, so the bounds cover all of it (none is read or sent from where it
+        // is) and each is kept aside instead (quarantined): an edit of its own, never closed (never read as contents), with
+        // a staging row ("The save wasn't kept.") that keeps its own number, to Retry or Dismiss. A Retry sends it only if
+        // nothing newer of the file was kept aside (TransferQueue.retry). The newest complete generation leaves the slot.
         // (A generation whose description can't be read names no file to send to, and isn't kept.)
+        val sending = dir.listFiles { f -> f.name.startsWith("sending-") }.orEmpty().mapNotNull { numberOfId(it.name.removePrefix("sending-")) }
+        // Edits set aside before (a rebuild that stopped between an edit's rename and its row): `<id>.q<number>`.
+        val asides = runCatching { File(context.filesDir, EDITS).walkTopDown().filter { it.isFile && Regex("^[^.]+\\.q(\\d+)$").matches(it.name) }.toList() }
+            .getOrDefault(emptyList()).mapNotNull { aside ->
+                val target = runCatching { decodeTarget(sidecarOf(aside).readText()) }.getOrNull() ?: return@mapNotNull null
+                if (slotOf(target.workspaceId, target.nodeId) != slot) null else Triple(aside, target, aside.name.substringAfterLast(".q").toLongOrNull() ?: 0L)
+            }
+        val ceiling = (generations.map { it.generation } + closed.map { it.first } + rows.mapNotNull { stagedNumber(it.stage!!) } + sending + asides.map { it.third }).maxOrNull() ?: 0L
+        val account = Shared.session(context)?.userId
+        fun kept(edit: File): Boolean = runCatching { records.all() }.getOrDefault(emptyList()).any { it.file == edit.path }
         generations.maxByOrNull { it.generation }?.let { save ->
             val rescued = File(editDirOf(context, save.target), "rescued-${save.id}")
             // There only once copied whole: written beside it and synced, then renamed into place (a copy cut short leaves
             // only the one beside it, which is never taken for the rescue and is made again).
             if (!rescued.isFile) {
-                editIn(rescued.parentFile!!, save.target, Shared.session(context)?.userId, rescued.name)
+                editIn(rescued.parentFile!!, save.target, account, rescued.name)
                 val copying = File(rescued.parentFile, "${rescued.name}.incoming")
                 try {
                     val source = File(dir, save.id + BIN)
@@ -431,21 +473,46 @@ object WriteBacks {
                 }
             }
             // Its row before the bounds move past it: without one (a row refused), nothing is rebuilt yet.
-            val rowed = runCatching { FailedTransfers.of(context).all() }.getOrDefault(emptyList()).any { it.file == rescued.path } ||
-                // A family's: no revocation count is known for it here (a revocation deletes the edit, as it deletes every
-                // edit of the folder), so none moves past it.
-                TransferQueue.stagingFailed(context, save.target, rescued, Exception("The save wasn't kept."), Reservations.generation, save.generation,
-                    save.target.familyWorkspace?.let { Long.MAX_VALUE })
-            if (!rowed) return null
-            // Kept as the row's edit: out of the slot before the bounds stop below it, so it is never sent from there.
+            // A family's: no revocation count is known for it here (a revocation deletes the edit, as it deletes every edit
+            // of the folder), so none moves past it.
+            if (!kept(rescued) && !TransferQueue.stagingFailed(context, save.target, rescued, Exception("The save wasn't kept."), Reservations.generation,
+                    save.generation, save.target.familyWorkspace?.let { Long.MAX_VALUE }, quarantined = ceiling)) return null
+            // Kept as the row's edit: out of the slot, so it is never sent from there.
             File(dir, save.id + BIN).delete()
             File(dir, save.id + META).delete()
             if (read(File(dir, RECORD), slot)?.id == save.id) File(dir, RECORD).delete()
         }
-        val below = maxOf(newest - 1, 0L)
-        val rebuilt = Numbers(newest, below, below, Landing(java.util.UUID.randomUUID().toString(), null))
+        // Closed edits: renamed out of the closed form (`<id>.q<number>`, its number kept in the name) so nothing reads
+        // them, each with its row (a row naming it already is moved to the new name and kept aside).
+        for ((number, edit) in closed) {
+            val aside = File(edit.parentFile, edit.name.substringBefore('.') + ".q$number")
+            if (!edit.renameTo(aside)) return null
+            val named = rows.firstOrNull { it.file == edit.path }
+            if (named != null) {
+                runCatching { records.record(named.copy(file = aside.path, stage = quarantine(named.stage!!, ceiling))) }.getOrElse { return null }
+            } else {
+                val target = runCatching { decodeTarget(sidecarOf(aside).readText()) }.getOrNull() ?: continue
+                if (!TransferQueue.stagingFailed(context, target, aside, Exception("The save wasn't kept."), Reservations.generation, number,
+                        target.familyWorkspace?.let { Long.MAX_VALUE }, quarantined = ceiling)) return null
+            }
+        }
+        // An edit set aside before without its row: its row now.
+        for ((aside, target, number) in asides) {
+            if (kept(aside)) continue
+            if (!TransferQueue.stagingFailed(context, target, aside, Exception("The save wasn't kept."), Reservations.generation, number,
+                    target.familyWorkspace?.let { Long.MAX_VALUE }, quarantined = ceiling)) return null
+        }
+        // The other staging rows (an edit kept under its open name): kept aside too.
+        for (row in runCatching { records.all() }.getOrDefault(emptyList()).filter { it.slot == slot && it.stage != null && quarantinedAt(it.stage) == null }) {
+            runCatching { records.record(row.copy(stage = quarantine(row.stage!!, ceiling))) }.getOrElse { return null }
+        }
+        FailedTransfers.changed()
+        val rebuilt = Numbers(ceiling, ceiling, ceiling, Landing(java.util.UUID.randomUUID().toString(), null))
         return runCatching { writeNumbers(context, slot, rebuilt); rebuilt }.getOrNull()
     }
+
+    /* Reconcile and the sweep, under the account's lock: the slot made what `current` reads (recovered). */
+    fun recover(context: Context, slot: String) { lockOf(slot).withLock { recovered(dir(context, slot), slot) } }
 
     /* Reconcile: the slot's numbers rebuilt if they can't be read (repaired). */
     fun repair(context: Context, slot: String) { lockOf(slot).withLock { repaired(context, slot) } }
@@ -555,7 +622,7 @@ object WriteBacks {
         val dir = dir(context, slot)
         // Bounds that can't be read or rebuilt: nothing is taken, and the job tries again later.
         if (dir.isDirectory) repaired(context, slot) ?: throw IllegalStateException("The save couldn't be read.")
-        val pending = current(dir, slot) ?: return@whileAccount null
+        val pending = recovered(dir, slot) ?: return@whileAccount null
         val sending = File(dir, "sending-${pending.id}")
         try {
             File(dir, pending.id + BIN).copyTo(sending, overwrite = true)
@@ -599,8 +666,8 @@ object WriteBacks {
         // 2-3. The landing recorded (recordLanding, as every landing is). Refused, nothing below runs (the caller's job tries again).
         if (generation > 0L) recordLanding(context, slot, generation, if (kept) version else null)
         // 4. The slot cleared of it.
-        val held = current(dir, slot)
-        if (held == null || held.id == id) { dir.deleteRecursively(); null } else {
+        val held = recovered(dir, slot)
+        if (held == null || held.id == id) { clearThrough(dir, generation); null } else {
             dir.listFiles()?.filter { it.name.startsWith("sending-") }?.forEach { it.delete() }
             held
         }
@@ -728,6 +795,20 @@ object WriteBacks {
         dir.deleteRecursively()
     }
 
+    /*
+     * A slot whose saves through `through` are settled (landed, cancelled, dismissed) cleared of them: but a family save
+     * staged meanwhile (`.staged`, numbered above them: copied, its publication still to come) stays, with what it
+     * publishes into (the slot's id), so a landing or a cancel never deletes a newer save under way. With none, it all goes.
+     */
+    private fun clearThrough(dir: File, through: Long) {
+        val inFlight = dir.listFiles { f -> f.name.endsWith(STAGED) && (numberOfId(f.name.substringBefore('.')) ?: 0L) > through }.orEmpty()
+        if (inFlight.isEmpty()) return clear(dir)
+        dir.listFiles().orEmpty().filter { it !in inFlight && it.name != INCARNATION }.sortedBy { !it.name.endsWith(BIN) }.forEach { it.deleteRecursively() }
+    }
+
+    /* Tests: runs once a family save is staged, before it is published. */
+    @Volatile internal var afterStaged: (() -> Unit)? = null
+
     /* What a cancel pressed now takes: the slot's own id, and the save its record names (its generation, id and file). */
     data class Captured(val incarnation: String, val generation: Long, val id: String, val target: Target)
 
@@ -756,7 +837,7 @@ object WriteBacks {
         val dir = dir(context, slot)
         // The slot Cancel was pressed on, still: one made since the earlier one went counts afresh, and none of it is taken.
         if (cancelled == null || !dir.isDirectory || runCatching { File(dir, INCARNATION).readText() }.getOrNull() != cancelled.incarnation)
-            return@whileAccount current(dir, slot)
+            return@whileAccount recovered(dir, slot)
         val through = cancelled.generation
         repaired(context, slot) ?: return@whileAccount null
         // The bound first, kept past the slot (with its numbers): from here no look takes a save at or below it as pending, a
@@ -770,9 +851,9 @@ object WriteBacks {
             File(dir, it.id + META).delete()
         }
         if ((read(File(dir, RECORD), slot)?.generation ?: Long.MAX_VALUE) <= through) File(dir, RECORD).delete()
-        val left = current(dir, slot)
+        val left = recovered(dir, slot)
         // Nothing left to send and no upload copy in use: the slot goes.
-        if (left == null && dir.listFiles().orEmpty().none { it.name.startsWith("sending-") }) dir.deleteRecursively()
+        if (left == null && dir.listFiles().orEmpty().none { it.name.startsWith("sending-") }) clearThrough(dir, through)
         // Its listing no longer shows the cancelled save's size and date.
         notifyFolder(context, cancelled.target)
         left
@@ -786,7 +867,7 @@ object WriteBacks {
     fun retireStagedThrough(context: Context, slot: String, through: Long) {
         val records = FailedTransfers.of(context)
         val rows = runCatching { records.all() }.getOrDefault(emptyList())
-            .filter { it.slot == slot && it.stage != null && (stagedNumber(it.stage) ?: 0L) <= through }
+            .filter { it.slot == slot && it.stage != null && retiredBy(it.stage, through) }
         rows.forEach { row -> row.file?.let { discardEdit(File(it)) } }
         if (rows.isNotEmpty()) runCatching { records.forgetWhere { row -> rows.any { it.id == row.id } }; FailedTransfers.changed() }
         File(context.filesDir, EDITS).walkTopDown().filter { it.isFile && it.name.endsWith(".closed") }.toList().forEach { closed ->
@@ -823,9 +904,9 @@ object WriteBacks {
      */
     fun discard(context: Context, slot: String, file: String?) = lockOf(slot).withLock {
         val dir = dir(context, slot)
-        val held = current(dir, slot) ?: return@withLock
+        val held = recovered(dir, slot) ?: return@withLock
         if (held.id == idOf(file)) {
-            clear(dir)
+            clearThrough(dir, held.generation)
             // The same save kept elsewhere too (its staging row and edit, a closed edit of its number) goes with it, so no
             // Retry or reopen brings back what was dismissed.
             val records = FailedTransfers.of(context)
