@@ -18,6 +18,7 @@ import com.hushos.app.data.SessionEnded
 import com.hushos.app.data.Shared
 import com.hushos.app.data.Vault
 import com.hushos.app.data.familyGuardKept
+import com.hushos.app.data.forgetFamilyCopies
 import com.hushos.app.data.FamilyUploads
 import com.hushos.app.data.Reservations
 import com.hushos.app.data.TransferQueue
@@ -110,8 +111,8 @@ class ProviderFamiliesTest {
      * file as the app opened it being the row this vault holds. The file's slot.
      */
     private fun writeBack(families: ProviderFamilies, doc: FamilyDoc.Node, edit: File,
-                          opened: com.hushos.app.data.Opened = families.vault.item(doc.workspaceId, doc.nodeId)!!): String {
-        assertTrue("the save wasn't kept", families.save(doc, edit, opened))
+                          opened: com.hushos.app.data.Opened = families.vault.item(doc.workspaceId, doc.nodeId)!!, epoch: Long = families.epochOf(doc)): String {
+        assertTrue("the save wasn't kept", families.save(doc, edit, opened, epoch))
         return WriteBacks.slotOf(doc.workspaceId, doc.nodeId)
     }
 
@@ -388,16 +389,19 @@ class ProviderFamiliesTest {
     }
 
     /*
-     * Left elsewhere after Files opened the file and before it wrote it back: the save is kept (the close asks nothing of
-     * the network), and its job checks the family first, sends nothing and ends the family's uploads, its slot with them.
-     * Fails if a write-back goes out on the roots the provider loaded before the leave, or its save outlives the family.
+     * Left elsewhere after Files opened the file and before it wrote it back: the close keeps nothing (the folder's
+     * invalidation count moved since the open read it), so no plaintext reaches the queue and nothing is sent. Fails if a
+     * save is kept for a family let go of after its open, on the strength of roots or rows loaded before the leave.
      */
     @Test
-    fun aWriteBackAfterTheFamilyWentElsewhereSendsNothing() {
+    fun aWriteBackAfterTheFamilyWentElsewhereKeepsNothing() {
         val provider = provider()
         rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
         val families = familiesOf(provider)
-        val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, keepContents = false).apply { writeText("not sent") }
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        val opened = families.vault.item(doc.workspaceId, doc.nodeId)!!
+        val epoch = families.epochOf(doc)
+        val edit = families.editCopy(doc, keepContents = false, epoch).apply { writeText("not sent") }
         val phone = family.phone()
         assertTrue(phone.sync.sync(family.summary) is FamilyState.Accepted)
         assertEquals(listOf("family:${family.groupId}"), familyRoots(provider))
@@ -407,11 +411,10 @@ class ProviderFamiliesTest {
         edit.parentFile!!.mkdirs()
         edit.writeText("not sent")
         val sent = server.requests.size
-        val slot = writeBack(families, FamilyDoc.of(file) as FamilyDoc.Node, edit)
-        assertEquals(ListenableWorker.Result.failure()::class, runJob(slot)::class)
+        assertFalse(families.save(doc, edit, opened, epoch))
+        assertFalse("a save of a family let go of reached the queue", WriteBacks.dir(app, slot).exists())
+        assertTrue(jobs(slot).isEmpty())
         assertEquals(emptyList<String>(), driveWritesSince(sent))
-        assertNull("the save outlived the family", WriteBacks.pending(app, slot))
-        assertEquals(com.hushos.app.data.FamilyWords.NOT_IN_FAMILY, com.hushos.app.data.FailedTransfers.of(app).all().single().reason)
     }
 
     /*
@@ -1196,8 +1199,8 @@ class ProviderFamiliesTest {
         writeBack(families, doc, families.editFor(doc, "w").apply { writeText("pending save") })
         val phone = family.phone()
         assertTrue(phone.sync.sync(family.summary) is FamilyState.Accepted)
-        families.beforePendingCopy = {
-            families.beforePendingCopy = null
+        families.afterAccessChecked = {
+            families.afterAccessChecked = null
             assertTrue(phone.sync.leave(family.groupId) is FamilySync.Leaving.Left)
         }
         assertThrows(FileNotFoundException::class.java) { read(provider, file) }
@@ -1299,6 +1302,67 @@ class ProviderFamiliesTest {
         family.listed = false
         provider.refresh(DocumentsContract.buildChildDocumentsUri(authority, top), null, null)
         assertThrows(FileNotFoundException::class.java) { provider.queryChildDocuments(top, null, null as String?).close() }
+    }
+
+    /*
+     * Another app opens a family file to read and write (keeping its contents) while a save of it is pending, and another
+     * vault lets the family go after the open checked the folder's access: no edit is made, so the pending save's plaintext
+     * is never copied back into the family's edits after their cleanup. Fails if the edit's invalidation count is read
+     * after the access check (it then reads the count after the removal and accepts it).
+     */
+    @Test
+    fun anEditTheFamilyLetGoOfMeanwhileCopiesNothing() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("pending save") })
+        // A cleanup of the family's copies (a refusal's or a removal's) lands just after the access check; the slot it
+        // leaves for the family's transfers to end.
+        families.afterAccessChecked = {
+            families.afterAccessChecked = null
+            families.vault.forgetFamilyCopies(listOf(family.workspaceId))
+        }
+        assertThrows(FileNotFoundException::class.java) { provider.openDocument(file, "rw", null).close() }
+        val edits = FamilyCopies.edits(app.cacheDir, family.workspaceId)
+        assertTrue("a pending save's plaintext was copied into the edits after the family let go", edits == null || !edits.walkTopDown().any { it.isFile })
+    }
+
+    /*
+     * A read of a family file (no save pending) whose copies are cleaned (a refusal's or a removal's cleanup) after the read
+     * checked the folder: nothing is downloaded into the family's copies. Fails if the download's invalidation count is
+     * read after the check.
+     */
+    @Test
+    fun aReadTheFamilyLetGoOfMeanwhileKeepsNoCopy() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        // A cleanup of the family's copies (a refusal's or a removal's) lands just after the access check; the slot it
+        // leaves for the family's transfers to end.
+        families.afterAccessChecked = {
+            families.afterAccessChecked = null
+            families.vault.forgetFamilyCopies(listOf(family.workspaceId))
+        }
+        assertTrue(runCatching { families.readCopy(FamilyDoc.of(file) as FamilyDoc.Node) }.isFailure)
+        val copies = FamilyCopies.folder(app.cacheDir, family.workspaceId)
+        assertTrue("a read's plaintext was kept after the family let go", copies == null || !copies.walkTopDown().any { it.isFile })
+    }
+
+    /*
+     * A family file's save kept tells Files its folder changed (its listing now shows the save's size and date). Fails if
+     * a save changes what a family listing shows without telling the observers.
+     */
+    @Test
+    fun aFamilySaveTellsFilesItsFolderChanged() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        val edit = families.editFor(doc, "w").apply { writeText("pending save") }
+        shadowOf(app.contentResolver).notifiedUris.clear()
+        writeBack(families, doc, edit)
+        assertTrue(shadowOf(app.contentResolver).notifiedUris.any { it.uri == DocumentsContract.buildChildDocumentsUri(authority, folder) })
     }
 
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =

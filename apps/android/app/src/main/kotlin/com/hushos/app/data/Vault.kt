@@ -1383,7 +1383,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * the core returns only the file's own bytes.
      */
     fun download(id: String, destination: File, version: VersionListView? = null, expectedVersionId: String? = null, workspaceId: String? = null,
-                 progress: (Float) -> Unit = {}) {
+                 familyEpochAt: Long? = null, progress: (Float) -> Unit = {}) {
         // A family file's folder may be let go of while this runs (a removal): what it was before anything is opened.
         val began = HashMap(familyEpochs)
         // The row of the workspace asked for, never another with the same id (resolve alone prefers this account's own).
@@ -1393,7 +1393,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val family = isFamilyWorkspace(ws) || familyEpochs.containsKey(ws)
         // A family's file downloads only under the key its area ledger opened, never one a share mount left in the cache.
         if (family && !nodes.viaLedger(ws, item.id)) throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
-        val epoch = began[ws]?.first ?: 0L
+        // A caller that checked the folder's access first read its count before that check (`familyEpochAt`).
+        val epoch = familyEpochAt ?: began[ws]?.first ?: 0L
         try {
             val v = openVersion(item, version)
             // The copy's path is keyed by the version the caller saw: another version never goes there.

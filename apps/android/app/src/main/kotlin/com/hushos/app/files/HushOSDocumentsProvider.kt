@@ -471,19 +471,21 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             families.pendingRead(doc)?.let { pending -> return ParcelFileDescriptor.open(pending, ParcelFileDescriptor.MODE_READ_ONLY).also { pending.delete() } }
             return ParcelFileDescriptor.open(families.readCopy(doc), ParcelFileDescriptor.MODE_READ_ONLY)
         }
-        val edit = families.editFor(doc, mode)
+        // The folder's invalidation count before anything is checked: the edit is made, and its save kept, only while it holds.
+        val epoch = families.epochOf(doc)
+        val edit = families.editFor(doc, mode, epoch)
         val opened = families.node(doc)
         // On the saves' own thread (WriteBacks.closes), in close order, never the main one.
-        return ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), WriteBacks.closes) { error -> onFamilyEditClosed(error, families, doc, edit, opened) }
+        return ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), WriteBacks.closes) { error -> onFamilyEditClosed(error, families, doc, edit, opened, epoch) }
     }
 
     /*
      * The other app closed a family file it wrote: it becomes the file's pending save, here in the close callback so saves
      * keep the order they were closed in (ProviderFamilies.save). Nothing is sent from here; the slot's job sends it.
      */
-    internal fun onFamilyEditClosed(error: java.io.IOException?, families: ProviderFamilies, doc: FamilyDoc.Node, edit: File, opened: com.hushos.app.data.Opened) {
+    internal fun onFamilyEditClosed(error: java.io.IOException?, families: ProviderFamilies, doc: FamilyDoc.Node, edit: File, opened: com.hushos.app.data.Opened, epoch: Long) {
         try {
-            if (error == null && !families.save(doc, edit, opened)) android.util.Log.w("HushOSFiles", "a family save wasn't kept")
+            if (error == null && !families.save(doc, edit, opened, epoch)) android.util.Log.w("HushOSFiles", "a family save wasn't kept")
         } catch (failure: Exception) {
             android.util.Log.w("HushOSFiles", "a family save couldn't be kept: ${failure.javaClass.name}")
         } finally {

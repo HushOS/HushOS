@@ -420,12 +420,15 @@ class ProviderFamilies internal constructor(
      * downloaded under the folder's invalidation: a removal meanwhile writes nothing, and deletes what was there.
      */
     fun readCopy(doc: FamilyDoc.Node, strict: Boolean = false): File {
+        // The folder's invalidation count before its access is checked: the download keeps nothing once it moved.
+        val epoch = vault.familyEpoch(doc.workspaceId)
         val (_, folder) = folderOf(doc)
         val item = current(doc, strict)
+        afterAccessChecked?.invoke()
         val version = item.node.currentVersion?.id ?: throw FileNotFoundException("This file has no content yet.")
         val copies = FamilyCopies.folder(vault.context.cacheDir, folder.workspaceId) ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
         val file = File(copies, "files/${item.id.lowercase()}/$version")
-        if (!file.exists()) vault.download(item.id, file, expectedVersionId = version, workspaceId = folder.workspaceId)
+        if (!file.exists()) vault.download(item.id, file, expectedVersionId = version, workspaceId = folder.workspaceId, familyEpochAt = epoch)
         return file
     }
 
@@ -455,22 +458,31 @@ class ProviderFamilies internal constructor(
      * copies lock only while the folder stands and the session lasts, holding the current version first when the mode
      * keeps the contents (WriteModes: appending, or reading and writing without truncating).
      */
-    /* The edit for another app opening a family file in `mode` (WriteModes). */
-    fun editFor(doc: FamilyDoc.Node, mode: String): File = editCopy(doc, WriteModes.keepsContents(mode))
+    /*
+     * The edit for another app opening a family file in `mode` (WriteModes). `epoch`: the folder's invalidation count read
+     * before anything was checked (the open's, which its save checks again).
+     */
+    fun editFor(doc: FamilyDoc.Node, mode: String, epoch: Long = vault.familyEpoch(doc.workspaceId)): File = editCopy(doc, WriteModes.keepsContents(mode), epoch)
 
-    fun editCopy(doc: FamilyDoc.Node, keepContents: Boolean): File {
+    /* The folder's invalidation count now: read before an open checks anything, and carried to its save. */
+    fun epochOf(doc: FamilyDoc.Node): Long = vault.familyEpoch(doc.workspaceId)
+
+    fun editCopy(doc: FamilyDoc.Node, keepContents: Boolean, epoch: Long = vault.familyEpoch(doc.workspaceId)): File {
         val (folder, item) = writable(doc)
-        if (!keepContents) return editCopy(folder, item) { it.createNewFile(); true }!!
+        afterAccessChecked?.invoke()
+        if (!keepContents) return editCopy(folder, item, epoch) { it.createNewFile(); true }!!
         // The file's pending save, when it has one (what another app last wrote, not landed yet, whatever its job's state):
         // the server's version is older than it, and an edit built on that would drop the save.
-        editCopy(folder, item) { WriteBacks.copyTo(vault.context, slotOf(doc), it) }?.let { return it }
+        editCopy(folder, item, epoch) { WriteBacks.copyTo(vault.context, slotOf(doc), it) }?.let { return it }
         val source = readCopy(doc, strict = true)
-        return editCopy(folder, item) { source.copyTo(it, overwrite = true); true }!!
+        return editCopy(folder, item, epoch) { source.copyTo(it, overwrite = true); true }!!
     }
 
-    /* An edit filled by `fill` under the copies lock, only while the folder stands and the session lasts; null if `fill` had nothing. */
-    private fun editCopy(folder: FamilyRoot.Folder, item: Opened, fill: (File) -> Boolean): File? {
-        val epoch = vault.familyEpoch(folder.workspaceId)
+    /*
+     * An edit filled by `fill` under the copies lock, only while the session lasts and the folder's invalidation count is
+     * still `epoch` (read before its access was checked); null if `fill` had nothing.
+     */
+    private fun editCopy(folder: FamilyRoot.Folder, item: Opened, epoch: Long, fill: (File) -> Boolean): File? {
         val edits = FamilyCopies.edits(vault.context.cacheDir, folder.workspaceId) ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
         val edit = File(edits, "${item.id.lowercase()}/${java.util.UUID.randomUUID()}")
         synchronized(FamilyCopies.LOCK) {
@@ -495,7 +507,7 @@ class ProviderFamilies internal constructor(
         val (_, folder) = folderOf(doc)
         val copies = FamilyCopies.folder(vault.context.cacheDir, folder.workspaceId) ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
         val file = File(copies, "pending/${doc.nodeId.lowercase()}/${java.util.UUID.randomUUID()}")
-        beforePendingCopy?.invoke()
+        afterAccessChecked?.invoke()
         return synchronized(FamilyCopies.LOCK) {
             if (vault.closed) throw SessionEnded()
             vault.familyWordsSince(folder.workspaceId, epoch)?.let { throw FileNotFoundException(it) }
@@ -503,8 +515,8 @@ class ProviderFamilies internal constructor(
         }
     }
 
-    /* Tests: runs after a pending read checked the folder's access, before it takes the copies lock. */
-    @Volatile internal var beforePendingCopy: (() -> Unit)? = null
+    /* Tests: runs after a read, a pending read or an edit checked the folder's access, before it copies anything. */
+    @Volatile internal var afterAccessChecked: (() -> Unit)? = null
 
     /*
      * What another app wrote, once it closed the file (in the close callback itself, so saves keep the order the app
@@ -517,12 +529,22 @@ class ProviderFamilies internal constructor(
      * nothing to save; a sign-out since the open keeps nothing (WriteBacks.save). `opened` is the file as the app opened
      * it. False when nothing was kept.
      */
-    fun save(doc: FamilyDoc.Node, edit: File, opened: Opened): Boolean {
+    fun save(doc: FamilyDoc.Node, edit: File, opened: Opened, epoch: Long): Boolean {
         if (!edit.exists()) return false
-        val target = WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime,
-            opened.node.parentId ?: return false, doc.groupId.lowercase(), doc.workspaceId.lowercase())
-        WriteBacks.save(vault.context, vault.ledgerGeneration, target, edit) ?: return false
-        TransferQueue.enqueueSlot(vault.context, slotOf(doc), opened.name, target.family)
+        val parent = opened.node.parentId ?: return false
+        val target = WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime, parent, doc.groupId.lowercase(), doc.workspaceId.lowercase())
+        // Kept only while the folder's invalidation count is still the one the open read before it checked anything, and
+        // the session lasts, under the copies lock a removal's cleanup takes: a family let go of since keeps no plaintext.
+        val kept = synchronized(FamilyCopies.LOCK) {
+            if (vault.closed || vault.familyWordsSince(doc.workspaceId, epoch) != null) null
+            else WriteBacks.save(vault.context, vault.ledgerGeneration, target, edit)
+        } ?: return false
+        TransferQueue.enqueueSlot(vault.context, kept.slot, opened.name, target.family)
+        // Its listing shows the save's size and date now: Files reads the folder again.
+        runCatching {
+            vault.context.contentResolver.notifyChange(DocumentsContract.buildChildDocumentsUri(FilesRoots.authority(vault.context),
+                FamilyDoc.Node(doc.groupId, doc.workspaceId, parent).id), null)
+        }
         return true
     }
 
