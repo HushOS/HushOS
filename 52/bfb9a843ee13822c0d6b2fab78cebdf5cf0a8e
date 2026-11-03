@@ -1,0 +1,81 @@
+.release-please-manifest.json
+  s_566b8e0c4467a4::t_33db37048da9a3 2
+CHANGELOG.md
+  s_566b8e0c4467a4::t_8d791b9b367dd4 3-18
+Cargo.lock
+  s_566b8e0c4467a4::t_d2b0f59229d9ac 753
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_fabbb985016a91 87
+apps/android/app/build.gradle.kts
+  s_566b8e0c4467a4::t_ffe98f54406cde 72
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyManage.kt
+  s_566b8e0c4467a4::t_5adcdb4176c450 1-514
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_566b8e0c4467a4::t_77ae7f6d799597 683,739-741
+apps/android/app/src/main/kotlin/com/hushos/app/data/GroupsApi.kt
+  s_566b8e0c4467a4::t_9aa57f068015db 122-126,133-145,149-162,326-400,410-411
+apps/android/app/src/main/kotlin/com/hushos/app/files/HushOSDocumentsProvider.kt
+  s_566b8e0c4467a4::t_87d3bc52d4d581 33-41,296-326,328,345-360,362-364,368-399,401,458
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_21095ab97e3e4c 242,342,516,534,1442,1661-1663,1666,1669,1673-1674,1676
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Families.kt
+  s_566b8e0c4467a4::t_91f189be0e61ef 159-168,179,187-188,201,306-446
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_dc95a5fb7c7c0d 25-32,36,137-138,141-147,195-400,947,1099-1110
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NoticeQueue.kt
+  s_566b8e0c4467a4::t_18e5f9c6b26e75 1-54
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_566b8e0c4467a4::t_9d9d2824275e16 102-110,525,594-595,617-619
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyFixture.kt
+  s_566b8e0c4467a4::t_4686ee38973a58 42-44,99-100,125-149,164-165,204,206-207,224-243,313-370
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyManageTest.kt
+  s_566b8e0c4467a4::t_72e1e9bffd8b17 1-497
+apps/android/app/src/test/kotlin/com/hushos/app/files/FilesTreeGrantsTest.kt
+  s_566b8e0c4467a4::t_7a3e3c1641319b 1-86
+apps/android/app/src/test/kotlin/com/hushos/app/files/FilesWriteModesTest.kt
+  s_566b8e0c4467a4::t_bcca1cf5ee32da 1-171
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyManageModelTest.kt
+  s_566b8e0c4467a4::t_b00571907a8f39 1-331
+apps/android/app/src/test/kotlin/com/hushos/app/ui/NoticeQueueTest.kt
+  s_566b8e0c4467a4::t_721db65c788205 1-48
+apps/ios/project.yml
+  s_566b8e0c4467a4::t_6e39f54234892d 23
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_30bf605d6bd25b 33,2649-2655
+crates/hushos-core/Cargo.toml
+  s_566b8e0c4467a4::t_ae76e04a574a23 3
+crates/hushos-core/fuzz/Cargo.lock
+  s_566b8e0c4467a4::t_7f1294a6edba36 566
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_935722307a8eb6 189-190,225-226
+docs/groups-server.md
+  s_566b8e0c4467a4::t_7f9ed817c2d8ca 236
+package.json
+  s_566b8e0c4467a4::t_2a37315401ab51 3
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_73737d49a34a16 2284-2288,2498-2500,2502-2506,2515,2914-2916
+packages/crypto/src/roster-calls-testkit.ts
+  s_566b8e0c4467a4::t_fdff20aae2d68c 391
+packages/crypto/src/session-groups.ts
+  s_566b8e0c4467a4::t_b34c6f0a3baf34 3258
+packages/groups/src/server.billing.test.ts
+  s_566b8e0c4467a4::t_c85458d47bdd2d 511-553
+packages/groups/src/server.ts
+  s_566b8e0c4467a4::t_49f227840a2b3e 2004,2023-2033,2038-2039,2046,2071
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "52bfb9a843ee13822c0d6b2fab78cebdf5cf0a8e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
