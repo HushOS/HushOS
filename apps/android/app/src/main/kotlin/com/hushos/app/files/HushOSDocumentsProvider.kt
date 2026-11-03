@@ -329,6 +329,9 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         return false
     }
 
+    /* Tests: runs right after an open looked its file up, before anything else. */
+    @Volatile internal var afterResolve: (() -> Unit)? = null
+
     /* Per version, so a download resumed after a replacement never mixes two versions' bytes. */
     private fun cacheFile(id: String, versionId: String?): File = File(context!!.cacheDir, "files/$id/${versionId ?: "new"}").also { it.parentFile?.mkdirs() }
 
@@ -337,18 +340,19 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         val id = nodeId(documentId, vault)
         val item = vault.resolve(id)
         val slot = WriteBacks.slotOf(item.node.workspaceId, id)
+        afterResolve?.invoke()
         if (mode.contains("r") && !mode.contains("w")) {
             // A save of it still pending (waiting, retrying, failed) is what another app last wrote: read that, never the
             // server's older version, which an app that reads then truncates would write the save away with.
             val pending = File(context!!.cacheDir, "files/$id/pending-${java.util.UUID.randomUUID()}")
             if (WriteBacks.copyTo(context!!, slot, pending)) return@guarded ParcelFileDescriptor.open(pending, ParcelFileDescriptor.MODE_READ_ONLY).also { pending.delete() }
-            // A save of it landed from its job's own vault since: this vault may still hold the version before, so the
-            // version is checked with the server first (without an answer, the row held is read).
             // A save of it landed from its job's own vault since: this vault may still hold the version before. The version is
             // checked with the server first; without an answer, the landed bytes are read (kept as that version's read copy),
             // or nothing is: never the version before, which an app that reads then saves would write over the landed save.
+            // The row is looked up again after the landing is read: a read that refreshed for it and cleared it meanwhile
+            // left the fresh row here, so a row taken before that is never served.
             val landing = WriteBacks.landing(context!!, slot)
-            val item = if (landing == null) item else {
+            val item = if (landing == null) vault.resolve(id) else {
                 runCatching { currentVersion(vault, id) }.getOrNull()?.also { WriteBacks.caughtUp(context!!, slot, landing.id) } ?: run {
                     val landed = landing.version?.let { cacheFile(id, it) }?.takeIf { it.isFile }
                         ?: throw FileNotFoundException(com.hushos.app.data.GroupsApiError.NO_ANSWER)
@@ -373,8 +377,11 @@ class HushOSDocumentsProvider : DocumentsProvider() {
      */
     internal fun onEditClosed(error: java.io.IOException?, vault: Vault, edit: File, opened: com.hushos.app.data.Opened) {
         if (error != null) { edit.delete(); return }
+        val target = WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime, opened.node.parentId ?: vault.rootId, root = vault.rootId)
+        // A save that couldn't be kept leaves its edit (the only copy of what the app believes it saved) and a row to retry
+        // it; one the sign-out overtook keeps nothing.
+        var keep = false
         try {
-            val target = WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime, opened.node.parentId ?: vault.rootId, root = vault.rootId)
             if (WriteBacks.save(context!!, vault.ledgerGeneration, target, edit) != null) {
                 com.hushos.app.data.TransferQueue.enqueueSlot(context!!, WriteBacks.slotOf(target.workspaceId, target.nodeId), opened.name)
                 // Its listing shows the save's size and date now: Files reads the folder again.
@@ -382,8 +389,9 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             }
         } catch (failure: Exception) {
             android.util.Log.w("HushOSFiles", "a save couldn't be kept: ${failure.javaClass.name}")
+            keep = com.hushos.app.data.TransferQueue.stagingFailed(context!!, target, edit, failure, vault.ledgerGeneration)
         } finally {
-            edit.delete()
+            if (!keep) edit.delete()
         }
     }
 

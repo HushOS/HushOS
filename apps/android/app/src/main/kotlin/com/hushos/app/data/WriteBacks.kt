@@ -119,6 +119,20 @@ object WriteBacks {
     /* The slot's pending save, if it has one. */
     fun pending(context: Context, slot: String): Pending? = lockOf(slot).withLock { current(dir(context, slot), slot) }
 
+    /* Tests: runs as a save is about to make its slot's own id (a new slot's first write). */
+    @Volatile internal var beforeSlotId: (() -> Unit)? = null
+
+    /* A save's file as a failed row keeps it (FailedTransfer.stage), and back. */
+    fun encodeTarget(t: Target): String = JSONObject().put("workspaceId", t.workspaceId).put("nodeId", t.nodeId).put("name", t.name)
+        .put("mime", t.mime ?: JSONObject.NULL).put("folder", t.folder).put("family", t.family ?: JSONObject.NULL)
+        .put("familyWorkspace", t.familyWorkspace ?: JSONObject.NULL).put("root", t.root ?: JSONObject.NULL).toString()
+
+    fun decodeTarget(json: String): Target? = runCatching {
+        val o = JSONObject(json)
+        Target(o.getString("workspaceId"), o.getString("nodeId"), o.getString("name"), o.opt("mime") as? String, o.getString("folder"),
+            o.opt("family") as? String, o.opt("familyWorkspace") as? String, o.opt("root") as? String)
+    }.getOrNull()
+
     /* Tests: runs right after a save's contents and description are in place, before the record names them. */
     @Volatile internal var afterContent: (() -> Unit)? = null
 
@@ -135,6 +149,7 @@ object WriteBacks {
             // The slot's own id for as long as it exists (its generations count from one again once it is gone): what tells a
             // cancel pressed on an earlier slot of the file from this one.
             File(dir, INCARNATION).takeIf { !it.isFile }?.let { file ->
+                beforeSlotId?.invoke()
                 val incoming = File(dir, "$INCARNATION.incoming").apply { writeText(java.util.UUID.randomUUID().toString()) }
                 check(incoming.renameTo(file)) { "The save couldn't be kept." }
             }

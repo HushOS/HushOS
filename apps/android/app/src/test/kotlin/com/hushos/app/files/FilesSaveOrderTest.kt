@@ -70,6 +70,7 @@ class FilesSaveOrderTest {
     @After
     fun close() {
         WriteBacks.afterContent = null
+        WriteBacks.beforeSlotId = null
         TransferQueue.beforeSlotFails = null
         TransferQueue.afterCancelCleans = null
         TransferQueue.beforeSweepRemoves = null
@@ -137,6 +138,24 @@ class FilesSaveOrderTest {
         val request = TransferQueue.slotRequest(id, slot, file, session = session)
         val worker = TestListenableWorkerBuilder<UploadWorker>(app).setId(id).setInputData(request.workSpec.input).setTags(request.tags.toList()).build()
         return runBlocking { worker.doWork() }
+    }
+
+    /* A run of the slot's job under `id` (a job WorkManager holds), as WorkManager starts it. */
+    private fun runSlotAs(slot: String, id: java.util.UUID): ListenableWorker.Result {
+        val session = TransferQueue.accountTag(Shared.session(app)!!)
+        val file = File(jobs(slot).first().tags.first { it.startsWith("file:") }.removePrefix("file:"))
+        val request = TransferQueue.slotRequest(id, slot, file, session = session)
+        val worker = TestListenableWorkerBuilder<UploadWorker>(app).setId(id).setInputData(request.workSpec.input).setTags(request.tags.toList()).build()
+        return runBlocking { worker.doWork() }
+    }
+
+    private fun posted() = shadowOf(app.getSystemService(android.app.NotificationManager::class.java)).allNotifications
+
+    /* A second job of the slot queued behind the first (as a save made while the first ran queues one). */
+    private fun secondJob(slot: String): java.util.UUID {
+        val request = TransferQueue.slotRequest(java.util.UUID.randomUUID(), slot, WriteBacks.contentOf(app, slot), session = TransferQueue.accountTag(Shared.session(app)!!))
+        WorkManager.getInstance(app).enqueue(request).result.get()
+        return request.id
     }
 
     /* The network drops as a completion lands: its answer, and every answer after it, lost. */
@@ -1119,6 +1138,103 @@ class FilesSaveOrderTest {
         WriteBacks.cancelThrough(app, slot, pressed)
         assertEquals("next save", WriteBacks.contentOf(app, slot).readText())
         assertFalse(WriteBacks.isCancelled(app, slot, WriteBacks.pending(app, slot)!!.generation))
+    }
+
+    /*
+     * Two reads after a save landed: the second looked the file up before the first refreshed it, and reads the landing
+     * after the first cleared it. It still reads the landed version, not the row it looked up first. Fails if an open
+     * serves the row it took before it read the landing.
+     */
+    @Test
+    fun twoReadsAfterALandingNeverServeTheVersionBefore() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        assertEquals("original", opened(provider, notes, "r"))
+        save(provider, notes, "landed save")
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        val looked = CountDownLatch(1)
+        val firstDone = CountDownLatch(1)
+        provider.afterResolve = {
+            if (Thread.currentThread().name == "second-reader") { looked.countDown(); firstDone.await(10, TimeUnit.SECONDS) }
+        }
+        var second: String? = null
+        val reader = Thread({ second = opened(provider, notes, "r") }, "second-reader").apply { start() }
+        assertTrue(looked.await(5, TimeUnit.SECONDS))
+        assertEquals("landed save", opened(provider, notes, "r"))
+        assertNull(WriteBacks.landing(app, slot))
+        firstDone.countDown()
+        reader.join(10_000)
+        provider.afterResolve = null
+        assertEquals("the second read served the version before the landing", "landed save", second)
+    }
+
+    /*
+     * Off screen, a file's first job lands its save while a second job of the file is still queued, so the summary waits
+     * for it; the second finds nothing left to send. Its end posts the summary. Fails if a job that sent nothing ends
+     * without letting the gathered summary out (it then waits for ever).
+     */
+    @Test
+    fun aSummaryWaitingOnAJobWithNothingToSendIsPostedWhenItEnds() {
+        shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "landed save")
+        val first = jobs(slot).single().id
+        val second = secondJob(slot)
+        assertEquals(ListenableWorker.Result.success(), runSlotAs(slot, first))
+        assertTrue("posted while another job was queued", posted().isEmpty())
+        assertEquals(ListenableWorker.Result.success(), runSlotAs(slot, second))
+        assertEquals(1, posted().size)
+    }
+
+    /*
+     * Off screen, a file's save fails for good while another job of the file is queued (its failure waits in the summary);
+     * a newer save of the file then lands. The summary says the file uploaded, never that an upload didn't finish. Fails
+     * if a failure the later upload made moot is still posted.
+     */
+    @Test
+    fun aFailureALaterUploadMadeMootIsNeverPosted() {
+        shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "refused save")
+        val first = jobs(slot).single().id
+        val second = secondJob(slot)
+        refuseBegins(true)
+        assertEquals(ListenableWorker.Result.failure()::class, runSlotAs(slot, first)::class)
+        refuseBegins(false)
+        // WorkManager's own record of the first job ends with it (run here outside WorkManager, it would stay queued).
+        WorkManager.getInstance(app).cancelWorkById(first).result.get()
+        assertTrue(posted().isEmpty())
+        save(provider, notes, "newer save")
+        assertEquals(ListenableWorker.Result.success(), runSlotAs(slot, second))
+        val title = posted().single().extras.getString(android.app.Notification.EXTRA_TITLE)
+        assertEquals("1 file uploaded", title)
+    }
+
+    /*
+     * Another app closes the file and its save can't be kept in the slot (the disk refuses the slot's first write): its
+     * edit, the only copy of what the app believes it saved, stays, with a row whose Retry keeps it and sends it. Fails if
+     * a save that couldn't be kept deletes the edit.
+     */
+    @Test
+    fun aSaveThatCantBeKeptKeepsItsEditAndRetriesIt() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.beforeSlotId = { WriteBacks.beforeSlotId = null; throw java.io.IOException("No space left on device") }
+        save(provider, notes, "save the disk refused")
+        assertNull(WriteBacks.pending(app, slot))
+        val row = FailedTransfers.of(app).all().single()
+        assertEquals("save the disk refused", File(row.file!!).readText())
+        assertFalse(row.sourceGone())
+        assertTrue(TransferQueue.retry(app, row))
+        assertTrue(FailedTransfers.of(app).all().isEmpty())
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("save the disk refused", serverText(notes))
     }
 
     /*

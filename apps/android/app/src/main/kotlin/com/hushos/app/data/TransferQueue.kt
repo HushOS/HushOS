@@ -311,8 +311,15 @@ object TransferQueue {
     fun retry(context: Context, failed: FailedTransfer): Boolean {
         val records = FailedTransfers.of(context)
         when (failed.kind) {
+            // A save that couldn't be kept in its slot: kept now (its edit as it was left), then sent. Not kept again: the row stays.
+            UPLOAD -> if (failed.stage != null) {
+                val target = failed.stage.let(WriteBacks::decodeTarget) ?: return false
+                val edit = failed.file?.let(::File)?.takeIf { it.isFile } ?: return false
+                val kept = runCatching { WriteBacks.save(context, Reservations.generation, target, edit) }.getOrNull() ?: return false
+                enqueueSlot(context, kept.slot, target.name, target.family)
+                WriteBacks.notifyFolder(context, target)
             // A file's slot: its job again, sending whatever the slot holds now (the newest save), never an older one.
-            UPLOAD -> if (failed.slot != null) {
+            } else if (failed.slot != null) {
                 if (WriteBacks.pending(context, failed.slot) == null) return false
                 enqueueSlot(context, failed.slot, failed.name, failed.family)
             } else if (!retryUpload(failed) { id, ledger ->
@@ -336,8 +343,10 @@ object TransferQueue {
     /* Removed from the list: the record, and the copy an upload kept for its retry. */
     fun dismiss(context: Context, failed: FailedTransfer) {
         FailedTransfers.of(context).forget(failed.id)
-        // A file's failed save: only that save goes (the slot with it while it is still the pending one), never a newer one.
-        if (failed.kind == UPLOAD && failed.slot != null) WriteBacks.discard(context, failed.slot, failed.file)
+        // A save that was never kept in its slot: its edit goes. A file's failed save: only that save goes (the slot with it
+        // while it is still the pending one), never a newer one.
+        if (failed.kind == UPLOAD && failed.stage != null) failed.file?.let { File(it).delete() }
+        else if (failed.kind == UPLOAD && failed.slot != null) WriteBacks.discard(context, failed.slot, failed.file)
         else if (failed.kind == UPLOAD) discard(context, failed.file)
     }
 
@@ -505,6 +514,22 @@ object TransferQueue {
         }
     }
 
+    /*
+     * Another app's save that couldn't be kept in its slot (WriteBacks.save threw: a full disk, say): its edit stays where it
+     * is, the only copy of what the app believes it saved, and a row says so, whose Retry keeps it in the slot and sends it.
+     * Only while the account it was made under is still here. Whether the row was made (else the edit can go).
+     */
+    fun stagingFailed(context: Context, target: WriteBacks.Target, edit: File, error: Exception, accountGeneration: Long): Boolean =
+        Reservations.whileAccount(accountGeneration) {
+            if (!edit.isFile) return@whileAccount false
+            FailedTransfers.of(context).record(FailedTransfer(UUID.randomUUID().toString(), UPLOAD, target.name, Problems.say(error, "The transfer failed."),
+                System.currentTimeMillis(), file = edit.path, mime = target.mime, folder = target.folder, replacing = target.nodeId,
+                family = target.family, familyWorkspace = target.familyWorkspace, slot = WriteBacks.slotOf(target.workspaceId, target.nodeId),
+                stage = WriteBacks.encodeTarget(target)))
+            FailedTransfers.changed()
+            true
+        } == true
+
     /* Tests: runs after a cancel's saves went, before the job's cancel is published. */
     @Volatile internal var afterCancelCleans: (() -> Unit)? = null
 
@@ -645,6 +670,8 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         var vault = jobVault(applicationContext) ?: return outcome(NotAuthenticated(), inputData, generation)
         val familyOf = inputData.getString("family")
         var first = true
+        // Whether this run landed anything (and so said so).
+        var sentHere = false
         // Not in the family any more: the family's uploads end, this slot with every reservation its saves made.
         fun removed(): Result {
             TransferQueue.endFamily(applicationContext, familyOf!!, vault.api.session, except = this@UploadWorker.id, still = { !isStopped }) { uploadId, workspaceId ->
@@ -685,7 +712,12 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 return failed(Problems.say(error, "The transfer failed."), androidx.work.Data.Builder().putAll(inputData)
                     .putString("file", java.io.File(WriteBacks.dir(applicationContext, slot), kept.id + ".bin").path).build(), generation)
             }
-            val (pending, sending) = taken ?: return Result.success()
+            val (pending, sending) = taken ?: run {
+                // Nothing (more) to send. A job that sent nothing still ends as one the summary waits for: what others
+                // gathered goes out now if no other job is left (nothing of this one is said).
+                if (!sentHere) forItsAccount(generation) { TransferNotices.settled(applicationContext, this@UploadWorker.id.toString()) }
+                return Result.success()
+            }
             val target = pending.target
             val ledger = pending.ledger
             // Landed: the slot cleared only while it still holds this save, said once, the landed row used up last (once the
@@ -696,7 +728,11 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             fun landed(version: String? = null): Boolean = forItsAccount(generation) {
                 val readCopy = if (target.family == null && version != null) java.io.File(applicationContext.cacheDir, "files/${target.nodeId}/$version") else null
                 val left = WriteBacks.landed(applicationContext, slot, pending.id, version, readCopy)
-                FailedTransfers.of(applicationContext).forgetWhere { it.slot == slot && WriteBacks.idOf(it.file) != left?.id }
+                val obsolete = FailedTransfers.of(applicationContext).all().filter { it.slot == slot && WriteBacks.idOf(it.file) != left?.id }.map { it.id }.toSet()
+                FailedTransfers.of(applicationContext).forgetWhere { it.id in obsolete }
+                // Their failures still waiting to be summed up go too: a file that uploaded is never said not to have.
+                TransferNotices.retire(applicationContext, obsolete)
+                sentHere = true
                 waits.forget(this@UploadWorker.id.toString())
                 TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = target.folder))
                 if (left == null) Reservations.forgetLandedWhere(applicationContext) { WriteBacks.ledgerOf(slot, it) } else Reservations.forgetLanded(applicationContext, ledger)
