@@ -2051,7 +2051,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
             final = metadata.copy(mime = mime ?: metadata.mime, size = size, modified = modified)
             val next = node.metadataVersion + 1uL
             val sealed = metadataSeal(MetadataContext(ws, nodeId, next), nodeKey, final)
+            // The rename's answer carries no version (packages/db renameNode returns the node's own columns): the version
+            // the completion landed is kept on the row.
+            val completed = node.currentVersion
             node = api.rename(nodeId, ws, node.metadataVersion, node.keyEpoch, base64urlEncode(sealed), signMetadata(ws, nodeId, NodeKind.FILE, next, sealed, keptName))
+            if (node.currentVersion == null) node = node.copy(currentVersion = completed)
         }
         // Told once it has landed, wherever it was started from (the app, a transfer job, Files writing a file back).
         return adoptWritten(node, nodeKey, final, ws, nodeId).also { foldersChanged(listOf(it.node.parentId)) }

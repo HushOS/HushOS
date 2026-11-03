@@ -132,6 +132,12 @@ object WriteBacks {
         val slot = slotOf(target.workspaceId, target.nodeId)
         lockOf(slot).withLock {
             val dir = dir(context, slot).also { it.mkdirs() }
+            // The slot's own id for as long as it exists (its generations count from one again once it is gone): what tells a
+            // cancel pressed on an earlier slot of the file from this one.
+            File(dir, INCARNATION).takeIf { !it.isFile }?.let { file ->
+                val incoming = File(dir, "$INCARNATION.incoming").apply { writeText(java.util.UUID.randomUUID().toString()) }
+                check(incoming.renameTo(file)) { "The save couldn't be kept." }
+            }
             // Above every generation the slot holds (a cancelled record's newer saves included) and every one a cancel took,
             // so it is the newest and never taken for a cancelled one.
             val generation = maxOf(current(dir, slot)?.generation ?: 0L, cancelledThrough(dir),
@@ -251,21 +257,34 @@ object WriteBacks {
     /* The slot's saves dropped (its family ended): under its lock, so a save landing in it meanwhile is either kept whole or gone. */
     fun drop(context: Context, slot: String) = lockOf(slot).withLock { dir(context, slot).deleteRecursively() }
 
-    /*
-     * The save the slot's record names now, read without its lock (the record changes by one rename, so it is whole):
-     * what a cancel pressed now cancels, before any save that arrives after it. Null when none is published.
-     */
-    fun publishedId(context: Context, slot: String): String? = read(File(dir(context, slot), RECORD), slot)?.id
+    /* What a cancel pressed now takes: the slot's own id, and the save its record names (its generation, id and file). */
+    data class Captured(val incarnation: String, val generation: Long, val id: String, val target: Target)
+
+    private const val INCARNATION = "slot-id"
 
     /*
-     * A cancel of the save `id` (what the slot held when it was pressed), under the slot's lock: that save and every older
-     * one go, and only those; a save made after the cancel was pressed stays pending, published if it was waiting behind
-     * a cancelled record. Nothing when `id` is gone already (it landed, or a newer save replaced it). The save left, if any.
+     * The save the slot's record names now, read without its lock (the record and the slot's id each change by one rename,
+     * so they are whole): what a cancel pressed now cancels, before any save that arrives after it, by its generation,
+     * which no later save can take away. Null when none is published.
      */
-    fun cancelThrough(context: Context, slot: String, id: String?): Pending? = lockOf(slot).withLock {
+    fun publishedSave(context: Context, slot: String): Captured? {
         val dir = dir(context, slot)
-        if (id == null || !dir.isDirectory) return@withLock current(dir, slot)
-        val cancelled = read(File(dir, id + META), slot) ?: return@withLock current(dir, slot)
+        val incarnation = runCatching { File(dir, INCARNATION).readText() }.getOrNull() ?: return null
+        val record = read(File(dir, RECORD), slot) ?: return null
+        return Captured(incarnation, record.generation, record.id, record.target)
+    }
+
+    /*
+     * A cancel of the save `cancelled` (what the slot held when it was pressed), under the slot's lock: that generation and
+     * every older one go, and only those, and the bound is kept on the slot whether or not their files are still there (a
+     * newer save may have replaced them, while a job still sends one); a save made after the cancel was pressed stays
+     * pending. Nothing when the slot it was pressed on is gone. The save left, if any.
+     */
+    fun cancelThrough(context: Context, slot: String, cancelled: Captured?): Pending? = lockOf(slot).withLock {
+        val dir = dir(context, slot)
+        // The slot Cancel was pressed on, still: one made since the earlier one went counts afresh, and none of it is taken.
+        if (cancelled == null || !dir.isDirectory || runCatching { File(dir, INCARNATION).readText() }.getOrNull() != cancelled.incarnation)
+            return@withLock current(dir, slot)
         val through = cancelled.generation
         // Every save up to it cancelled, kept on the slot: a job already sending one of them stops before landing it.
         val marker = File(dir, "$CANCELLED.incoming").apply { writeText(maxOf(through, cancelledThrough(dir)).toString()) }

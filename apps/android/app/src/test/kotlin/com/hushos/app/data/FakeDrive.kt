@@ -707,7 +707,8 @@ class FakeDrive : AutoCloseable {
                 node.signer = userId
                 node.metadataVersion++
                 bump(node)
-                ok(JSONObject().put("node", node.json()))
+                // As packages/db renameNode answers: the node's own columns, no current version joined.
+                ok(JSONObject().put("node", node.json().put("currentVersion", JSONObject.NULL)))
             }
             post && at("drive", "nodes", "*", "copy") -> {
                 val source = node(segments[2])
