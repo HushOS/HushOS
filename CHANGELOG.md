@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.0](https://github.com/HushOS/HushOS/compare/v0.12.0...v0.13.0) (2026-11-03)
+
+
+### Features
+
+* **android:** let managers change roles and hand over the organizer role ([#276](https://github.com/HushOS/HushOS/issues/276)) ([d4a78ca](https://github.com/HushOS/HushOS/commit/d4a78ca0066ee2f288afeb3806cadfb1cefb12d5))
+* **ios:** invite people to a family and let them in ([#275](https://github.com/HushOS/HushOS/issues/275)) ([d2d5f1e](https://github.com/HushOS/HushOS/commit/d2d5f1ee64c601ca4d89e79c2a14d95faa21f0a7))
+
 ## [0.12.0](https://github.com/HushOS/HushOS/compare/v0.11.0...v0.12.0) (2026-11-02)
 
 
