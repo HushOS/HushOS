@@ -1,0 +1,19 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/WriteBacks.kt
+  s_7533dba93edd49::t_f285825289c84d 163-164,487,506
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d4ae2dbc4b952e8dfd4a25ce59a0411f372b45fa",
+  "prompts": {},
+  "sessions": {
+    "s_7533dba93edd49": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-adcfe02176fcb07a9",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
