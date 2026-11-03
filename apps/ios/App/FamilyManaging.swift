@@ -151,14 +151,14 @@ extension DriveStore {
                     waitingRows[key]?.keptOther = false
                 }
                 guard case .answered(let outcome) = try await familyAnswer(session, { try await $0.letIn(summary, person) }) else { return }
+                if let words = ManageWords.letIn(outcome, first: first, family: summary.name) { notify(words) }
                 switch outcome {
                 case .landed:
-                    notify("\(first) is in \(summary.name)")
                     await reloadManaged(summary.id, session: session)
                     guard current(session) else { return }
                     await refreshFamily(summary)
                 case .pending:
-                    notify("Saved on this device. HushOS couldn’t reach the server. \(first) is let in once it can.")
+                    break
                 case .refused(let words):
                     waitingRows[key]?.error = words
                 case .changed(let change):

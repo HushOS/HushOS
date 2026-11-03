@@ -393,18 +393,36 @@ extension OnFakeDrive {
         }
 
         /*
-         * Turned down with a Let them in still kept for them: the kept call goes. They accept a later
+         * Turned down with a Let them in still kept for them, and the decline's answer lost after the
+         * server took it: the kept call was gone before the decline went. They accept a later
          * invitation (no revision moves) and the outbox resumes: they aren't let in by the old call.
-         * Fails if a turned-down person's signed admission survives the decline.
+         * Fails if a decline is sent while a signed admission of theirs can still be replayed.
          */
-        @Test func turningDownDropsTheirKeptAdmission() async throws {
+        @Test func aTurnDownWhoseAnswerIsLostLeavesNoAdmissionToReplay() async throws {
             let m = try await Self.managed()
             defer { m.phone.done() }
             m.server.lock.withLock { m.server.manage.admitAnswers = [Self.noAnswer, Self.noAnswer, Self.noAnswer] }
             _ = try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) }
             #expect(try m.kept.count == 1)
-            try await m.phone.sync.turnDown(m.family.groupId, userId: m.grace.userId)
+            let server = m.server
+            let graceId = m.grace.userId.lowercased()
+            m.server.lock.withLock {
+                // The server takes the decline; its answer never arrives.
+                m.server.manage.beforeAnswer = { method, path in
+                    guard method == "POST", path.hasSuffix("/decline") else { return }
+                    server.lock.withLock {
+                        server.manage.pendingRows.removeAll { $0["userId"] as? String == graceId }
+                        server.manage.manageAnswer = (503, ["code": "unavailable", "message": "HushOS is temporarily unavailable."])
+                    }
+                }
+            }
+            await #expect(throws: (any Error).self) { try await m.phone.sync.turnDown(m.family.groupId, userId: m.grace.userId) }
+            #expect(m.server.lock.withLock { m.server.manage.declined.count } == 1)
             #expect(try m.kept.isEmpty, "a turned-down person's admission stayed kept")
+            m.server.lock.withLock {
+                m.server.manage.beforeAnswer = nil
+                m.server.manage.manageAnswer = nil
+            }
             // They accept another invitation: waiting again, under the same chain.
             m.server.waiting(m.grace, email: Self.graceEmail, name: "Grace Holm")
             let chain = m.server.lock.withLock { m.server.chain.count }
@@ -412,6 +430,65 @@ extension OnFakeDrive {
             _ = try await Self.quickly { try await m.phone.sync.resumeOutbox(m.family.groupId) }
             #expect(m.server.callBodies.count == sent, "the old admission was sent after the decline")
             #expect(m.server.lock.withLock { m.server.chain.count } == chain, "they were let in with nobody pressing Let them in")
+        }
+
+        /*
+         * The kept admissions can't be judged (the settings don't read): the decline isn't sent, so
+         * the call that stays kept is for someone still waiting. Fails if a decline goes out while a
+         * signed admission of theirs is left behind.
+         */
+        @Test func aTurnDownWhoseCleanupCantRunSendsNoDecline() async throws {
+            let m = try await Self.managed()
+            defer { m.phone.done() }
+            m.server.lock.withLock { m.server.manage.admitAnswers = [Self.noAnswer, Self.noAnswer, Self.noAnswer] }
+            _ = try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) }
+            m.server.lock.withLock { m.server.manage.failSettingsReads = true }
+            await #expect(throws: (any Error).self) { try await m.phone.sync.turnDown(m.family.groupId, userId: m.grace.userId) }
+            #expect(m.server.lock.withLock { m.server.manage.declined.isEmpty }, "a decline went out with their admission still kept")
+            #expect(try m.kept.count == 1)
+            #expect(try await m.waitingGrace().userId == m.grace.userId.lowercased())
+        }
+
+        /*
+         * An outbox that can't be reached (its folder's parent can't be searched) is never read as
+         * one that isn't there: listing, resuming and wiping throw. Fails if `fileExists` saying no
+         * is taken as nothing kept.
+         */
+        @Test func anOutboxThatCantBeReachedIsNotAnEmptyOne() async throws {
+            let m = try await Self.managed()
+            defer { m.phone.done() }
+            // A folder that plainly isn't there yet is no calls, and a wipe has nothing to take.
+            #expect(!FileManager.default.fileExists(atPath: m.phone.records.folder.appendingPathComponent("outbox").path))
+            #expect(try m.kept.isEmpty)
+            try m.phone.records.outboxDeleteAll(userId: m.me, groupId: m.family.groupId)
+            m.server.lock.withLock { m.server.manage.admitAnswers = [Self.noAnswer, Self.noAnswer, Self.noAnswer] }
+            _ = try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) }
+            let parent = m.phone.records.folder
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: parent.path)
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: parent.path) }
+            #expect(throws: GuardError.self) { _ = try m.phone.records.outboxList(userId: m.me, groupId: m.family.groupId) }
+            #expect(throws: GuardError.self) { try m.phone.records.outboxDeleteAll(userId: m.me, groupId: m.family.groupId) }
+            await #expect(throws: GuardError.self) { _ = try await m.phone.sync.resumeOutbox(m.family.groupId) }
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: parent.path)
+            #expect(try m.kept.count == 1, "the kept call was lost")
+        }
+
+        /*
+         * Let them in kept on this device says why it isn't in yet, in the words the outbox gave
+         * ("Saved on this device. {reason}", Android #265). Fails if the reason is dropped or
+         * replaced by fixed words.
+         */
+        @Test func aKeptLetInSaysWhyItIsntInYet() async throws {
+            let m = try await Self.managed()
+            defer { m.phone.done() }
+            m.server.lock.withLock { m.server.manage.admitAnswers = [Self.noAnswer, Self.noAnswer, Self.noAnswer] }
+            let outcome = try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) }
+            guard case .pending(let reason) = outcome else { Issue.record("no answer wasn't pending"); return }
+            #expect(!reason.isEmpty)
+            #expect(ManageWords.letIn(outcome, first: "Grace", family: "Lindqvist family") == "Saved on this device. \(reason)")
+            #expect(ManageWords.letIn(.pending(ManageWords.grantsDue), first: "Grace", family: "Lindqvist family") == "Saved on this device. \(ManageWords.grantsDue)")
+            #expect(ManageWords.letIn(.landed, first: "Grace", family: "Lindqvist family") == "Grace is in Lindqvist family")
+            #expect(ManageWords.letIn(.refused("No."), first: "Grace", family: "Lindqvist family") == nil)
         }
 
         /*

@@ -261,13 +261,7 @@ extension FamilyRecords {
     func outboxList(userId: String, groupId: String) throws -> [(outboxId: String, entry: String)] {
         guard Self.valid(userId.lowercased()), Self.valid(groupId) else { return [] }
         let prefix = "\(userId.lowercased())_\(groupId)_"
-        guard FileManager.default.fileExists(atPath: outboxFolder.path) else { return [] }
-        let names: [URL]
-        do {
-            names = try FileManager.default.contentsOfDirectory(at: outboxFolder, includingPropertiesForKeys: [.contentModificationDateKey])
-        } catch {
-            throw GuardError.unreadable
-        }
+        guard let names = try outboxNames([.contentModificationDateKey]) else { return [] }
         var out: [(Date, String, String)] = []
         for url in names where url.lastPathComponent.hasPrefix(prefix) && url.pathExtension == "call" {
             let outboxId = String(url.deletingPathExtension().lastPathComponent.dropFirst(prefix.count))
@@ -280,18 +274,29 @@ extension FamilyRecords {
         return out.sorted { ($0.0, $0.1) < ($1.0, $1.1) }.map { ($0.1, $0.2) }
     }
 
+    /*
+     * The outbox folder's entries; nil only when it plainly doesn't exist (nothing was ever kept).
+     * A folder that can't be reached (an ancestor that can't be searched, a permission) throws, never
+     * read as no calls: `fileExists` can't tell those apart.
+     */
+    private func outboxNames(_ keys: [URLResourceKey]) throws -> [URL]? {
+        do {
+            return try FileManager.default.contentsOfDirectory(at: outboxFolder, includingPropertiesForKeys: keys)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+            return nil
+        } catch {
+            throw GuardError.unreadable
+        }
+    }
+
     /* A wipe of the family: every call kept for it goes, before the record that ties them to it. */
     func outboxDeleteAll(userId: String, groupId: String) throws {
-        guard Self.valid(userId.lowercased()), Self.valid(groupId), FileManager.default.fileExists(atPath: outboxFolder.path) else { return }
+        // Nothing ever kept: nothing to take (and no lock needed). One that can't be reached throws.
+        guard Self.valid(userId.lowercased()), Self.valid(groupId), try outboxNames([]) != nil else { return }
         let prefix = "\(userId.lowercased())_\(groupId)_"
         try underLock {
             // A folder that can't be listed fails the wipe: signed calls are never left behind as if there were none.
-            let names: [URL]
-            do {
-                names = try FileManager.default.contentsOfDirectory(at: outboxFolder, includingPropertiesForKeys: nil)
-            } catch {
-                throw GuardError.unreadable
-            }
+            guard let names = try outboxNames([]) else { return }
             for url in names where url.lastPathComponent.hasPrefix(prefix) { try? FileManager.default.removeItem(at: url) }
             if names.contains(where: { $0.lastPathComponent.hasPrefix(prefix) && FileManager.default.fileExists(atPath: $0.path) }) {
                 throw GuardError.unsaved

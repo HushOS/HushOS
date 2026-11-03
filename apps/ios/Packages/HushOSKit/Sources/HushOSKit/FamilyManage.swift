@@ -71,6 +71,18 @@ public enum ManageWords {
     }
 
     /*
+     * What Let them in says in passing: in, or kept on this device with why it isn't in yet (the
+     * words the outbox gave, as Android #265 says them). Nil for outcomes said elsewhere.
+     */
+    public static func letIn(_ outcome: LetIn, first: String, family: String) -> String? {
+        switch outcome {
+        case .landed: return "\(first) is in \(family)"
+        case .pending(let reason): return "Saved on this device. \(reason)"
+        default: return nil
+        }
+    }
+
+    /*
      * What a manager is told, until read, of a kept call the resume let go of: a refusal in its own
      * words; an admission another change overtook (nothing of it was made: they're let in again,
      * Android #276's words); nil for one that landed. `name`: a person's first name, if known.
@@ -167,13 +179,22 @@ extension FamilySync {
     }
 
     /*
-     * Route 26: Not now. Once it is confirmed, every Let them in kept for them goes, in the
-     * family's turn: turning down and accepting again move no revision, so a kept admission would
-     * otherwise still apply after a later invitation, with nobody pressing Let them in.
+     * Route 26: Not now, in the family's turn. Every Let them in kept for them goes first, and
+     * only then is the decline sent: turning down and accepting again move no revision, so a kept
+     * admission that outlived a decline (its answer lost, or a cleanup that couldn't run after it)
+     * would still apply after a later invitation, with nobody pressing Let them in. A decline that
+     * then fails has cost nothing the manager wanted: Let them in signs a new one.
      */
     public func turnDown(_ groupId: String, userId person: String) async throws {
-        try await notMemberLetsGo(groupId) { try await self.api.decline(groupId, userId: person) }
-        try await dropKeptAdmissions(groupId, of: person, heldOnly: false)
+        try await exclusive(groupId) {
+            try await self.dropKeptAdmissionsInTurn(groupId, of: person, heldOnly: false)
+            do {
+                try await self.api.decline(groupId, userId: person)
+            } catch let error as GroupsAPIError where error.isNotMember {
+                _ = await self.removedInTurn(groupId)
+                throw error
+            }
+        }
     }
 
     /* Route 13: Cancel invitation. */
@@ -504,24 +525,27 @@ extension FamilySync {
 
     /* The person's kept admissions deleted in the family's turn: only held ones, or all of them (turned down). */
     private func dropKeptAdmissions(_ groupId: String, of person: String, heldOnly: Bool) async throws {
+        try await exclusive(groupId) { try await self.dropKeptAdmissionsInTurn(groupId, of: person, heldOnly: heldOnly) }
+    }
+
+    /* The same, from inside the family's turn (`exclusive` isn't reentrant). Any failure throws: nothing is assumed gone. */
+    private func dropKeptAdmissionsInTurn(_ groupId: String, of person: String, heldOnly: Bool) async throws {
         let user = userId
-        try await exclusive(groupId) {
-            _ = try await self.vault.familyPin(groupId)
-            for kept in try self.records.outboxList(userId: user, groupId: groupId) {
-                let opened: OutboxCall
-                do {
-                    opened = try self.vault.areaLedger.outboxOpen(groupId: groupId, outboxId: kept.outboxId, userId: user, entry: kept.entry)
-                } catch CoreError.Sealed {
-                    continue
-                }
-                let route: ChainRoute
-                switch opened {
-                case .send(_, let r, _), .landed(_, let r), .superseded(_, let r): if heldOnly { continue } else { route = r }
-                case .hold(_, let r, _): route = r
-                }
-                guard case .admit(let who) = route, who.lowercased() == person.lowercased() else { continue }
-                try self.records.outboxDelete(userId: user, groupId: groupId, outboxId: kept.outboxId)
+        _ = try await vault.familyPin(groupId)
+        for kept in try records.outboxList(userId: user, groupId: groupId) {
+            let opened: OutboxCall
+            do {
+                opened = try ledger.outboxOpen(groupId: groupId, outboxId: kept.outboxId, userId: user, entry: kept.entry)
+            } catch CoreError.Sealed {
+                continue
             }
+            let route: ChainRoute
+            switch opened {
+            case .send(_, let r, _), .landed(_, let r), .superseded(_, let r): if heldOnly { continue } else { route = r }
+            case .hold(_, let r, _): route = r
+            }
+            guard case .admit(let who) = route, who.lowercased() == person.lowercased() else { continue }
+            try records.outboxDelete(userId: user, groupId: groupId, outboxId: kept.outboxId)
         }
     }
 }
