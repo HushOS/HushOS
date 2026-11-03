@@ -1,0 +1,35 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_e2339722e7ef22 89
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_566b8e0c4467a4::t_23c73d04897b3d 409-416,663-664,775-779,784-786
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_644e0bfa54aa2d 1287-1294,1580,1613,1790
+apps/android/app/src/main/kotlin/com/hushos/app/data/WriteBacks.kt
+  s_566b8e0c4467a4::t_af792962bdd98a 147-152,271-272,274-280,284,967-973
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_30581733bb013c 393-394,398,400
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_566b8e0c4467a4::t_dfa66b4b4dcb6d 693-694,714-715
+apps/android/app/src/test/kotlin/com/hushos/app/data/VaultAttributesTest.kt
+  s_566b8e0c4467a4::t_bc5aba2c6c1310 6,247-263
+apps/android/app/src/test/kotlin/com/hushos/app/files/FilesSaveOrderTest.kt
+  s_566b8e0c4467a4::t_87e910c81c1c15 84,2306-2449
+apps/android/app/src/test/kotlin/com/hushos/app/files/ProviderFamiliesTest.kt
+  s_566b8e0c4467a4::t_248fbd88e9e4df 1877-1878
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1a540d6e5013547427f74bbc2e17c8a1666ba2f2",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
