@@ -313,6 +313,12 @@ function Outcome({
                     {who} isn’t in {family} any more, so there was nothing to remove.
                 </p>
             );
+        case 'moved':
+            return (
+                <p className="text-sm" data-outcome="moved">
+                    {family} changed while you were working on it. Try again.
+                </p>
+            );
         case 'pending':
             return (
                 <p className="text-sm" data-outcome="pending">

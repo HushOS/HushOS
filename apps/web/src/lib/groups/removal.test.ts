@@ -276,11 +276,30 @@ describe('removing someone: hold, finish, remove', () => {
         ]);
     });
 
-    test('someone no longer active is not removed again', async () => {
+    test('members-changed while they are still in the family is never said as them being gone', async () => {
         const { server, ctx, groupId } = await family();
         server.answer('hold', refusal(409, 'members-changed', { reason: 'target' }));
-        expect(await removeMember(ctx, groupId, BOB)).toEqual({ status: 'changed' });
+        // Bob is still active on the member list read again: the family changed, and the remover looks again.
+        expect(await removeMember(ctx, groupId, BOB)).toEqual({ status: 'moved' });
         expect(server.sent('remove')).toEqual([]);
+    });
+
+    test('someone no longer active is not removed again', async () => {
+        const { server, ctx, groupId } = await family();
+        const other = await server.device();
+        expect((await syncGroup(other, groupId)).status).toBe('accepted');
+        // Another of Alice's devices removes Bob between this one's read and its hold.
+        const hold = ctx.api.hold.bind(ctx.api);
+        let raced = false;
+        vi.spyOn(ctx.api, 'hold').mockImplementation(async (group, user) => {
+            if (raced) return hold(group, user);
+            raced = true;
+            expect(await removeMember(other, groupId, BOB)).toEqual({ status: 'removed' });
+            throw refusal(409, 'members-changed', { reason: 'target' });
+        });
+        const removals = server.sent('remove').length;
+        expect(await removeMember(ctx, groupId, BOB)).toEqual({ status: 'changed' });
+        expect(server.sent('remove').length).toBe(removals + 1);
     });
 });
 

@@ -37,6 +37,12 @@ export type RemovalOutcome =
     | { status: 'held'; heldBy: string | null; targetManages: boolean }
     /* They are not an active member any more (left, removed by someone else meanwhile). */
     | { status: 'changed' }
+    /*
+     * The server said the member list moved (`members-changed`) while they are still an active
+     * member, or it couldn't be read again: nothing was changed, and the remover looks again.
+     * Never said as them being gone.
+     */
+    | { status: 'moved' }
     /* Kept on this device and sent again later: an unknown outcome, or a fix it could not make now. */
     | { status: 'pending'; message: string }
     | { status: 'failed'; message: string }
@@ -57,8 +63,30 @@ function manages(view: GroupView | null, userId: string) {
     return Boolean(entry && entry.status === 'active' && entry.roles.includes('members'));
 }
 
-/* A stageChange outcome other than landed, as a removal says it. */
-function failure(staged: StageOutcome, family: string): RemovalOutcome | null {
+/*
+ * The server's `members-changed`, said as what the family is now (read again, so the page shows
+ * it too): this account let go of is wiped, the person no longer active is changed, and anything
+ * else (still active, or a read that didn't answer) is moved, never "isn't in the family" about
+ * someone who is.
+ */
+async function membersChanged(
+    ctx: GroupContext,
+    groupId: string,
+    userId: string,
+): Promise<RemovalOutcome> {
+    const synced = await syncGroup(ctx, groupId).catch(() => null);
+    if (synced?.status === 'wiped') return { status: 'wiped' };
+    if (synced?.status !== 'accepted') return { status: 'moved' };
+    const active = synced.view.members.some((m) => m.userId === userId && m.status === 'active');
+    return active ? { status: 'moved' } : { status: 'changed' };
+}
+
+/* A stageChange outcome other than landed, as a removal says it (`changed`: a members-changed answer's). */
+async function failure(
+    staged: StageOutcome,
+    family: string,
+    changed: () => Promise<RemovalOutcome>,
+): Promise<RemovalOutcome | null> {
     if (staged.status === 'not-synced')
         return staged.sync.status === 'wiped'
             ? { status: 'wiped' }
@@ -84,7 +112,7 @@ function failure(staged: StageOutcome, family: string): RemovalOutcome | null {
             return { status: 'wiped' };
         case 'membership-moved':
             return outcome.code === 'members-changed'
-                ? { status: 'changed' }
+                ? await changed()
                 : {
                       status: 'failed',
                       message: refusalCopy(outcome.code, outcome.data, { family }),
@@ -123,6 +151,7 @@ export async function removeMember(
     } = {},
 ): Promise<RemovalOutcome> {
     const family = options.family ?? 'The family';
+    const changed = () => membersChanged(ctx, groupId, userId);
     const rotations = ctx.rotations;
     if (!rotations)
         return { status: 'failed', message: 'Open the family’s folders, then try again.' };
@@ -160,7 +189,7 @@ export async function removeMember(
             userId,
             roles: entry.roles.filter((role) => role !== 'members'),
         });
-        const stopped = failure(demoted, family);
+        const stopped = await failure(demoted, family, changed);
         if (stopped) return stopped;
         // Read again: the view from before the demotion would still say they manage the family.
         synced = await syncGroup(ctx, groupId);
@@ -183,10 +212,7 @@ export async function removeMember(
                 heldBy: await whoHolds(ctx, groupId),
                 targetManages: manages(synced.view, userId),
             };
-        if (error instanceof GroupApiError && error.code === 'members-changed') {
-            await syncGroup(ctx, groupId).catch(() => null);
-            return { status: 'changed' };
-        }
+        if (error instanceof GroupApiError && error.code === 'members-changed') return changed();
         throw error;
     }
 
@@ -200,7 +226,7 @@ export async function removeMember(
                 heldBy: await whoHolds(ctx, groupId),
                 targetManages: synced.status === 'accepted' && manages(synced.view, userId),
             };
-        if (refused.code === 'members-changed') return { status: 'changed' };
+        if (refused.code === 'members-changed') return changed();
         return {
             status: 'failed',
             message: refusalCopy(refused.code ?? '', refused.data, { family }),
@@ -265,20 +291,20 @@ export async function removeMember(
                 // left themselves meanwhile, marking them left is the whole removal.
                 const marked = await markDepartedLeft(ctx, groupId, departed);
                 if (marked.status !== 'sent' || marked.outcome.status !== 'landed') {
-                    const stopped = failure(marked as StageOutcome, family);
+                    const stopped = await failure(marked as StageOutcome, family, changed);
                     return stopped ?? { status: 'failed', message: 'Nothing was changed.' };
                 }
                 if (departed.includes(userId)) return { status: 'removed' };
-            } else return { status: 'changed' };
+            } else return changed();
         } else if (staged.status === 'sent' && staged.outcome.status === 'stale') {
             // Another manager's change landed first: built again on top of it.
         } else {
-            const stopped = failure(staged, family);
+            const stopped = await failure(staged, family, changed);
             return stopped ?? { status: 'removed' };
         }
         const again = await syncGroup(ctx, groupId);
         if (again.status !== 'accepted')
-            return failure({ status: 'not-synced', sync: again }, family)!;
+            return (await failure({ status: 'not-synced', sync: again }, family, changed))!;
         synced = again;
         if (!synced.view.members.some((m) => m.userId === userId && m.status === 'active'))
             return { status: 'removed' };
