@@ -1,0 +1,31 @@
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_313b996c92aa50 141
+apps/ios/App/Families.swift
+  s_566b8e0c4467a4::t_781b29ac54f1f7 260,314-315,338-340,342-343
+apps/ios/Files/FamilyFileProvider.swift
+  s_566b8e0c4467a4::t_25b730fa6557ce 84,92,101,109,112,114,142,162,194
+apps/ios/Files/FileProviderExtension.swift
+  s_566b8e0c4467a4::t_5ffee989adf174 79-80,94-95,98,104,110,165,202,293,385,391,419-420,438-441,445
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyFiles.swift
+  s_566b8e0c4467a4::t_3b872c75881f87 42,46,48,51,67-69,87-94,99,103-106,109-115,117,120-123,127,144-149,161-162,166-169,178,182,185,201-203,205-208,211,214-220,222,231-234,237,239-244,247,254-255,262,265-268,271-272,274,287,296-305,334-340,393-394,397-398,402-403,408,413-418,424,467,476,530-535,537,539-541,543-550,558,624-642
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_566b8e0c4467a4::t_e50b3124024bcf 238-241,269-270,499-506,537-541
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyFilesTests.swift
+  s_566b8e0c4467a4::t_6288d97e726f32 22-23,48-51,53-55,57-58,61-63,69-73,76,81-146,155,159,182,193,202,238,253-254,256-258,275,295,300,344-372,384
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "303442c6cba119edbc87d7fb5bebc820b106a86f",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
