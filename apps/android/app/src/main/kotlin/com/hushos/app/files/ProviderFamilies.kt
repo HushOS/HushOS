@@ -495,28 +495,31 @@ class ProviderFamilies internal constructor(
     fun editCopy(doc: FamilyDoc.Node, keepContents: Boolean, epoch: Long = vault.familyEpoch(doc.workspaceId)): File {
         val (folder, item) = writable(doc)
         afterAccessChecked?.invoke()
-        if (!keepContents) return editCopy(folder, item, epoch) { it.createNewFile(); true }!!
+        if (!keepContents) return editCopy(doc, folder, item, epoch) { it.createNewFile(); true }!!
         // The file's pending save, when it has one (what another app last wrote, not landed yet, whatever its job's state):
         // the server's version is older than it, and an edit built on that would drop the save.
-        editCopy(folder, item, epoch) { WriteBacks.copyNewestTo(vault.context, slotOf(doc), it) }?.let { return it }
+        editCopy(doc, folder, item, epoch) { WriteBacks.copyNewestTo(vault.context, slotOf(doc), it) }?.let { return it }
         val source = readCopy(doc, strict = true)
-        return editCopy(folder, item, epoch) { source.copyTo(it, overwrite = true); true }!!
+        return editCopy(doc, folder, item, epoch) { source.copyTo(it, overwrite = true); true }!!
     }
 
     /*
      * An edit filled by `fill` under the copies lock, only while the session lasts and the folder's invalidation count is
      * still `epoch` (read before its access was checked); null if `fill` had nothing.
      */
-    private fun editCopy(folder: FamilyRoot.Folder, item: Opened, epoch: Long, fill: (File) -> Boolean): File? {
-        val edits = FamilyCopies.edits(vault.context.cacheDir, folder.workspaceId) ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
-        val edit = File(edits, "${item.id.lowercase()}/${java.util.UUID.randomUUID()}")
+    private fun editCopy(doc: FamilyDoc.Node, folder: FamilyRoot.Folder, item: Opened, epoch: Long, fill: (File) -> Boolean): File? {
+        // Durable (filesDir/edits/family/<workspace>): a save kept for a Retry outlives a cache clear; the folder's revocation
+        // deletes it. The file it would replace is written beside it as it is made.
+        val edits = FamilyCopies.edits(vault.context.filesDir, folder.workspaceId) ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
+        val parent = item.node.parentId ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
+        val target = WriteBacks.Target(item.node.workspaceId, item.id, item.name, item.metadata.mime, parent, doc.groupId.lowercase(), folder.workspaceId.lowercase())
         synchronized(FamilyCopies.LOCK) {
             if (vault.closed) throw SessionEnded()
             vault.familyWordsSince(folder.workspaceId, epoch)?.let { throw FileNotFoundException(it) }
-            edit.parentFile?.mkdirs()
-            if (!fill(edit)) { edit.delete(); return null }
+            val edit = WriteBacks.editIn(File(edits, item.id.lowercase()), target)
+            if (!fill(edit)) { WriteBacks.discardEdit(edit); return null }
+            return edit
         }
-        return edit
     }
 
     private fun slotOf(doc: FamilyDoc.Node) = WriteBacks.slotOf(doc.workspaceId, doc.nodeId)
@@ -558,18 +561,21 @@ class ProviderFamilies internal constructor(
         if (!edit.exists()) return false
         val parent = opened.node.parentId ?: return false
         val target = WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime, parent, doc.groupId.lowercase(), doc.workspaceId.lowercase())
-        // Its order among the file's saves, given now, before anything is kept: a Retry of it keeps that order.
+        // Its order among the file's saves (only read, never fails), then the edit marked as that save by one rename (no room
+        // needed): from here it goes only once kept, dismissed, or let go of with its family or account.
         val number = WriteBacks.reserve(vault.context, slotOf(doc))
+        val closed = WriteBacks.close(edit, number)
         // Kept only while the folder's invalidation count is still the one the open read before it checked anything, and
         // the session lasts, under the copies lock a removal's cleanup takes: a family let go of since keeps no plaintext.
         val kept = synchronized(FamilyCopies.LOCK) {
-            if (vault.closed || vault.familyWordsSince(doc.workspaceId, epoch) != null) null
+            if (vault.closed || vault.familyWordsSince(doc.workspaceId, epoch) != null) { WriteBacks.discardEdit(closed); null }
             else try {
-                WriteBacks.stage(vault.context, vault.ledgerGeneration, target, edit, number)
+                WriteBacks.stage(vault.context, vault.ledgerGeneration, target, closed, number) ?: run { WriteBacks.discardEdit(closed); null }
             } catch (failure: Exception) {
-                // Not kept (a full disk, say): the edit stays with a row whose Retry keeps it; a removal's cleanup deletes it.
-                if (TransferQueue.stagingFailed(vault.context, target, edit, failure, vault.ledgerGeneration, number, epoch)) throw EditKept(failure)
-                throw failure
+                // Not kept (a full disk, say): the closed edit stays, with a row to retry it when one can be written (else the
+                // next reconcile makes it); a removal's cleanup deletes it.
+                TransferQueue.stagingFailed(vault.context, target, closed, failure, vault.ledgerGeneration, number, epoch)
+                throw EditKept(failure)
             }
         } ?: return false
         TransferQueue.enqueueSlot(vault.context, kept.slot, opened.name, target.family)

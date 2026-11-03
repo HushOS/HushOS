@@ -492,16 +492,13 @@ class HushOSDocumentsProvider : DocumentsProvider() {
      * keep the order they were closed in (ProviderFamilies.save). Nothing is sent from here; the slot's job sends it.
      */
     internal fun onFamilyEditClosed(error: java.io.IOException?, families: ProviderFamilies, doc: FamilyDoc.Node, edit: File, opened: com.hushos.app.data.Opened, epoch: Long) {
-        // A save that couldn't be kept but left its edit for a Retry keeps the edit; any other end deletes it.
-        var keep = false
+        // Nothing escapes the close thread, whatever happens. The other app's write failed: what it left was never saved.
+        // Otherwise the save decides (ProviderFamilies.save): a closed edit goes only once kept or let go of, never here.
         try {
-            if (error == null && !families.save(doc, edit, opened, epoch)) android.util.Log.w("HushOSFiles", "a family save wasn't kept")
-        } catch (kept: ProviderFamilies.EditKept) {
-            keep = true
-        } catch (failure: Exception) {
+            if (error != null) { WriteBacks.discardEdit(edit); return }
+            if (!families.save(doc, edit, opened, epoch)) android.util.Log.w("HushOSFiles", "a family save wasn't kept")
+        } catch (failure: Throwable) {
             android.util.Log.w("HushOSFiles", "a family save couldn't be kept: ${failure.javaClass.name}")
-        } finally {
-            if (!keep) edit.delete()
         }
     }
 

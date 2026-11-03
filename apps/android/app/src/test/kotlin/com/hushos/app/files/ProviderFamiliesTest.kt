@@ -78,6 +78,7 @@ class ProviderFamiliesTest {
         WriteBacks.afterContent = null
         WriteBacks.beforeSlotId = null
         WriteBacks.fault = null
+        com.hushos.app.data.FailedTransfers.beforeWrite = null
         Reservations.forgetHeld()
         server.close()
         assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
@@ -345,7 +346,7 @@ class ProviderFamiliesTest {
         rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
         val families = familiesOf(provider)
         val edit = families.editCopy(FamilyDoc.of(file) as FamilyDoc.Node, keepContents = true)
-        assertTrue(edit.path.startsWith(FamilyCopies.edits(app.cacheDir, family.workspaceId)!!.path))
+        assertTrue(edit.path.startsWith(FamilyCopies.edits(app.filesDir, family.workspaceId)!!.path))
         assertEquals("marker-family", edit.readText())
         edit.writeText("edited in another app")
         assertEquals(ListenableWorker.Result.success(), runJob(writeBack(families, FamilyDoc.of(file) as FamilyDoc.Node, edit)))
@@ -1326,7 +1327,7 @@ class ProviderFamiliesTest {
             families.vault.forgetFamilyCopies(listOf(family.workspaceId))
         }
         assertThrows(FileNotFoundException::class.java) { provider.openDocument(file, "rw", null).close() }
-        val edits = FamilyCopies.edits(app.cacheDir, family.workspaceId)
+        val edits = FamilyCopies.edits(app.filesDir, family.workspaceId)
         assertTrue("a pending save's plaintext was copied into the edits after the family let go", edits == null || !edits.walkTopDown().any { it.isFile })
     }
 
@@ -1570,6 +1571,58 @@ class ProviderFamiliesTest {
         assertEquals(1, com.hushos.app.data.FailedTransfers.of(app).all().size)
         assertEquals("kept for a retry", read(provider, file))
         assertEquals("kept for a retry", families.editFor(doc, "wa").readText())
+    }
+
+    /*
+     * A family save can't be kept and its row can't be written either (the same full disk): the closed edit stays (under
+     * filesDir, where the family's revocation alone deletes it), and the next start gives it its row, whose Retry sends it.
+     * Fails if a family save whose row couldn't be written loses its edit.
+     */
+    @Test
+    fun aFamilySaveWhoseRowCantBeWrittenIsRecoveredAtTheNextStart() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        WriteBacks.fault = { at -> if (at == "copy") throw java.io.IOException("No space left on device") }
+        com.hushos.app.data.FailedTransfers.beforeWrite = { throw java.io.IOException("No space left on device") }
+        ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("family save on a full disk".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
+        WriteBacks.fault = null
+        com.hushos.app.data.FailedTransfers.beforeWrite = null
+        assertTrue(com.hushos.app.data.FailedTransfers.of(app).all().isEmpty())
+        val closed = FamilyCopies.edits(app.filesDir, family.workspaceId)!!.walkTopDown().single { it.isFile && it.name.endsWith(".closed") }
+        assertEquals("family save on a full disk", closed.readText())
+        TransferQueue.reconcileEdits(app, startup = true)
+        val row = com.hushos.app.data.FailedTransfers.of(app).all().single()
+        assertTrue(TransferQueue.retry(app, row))
+        assertEquals(ListenableWorker.Result.success(), runJob(slot))
+        assertEquals("family save on a full disk", serverText())
+    }
+
+    /*
+     * A family save that couldn't be kept waits more than a day for its Retry, and the process starts again (the cache
+     * swept of copies over a day old): its edit is still there and the Retry sends it; an edit opened and never closed, as
+     * old, goes at that start. Fails if a retained family edit is swept with the cache.
+     */
+    @Test
+    fun aRetainedFamilyEditOutlivesADayAndARestart() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        WriteBacks.fault = { at -> if (at == "copy") { WriteBacks.fault = null; throw java.io.IOException("No space left on device") } }
+        ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("kept over a day".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
+        val row = com.hushos.app.data.FailedTransfers.of(app).all().single()
+        val abandoned = families.editFor(doc, "w").apply { writeText("never closed") }
+        val twoDaysAgo = System.currentTimeMillis() - 2 * 86_400_000L
+        File(app.filesDir, WriteBacks.EDITS).walkTopDown().forEach { it.setLastModified(twoDaysAgo) }
+        com.hushos.app.data.DecryptedCopies.sweep(app.cacheDir)
+        TransferQueue.reconcileEdits(app, startup = true)
+        assertFalse("an abandoned open was kept", abandoned.exists())
+        assertEquals("kept over a day", File(row.file!!).readText())
+        assertTrue(TransferQueue.retry(app, row))
+        assertEquals(ListenableWorker.Result.success(), runJob(slot))
+        assertEquals("kept over a day", serverText())
     }
 
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =

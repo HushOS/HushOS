@@ -149,6 +149,8 @@ private fun Vault.purgeShareCopies(workspaceId: String, held: Set<String>): Set<
     // Node ids name folders here only when they are ids (never "family", "..", or a path).
     for (id in ids.filter { FamilyRecords.valid(it) }) {
         for (place in listOf("opened", "files", "edits", "thumbnails")) File(File(context.cacheDir, place), id.lowercase()).deleteRecursively()
+        // The Files app's edits of it, kept under filesDir (WriteBacks.EDITS), go with the rest.
+        File(context.filesDir, "${WriteBacks.EDITS}/personal/${id.lowercase()}").deleteRecursively()
         if (id != id.lowercase()) for (place in listOf("opened", "files", "edits", "thumbnails")) File(File(context.cacheDir, place), id).deleteRecursively()
     }
     return ids
@@ -397,7 +399,7 @@ internal fun Vault.forgetWorkspaces(ids: Collection<String>, words: String = Fam
         // An ended session's cleanup touches nothing: the copies there now may be the next session's.
         if (closed) return gone
         for (id in ids) familyEpochs.compute(id.lowercase()) { _, old -> ((old?.first ?: 0L) + 1) to words }
-        FamilyCopies.delete(context.cacheDir, ids)
+        FamilyCopies.delete(context.cacheDir, context.filesDir, ids)
         for (id in ids) if (!id.equals(ownWorkspaceId, ignoreCase = true)) {
             // The sealed thumbnails kept of what this session opened there go with the rows that named them.
             runCatching { mirror.dropThumbnails(nodes.rowsIn(id).mapNotNull { it.node.currentVersion?.id }) }
@@ -415,7 +417,7 @@ internal fun Vault.forgetWorkspaces(ids: Collection<String>, words: String = Fam
 fun Vault.forgetFamilyCopies(ids: Collection<String>) = synchronized(familyCopiesLock) {
     if (closed) return@synchronized
     for (id in ids) familyEpochs.compute(id.lowercase()) { _, old -> ((old?.first ?: 0L) + 1) to FamilyWords.OPEN_AGAIN }
-    FamilyCopies.delete(context.cacheDir, ids)
+    FamilyCopies.delete(context.cacheDir, context.filesDir, ids)
 }
 
 /*

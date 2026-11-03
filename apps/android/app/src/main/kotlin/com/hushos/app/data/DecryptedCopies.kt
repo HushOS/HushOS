@@ -61,18 +61,20 @@ object FamilyCopies {
         if (FamilyRecords.valid(workspaceId)) File(cache, "opened/family/${workspaceId.lowercase()}") else null
 
     /*
-     * Where the Files app writes a family file's new bytes until they go up (edits/family/<workspace>): beside the copies,
+     * Where the Files app writes a family file's new bytes until they go up (filesDir/edits/family/<workspace>: durable, so
+     * a save kept for a Retry outlives a cache clear; every forget of the workspace deletes it): apart from the copies,
      * not among them, so an allowlist sweep (a vault's first, before its sync accepted anything) never deletes an edit
      * still being written; every forget of the workspace deletes it with them.
      */
-    fun edits(cache: File, workspaceId: String): File? =
-        if (FamilyRecords.valid(workspaceId)) File(cache, "edits/family/${workspaceId.lowercase()}") else null
+    fun edits(files: File, workspaceId: String): File? =
+        if (FamilyRecords.valid(workspaceId)) File(files, "${WriteBacks.EDITS}/family/${workspaceId.lowercase()}") else null
 
     /* What a family's clear leaves of these workspaces' copies and edits: nothing. A folder the personal drive's id names holds none. */
-    fun delete(cache: File, workspaceIds: Collection<String>) {
+    fun delete(cache: File, files: File, workspaceIds: Collection<String>) {
         for (id in workspaceIds) {
             folder(cache, id)?.deleteRecursively()
-            edits(cache, id)?.deleteRecursively()
+            edits(files, id)?.deleteRecursively()
         }
     }
+
 }

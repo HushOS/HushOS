@@ -51,7 +51,7 @@ class FamilyFoldersTest {
         // Listed now: only "kept"; "gone" was opened earlier this session (the vault's family nodes); "mine" is personal.
         val ids = folders.wipeIds(group, shown = mapOf("root" to listOf(row("kept", folder = false))), opened = mapOf("gone" to area, "kept" to area, "mine" to own))
         assertEquals(setOf("gone", "kept"), ids)
-        com.hushos.app.data.FamilyCopies.delete(cache, folders.workspacesOf(group))
+        com.hushos.app.data.FamilyCopies.delete(cache, java.nio.file.Files.createTempDirectory("family-files").toFile(), folders.workspacesOf(group))
         assertFalse(gone.exists())
         assertTrue(mine.exists())
     }
