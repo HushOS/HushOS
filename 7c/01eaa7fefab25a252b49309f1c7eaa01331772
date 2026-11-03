@@ -1,0 +1,95 @@
+.release-please-manifest.json
+  s_566b8e0c4467a4::t_d58474d713ae38 2
+CHANGELOG.md
+  s_566b8e0c4467a4::t_c83db0bd8e973d 3-18
+Cargo.lock
+  s_566b8e0c4467a4::t_e3d114de399c93 753
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_4e7e3b1e38f9ff 87
+apps/android/app/build.gradle.kts
+  s_566b8e0c4467a4::t_12e61d59e75495 72
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_566b8e0c4467a4::t_4428f7136c4550 88-89
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyManage.kt
+  s_566b8e0c4467a4::t_fb57fe4d4b520a 1-514
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_566b8e0c4467a4::t_f2fba8973b4d9b 691,747-749
+apps/android/app/src/main/kotlin/com/hushos/app/data/GroupsApi.kt
+  s_566b8e0c4467a4::t_e9d1dc4fa6498b 122-126,133-145,149-162,326-400,410-411
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_566b8e0c4467a4::t_3426a9f55bb613 511-513,522,577-579
+apps/android/app/src/main/kotlin/com/hushos/app/data/WriteBacks.kt
+  s_566b8e0c4467a4::t_fcd03034eed23c 27-28,33-42,52-65
+apps/android/app/src/main/kotlin/com/hushos/app/files/HushOSDocumentsProvider.kt
+  s_566b8e0c4467a4::t_2e7fac6dc6784e 379-409,411,434,442-443,448,471,490-522,598
+apps/android/app/src/main/kotlin/com/hushos/app/files/ProviderFamilies.kt
+  s_566b8e0c4467a4::t_3e6613e7eae682 458
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_2cb5d1a106d127 242,342,516,534,1442,1661-1663,1666,1669,1673-1674,1676
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Families.kt
+  s_566b8e0c4467a4::t_1235e4f3ee1d1d 159-168,179,187-188,201,307-447
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_de7a74f81dec14 25-32,36,137-138,141-147,195-400,947,1099-1110
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NoticeQueue.kt
+  s_566b8e0c4467a4::t_7b4182a5d51fdf 1-54
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_566b8e0c4467a4::t_7b48469de89c93 102-110,525,589-590,596-597,619-621
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyFixture.kt
+  s_566b8e0c4467a4::t_350d4efc690cbb 42-44,99-100,125-149,164-165,204,206-207,224-243,313-370
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyManageTest.kt
+  s_566b8e0c4467a4::t_38830ec90a5601 1-497
+apps/android/app/src/test/kotlin/com/hushos/app/files/FilesTreeGrantsTest.kt
+  s_566b8e0c4467a4::t_77809b1c6b3692 1-86
+apps/android/app/src/test/kotlin/com/hushos/app/files/FilesWriteModesTest.kt
+  s_566b8e0c4467a4::t_f69726dab431f7 1-171
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyManageModelTest.kt
+  s_566b8e0c4467a4::t_53b5dab33f2109 1-331
+apps/android/app/src/test/kotlin/com/hushos/app/ui/NoticeQueueTest.kt
+  s_566b8e0c4467a4::t_5df082c65e5071 1-48
+apps/ios/project.yml
+  s_566b8e0c4467a4::t_efc264a5f373f5 23
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_64d6499746274e 33,2649-2655
+crates/hushos-core/AGENTS.md
+  s_566b8e0c4467a4::t_381f6ef085c93a 183
+crates/hushos-core/Cargo.toml
+  s_566b8e0c4467a4::t_72d266a056ded0 3
+crates/hushos-core/fuzz/Cargo.lock
+  s_566b8e0c4467a4::t_f22ad7faf51499 566
+crates/hushos-core/src/roster_calls.rs
+  s_566b8e0c4467a4::t_1329592fa1ff9c 702-705
+crates/hushos-core/src/roster_calls/tests.rs
+  s_566b8e0c4467a4::t_5d08eeced014e0 486-487,490-498
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_2904ef87b09f60 189-190,224
+docs/groups-server.md
+  s_566b8e0c4467a4::t_e5f29eba77020d 236
+package.json
+  s_566b8e0c4467a4::t_555a55a9f0c728 3
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_8c145bb303475d 2284-2288,2498-2500,2502-2506,2515,2914-2916
+packages/crypto/src/roster-calls-testkit.ts
+  s_566b8e0c4467a4::t_f39bafd575c1fc 391
+packages/crypto/src/session-groups.ts
+  s_566b8e0c4467a4::t_b724f883fc37b7 3258
+packages/groups/src/server.billing.test.ts
+  s_566b8e0c4467a4::t_66f5dd6a5b019f 511-553
+packages/groups/src/server.ts
+  s_566b8e0c4467a4::t_e5fb49a7b37506 2004,2023-2033,2038-2039,2046,2071
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7c01eaa7fefab25a252b49309f1c7eaa01331772",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
