@@ -1,0 +1,25 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_89e0f2cbec3d6f 88
+apps/android/app/src/main/kotlin/com/hushos/app/HushOSApplication.kt
+  s_566b8e0c4467a4::t_ae318ad44e9f0a 18-20
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_566b8e0c4467a4::t_1a86e0392db2b7 387-392,451-461
+apps/android/app/src/main/kotlin/com/hushos/app/data/WriteBacks.kt
+  s_566b8e0c4467a4::t_b09c7a95e70a33 91-93,183,279-285,307,325-327,331,380-381,383,445-459,492-496,535
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "098e19d58d26cc7905ee37bb3f299e0036afba3b",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
