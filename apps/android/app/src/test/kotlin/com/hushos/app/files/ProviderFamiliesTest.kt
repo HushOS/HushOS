@@ -1878,6 +1878,52 @@ class ProviderFamiliesTest {
         assertFalse("a staged copy a dead process left was kept", left.exists())
     }
 
+    /*
+     * #266 P1: a family save's completion landed with its answer lost, then a newer save of the file is pending (not sent),
+     * and the provider confirms the family's removal. The older save's landing is no upload of the newer one: the newer
+     * ends as not in the family, not as uploaded. Fails if the removal reads any landed reservation of the slot as the
+     * pending save's.
+     */
+    @Test
+    fun aRemovalNeverCountsAnOlderSavesLandingForTheNewerOne() {
+        var now = 0L
+        val vault = Vault(app, DriveApi(Shared.session(app)!!))
+        val families = ProviderFamilies(vault, FamilySync(vault, sweeps = false, tellsFiles = false)) { now }
+        families.load()
+        val doc = FamilyDoc.Node(family.groupId, family.workspaceId, family.fileId)
+        families.children(FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId))
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("landed save") })
+        dropFromTheCompletion()
+        assertEquals(ListenableWorker.Result.retry(), runJob(slot))
+        server.dropReply = null
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("newer save, never sent") })
+        family.notMember = true
+        family.listed = false
+        now += 6 * 60_000L
+        assertEquals(emptyList<FamilyRoot>(), families.load())
+        val rows = com.hushos.app.data.FailedTransfers.of(app).all()
+        assertEquals("the newer save was said to have uploaded", listOf(com.hushos.app.data.FamilyWords.NOT_IN_FAMILY), rows.map { it.reason })
+        assertFalse(WriteBacks.dir(app, slot).exists())
+    }
+
+    /*
+     * #266 P2: two apps open the same family file at once, its version not cached yet: each read gets the file's bytes
+     * (each download its own, one kept as the version's copy). Fails if two downloads of one version share a partial and
+     * one deletes the other's result.
+     */
+    @Test
+    fun twoReadsOfAnUncachedFamilyVersionBothGetIt() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val both = java.util.concurrent.CountDownLatch(2)
+        server.beforeAnswer = { method, path -> if (method == "GET" && path.startsWith("/store/")) { both.countDown(); both.await(5, java.util.concurrent.TimeUnit.SECONDS) } }
+        val results = arrayOfNulls<String>(2)
+        val reads = (0..1).map { i -> Thread { results[i] = runCatching { read(provider, file) }.getOrElse { "failed: $it" } }.apply { start() } }
+        reads.forEach { it.join(30_000) }
+        server.beforeAnswer = null
+        assertEquals(listOf("marker-family", "marker-family"), results.toList())
+    }
+
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =
         HushOSDocumentsProvider::class.java.getDeclaredField("families").apply { isAccessible = true }.get(provider) as ProviderFamilies
 }

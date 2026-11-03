@@ -454,7 +454,27 @@ class ProviderFamilies internal constructor(
         val version = item.node.currentVersion?.id ?: throw FileNotFoundException("This file has no content yet.")
         val copies = FamilyCopies.folder(vault.context.cacheDir, folder.workspaceId) ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
         val file = File(copies, "files/${item.id.lowercase()}/$version")
-        if (!file.exists()) vault.download(item.id, file, expectedVersionId = version, workspaceId = folder.workspaceId, familyEpochAt = epoch)
+        if (file.isFile) return file
+        // Its own download (two opens of an uncached version never share one), into the folder's copies (a forget of the
+        // folder deletes it too), kept as the version's copy only under the copies lock, while the folder stands and the
+        // account it opens for is still here; one kept meanwhile by another open stays, and this one goes.
+        val incoming = File(copies, "incoming/${java.util.UUID.randomUUID()}")
+        try {
+            vault.download(item.id, incoming, expectedVersionId = version, workspaceId = folder.workspaceId, familyEpochAt = epoch)
+            synchronized(FamilyCopies.LOCK) {
+                if (vault.closed) throw SessionEnded()
+                vault.familyWordsSince(folder.workspaceId, epoch)?.let { throw FileNotFoundException(it) }
+                com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) {
+                    if (!file.isFile) {
+                        file.parentFile?.mkdirs()
+                        check(incoming.renameTo(file)) { "The file couldn't be kept." }
+                    }
+                } ?: throw SessionEnded()
+            }
+        } finally {
+            incoming.delete()
+            File(incoming.path + ".part").delete()
+        }
         return file
     }
 

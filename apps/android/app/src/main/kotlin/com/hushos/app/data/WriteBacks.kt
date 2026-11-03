@@ -103,7 +103,8 @@ object WriteBacks {
         val newest = dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty()
             .mapNotNull { read(it, slot) }.filter { File(dir, it.id + BIN).isFile && it.generation > through }.maxByOrNull { it.generation }
         val pending = if (newest != null && (published == null || newest.generation > published.generation)) {
-            publish(dir, newest.id)
+            // Its record written now; refused (a full disk), it is still the pending save, and a later look writes it.
+            runCatching { publish(dir, newest.id) }
             newest
         } else published
         val keep = pending?.id
@@ -188,7 +189,10 @@ object WriteBacks {
               publishUnder: ((() -> Pending?) -> Pending?)? = null): Pending? {
         val slot = slotOf(target.workspaceId, target.nodeId)
         if (publishUnder == null) return Reservations.whileAccount(accountGeneration) {
-            lockOf(slot).withLock { publishGeneration(context, slot, target, edit, number, write(context, slot, target, edit, number, staged = false), staged = false) }
+            lockOf(slot).withLock {
+                val id = write(context, slot, target, edit, number, staged = false)
+                unlessPublished(context, slot, id) { publishGeneration(context, slot, target, edit, number, id, staged = false) }
+            }
         }
         // A family's: copied and synced under the slot's lock alone (staged: no look publishes or removes it), then published
         // under whatever `publishUnder` holds (the copies lock a revocation's cleanup takes, its recheck first) for the short
@@ -196,11 +200,24 @@ object WriteBacks {
         val id = Reservations.whileAccount(accountGeneration) { lockOf(slot).withLock { write(context, slot, target, edit, number, staged = true) } } ?: return null
         var kept: Pending? = null
         try {
-            kept = publishUnder { Reservations.whileAccount(accountGeneration) { lockOf(slot).withLock { publishGeneration(context, slot, target, edit, number, id, staged = true) } } }
+            kept = publishUnder { Reservations.whileAccount(accountGeneration) { lockOf(slot).withLock { unlessPublished(context, slot, id) { publishGeneration(context, slot, target, edit, number, id, staged = true) } } } }
             return kept
         } finally {
             if (kept == null) lockOf(slot).withLock { dir(context, slot).let { File(it, id + BIN + STAGED).delete(); File(it, id + META + STAGED).delete() } }
         }
+    }
+
+    /*
+     * `publish` of generation `id`; failing before its record named it, the generation goes (the edit, kept by the caller
+     * with its row, is that save from here, so no look publishes a copy its Retry would then find superseding it).
+     */
+    private fun unlessPublished(context: Context, slot: String, id: String, publish: () -> Pending): Pending = try {
+        publish()
+    } catch (failure: Exception) {
+        // (A death has no say here: what it leaves is a complete generation the next look publishes, or nothing.)
+        val dir = dir(context, slot)
+        if (read(File(dir, RECORD), slot)?.id != id) { File(dir, id + BIN).delete(); File(dir, id + META).delete() }
+        throw failure
     }
 
     /* A family save's generation copied but not yet published: no look takes it as pending or removes it. */
@@ -221,7 +238,7 @@ object WriteBacks {
         // A step failing leaves nothing of this generation (its contents are a whole plaintext copy): the edit stays.
         try {
             writeGeneration(dir, target, edit, number, id, suffix)
-        } catch (failure: Throwable) {
+        } catch (failure: Exception) {
             for (name in listOf("$id$BIN.incoming", id + BIN + suffix, "$id$META.incoming", id + META + suffix)) File(dir, name).delete()
             throw failure
         }
@@ -376,9 +393,12 @@ object WriteBacks {
         val generations = dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty().mapNotNull { read(it, slot) }
             .filter { File(dir, it.id + BIN).isFile }
         val newest = generations.maxOfOrNull { it.generation } ?: 0L
-        // Not known: every generation on disk counts as passed, so none is sent again; but the newest complete one may be a
-        // save still pending, so it is kept first as an edit of its own with a staging row ("The save wasn't kept."), never
-        // read as contents (not closed), to Retry or Dismiss. Its row names a number above the rebuilt bounds.
+        // Not known: no generation on disk is sent again from the slot; but the newest complete one may be a save still
+        // pending, so it is kept first as an edit of its own with a staging row ("The save wasn't kept."), never read as
+        // contents (not closed), to Retry or Dismiss. It keeps its own number (its description's, as `n<number>-` names it
+        // too), so it stays behind any newer save retained on disk (a closed edit, a staging row): its Retry never wins a
+        // read over one, and its landing never retires one. Then it leaves the slot, and the bounds stop just below it.
+        // (A generation whose description can't be read names no file to send to, and isn't kept.)
         generations.maxByOrNull { it.generation }?.let { save ->
             val rescued = File(editDirOf(context, save.target), "rescued-${save.id}")
             // There only once copied whole: written beside it and synced, then renamed into place (a copy cut short leaves
@@ -414,11 +434,16 @@ object WriteBacks {
             val rowed = runCatching { FailedTransfers.of(context).all() }.getOrDefault(emptyList()).any { it.file == rescued.path } ||
                 // A family's: no revocation count is known for it here (a revocation deletes the edit, as it deletes every
                 // edit of the folder), so none moves past it.
-                TransferQueue.stagingFailed(context, save.target, rescued, Exception("The save wasn't kept."), Reservations.generation, newest + 1,
+                TransferQueue.stagingFailed(context, save.target, rescued, Exception("The save wasn't kept."), Reservations.generation, save.generation,
                     save.target.familyWorkspace?.let { Long.MAX_VALUE })
             if (!rowed) return null
+            // Kept as the row's edit: out of the slot before the bounds stop below it, so it is never sent from there.
+            File(dir, save.id + BIN).delete()
+            File(dir, save.id + META).delete()
+            if (read(File(dir, RECORD), slot)?.id == save.id) File(dir, RECORD).delete()
         }
-        val rebuilt = Numbers(newest + 1, newest, newest, Landing(java.util.UUID.randomUUID().toString(), null))
+        val below = maxOf(newest - 1, 0L)
+        val rebuilt = Numbers(newest, below, below, Landing(java.util.UUID.randomUUID().toString(), null))
         return runCatching { writeNumbers(context, slot, rebuilt); rebuilt }.getOrNull()
     }
 
@@ -801,6 +826,13 @@ object WriteBacks {
         val held = current(dir, slot) ?: return@withLock
         if (held.id == idOf(file)) {
             clear(dir)
+            // The same save kept elsewhere too (its staging row and edit, a closed edit of its number) goes with it, so no
+            // Retry or reopen brings back what was dismissed.
+            val records = FailedTransfers.of(context)
+            val same = runCatching { records.all() }.getOrDefault(emptyList()).filter { it.slot == slot && it.stage != null && stagedNumber(it.stage) == held.generation }
+            same.forEach { row -> row.file?.let { discardEdit(File(it)) } }
+            if (same.isNotEmpty()) runCatching { records.forgetWhere { row -> same.any { it.id == row.id } } }
+            closedEditsOf(context, slot).filter { it.first == held.generation }.forEach { discardEdit(it.second) }
             notifyFolder(context, held.target)
         }
     }
