@@ -484,7 +484,10 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         val edit = families.editFor(doc, mode, epoch)
         val opened = families.node(doc)
         // On the saves' own thread (WriteBacks.closes), in close order, never the main one.
-        return ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), WriteBacks.closes) { error -> onFamilyEditClosed(error, families, doc, edit, opened, epoch) }
+        // Opened only while the account it was made for is still here: a mode that creates would make it again after a sign-out.
+        return com.hushos.app.data.Reservations.whileAccount(families.vault.ledgerGeneration) {
+            ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), WriteBacks.closes) { error -> onFamilyEditClosed(error, families, doc, edit, opened, epoch) }
+        } ?: run { WriteBacks.discardEdit(edit); throw FileNotFoundException(com.hushos.app.data.FamilyWords.OPEN_AGAIN) }
     }
 
     /*

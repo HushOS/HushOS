@@ -1116,8 +1116,9 @@ class ProviderFamiliesTest {
         var dropping = false
         server.dropReply = { method, path -> (dropping || (method == "POST" && path.endsWith("/complete"))).also { if (it) dropping = true } }
         assertEquals(ListenableWorker.Result.retry(), runJob(slot))
-        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("second save") })
+        // Answered again for the open (a family list with no answer leaves its roots read only), not yet for the abort.
         server.dropReply = { _, path -> path.endsWith("/abort") }
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("second save") })
         val sent = begins()
         assertEquals(ListenableWorker.Result.retry(), runJob(slot))
         assertEquals("a newer save started over an unsettled one", sent, begins())
@@ -1802,6 +1803,57 @@ class ProviderFamiliesTest {
         assertEquals(ListenableWorker.Result.success(), runJob(slot))
         assertEquals(sent, begins())
         assertEquals("marker-family", serverText())
+    }
+
+    /*
+     * #266 P2: a family save's copy into the queue is made outside the copies lock, so a revocation (and a sign-out's close,
+     * which waits for that lock on the main thread) never waits for a whole file's copy; and a revocation landing during
+     * the copy keeps nothing: the copy is never published and goes. Fails if the copy holds the copies lock, or if a save
+     * revoked during its copy is published.
+     */
+    @Test
+    fun aFamilySavesCopyHoldsNoCopiesLockAndKeepsNothingRevokedMeanwhile() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        var revoking: Thread? = null
+        WriteBacks.fault = { at ->
+            if (at == "fsync" && revoking == null) revoking = Thread {
+                Vault(app, DriveApi(Shared.session(app)!!)).forgetFamilyCopies(listOf(family.workspaceId))
+            }.apply { start(); join(5_000) }
+        }
+        ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("revoked during its copy".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
+        WriteBacks.fault = null
+        revoking!!.join(10_000)
+        assertNull("a save revoked during its copy was published", WriteBacks.pending(app, slot))
+        assertEquals("a revoked save's copy was left", emptyList<String>(), WriteBacks.dir(app, slot).listFiles().orEmpty().map { it.name }.filter { it.contains(".bin") })
+        assertTrue(com.hushos.app.data.FailedTransfers.of(app).all().isEmpty())
+    }
+
+    /*
+     * #266 P2: the family list (route 2) gets no answer: the roots Files had stay, read only, until a load is answered
+     * again (no create flag, every write refused), as a family whose own sync gets no answer is. Fails if a failed list
+     * keeps cached roots writable.
+     */
+    @Test
+    fun aFailedFamilyListKeepsTheRootsReadOnlyUntilAnswered() {
+        var now = 0L
+        val vault = Vault(app, DriveApi(Shared.session(app)!!))
+        val families = ProviderFamilies(vault, FamilySync(vault, sweeps = false, tellsFiles = false)) { now }
+        val top = FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId)
+        assertTrue(families.load().single().folders.single().writable)
+        server.beforeAnswer = { method, path -> if (method == "GET" && path == "groups") throw java.io.IOException("dropped") }
+        now += 6 * 60_000L
+        val kept = families.load().single()
+        assertFalse(kept.folders.single().writable)
+        assertTrue(kept.unanswered)
+        assertEquals(0, families.document(top).flags and Document.FLAG_DIR_SUPPORTS_CREATE)
+        val sent = server.requests.size
+        assertThrows(FileNotFoundException::class.java) { families.create(top, Document.MIME_TYPE_DIR, "Trips") }
+        assertEquals(emptyList<String>(), driveWritesSince(sent))
+        server.beforeAnswer = null
+        now += 60_000L
+        assertTrue(families.load().single().folders.single().writable)
     }
 
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =

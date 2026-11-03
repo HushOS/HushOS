@@ -147,8 +147,9 @@ class ProviderFamilies internal constructor(
         } catch (error: NotAuthenticated) {
             throw error
         } catch (_: Exception) {
-            // No answer: the roots it had stay, but never a folder revoked since it was accepted.
-            val kept = before.orEmpty().mapNotNull(::unrevoked)
+            // No answer: the roots it had stay, read only until a sync accepts them again, and never a folder revoked since
+            // it was accepted.
+            val kept = before.orEmpty().mapNotNull { unrevoked(it)?.readOnly() }
             snapshot = Snapshot(kept, clock(), signal, failed = true)
             tell(before, kept)
             return kept
@@ -516,9 +517,19 @@ class ProviderFamilies internal constructor(
         synchronized(FamilyCopies.LOCK) {
             if (vault.closed) throw SessionEnded()
             vault.familyWordsSince(folder.workspaceId, epoch)?.let { throw FileNotFoundException(it) }
-            val edit = WriteBacks.editIn(File(edits, item.id.lowercase()), target)
-            if (!fill(edit)) { WriteBacks.discardEdit(edit); return null }
-            return edit
+            // Only while the account it opens for is still here (the wipe's lock, inside the copies lock as everywhere): after
+            // a sign-out nothing of it is made. Its target names the account, so no later start takes it for another's.
+            var made: File? = null
+            com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) {
+                val edit = WriteBacks.editIn(File(edits, item.id.lowercase()), target, vault.api.session.userId)
+                try {
+                    if (fill(edit)) made = edit else WriteBacks.discardEdit(edit)
+                } catch (failure: Throwable) {
+                    WriteBacks.discardEdit(edit)
+                    throw failure
+                }
+            } ?: throw SessionEnded()
+            return made
         }
     }
 
@@ -569,16 +580,19 @@ class ProviderFamilies internal constructor(
         val closed = com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) { WriteBacks.close(edit, number) } ?: run { WriteBacks.discardEdit(edit); return false }
         // Kept only while the folder's invalidation count is still the one the open read before it checked anything, and
         // the session lasts, under the copies lock a removal's cleanup takes: a family let go of since keeps no plaintext.
-        val kept = synchronized(FamilyCopies.LOCK) {
-            if (vault.closed || vault.familyWordsSince(doc.workspaceId, epoch) != null) { WriteBacks.discardEdit(closed); null }
-            else try {
-                WriteBacks.stage(vault.context, vault.ledgerGeneration, target, closed, number) ?: run { WriteBacks.discardEdit(closed); null }
-            } catch (failure: Exception) {
-                // Not kept (a full disk, say): the closed edit stays, with a row to retry it when one can be written (else the
-                // next reconcile makes it); a removal's cleanup deletes it.
-                TransferQueue.stagingFailed(vault.context, target, closed, failure, vault.ledgerGeneration, number, epoch)
-                throw EditKept(failure)
-            }
+        // The copy into the slot is made outside the copies lock (a sign-out's close on the main thread waits for that lock,
+        // never for a whole file's copy), and only published under it, the check made again first.
+        fun letGo() = vault.closed || vault.familyWordsSince(doc.workspaceId, epoch) != null
+        if (synchronized(FamilyCopies.LOCK) { letGo() }) { WriteBacks.discardEdit(closed); return false }
+        val kept = try {
+            WriteBacks.stage(vault.context, vault.ledgerGeneration, target, closed, number) { publish ->
+                synchronized(FamilyCopies.LOCK) { if (letGo()) null else publish() }
+            } ?: run { WriteBacks.discardEdit(closed); null }
+        } catch (failure: Exception) {
+            // Not kept (a full disk, say): the closed edit stays, with a row to retry it when one can be written (else the
+            // next reconcile makes it); a removal's cleanup deletes it.
+            TransferQueue.stagingFailed(vault.context, target, closed, failure, vault.ledgerGeneration, number, epoch)
+            throw EditKept(failure)
         } ?: return false
         TransferQueue.enqueueSlot(vault.context, kept.slot, opened.name, target.family, vault.ledgerGeneration)
         // Its listing shows the save's size and date now: Files reads the folder again, by the plain node id its listing of

@@ -331,8 +331,8 @@ object TransferQueue {
                 // (Superseded) and its row and edit go, so an older save can't replace a newer one.
                 val number = WriteBacks.stagedNumber(failed.stage) ?: return false
                 var superseded = false
-                fun stage(): WriteBacks.Pending? = try {
-                    WriteBacks.stage(context, generation, target, edit, number)
+                fun stage(publishUnder: ((() -> WriteBacks.Pending?) -> WriteBacks.Pending?)? = null): WriteBacks.Pending? = try {
+                    WriteBacks.stage(context, generation, target, edit, number, publishUnder)
                 } catch (_: WriteBacks.Superseded) {
                     superseded = true
                     null
@@ -340,19 +340,22 @@ object TransferQueue {
                     null
                 }
                 val kept = if (target.familyWorkspace != null) {
-                    // A family's edit: kept only under the copies lock a revocation's cleanup takes, while the folder hasn't
-                    // been let go of since the row was made (its revocation count, as a family save checks it; a count lower
-                    // than the row's is a later process's, where a revocation would have deleted the edit) and the edit is
-                    // still there. Let go of: nothing is kept, the edit goes, and the row says why.
+                    // A family's edit: kept only while the folder hasn't been let go of since the row was made (its revocation
+                    // count, as a family save checks it; a count lower than the row's is a later process's, where a revocation
+                    // would have deleted the edit) and the edit is still there, checked under the copies lock a revocation's
+                    // cleanup takes before the copy and again as it is published (the copy itself made outside that lock).
+                    // Let go of: nothing is kept, the edit goes, and the row says why.
                     val session = Shared.session(context) ?: return false
                     val state = FamilySessions.of(session)
                     var revoked = false
-                    val saved = synchronized(FamilyCopies.LOCK) {
+                    fun letGo(): Boolean {
                         val now = state.epochs[target.familyWorkspace.lowercase()]?.first ?: 0L
                         revoked = state.closed || !edit.isFile || now > (WriteBacks.stagedEpoch(failed.stage) ?: 0L)
-                        if (revoked) { WriteBacks.discardEdit(edit); null }
-                        else stage()
+                        if (revoked) WriteBacks.discardEdit(edit)
+                        return revoked
                     }
+                    val saved = if (synchronized(FamilyCopies.LOCK) { letGo() }) null
+                        else stage { publish -> synchronized(FamilyCopies.LOCK) { if (letGo()) null else publish() } }
                     if (revoked) {
                         Reservations.whileAccount(generation) { records.record(failed.copy(reason = FamilyWords.NOT_IN_FAMILY, stage = null)) }
                         FailedTransfers.changed()
@@ -647,7 +650,10 @@ object TransferQueue {
                 file.name.endsWith(".closed") -> {
                     if (file.path in named) return@forEach
                     val number = WriteBacks.closedNumber(file) ?: return@forEach
-                    val target = runCatching { WriteBacks.decodeTarget(WriteBacks.sidecarOf(file).readText()) }.getOrNull() ?: return@forEach
+                    val sidecar = runCatching { WriteBacks.sidecarOf(file).readText() }.getOrNull() ?: return@forEach
+                    val target = WriteBacks.decodeTarget(sidecar) ?: return@forEach
+                    // Made for another account (an open that outlived a sign-out): never this one's, and gone.
+                    if (WriteBacks.accountOf(sidecar)?.let { !it.equals(session.userId, ignoreCase = true) } == true) { WriteBacks.discardEdit(file); return@forEach }
                     if (WriteBacks.keptAtOrAbove(context, WriteBacks.slotOf(target.workspaceId, target.nodeId), number)) { WriteBacks.discardEdit(file); return@forEach }
                     // A family's: made under the folder's revocation count it has now (a revocation would have deleted it).
                     val epoch = target.familyWorkspace?.let { ws ->
@@ -666,8 +672,10 @@ object TransferQueue {
                 // or Dismiss; an open abandoned partway shows up the same way. Only one without its target goes.
                 else -> if (startup && file.path !in named && file.lastModified() < dayAgo) {
                     val sidecar = WriteBacks.sidecarOf(file)
-                    val target = runCatching { WriteBacks.decodeTarget(sidecar.readText()) }.getOrNull()
+                    val written = runCatching { sidecar.readText() }.getOrNull()
+                    val target = written?.let(WriteBacks::decodeTarget)
                     if (target == null) { if (!sidecar.exists()) WriteBacks.discardEdit(file); return@forEach }
+                    if (WriteBacks.accountOf(written)?.let { !it.equals(session.userId, ignoreCase = true) } == true) { WriteBacks.discardEdit(file); return@forEach }
                     val slot = WriteBacks.slotOf(target.workspaceId, target.nodeId)
                     val epoch = target.familyWorkspace?.let { ws ->
                         synchronized(FamilyCopies.LOCK) { if (!file.isFile) return@forEach; FamilySessions.of(session).epochs[ws.lowercase()]?.first ?: 0L }

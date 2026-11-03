@@ -45,6 +45,8 @@ class AccountStore(private val files: File, private val cache: File, private val
         // The upload ledger under its own lock first: an upload still on its way adds nothing back after this.
         Reservations.wipe(files)
         for (name in ACCOUNT_FILES) File(files, name).deleteRecursively()
+        // What this process held of the account's saves (numbers given, bounds last read) goes with them.
+        WriteBacks.forgetHere()
         // The rollback marks, sealed, and the plaintext file earlier versions kept across sign-outs: a phone signed back
         // in trusts the server as a new device does, the cost the web accepted too (docs/integrity-design.md).
         SettingsMark.deleteAll(noBackup)
