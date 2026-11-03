@@ -578,7 +578,7 @@ class ProviderFamilies internal constructor(
                 throw EditKept(failure)
             }
         } ?: return false
-        TransferQueue.enqueueSlot(vault.context, kept.slot, opened.name, target.family)
+        TransferQueue.enqueueSlot(vault.context, kept.slot, opened.name, target.family, vault.ledgerGeneration)
         // Its listing shows the save's size and date now: Files reads the folder again, by the plain node id its listing of
         // a family folder watches (queryChildDocuments), as every family write tells it (Vault.foldersChanged).
         FilesRoots.foldersChanged(vault.context, listOf(parent), null)

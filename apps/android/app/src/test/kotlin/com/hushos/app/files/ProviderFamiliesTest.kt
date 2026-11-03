@@ -36,6 +36,7 @@ import com.hushos.app.data.oweFamilyGuard
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -78,6 +79,8 @@ class ProviderFamiliesTest {
         WriteBacks.afterContent = null
         WriteBacks.beforeSlotId = null
         WriteBacks.fault = null
+        WriteBacks.afterNewestChosen = null
+        TransferQueue.beforeSlotEnqueued = null
         com.hushos.app.data.FailedTransfers.beforeWrite = null
         Reservations.forgetHeld()
         server.close()
@@ -1645,6 +1648,56 @@ class ProviderFamiliesTest {
         assertTrue(com.hushos.app.data.FailedTransfers.of(app).all().isEmpty())
         assertEquals("only in its closed edit", read(provider, file))
         assertEquals("only in its closed edit", families.editFor(doc, "rw").readText())
+    }
+
+    /*
+     * #266 P1 (account): a family save is kept, and before its job is queued (WorkManager's lookup blocking, say) the account
+     * signs out and another signs in: nothing of the save is published, no job and no file name the new account would see.
+     * Fails if the enqueue tags a job with the account signed in now, or writes the old file's name, instead of checking
+     * the account the save was kept under.
+     */
+    @Test
+    fun aFamilySaveQueuedAfterItsAccountLeftPublishesNothing() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        TransferQueue.beforeSlotEnqueued = {
+            TransferQueue.beforeSlotEnqueued = null
+            Shared.clearSession(app)
+            com.hushos.app.data.AccountStore(app.filesDir, app.cacheDir, app.noBackupFilesDir).wipe()
+            Shared.writeSession(app, Shared.Session(server.origin, "another-token", UUID.randomUUID().toString(), "sam@example.org"))
+        }
+        ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("saved before the sign-out".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
+        assertEquals("a job was queued for the account signed in now", emptyList<androidx.work.WorkInfo>(), jobs(slot))
+        assertEquals("the old account's file name was published", emptyMap<String, String>(), com.hushos.app.data.JobNames.of(app).all())
+    }
+
+    /*
+     * #266 P2: a read of a family file chooses what to start from (a closed edit a failed save left, or the slot's newer
+     * pending save) while that pending save lands: the landing waits for the choice, and the read gets the newest save.
+     * Fails if the choice is made outside the slot's lock, where the landing deletes the chosen edit (and the slot) before
+     * it is copied and the read fails.
+     */
+    @Test
+    fun aFamilyReadChoosingKeptContentsDuringALandingReadsTheNewest() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        WriteBacks.fault = { at -> if (at == "copy") throw java.io.IOException("No space left on device") }
+        ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("never kept".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
+        WriteBacks.fault = null
+        assertEquals(1, com.hushos.app.data.FailedTransfers.of(app).all().count { it.slot == slot && it.stage != null })
+        ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("newest".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
+        val pending = WriteBacks.pending(app, slot)!!
+        var landing: Thread? = null
+        WriteBacks.afterNewestChosen = {
+            WriteBacks.afterNewestChosen = null
+            landing = Thread { WriteBacks.landed(app, slot, pending.id, null, null, pending.generation) }.apply { start(); join(500) }
+        }
+        assertEquals("newest", read(provider, file))
+        assertNotNull("the read never chose", landing)
+        landing!!.join(10_000)
     }
 
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =

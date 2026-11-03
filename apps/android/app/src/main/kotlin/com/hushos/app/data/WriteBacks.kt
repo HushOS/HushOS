@@ -158,7 +158,10 @@ object WriteBacks {
     /* A save older than what its file's slot already holds or landed: never kept (a newer one stands). */
     class Superseded : Exception("A newer save of this file stands.")
 
-    /* Tests: runs at each step of keeping a save ("copy", "fsync", "json", "record", "delete"), to fail it there. */
+    /*
+     * Tests: runs at each step of keeping a save ("copy", "fsync", "json", "record", "delete"), of a landing ("landed-copy",
+     * "landed-mark", "landed-retire": after each) and of the others named where they run, to fail it there.
+     */
     @Volatile internal var fault: ((String) -> Unit)? = null
 
     /*
@@ -219,6 +222,9 @@ object WriteBacks {
      */
     const val EDITS = "edits"
 
+    /* Tests: runs as an open has chosen which kept contents to start from, before copying them. */
+    @Volatile internal var afterNewestChosen: (() -> Unit)? = null
+
     /* Every closed edit of `slot` on disk, by the number in its name: the saves never kept in the slot. Never throws. */
     fun closedEditsOf(context: Context, slot: String): List<Pair<Long, File>> = runCatching {
         File(context.filesDir, EDITS).walkTopDown().filter { it.isFile && it.name.endsWith(".closed") }.mapNotNull { closed ->
@@ -268,9 +274,12 @@ object WriteBacks {
         readNumbers(context, slot).let { held -> number <= maxOf(current(dir(context, slot), slot)?.generation ?: 0L, held.landed, held.cancelled) }
     }
 
-    /* Per slot, kept past the slot itself (an account file a sign-out wipes): the last number given and the newest landed. */
-    /* Per slot, kept past it: the last number given, the newest landed, and every number a cancel took (`cancelled`). */
-    private data class Numbers(val reserved: Long, val landed: Long, val cancelled: Long = 0L)
+    /*
+     * Per slot, kept past it (an account file a sign-out wipes): the last number given, the newest landed, every number a
+     * cancel took (`cancelled`), and the landing a read hasn't caught up with yet. One file, so the landed bound and its
+     * landing marker change together, by one rename: no state on disk says a save landed while a read doesn't know it.
+     */
+    private data class Numbers(val reserved: Long, val landed: Long, val cancelled: Long = 0L, val landing: Landing? = null)
 
     private val reservedHere = ConcurrentHashMap<String, Long>()
 
@@ -282,15 +291,24 @@ object WriteBacks {
     private fun numbersOf(dir: File, slot: String): Numbers = readNumbersAt(File(dir.parentFile?.parentFile, "$NUMBERS/$slot"))
 
     private fun readNumbersAt(file: File): Numbers = runCatching {
-        val parts = file.readText().trim().split(" ")
-        Numbers(parts[0].toLong(), parts[1].toLong(), parts.getOrNull(2)?.toLong() ?: 0L)
+        val lines = file.readText().split("\n")
+        val parts = lines[0].trim().split(" ")
+        val landing = lines.getOrNull(1)?.takeIf { it.isNotEmpty() }?.let { Landing(it, lines.getOrNull(2)?.ifEmpty { null }) }
+        Numbers(parts[0].toLong(), parts[1].toLong(), parts.getOrNull(2)?.toLong() ?: 0L, landing)
     }.getOrDefault(Numbers(0L, 0L))
 
+    /* Written whole and synced, then renamed into place (its folder synced too where the platform lets it): old or new, never half. */
     private fun writeNumbers(context: Context, slot: String, numbers: Numbers) {
         fault?.invoke("numbers")
         val file = numbersFile(context, slot).also { it.parentFile?.mkdirs() }
-        val incoming = File(file.parentFile, "$slot.incoming").apply { writeText("${numbers.reserved} ${numbers.landed} ${numbers.cancelled}") }
+        val incoming = File(file.parentFile, "$slot.incoming")
+        val text = "${numbers.reserved} ${numbers.landed} ${numbers.cancelled}" + (numbers.landing?.let { "\n${it.id}\n${it.version ?: ""}" } ?: "")
+        java.io.FileOutputStream(incoming).use { out -> out.write(text.toByteArray()); out.fd.sync() }
         check(incoming.renameTo(file)) { "The save's number couldn't be kept." }
+        runCatching {
+            val fd = android.system.Os.open(file.parentFile!!.path, android.system.OsConstants.O_RDONLY, 0)
+            try { android.system.Os.fsync(fd) } finally { android.system.Os.close(fd) }
+        }
     }
 
     /*
@@ -324,12 +342,14 @@ object WriteBacks {
     fun copyNewestTo(context: Context, slot: String, dest: File): Boolean {
         // The closed edits on disk, row or not (a row that couldn't be written leaves only the edit), and any row's edit; never
         // one at or below the newest landed save or a cancel's bound (a newer save stands, or the save was cancelled).
-        val settled = readNumbers(context, slot).let { maxOf(it.landed, it.cancelled) }
-        val staged = (closedEditsOf(context, slot) + runCatching { FailedTransfers.of(context).all() }.getOrDefault(emptyList())
-            .filter { it.slot == slot && it.stage != null }
-            .mapNotNull { row -> stagedNumber(row.stage!!)?.let { it to File(row.file ?: return@mapNotNull null) } })
-            .filter { it.first > settled && it.second.isFile }.maxByOrNull { it.first }
+        // All of it under the slot's lock a landing and a cancel take, so the edit chosen is never deleted before it is copied.
         return lockOf(slot).withLock {
+            val settled = readNumbers(context, slot).let { maxOf(it.landed, it.cancelled) }
+            val staged = (closedEditsOf(context, slot) + runCatching { FailedTransfers.of(context).all() }.getOrDefault(emptyList())
+                .filter { it.slot == slot && it.stage != null }
+                .mapNotNull { row -> stagedNumber(row.stage!!)?.let { it to File(row.file ?: return@mapNotNull null) } })
+                .filter { it.first > settled && it.second.isFile }.maxByOrNull { it.first }
+            afterNewestChosen?.invoke()
             val dir = dir(context, slot)
             val pending = current(dir, slot)
             val source = when {
@@ -377,18 +397,29 @@ object WriteBacks {
      */
     fun landed(context: Context, slot: String, id: String, version: String? = null, readCopy: File? = null, generation: Long = 0L): Pending? = lockOf(slot).withLock {
         val dir = dir(context, slot)
-        // The newest number landed, kept past the slot: a save numbered at or below it (a staging retry) is never kept again,
-        // and every one that never made it into the slot goes now, found on disk (a closed edit no row names included).
-        readNumbers(context, slot).let { held -> if (generation > held.landed) runCatching { writeNumbers(context, slot, held.copy(landed = generation)) } }
-        if (generation > 0L) retireStagedThrough(context, slot, generation)
-        // What a read of the file is served from now on until it has caught up with the server (`landing`): the landed
-        // bytes, moved from the copy that was sent to the read copy of the version they became, when that is known.
+        // In an order where no step's end (a death, a write refused) leaves the disk saying "landed" while a read doesn't know
+        // it: until the landing marker is written the save is still pending (sent again, or found landed by its ledger); from
+        // it on a read refreshes or serves the landed bytes. Only then does anything go.
+        // 1. What a read is served from until it has caught up with the server (`landing`): the landed bytes, moved from the
+        //    copy that was sent to the read copy of the version they became, when that is known.
         val sending = File(dir, "sending-$id")
         val kept = if (version != null && readCopy != null && sending.isFile) {
             readCopy.parentFile?.mkdirs()
             sending.renameTo(readCopy) || runCatching { sending.copyTo(readCopy, overwrite = true); true }.getOrDefault(false)
         } else false
-        noteLanding(context, slot, if (kept) version else null)
+        fault?.invoke("landed-copy")
+        // 2. The landing marker and the newest number landed, in one write (one rename): from here a read refreshes or serves
+        //    the landed bytes, and a save numbered at or below it (a staging retry) is never kept again. Refused, nothing
+        //    below runs (the caller's job tries again).
+        readNumbers(context, slot).let { held ->
+            writeNumbers(context, slot, held.copy(landed = maxOf(held.landed, generation), landing = Landing(java.util.UUID.randomUUID().toString(), if (kept) version else null)))
+        }
+        fault?.invoke("landed-mark")
+        // 3. Every save at or below it that never made it into the slot goes now, found on disk (a closed edit no row names
+        //    too); a death before this is finished by the next reconcile (retireSettled).
+        if (generation > 0L) retireStagedThrough(context, slot, generation)
+        fault?.invoke("landed-retire")
+        // 4. The slot cleared of it.
         val held = current(dir, slot)
         if (held == null || held.id == id) { dir.deleteRecursively(); null } else {
             dir.listFiles()?.filter { it.name.startsWith("sending-") }?.forEach { it.delete() }
@@ -404,33 +435,37 @@ object WriteBacks {
 
     /*
      * A file's save landed from its job's own vault: the reader's vault may still hold the version before. Kept on disk
-     * (filesDir/writeback-landings/<slot>, an account file a sign-out wipes) until a read caught up with the server: a
+     * with the slot's numbers (filesDir/writeback-numbers/<slot>, with the landed bound) until a read caught up with the server: a
      * landing id of its own (so a read only clears the landing it refreshed for) and the version the save became, when
      * its bytes were kept as that version's read copy. A read that can't reach the server serves those bytes, or fails;
      * never the version before.
      */
     data class Landing(val id: String, val version: String?)
 
+    /* Where an earlier build kept landings apart from the numbers: nothing reads it now; a sign-out still wipes it. */
     const val LANDINGS = "writeback-landings"
 
-    private fun landingFile(context: Context, slot: String) = File(context.filesDir, "$LANDINGS/$slot")
-
-    internal fun noteLanding(context: Context, slot: String, version: String?) {
-        val file = landingFile(context, slot).also { it.parentFile?.mkdirs() }
-        val incoming = File(file.parentFile, "$slot.incoming")
-        incoming.writeText(java.util.UUID.randomUUID().toString() + "\n" + (version ?: ""))
-        check(incoming.renameTo(file)) { "The landing couldn't be kept." }
+    /* Tests: a landing of the file noted, as `landed` notes one. */
+    internal fun noteLanding(context: Context, slot: String, version: String?) = lockOf(slot).withLock {
+        writeNumbers(context, slot, readNumbers(context, slot).copy(landing = Landing(java.util.UUID.randomUUID().toString(), version)))
     }
 
-    /* The file's latest landing a read hasn't caught up with, if any. */
-    fun landing(context: Context, slot: String): Landing? = runCatching {
-        val lines = landingFile(context, slot).readText().split("\n")
-        Landing(lines[0], lines.getOrNull(1)?.ifEmpty { null })
-    }.getOrNull()
+    /* The file's latest landing a read hasn't caught up with, if any (read without the lock: the file changes by one rename). */
+    fun landing(context: Context, slot: String): Landing? = readNumbers(context, slot).landing
 
     /* A read caught up with the server after landing `seen`: only that landing goes, never one that came meanwhile. */
     fun caughtUp(context: Context, slot: String, seen: String) = lockOf(slot).withLock {
-        if (landing(context, slot)?.id == seen) landingFile(context, slot).delete()
+        val held = readNumbers(context, slot)
+        if (held.landing?.id == seen) runCatching { writeNumbers(context, slot, held.copy(landing = null)) }
+    }
+
+    /*
+     * The slot's saves at or below its durable bounds (landed, cancelled) that never made it into it, gone: what a landing
+     * or a cancel that died after its bound left (the next reconcile runs this), under the slot's lock.
+     */
+    fun retireSettled(context: Context, slot: String) = lockOf(slot).withLock {
+        val through = readNumbers(context, slot).let { maxOf(it.landed, it.cancelled) }
+        if (through > 0L) retireStagedThrough(context, slot, through)
     }
 
     /*
@@ -458,7 +493,16 @@ object WriteBacks {
     }
 
     /* The slot's saves dropped (its family ended): under its lock, so a save landing in it meanwhile is either kept whole or gone. */
-    fun drop(context: Context, slot: String) = lockOf(slot).withLock { dir(context, slot).deleteRecursively() }
+    fun drop(context: Context, slot: String) = lockOf(slot).withLock { clear(dir(context, slot)) }
+
+    /*
+     * A slot deleted, its generations' contents first: a death partway through leaves no generation whole (contents and
+     * description) for a later look to publish again, whatever order the rest goes in.
+     */
+    private fun clear(dir: File) {
+        dir.listFiles { f -> f.name.endsWith(BIN) }?.forEach { it.delete() }
+        dir.deleteRecursively()
+    }
 
     /* What a cancel pressed now takes: the slot's own id, and the save its record names (its generation, id and file). */
     data class Captured(val incarnation: String, val generation: Long, val id: String, val target: Target)
@@ -558,7 +602,7 @@ object WriteBacks {
         val dir = dir(context, slot)
         val held = current(dir, slot) ?: return@withLock
         if (held.id == idOf(file)) {
-            dir.deleteRecursively()
+            clear(dir)
             notifyFolder(context, held.target)
         }
     }
