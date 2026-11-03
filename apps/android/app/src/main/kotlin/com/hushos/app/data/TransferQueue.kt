@@ -610,7 +610,8 @@ object TransferQueue {
     /*
      * Edits on disk set right (as the process starts, and at every sweep of the queue): a closed edit no row names and whose
      * number the slot hasn't kept gets its staging row (one kept or superseded meanwhile goes); as the process starts, an
-     * edit never closed and over a day old is an open no process holds any more, and goes. Only for the account signed in.
+     * edit never closed, over a day old and no row naming it gets one too (its target beside it; it may be a save whose
+     * close failed at every step), and only an edit without its target goes. Only for the account signed in.
      */
     fun reconcileEdits(context: Context, startup: Boolean) {
         val session = Shared.session(context) ?: return
@@ -648,8 +649,20 @@ object TransferQueue {
                     val closed = file.parentFile?.listFiles()?.any { it.name.startsWith(edit.name + ".") && it.name.endsWith(".closed") } == true
                     if (startup && !edit.exists() && !closed && file.lastModified() < dayAgo) file.delete()
                 }
-                // Never one a row names, whatever its name (a close whose rename failed keeps its save under the edit's own name).
-                else -> if (startup && file.path !in named && file.lastModified() < dayAgo) WriteBacks.discardEdit(file)
+                // An edit never closed, over a day old and no row naming it: no process holds it any more, but its close may
+                // have run with every step failing (the rename, the save, the row), so it may be a save. Never deleted here
+                // while its target is beside it: it gets a staging row (numbered now, above the file's saves so far) to Retry
+                // or Dismiss; an open abandoned partway shows up the same way. Only one without its target goes.
+                else -> if (startup && file.path !in named && file.lastModified() < dayAgo) {
+                    val sidecar = WriteBacks.sidecarOf(file)
+                    val target = runCatching { WriteBacks.decodeTarget(sidecar.readText()) }.getOrNull()
+                    if (target == null) { if (!sidecar.exists()) WriteBacks.discardEdit(file); return@forEach }
+                    val slot = WriteBacks.slotOf(target.workspaceId, target.nodeId)
+                    val epoch = target.familyWorkspace?.let { ws ->
+                        synchronized(FamilyCopies.LOCK) { if (!file.isFile) return@forEach; FamilySessions.of(session).epochs[ws.lowercase()]?.first ?: 0L }
+                    }
+                    stagingFailed(context, target, file, Exception("The save wasn't kept."), generation, WriteBacks.reserve(context, slot), epoch)
+                }
             }
         }
     }

@@ -1377,12 +1377,13 @@ class FilesSaveOrderTest {
 
     /*
      * A save that couldn't be kept waits more than a day for its Retry, and the process starts again (its cache swept of
-     * copies over a day old): the edit is still there, and the Retry sends it. An edit opened and never closed, as old, is
-     * an open no process holds any more and goes at that start. Fails if a retained edit is swept with the cache, or an
-     * abandoned open is kept for ever.
+     * copies over a day old): the edit is still there, and the Retry sends it. An edit opened and never closed, as old,
+     * can't be told from a save whose close failed at every step: it gets a row of its own to dismiss, and is never sent
+     * or read in place of the retained save. Fails if a retained edit is swept with the cache, or if an edit never closed
+     * is deleted unasked or kept with nothing to dismiss it by.
      */
     @Test
-    fun aRetainedEditOutlivesADayAndARestartWhileAnAbandonedOneGoes() {
+    fun aRetainedEditOutlivesADayAndARestartWhileAnAbandonedOneWaitsToBeDismissed() {
         val provider = provider()
         val notes = notes(provider)
         val slot = slotOf(provider, notes)
@@ -1394,11 +1395,15 @@ class FilesSaveOrderTest {
         File(app.filesDir, WriteBacks.EDITS).walkTopDown().forEach { it.setLastModified(twoDaysAgo) }
         com.hushos.app.data.DecryptedCopies.sweep(app.cacheDir)
         TransferQueue.reconcileEdits(app, startup = true)
-        assertFalse("an abandoned open was kept", abandoned.exists())
+        val left = FailedTransfers.of(app).all().single { it.file == abandoned.path }
         assertEquals("kept over a day", File(row.file!!).readText())
+        assertEquals("kept over a day", opened(provider, notes, "r"))
         assertTrue(TransferQueue.retry(app, row))
         assertEquals(ListenableWorker.Result.success(), runSlot(slot))
         assertEquals("kept over a day", serverText(notes))
+        TransferQueue.dismiss(app, left)
+        assertFalse("a dismissed open was kept", abandoned.exists())
+        assertTrue(FailedTransfers.of(app).all().isEmpty())
     }
 
     /*
@@ -1866,5 +1871,36 @@ class FilesSaveOrderTest {
         val started = landWithItsBookkeepingCut(start)
         TransferQueue.reconcileEdits(app, startup = true)
         assertEquals("the next start left the landing's obsolete row", emptyList<FailedTransfer>(), FailedTransfers.of(app).all().filter { it.slot == started })
+    }
+
+    /*
+     * #266 P1 (shared): on a full disk another app's save closes with every step failing: the close's rename, the save into
+     * the slot and its row. The edit is left under its own name, like an open abandoned partway. A start more than a day
+     * later gives it a row instead of deleting it, and the row's Retry sends it; until then no read takes it for contents.
+     * Fails if a start deletes an edit never closed that its target is kept beside.
+     */
+    @Test
+    fun aSaveWhoseCloseFailedAtEveryStepIsKeptPastADayAndARestart() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.fault = { if (it == "close" || it == "copy") throw java.io.IOException("No space left on device") }
+        FailedTransfers.beforeWrite = { throw java.io.IOException("No space left on device") }
+        save(provider, notes, "saved on a full disk")
+        WriteBacks.fault = null
+        FailedTransfers.beforeWrite = null
+        assertTrue(FailedTransfers.of(app).all().isEmpty())
+        val edit = File(app.filesDir, WriteBacks.EDITS).walkTopDown().single { it.isFile && !it.name.contains('.') }
+        assertEquals("saved on a full disk", edit.readText())
+        assertEquals("an edit never closed was read as contents", "original", opened(provider, notes, "r"))
+        val twoDaysAgo = System.currentTimeMillis() - 2 * 86_400_000L
+        File(app.filesDir, WriteBacks.EDITS).walkTopDown().forEach { it.setLastModified(twoDaysAgo) }
+        WriteBacks.forgetReservedHere()
+        TransferQueue.reconcileEdits(app, startup = true)
+        val row = FailedTransfers.of(app).all().single { it.slot == slot }
+        assertEquals(edit.path, row.file)
+        assertTrue(TransferQueue.retry(app, row))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("saved on a full disk", serverText(notes))
     }
 }
