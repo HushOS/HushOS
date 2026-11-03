@@ -399,6 +399,15 @@ class FamilyFixture(val server: FakeDrive) {
         return chain
     }
 
+    /* Sam, on his own device, gives `userId` billing: another manager's handover landing meanwhile. */
+    fun samGivesBilling(userId: String) {
+        val accepted = creatorChain()
+        val members = accepted.roster().members.map {
+            if (it.userId.equals(userId, ignoreCase = true)) it.copy(roles = (it.roles + GroupRole.BILLING).distinct().sortedBy { role -> role.ordinal }) else it
+        }
+        chain = chain + rosterSign(rosterNext(accepted, members, creator.id, null, null, null), groupSeed, creator.keys)
+    }
+
     /* Sam changes the member list himself (a roster that only re-signs it): what another manager's win looks like. */
     fun samChangesTheList() {
         val accepted = creatorChain()

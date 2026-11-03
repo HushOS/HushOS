@@ -387,4 +387,53 @@ class FamilyRolesTest {
         assertEquals(setOf(family.member.id.lowercase(), graceId), organizers(phone))
         assertTrue("nothing for Ada", family.memberCalls.none { it.first.equals(ada.id, ignoreCase = true) })
     }
+
+    /* Grace and Ada in the family and checked, Maya the organizer. */
+    private fun withAda(): Pair<FamilyFixture.Phone, String> {
+        val phone = phone(organizer = true)
+        val ada = server.another("ada@example.org", "Ada Lovelace")
+        family.waiting(ada, "ada@example.org", "Ada Lovelace")
+        assertEquals(LetIn.Landed, phone.sync.letIn(summary, family.pendingRows.map(PendingPerson::from).single()))
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        family.verifyPin(ada, "ada@example.org", "Ada Lovelace")
+        return phone to ada.id.lowercase()
+    }
+
+    private val names: (String) -> String? = { id -> if (id.equals(graceId, ignoreCase = true)) "Grace" else "Ada" }
+
+    /*
+     * Make them the organizer on Grace meets `stale`: another device gave Ada billing meanwhile. The re-sign over the new
+     * member list sees Maya and Ada both holding it and stops: Grace is never given billing, the handover's record goes.
+     * Fails if a handover checks for one left half done only before its first attempt.
+     */
+    @Test
+    fun aHandoverOvertakenByAnotherOneIsNeverReSignedOverIt() {
+        val (phone, ada) = withAda()
+        family.memberAnswers.add { _ ->
+            family.samGivesBilling(ada)
+            409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
+        }
+        assertEquals(RoleEnd.Refused("Finish handing over to Ada first."), phone.sync.handOver(summary, graceId, "Grace", names))
+        assertEquals(setOf(family.member.id.lowercase(), ada), organizers(phone))
+        assertNull(phone.sync.outbox.handover(family.member.id, family.groupId))
+    }
+
+    /*
+     * A handover to Grace kept unstaged (a grant for her still waiting), then another device gives Ada billing; the next
+     * open finishes the grant and, going on with the handover, finds Ada beside Maya and stops. Fails if a resumed
+     * handover gives billing without reading the member list it resumes over.
+     */
+    @Test
+    fun aResumedHandoverOvertakenByAnotherOneStops() {
+        val (phone, ada) = withAda()
+        answer(6, 503)
+        assertTrue(grant(phone) is RoleEnd.Pending)
+        assertTrue(phone.sync.handOver(summary, graceId, "Grace", names) is RoleEnd.Pending)
+        family.samGivesBilling(ada)
+        val handed = ArrayList<Pair<String, RoleEnd>>()
+        phone.sync.resumeOutbox(summary, names = names, handed = { to, end -> handed.add(to to end) })
+        assertEquals(listOf(graceId to RoleEnd.Refused("Finish handing over to Ada first.")), handed)
+        assertEquals(setOf(family.member.id.lowercase(), ada), organizers(phone))
+        assertNull(phone.sync.outbox.handover(family.member.id, family.groupId))
+    }
 }

@@ -432,7 +432,7 @@ private fun FamilySync.finishHandover(summary: GroupSummary, names: (String) -> 
         !bills(userId) -> { outbox.clearHandover(userId, groupId); return }
         bills(to) -> stepDown(summary, first)
         // Billing never staged for them (a change for them was still waiting): the handover goes on from its start.
-        !kept.staged -> giveThenStepDown(summary, to, first)
+        !kept.staged -> giveThenStepDown(summary, to, first, names)
         // Staged and ended without landing: its refusal was said with its call.
         else -> { outbox.clearHandover(userId, groupId); return }
     }
@@ -655,15 +655,8 @@ fun FamilySync.handOver(summary: GroupSummary, to: String, first: String, names:
             if (outbox.handover(userId, summary.id) != null) return@notMemberLetsGo RoleEnd.Refused("Finish handing over to $them first.")
             if (settled == RoleEnd.Landed) return@notMemberLetsGo RoleEnd.Refused("$them is the organizer now.")
         }
-        // The member list, not only this device's record: a handover whose last step was refused left no record, but
-        // someone else holds billing beside this account. Billing goes to nobody else until that one is finished.
-        (syncRevised(summary).state as? FamilyState.Accepted)?.view?.let { view ->
-            handoverToFinish(view, userId)?.takeIf { !it.equals(to, ignoreCase = true) }?.let { other ->
-                return@notMemberLetsGo RoleEnd.Refused("Finish handing over to ${names(other) ?: "them"} first.")
-            }
-        }
         outbox.markHandover(userId, summary.id, to)
-        giveThenStepDown(summary, to, first)
+        giveThenStepDown(summary, to, first, names)
     }
 }
 
@@ -687,8 +680,16 @@ fun handoverToFinish(view: FamilyView, me: String): String? {
  * needsCheckFor), the record marked staged once that call is kept, then this account lets go of it. Pending (unanswered,
  * or a change for them kept before it) keeps the record for the next open; a refusal or a check asked for ends it.
  */
-private fun FamilySync.giveThenStepDown(summary: GroupSummary, to: String, first: String): RoleEnd =
+private fun FamilySync.giveThenStepDown(summary: GroupSummary, to: String, first: String, names: (String) -> String?): RoleEnd =
     when (val given = callFor(summary, to, first, unchangedIsDone = true, check = to,
+        // The member list itself on every attempt (a first one, a re-sign after `stale`, a resumed handover): while this
+        // account and someone else hold billing, it goes to nobody else until that handover is finished. A handover left
+        // half done here, or one another device made meanwhile, ends this one, refused.
+        before = { view ->
+            handoverToFinish(view, userId)?.takeIf { !it.equals(to, ignoreCase = true) }?.let { other ->
+                throw StageRefused("Finish handing over to ${names(other) ?: "them"} first.")
+            }
+        },
         onStaged = { outbox.markHandover(userId, summary.id, to, staged = true) }) { revision, kems ->
         ledger.handoverBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), summary.id, revision, Handover.To(to.lowercase()), kems)
     }) {
@@ -715,7 +716,7 @@ private fun FamilySync.stepDown(summary: GroupSummary, first: String): RoleEnd {
  * A change that no longer changes anything after a landing or a win is done; `unchangedIsDone` says so from the start.
  */
 private fun FamilySync.callFor(summary: GroupSummary, person: String, first: String, unchangedIsDone: Boolean,
-    check: String? = null, onStaged: () -> Unit = {}, build: (ULong, Map<String, String>) -> RosterCall): RoleEnd {
+    check: String? = null, before: (FamilyView) -> Unit = {}, onStaged: () -> Unit = {}, build: (ULong, Map<String, String>) -> RosterCall): RoleEnd {
     val route = ChainRoute.Member(person.lowercase())
     var moved = unchangedIsDone
     for (kept in outbox.list(userId, summary.id)) {
@@ -732,6 +733,7 @@ private fun FamilySync.callFor(summary: GroupSummary, person: String, first: Str
         // A promotion: where they stand on this phone now, from the settings and this device's guard read together over
         // the member list just synced (the row's label may be old). A guard that can't be read throws: nothing is signed.
         val built = stageCall(summary) { view, revision, kems ->
+            before(view)
             if (check != null && memberStandings(view)[check.lowercase()] != MemberStanding.VERIFIED) throw CheckFirstNeeded()
             build(revision, kems)
         }

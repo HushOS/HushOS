@@ -258,10 +258,11 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         }
         // A handover the app stopped in the middle of, finished: said as the web's Make them the organizer says it, and the
         // family read again so its page shows who the organizer is now.
+        // Any handover outcome (landed, refused, a check asked for) may have changed who holds billing part way.
         var handedOver = false
         val handed = { to: String, end: com.hushos.app.data.RoleEnd ->
             val who = names(to) ?: "They"
-            if (end == com.hushos.app.data.RoleEnd.Landed) handedOver = true
+            handedOver = true
             if (gate.current(s)) when (end) {
                 com.hushos.app.data.RoleEnd.Landed -> model.notice("$who is the organizer", untilRead = false)
                 is com.hushos.app.data.RoleEnd.Refused -> model.notice("Couldn’t change that. ${end.words}", untilRead = true)
@@ -277,6 +278,8 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             error.rethrowIfCancelled()
             if (error is NotAuthenticated) { model.lostSession(); return }
             if (!FamilySync.unanswered(error)) model.notice(FamilyWords.error(error), untilRead = false)
+            // Failed part way: what landed before the failure (a handover's billing) shows only once the family is read.
+            handedOver = true
             emptyMap()
         }
         if (ends.values.any { it == com.hushos.app.data.CallEnd.Wiped }) return

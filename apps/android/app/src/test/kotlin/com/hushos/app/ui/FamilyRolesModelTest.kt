@@ -158,4 +158,36 @@ class FamilyRolesModelTest {
         handOverFromTheRow()
         until("the page read the family again") { halfDoneShown() == server.grace.id.lowercase() }
     }
+
+    /*
+     * A handover kept unstaged (its first call never made: the connection dropped), then the page opens: the resume gives
+     * Grace billing, and Maya's last step is refused. Nothing was in the outbox, so only the handover's outcome says the
+     * family changed; the page reads it again and shows Finish handing over. Fails if a resume that completes part way
+     * leaves the page as it was.
+     */
+    @Test
+    fun aResumedHandoverThatPartlyCompletesShowsTheFamilyAsItIs() {
+        family.rosterFailures = 1
+        assertTrue(runCatching { host.vault.families.handOver(family.summary, server.grace.id, "Grace") }.isFailure)
+        runBlocking { model.refreshFamilies(force = true) }
+        assertEquals(null, halfDoneShown())
+        family.memberAnswers.add { body -> family.apply(body, null) }
+        family.memberAnswers.add { _ -> 409 to JSONObject().put("code", "held").put("message", "Paused.") }
+        runBlocking { model.loadManaged(family.groupId) }
+        assertEquals(server.grace.id.lowercase(), halfDoneShown())
+    }
+
+    /*
+     * The same, but the resume fails once billing landed (the connection drops before Maya's last step): the failure is
+     * said, and the page still reads the family again. Fails if a failed resume skips the read.
+     */
+    @Test
+    fun aResumeThatFailsPartWayStillShowsTheFamilyAsItIs() {
+        family.rosterFailures = 1
+        assertTrue(runCatching { host.vault.families.handOver(family.summary, server.grace.id, "Grace") }.isFailure)
+        runBlocking { model.refreshFamilies(force = true) }
+        family.memberAnswers.add { body -> val landed = family.apply(body, null); family.rosterFailures = 2; landed }
+        runBlocking { model.loadManaged(family.groupId) }
+        assertEquals(server.grace.id.lowercase(), halfDoneShown())
+    }
 }
