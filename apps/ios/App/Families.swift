@@ -334,6 +334,10 @@ extension DriveStore {
         for (area, groupId) in areas { familyAreaGroups[area] = groupId }
         guard stillShown() else { return }
         if case .accepted(let view) = state {
+            // In the Files app too: its location added (or kept) for this account, unless a later look let it go.
+            let vault = session.owner
+            FamilyFilesDomains.shared.accepted(summary.id, name: summary.name, owner: AccountOwner(vault.api.session),
+                                               revision: revision ?? FamilySync.newestLook(), session: vault.copySession)
             familyShown[summary.id] = view
             for root in view.areas.compactMap({ $0.root?.id.lowercased() }) { familyRoots[root] = summary.id }
             let groupId = summary.id

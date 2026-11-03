@@ -117,12 +117,14 @@ public enum FilesDomain {
      * ... menu, Edit). Simulator debug builds skip that step through the testing mode, which
      * needs the testing-mode entitlement the app carries.
      */
-    public static func register(for owner: AccountOwner, record: FilesDomainOwner = .shared) async {
+    public static func register(for owner: AccountOwner, record: FilesDomainOwner = .shared, families: FamilyFilesDomains = .shared) async {
         // Unknown is not "none": adding over a domain that exists would keep it, whatever it holds.
         guard let existing = try? await NSFileProviderManager.domains() else { return }
         let ours = existing.first { $0.identifier == identifier }
         switch FilesDomainOwner.plan(domainExists: ours != nil, recorded: record.read(), signingIn: owner) {
         case .keep:
+            // The same account: its families' locations stay, any other account's (or one a revocation left without a record) go.
+            await families.reconcile(owner: owner).value
             await signedIn()
             return
         case .replace:
@@ -130,7 +132,11 @@ public enum FilesDomain {
         case .add:
             break
         }
-        for stale in existing where stale.identifier != identifier { _ = await removeAll(stale) }
+        // Every family location goes with the drive's (each record once its location went): the next acceptance adds this account's.
+        await families.removeAll()
+        for stale in existing where stale.identifier != identifier && FamilyFileIds.group(ofDomain: stale.identifier.rawValue) == nil {
+            _ = await removeAll(stale)
+        }
         guard (try? record.write(owner)) != nil else { return }
         let domain = NSFileProviderDomain(identifier: identifier, displayName: "HushOS")
         #if DEBUG && targetEnvironment(simulator)
@@ -158,7 +164,9 @@ public enum FilesDomain {
      * the account's files. The record goes only with it: a location that failed to go stays
      * its account's, refused to anyone else.
      */
-    public static func remove(record: FilesDomainOwner = .shared) async {
+    public static func remove(record: FilesDomainOwner = .shared, families: FamilyFilesDomains = .shared) async {
+        // The families' locations first, each record only once its location went: one that stays is refused to anyone else.
+        await families.removeAll()
         if await removeAll(NSFileProviderDomain(identifier: identifier, displayName: "HushOS")) { record.clear() }
     }
 

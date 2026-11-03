@@ -1120,7 +1120,8 @@ struct FamilyFixture {
 
     /* The member's phone: a vault with their keys and drive, its own ledger, and FamilySync over the stub. */
     /* `account`: the session epoch its vault and sync are kept to (a test's own, so ending it touches no other test). */
-    func phone(_ server: FamilyServer, records: FamilyRecords? = nil, guards: FamilyGuardStore? = nil, account: CopyEpoch = CopyEpoch()) async throws -> Phone {
+    func phone(_ server: FamilyServer, records: FamilyRecords? = nil, guards: FamilyGuardStore? = nil, account: CopyEpoch = CopyEpoch(),
+               filesDomains: FamilyFilesDomains = TestFamilyDomains.throwaway()) async throws -> Phone {
         let session = SharedKeychain.Session(origin: "https://family.test", token: "t", userId: member.userId)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [FamilyServerProtocol.self]
@@ -1144,7 +1145,7 @@ struct FamilyFixture {
         held.key = server.guardKey
         // Opened copies in a folder of the test's own, beside the guard: a relaunch passing the same guard finds them.
         let temporary = guards.folder.deletingLastPathComponent().appendingPathComponent(guards.folder.lastPathComponent + "-tmp", isDirectory: true)
-        return Phone(vault: vault, sync: FamilySync(vault: vault, api: GroupsAPI(drive: api), records: store, temporary: temporary),
+        return Phone(vault: vault, sync: FamilySync(vault: vault, api: GroupsAPI(drive: api), records: store, temporary: temporary, filesDomains: filesDomains),
                      records: store, guards: guards, held: held, temporary: temporary)
     }
 

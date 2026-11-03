@@ -231,8 +231,16 @@ public actor FamilySync: FamilyJudge {
     private var acceptedFamilies: Set<String> = []
 
     public init(vault: Vault, api: GroupsAPI? = nil, records: FamilyRecords = .shared, now: @escaping @Sendable () -> Date = { Date() },
-                temporary: URL = FileManager.default.temporaryDirectory) {
+                temporary: URL = FileManager.default.temporaryDirectory, filesDomains: FamilyFilesDomains? = nil) {
         self.vault = vault
+        // Whoever finds a family let go of (this process's sync, its reconcile, a leave), its Files location goes with it.
+        let owner = AccountOwner(vault.session)
+        if let domains = filesDomains ?? Self.defaultFilesDomains {
+            let lettingGo: @Sendable (String, UInt64) -> Void = { groupId, revision in domains.letGo(groupId, owner: owner, revision: revision) }
+            releases = FamilyReleases(lettingGo: lettingGo)
+        } else {
+            releases = FamilyReleases()
+        }
         self.api = api ?? GroupsAPI(drive: vault.api)
         // Kept to its vault's session, never the one open as it is made: a sync made late for a replaced vault
         // deletes and writes no record or copy, its first sweep included, since those there now are the next session's.
@@ -255,7 +263,7 @@ public actor FamilySync: FamilyJudge {
      * whoever found it: a sync, route 2's reconcile, a leave or member check, a join, the background
      * pass. The screens take them from here, so none is shown only to whoever asked.
      */
-    public nonisolated let releases = FamilyReleases()
+    public nonisolated let releases: FamilyReleases
     /* Whether this session's families need the background check (FamilyWalkWork), as a join or route 2 finds. */
     public nonisolated let familyWork = FamilyWorkHook()
 
@@ -493,6 +501,16 @@ public actor FamilySync: FamilyJudge {
      */
     private static let revisions = OSAllocatedUnfairLock(initialState: UInt64(0))
     static func revise() -> UInt64 { revisions.withLock { $0 += 1; return $0 } }
+
+    /* A look at the families now, later than every one taken before (a join's acceptance shown without one). */
+    public static func newestLook() -> UInt64 { revise() }
+
+    /* The process's family locations (none where Files isn't). */
+    #if canImport(FileProvider)
+    static var defaultFilesDomains: FamilyFilesDomains? { .shared }
+    #else
+    static var defaultFilesDomains: FamilyFilesDomains? { nil }
+    #endif
     /* The last revision given out: an answer taken at or before it is no later than now. */
     public static func latestRevision() -> UInt64 { revisions.withLock { $0 } }
 

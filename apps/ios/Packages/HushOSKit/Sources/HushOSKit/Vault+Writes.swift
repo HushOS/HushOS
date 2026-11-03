@@ -947,6 +947,47 @@ extension Vault {
         }
         return Changes(updated: updated, deleted: deleted, nextCursor: feed.nextCursor, hasMore: feed.hasMore)
     }
+
+    /*
+     * A family folder's change feed since `cursor`, as `changes(since:)` reads the own drive's: every
+     * row opened in `workspaceId` (by listing the folder it is in now, through the family's ledger),
+     * never looked up by id alone. Nil means start over.
+     */
+    func familyChanges(in workspaceId: String, since cursor: Int) async throws -> Changes? {
+        let feed = try await api.changes(workspaceId: workspaceId, since: cursor)
+        if feed.resync { return nil }
+        var updated: [Opened] = []
+        var deleted: [String] = []
+        for change in feed.changes {
+            switch change.kind {
+            case "node":
+                guard let node = change.node, node.ref.workspaceId == workspaceId.lowercased() else { continue }
+                opened[node.ref] = nil
+                if node.trashedAt != nil {
+                    deleted.append(node.id)
+                    continue
+                }
+                if let parent = node.parentId { rememberParent(node.id, parent: parent) }
+                do {
+                    _ = try await listChildren(of: node.parentId ?? node.id, in: workspaceId)
+                    if let row = opened[node.ref] { updated.append(row) } else { deleted.append(node.id) }
+                } catch DriveAPIError.notFound, DriveAPIError.trashed, is CoreError {
+                    deleted.append(node.id)
+                }
+            case "tombstone":
+                if let id = change.nodeId {
+                    deleted.append(id)
+                    remove(NodeRef(workspaceId: workspaceId, nodeId: id))
+                }
+            default:
+                break
+            }
+        }
+        return Changes(updated: updated, deleted: deleted, nextCursor: feed.nextCursor, hasMore: feed.hasMore)
+    }
+
+    /* The folder a node was last seen in (the index a cold process lists from); nil when none is known. */
+    func knownParent(_ nodeId: String) -> String? { opened[nodeId]?.node.parentId ?? parents[nodeId] }
 }
 
 /* The workspace a write lands in: the parent's, which is the granter's inside a share. */

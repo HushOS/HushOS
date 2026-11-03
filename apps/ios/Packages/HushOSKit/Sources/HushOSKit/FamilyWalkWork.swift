@@ -59,6 +59,10 @@ public final class FamilyReleases: Sendable {
     }
 
     private let state = OSAllocatedUnfairLock(initialState: (queue: [Release](), listener: (@Sendable () -> Void)?.none))
+    /* Runs for every let-go posted, before the screens hear of it, in whatever process posted it: the family's Files location goes. */
+    private let lettingGo: (@Sendable (String, UInt64) -> Void)?
+
+    public init(lettingGo: (@Sendable (String, UInt64) -> Void)? = nil) { self.lettingGo = lettingGo }
 
     /* Whether a state lets the family go on this device: anything but an acceptance or no answer. */
     public static func letsGo(_ state: FamilyState) -> Bool {
@@ -70,6 +74,7 @@ public final class FamilyReleases: Sendable {
     }
 
     func post(_ groupId: String, _ revised: FamilySync.Revised) {
+        if Self.letsGo(revised.state) { lettingGo?(groupId, revised.revision) }
         let listener = state.withLock { state -> (@Sendable () -> Void)? in
             state.queue.append(Release(groupId: groupId, revised: revised))
             return state.listener

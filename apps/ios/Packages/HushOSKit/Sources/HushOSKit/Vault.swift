@@ -271,6 +271,9 @@ public actor Vault {
 
     static let current = Current()
 
+    /* The vault of `session` in this process (`fromKeychain`'s), for a caller that already admitted the session. */
+    public static func shared(for session: SharedKeychain.Session) -> Vault { current.vault(for: session) }
+
     final class Current: @unchecked Sendable {
         private let lock = NSLock()
         private var held: Vault?
