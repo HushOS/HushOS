@@ -28,6 +28,26 @@ fn this_core_s_roster_calls_say_what_they_declare() {
     check(&doc);
 }
 
+/*
+ * Core 5b: the web's removals, key replacements and deletions land as every member takes them
+ * (every live folder rotated, its new keys granted only to those who stay, one tombstone for a
+ * deletion), its refusals are the same sentences here, and its previous roots check alike.
+ */
+#[test]
+fn the_web_s_removals_read_here_as_the_web_declared() {
+    common::removal_calls::check(&read("web-roster-calls.json"));
+}
+
+#[test]
+fn this_core_s_removals_say_what_they_declare() {
+    let doc = fixture();
+    let removals = common::removal_calls::fixture(&doc);
+    common::removal_calls::check(&removals.as_object().unwrap().iter().fold(doc, |mut doc, (key, value)| {
+        doc[key] = value.clone();
+        doc
+    }));
+}
+
 #[test]
 fn the_outbox_answer_table_is_the_shared_one() {
     let table = read("outbox-steps.json");

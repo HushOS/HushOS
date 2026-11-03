@@ -631,14 +631,28 @@ pub fn document_seal(ctx: DocumentContext, workspace_key: Vec<u8>, json: String)
 /// The inverse of [`document_seal`]: the JSON text, padding trimmed.
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn document_open(ctx: DocumentContext, workspace_key: Vec<u8>, envelope: Vec<u8>) -> CoreResult<String> {
-    expect_len("workspaceKey", &workspace_key, KEY_BYTES)?;
+    Ok(document_plaintext(&ctx, &workspace_key, &envelope)?.trim_end().to_string())
+}
+
+/*
+ * A document's text with only its padding (spaces) trimmed, nothing else: what
+ * the web's openDocument hands JSON.parse (a fatal UTF-8 decode, a BOM kept),
+ * so a rotation judges and seals again exactly the text a member wrote.
+ */
+pub(crate) fn document_plaintext(
+    ctx: &DocumentContext,
+    workspace_key: &[u8],
+    envelope: &[u8],
+) -> CoreResult<String> {
+    expect_len("workspaceKey", workspace_key, KEY_BYTES)?;
     if envelope.len() > NONCE_BYTES + DOCUMENT_MAX_BYTES + TAG_BYTES {
         return Err(CoreError::Sealed("This encrypted document is damaged.".into()));
     }
-    let plaintext = open(&workspace_key, &envelope, &document_context(&ctx)?)?;
-    let text =
+    let plaintext = open(workspace_key, envelope, &document_context(ctx)?)?;
+    let mut text =
         String::from_utf8(plaintext).map_err(|_| CoreError::Sealed("This document is not UTF-8.".into()))?;
-    Ok(text.trim_end().to_string())
+    text.truncate(text.trim_end_matches(' ').len());
+    Ok(text)
 }
 
 // ---------------------------------------------------------------------------

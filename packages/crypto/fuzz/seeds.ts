@@ -751,6 +751,19 @@ export function documents(target: Target): Uint8Array[] {
                 ...coreRosterCalls().calls.map((k: Json) =>
                     json({ kind: 'roster_call', op: k.op }),
                 ),
+                // Core 5b: every removal, key replacement and deletion both twins' fixtures make, and
+                // route 25's previous roots.
+                ...coreRosterCalls().removalCalls.map((k: Json) =>
+                    json({ kind: 'removal_call', op: k.op }),
+                ),
+                ...coreRosterCalls().previousRoots.map((k: Json) =>
+                    json({
+                        kind: 'previous_root',
+                        area: k.area,
+                        envelope: k.envelope,
+                        prevParentKeyEpoch: k.prevParentKeyEpoch ?? null,
+                    }),
+                ),
                 json({
                     kind: 'roster_call',
                     op: {

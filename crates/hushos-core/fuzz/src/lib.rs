@@ -33,6 +33,11 @@ pub mod device_records;
 #[path = "../../tests/common/join.rs"]
 pub mod join;
 
+/// Removals, key replacements, folder deletions and previous roots (Core 5b), run as the fixture tests run them.
+#[allow(dead_code, clippy::all)]
+#[path = "../../tests/common/removal_calls.rs"]
+pub mod removal_calls;
+
 /// Roster calls, the admin's join code and outbox entries, run as the fixture tests run them.
 #[allow(dead_code, clippy::all)]
 #[path = "../../tests/common/roster_calls.rs"]
