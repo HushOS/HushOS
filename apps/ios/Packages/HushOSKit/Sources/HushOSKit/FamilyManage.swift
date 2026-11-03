@@ -369,15 +369,20 @@ extension FamilySync {
     // MARK: Let them in
 
     /*
-     * Let them in: pinned first-seen from their keys (a changed account is said first), then in
+     * Let them in: pinned first-seen from their keys (a changed account is said first; a move in
+     * trust is told through `trustMoved`), then in
      * the family's turn any kept admission of theirs is sent before anything new is signed, and
      * only then is a new one staged and sent, signed again over whatever change landed first.
      */
-    public func letIn(_ summary: GroupSummary, _ person: PendingPerson) async throws -> LetIn {
+    public func letIn(_ summary: GroupSummary, _ person: PendingPerson, trustMoved: (@Sendable () async -> Void)? = nil) async throws -> LetIn {
         families[summary.id] = summary.name
         summaries[summary.id] = summary
-        if case .changed(let change) = try await vault.addContact(email: person.email, writer: person.userId, firstSeen: "family") {
-            return .changed(change)
+        // Pinning them can move trust (a new pin, a followed succession): told before anything else, as the Contacts
+        // screen's add is, so whose signatures count is judged again however the admission then ends.
+        switch try await vault.addContact(email: person.email, writer: person.userId, firstSeen: "family") {
+        case .changed(let change): return .changed(change)
+        case .added: await trustMoved?()
+        case .already(_, let moved): if moved { await trustMoved?() }
         }
         return try await exclusive(summary.id) {
             do {

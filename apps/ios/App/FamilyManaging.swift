@@ -74,6 +74,12 @@ extension DriveStore {
         await reloadManaged(groupId, session: session)
     }
 
+    /* A pin Let them in made or moved, for the session it began in: signers and shares loaded again, as Contacts does. */
+    private func trustMovedByLetIn(_ session: Session) {
+        guard current(session) else { return }
+        Task { await refreshSigners(); await refreshMounts() }
+    }
+
     /* What a dropped kept call came to, for the session it began in: a refusal, or an admission overtaken, waits until it is read. */
     private func handOver(_ end: CallEnd, route: ChainRoute?, groupId: String, session: Session) {
         guard current(session) else { return }
@@ -150,7 +156,9 @@ extension DriveStore {
                     guard case .answered = try await familyAnswer(session, { try await $0.dropKeptAdmission(summary.id, userId: person.userId) }) else { return }
                     waitingRows[key]?.keptOther = false
                 }
-                guard case .answered(let outcome) = try await familyAnswer(session, { try await $0.letIn(summary, person) }) else { return }
+                // Pinning them may have moved trust: what they and anyone else signed is judged again, as after Contacts' add.
+                let trustMoved: @Sendable () async -> Void = { await self.trustMovedByLetIn(session) }
+                guard case .answered(let outcome) = try await familyAnswer(session, { try await $0.letIn(summary, person, trustMoved: trustMoved) }) else { return }
                 if let words = ManageWords.letIn(outcome, first: first, family: summary.name) { notify(words) }
                 switch outcome {
                 case .landed:

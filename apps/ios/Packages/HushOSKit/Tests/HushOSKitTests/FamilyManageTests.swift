@@ -263,6 +263,25 @@ extension OnFakeDrive {
         }
 
         /*
+         * Pinning them moves trust (here a new pin; a followed succession is told the same way, from
+         * addContact's own answer) and is told before the admission, so the app judges signatures again
+         * even when the admission is then refused. Fails if a pin Let them in made or moved is kept from
+         * the app, leaving marks drawn over the old trust.
+         */
+        @Test func aPinLetThemInMovesIsToldEvenWhenTheAdmissionIsRefused() async throws {
+            let m = try await Self.managed()
+            defer { m.phone.done() }
+            m.server.lock.withLock { m.server.manage.admitAnswers = [answering(409, ["code": "pool-full", "message": "No room."])] }
+            let told = Heard()
+            let outcome = try await Self.quickly {
+                try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) { await told.add(.landed, route: nil, keptThen: 0) }
+            }
+            #expect(outcome == .refused(ManageWords.poolFull))
+            #expect(await told.ends.count == 1, "a pin Let them in made wasn't told")
+            #expect(await m.phone.vault.knownPins()[m.grace.userId.lowercased()] != nil)
+        }
+
+        /*
          * The settings can't be read before a kept call is sent: nothing is sent and the call stays
          * kept; once they read, it lands. Fails if a call goes out without the settings read afresh.
          */
