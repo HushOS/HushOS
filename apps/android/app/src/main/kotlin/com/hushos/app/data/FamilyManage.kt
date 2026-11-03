@@ -182,6 +182,50 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
         }
     }
 
+    /*
+     * Words still to be said to the person about this family (a landed rotation's documents carried on empty), kept from the
+     * moment the call landed until the screens take them (`takeUnsaid`): a process that dies in between loses none.
+     */
+    private fun unsaidFile(userId: String, groupId: String): File? {
+        val ids = listOf(userId.lowercase(), groupId.lowercase())
+        if (ids.any { !FamilyRecords.valid(it) }) return null
+        return File(folder, "${ids[0]}_${ids[1]}.unsaid")
+    }
+
+    fun keepUnsaid(userId: String, groupId: String, words: Collection<String>) = synchronized(FamilyCopies.LOCK) {
+        if (words.isEmpty()) return@synchronized
+        if (!open()) throw OutboxUnsaved()
+        val file = unsaidFile(userId, groupId) ?: throw OutboxUnsaved()
+        try {
+            folder.mkdirs()
+            val all = unsaid(file) + words
+            val next = File(file.path + ".next")
+            next.writeText(org.json.JSONArray(all).toString())
+            if (!next.renameTo(file)) throw java.io.IOException("not moved")
+        } catch (_: Exception) {
+            throw OutboxUnsaved()
+        }
+    }
+
+    /* The words kept to say, handed over and deleted together; none when there are none. */
+    fun takeUnsaid(userId: String, groupId: String): List<String> = synchronized(FamilyCopies.LOCK) {
+        if (!open()) return@synchronized emptyList()
+        val file = unsaidFile(userId, groupId) ?: return@synchronized emptyList()
+        val words = unsaid(file)
+        if (words.isNotEmpty() && !file.delete() && file.exists()) return@synchronized emptyList()
+        words.distinct()
+    }
+
+    private fun unsaid(file: File): List<String> {
+        if (!file.exists()) return emptyList()
+        return try {
+            val list = org.json.JSONArray(file.readText())
+            (0 until list.length()).map(list::getString)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     /* What `noteCleared` kept for an entry; none when nothing was. */
     fun cleared(userId: String, groupId: String, outboxId: String): List<String> {
         val target = file(userId, groupId, outboxId)?.let { File(it.path.removeSuffix(".call") + ".cleared") } ?: return emptyList()
@@ -199,6 +243,7 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
         }
         clearHandover(userId, groupId)
         removalsFile(userId, groupId)?.let { if (!it.delete() && it.exists()) throw OutboxUnsaved() }
+        unsaidFile(userId, groupId)?.delete()
     }
 
     /*
@@ -377,8 +422,8 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
     var current = kept
     fun finish(end: CallEnd): CallEnd {
         told(on, end)
-        // Documents a landed rotation carried on empty are said (FamilySync.takeCleared) before its notes go with the entry.
-        if (end == CallEnd.Landed) outbox.cleared(userId, groupId, current.outboxId).forEach { clearedSaid.add(clearedWords(it)) }
+        // Documents a landed rotation carried on empty: kept to be said (FamilySync.takeCleared) before its notes go with the entry.
+        if (end == CallEnd.Landed) outbox.keepUnsaid(userId, groupId, outbox.cleared(userId, groupId, current.outboxId).map(::clearedWords))
         outbox.delete(userId, groupId, current.outboxId)
         return end
     }
@@ -607,7 +652,7 @@ private fun FamilySync.finishHandover(summary: GroupSummary, names: (String) -> 
     // Told whatever it came to, pending included (billing may have landed before the last step went unanswered): the
     // page reads the family again. A pending one keeps its record for the next open.
     handed(to, end)
-    if (end is RoleEnd.Pending) return
+    if (end is RoleEnd.Pending || end is RoleEnd.Waiting) return
     if (end != RoleEnd.Wiped) outbox.clearHandover(userId, groupId)
 }
 
@@ -710,7 +755,8 @@ private fun FamilySync.waiting(groupId: String, userId: String): Boolean =
 internal sealed interface Staged {
     /* `replaced`: workspace documents a rotation couldn't open and carried on empty (the core says which). */
     class Call(val kept: FamilyOutbox.Kept, val replaced: List<com.hushos.core.ReplacedDocument> = emptyList()) : Staged
-    class Refused(val words: String) : Staged
+    /* `retry`: nothing definite was said (the family couldn't be checked, its key isn't open yet, it kept changing): a promise waits. */
+    class Refused(val words: String, val retry: Boolean = false) : Staged
     /* The manager rule: their words first (the core's CHECK_MANAGER_FIRST). */
     data object CheckFirst : Staged
     /* Nothing to change: they already have, or don't have, the role. */
@@ -754,12 +800,12 @@ internal fun FamilySync.stageCall(summary: GroupSummary, build: (view: FamilyVie
             is FamilyState.Accepted -> state.view
             FamilyState.Wiped -> return Staged.Wiped
             // No answer is not a refusal: nothing was signed, and whatever waits on this (a handover) waits on.
-            is FamilyState.Failed -> if (state.transient) throw FamilyFailure(state.words) else return Staged.Refused(state.words)
-            else -> return Staged.Refused("Couldn’t check ${summary.name}. Try again.")
+            is FamilyState.Failed -> if (state.transient) throw FamilyFailure(state.words) else return Staged.Refused(state.words, retry = true)
+            else -> return Staged.Refused("Couldn’t check ${summary.name}. Try again.", retry = true)
         }
         val head = api.group(groupId)
-        val headVersion = head.headVersion ?: return Staged.Refused("Couldn’t check ${summary.name}. Try again.")
-        val revision = head.revision ?: return Staged.Refused("Couldn’t check ${summary.name}. Try again.")
+        val headVersion = head.headVersion ?: return Staged.Refused("Couldn’t check ${summary.name}. Try again.", retry = true)
+        val revision = head.revision ?: return Staged.Refused("Couldn’t check ${summary.name}. Try again.", retry = true)
         if (headVersion != view.rosterVersion.toLong()) return@repeat
         // The ledger reads this account's contact pins from the settings it was handed last.
         vault.familyPin(groupId)
@@ -788,13 +834,13 @@ internal fun FamilySync.stageCall(summary: GroupSummary, build: (view: FamilyVie
             // Synced at the top of the next round.
             RosterCall.SyncFirst, RosterCall.OpenFoldersFirst -> {}
             RosterCall.OpenKeyFirst -> {
-                if (keyOpened) return Staged.Refused("Another manager needs to open the family before you can change it. Try again later.")
+                if (keyOpened) return Staged.Refused("Another manager needs to open the family before you can change it. Try again later.", retry = true)
                 keyOpened = true
                 openGroupKey(groupId, identities)
             }
         }
     }
-    return Staged.Refused("${summary.name} keeps changing. Try again in a moment.")
+    return Staged.Refused("${summary.name} keeps changing. Try again in a moment.", retry = true)
 }
 
 /*
@@ -818,6 +864,8 @@ sealed interface RoleEnd {
     /* The manager rule: managing the family is given only after a check of their words. */
     data object CheckFirst : RoleEnd
     data object Wiped : RoleEnd
+    /* An earlier change kept here is unresolved: nothing was staged (the outbox's gate), nothing kept for this one. */
+    data class Waiting(val words: String) : RoleEnd
 }
 
 /*
@@ -963,7 +1011,7 @@ internal fun FamilySync.callFor(summary: GroupSummary, person: String, first: St
             Staged.CheckFirst -> return RoleEnd.CheckFirst
             Staged.Unchanged -> return if (moved) RoleEnd.Landed else RoleEnd.Refused(UNCHANGED)
             Staged.Wiped -> return RoleEnd.Wiped
-            Staged.Waiting -> return RoleEnd.Refused(earlierWaiting(summary.name))
+            Staged.Waiting -> return RoleEnd.Waiting(earlierWaiting(summary.name))
             is Staged.Call -> when (val end = sendKept(summary, built.kept.also { onStaged() }, names = { first })) {
                 CallEnd.Landed -> return RoleEnd.Landed
                 is CallEnd.Pending -> return RoleEnd.Pending(end.reason)

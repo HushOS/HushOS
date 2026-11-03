@@ -207,7 +207,7 @@ class FamilyRemovalTest {
         }
         // The tags this phone was served never open (junk): read again once, then carried on empty, and said.
         assertEquals(RemovalEnd.Removed, remove(phone))
-        assertEquals(listOf(clearedWords("tags")), phone.sync.takeCleared())
+        assertEquals(listOf(clearedWords("tags")), phone.sync.takeCleared(family.groupId))
         val (first, second) = bodies("remove")
         assertEquals(1, rotation(first).getJSONArray("documents").getJSONObject(0).getInt("version"))
         assertEquals(2, rotation(second).getJSONArray("documents").getJSONObject(0).getInt("version"))
@@ -344,7 +344,7 @@ class FamilyRemovalTest {
         val next = phone(first.folder)
         assertEquals(listOf(CallEnd.Landed), next.sync.resumeOutbox(summary).values.toList())
         assertEquals("read again before it was sent", reads + 1, family.documentReads.get())
-        assertEquals(listOf(clearedWords("tags")), next.sync.takeCleared())
+        assertEquals(listOf(clearedWords("tags")), next.sync.takeCleared(family.groupId))
         assertFalse(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
     }
 
@@ -393,9 +393,47 @@ class FamilyRemovalTest {
         assertTrue(remove(first) is RemovalEnd.Pending)
         // Read when gathered, read in the rebuild, and read once more when it didn't open there.
         assertEquals(3, server.requests.count { it.contains("/documents/tags") })
-        assertTrue("nothing said before it lands", first.sync.takeCleared().isEmpty())
+        assertTrue("nothing said before it lands", first.sync.takeCleared(family.groupId).isEmpty())
         val next = phone(first.folder)
         assertEquals(listOf(CallEnd.Landed), next.sync.resumeOutbox(summary).values.toList())
-        assertEquals(listOf(clearedWords("tags")), next.sync.takeCleared())
+        assertEquals(listOf(clearedWords("tags")), next.sync.takeCleared(family.groupId))
+    }
+
+    /*
+     * Codex #281 round 3, 1: only the removal's intent is left on the phone, and at the next open the server doesn't answer
+     * (503): the continued removal is pending and its intent stays. Answered at the open after (a fresh process), it lands.
+     * Fails if a transient failure counts as a definite end and the removal is never made.
+     */
+    @Test
+    fun aRemovalIntentOutlivesATransientFailureAndAProcess() {
+        val first = phone()
+        first.sync.outbox.keepRemoval(family.member.id, family.groupId, FamilyOutbox.Removal(graceId, "Grace", emptyList(), false))
+        family.rostersFail = true
+        val ended = ArrayList<RemovalEnd>()
+        first.sync.resumeOutbox(summary, continued = { _, end -> ended.add(end) })
+        assertTrue(ended.single() is RemovalEnd.Pending)
+        assertEquals(listOf(graceId), first.sync.outbox.removals(family.member.id, family.groupId).map { it.userId })
+        family.rostersFail = false
+        val next = phone(first.folder)
+        ended.clear()
+        next.sync.resumeOutbox(summary, continued = { _, end -> ended.add(end) })
+        assertEquals(listOf<RemovalEnd>(RemovalEnd.Removed), ended)
+        assertTrue(next.sync.outbox.removals(family.member.id, family.groupId).isEmpty())
+        assertFalse(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
+    }
+
+    /*
+     * Codex #281 round 3, 3: a removal lands carrying the folder's tags on empty, and the process dies before anything was
+     * said. The words are kept on the phone until taken: the next process says them, once. Fails if the warning lives only
+     * in memory between the landing and the screen.
+     */
+    @Test
+    fun aClearedDocumentsWarningOutlivesTheProcessUntilItIsSaid() {
+        val first = phone()
+        family.documents["tags"] = 1 to com.hushos.core.base64urlEncode(ByteArray(80) { 7 })
+        assertEquals(RemovalEnd.Removed, remove(first))
+        val next = phone(first.folder)
+        assertEquals(listOf(clearedWords("tags")), next.sync.takeCleared(family.groupId))
+        assertTrue(next.sync.takeCleared(family.groupId).isEmpty())
     }
 }

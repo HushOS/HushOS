@@ -174,7 +174,7 @@ class FamilyRolesTest {
         assertTrue(grant(phone) is RoleEnd.Pending)
         val graceKept = kept(phone).single()
         answer(3, 503)
-        assertEquals(RoleEnd.Refused(earlierWaiting(summary.name)), phone.sync.changeRole(summary, ada.id, "Ada", MembersRole.GRANT))
+        assertEquals(RoleEnd.Waiting(earlierWaiting(summary.name)), phone.sync.changeRole(summary, ada.id, "Ada", MembersRole.GRANT))
         assertEquals(List(6) { graceId }, family.memberCalls.map { it.first.lowercase() })
         assertEquals(listOf(graceKept), kept(phone))
         assertEquals(RoleEnd.Landed, phone.sync.changeRole(summary, ada.id, "Ada", MembersRole.GRANT))

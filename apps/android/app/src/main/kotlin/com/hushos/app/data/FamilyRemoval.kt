@@ -164,9 +164,10 @@ private fun staleDocuments(data: JSONObject?): Map<String, List<String>> {
 /* What one rotating call came to: sent, refused before anything was signed, or a removal. Documents carried on empty are said on landing (takeCleared). */
 sealed interface Rotated {
     data class Sent(val end: CallEnd) : Rotated
+    /* `retry`: nothing definite was said (Staged.Refused's). */
     /* An earlier change kept here is unresolved: nothing was staged (the outbox's gate). */
     data object Waiting : Rotated
-    data class Refused(val words: String) : Rotated
+    data class Refused(val words: String, val retry: Boolean = false) : Rotated
     data object Wiped : Rotated
 }
 
@@ -178,7 +179,7 @@ sealed interface Rotated {
 private fun FamilySync.rotatingCall(summary: GroupSummary, names: (String) -> String?, build: (FamilyView, ULong, Map<String, String>) -> RosterCall): Rotated =
     when (val staged = stageCall(summary, build)) {
         is Staged.Call -> Rotated.Sent(sendKept(summary, readAgain(summary.id, staged.kept, staged.replaced), names = names))
-        is Staged.Refused -> Rotated.Refused(staged.words)
+        is Staged.Refused -> Rotated.Refused(staged.words, staged.retry)
         Staged.Wiped -> Rotated.Wiped
         Staged.CheckFirst -> Rotated.Refused(CHECK_MANAGER_FIRST)
         Staged.Unchanged -> Rotated.Refused(UNCHANGED)
@@ -248,11 +249,16 @@ internal fun FamilySync.continueRemovals(summary: GroupSummary, names: (String) 
 }
 
 /* The family synced, as a removal reads it: the view, or what to say instead. */
+/*
+ * The family synced, as a removal reads it: the view, or what to say instead. Only the account's removal is definite; a sync
+ * that got no answer, or a family that couldn't be checked or looks different here, keeps the removal's intent (Pending).
+ */
 private fun FamilySync.syncedView(summary: GroupSummary): Pair<FamilyView?, RemovalEnd?> = when (val state = syncRevised(summary).state) {
     is FamilyState.Accepted -> state.view to null
     FamilyState.Wiped -> null to RemovalEnd.Wiped
-    is FamilyState.Fork -> null to RemovalEnd.Failed("${summary.name} looks different on this device.")
-    else -> null to RemovalEnd.Failed("Couldn’t check ${summary.name}. Try again.")
+    is FamilyState.Fork -> null to RemovalEnd.Pending("${summary.name} looks different on this device.")
+    is FamilyState.Failed -> null to RemovalEnd.Pending(if (state.transient) keptForLater(summary.name) else "Couldn’t check ${summary.name}. Try again.")
+    else -> null to RemovalEnd.Pending("Couldn’t check ${summary.name}. Try again.")
 }
 
 private fun manages(view: FamilyView, userId: String) = view.members.any { it.userId.equals(userId, ignoreCase = true) && "members" in it.roles }
@@ -277,7 +283,13 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
                 if (!inFamily(view, userId)) return RemovalEnd.Removed
             }
             is CallEnd.Pending -> return RemovalEnd.Pending(keptForLater(family))
-            is CallEnd.Refused -> return RemovalEnd.Failed(end.words)
+            // Refused as kept: a departure still to mark left is done below (staged anew); the rest is definite.
+            is CallEnd.Refused -> when (end.code) {
+                "left-due" -> {}
+                "members-changed" -> return RemovalEnd.Changed
+                "ends-lapsed" -> return RemovalEnd.EndsLapsed(FamilyLapsedPlan.listIn(end.data))
+                else -> return RemovalEnd.Failed(end.words)
+            }
             CallEnd.OtherKeys -> return RemovalEnd.Failed("Nothing was changed.")
             CallEnd.Wiped -> return RemovalEnd.Wiped
         }
@@ -305,6 +317,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
             RoleEnd.Landed -> {}
             is RoleEnd.Pending -> return RemovalEnd.Pending(keptForLater(family))
             is RoleEnd.Refused -> return RemovalEnd.Failed(demoted.words)
+            is RoleEnd.Waiting -> return RemovalEnd.Pending(keptForLater(family))
             RoleEnd.CheckFirst -> return RemovalEnd.Failed("Nothing was changed.")
             RoleEnd.Wiped -> return RemovalEnd.Wiped
         }
@@ -340,7 +353,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
                 vault.accountKeyVersion(), kems)
         }
         val end = when (sent) {
-            is Rotated.Refused -> return RemovalEnd.Failed(sent.words)
+            is Rotated.Refused -> return if (sent.retry) RemovalEnd.Pending(sent.words) else RemovalEnd.Failed(sent.words)
             Rotated.Wiped -> return RemovalEnd.Wiped
             Rotated.Waiting -> return RemovalEnd.Pending(keptForLater(family))
             is Rotated.Sent -> sent
@@ -363,9 +376,10 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
                             is CallEnd.Pending -> RemovalEnd.Pending(keptForLater(family))
                             is CallEnd.Refused -> RemovalEnd.Failed(m.words)
                             CallEnd.Wiped -> RemovalEnd.Wiped
-                            else -> RemovalEnd.Failed("Nothing was changed.")
+                            // Overtaken, or held: nothing definite about the removal; it goes on at the next open.
+                            else -> RemovalEnd.Pending(keptForLater(family))
                         }
-                        is Rotated.Refused -> return RemovalEnd.Failed(marked.words)
+                        is Rotated.Refused -> return if (marked.retry) RemovalEnd.Pending(marked.words) else RemovalEnd.Failed(marked.words)
                         Rotated.Wiped -> return RemovalEnd.Wiped
                         Rotated.Waiting -> return RemovalEnd.Pending(keptForLater(family))
                     }
@@ -379,7 +393,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
         syncedView(summary).let { (now, stopped) -> view = now ?: return stopped!! }
         if (!inFamily(view!!, userId)) return RemovalEnd.Removed
     }
-    return RemovalEnd.Failed("$family kept changing. Try again in a moment.")
+    return RemovalEnd.Pending("$family kept changing. Try again in a moment.")
 }
 
 /* The hold placed (or placed again); null when it holds, else what the removal says instead. */
@@ -390,7 +404,12 @@ private fun FamilySync.placeHold(summary: GroupSummary, userId: String, view: Fa
     when (error.code) {
         "held" -> RemovalEnd.Held(whoHolds(summary.id), manages(view, userId))
         "members-changed" -> { runCatching { syncRevised(summary) }; RemovalEnd.Changed }
-        else -> if (error.isNotMember) throw error else RemovalEnd.Failed(callWords(CallAnswer(error.status, error.code, null, error.message), null, summary.name))
+        else -> when {
+            error.isNotMember -> throw error
+            // No answer, or the server's for now (a timeout, throttling, an outage): the removal goes on at the next open.
+            error.status == 0 || error.status == 408 || error.status == 429 || error.status >= 500 -> RemovalEnd.Pending(keptForLater(summary.name))
+            else -> RemovalEnd.Failed(callWords(CallAnswer(error.status, error.code, null, error.message), null, summary.name))
+        }
     }
 }
 

@@ -6,6 +6,7 @@ import com.hushos.app.data.FamilyFixture
 import com.hushos.app.data.FamilyOutbox
 import com.hushos.app.data.FamilyState
 import com.hushos.app.data.LetIn
+import com.hushos.app.data.outbox
 import com.hushos.app.data.Opened
 import com.hushos.app.data.PendingPerson
 import com.hushos.app.data.Shared
@@ -22,6 +23,7 @@ import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -396,5 +398,23 @@ class FamilyManageModelTest {
         until("it landed") { model.roleBusy == null && host.shown != null }
         assertEquals(listOf("Grace can manage the family"), host.read())
         assertEquals(1, family.memberCalls.size)
+    }
+
+    /*
+     * Codex #281 round 3, 2: a removal Maya confirmed is left only as its intent (no kept call). At the page's open it is
+     * continued and lands; the family is read again, so the page drops Grace (and starts walking the folders' new keys), and
+     * says it. Fails if a removal continued from its intent alone leaves the page showing the person removed.
+     */
+    @Test
+    fun aContinuedRemovalShowsTheFamilyAsItIsNow() {
+        val graceId = server.grace.id.lowercase()
+        assertEquals(LetIn.Landed, host.vault.families.letIn(family.summary, grace))
+        runBlocking { model.refreshFamilies(force = true) }
+        fun shown() = (model.states[family.groupId] as FamilyState.Accepted).view.members.map { it.userId.lowercase() }
+        assertTrue(graceId in shown())
+        host.vault.families.outbox.keepRemoval(family.member.id, family.groupId, com.hushos.app.data.FamilyOutbox.Removal(graceId, "Grace", emptyList(), false))
+        runBlocking { model.loadManaged(family.groupId) }
+        assertFalse(graceId in shown())
+        assertTrue(host.read().contains("Grace is no longer in Lindqvist family."))
     }
 }

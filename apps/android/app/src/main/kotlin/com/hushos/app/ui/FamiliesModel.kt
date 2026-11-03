@@ -270,7 +270,10 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         // change overtook is said too: nothing of it was made, so the person makes it again.
         val told = { route: com.hushos.core.ChainRoute?, end: com.hushos.app.data.CallEnd -> if (gate.current(s)) sayEnd(summary, route, end, names) }
         // A removal confirmed earlier that stopped part way and went on now: said as it ended, unless it is still pending.
+        // Anything a continued removal did (it landed, or found them gone or the family changed) is shown: the family read again.
+        var continuedAny = false
         val continued = { removal: com.hushos.app.data.FamilyOutbox.Removal, end: com.hushos.app.data.RemovalEnd ->
+            if (end !is com.hushos.app.data.RemovalEnd.Pending) continuedAny = true
             if (gate.current(s)) removalNotice(end, removal.first, summary.name, removal.userId)?.let { model.notice(it, untilRead = true) }
         }
         // A handover the app stopped in the middle of, finished: said as the web's Make them the organizer says it, and the
@@ -301,7 +304,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         }
         sayCleared(s)
         if (ends.values.any { it == com.hushos.app.data.CallEnd.Wiped }) return
-        if (handedOver || ends.values.any { it == com.hushos.app.data.CallEnd.Landed || it == com.hushos.app.data.CallEnd.Stale }) refreshFamily(summary, session = s)
+        if (handedOver || continuedAny || ends.values.any { it == com.hushos.app.data.CallEnd.Landed || it == com.hushos.app.data.CallEnd.Stale }) refreshFamily(summary, session = s)
         runDue(summary, names, s)
         reloadManaged(groupId, s)
     }
@@ -347,7 +350,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             val summary = list?.firstOrNull { it.id.equals(groupId, ignoreCase = true) } ?: continue
             sayEnd(summary, route, end, ::memberName)
         }
-        s.owner.families.takeCleared().forEach { model.notice(it, untilRead = true) }
+        for (family in list.orEmpty()) s.owner.families.takeCleared(family.id).forEach { model.notice(it, untilRead = true) }
     }
 
     /* Families whose due work (the departed marked left, folders given new keys) runs on this phone now. */
@@ -367,6 +370,8 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             dueRunning.remove(summary.id)
         }
         if (!gate.current(s)) return
+        // What landed before a failure (a document cleared by a departure marked left) is said first.
+        sayCleared(s)
         val did = done.getOrElse { error ->
             error.rethrowIfCancelled()
             if (error is NotAuthenticated) { model.lostSession(); return }
@@ -540,6 +545,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                 }
                 is com.hushos.app.data.RoleEnd.Pending -> model.notice("Saved on this device. ${outcome.reason}", untilRead = false)
                 is com.hushos.app.data.RoleEnd.Refused -> model.notice("Couldn’t change that. ${outcome.words}", untilRead = false)
+                is com.hushos.app.data.RoleEnd.Waiting -> model.notice("Couldn’t change that. ${outcome.words}", untilRead = false)
                 com.hushos.app.data.RoleEnd.CheckFirst -> checkFirst = ask
                 com.hushos.app.data.RoleEnd.Wiped -> refreshFamilies(force = true, session = s)
             }
