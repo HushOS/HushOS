@@ -332,6 +332,106 @@ extension OnFakeDrive {
         }
 
         /*
+         * A wipe whose outbox folder can't be listed fails as a wipe that didn't finish: the family
+         * isn't let go of as wiped while signed calls stay on disk, and once the folder reads, the
+         * removal takes them. Fails if a listing that failed is taken as no calls.
+         */
+        @Test func aWipeWhoseOutboxCantBeListedFailsAndKeepsNothingBehind() async throws {
+            let m = try await Self.managed()
+            defer { m.phone.done() }
+            m.server.lock.withLock { m.server.manage.admitAnswers = [Self.noAnswer, Self.noAnswer, Self.noAnswer] }
+            _ = try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) }
+            let kept = try #require(try m.kept.first)
+            let folder = m.phone.records.folder.appendingPathComponent("outbox", isDirectory: true)
+            let file = folder.appendingPathComponent("\(m.me.lowercased())_\(m.family.groupId)_\(kept.outboxId).call")
+            // Write and search, no listing: each file can still be reached by name.
+            try FileManager.default.setAttributes([.posixPermissions: 0o300], ofItemAtPath: folder.path)
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+            #expect(await m.phone.sync.removedNow(m.family.groupId).state != .wiped, "a wipe that couldn't list the kept calls was called done")
+            #expect(FileManager.default.fileExists(atPath: file.path))
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            #expect(await m.phone.sync.removedNow(m.family.groupId).state == .wiped)
+            #expect(!FileManager.default.fileExists(atPath: file.path), "a signed call outlived the wipe")
+        }
+
+        /*
+         * Whoever asked for the resume stops waiting mid-resend (its page left): a call already refused
+         * was handed over before its entry went, so the refusal is still said; the call after it stays
+         * kept. Fails if what a dropped call came to reaches only a caller that may have gone.
+         */
+        @Test func aRefusalIsHandedOverBeforeItsCallGoesEvenWhenTheResumeStops() async throws {
+            let m = try await Self.managed()
+            defer { m.phone.done() }
+            m.server.lock.withLock { m.server.manage.admitAnswers = Array(repeating: Self.noAnswer, count: 6) }
+            _ = try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) }
+            let ada = try await onLargeStack { try FamilyPerson() }
+            m.server.waiting(ada, email: "ada@example.com", name: "Ada Lindqvist")
+            let adaRow = try #require(try await m.phone.sync.waitingToJoin(m.family.groupId).first { $0.userId == ada.userId.lowercased() })
+            _ = try await Self.quickly { try await m.phone.sync.letIn(m.summary, adaRow) }
+            #expect(try m.kept.count == 2)
+            m.server.lock.withLock {
+                m.server.manage.admitAnswers = [answering(409, ["code": "pool-full", "message": "No room."])] + Array(repeating: Self.noAnswer, count: 3)
+            }
+            let heard = Heard()
+            let (records, me, groupId, sync) = (m.phone.records, m.me, m.family.groupId, m.phone.sync)
+            let sent = m.server.callBodies.count
+            let resume = Task {
+                try await FamilySync.$resendPause.withValue(.milliseconds(200)) {
+                    try await sync.resumeOutbox(groupId) { end in
+                        await heard.add(end, keptThen: (try? records.outboxList(userId: me, groupId: groupId).count) ?? -1)
+                    }
+                }
+            }
+            // The second call sent once and waiting out its pause: the caller stops waiting.
+            for _ in 0 ..< 500 where m.server.callBodies.count < sent + 2 { try await Task.sleep(for: .milliseconds(10)) }
+            resume.cancel()
+            _ = await resume.result
+            let ends = await heard.ends
+            #expect(ends.map(\.end) == [.refused(ManageWords.poolFull)], "a refusal of a dropped call wasn't handed over")
+            #expect(ends.first?.keptThen == 2, "the refusal was handed over after its entry went")
+            #expect(try m.kept.count == 1)
+        }
+
+        /*
+         * This phone's call is overtaken and they no longer wait, because another manager turned them
+         * down: never said as let in. Fails if leaving route 16 is taken as joining.
+         */
+        @Test func overtakenByATurnDownIsNotLetIn() async throws {
+            let m = try await Self.managed()
+            defer { m.phone.done() }
+            let server = m.server
+            let graceId = m.grace.userId.lowercased()
+            m.server.lock.withLock {
+                m.server.manage.admitAnswers = [{ _ in
+                    try? server.creatorChangesTheList()
+                    server.lock.withLock { server.manage.pendingRows.removeAll { $0["userId"] as? String == graceId } }
+                    return (409, ["code": "stale", "message": "Another change to the family landed first."])
+                }]
+            }
+            #expect(try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) } == .refused(ManageWords.notWaiting("Grace")))
+            #expect(try m.kept.isEmpty)
+        }
+
+        /*
+         * This phone's call is overtaken and the member list accepted afresh names them: let in.
+         * Fails if a person the roster admitted meanwhile is said not to be waiting.
+         */
+        @Test func overtakenByTheirAdmissionIsLetIn() async throws {
+            let m = try await Self.managed()
+            defer { m.phone.done() }
+            let server = m.server
+            let graceId = m.grace.userId
+            m.server.lock.withLock {
+                m.server.manage.admitAnswers = [{ body in
+                    // Applied, as another manager's admission of Grace would be, then answered as overtaken.
+                    _ = server.lock.withLock { server.apply(body, userId: graceId) }
+                    return (409, ["code": "stale", "message": "Another change to the family landed first."])
+                }]
+            }
+            #expect(try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) } == .landed)
+        }
+
+        /*
          * A kept call's file can't be read: nothing is signed or sent and the file stays; once it
          * reads, the same bytes land. Fails if an unreadable entry is dropped or skipped.
          */
@@ -553,4 +653,10 @@ extension OnFakeDrive {
         let other = loads.begin("h")
         #expect(loads.admits("h", other) && loads.admits("g", cancelReload), "one family's load superseded another's")
     }
+}
+
+/* What a resume handed over, with how many calls were still kept as each was. */
+private actor Heard {
+    private(set) var ends: [(end: CallEnd, keptThen: Int)] = []
+    func add(_ end: CallEnd, keptThen: Int) { ends.append((end, keptThen)) }
 }

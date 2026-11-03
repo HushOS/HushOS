@@ -61,6 +61,39 @@ import Testing
         #expect(sawCancel.isOpen, "the reset left the work running")
     }
 
+    /*
+     * A screen's action whose session ends while it is out is dropped, never answered, and a
+     * follow-up begun from the same session does nothing. Fails if a discarded answer reads as
+     * success (an invitation "sent", a row gone) or a follow-up runs in the next session.
+     */
+    @Test func anActionWhoseSessionEndedIsDroppedNotAnswered() async throws {
+        let owner = Owner()
+        let gate = SessionGate<Owner> { owner }
+        let token = try #require(gate.begin())
+        let held = Gate()
+        let pending = Task { @MainActor in
+            try await gate.answer(token) { _ -> Int? in
+                await held.wait()
+                return 1
+            }
+        }
+        try? await Task.sleep(for: .milliseconds(50))
+        gate.reset()
+        held.open()
+        guard case .dropped = try await pending.value else { Issue.record("an action of an ended session was answered"); return }
+        let ran = Gate()
+        guard case .dropped = try await gate.answer(token, { _ -> Int? in ran.open(); return 2 }) else {
+            Issue.record("a follow-up of the ended session was answered"); return
+        }
+        #expect(!ran.isOpen, "a follow-up of the ended session ran")
+        // Nothing to ask (no family sync): dropped too. The session in place answers, and its failure is thrown.
+        let now = try #require(gate.begin())
+        guard case .dropped = try await gate.answer(now, { _ -> Int? in nil }) else { Issue.record("no answer read as an answer"); return }
+        guard case .answered(let value) = try await gate.answer(now, { _ -> Int? in 3 }) else { Issue.record("the session in place was dropped"); return }
+        #expect(value == 3)
+        await #expect(throws: URLError.self) { _ = try await gate.answer(now) { _ -> Int? in throw URLError(.badServerResponse) } }
+    }
+
     @Test func aFailureFromAnotherSessionIsDropped() async {
         var owner = Owner()
         let gate = SessionGate<Owner> { owner }

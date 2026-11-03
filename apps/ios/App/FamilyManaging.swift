@@ -47,30 +47,58 @@ extension DriveStore {
     static func waitingKey(_ groupId: String, _ userId: String) -> String { "\(groupId)|\(userId.lowercased())" }
 
     /*
-     * The manager lists of a family: calls kept on this phone sent again first (what each came to
-     * said until read), then who waits and the open invitations read again.
+     * The manager lists of a family: calls kept on this phone sent again first, as the session's
+     * own work (leaving the page doesn't stop it, and each refusal is handed to the notices before
+     * its call goes, said until read), then who waits and the open invitations read again.
      */
     func loadManaged(_ summary: GroupSummary) async {
         let groupId = summary.id
+        guard let session = beginSession() else { return }
         do {
-            guard let ends = try await inFamily(nil, { try await $0.resumeOutbox(groupId) }) else { return }
-            for end in ends.values { if case .refused(let words) = end { manageNotices.untilRead(words) } }
-            if ends.values.contains(.wiped) { return }
-            if ends.values.contains(where: { $0 == .landed || $0 == .stale }) { await refreshFamily(summary) }
+            let resumed = try await inFamilyLanding(session, { sync in
+                try await sync.resumeOutbox(groupId) { end in await self.handOver(end, session: session) }
+            }, land: { result in await self.landResumed(summary, result, session: session) })
+            guard let ends = resumed, !ends.values.contains(.wiped) else { return }
         } catch {
+            // Said (or the session reported) as it landed.
+            if endsSession(error) { return }
+        }
+        await reloadManaged(groupId, session: session)
+    }
+
+    /* What a dropped kept call came to, for the session it began in: a refusal waits until it is read. */
+    private func handOver(_ end: CallEnd, session: Session) {
+        guard current(session), case .refused(let words) = end else { return }
+        manageNotices.untilRead(words)
+    }
+
+    /* A resume's end, the session's: the family checked again after a call landed or was overtaken; a failure said. */
+    private func landResumed(_ summary: GroupSummary, _ result: Result<[String: CallEnd], Error>, session: Session) async {
+        guard current(session) else { return }
+        switch result {
+        case .success(let ends):
+            if !ends.values.contains(.wiped), ends.values.contains(where: { $0 == .landed || $0 == .stale }) { await refreshFamily(summary) }
+        case .failure(let error):
             if endsSession(error) {
                 report(error)
-                return
+            } else if !FamilySync.unanswered(error) {
+                notify(FamilyWords.error(error))
             }
-            if !FamilySync.unanswered(error) { notify(FamilyWords.error(error)) }
         }
-        await reloadManaged(groupId)
+    }
+
+    /* A manager's action of `session` against its family sync: dropped when the session ended or changed, never success. */
+    private func familyAnswer<T: Sendable>(_ session: Session, _ work: @escaping @Sendable (FamilySync) async throws -> T) async throws -> Answered<T> {
+        try await sessionGate.answer(session) { vault -> T? in
+            guard let families = FamilySync.shared(for: vault) else { return nil }
+            return try await work(families)
+        }
     }
 
     /* Who waits and the open invitations, read again; an answer of a load begun before the last one is dropped. */
-    func reloadManaged(_ groupId: String) async {
+    func reloadManaged(_ groupId: String, session begun: Session? = nil) async {
         let load = managedLoads.begin(groupId)
-        guard let session = beginSession() else { return }
+        guard let session = begun ?? beginSession() else { return }
         var failures: [Error] = []
         var people: [PendingPerson]?
         var invitations: [FamilyInvitation]?
@@ -96,22 +124,24 @@ extension DriveStore {
     func letIn(_ summary: GroupSummary, _ person: PendingPerson, dropKept: Bool = false) {
         let key = Self.waitingKey(summary.id, person.userId)
         guard waitingRows[key]?.busy == nil else { return }
+        guard let session = beginSession() else { return }
         _ = managedLoads.begin(summary.id)
         waitingRows[key, default: WaitingRow()].busy = .send
         waitingRows[key]?.error = nil
         let first = HushOS.firstName(person.name)
         Task {
-            defer { waitingRows[key]?.busy = nil }
+            defer { if current(session) { waitingRows[key]?.busy = nil } }
             do {
                 if dropKept {
-                    _ = try await inFamily(nil, { try await $0.dropKeptAdmission(summary.id, userId: person.userId) })
+                    guard case .answered = try await familyAnswer(session, { try await $0.dropKeptAdmission(summary.id, userId: person.userId) }) else { return }
                     waitingRows[key]?.keptOther = false
                 }
-                guard let outcome = try await inFamily(nil, { try await $0.letIn(summary, person) }) else { return }
+                guard case .answered(let outcome) = try await familyAnswer(session, { try await $0.letIn(summary, person) }) else { return }
                 switch outcome {
                 case .landed:
                     notify("\(first) is in \(summary.name)")
-                    await reloadManaged(summary.id)
+                    await reloadManaged(summary.id, session: session)
+                    guard current(session) else { return }
                     await refreshFamily(summary)
                 case .pending:
                     notify("Saved on this device. HushOS couldn’t reach the server. \(first) is let in once it can.")
@@ -125,6 +155,7 @@ extension DriveStore {
                     await refreshFamilies(force: true)
                 }
             } catch {
+                guard current(session) else { return }
                 if endsSession(error) {
                     report(error)
                     return
@@ -136,18 +167,23 @@ extension DriveStore {
 
     func turnDown(_ ask: TurnDownAsk) {
         let key = Self.waitingKey(ask.groupId, ask.person.userId)
-        guard waitingRows[key]?.busy == nil else { return }
+        guard waitingRows[key]?.busy == nil, let session = beginSession() else { return }
         _ = managedLoads.begin(ask.groupId)
         waitingRows[key, default: WaitingRow()].busy = .decline
         waitingRows[key]?.error = nil
         Task {
             do {
-                _ = try await inFamily(nil, { try await $0.turnDown(ask.groupId, userId: ask.person.userId) })
+                // Dropped (the session ended or changed): nothing was turned down as far as this screen knows.
+                guard case .answered = try await familyAnswer(session, { try await $0.turnDown(ask.groupId, userId: ask.person.userId) }) else {
+                    if current(session) { waitingRows[key]?.busy = nil }
+                    return
+                }
                 waitingRows[key] = nil
                 waitingToJoin[ask.groupId]?.removeAll { $0.userId == ask.person.userId }
                 notify("\(HushOS.firstName(ask.person.name)) won’t join \(ask.family). You can invite them again.")
-                await reloadManaged(ask.groupId)
+                await reloadManaged(ask.groupId, session: session)
             } catch {
+                guard current(session) else { return }
                 if endsSession(error) {
                     waitingRows[key] = nil
                     report(error)
@@ -160,19 +196,21 @@ extension DriveStore {
     }
 
     func cancelInvitation(_ ask: CancelInvitationAsk) {
+        guard let session = beginSession() else { return }
         _ = managedLoads.begin(ask.groupId)
         Task {
             do {
-                _ = try await inFamily(nil, { try await $0.cancelInvitation(ask.groupId, invitationId: ask.invitation.id) })
+                guard case .answered = try await familyAnswer(session, { try await $0.cancelInvitation(ask.groupId, invitationId: ask.invitation.id) }) else { return }
                 notify(ask.invitation.email.isEmpty ? "Invitation cancelled" : "Invitation to \(ask.invitation.email) cancelled")
             } catch {
+                guard current(session) else { return }
                 if endsSession(error) {
                     report(error)
                     return
                 }
                 notify("Couldn’t cancel it. \(FamilyWords.error(error))")
             }
-            await reloadManaged(ask.groupId)
+            await reloadManaged(ask.groupId, session: session)
         }
     }
 
@@ -195,7 +233,7 @@ extension DriveStore {
     func sendInvite() {
         guard var ask = inviting, !ask.busy else { return }
         let address = ask.email.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !address.isEmpty else { return }
+        guard !address.isEmpty, let session = beginSession() else { return }
         ask.busy = true
         ask.error = nil
         inviting = ask
@@ -203,11 +241,16 @@ extension DriveStore {
         _ = managedLoads.begin(groupId)
         Task {
             do {
-                _ = try await inFamily(nil, { try await $0.invite(groupId, email: address) })
+                // Dropped (the session ended or changed): never "sent"; the sheet stays as typed, or went with the session.
+                guard case .answered = try await familyAnswer(session, { try await $0.invite(groupId, email: address) }) else {
+                    if current(session) { inviting?.busy = false }
+                    return
+                }
                 inviting = nil
                 notify("Invitation sent to \(address)")
-                await reloadManaged(groupId)
+                await reloadManaged(groupId, session: session)
             } catch {
+                guard current(session) else { return }
                 if endsSession(error) {
                     inviting = nil
                     report(error)

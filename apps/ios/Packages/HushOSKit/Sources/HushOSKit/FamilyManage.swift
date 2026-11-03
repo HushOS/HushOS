@@ -175,15 +175,17 @@ extension FamilySync {
 
     /*
      * Every call kept for the family, sent again (or let go of) in the family's turn: what each
-     * came to, by outbox id. Stops at a removal. A store that can't be read throws.
+     * came to, by outbox id. Stops at a removal. A store that can't be read throws. `handOver`
+     * hears each call that is let go of, before its entry is deleted, so what it came to is said
+     * even when whoever asked has stopped waiting (a page left mid-resend).
      */
-    public func resumeOutbox(_ groupId: String) async throws -> [String: CallEnd] {
+    public func resumeOutbox(_ groupId: String, handOver: (@Sendable (CallEnd) async -> Void)? = nil) async throws -> [String: CallEnd] {
         let user = userId
         return try await exclusive(groupId) {
             var out: [String: CallEnd] = [:]
             do {
                 for kept in try self.records.outboxList(userId: user, groupId: groupId) {
-                    let end = try await self.sendKept(groupId, outboxId: kept.outboxId, entry: kept.entry, only: nil)
+                    let end = try await self.sendKept(groupId, outboxId: kept.outboxId, entry: kept.entry, only: nil, handOver: handOver)
                     out[kept.outboxId] = end
                     if end == .wiped { break }
                 }
@@ -200,10 +202,15 @@ extension FamilySync {
      * then sent (as the same bytes, a few times on no answer) and its answer followed. `only`: a
      * person's Let them in looks only at their own admission; anyone else's is `other`, untouched.
      */
-    func sendKept(_ groupId: String, outboxId: String, entry: String, only: String?) async throws -> CallEnd {
+    func sendKept(_ groupId: String, outboxId: String, entry: String, only: String?,
+                  handOver: (@Sendable (CallEnd) async -> Void)? = nil) async throws -> CallEnd {
         var sends = 0
         var fixes = 0
-        func drop() throws { try records.outboxDelete(userId: userId, groupId: groupId, outboxId: outboxId) }
+        // What the call came to is handed over first, then its entry goes: a caller that stops waiting loses nothing.
+        func drop(_ end: CallEnd) async throws {
+            await handOver?(end)
+            try records.outboxDelete(userId: userId, groupId: groupId, outboxId: outboxId)
+        }
         while true {
             // The settings first, every attempt: a pin changed or dropped on another device decides what is sent.
             do {
@@ -219,8 +226,9 @@ extension FamilySync {
                 opened = try ledger.outboxOpen(groupId: groupId, outboxId: outboxId, userId: userId, entry: entry)
             } catch CoreError.Sealed {
                 // Not this account's, or doesn't open (a master-key rotation since): lost, and said so.
-                try drop()
-                return .refused(ManageWords.changesLost(familyName(groupId)))
+                let end = CallEnd.refused(ManageWords.changesLost(familyName(groupId)))
+                try await drop(end)
+                return end
             }
             let route: ChainRoute
             switch opened {
@@ -231,18 +239,18 @@ extension FamilySync {
             case .hold(_, _, let reason):
                 return reason == .otherKeys ? .otherKeys : .pending(ManageWords.keptOnDevice)
             case .landed:
-                try drop()
+                try await drop(.landed)
                 await syncInTurn(groupId)
                 return .landed
             case .superseded:
-                try drop()
+                try await drop(.stale)
                 return .stale
             case .send(_, _, let body):
                 let answer = try await api.sendCall(groupId, route: route, body: body)
                 sends += 1
                 switch outboxStep(status: UInt16(clamping: max(0, answer.status)), code: answer.code) {
                 case .landed:
-                    try drop()
+                    try await drop(.landed)
                     await syncInTurn(groupId)
                     return .landed
                 case .resend, .rebuild:
@@ -253,17 +261,19 @@ extension FamilySync {
                     if fixes > Self.fixesPerCall { return .pending(ManageWords.grantsDue) }
                     if let end = try await sendGrants(groupId, answer) { return end }
                 case .stale:
-                    try drop()
+                    try await drop(.stale)
                     await syncInTurn(groupId)
                     return .stale
                 case .membershipMoved:
-                    try drop()
+                    let end = CallEnd.refused(ManageWords.call(answer, family: familyName(groupId)))
+                    try await drop(end)
                     await syncInTurn(groupId)
-                    return .refused(ManageWords.call(answer, family: familyName(groupId)))
+                    return end
                 case .refused:
-                    try drop()
+                    let end = CallEnd.refused(ManageWords.call(answer, family: familyName(groupId)))
+                    try await drop(end)
                     if answer.code == "forbidden" { await syncInTurn(groupId) }
-                    return .refused(ManageWords.call(answer, family: familyName(groupId)))
+                    return end
                 case .wiped:
                     _ = await removedInTurn(groupId)
                     return .wiped
@@ -358,7 +368,7 @@ extension FamilySync {
             case .call(let call):
                 switch try await sendKept(groupId, outboxId: call.outboxId, entry: call.entry, only: nil) {
                 case .landed: return .landed
-                case .stale, .other: if try await !stillWaiting(groupId, person) { return .landed }
+                case .stale, .other: if try await !stillWaiting(groupId, person) { return await letInMeanwhile(summary, person, first: first) }
                 case .pending(let words): return .pending(words)
                 case .refused(let words): return .refused(words)
                 case .otherKeys: return .keptOther
@@ -367,6 +377,20 @@ extension FamilySync {
             }
         }
         return .refused(ManageWords.keepsChanging(summary.name))
+    }
+
+    /*
+     * No longer waiting after this phone's call was overtaken: let in only if the member list
+     * accepted afresh names them (another manager may have turned them down instead).
+     */
+    private func letInMeanwhile(_ summary: GroupSummary, _ person: PendingPerson, first: String?) async -> LetIn {
+        switch await syncInTurn(summary.id) {
+        case .accepted(let view)?:
+            return view.members.contains { $0.userId.lowercased() == person.userId.lowercased() } ? .landed : .refused(ManageWords.notWaiting(first))
+        case .wiped?: return .wiped
+        case .failed(let words)?: return .refused(words)
+        default: return .refused(ManageWords.couldntCheck(summary.name))
+        }
     }
 
     private func stillWaiting(_ groupId: String, _ person: PendingPerson) async throws -> Bool {
