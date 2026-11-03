@@ -1,0 +1,40 @@
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyRemovalTest.kt
+  s_566b8e0c4467a4::t_cdd1b8178c7dd7 1-284
+  s_566b8e0c4467a4::t_2aef8c81154f03 285-286
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyRemoval.kt
+  s_566b8e0c4467a4::t_d60e559f320142 1-494
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_0c5d23f83fdff1 89-95
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyManage.kt
+  s_566b8e0c4467a4::t_055cf55b484a4c 152-156,245-246,249,263,286,291-300,315,320,337,341,345-348,352-355,359,473,564-566,580,591,626,779
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_566b8e0c4467a4::t_656f27cfd7e040 180-186
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyWalks.kt
+  s_566b8e0c4467a4::t_d78cd6575713e3 279
+apps/android/app/src/main/kotlin/com/hushos/app/data/GroupsApi.kt
+  s_566b8e0c4467a4::t_e4e4160603b808 87-98,138,141-148,153-162,380-406,413-414,418,422-425
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Families.kt
+  s_566b8e0c4467a4::t_c7ae6baec88312 23-24,30,184-186,203-211,213,236-238,240,533,560-570,577,593-705,707-712,716-734
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_acca005120bedf 8-10,171-188,308,312-339,505-603
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyFixture.kt
+  s_566b8e0c4467a4::t_e9fadd3d6e8920 189-204,238-239,295-311,400-481
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_fbb8a66981d4bd 109,236-237
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fd4de9bece7bb062f271ce0213a35a9cf79760b3",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
