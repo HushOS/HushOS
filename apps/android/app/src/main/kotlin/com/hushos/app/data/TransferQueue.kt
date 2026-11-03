@@ -114,15 +114,23 @@ object TransferQueue {
      */
     internal fun dropSlot(context: Context, slot: String, workId: String?, guarded: (() -> Unit) -> Unit,
                           abort: (uploadId: String, workspaceId: String) -> Reservations.Abort): Boolean {
-        var landed = workId != null && LandedJobs.of(context).has(workId)
-        for (key in slotKeys(context, slot)) {
-            if (runCatching { Reservations.settleJob(context, key, abort) }.getOrNull() == Reservations.Settle.LANDED) landed = true
-            Reservations.forgetLanded(context, key)
-        }
+        val landed = (workId != null && LandedJobs.of(context).has(workId)) || slotLanded(context, slot, abort)
+        for (key in slotKeys(context, slot)) Reservations.forgetLanded(context, key)
         // Only while the account that began this is still the one here (`guarded`: under the wipe's lock): an abort can
         // block across a sign-out, and the next account's save of the same family file has the same slot.
         guarded { WriteBacks.drop(context, slot) }
         return landed
+    }
+
+    /*
+     * Every reservation the slot's saves made settled (`slot#<save>`), and whether the file's save landed: the pending one's
+     * own reservation, never an older save's (an older save landed while a newer one is still to send is no upload of
+     * the newer). With nothing pending, whether any of its saves landed.
+     */
+    internal fun slotLanded(context: Context, slot: String, abort: (uploadId: String, workspaceId: String) -> Reservations.Abort): Boolean {
+        val settled = slotKeys(context, slot).associateWith { key -> runCatching { Reservations.settleJob(context, key, abort) }.getOrNull() }
+        val pending = WriteBacks.pending(context, slot) ?: return settled.values.any { it == Reservations.Settle.LANDED }
+        return settled[pending.ledger] == Reservations.Settle.LANDED
     }
 
     /* The upload ledger's keys the slot's saves reserved under. */
@@ -257,9 +265,8 @@ object TransferQueue {
         fun slotOf(info: androidx.work.WorkInfo) = info.tags.firstOrNull { it.startsWith(WriteBacks.SLOT) }?.removePrefix(WriteBacks.SLOT)
         // A slot's saves reserve under their own keys (`slot#<save>`): each is settled, so a reservation is released, or
         // found landed, whichever save of the slot made it.
-        fun settledLanded(info: androidx.work.WorkInfo): Boolean = slotOf(info)?.let { slot ->
-            slotKeys(context, slot).map { key -> runCatching { Reservations.settleJob(context, key, abort) }.getOrNull() }.any { it == Reservations.Settle.LANDED }
-        } ?: (runCatching { Reservations.settleJob(context, ledgerOf(info), abort) }.getOrNull() == Reservations.Settle.LANDED)
+        fun settledLanded(info: androidx.work.WorkInfo): Boolean = slotOf(info)?.let { slot -> slotLanded(context, slot, abort) }
+            ?: (runCatching { Reservations.settleJob(context, ledgerOf(info), abort) }.getOrNull() == Reservations.Settle.LANDED)
         fun dropSlotHere(slot: String, workId: String): Boolean {
             current()
             val landed = dropSlot(context, slot, workId, write, abort)

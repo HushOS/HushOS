@@ -2047,4 +2047,36 @@ class FilesSaveOrderTest {
         assertEquals(ListenableWorker.Result.success(), runSlot(slot))
         assertEquals(text, serverText(notes))
     }
+
+    /*
+     * #274 P1 (rescue order): save 1 is pending in the slot, save 2 couldn't be kept (its closed edit and row), then the
+     * slot's bounds become unreadable and the process starts again. The rescued save 1 keeps its own number, behind save
+     * 2: reads serve save 2, save 1's Retry lands without retiring save 2, and save 2 lands last. Fails if the rescue is
+     * numbered as the newest save, where its Retry wins reads and its landing deletes the newer edit.
+     */
+    @Test
+    fun aRescuedSaveKeepsItsPlaceBehindANewerRetainedEdit() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "first save")
+        WriteBacks.fault = { if (it == "copy") throw java.io.IOException("No space left on device") }
+        save(provider, notes, "second save")
+        WriteBacks.fault = null
+        File(app.filesDir, "${WriteBacks.NUMBERS}/$slot").writeText("not the numbers")
+        WriteBacks.forgetReservedHere()
+        TransferQueue.reconcileEdits(app, startup = true)
+        assertEquals("second save", opened(provider, notes, "r"))
+        val rows = FailedTransfers.of(app).all().filter { it.slot == slot }
+        val rescued = rows.single { File(it.file!!).readText() == "first save" }
+        val newer = rows.single { File(it.file!!).readText() == "second save" }
+        assertTrue(TransferQueue.retry(app, rescued))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("first save", serverText(notes))
+        assertTrue("the rescued save's landing deleted the newer edit", File(newer.file!!).isFile)
+        assertEquals("second save", opened(provider, notes, "r"))
+        assertTrue(TransferQueue.retry(app, FailedTransfers.of(app).all().single { it.id == newer.id }))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("second save", serverText(notes))
+    }
 }
