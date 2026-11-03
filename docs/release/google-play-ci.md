@@ -8,7 +8,7 @@ When release-please publishes `vX.Y.Z` (release.yml), the workflow starts on its
 
 1. **Build and check the bundle.** At the tag, with full history: `apps/android/scripts/bundle-release.sh`, the same script as `bun run android:bundle`, with the upload key from the `play` environment's secrets. Then `check-bundle.sh`: the bundle must be signed with the upload key alone, carry `com.hushos.app` at the tag's version and versionCode, and reach the same phones as the previous release (minSdk, ABIs, required and implied hardware features, screen requirements, compared with the previous release's APK). Play Console shows a review when the number of supported devices changes; the API does not, so this is where a change stops.
 2. **Google Play internal testing.** `play-publish.sh upload`: one Play edit that uploads the bundle, checks Play read the same versionCode and SHA-256, sets the internal track to it as a completed release named `X.Y.Z (versionCode)`, and commits. Testers get it within minutes. No release notes are sent: the manual flow writes them in Play Console from store-listing.md, and there is no per-version source to send. Add them on the internal release in Play Console if you want them; promoting copies them to production.
-3. **The APK.** `release-apk.sh vX.Y.Z`, as by hand: it attaches `HushOS-X.Y.Z.apk` and its `.sha256` to the GitHub release and writes the notes' Android section. It is its own job, so if it fails, **Re-run failed jobs** repeats it without a second Play upload.
+3. **The APK.** `release-apk.sh vX.Y.Z`, as by hand: it attaches `HushOS-X.Y.Z.apk` and its `.sha256` to the GitHub release and writes the notes' Android section. It is its own job, so if it fails, **Re-run failed jobs** repeats it without a second Play upload. It never writes the notes at the same time as release.yml's Server images section: both rewrite the whole body, so they take turns per release.
 
 Then, by hand, once the internal build has been checked on a phone:
 
@@ -33,7 +33,7 @@ The previous release's APK is looked up on GitHub newest first; only a release o
 
 Jobs that change Google Play (the upload, the dry run, promote) wait for each other across all tags: Play allows one open edit per user, and a second edit by the same service account would invalidate the first.
 
-A second upload of a versionCode Play already has (a re-run after the commit went through) uploads nothing and sets the internal track to the bundle Play holds.
+A second upload of a versionCode Play already has (a re-run after the commit went through) uploads nothing. If internal testing already holds that versionCode as a rolled-out release, the track is left exactly as it is, release notes written in Play Console included; otherwise the release is rolled out, keeping any notes it had.
 
 ## One-time setup
 

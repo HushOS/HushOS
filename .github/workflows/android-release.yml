@@ -230,6 +230,10 @@ jobs:
 
     # The APK for phones without Google Play, once Play has the bundle, as release-apk.sh does
     # by hand. Its own job, so a failure here is re-run alone, without a second Play upload.
+    # release-notes-section.sh reads and rewrites the whole body of the release's notes, as
+    # release.yml's notes job does for the Server images section: both share one group per
+    # release, so neither drops the other's section. This job holds it for its whole build; the
+    # notes job waits that long at most.
     apk:
         name: APK on the GitHub release
         needs: [release, bundle, play]
@@ -237,6 +241,10 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 60
         environment: play
+        concurrency:
+            group: release-notes-${{ needs.release.outputs.tag }}
+            cancel-in-progress: false
+            queue: max
         permissions:
             contents: write
         steps:

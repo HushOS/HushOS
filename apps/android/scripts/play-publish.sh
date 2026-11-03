@@ -98,8 +98,12 @@ plan_answer() {
             jq -cn --argjson code "$CODE" --arg sha "${AAB_SHA256:-}" '{versionCode: $code, sha256: $sha}'
             ;;
         "GET $API/edits/EDIT/tracks/internal")
-            jq -cn --argjson code "$CODE" --arg name "$NAME" \
-                '{track: "internal", releases: [{name: $name, versionCodes: [($code | tostring)], status: "completed"}]}'
+            if [[ "$COMMAND" == promote ]]; then
+                jq -cn --argjson code "$CODE" --arg name "$NAME" \
+                    '{track: "internal", releases: [{name: $name, versionCodes: [($code | tostring)], status: "completed"}]}'
+            else
+                echo '{"track":"internal","releases":[]}'
+            fi
             ;;
         "GET $API/edits/EDIT/tracks/production") echo '{"track":"production","releases":[]}' ;;
         *) echo '{}' ;;
@@ -135,7 +139,7 @@ upload_bundle() {
     local existing response uploaded sha
     existing=$(api GET "$API/edits/$EDIT/bundles" | jq --argjson code "$CODE" '[.bundles[]? | select(.versionCode == $code)] | length')
     if [[ "$existing" != 0 ]]; then
-        echo "::notice title=Already on Google Play::versionCode $CODE was uploaded before; the internal track is set to it without uploading again."
+        echo "::notice title=Already on Google Play::versionCode $CODE was uploaded before; it is not uploaded again."
         return
     fi
     AAB_SHA256=$(sha256sum "$AAB" 2> /dev/null || shasum -a 256 "$AAB")
@@ -150,6 +154,27 @@ upload_bundle() {
     echo "Google Play has versionCode $CODE, SHA-256 $sha"
 }
 
+# The internal track's release for this versionCode, built on what the track already holds: a
+# completed one is left exactly as it is (a re-run after the commit), so release notes written
+# in Play Console since are not lost, and for anything else the notes carry over. Sets TRACK
+# to the new track, or to nothing when there is nothing to change.
+TRACK=''
+internal_track() {
+    local internal existing
+    TRACK=''
+    internal=$(api GET "$API/edits/$EDIT/tracks/internal")
+    existing=$(jq -c --arg code "$CODE" '[.releases[]? | select((.versionCodes // []) | index($code))][0] // empty' <<< "$internal")
+    if [[ -n "$existing" && "$(jq -r .status <<< "$existing")" == completed ]]; then
+        echo "::notice title=Already on internal testing::$(jq -r --arg name "$NAME" '.name // $name' <<< "$existing") is already rolled out to the testers; the track is left as it is, release notes included."
+        return
+    fi
+    TRACK=$(jq -c --arg name "$NAME" --arg code "$CODE" '{
+        track: "internal",
+        releases: [{name: $name, versionCodes: [$code], status: "completed"}
+            + (if .releaseNotes then {releaseNotes: .releaseNotes} else {} end)]
+    }' <<< "${existing:-"{}"}")
+}
+
 set_track() {
     local track=$1 body=$2
     api PUT "$API/edits/$EDIT/tracks/$track" -H 'Content-Type: application/json' --data "$body" > /dev/null
@@ -160,18 +185,22 @@ case "$COMMAND" in
     upload)
         open_edit
         upload_bundle
-        # No release notes: the manual flow writes them per release in Play Console from
+        # No new release notes: the manual flow writes them per release in Play Console from
         # docs/release/store-listing.md, and there is no per-version source to send.
-        set_track internal "$(jq -cn --arg name "$NAME" --arg code "$CODE" \
-            '{track: "internal", releases: [{name: $name, versionCodes: [$code], status: "completed"}]}')"
+        internal_track
+        if [[ -z "$TRACK" ]]; then
+            echo "Google Play internal testing already had $NAME; nothing changed."
+            exit 0
+        fi
+        set_track internal "$TRACK"
         commit_edit
         echo "Google Play internal testing: $NAME, rolled out to the testers."
         ;;
     dry-run)
         open_edit
         upload_bundle
-        set_track internal "$(jq -cn --arg name "$NAME" --arg code "$CODE" \
-            '{track: "internal", releases: [{name: $name, versionCodes: [$code], status: "completed"}]}')"
+        internal_track
+        [[ -z "$TRACK" ]] || set_track internal "$TRACK"
         api POST "$API/edits/$EDIT:validate" > /dev/null
         echo "Google Play accepted $NAME for the internal track; nothing was committed."
         ;;
