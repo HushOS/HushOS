@@ -430,6 +430,52 @@ class FamilyUploadsTest {
         return FamilyUploads.waitingOutKeyChanges({ since }, { since = it }, { clock }, { ms -> pauses.add(ms); clock += ms }, {}, attempt)
     }
 
+    /*
+     * #266 review 7, item 2: the job's first look held the file it replaces at its old keys; then the family's keys change
+     * and the file waits for the key change to reach it. Another member's device re-keys the folder and the file during the
+     * wait: the next look lists the file afresh at its new keys and the new version lands. Fails if a look reuses the
+     * row an earlier look held (the upload then waits out the half hour, or fails, while the file is writable).
+     */
+    @Test
+    fun aKeyChangeFinishedDuringTheWaitLetsTheReplacementLandAtTheNextLook() {
+        // In a folder of its own, below the top folder the family's sync lists itself.
+        val trips = server.folder(family.rootId, "Trips")
+        val notes = server.file(trips, "Notes.txt", "before".toByteArray())
+        val vault = job()
+        FamilyUploads.open(vault, family.groupId, family.workspaceId, family.rootId)
+        vault.listChildren(trips, family.workspaceId)
+        assertNotNull(vault.item(family.workspaceId, notes))
+        family.replaceKeys()
+        var walked = false
+        var since: Long? = null
+        var clock = 0L
+        val pauses = ArrayList<Long>()
+        val landed = FamilyUploads.waitingOutKeyChanges({ since }, { since = it }, { clock }, { ms ->
+            pauses.add(ms)
+            clock += ms
+            if (!walked) {
+                // Sam's device walks it: the folder and the file re-keyed on the server, nothing told to this phone.
+                walked = true
+                server.rekeyedElsewhere(family.rootId, trips)
+                server.rekeyedElsewhere(family.rootId, notes)
+            }
+        }, {}) {
+            val job = UUID.randomUUID().toString()
+            FamilyUploads.upload(vault, family.groupId, family.workspaceId, local("Notes.txt", "packing list"), "Notes.txt", "text/plain", trips, notes, job) {}
+                .also { Reservations.forgetLanded(app, job) }
+        }
+        assertTrue("the key change wasn't waited for", walked)
+        assertEquals("it took more than one look after the walk", listOf(FamilyUploads.PAUSE_MS), pauses)
+        assertEquals(notes, landed.id)
+        val reader = family.phone()
+        accepted(reader)
+        reader.vault.listChildren(family.rootId, family.workspaceId)
+        reader.vault.listChildren(trips, family.workspaceId)
+        val out = File(app.cacheDir, "read-${System.nanoTime()}")
+        reader.vault.download(notes, out, workspaceId = family.workspaceId)
+        assertEquals("packing list", out.readText())
+    }
+
     /* Answers the next requests matching `matches` with `answer` (`times` of them), the rest as the fake does. */
     private fun answering(times: Int, matches: (String, List<String>) -> Boolean, answer: () -> Pair<Int, org.json.JSONObject>) {
         val inner = server.extraRoutes!!

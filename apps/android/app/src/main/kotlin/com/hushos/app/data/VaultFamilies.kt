@@ -399,7 +399,7 @@ internal fun Vault.forgetWorkspaces(ids: Collection<String>, words: String = Fam
         // An ended session's cleanup touches nothing: the copies there now may be the next session's.
         if (closed) return gone
         for (id in ids) familyEpochs.compute(id.lowercase()) { _, old -> ((old?.first ?: 0L) + 1) to words }
-        FamilyCopies.delete(context.cacheDir, ids)
+        FamilyCopies.delete(context.cacheDir, context.filesDir, ids)
         for (id in ids) if (!id.equals(ownWorkspaceId, ignoreCase = true)) {
             // The sealed thumbnails kept of what this session opened there go with the rows that named them.
             runCatching { mirror.dropThumbnails(nodes.rowsIn(id).mapNotNull { it.node.currentVersion?.id }) }
@@ -417,14 +417,15 @@ internal fun Vault.forgetWorkspaces(ids: Collection<String>, words: String = Fam
 fun Vault.forgetFamilyCopies(ids: Collection<String>) = synchronized(familyCopiesLock) {
     if (closed) return@synchronized
     for (id in ids) familyEpochs.compute(id.lowercase()) { _, old -> ((old?.first ?: 0L) + 1) to FamilyWords.OPEN_AGAIN }
-    FamilyCopies.delete(context.cacheDir, ids)
+    FamilyCopies.delete(context.cacheDir, context.filesDir, ids)
 }
 
 /*
  * The allowlist sweep: every family copy folder (cache/opened/family/<workspace>) whose workspace isn't in `keep`, deleted,
- * its invalidation moved first so no download of it writes after. Under the copies lock, and never from a closed vault.
+ * its copies' count moved first so no download of it writes after. Under the copies lock, and never from a closed vault.
  * Copies are cleaned whatever any record remembers; an empty `keep` (a cold start) deletes them all, which only costs a
- * download again.
+ * download again. A cache clean, never a revocation: the folder's revocation count stays (an edit open in it, and its
+ * save, are untouched), and it is only marked a family folder (its count's entry made, at what it was).
  */
 internal fun Vault.sweepFamilyCopies(keep: Set<String>) = synchronized(familyCopiesLock) {
     if (closed) return@synchronized
@@ -432,7 +433,8 @@ internal fun Vault.sweepFamilyCopies(keep: Set<String>) = synchronized(familyCop
     for (folder in File(context.cacheDir, "opened/family").listFiles().orEmpty()) {
         val workspace = folder.name.lowercase()
         if (workspace in kept) continue
-        familyEpochs.compute(workspace) { _, old -> ((old?.first ?: 0L) + 1) to FamilyWords.OPEN_AGAIN }
+        familyCopyEpochs.compute(workspace) { _, old -> (old ?: 0L) + 1 }
+        familyEpochs.putIfAbsent(workspace, 0L to FamilyWords.OPEN_AGAIN)
         folder.deleteRecursively()
     }
 }

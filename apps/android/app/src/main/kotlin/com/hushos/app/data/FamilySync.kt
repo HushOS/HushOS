@@ -154,6 +154,11 @@ class FamilySync(
      * never does, since its keep list holds only the family it opened and would delete the app's copies of the rest.
      */
     private val sweeps: Boolean = true,
+    /*
+     * Whether a family this sync accepts for the first time, or lets go of, is told to the Files app (FamilyRootsSignal):
+     * every sync's but the Files app provider's own, whose own loads decide its roots.
+     */
+    private val tellsFiles: Boolean = true,
 ) {
     // Bound to this vault's session: once it is closed, nothing it does writes or deletes a record.
     internal val records: FamilyRecords = records.whileOpen { !vault.closed }
@@ -245,6 +250,8 @@ class FamilySync(
     internal fun publishRemovals(found: List<Revised>) {
         if (found.isEmpty()) return
         removals.addAll(found)
+        // The Files app's family roots are checked again: one of them may have gone.
+        if (tellsFiles) FamilyRootsSignal.moved(vault.context)
         onRemovals?.invoke()
     }
 
@@ -429,7 +436,8 @@ class FamilySync(
         return when (val settled = settle(groupId, pin, chain.checked(), areas.mapNotNull { it.second })) {
             is Settled.Forked -> { refuse(groupId, fork = true); FamilyState.Fork(settled.fork) }
             is Settled.Done -> {
-                accepted.add(groupId.lowercase())
+                // Newly accepted in this process (a join, a relaunch's first sync): the Files app's roots are checked again.
+                if (accepted.add(groupId.lowercase()) && tellsFiles) FamilyRootsSignal.moved(vault.context)
                 // The member list's names: a failure keeps the acceptance, but a not-member here is a removal like any
                 // other (the sync's or the join's wipe), never an accepted family with its keys and copies kept.
                 try {

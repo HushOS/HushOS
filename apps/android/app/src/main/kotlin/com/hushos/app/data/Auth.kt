@@ -737,6 +737,9 @@ object Auth {
 
     fun billing(context: Context): BillingSummary = BillingSummary.from(call(context, "/api/billing"))
 
+    /* A family's plan as this member may see it (FamilyPlan); `groupId` a lowercase UUID, checked by the caller. */
+    fun familyBilling(context: Context, groupId: String, session: Shared.Session): JSONObject = call(context, "/api/billing/groups/$groupId", `as` = session)
+
     private fun envelope(json: JSONObject) = AccountKeyEnvelope(
         json.getInt("envelopeVersion").toUInt(), json.getLong("keyVersion").toULong(), json.getLong("credentialVersion").toULong(),
         json.getString("wrappingSalt"), json.getString("wrappingNonce"), json.getString("encryptedKey"),
