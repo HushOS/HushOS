@@ -2020,4 +2020,31 @@ class FilesSaveOrderTest {
         assertEquals(ListenableWorker.Result.success(), runSlot(slot))
         assertEquals("pending as its numbers broke", serverText(notes))
     }
+
+    /*
+     * #274 P1 (rescue): a slot's bounds are rebuilt after a restart, and the copy that keeps its newest save as an edit is
+     * cut short (a full disk, a death). Nothing moves on: no row, the generation kept. The next rebuild makes the copy
+     * again, whole, and its Retry sends every byte. Fails if a rescued edit counts as made before it was copied whole.
+     */
+    @Test
+    fun aRescueCutShortIsMadeAgainWhole() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        val text = "a save that has to come back whole, every byte of it"
+        save(provider, notes, text)
+        File(app.filesDir, "${WriteBacks.NUMBERS}/$slot").writeText("not the numbers")
+        WriteBacks.forgetReservedHere()
+        WriteBacks.fault = { if (it == "rescue") throw java.io.IOException("No space left on device") }
+        TransferQueue.reconcileEdits(app, startup = true)
+        WriteBacks.fault = null
+        assertTrue("a rescue cut short made a row", FailedTransfers.of(app).all().none { it.slot == slot })
+        assertEquals(1, WriteBacks.dir(app, slot).listFiles().orEmpty().count { it.name.endsWith(".bin") })
+        TransferQueue.reconcileEdits(app, startup = true)
+        val row = FailedTransfers.of(app).all().single { it.slot == slot }
+        assertEquals(text, File(row.file!!).readText())
+        assertTrue(TransferQueue.retry(app, row))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals(text, serverText(notes))
+    }
 }

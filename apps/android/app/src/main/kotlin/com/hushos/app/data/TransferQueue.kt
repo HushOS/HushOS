@@ -630,6 +630,7 @@ object TransferQueue {
         val generation = Reservations.generation
         // First every landing the ledger knows of that reads don't yet (a reservation settled as completed whose recording
         // was refused), then what a landing's bookkeeping left (rows a death kept), for the account it started in.
+        if (startup) runCatching { WriteBacks.dropStaged(context) }
         Reservations.whileAccount(generation) {
             // Numbers that can't be read rebuilt first, so nothing old is published again from what they bounded.
             File(context.filesDir, WriteBacks.NUMBERS).listFiles()?.filter { !it.name.endsWith(".incoming") }?.forEach { runCatching { WriteBacks.repair(context, it.name) } }

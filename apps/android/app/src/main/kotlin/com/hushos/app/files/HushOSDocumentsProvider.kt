@@ -357,7 +357,9 @@ class HushOSDocumentsProvider : DocumentsProvider() {
                 check(incoming.renameTo(file) || file.isFile) { "The file couldn't be kept." }
             } ?: throw authenticationRequired()
         } finally {
+            // Whatever of it is left, kept or not: the download and its partial (Resumable's `.part`).
             incoming.delete()
+            File(incoming.path + ".part").delete()
         }
         return file
     }
