@@ -99,26 +99,50 @@ struct ShareSweepTests {
         let root = try root(), now = Date()
         let id = UUID()
         let folder = try folder(id.uuidString, in: root, file: "handoff.json", ago: 0, now: now)
-        try Data("etag-a".utf8).write(to: folder.appendingPathComponent("etag-1"))
-        try Data("etag-b".utf8).write(to: folder.appendingPathComponent("etag-2"))
-        #expect(ShareHandoff.landedParts(id, in: root) == [1: "etag-a", 2: "etag-b"])
+        try Data("etag-a".utf8).write(to: folder.appendingPathComponent("etag-u1-1"))
+        try Data("etag-b".utf8).write(to: folder.appendingPathComponent("etag-u1-2"))
+        #expect(ShareHandoff.landedParts(id, upload: "u1", in: root) == [1: "etag-a", 2: "etag-b"])
         // A part lands after the adoption read the others: its file is not the adoption's to remove.
-        try Data("etag-c".utf8).write(to: folder.appendingPathComponent("etag-3"))
+        try Data("etag-c".utf8).write(to: folder.appendingPathComponent("etag-u1-3"))
 
         // Records not written (the app died, the disk refused): nothing goes.
-        #expect(!ShareHandoff.adopt([id: [1, 2]], in: root) { false })
+        #expect(!ShareHandoff.adopt([id: ("u1", [1, 2])], in: root) { false })
         #expect(exists(folder.appendingPathComponent("handoff.json")))
-        #expect(exists(folder.appendingPathComponent("etag-1")))
+        #expect(exists(folder.appendingPathComponent("etag-u1-1")))
 
         var notePresentWhileRecording = false
-        #expect(ShareHandoff.adopt([id: [1, 2]], in: root) {
-            notePresentWhileRecording = exists(folder.appendingPathComponent("handoff.json")) && exists(folder.appendingPathComponent("etag-2"))
+        #expect(ShareHandoff.adopt([id: ("u1", [1, 2])], in: root) {
+            notePresentWhileRecording = exists(folder.appendingPathComponent("handoff.json")) && exists(folder.appendingPathComponent("etag-u1-2"))
             return true
         })
         #expect(notePresentWhileRecording, "the note or its parts went before the records naming them were written")
         #expect(!exists(folder.appendingPathComponent("handoff.json")))
-        #expect(!exists(folder.appendingPathComponent("etag-1")) && !exists(folder.appendingPathComponent("etag-2")))
-        #expect(exists(folder.appendingPathComponent("etag-3")))
+        #expect(!exists(folder.appendingPathComponent("etag-u1-1")) && !exists(folder.appendingPathComponent("etag-u1-2")))
+        #expect(exists(folder.appendingPathComponent("etag-u1-3")))
+    }
+
+    /*
+     * Codex #283, 2: a family upload the share sheet started is aborted after a key change and sealed again under a new
+     * server upload, while a part of the first one still lands (the extension's and the app's transfers overlapping).
+     * Its result names the first upload, file and task alike, and is never taken for the new one's; an unversioned result
+     * (no upload named) is never taken either. Fails if a stale ETag is registered against the new upload.
+     */
+    @Test func aPartOfAnUploadSealedAgainIsNeverTakenForTheNewOne() throws {
+        let root = try root(), now = Date()
+        let id = UUID()
+        let folder = try folder(id.uuidString, in: root, file: "handoff.json", ago: 0, now: now)
+        ShareHandoff.landed(id, part: 1, etag: "old", upload: "u1", in: root)
+        try Data("unversioned".utf8).write(to: folder.appendingPathComponent("etag-1"))
+        #expect(ShareHandoff.landedParts(id, upload: "u2", in: root).isEmpty)
+        #expect(ShareHandoff.takeLanded(id, upload: "u2", in: root).isEmpty)
+        #expect(exists(folder.appendingPathComponent("etag-u1-1")), "another upload's result is left unread")
+        ShareHandoff.landed(id, part: 1, etag: "new", upload: "u2", in: root)
+        #expect(ShareHandoff.takeLanded(id, upload: "u2", in: root) == [1: "new"])
+        // The session task names its upload; one that names none, or another, is told apart.
+        let landing = try #require(ShareHandoff.landing(ShareHandoff.taskDescription(id, part: 2, upload: "u2")))
+        #expect(landing.id == id && landing.part == 2 && landing.upload == "u2")
+        #expect(ShareHandoff.landing("\(id.uuidString)|1") == nil)
+        #expect(ShareHandoff.landing("\(id.uuidString)|1|../x") == nil)
     }
 
     @Test func aSheetStillOpenKeepsItsCopiesHoweverLong() throws {

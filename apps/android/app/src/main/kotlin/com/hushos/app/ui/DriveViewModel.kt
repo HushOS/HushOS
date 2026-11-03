@@ -1929,8 +1929,12 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      * so nothing is looked up by name here.
      */
     fun upload(items: List<Outgoing>, folder: String) = viewModelScope.launch {
-        // The folder last added to: Save to HushOS and the shortcuts start there next time.
+        // The folder last added to: Save to HushOS and the shortcuts start there next time (a family folder's with its
+        // family, which Save to HushOS checks again; the shortcuts keep to your own drive).
         if (ownDrive(folder)) com.hushos.app.data.Places.used(context, folder, if (folder == state.value.rootId) "Files" else vault?.item(folder)?.name ?: "Files")
+        else familyFolderOf(folder)?.let { family ->
+            vault?.item(family.workspaceId, folder)?.let { com.hushos.app.data.Places.used(context, com.hushos.app.data.Places.Folder(folder, it.name, family.groupId, family.workspaceId)) }
+        }
         for (item in items) {
             val staged = withContext(Dispatchers.IO) { stage(item.uri) } ?: continue
             // A family folder's: queued too, its job opening the family itself (FamilyUploads), so it finishes after the app closes.

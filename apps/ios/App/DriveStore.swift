@@ -1919,6 +1919,8 @@ final class DriveStore {
             // A family folder's uploads go through the queue too: sealed with the area ledger's keys, and a key change
             // the folder hasn't reached yet is waited out there ("Finishing a key change…"), not failed.
             if let groupId = familyGroup(ofFolder: folder), let workspace = (try? await vault.workspaceId(of: folder)), familyFolderWritable(folder) {
+                // Where Save to HushOS adds next, with its family (which Save to HushOS checks again; the quick actions keep to your own drive).
+                if let name = known(folder)?.name { Places.used(Places.Folder(id: folder, name: name, groupId: groupId, workspaceId: workspace.lowercased())) }
                 BackgroundTransfers.shared.upload(fileURL: item.file.url, name: item.name, mime: mime, folderId: folder, replacingId: item.replacing?.id,
                                                   family: .init(groupId: groupId, workspaceId: workspace),
                                                   replacingVersionId: item.replacing?.node.currentVersion?.id)
