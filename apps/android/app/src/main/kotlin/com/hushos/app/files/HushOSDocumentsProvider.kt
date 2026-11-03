@@ -366,8 +366,11 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         if (error != null) { edit.delete(); return }
         try {
             val target = WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime, opened.node.parentId ?: vault.rootId)
-            if (WriteBacks.save(context!!, vault.ledgerGeneration, target, edit) != null)
+            if (WriteBacks.save(context!!, vault.ledgerGeneration, target, edit) != null) {
                 com.hushos.app.data.TransferQueue.enqueueSlot(context!!, WriteBacks.slotOf(target.workspaceId, target.nodeId), opened.name)
+                // Its listing shows the save's size and date now: Files reads the folder again.
+                FilesRoots.foldersChanged(context!!, listOf(target.folder), vault.rootId)
+            }
         } catch (failure: Exception) {
             android.util.Log.w("HushOSFiles", "a save couldn't be kept: ${failure.javaClass.name}")
         } finally {

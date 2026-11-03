@@ -342,7 +342,8 @@ object TransferQueue {
 
     /* Removes the copy a failed upload kept for a retry; a reservation it left stays on record (Reservations) until settled. */
     fun discard(context: Context, file: String?) {
-        file?.let { File(it).parentFile?.deleteRecursively() }
+        // Never a file's slot: those go only through WriteBacks, under their lock.
+        file?.let { File(it).parentFile }?.takeIf { !WriteBacks.isSlot(it.name) }?.deleteRecursively()
     }
 
     /*
@@ -383,7 +384,8 @@ object TransferQueue {
             (workId != null && LandedJobs.of(context).has(workId))
         // The job is over: the landed row has told its caller, and nobody else is left to tell.
         Reservations.forgetLanded(context, job)
-        dir?.deleteRecursively()
+        // Never a file's slot: those go only through WriteBacks, under their lock (dropSlot).
+        dir?.takeIf { !WriteBacks.isSlot(it.name) }?.deleteRecursively()
         return landed
     }
 
@@ -412,9 +414,18 @@ object TransferQueue {
             // A file's pending save is kept until it lands, is cancelled or dismissed; one left without a job or a row (a
             // death between its save and its job) gets its job.
             // A row owns it only while the row's failed save is still the pending one (its Retry is the person's to press).
-            WriteBacks.pending(context, dir.name)?.let { pending ->
-                val failedHere = rows.any { it.slot == dir.name && WriteBacks.idOf(it.file) == pending.id }
-                if (dir.path !in running && !failedHere) enqueueSlot(context, dir.name, pending.target.name, pending.target.family)
+            if (WriteBacks.isSlot(dir.name)) {
+                WriteBacks.pending(context, dir.name)?.let { pending ->
+                    val failedHere = rows.any { it.slot == dir.name && WriteBacks.idOf(it.file) == pending.id }
+                    if (dir.path !in running && !failedHere) enqueueSlot(context, dir.name, pending.target.name, pending.target.family)
+                    return@forEach
+                }
+                // An old slot with nothing to send and no job: gone, but only as one locked step that looks again first,
+                // so a save published since the look above is never deleted.
+                if (dir.path !in inUse && dir.lastModified() < cutoff) {
+                    beforeSweepRemoves?.invoke(dir)
+                    WriteBacks.removeIfEmpty(context, dir.name)
+                }
                 return@forEach
             }
             if (dir.path !in inUse && dir.path !in recorded && dir.lastModified() < cutoff) dir.deleteRecursively()
@@ -473,7 +484,7 @@ object TransferQueue {
     fun cancel(context: Context, id: UUID, file: String?): java.util.concurrent.Future<*> {
         val dir = file?.let { File(it).parentFile }
         val queue = File(context.filesDir, "queue")
-        if (dir == null || dir.parentFile != queue || !dir.name.startsWith("writeback-")) {
+        if (dir == null || dir.parentFile != queue || !WriteBacks.isSlot(dir.name)) {
             WorkManager.getInstance(context).cancelWorkById(id)
             return cleanups.submit { dir?.deleteRecursively() }
         }
@@ -484,11 +495,20 @@ object TransferQueue {
         val slot = dir.name
         val cancelled = WriteBacks.publishedId(context, slot)
         return cleanups.submit {
-            val left = WriteBacks.cancelThrough(context, slot, cancelled)
+            WriteBacks.cancelThrough(context, slot, cancelled)
+            afterCancelCleans?.invoke()
             WorkManager.getInstance(context).cancelWorkById(id).result.get()
-            if (left != null) enqueueSlot(context, slot, left.target.name, left.target.family)
+            // Read again once the cancel is done: a save made meanwhile may have found the cancelled job still waiting and
+            // counted on it; it gets a job of its own.
+            WriteBacks.pending(context, slot)?.let { enqueueSlot(context, slot, it.target.name, it.target.family) }
         }
     }
+
+    /* Tests: runs after a cancel's saves went, before the job's cancel is published. */
+    @Volatile internal var afterCancelCleans: (() -> Unit)? = null
+
+    /* Tests: runs as the sweep is about to remove an old slot it found empty. */
+    @Volatile internal var beforeSweepRemoves: ((File) -> Unit)? = null
 
     /* Tests: runs as a slot's job is about to end failed for good, after its last look at the slot. */
     @Volatile internal var beforeSlotFails: (() -> Unit)? = null
@@ -655,7 +675,16 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             // the one this vault held before an earlier save landed (its answer perhaps lost).
             if (!first || earlier) vault = jobVault(applicationContext) ?: return Result.retry()
             first = false
-            val (pending, sending) = WriteBacks.take(applicationContext, slot) ?: return Result.success()
+            // Its own copy to send (a full disk, say, can stop it): a failure of its own, with a row for the save kept, which
+            // a Retry sends; the partial copy gone (WriteBacks.take).
+            val taken = try {
+                WriteBacks.take(applicationContext, slot)
+            } catch (error: Exception) {
+                val kept = WriteBacks.pending(applicationContext, slot) ?: return Result.retry()
+                return failed(Problems.say(error, "The transfer failed."), androidx.work.Data.Builder().putAll(inputData)
+                    .putString("file", java.io.File(WriteBacks.dir(applicationContext, slot), kept.id + ".bin").path).build(), generation)
+            }
+            val (pending, sending) = taken ?: return Result.success()
             val target = pending.target
             val ledger = pending.ledger
             // Landed: the slot cleared only while it still holds this save, said once, the landed row used up last (once the

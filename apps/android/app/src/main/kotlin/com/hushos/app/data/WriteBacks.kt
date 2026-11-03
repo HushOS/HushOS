@@ -33,6 +33,9 @@ object WriteBacks {
     private const val BIN = ".bin"
     private const val META = ".json"
 
+    /* Whether a queue folder is a file's slot (by its name). */
+    fun isSlot(name: String) = name.startsWith("writeback-")
+
     /* A file's slot: its workspace and node, both ids; also its folder's name and its job's unique name. */
     fun slotOf(workspaceId: String, nodeId: String): String = "writeback-${workspaceId.lowercase()}-${nodeId.lowercase()}"
 
@@ -161,7 +164,13 @@ object WriteBacks {
         val dir = dir(context, slot)
         val pending = current(dir, slot) ?: return null
         val sending = File(dir, "sending-${pending.id}")
-        File(dir, pending.id + BIN).copyTo(sending, overwrite = true)
+        try {
+            File(dir, pending.id + BIN).copyTo(sending, overwrite = true)
+        } catch (error: Exception) {
+            // Nothing half-copied is left: the save itself stays as it was.
+            sending.deleteRecursively()
+            throw error
+        }
         pending to sending
     }
 
@@ -200,6 +209,15 @@ object WriteBacks {
 
     /* A read refreshed after landing `seen`: only that landing is caught up with, never one that came during the refresh. */
     fun caughtUp(slot: String, seen: Long) { landedHere.remove(slot, seen) }
+
+    /*
+     * An old slot the sweep found with nothing to send and no job: deleted only if, looked at again under its lock, it still
+     * holds no save (one published meanwhile stays).
+     */
+    fun removeIfEmpty(context: Context, slot: String) = lockOf(slot).withLock {
+        val dir = dir(context, slot)
+        if (current(dir, slot) == null) dir.deleteRecursively()
+    }
 
     /* The slot's saves dropped (its family ended): under its lock, so a save landing in it meanwhile is either kept whole or gone. */
     fun drop(context: Context, slot: String) = lockOf(slot).withLock { dir(context, slot).deleteRecursively() }

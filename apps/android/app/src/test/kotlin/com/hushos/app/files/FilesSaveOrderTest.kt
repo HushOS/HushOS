@@ -68,6 +68,8 @@ class FilesSaveOrderTest {
     fun close() {
         WriteBacks.afterContent = null
         TransferQueue.beforeSlotFails = null
+        TransferQueue.afterCancelCleans = null
+        TransferQueue.beforeSweepRemoves = null
         server.close()
         assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
     }
@@ -862,6 +864,92 @@ class FilesSaveOrderTest {
             assertEquals(kept.lastModified(), modified)
             assertTrue(modified >= before - 1_000)
         }
+    }
+
+    /*
+     * The sweep finds an old slot with nothing to send and no job, and a save is published there just before it removes
+     * it: the save stays. Fails if the sweep removes a slot on the strength of a look it took without the slot's lock.
+     */
+    @Test
+    fun aSweepNeverRemovesASavePublishedAfterItLooked() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "landed save")
+        val target = WriteBacks.pending(app, slot)!!.target
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        val dir = WriteBacks.dir(app, slot).apply { mkdirs(); setLastModified(System.currentTimeMillis() - 3_600_000) }
+        TransferQueue.beforeSweepRemoves = { seen ->
+            if (seen == dir) {
+                TransferQueue.beforeSweepRemoves = null
+                WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "meanwhile").apply { writeText("published meanwhile") })
+            }
+        }
+        TransferQueue.sweep(app, inUse = emptySet())
+        assertEquals("published meanwhile", WriteBacks.contentOf(app, slot).readText())
+    }
+
+    /*
+     * Cancel pressed for a waiting job; once the cancelled save went, and before the job's cancel is published, the other
+     * app saves again and finds that job still waiting (so makes none of its own). After the cancel, the new save has a job
+     * of its own and lands. Fails if the cancel decides what is left before its job's cancel is done.
+     */
+    @Test
+    fun aSaveMadeWhileACancelIsPublishedGetsAJob() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "cancelled save")
+        val job = jobs(slot).single()
+        val target = WriteBacks.pending(app, slot)!!.target
+        TransferQueue.afterCancelCleans = {
+            TransferQueue.afterCancelCleans = null
+            WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "meanwhile").apply { writeText("save during the cancel") })
+            assertEquals(job.id, TransferQueue.enqueueSlot(app, slot, "Notes.txt"))
+        }
+        TransferQueue.cancel(app, job.id, job.tags.first { it.startsWith("file:") }.removePrefix("file:")).get(5, TimeUnit.SECONDS)
+        assertEquals(WorkInfo.State.ENQUEUED, jobs(slot).single { it.id != job.id }.state)
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("save during the cancel", serverText(notes))
+    }
+
+    /*
+     * The job can't make its copy of the save to send (the disk refuses it; here something already stands at its path):
+     * the job fails with a row for the save, no partial copy is left, and the row's Retry sends the save. Fails if a copy
+     * failure escapes the job (no row, and the save waits for ever) or leaves the partial copy.
+     */
+    @Test
+    fun aSaveThatCantBeCopiedForSendingFailsWithARowAndIsRetried() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "kept save")
+        val kept = WriteBacks.pending(app, slot)!!
+        val blocking = File(WriteBacks.dir(app, slot), "sending-${kept.id}").apply { mkdirs(); File(this, "in the way").writeText("x") }
+        assertEquals(ListenableWorker.Result.failure()::class, runSlot(slot)::class)
+        assertFalse("the partial copy was left", blocking.exists())
+        val row = FailedTransfers.of(app).all().single()
+        assertEquals(slot, row.slot)
+        assertEquals(File(WriteBacks.dir(app, slot), kept.id + ".bin").path, row.file)
+        assertFalse(row.sourceGone())
+        assertTrue(TransferQueue.retry(app, row))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("kept save", serverText(notes))
+    }
+
+    /*
+     * A save kept tells Files that the file's folder changed (its listing now shows the save's size and date). Fails if a
+     * save changes what a listing shows without telling the observers.
+     */
+    @Test
+    fun aSaveTellsFilesItsFolderChanged() {
+        val provider = provider()
+        val notes = notes(provider)
+        val notified = shadowOf(app.contentResolver)
+        notified.notifiedUris.clear()
+        save(provider, notes, "kept save")
+        val authority = "${app.packageName}.documents"
+        assertTrue(notified.notifiedUris.any { it.uri == android.provider.DocumentsContract.buildChildDocumentsUri(authority, "root") })
     }
 
     /*
