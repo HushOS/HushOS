@@ -1,0 +1,25 @@
+.github/workflows/android-release.yml
+  s_566b8e0c4467a4::t_b640834a9d5383 233-236,244-247
+.github/workflows/release.yml
+  s_566b8e0c4467a4::t_7cfbf96f164aae 247-252
+apps/android/scripts/play-publish.sh
+  s_566b8e0c4467a4::t_01e8a3372001bf 101-106,142,157-177,188,190-195,202-203
+docs/release/google-play-ci.md
+  s_566b8e0c4467a4::t_943b52a5aec74a 11,36
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7f2a25347a4f6932e7b7e7712cbc70db59a7289f",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
