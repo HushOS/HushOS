@@ -41,7 +41,10 @@ on:
 
 permissions: {}
 
-# One run per tag at a time, and none cancelled half-way through a Play edit.
+# One run per tag at a time. The jobs that open Play edits (play, promote) also share one group
+# across all tags, below: Play allows one open edit per user, so a second edit by the same
+# service account invalidates the first. Nothing is cancelled in progress, and there `queue:
+# max` keeps every waiting job instead of only the newest (as in ci.yml).
 concurrency:
     group: ${{ github.workflow }}-${{ github.ref }}
     cancel-in-progress: false
@@ -149,24 +152,21 @@ jobs:
                   apps/android/scripts/bundle-release.sh
                   echo "code=$(scripts/build-number.sh --store)" >> "$GITHUB_OUTPUT"
             # The highest release below this one that has an APK attached: what the phones that
-            # have HushOS now were offered.
+            # have HushOS now were offered. Only a release or asset GitHub confirms is missing
+            # moves the search to an older one; any other error fails the job.
             - name: The previous release's APK
               id: previous
               if: steps.setup.outputs.configured == 'true'
               env:
                   GH_TOKEN: ${{ github.token }}
+                  GH_REPO: ${{ github.repository }}
                   TAG: ${{ needs.release.outputs.tag }}
               run: |
-                  mkdir -p "$RUNNER_TEMP/previous"
-                  for prev in $(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -rV); do
-                      [[ "$(printf '%s\n' "$prev" "$TAG" | sort -V | tail -n 1)" == "$TAG" && "$prev" != "$TAG" ]] || continue
-                      if gh release download "$prev" -R "$GITHUB_REPOSITORY" -p "HushOS-${prev#v}.apk" -D "$RUNNER_TEMP/previous" 2> /dev/null; then
-                          echo "apk=$RUNNER_TEMP/previous/HushOS-${prev#v}.apk" >> "$GITHUB_OUTPUT"
-                          echo "Comparing with $prev's APK."
-                          exit 0
-                      fi
-                  done
-                  echo "::warning title=No previous APK::No earlier release has an APK attached; only the ABIs are checked."
+                  apk=$(apps/android/scripts/previous-apk.sh "$TAG" "$RUNNER_TEMP/previous")
+                  if [[ -z "$apk" ]]; then
+                      echo "::warning title=No previous APK::No earlier release has an APK attached; only the ABIs are checked."
+                  fi
+                  echo "apk=$apk" >> "$GITHUB_OUTPUT"
             - name: Check the bundle
               if: steps.setup.outputs.configured == 'true'
               env:
@@ -194,6 +194,10 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 15
         environment: play
+        concurrency:
+            group: google-play-edits
+            cancel-in-progress: false
+            queue: max
         permissions:
             contents: read
             id-token: write
@@ -270,6 +274,10 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 10
         environment: play
+        concurrency:
+            group: google-play-edits
+            cancel-in-progress: false
+            queue: max
         permissions:
             contents: read
             id-token: write

@@ -27,6 +27,12 @@ Every run by hand names the tag with `--ref`: the workflow takes the release fro
 | `gh workflow run android-release.yml --ref vX.Y.Z -f accept-device-change=true` | The same, after `check-bundle.sh` stopped on an intended change in supported phones.        |
 | `gh workflow run android-release.yml --ref vX.Y.Z -f action=promote`            | Internal testing's release of the tag to production, 100%.                                  |
 
+**A change in supported phones stops the upload.** Any release that changes minSdk, the ABIs, or the required hardware features fails at the check until it is run again with `-f accept-device-change=true`, after you have decided the change is intended. One is known to be coming: today the `CAMERA` permission makes Play treat a rear camera as required (`uses-implied-feature: android.hardware.camera`; only `android.hardware.camera.any` is declared not required), so devices without one don't see HushOS. The release that fixes that in the manifest needs the flag once, and the releases after it compare against its APK.
+
+The previous release's APK is looked up on GitHub newest first; only a release or asset GitHub confirms is missing moves the search to an older one. Any other error (a 5xx, a refused token, a failed download) fails the job rather than compare with a staler release or skip the check: re-run it.
+
+Jobs that change Google Play (the upload, the dry run, promote) wait for each other across all tags: Play allows one open edit per user, and a second edit by the same service account would invalidate the first.
+
 A second upload of a versionCode Play already has (a re-run after the commit went through) uploads nothing and sets the internal track to the bundle Play holds.
 
 ## One-time setup
