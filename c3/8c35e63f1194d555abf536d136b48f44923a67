@@ -1,0 +1,31 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_92c27eb8450916 93
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyRemoval.kt
+  s_566b8e0c4467a4::t_917e04df3e3580 214-218,246,260-261,314,332,356-361,405,443,462,472-482
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Families.kt
+  s_566b8e0c4467a4::t_45d68c84aca0b9 708-709
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_cfa39a57cf15f4 341-342
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyFixture.kt
+  s_566b8e0c4467a4::t_95ac6271108a39 247,386-387,401,404,424-430,439,441,505
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyRemovalTest.kt
+  s_566b8e0c4467a4::t_ba05a63c48587a 557,604,610-644
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_be1b60b34b6f60 236
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c38c35e63f1194d555abf536d136b48f44923a67",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
