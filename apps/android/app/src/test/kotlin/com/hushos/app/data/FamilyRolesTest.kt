@@ -468,4 +468,41 @@ class FamilyRolesTest {
         assertEquals(setOf(graceId), organizers(phone))
         assertTrue("Ada never staged", family.memberCalls.none { it.first.equals(ada, ignoreCase = true) })
     }
+
+    /*
+     * A handover to Grace left half done (billing given, Maya's last step refused); then another device moves Grace's
+     * billing to Ada. Finish handing over to Grace: Grace no longer holds it, so Maya doesn't let go (no step down sent),
+     * stays an organizer, and is told who holds it now. Fails if Maya steps down in favour of someone she never chose.
+     */
+    @Test
+    fun finishingAHandoverWhoseRecipientLostBillingLetsNothingGo() {
+        val (phone, ada) = withAda()
+        family.memberAnswers.add { body -> family.apply(body, null) }
+        family.memberAnswers.add { _ -> 409 to JSONObject().put("code", "held").put("message", "Paused.") }
+        assertTrue(phone.sync.handOver(summary, graceId, "Grace", names) is RoleEnd.Refused)
+        val mayaCalls = family.memberCalls.count { it.first.equals(family.member.id, ignoreCase = true) }
+        family.samMovesBilling(ada, from = graceId)
+        assertEquals(RoleEnd.Refused("Ada is the organizer now."), phone.sync.finishHandingOver(summary, graceId, "Grace", names))
+        assertEquals("no step down sent", mayaCalls, family.memberCalls.count { it.first.equals(family.member.id, ignoreCase = true) })
+        assertEquals(setOf(family.member.id.lowercase(), ada), organizers(phone))
+    }
+
+    /*
+     * Make them the organizer on Grace: billing lands with her, then Maya's step down meets `stale` because another device
+     * moved Grace's billing to Ada meanwhile. The re-sign over the new member list stops: Maya stays an organizer. Fails if
+     * the recipient is checked only before the first attempt.
+     */
+    @Test
+    fun aStepDownReSignedAfterTheRecipientLostBillingStops() {
+        val (phone, ada) = withAda()
+        family.memberAnswers.add { body -> family.apply(body, null) }
+        family.memberAnswers.add { _ ->
+            family.samMovesBilling(ada, from = graceId)
+            409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
+        }
+        assertEquals(RoleEnd.Refused("Ada is the organizer now."), phone.sync.handOver(summary, graceId, "Grace", names))
+        assertEquals("one step down sent, never re-signed", 1, family.memberCalls.count { it.first.equals(family.member.id, ignoreCase = true) })
+        assertEquals(setOf(family.member.id.lowercase(), ada), organizers(phone))
+        assertNull(phone.sync.outbox.handover(family.member.id, family.groupId))
+    }
 }

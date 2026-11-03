@@ -418,7 +418,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                     RoleKind.MANAGE -> sync.changeRole(summary, ask.member.userId, who, com.hushos.core.MembersRole.GRANT)
                     RoleKind.STOP -> sync.changeRole(summary, ask.member.userId, who, com.hushos.core.MembersRole.TAKE)
                     RoleKind.ORGANIZER -> sync.handOver(summary, ask.member.userId, who, ::memberName)
-                    RoleKind.FINISH -> sync.finishHandingOver(summary, ask.member.userId, who)
+                    RoleKind.FINISH -> sync.finishHandingOver(summary, ask.member.userId, who, ::memberName)
                 }
             }
             // An ended session's answer touches nothing: the next session's own change may be under way.

@@ -430,7 +430,7 @@ private fun FamilySync.finishHandover(summary: GroupSummary, names: (String) -> 
     val end = when {
         // Let go of already (here or on another device): done.
         !bills(userId) -> { outbox.clearHandover(userId, groupId); return }
-        bills(to) -> stepDown(summary, first)
+        bills(to) -> stepDown(summary, to, first, names)
         // Billing never staged for them (a change for them was still waiting): the handover goes on from its start.
         !kept.staged -> giveThenStepDown(summary, to, first, names)
         // Staged and ended without landing: its refusal was said with its call.
@@ -664,8 +664,8 @@ fun FamilySync.handOver(summary: GroupSummary, to: String, first: String, names:
  * Finish handing over to {first}: this account and they both hold billing (a handover whose second step was refused,
  * or never sent), and this account lets go of it now, as the handover's last step.
  */
-fun FamilySync.finishHandingOver(summary: GroupSummary, to: String, first: String): RoleEnd = exclusive(summary.id) {
-    notMemberLetsGo(summary.id, { RoleEnd.Wiped }) { stepDown(summary, first) }
+fun FamilySync.finishHandingOver(summary: GroupSummary, to: String, first: String, names: (String) -> String? = { null }): RoleEnd = exclusive(summary.id) {
+    notMemberLetsGo(summary.id, { RoleEnd.Wiped }) { stepDown(summary, to, first, names) }
 }
 
 /* Who else holds billing beside this account, on a member list where this account does too: a handover left half done. */
@@ -699,22 +699,36 @@ private fun FamilySync.giveThenStepDown(summary: GroupSummary, to: String, first
         onStaged = { outbox.markHandover(userId, summary.id, to, staged = true) }) { revision, kems ->
         ledger.handoverBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), summary.id, revision, Handover.To(to.lowercase()), kems)
     }) {
-        RoleEnd.Landed -> stepDown(summary, first)
+        RoleEnd.Landed -> stepDown(summary, to, first, names)
         is RoleEnd.Pending, RoleEnd.Wiped -> given
         else -> { outbox.clearHandover(userId, summary.id); given }
     }
 
 /* The handover's second call: this account lets go of billing, someone else holding it now. */
-private fun FamilySync.stepDown(summary: GroupSummary, first: String): RoleEnd {
-    val end = callFor(summary, userId, first, unchangedIsDone = true) { revision, kems ->
+private fun FamilySync.stepDown(summary: GroupSummary, to: String, first: String, names: (String) -> String?): RoleEnd {
+    // Only in favour of the person it was handed to: on every freshly synced member list (a first attempt, a re-sign after
+    // `stale`), they must still hold billing. Moved to someone else meanwhile (another device), this account stays the
+    // organizer, and the person is told who holds it now.
+    var moved: String? = null
+    val end = callFor(summary, userId, first, unchangedIsDone = true, before = { view ->
+        if (view.members.none { it.userId.equals(to, ignoreCase = true) && "billing" in it.roles }) {
+            val now = view.members.firstOrNull { !it.userId.equals(userId, ignoreCase = true) && "billing" in it.roles }?.userId
+            moved = now?.let { "${names(it) ?: "Someone else"} is the organizer now." } ?: ORGANIZER_FIRST
+            throw StageRefused(moved!!)
+        }
+    }) { revision, kems ->
         ledger.handoverBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), summary.id, revision, Handover.StepDown, kems)
     }
-    return when (end) {
-        RoleEnd.Landed -> { outbox.clearHandover(userId, summary.id); end }
-        is RoleEnd.Refused -> { outbox.clearHandover(userId, summary.id); RoleEnd.Refused("$first is an organizer now, and so are you still: ${end.words}") }
+    return when {
+        end == RoleEnd.Landed -> { outbox.clearHandover(userId, summary.id); end }
+        end is RoleEnd.Refused && moved != null -> { outbox.clearHandover(userId, summary.id); RoleEnd.Refused(moved!!) }
+        end is RoleEnd.Refused -> { outbox.clearHandover(userId, summary.id); RoleEnd.Refused("$first is an organizer now, and so are you still: ${end.words}") }
         else -> end
     }
 }
+
+/* The core's and the web's words for letting go of billing while nobody else holds it (roster_calls.rs ORGANIZER_FIRST). */
+private const val ORGANIZER_FIRST = "Make someone else the organizer first."
 
 /*
  * One role change of `person` sent through the outbox: an earlier one for them kept here goes first (an unanswered one
