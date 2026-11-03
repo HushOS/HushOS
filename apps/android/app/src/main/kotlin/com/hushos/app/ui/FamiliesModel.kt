@@ -338,6 +338,8 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             ?.let { "$it paused your changes in $family for now, so $who wasn’t removed. Try again later, or ask $it." }
             ?: "Your changes in $family are paused for now, so $who wasn’t removed. Try again later, or ask the family’s other managers."
         is com.hushos.app.data.RemovalEnd.EndsLapsed -> "$who wasn’t removed: a plan they pay for would end. Remove them again to confirm it."
+        // Still in the family, not as confirmed: nothing was done, and the manager looks again.
+        com.hushos.app.data.RemovalEnd.Moved -> "$family changed while you were working on it. Try again."
         else -> null
     }
 

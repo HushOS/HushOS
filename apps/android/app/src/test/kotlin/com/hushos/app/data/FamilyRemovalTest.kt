@@ -554,7 +554,7 @@ class FamilyRemovalTest {
         val next = phone(first.folder)
         val continued = ArrayList<RemovalEnd>()
         next.sync.resumeOutbox(summary, continued = { _, end -> continued.add(end) })
-        assertEquals(listOf<RemovalEnd>(RemovalEnd.Changed), continued)
+        assertEquals("still in, so never said as gone", listOf<RemovalEnd>(RemovalEnd.Moved), continued)
         assertTrue("nothing staged", family.rotatingCalls.isEmpty())
         assertTrue(family.holdsAsked.isEmpty())
         assertTrue(next.sync.outbox.removals(family.member.id, family.groupId).isEmpty())
@@ -601,10 +601,45 @@ class FamilyRemovalTest {
         server.beforeAnswer = { method, path ->
             if (method == "POST" && path.endsWith("/hold") && ++holds == 2) family.samGivesBilling(graceId)
         }
-        assertEquals(RemovalEnd.Changed, phone.sync.removeMember(summary, graceId, "Grace", since))
+        assertEquals("still in, so never said as gone", RemovalEnd.Moved, phone.sync.removeMember(summary, graceId, "Grace", since))
         server.beforeAnswer = null
         assertTrue("nothing staged", bodies("remove").isEmpty())
         assertTrue(phone.sync.outbox.removals(family.member.id, family.groupId).isEmpty())
         assertTrue(view(phone).members.any { it.userId.equals(graceId, ignoreCase = true) })
+    }
+
+    /*
+     * Codex #281 round 7, 1: a group key's standalone succession has moved the chain's revision past the member list's
+     * version. Grace manages the family; taking that from her lands, and her entry then sits at the member list's next
+     * version, which the intent was bound to: she is removed. Fails if the demotion is bound to the chain's revision (the
+     * removal would end as moved, and she would stay).
+     */
+    @Test
+    fun aDemotionIsBoundToTheMemberListVersionNotTheChainRevision() {
+        val first = phone()
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        assertEquals(RoleEnd.Landed, first.sync.changeRole(summary, graceId, "Grace", MembersRole.GRANT))
+        family.standaloneSuccessions = 1
+        val steps = ArrayList<RemovalStep>()
+        assertEquals(RemovalEnd.Removed, first.sync.removeMember(summary, graceId, "Grace", graceSince(first), demoteFirst = true) { steps.add(it) })
+        assertEquals(RemovalStep.DEMOTE, steps.first())
+        assertFalse(view(first).members.any { it.userId.equals(graceId, ignoreCase = true) })
+    }
+
+    /*
+     * Codex #281 round 7, 2: the server answers the hold with `members-changed`. Grace is still in the family: said as the
+     * family having changed (the web's words), never as her being gone; once she is gone, as gone. Fails if a person who is
+     * still in the family is reported as no longer in it.
+     */
+    @Test
+    fun aMembersChangedAnswerSaysGoneOnlyWhenTheyAre() {
+        val phone = phone()
+        family.holdAnswer = refuse("members-changed")
+        assertEquals(RemovalEnd.Moved, remove(phone))
+        val since = graceSince(phone)
+        family.holdAnswer = null
+        assertEquals(RemovalEnd.Removed, remove(phone))
+        assertEquals(RemovalEnd.Changed, phone.sync.removeMember(summary, graceId, "Grace", since))
+        assertTrue(phone.sync.outbox.removals(family.member.id, family.groupId).isEmpty())
     }
 }

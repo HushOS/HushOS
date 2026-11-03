@@ -211,6 +211,11 @@ sealed interface RemovalEnd {
     data class Held(val heldBy: String?, val targetManages: Boolean) : RemovalEnd
     /* They're not an active member any more: nothing to remove. */
     data object Changed : RemovalEnd
+    /*
+     * They're still in the family, but not as confirmed: their entry changed (a role, their keys, let in again) or the server
+     * said the member list moved. Nothing was changed; the person looks again and confirms (the web's members-changed words).
+     */
+    data object Moved : RemovalEnd
     /* Kept on this phone and sent again at the next open. */
     data class Pending(val words: String) : RemovalEnd
     data class Failed(val words: String) : RemovalEnd
@@ -238,7 +243,7 @@ fun FamilySync.removeMember(summary: GroupSummary, userId: String, first: String
 }
 
 /* A removal's member list moved to a state nobody confirmed (FamilyOutbox.Removal.bound): thrown from a build, nothing staged. */
-private class NotConfirmed : Exception("not the membership confirmed")
+private class NotConfirmed(val present: Boolean) : Exception("not the membership confirmed")
 
 /*
  * One removal's turn. Its intent is kept on this device first, before any read or call (a write that may not be on disk
@@ -252,8 +257,8 @@ private fun FamilySync.removeKept(summary: GroupSummary, removal: FamilyOutbox.R
     outbox.keepRemoval(userId, summary.id, removal)
     val end = try {
         removeInTurn(summary, removal, names, onStep)
-    } catch (_: NotConfirmed) {
-        RemovalEnd.Changed
+    } catch (moved: NotConfirmed) {
+        if (moved.present) RemovalEnd.Moved else RemovalEnd.Changed
     } catch (error: Exception) {
         if (error is NotAuthenticated || error is kotlinx.coroutines.CancellationException || !FamilySync.transient(error)) throw error
         return RemovalEnd.Pending(keptForLater(summary.name))
@@ -306,7 +311,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, confirmed: FamilyOutb
     val endsLapsed = confirmed.endsLapsed
     var removal = confirmed
     fun entry(view: FamilyView) = view.members.firstOrNull { it.userId.equals(userId, ignoreCase = true) }
-    fun requireBound(view: FamilyView) { entry(view)?.let { if (!removal.bound(it)) throw NotConfirmed() } }
+    fun requireBound(view: FamilyView) { entry(view)?.let { if (!removal.bound(it)) throw NotConfirmed(present = true) } }
     val groupId = summary.id
     val family = summary.name
     val named = { id: String -> if (id.equals(userId, ignoreCase = true)) first else names(id) }
@@ -324,7 +329,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, confirmed: FamilyOutb
             // Refused as kept: a departure still to mark left is done below (staged anew); the rest is definite.
             is CallEnd.Refused -> when (end.code) {
                 "left-due" -> {}
-                "members-changed" -> return RemovalEnd.Changed
+                "members-changed" -> return membersChanged(summary, userId)
                 "ends-lapsed" -> return RemovalEnd.EndsLapsed(FamilyLapsedPlan.listIn(end.data))
                 else -> return RemovalEnd.Failed(end.words)
             }
@@ -348,9 +353,12 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, confirmed: FamilyOutb
 
     if (demoteFirst && manages(view, userId)) {
         onStep(RemovalStep.DEMOTE)
-        when (val demoted = callFor(summary, userId, first, unchangedIsDone = true, before = ::requireBound) { revision, kems ->
-            // The version this demotion takes if it lands, kept before it is staged: the entry it leaves is still the one confirmed.
-            removal = removal.copy(demotedAt = revision.toLong() + 1)
+        // The member list the demotion is staged over (callFor hands it to `before` right before the build).
+        var stagedOver: FamilyView? = null
+        when (val demoted = callFor(summary, userId, first, unchangedIsDone = true, before = { over -> requireBound(over); stagedOver = over }) { revision, kems ->
+            // The member list version this demotion takes if it lands (the core's next roster: its entry's since), kept before
+            // it is staged. Never the chain's revision, which a standalone succession moves past the member list's version.
+            removal = removal.copy(demotedAt = stagedOver!!.rosterVersion.toLong() + 1)
             outbox.keepRemoval(this.userId, groupId, removal)
             ledger.rolesBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, revision, userId, MembersRole.TAKE, kems)
         }) {
@@ -394,7 +402,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, confirmed: FamilyOutb
         // Placed again right before the folders are read: a long finish must not let it lapse while the epochs are drawn.
         placeHold(summary, userId, view!!)?.let { return it }
         val sent = rotatingCall(summary, named) { signedOver, revision, kems ->
-            if (!inFamily(signedOver, userId)) throw NotConfirmed()
+            if (!inFamily(signedOver, userId)) throw NotConfirmed(present = false)
             requireBound(signedOver)
             ledger.removalBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, revision, userId, gatherLive(groupId), endsLapsed,
                 vault.accountKeyVersion(), kems)
@@ -432,7 +440,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, confirmed: FamilyOutb
                     }
                     if (departed.any { it.equals(userId, ignoreCase = true) }) return RemovalEnd.Removed
                 }
-                "members-changed" -> return RemovalEnd.Changed
+                "members-changed" -> return membersChanged(summary, userId)
                 "ends-lapsed" -> return RemovalEnd.EndsLapsed(FamilyLapsedPlan.listIn(call.data))
                 else -> return RemovalEnd.Failed(call.words)
             }
@@ -451,8 +459,7 @@ private fun FamilySync.placeHold(summary: GroupSummary, userId: String, view: Fa
 } catch (error: GroupsApiError) {
     when (error.code) {
         "held" -> RemovalEnd.Held(whoHolds(summary.id), manages(view, userId))
-        // Read again so the page shows the list as it is; a sync that let go of the family (not-member) is the account's removal.
-        "members-changed" -> if (syncRevised(summary).state == FamilyState.Wiped) RemovalEnd.Wiped else RemovalEnd.Changed
+        "members-changed" -> membersChanged(summary, userId)
         else -> when {
             error.isNotMember -> throw error
             // No answer, or the server's for now (a timeout, throttling, an outage): the removal goes on at the next open.
@@ -460,6 +467,17 @@ private fun FamilySync.placeHold(summary: GroupSummary, userId: String, view: Fa
             else -> RemovalEnd.Failed(callWords(CallAnswer(error.status, error.code, null, error.message), null, summary.name))
         }
     }
+}
+
+/*
+ * The server's `members-changed`, said as what the family is now (read again, so the page shows it too): the account let go
+ * of (not-member) is Wiped, the person no longer in it is Changed, and anything else (still in, or a read that didn't answer)
+ * is Moved, never "no longer in the family" about someone who is.
+ */
+private fun FamilySync.membersChanged(summary: GroupSummary, userId: String): RemovalEnd = when (val state = syncRevised(summary).state) {
+    FamilyState.Wiped -> RemovalEnd.Wiped
+    is FamilyState.Accepted -> if (inFamily(state.view, userId)) RemovalEnd.Moved else RemovalEnd.Changed
+    else -> RemovalEnd.Moved
 }
 
 /* Who holds this manager, from route 3's `due.holds` (listed to every holder); null when unknown: nobody is named on a guess. */

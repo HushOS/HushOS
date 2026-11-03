@@ -705,6 +705,8 @@ private fun RemovalOutcome(end: com.hushos.app.data.RemovalEnd, who: String, fam
             }
         }
         com.hushos.app.data.RemovalEnd.Changed -> Text("$who isn’t in $family any more, so there was nothing to remove.")
+        // Still in the family, not as confirmed: the web's members-changed words, nothing changed.
+        com.hushos.app.data.RemovalEnd.Moved -> Text("$family changed while you were working on it. Try again.")
         is com.hushos.app.data.RemovalEnd.Pending -> Text(end.words)
         com.hushos.app.data.RemovalEnd.Wiped -> Text("You’re not in $family any more.")
         is com.hushos.app.data.RemovalEnd.Failed -> Text(end.words, color = alpine.danger)

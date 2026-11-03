@@ -244,7 +244,7 @@ class FamilyFixture(val server: FakeDrive) {
             method == "GET" && path == "groups/$groupId" -> if (notMember) notMemberAnswer() else 200 to JSONObject()
                 .put("due", JSONObject().put("grants", JSONArray()).put("markLeft", JSONArray(dueMarkLeft)).put("rotations", JSONArray(dueRotations))
                     .put("holds", JSONArray(holdRows.toList())))
-                .put("head", JSONObject().put("version", chain.size).put("revision", chain.size)).put("members", JSONArray()
+                .put("head", JSONObject().put("version", chain.size).put("revision", revision)).put("members", JSONArray()
                 .put(JSONObject().put("userId", creator.id).put("name", "Sam Lindqvist").put("email", "sam@example.org").put("state", "active").put("roles", JSONArray().put("billing").put("members")))
                 .put(JSONObject().put("userId", member.id.lowercase()).put("name", "Maya").put("email", "me@example.org").put("state", "active").put("roles", JSONArray()))
                 .apply { joined.forEach { person -> put(JSONObject().put("userId", person.id.lowercase()).put("name", nameOf(person)).put("email", emailOf(person)).put("state", "active").put("roles", JSONArray())) } })
@@ -383,8 +383,8 @@ class FamilyFixture(val server: FakeDrive) {
         val next = signedOf(body.getJSONObject("roster"))
         // A call the server took already, sent again (its answer was lost): answered with the head, as the server replays it.
         if (chain.any { it.statement.contentEquals(next.statement) })
-            return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", chain.size))
-        if (body.optLong("expectedRevision", -1) != chain.size.toLong())
+            return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", revision))
+        if (body.optLong("expectedRevision", -1) != revision.toLong())
             return 409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
         val succession = body.optJSONObject("succession")?.let(::signedOf)
         // The roster (and its succession) must follow the head it names (the server's verify; `invalid`/`roster-chain` otherwise).
@@ -398,10 +398,10 @@ class FamilyFixture(val server: FakeDrive) {
                 keySeal = JSONObject(seal.toString()).put("sealerUserId", member.id.lowercase()).apply { remove("holderUserId") }
             }
         }
-        if (userId == null) return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", chain.size))
+        if (userId == null) return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", revision))
         (listOf(server.grace) + server.others.values.map { it.first }).firstOrNull { it.id.equals(userId, ignoreCase = true) }?.let(joined::add)
         pendingRows.removeIf { it.optString("userId").equals(userId, ignoreCase = true) }
-        return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", chain.size))
+        return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", revision))
     }
 
     /*
@@ -421,6 +421,13 @@ class FamilyFixture(val server: FakeDrive) {
         return answer
     }
 
+    /*
+     * Chain writes that aren't member lists (a group key's standalone succession, a manager leaving): each moves the
+     * server's chain revision, which every call names (`expectedRevision`), past the member list's version.
+     */
+    @Volatile var standaloneSuccessions = 0
+    val revision get() = chain.size + standaloneSuccessions
+
     /* The next this many 5b calls are applied (or answered) as usual, and their replies lost: the phone hears a 503. */
     @Volatile var repliesLost = 0
 
@@ -429,9 +436,9 @@ class FamilyFixture(val server: FakeDrive) {
         rotatingCalls.add(kind to body.toString())
         rotatingAnswers.poll()?.invoke(kind, body)?.let { return it }
         val next = signedOf(body.getJSONObject("roster"))
-        val head = 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", chain.size))
+        val head = 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", revision))
         if (chain.any { it.statement.contentEquals(next.statement) }) return head
-        if (body.optLong("expectedRevision", -1) != chain.size.toLong())
+        if (body.optLong("expectedRevision", -1) != revision.toLong())
             return 409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
         val wires = (body.optJSONArray("rotations")?.let { list -> (0 until list.length()).map(list::getJSONObject) }.orEmpty()) +
             listOfNotNull(body.optJSONObject("rotation"))
@@ -495,7 +502,7 @@ class FamilyFixture(val server: FakeDrive) {
         }
         if (kind == "delete") areaListed = false
         dueRotations = dueRotations.filter { ws -> wires.none { it.getString("workspaceId") == ws } }
-        return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", chain.size))
+        return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", revision))
     }
 
     private fun signedOf(wire: JSONObject): SignedGroupStatement {
