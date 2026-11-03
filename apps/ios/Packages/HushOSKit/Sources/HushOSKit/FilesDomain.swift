@@ -139,6 +139,10 @@ public enum FilesDomain {
     public static func register(for owner: AccountOwner, record: FilesDomainOwner = .shared, families: FamilyFilesDomains = .shared) async {
         // Unknown is not "none": adding over a domain that exists would keep it, whatever it holds.
         guard let existing = try? await NSFileProviderManager.domains() else { return }
+        // Asked again after every wait before anything is removed or recorded: a sign-in to someone else meanwhile (the Files
+        // sheet, a switch) is that sign-in's to register, never this one's to undo.
+        func still() -> Bool { AccountOwner.signedIn == owner }
+        guard still() else { return }
         let ours = existing.first { $0.identifier == identifier }
         switch FilesDomainOwner.plan(domainExists: ours != nil, recorded: record.read(), signingIn: owner) {
         case .keep:
@@ -147,16 +151,17 @@ public enum FilesDomain {
             await signedIn()
             return
         case .replace:
-            guard let ours, await removeAll(ours) else { return }
+            guard let ours, await removeAll(ours), still() else { return }
         case .add:
             break
         }
         // Every family location goes with the drive's (each record once its location went): the next acceptance adds this account's.
         await families.removeAll()
         for stale in existing where stale.identifier != identifier && FamilyFileIds.group(ofDomain: stale.identifier.rawValue) == nil {
+            guard still() else { return }
             _ = await removeAll(stale)
         }
-        guard (try? record.write(owner)) != nil else { return }
+        guard still(), (try? record.write(owner)) != nil else { return }
         let domain = NSFileProviderDomain(identifier: identifier, displayName: "HushOS")
         #if DEBUG && targetEnvironment(simulator)
         domain.testingModes = .alwaysEnabled
@@ -184,9 +189,12 @@ public enum FilesDomain {
      * its account's, refused to anyone else.
      */
     public static func remove(record: FilesDomainOwner = .shared, families: FamilyFilesDomains = .shared) async {
+        // Whose location this removes: a sign-in that registered meanwhile (its record written) keeps its own.
+        let leaving = record.read()
         // The families' locations first, each record only once its location went: one that stays is refused to anyone else.
         await families.removeAll()
-        if await removeAll(NSFileProviderDomain(identifier: identifier, displayName: "HushOS")) { record.clear() }
+        guard record.read() == leaving else { return }
+        if await removeAll(NSFileProviderDomain(identifier: identifier, displayName: "HushOS")), record.read() == leaving { record.clear() }
     }
 
     /* Removes a domain and everything Files kept in it; whether it went. (`.removeAll` preserves nothing, so its URL is always nil.) */
@@ -201,10 +209,11 @@ public enum FilesDomain {
 
     /* Tells Files something changed; it re-enumerates through the change feed. */
     /*
-     * An upload finished, maybe in a background launch before any screen exists: the location it went
-     * into is told, so Files reads its feed. A family folder's upload is its family's location's, never the drive's.
+     * The one way to tell Files a folder changed (a write, a move, an upload that landed, maybe in a
+     * background launch before any screen exists): a family folder's change goes to its family's
+     * location, anything else to the drive's. Only the own drive's feed signals the drive alone (`signal()`).
      */
-    public static func signalLanded(folderId: String?, familyGroup: String?, families: FamilyFilesDomains = .shared) {
+    public static func signalFor(folderId: String?, familyGroup: String?, families: FamilyFilesDomains = .shared) {
         if let familyGroup {
             families.signal(familyGroup)
         } else {

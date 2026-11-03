@@ -10,7 +10,7 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
     var removalFails = false
 
     /* Run as the system is asked for its locations, and as a location is added: what another process does meanwhile. */
-    var duringDomains: (@Sendable () -> Void)?
+    var duringDomains: (@Sendable () async -> Void)?
     /* Awaited before the added location appears: another process's whole let-go, its removal included, can land first. */
     var duringAdd: (@Sendable () async -> Void)?
     private(set) var adds: [String] = []
@@ -18,8 +18,8 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
     var addFails = false
 
     func domains() async throws -> [String: String] {
-        let hook = lock.withLock { () -> (@Sendable () -> Void)? in defer { duringDomains = nil }; return duringDomains }
-        hook?()
+        let hook = lock.withLock { () -> (@Sendable () async -> Void)? in defer { duringDomains = nil }; return duringDomains }
+        await hook?()
         return lock.withLock { present }
     }
     func add(_ identifier: String, name: String) async throws {
@@ -65,7 +65,12 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
 @Suite struct FamilyDomainsTests {
     let manager = TestFamilyDomains()
     let records = FamilyDomainRecords(folder: FileManager.default.temporaryDirectory.appendingPathComponent("family-domains-\(UUID().uuidString)"), activity: .expired)
-    var domains: FamilyFilesDomains { FamilyFilesDomains(records: records, manager: manager) }
+    /* The shared keychain as every lifecycle of the suite reads it: who is signed in. */
+    let keychain = OnFakeDrive.FamilyFilesSourceTests.Shared(nil)
+    var domains: FamilyFilesDomains { FamilyFilesDomains(records: records, manager: manager, sharedSession: { [keychain] in keychain.session }) }
+
+    /* `owner` signed in, as the app is before it reconciles. */
+    func signIn(_ owner: AccountOwner) { keychain.session = SharedKeychain.Session(origin: owner.origin, token: owner.userId, userId: owner.userId) }
     static let maya = AccountOwner(userId: UUID().uuidString, origin: "https://hushos.test")
     static let sam = AccountOwner(userId: UUID().uuidString, origin: "https://hushos.test")
     static let group = UUID().uuidString.lowercased()
@@ -115,6 +120,7 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, observed: records.generation(Self.group), session: session).value
         let other = FamilyFileIds.domain(UUID().uuidString.lowercased())
         manager.put(other, name: "Old family")
+        signIn(Self.maya)
         await domains.reconcile(owner: Self.maya).value
         #expect(manager.resolutions == [FamilyFileIds.domain(Self.group)])
     }
@@ -388,7 +394,7 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
      */
     @Test func aFamilyUploadThatLandsTellsItsFamilysLocation() async throws {
         let domains = self.domains
-        FilesDomain.signalLanded(folderId: UUID().uuidString.lowercased(), familyGroup: Self.group.uppercased(), families: domains)
+        FilesDomain.signalFor(folderId: UUID().uuidString.lowercased(), familyGroup: Self.group.uppercased(), families: domains)
         await domains.settled()
         #expect(manager.signals == [FamilyFileIds.domain(Self.group)])
     }
@@ -486,8 +492,9 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
      * reread after it.
      */
     @Test func everyRemovalGivesAnAcceptanceThatLandedDuringItItsLocationBack() async throws {
+        signIn(Self.maya)
         for path in ["reconcile", "foreign"] {
-            let lifecycle = FamilyFilesDomains(records: records, manager: manager)
+            let lifecycle = domains
             let app = FamilyFilesDomains(records: records, manager: manager)
             let session = TemporaryCopies.session(CopyEpoch())
             let (group, maya, sam, records) = (UUID().uuidString.lowercased(), Self.maya, Self.sam, self.records)
@@ -542,6 +549,122 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         #expect(try b.open().stands, "a gate served a value from an epoch that moved since")
     }
 
+    /*
+     * Maya's sign-in reconciles her family locations while the system answers slowly, and someone
+     * signs in meanwhile (another process wipes Maya's and accepts the next account's family): the
+     * paused reconcile removes and deletes nothing of that account's, whether it waited on the
+     * system's list, on a removal with more to go, or on its last removal; nor, when Maya herself
+     * signed out and in again, on the family she accepted since. Fails if a reconcile asks who is
+     * signed in (and since which account change) only before it waits.
+     */
+    @Test func aReconcilePausedWhileAnotherAccountSignsInLeavesThatAccountAlone() async throws {
+        let mayaSession = SharedKeychain.Session(origin: Self.maya.origin, token: "maya", userId: Self.maya.userId)
+        let mayaAgain = SharedKeychain.Session(origin: Self.maya.origin, token: "maya-again", userId: Self.maya.userId)
+        let samSession = SharedKeychain.Session(origin: Self.sam.origin, token: "sam", userId: Self.sam.userId)
+        for pausedIn in ["domains", "removal", "last removal", "same account again"] {
+            let manager = TestFamilyDomains()
+            let records = FamilyDomainRecords(folder: FileManager.default.temporaryDirectory.appendingPathComponent("family-domains-\(UUID().uuidString)"), activity: .expired)
+            let shared = OnFakeDrive.FamilyFilesSourceTests.Shared(mayaSession)
+            let old = FamilyFilesDomains(records: records, manager: manager, sharedSession: { shared.session })
+            let other = FamilyFilesDomains(records: records, manager: manager, sharedSession: { shared.session })
+            let (next, nextSession) = pausedIn == "same account again" ? (Self.maya, mayaAgain) : (Self.sam, samSession)
+            let tail = String(UUID().uuidString.lowercased().suffix(12))
+            let orphan = "00000000-0000-4000-8000-\(tail)", theirs = "ffffffff-ffff-4fff-8fff-\(tail)"
+            // A location without Maya's record, and (but for the last removal) the next account's from before or one
+            // without a record: Maya's reconcile removes both while she stays in.
+            manager.put(FamilyFileIds.domain(orphan), name: "Holm family")
+            if pausedIn != "last removal" { manager.put(FamilyFileIds.domain(theirs), name: "Lindqvist family") }
+            if pausedIn == "domains" || pausedIn == "removal" {
+                records.update { $0.records[theirs] = FamilyDomainRecord(owner: next, name: "Lindqvist family", generation: $0.generation(theirs)) }
+            }
+            let session = TemporaryCopies.session(CopyEpoch())
+            let signIn: @Sendable () async -> Void = {
+                shared.session = nextSession
+                await other.removeAll()
+                await other.accepted(theirs, name: "Lindqvist family", owner: next, observed: records.generation(theirs), session: session, signedIn: nextSession).value
+            }
+            if pausedIn == "domains" { manager.duringDomains = signIn } else { manager.duringRemove = signIn }
+            let removedBefore = { manager.removals.filter { $0 == FamilyFileIds.domain(theirs) }.count }
+            await old.reconcile(owner: Self.maya).value
+            #expect(try records.read()[theirs]?.owner == next, "a stale reconcile took the next sign-in's record (paused in \(pausedIn))")
+            #expect(manager.names[FamilyFileIds.domain(theirs)] != nil, "a stale reconcile took the next sign-in's location (paused in \(pausedIn))")
+            // The wipe removed it once at most (the next sign-in's own); the stale reconcile never.
+            #expect(removedBefore() <= 1, "a stale reconcile removed the next sign-in's location, emptying what Files kept of it (paused in \(pausedIn))")
+        }
+    }
+
+    /*
+     * An acceptance's add loses to a revocation, and before its take-back finishes the family is
+     * accepted again (a let-in after the let-go): the take-back leaves that fresher acceptance its
+     * location. Fails if the add's rollback removes unconditionally.
+     */
+    @Test func anAddsRollbackLeavesAFresherAcceptancesLocation() async throws {
+        // The add's own session ends while it adds: its record stays (whose the sign-out decides), its location doesn't.
+        let ending = CopyEpoch()
+        let endingSession = TemporaryCopies.session(ending)
+        let endingGroup = UUID().uuidString.lowercased()
+        manager.duringAdd = { TemporaryCopies.endAccount(ending) }
+        await domains.accepted(endingGroup, name: "Holm family", owner: Self.maya, observed: records.generation(endingGroup), session: endingSession).value
+        #expect(manager.names[FamilyFileIds.domain(endingGroup)] == nil, "the rollback gave an ended session's add its location back")
+
+        let app = self.domains
+        let again = FamilyFilesDomains(records: records, manager: manager)
+        let session = TemporaryCopies.session(CopyEpoch())
+        let (group, maya, records, manager) = (UUID().uuidString.lowercased(), Self.maya, self.records, self.manager)
+        manager.duringAdd = {
+            // Another process's let-go lands while the location is added (its own removal comes later).
+            records.update { stored in
+                stored.revoked[group, default: 0] += 1
+                stored.records[group] = nil
+            }
+            manager.duringRemove = { await again.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value }
+        }
+        await app.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value
+        #expect(manager.removals.contains(FamilyFileIds.domain(group)), "the lost add wasn't taken back")
+        #expect(records.admission(group, owner: maya) == .admitted)
+        #expect(manager.names[FamilyFileIds.domain(group)] != nil, "the rollback took the location of an acceptance newer than the add")
+    }
+
+    /*
+     * Sam's location met Maya signed in, and Sam signs in while it is being removed: Sam's record,
+     * no longer foreign, stays. Fails if the foreign refusal asks who is signed in only before it waits.
+     */
+    @Test func aForeignRefusalLeavesTheRecordOfWhoeverSignedInMeanwhile() async throws {
+        let samSession = SharedKeychain.Session(origin: Self.sam.origin, token: "sam", userId: Self.sam.userId)
+        let shared = OnFakeDrive.FamilyFilesSourceTests.Shared(SharedKeychain.Session(origin: Self.maya.origin, token: "maya", userId: Self.maya.userId))
+        let lifecycle = FamilyFilesDomains(records: records, manager: manager, sharedSession: { shared.session })
+        let group = UUID().uuidString.lowercased()
+        manager.put(FamilyFileIds.domain(group), name: "Lindqvist family")
+        records.update { $0.records[group] = FamilyDomainRecord(owner: Self.sam, name: "Lindqvist family") }
+        manager.duringRemove = { shared.session = samSession }
+        await lifecycle.dropForeign(group, current: Self.maya).value
+        #expect(try records.read()[group]?.owner == Self.sam, "the record of the account that signed in meanwhile went")
+
+        // Sam already signed in by the time the refusal runs: nothing of Sam's is touched.
+        let later = UUID().uuidString.lowercased()
+        manager.put(FamilyFileIds.domain(later), name: "Lindqvist family")
+        records.update { $0.records[later] = FamilyDomainRecord(owner: Self.sam, name: "Lindqvist family") }
+        await lifecycle.dropForeign(later, current: Self.maya).value
+        #expect(manager.names[FamilyFileIds.domain(later)] != nil, "a refusal for Maya removed the location of Sam, signed in by then")
+    }
+
+    /*
+     * The next account's acceptance lands while a sign-out's wipe removes the last account's
+     * locations: its record and location stay. Fails if the wipe drops records written after it began.
+     */
+    @Test func aWipeKeepsTheNextAccountsAcceptanceThatLandedDuringIt() async throws {
+        let wipe = FamilyFilesDomains(records: records, manager: manager)
+        let next = FamilyFilesDomains(records: records, manager: manager)
+        let session = TemporaryCopies.session(CopyEpoch())
+        let (old, fresh, records, sam) = (UUID().uuidString.lowercased(), UUID().uuidString.lowercased(), self.records, Self.sam)
+        await wipe.accepted(old, name: "Holm family", owner: Self.maya, observed: records.generation(old), session: session).value
+        manager.duringRemove = { await next.accepted(fresh, name: "Lindqvist family", owner: sam, observed: records.generation(fresh), session: session).value }
+        await wipe.removeAll()
+        #expect(try records.read()[old] == nil)
+        #expect(try records.read()[fresh]?.owner == sam, "the wipe dropped a record written after it began")
+        #expect(manager.names[FamilyFileIds.domain(fresh)] != nil)
+    }
+
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
     @Test func aRenamedFamilysLocationTakesTheNewName() async throws {
         let domains = self.domains
@@ -583,12 +706,14 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         #expect(try records.read()[Self.group]?.owner == Self.maya, "another account's acceptance took the record over")
         #expect(records.admission(Self.group, owner: Self.sam) == .otherAccount)
 
+        signIn(Self.maya)
         await domains.reconcile(owner: Self.maya).value
         #expect(manager.names[FamilyFileIds.domain(Self.group)] != nil, "the same account's location went at its own sign-in")
 
         // A location left with no record (its revocation's removal never ran) goes too.
         let orphan = FamilyFileIds.domain(UUID().uuidString.lowercased())
         manager.put(orphan, name: "Old family")
+        signIn(Self.sam)
         await domains.reconcile(owner: Self.sam).value
         #expect(manager.names.isEmpty)
         #expect(try records.read().isEmpty)

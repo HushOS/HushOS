@@ -123,6 +123,9 @@ public struct FamilyDomainRecords: Sendable {
     /* Every record by family. */
     public func read() throws -> [String: FamilyDomainRecord] { try stored().records }
 
+    /* How many account changes (`removeAll`) the store has seen; nil when it can't be read. */
+    public func accounts() -> UInt64? { (try? stored()).map { $0.accounts ?? 0 } }
+
     /* The family's revocation generation now; nil when the store can't be read. */
     public func generation(_ groupId: String) -> UInt64? { (try? stored())?.generation(groupId.lowercased()) }
 
@@ -244,13 +247,15 @@ public final class FamilyFilesDomains: @unchecked Sendable {
             // A let-go this process couldn't write is written first; while it still can't be, nothing is added.
             guard !revocationPending(groupId) else { return }
             var ours = false
+            var written: UInt64 = 0
             let wrote = records.update { stored in
                 guard stored.generation(groupId) <= observed else { return }
                 // Signed out or in again elsewhere since this sync's session began: nothing of it is written.
                 if let signedIn, sharedSession() != signedIn { return }
                 if let record = stored.records[groupId], record.owner != owner { return }
+                written = stored.generation(groupId)
                 stored.records[groupId] = FamilyDomainRecord(owner: owner, name: name, workspaces: workspaces.map { $0.lowercased() }.sorted(),
-                                                             generation: stored.generation(groupId))
+                                                             generation: written)
                 ours = true
             }
             guard wrote, ours, session.stands else { return }
@@ -260,7 +265,8 @@ public final class FamilyFilesDomains: @unchecked Sendable {
             // for an identifier that exists updates its name. Compared with the system's name, never the record's.
             if existing[identifier] != name {
                 // Another process may have let the family go (or signed out or in) while this one waited.
-                guard await addVerified(identifier, name: name, holds: { stands(groupId, owner: owner, observed: observed, session: session, signedIn: signedIn) })
+                guard await addVerified(groupId, name: name, from: written,
+                                        holds: { stands(groupId, owner: owner, observed: observed, session: session, signedIn: signedIn) })
                 else { return }
             }
             await manager.signal(identifier)
@@ -344,7 +350,7 @@ public final class FamilyFilesDomains: @unchecked Sendable {
             return record
         }
         guard let record = kept() else { return removed }
-        return !(await addVerified(identifier, name: record.name, holds: { kept() != nil }))
+        return !(await addVerified(groupId, name: record.name, from: record.generation ?? 0, holds: { kept() != nil }))
     }
 
     /*
@@ -353,11 +359,16 @@ public final class FamilyFilesDomains: @unchecked Sendable {
      * False when it doesn't stand.
      */
     @discardableResult
-    private func addVerified(_ identifier: String, name: String, holds: () -> Bool) async -> Bool {
+    private func addVerified(_ groupId: String, name: String, from start: UInt64, holds: () -> Bool) async -> Bool {
+        let identifier = FamilyFileIds.domain(groupId)
         guard holds() else { return false }
         try? await manager.add(identifier, name: name)
         guard holds() else {
-            try? await manager.remove(identifier)
+            // Lost (a revocation, a session that ended): taken back through `removeVerified`, which gives the location back
+            // only to a record newer than both the one this add was for (`start`) and whatever beat it (the generation now).
+            let beaten = records.generation(groupId) ?? .max
+            let fresher = max(start == .max ? .max : start &+ 1, beaten)
+            await removeVerified(groupId) { ($0.generation ?? 0) >= fresher }
             return false
         }
         return true
@@ -450,8 +461,17 @@ public final class FamilyFilesDomains: @unchecked Sendable {
      */
     @discardableResult
     public func reconcile(owner: AccountOwner) -> Task<Void, Never> {
-        enqueue { [self] in
-            guard let identifiers = (try? await manager.domains()).map({ Array($0.keys) }), let held = try? records.read() else { return }
+        // The account count as the sign-in asked: another sign-in or sign-out after it (in any process) stops this one.
+        let accounts = records.accounts()
+        return enqueue { [self] in
+            // Still `owner` signed in, with no account change since: asked before every removal (so after the system's answer
+            // and after the removal before it) and under the lock for the records' write, since another process (the Files
+            // sheet, a switch, the same account signing out and in again) may change who is in while the system answers.
+            func current(_ stored: FamilyDomainRecords.Stored? = nil) -> Bool {
+                guard let accounts, sharedSession().map(AccountOwner.init) == owner else { return false }
+                return (stored.map { $0.accounts ?? 0 } ?? records.accounts()) == accounts
+            }
+            guard let identifiers = (try? await manager.domains()).map({ Array($0.keys).sorted() }), let held = try? records.read() else { return }
             var present = Set(identifiers)
             var kept: [String] = []
             for identifier in identifiers {
@@ -460,11 +480,13 @@ public final class FamilyFilesDomains: @unchecked Sendable {
                     kept.append(identifier)
                     continue
                 }
+                guard current() else { return }
                 // Kept: this account's record, an acceptance that landed while the location was removed.
                 let gone = if let groupId { await removeVerified(groupId) { $0.owner == owner } } else { (try? await manager.remove(identifier)) != nil }
                 if gone { present.remove(identifier) }
             }
             records.update { stored in
+                guard current(stored) else { return }
                 stored.records = stored.records.filter { $0.value.owner == owner || present.contains(FamilyFileIds.domain($0.key)) }
             }
             for identifier in kept { await manager.resolved(identifier) }
@@ -480,12 +502,26 @@ public final class FamilyFilesDomains: @unchecked Sendable {
      */
     public func removeAll() async {
         // At once, before any queued call: every acceptance begun before this (in any process) is refused from here.
-        _ = (0 ..< 3).contains { _ in records.update { $0.accounts = ($0.accounts ?? 0) &+ 1 } }
+        var moved: UInt64?
+        _ = (0 ..< 3).contains { _ in
+            records.update { stored in
+                stored.accounts = (stored.accounts ?? 0) &+ 1
+                moved = stored.accounts
+            }
+        }
+        let after = moved
         await enqueue { [self] in
             guard let identifiers = (try? await manager.domains()).map({ Array($0.keys) }) else { return }
             var present = Set(identifiers)
             for identifier in identifiers where (try? await manager.remove(identifier)) != nil { present.remove(identifier) }
-            records.update { stored in stored.records = stored.records.filter { present.contains(FamilyFileIds.domain($0.key)) } }
+            records.update { stored in
+                // A record written after the wipe began (the next account's acceptance, whose generation counts the account
+                // change) stays: what goes is every record from before it whose location went or never stood.
+                stored.records = stored.records.filter { group, record in
+                    if let after, (record.generation ?? 0) >= stored.revoked[group, default: 0] &+ after { return true }
+                    return present.contains(FamilyFileIds.domain(group))
+                }
+            }
         }.value
     }
 
@@ -498,15 +534,17 @@ public final class FamilyFilesDomains: @unchecked Sendable {
     public func dropForeign(_ groupId: String, current: AccountOwner) -> Task<Void, Never> {
         let groupId = groupId.lowercased()
         return enqueue { [self] in
+            // `current` still signed in: a switch to the record's own account meanwhile makes it no longer foreign.
+            func signedIn() -> Bool { sharedSession().map(AccountOwner.init) == current }
             func foreign() -> Bool {
                 var record: FamilyDomainRecord?
                 guard records.update({ stored in record = stored.records[groupId] }), let record else { return false }
-                return record.owner != current
+                return record.owner != current && signedIn()
             }
             // Kept: the account signed in now's record, an acceptance that landed while the location was removed.
             guard foreign(), await removeVerified(groupId, keeps: { $0.owner == current }) else { return }
             records.update { stored in
-                if let record = stored.records[groupId], record.owner != current { stored.records[groupId] = nil }
+                if let record = stored.records[groupId], record.owner != current, signedIn() { stored.records[groupId] = nil }
             }
         }
     }

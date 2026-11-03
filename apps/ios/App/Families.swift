@@ -448,6 +448,11 @@ extension DriveStore {
     }
 
     /* Which family a folder on screen belongs to: a top folder by route 25, anything else by its workspace. */
+    /* Files is told `folder` changed: its family's location for a family folder, the drive's otherwise (`FilesDomain.signalFor`). */
+    func signalFiles(folder: String?) {
+        FilesDomain.signalFor(folderId: folder, familyGroup: folder.flatMap { familyGroup(ofFolder: $0) })
+    }
+
     func familyGroup(ofFolder id: String) -> String? {
         if let group = familyRoots[id.lowercased()] ?? familyFolders[id.lowercased()] { return group }
         return known(id).flatMap { familyAreaGroups[$0.node.workspaceId.lowercased()] }
