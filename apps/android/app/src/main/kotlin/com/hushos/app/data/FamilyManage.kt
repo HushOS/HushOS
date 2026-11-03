@@ -436,8 +436,10 @@ private fun FamilySync.finishHandover(summary: GroupSummary, names: (String) -> 
         // Staged and ended without landing: its refusal was said with its call.
         else -> { outbox.clearHandover(userId, groupId); return }
     }
-    if (end is RoleEnd.Pending) return
+    // Told whatever it came to, pending included (billing may have landed before the last step went unanswered): the
+    // page reads the family again. A pending one keeps its record for the next open.
     handed(to, end)
+    if (end is RoleEnd.Pending) return
     if (end != RoleEnd.Wiped) outbox.clearHandover(userId, groupId)
 }
 
@@ -503,7 +505,13 @@ private fun FamilySync.admitInTurn(summary: GroupSummary, person: PendingPerson,
                 // another manager may have turned them down meanwhile. Only their active entry on the synced member
                 // list is a landing.
                 CallEnd.Stale -> if (!waiting(groupId, person.userId)) {
-                    return if (activeOnChain(summary, person.userId)) LetIn.Landed else LetIn.Refused("$first isn’t waiting to join any more.")
+                    return when (val now = admittedNow(summary, person.userId)) {
+                        Admitted.Yes -> LetIn.Landed
+                        Admitted.No -> LetIn.Refused("$first isn’t waiting to join any more.")
+                        Admitted.Wiped -> LetIn.Wiped
+                        // The member list couldn't be read: neither let in nor turned down is known.
+                        is Admitted.Unknown -> LetIn.Refused(now.words)
+                    }
                 }
             }
         }
@@ -511,10 +519,19 @@ private fun FamilySync.admitInTurn(summary: GroupSummary, person: PendingPerson,
     return LetIn.Refused("${summary.name} keeps changing. Try again in a moment.")
 }
 
-/* Whether the family, synced now, has them as an active member: let in, by this phone or another manager. */
-private fun FamilySync.activeOnChain(summary: GroupSummary, userId: String): Boolean {
-    val view = (syncRevised(summary).state as? FamilyState.Accepted)?.view ?: return false
-    return view.members.any { it.userId.equals(userId, ignoreCase = true) }
+/* Whether they are in the family now, as a sync read it: only a member list read whole says yes or no. */
+private sealed interface Admitted {
+    data object Yes : Admitted
+    data object No : Admitted
+    data object Wiped : Admitted
+    data class Unknown(val words: String) : Admitted
+}
+
+/* The family synced now: their active entry (let in, by this phone or another manager), none, or a sync that didn't read. */
+private fun FamilySync.admittedNow(summary: GroupSummary, userId: String): Admitted = when (val state = syncRevised(summary).state) {
+    is FamilyState.Accepted -> if (state.view.members.any { it.userId.equals(userId, ignoreCase = true) }) Admitted.Yes else Admitted.No
+    FamilyState.Wiped -> Admitted.Wiped
+    else -> Admitted.Unknown("Couldn’t check ${summary.name}. Try again.")
 }
 
 /* Whether they are still waiting to join (route 16): one let in meanwhile, by another manager or an earlier send, isn't. A read that fails throws. */

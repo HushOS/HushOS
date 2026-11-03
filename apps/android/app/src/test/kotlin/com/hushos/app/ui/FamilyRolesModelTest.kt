@@ -11,6 +11,7 @@ import com.hushos.app.data.Shared
 import com.hushos.app.data.Vault
 import com.hushos.app.data.handOver
 import com.hushos.app.data.letIn
+import com.hushos.app.data.outbox
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -225,5 +226,23 @@ class FamilyRolesModelTest {
         second.countDown()
         until("the new session's change finished") { model.roleBusy == null }
         server.beforeAnswer = null
+    }
+
+    /*
+     * A handover kept unstaged, then the page opens with nothing in the outbox: the resume gives Grace billing, and Maya's
+     * last step gets no answer (kept for the next open). The page still reads the family again and shows Finish handing
+     * over. Fails if a resumed handover that ends pending says nothing to the page.
+     */
+    @Test
+    fun aResumedHandoverLeftPendingShowsTheFamilyAsItIs() {
+        family.rosterFailures = 1
+        assertTrue(runCatching { host.vault.families.handOver(family.summary, server.grace.id, "Grace") }.isFailure)
+        runBlocking { model.refreshFamilies(force = true) }
+        assertEquals(null, halfDoneShown())
+        family.memberAnswers.add { body -> family.apply(body, null) }
+        repeat(3) { family.memberAnswers.add { _ -> 503 to JSONObject().put("message", "Drive is temporarily unavailable. Please try again.") } }
+        runBlocking { model.loadManaged(family.groupId) }
+        assertEquals(server.grace.id.lowercase(), halfDoneShown())
+        assertTrue("the handover is kept", host.vault.families.outbox.handover(family.member.id, family.groupId) != null)
     }
 }

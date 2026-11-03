@@ -592,4 +592,21 @@ class FamilyManageTest {
         assertEquals("no decline sent", 0, declines())
         assertEquals(1, kept(phone).size)
     }
+
+    /*
+     * Let them in meets `stale` because Grace's admission landed first, and the sync that would show her in fails: neither
+     * let in nor turned down is known, so it says the family couldn't be checked, never that she isn't waiting. Fails if a
+     * sync that didn't read is taken for her absence from the member list.
+     */
+    @Test
+    fun aStaleWhoseFollowUpSyncFailsIsAFailedCheck() {
+        val phone = phone()
+        family.admitAnswers.add { body ->
+            family.apply(body, server.grace.id)
+            family.rosterFailures = 2
+            409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
+        }
+        assertEquals(LetIn.Refused("Couldn’t check Lindqvist family. Try again."), phone.sync.letIn(summary, grace))
+        assertEquals(4, family.chain.size)
+    }
 }
