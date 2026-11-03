@@ -1625,6 +1625,28 @@ class ProviderFamiliesTest {
         assertEquals("kept over a day", serverText())
     }
 
+    /*
+     * On a full disk, a family save can't be kept and its row can't be written: only its closed edit holds it. The next
+     * read of the file and the next open that keeps its contents start from that edit. Fails if a reopen looks only at
+     * rows and the slot.
+     */
+    @Test
+    fun aFamilyReopenStartsFromAClosedEditNoRowNames() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        WriteBacks.fault = { at -> if (at == "copy") throw java.io.IOException("No space left on device") }
+        com.hushos.app.data.FailedTransfers.beforeWrite = { throw java.io.IOException("No space left on device") }
+        ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("only in its closed edit".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
+        WriteBacks.fault = null
+        com.hushos.app.data.FailedTransfers.beforeWrite = null
+        assertTrue(com.hushos.app.data.FailedTransfers.of(app).all().isEmpty())
+        assertEquals("only in its closed edit", read(provider, file))
+        assertEquals("only in its closed edit", families.editFor(doc, "rw").readText())
+    }
+
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =
         HushOSDocumentsProvider::class.java.getDeclaredField("families").apply { isAccessible = true }.get(provider) as ProviderFamilies
 }

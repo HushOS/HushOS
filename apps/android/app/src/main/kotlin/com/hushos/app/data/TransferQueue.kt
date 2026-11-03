@@ -601,7 +601,8 @@ object TransferQueue {
                     val closed = file.parentFile?.listFiles()?.any { it.name.startsWith(edit.name + ".") && it.name.endsWith(".closed") } == true
                     if (startup && !edit.exists() && !closed && file.lastModified() < dayAgo) file.delete()
                 }
-                else -> if (startup && file.lastModified() < dayAgo) WriteBacks.discardEdit(file)
+                // Never one a row names, whatever its name (a close whose rename failed keeps its save under the edit's own name).
+                else -> if (startup && file.path !in named && file.lastModified() < dayAgo) WriteBacks.discardEdit(file)
             }
         }
     }

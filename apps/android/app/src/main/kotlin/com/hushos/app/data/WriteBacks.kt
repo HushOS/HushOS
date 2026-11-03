@@ -217,6 +217,18 @@ object WriteBacks {
      */
     const val EDITS = "edits"
 
+    /* Every closed edit of `slot` on disk, by the number in its name: the saves never kept in the slot. Never throws. */
+    fun closedEditsOf(context: Context, slot: String): List<Pair<Long, File>> = runCatching {
+        File(context.filesDir, EDITS).walkTopDown().filter { it.isFile && it.name.endsWith(".closed") }.mapNotNull { closed ->
+            val number = closedNumber(closed) ?: return@mapNotNull null
+            val target = runCatching { decodeTarget(sidecarOf(closed).readText()) }.getOrNull() ?: return@mapNotNull null
+            if (slotOf(target.workspaceId, target.nodeId) == slot) number to closed else null
+        }.toList()
+    }.getOrDefault(emptyList())
+
+    /* Tests: the numbers given in this process forgotten, as a restart forgets them. */
+    internal fun forgetReservedHere() = reservedHere.clear()
+
     /* A new edit in `dir`, its target written beside it. */
     fun editIn(dir: File, target: Target): File {
         dir.mkdirs()
@@ -236,6 +248,7 @@ object WriteBacks {
     /* A closed edit: renamed with its save's number (one rename, no room needed); the edit itself if the rename failed. */
     fun close(edit: File, number: Long): File {
         val closed = File(edit.parentFile, "${edit.name}.$number.closed")
+        if (runCatching { fault?.invoke("close") }.isFailure) return edit
         return if (edit.renameTo(closed)) closed else edit
     }
 
@@ -267,6 +280,7 @@ object WriteBacks {
     }.getOrDefault(Numbers(0L, 0L))
 
     private fun writeNumbers(context: Context, slot: String, numbers: Numbers) {
+        fault?.invoke("numbers")
         val file = numbersFile(context, slot).also { it.parentFile?.mkdirs() }
         val incoming = File(file.parentFile, "$slot.incoming").apply { writeText("${numbers.reserved} ${numbers.landed} ${numbers.cancelled}") }
         check(incoming.renameTo(file)) { "The save's number couldn't be kept." }
@@ -279,10 +293,15 @@ object WriteBacks {
      */
     fun reserve(context: Context, slot: String): Long = lockOf(slot).withLock {
         val held = readNumbers(context, slot)
+        // From what is on disk (the closed edits first: they are the saves, the counter and rows only caches of them), so a
+        // counter that couldn't be written, and a restart, never give a number again.
         val onDisk = runCatching {
             val dir = dir(context, slot)
             maxOf(held.reserved, held.landed, held.cancelled, read(File(dir, RECORD), slot)?.generation ?: 0L, cancelledThrough(dir),
-                dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty().mapNotNull { read(it, slot)?.generation }.maxOrNull() ?: 0L)
+                dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty().mapNotNull { read(it, slot)?.generation }.maxOrNull() ?: 0L,
+                closedEditsOf(context, slot).maxOfOrNull { it.first } ?: 0L,
+                runCatching { FailedTransfers.of(context).all() }.getOrDefault(emptyList())
+                    .filter { it.slot == slot && it.stage != null }.mapNotNull { stagedNumber(it.stage!!) }.maxOrNull() ?: 0L)
         }.getOrDefault(maxOf(held.reserved, held.landed, held.cancelled))
         val number = maxOf(onDisk, reservedHere[slot] ?: 0L) + 1
         reservedHere[slot] = number
@@ -296,8 +315,10 @@ object WriteBacks {
      * A copy in `dest`; false when there is neither.
      */
     fun copyNewestTo(context: Context, slot: String, dest: File): Boolean {
-        val staged = FailedTransfers.of(context).all().filter { it.slot == slot && it.stage != null }
-            .mapNotNull { row -> stagedNumber(row.stage!!)?.let { it to File(row.file ?: return@mapNotNull null) } }
+        // The closed edits on disk, row or not (a row that couldn't be written leaves only the edit), and any row's edit.
+        val staged = (closedEditsOf(context, slot) + runCatching { FailedTransfers.of(context).all() }.getOrDefault(emptyList())
+            .filter { it.slot == slot && it.stage != null }
+            .mapNotNull { row -> stagedNumber(row.stage!!)?.let { it to File(row.file ?: return@mapNotNull null) } })
             .filter { it.second.isFile }.maxByOrNull { it.first }
         return lockOf(slot).withLock {
             val dir = dir(context, slot)
