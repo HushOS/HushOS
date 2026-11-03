@@ -79,6 +79,9 @@ object TransferQueue {
         return enqueueUpload(context, id, file, name, mime, folderId, replacingId, family)
     }
 
+    /* Tests: runs as a Retry of a save kept aside has checked for anything newer, before it takes its number. */
+    @Volatile internal var beforeAsideReserve: (() -> Unit)? = null
+
     /* Tests: runs once a slot's enqueue has looked for a waiting job, before it publishes anything. */
     @Volatile internal var beforeSlotEnqueued: (() -> Unit)? = null
 
@@ -352,15 +355,22 @@ object TransferQueue {
                 val quarantined = WriteBacks.quarantinedAt(failed.stage)
                 val number = if (quarantined == null) own else {
                     val slot = WriteBacks.slotOf(target.workspaceId, target.nodeId)
-                    val newer = records.all().any { it.id != failed.id && it.slot == slot && it.stage != null && (WriteBacks.stagedNumber(it.stage) ?: 0L) > own } ||
-                        WriteBacks.closedEditsOf(context, slot).any { it.first > own }
-                    if (newer) return if (edit.isFile) Retry.NOT_KEPT else Retry.GONE
-                    WriteBacks.reserve(context, slot, generation) ?: return Retry.GONE
+                    // Checked and numbered in one hold of the slot lock every close takes for its number and rename, so no
+                    // close falls between; the keeping checks again under it (`intoEmptyAbove`).
+                    var moot = false
+                    val fresh = WriteBacks.withSlot(slot, generation) {
+                        moot = records.all().any { it.id != failed.id && it.slot == slot && it.stage != null && (WriteBacks.stagedNumber(it.stage) ?: 0L) > own } ||
+                            WriteBacks.closedEditsOf(context, slot).any { it.first > own }
+                        beforeAsideReserve?.invoke()
+                        if (moot) null else WriteBacks.reserve(context, slot, generation)
+                    }
+                    if (moot) return if (edit.isFile) Retry.NOT_KEPT else Retry.GONE
+                    fresh ?: return Retry.GONE
                 }
                 // Kept or not, the edit stays when this try fails (a disk still full): the row and its reason stand.
                 var notKept = false
                 fun stage(publishUnder: ((() -> WriteBacks.Pending?) -> WriteBacks.Pending?)? = null): WriteBacks.Pending? = try {
-                    WriteBacks.stage(context, generation, target, edit, number, intoEmptyAbove = quarantined, publishUnder = publishUnder)
+                    WriteBacks.stage(context, generation, target, edit, number, intoEmptyAbove = quarantined?.let { it to own }, publishUnder = publishUnder)
                 } catch (_: WriteBacks.Superseded) {
                     superseded = true
                     null

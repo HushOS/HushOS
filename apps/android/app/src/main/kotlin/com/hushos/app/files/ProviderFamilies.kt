@@ -596,8 +596,7 @@ class ProviderFamilies internal constructor(
         // from here it goes only once kept, dismissed, or let go of with its family or account. Both only while the account
         // it was opened in is still here (under the wipe's lock): after a sign-out nothing of it is written.
         // The account left meanwhile: the edit goes (deleting writes nothing of it back).
-        val number = WriteBacks.reserve(vault.context, slotOf(doc), vault.ledgerGeneration) ?: run { WriteBacks.discardEdit(edit); return false }
-        val closed = com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) { WriteBacks.close(edit, number) } ?: run { WriteBacks.discardEdit(edit); return false }
+        val (number, closed) = WriteBacks.reserveAndClose(vault.context, slotOf(doc), edit, vault.ledgerGeneration) ?: run { WriteBacks.discardEdit(edit); return false }
         // Kept only while the folder's invalidation count is still the one the open read before it checked anything, and
         // the session lasts, under the copies lock a removal's cleanup takes: a family let go of since keeps no plaintext.
         // The copy into the slot is made outside the copies lock (a sign-out's close on the main thread waits for that lock,
