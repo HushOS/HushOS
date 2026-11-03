@@ -163,7 +163,7 @@ extension FamilySync {
     private func giveThenStepDown(_ summary: GroupSummary, to: String, first: String, names: [String: String]) async throws -> RoleEnd {
         let me = userId.lowercased()
         let groupId = summary.id
-        let given = try await callFor(summary, person: to, first: first, operation: .billingTo, unchangedIsDone: true, check: to, before: { view in
+        let given = try await callFor(summary, person: to, first: first, operation: .billingTo, unchangedIsDone: true, check: to, waitsKept: true, before: { view in
             // Not the organizer any more (another device finished a handover, or this one's earlier step down landed):
             // billing is not this account's to give.
             if !self.bills(view, me) {
@@ -224,22 +224,34 @@ extension FamilySync {
     }
 
     /*
-     * One role change of `person` through the outbox: an earlier one of the same `operation` for them
-     * kept here goes first (an unanswered one stays the only one; another operation kept for them is
-     * the gate's, which sends it and waits while it is unresolved: never said as this one's), then the core's call is staged through the gate and
+     * One role change of `person` through the outbox: an earlier one for them kept here goes first (an
+     * unanswered one of the same `operation` stays the only one; another operation's end is never said
+     * as this one's: it is kept to be said and this one goes on, or, still unresolved, this one waits,
+     * except the handover's billing step, `waitsKept`, which stays pending, its record kept), then the core's call is staged through the gate and
      * sent, and signed again over another manager's win (`stale`). `before` judges each freshly
      * synced member list (throw StageRefused to stop); `check`: a promotion's person, who must be
      * verified on this phone now. A change that no longer changes anything after a landing or a win
      * is done; `unchangedIsDone` says so from the start.
      */
-    func callFor(_ summary: GroupSummary, person: String, first: String, operation: RoleOperation, unchangedIsDone: Bool, check: String? = nil,
+    func callFor(_ summary: GroupSummary, person: String, first: String, operation: RoleOperation, unchangedIsDone: Bool, check: String? = nil, waitsKept: Bool = false,
                  before: ((FamilyView) throws -> Void)? = nil, kept: (() throws -> Void)? = nil,
                  build: (UInt64, [String: String]) async throws -> RosterCall) async throws -> RoleEnd {
         let groupId = summary.id
         let route = ChainRoute.member(userId: person.lowercased())
         var moved = unchangedIsDone
         for call in try records.outboxList(userId: userId, groupId: groupId) {
-            switch try await sendKept(groupId, outboxId: call.outboxId, entry: call.entry, only: route, operation: operation) {
+            if try records.outboxOperation(userId: userId, groupId: groupId, outboxId: call.outboxId) != operation.rawValue {
+                // Another change for them (or one kept before operations were noted): never this one's outcome. It ends (kept
+                // to be said) and this one goes on; still unresolved, this one waits, unless `waitsKept` (the handover's billing
+                // step, whose record the next open goes on from once the earlier change lands).
+                switch try await sendKept(groupId, outboxId: call.outboxId, entry: call.entry, only: route, saysLater: true) {
+                case .other, .landed, .stale, .refused: continue
+                case .pending(let words): return waitsKept ? .pending(words) : .waiting(ManageWords.earlierWaiting(summary.name))
+                case .otherKeys: return .waiting(ManageWords.earlierWaiting(summary.name))
+                case .wiped: return .wiped
+                }
+            }
+            switch try await sendKept(groupId, outboxId: call.outboxId, entry: call.entry, only: route) {
             case .other: continue
             case .landed, .stale: moved = true
             case .pending(let words): return .pending(words)

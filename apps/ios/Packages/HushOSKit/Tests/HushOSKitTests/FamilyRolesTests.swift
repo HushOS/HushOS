@@ -143,12 +143,12 @@ extension OnFakeDrive {
         }
 
         /*
-         * Codex #285 round 3: an unanswered Stop them managing for Maya is kept, then Make them the
-         * organizer is asked for her. Both are on her `member` route, but they are different changes:
-         * the kept one is sent first and still unanswered, so the new one waits, said so, and nothing
-         * new is kept; asking the same change again is the kept one's, still saved on this device.
-         * Fails if a different kept change is said as this one's (Saved on this device, nothing kept
-         * for it), or the same change pressed again is refused as another's.
+         * Codex #285 round 3: Make them the organizer is kept unanswered for Maya (billing to her),
+         * then Stop them managing is asked for her. Both are on her `member` route, but they are
+         * different changes: the kept one is sent first and still unanswered, so the new one waits,
+         * said so, and nothing new is kept; Make them the organizer pressed again is the kept one's,
+         * still saved on this device. Fails if a different kept change is said as this one's (Saved
+         * on this device, nothing kept for it), or the same change pressed again is refused as another's.
          */
         @Test func aDifferentKeptChangeForThemMakesThisOneWait() async throws {
             let m = try await Self.organizer()
@@ -156,19 +156,54 @@ extension OnFakeDrive {
             try await Self.checkMaya(m)
             let maya = m.family.creator.userId
             m.server.lock.withLock { m.server.manage.memberAnswers = Array(repeating: Self.noAnswer, count: 12) }
-            guard case .pending = try await Self.quickly({ try await m.phone.sync.changeRole(m.summary, userId: maya, first: "Maya", change: .take) }) else {
-                Issue.record("the stop wasn't kept"); return
+            guard case .pending = try await Self.quickly({ try await m.phone.sync.handOver(m.summary, to: maya, first: "Maya") }) else {
+                Issue.record("the handover wasn't kept"); return
             }
             let kept = try m.kept
             #expect(kept.count == 1)
-            let end = try await Self.quickly { try await m.phone.sync.handOver(m.summary, to: maya, first: "Maya") }
-            #expect(end == .waiting(ManageWords.earlierWaiting("Lindqvist family")), "another kept change for Maya was said as the handover's")
-            #expect(try m.kept.map(\.entry) == kept.map(\.entry), "something new was kept over the stop")
-            #expect(try Self.handover(m) == nil, "a handover that waited was kept")
-            guard case .pending = try await Self.quickly({ try await m.phone.sync.changeRole(m.summary, userId: maya, first: "Maya", change: .take) }) else {
+            let end = try await Self.quickly { try await m.phone.sync.changeRole(m.summary, userId: maya, first: "Maya", change: .take) }
+            #expect(end == .waiting(ManageWords.earlierWaiting("Lindqvist family")), "another kept change for Maya was said as this one's")
+            #expect(try m.kept.map(\.entry) == kept.map(\.entry), "something new was kept over the handover")
+            guard case .pending = try await Self.quickly({ try await m.phone.sync.handOver(m.summary, to: maya, first: "Maya") }) else {
                 Issue.record("the same change pressed again wasn't the kept one's"); return
             }
             #expect(try m.kept.map(\.entry) == kept.map(\.entry))
+            #expect(Set(m.server.callBodies).count == 1, "something other than the kept handover was sent")
+        }
+
+        /*
+         * Android's aHandoverBlockedBehindAnEarlierChangeGoesOnOnceThatLands: a Let them manage for
+         * Grace (let in, her words checked) still unanswered when she is made the organizer. The handover can't be staged yet,
+         * so its record is kept, unstaged, and said as saved; once the earlier change lands, the next
+         * open stages the handover and finishes it. Fails if a handover blocked behind an earlier
+         * change for the same person is dropped as though it had been refused.
+         */
+        @Test func aHandoverBlockedBehindAnEarlierChangeForThemGoesOnOnceThatLands() async throws {
+            let m = try await Self.organizer()
+            defer { m.phone.done() }
+            #expect(try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) } == .landed)
+            let grace = m.grace.userId.lowercased()
+            guard case .code(let version, let words, _) = try await m.phone.sync.checkCode(m.summary, with: grace).code else { Issue.record("no words"); return }
+            let ref = FamilyMemberRef(userId: grace, email: FamilyManageTests.graceEmail, name: "Grace Holm")
+            #expect(try await m.phone.sync.checkMatch(m.family.groupId, member: ref, rosterVersion: version, code: words).verified)
+            m.server.lock.withLock { m.server.manage.memberAnswers = Array(repeating: Self.noAnswer, count: 9) }
+            let granted = try await Self.quickly { try await m.phone.sync.changeRole(m.summary, userId: grace, first: "Grace", change: .grant) }
+            guard case .pending = granted else { Issue.record("the grant wasn't kept: \(granted)"); return }
+            // The same change pressed again is the kept one's: still saved on this device.
+            guard case .pending = try await Self.quickly({ try await m.phone.sync.changeRole(m.summary, userId: grace, first: "Grace", change: .grant) }) else {
+                Issue.record("the same change pressed again wasn't the kept one's"); return
+            }
+            guard case .pending = try await Self.quickly({ try await m.phone.sync.handOver(m.summary, to: grace, first: "Grace") }) else {
+                Issue.record("the blocked handover wasn't kept"); return
+            }
+            #expect(try Self.handover(m) == FamilyRecords.KeptHandover(to: grace, staged: false), "the blocked handover's record went")
+            let (sync, groupId) = (m.phone.sync, m.family.groupId)
+            let heard = HandedEnds()
+            _ = try await Self.quickly { try await sync.resumeOutbox(groupId, names: [grace: "Grace"], handed: { _, end in await heard.add(end) }) }
+            #expect(await heard.ends == [.landed])
+            #expect(Set(try await Self.roles(m, grace)) == ["billing", "members"])
+            #expect(try await !Self.roles(m, m.me).contains("billing"))
+            #expect(try Self.handover(m) == nil)
         }
 
         /*

@@ -275,8 +275,7 @@ extension FamilySync {
      * call on that route (a person's admission, a change of their roles) looks only at its own;
      * anyone else's is `other`, untouched.
      */
-    func sendKept(_ groupId: String, outboxId: String, entry: String, only: ChainRoute?, operation: RoleOperation? = nil,
-                  saysLater: Bool = false) async throws -> CallEnd {
+    func sendKept(_ groupId: String, outboxId: String, entry: String, only: ChainRoute?, saysLater: Bool = false) async throws -> CallEnd {
         var sends = 0
         var fixes = 0
         // `saysLater`: a call nobody waits on for its own answer (the resume, the gate) keeps what it came to to be said,
@@ -311,8 +310,6 @@ extension FamilySync {
             case .send(_, let r, _), .hold(_, let r, _), .landed(_, let r), .superseded(_, let r): route = r
             }
             if let only, route != only { return .other }
-            // `operation`: on that route, only the same change is its own; another (or one kept with no note) is the gate's.
-            if let operation, try records.outboxOperation(userId: userId, groupId: groupId, outboxId: outboxId) != operation.rawValue { return .other }
             switch opened {
             case .hold(_, let held, let reason):
                 guard reason == .otherKeys else { return .pending(ManageWords.keptOnDevice) }
