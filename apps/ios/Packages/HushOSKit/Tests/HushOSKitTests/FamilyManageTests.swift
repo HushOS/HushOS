@@ -190,21 +190,27 @@ extension OnFakeDrive {
          * Per person: Grace's call is kept unanswered; letting Ada in sends Ada's call only, and
          * leaves Grace's as it was. Fails if another person's kept call is sent or dropped.
          */
-        @Test func anotherPersonsKeptAdmissionIsLeftAlone() async throws {
+        /*
+         * The gate (Android #281): Grace's Let them in is kept unanswered, and letting Ada in sends
+         * Grace's first (still unanswered), then stages nothing over it: Ada's waits, said so, and
+         * Grace's call is left as it was. Once Grace's lands, Ada is let in. Fails if a roster call is
+         * staged over a kept one, which its next resume would drop as superseded, unseen.
+         */
+        @Test func anotherPersonsKeptAdmissionGoesFirst() async throws {
             let m = try await Self.managed()
             defer { m.phone.done() }
-            m.server.lock.withLock { m.server.manage.admitAnswers = [Self.noAnswer, Self.noAnswer, Self.noAnswer] }
+            m.server.lock.withLock { m.server.manage.admitAnswers = Array(repeating: Self.noAnswer, count: 6) }
             _ = try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) }
             let graceKept = try m.kept
             let ada = try await onLargeStack { try FamilyPerson() }
             m.server.waiting(ada, email: "ada@example.com", name: "Ada Lindqvist")
             let adaRow = try #require(try await m.phone.sync.waitingToJoin(m.family.groupId).first { $0.userId == ada.userId.lowercased() })
-            let sent = m.server.callBodies.count
-            #expect(try await Self.quickly { try await m.phone.sync.letIn(m.summary, adaRow) } == .landed)
-            #expect(m.server.callBodies.count == sent + 1, "letting Ada in sent Grace's kept call too")
+            #expect(try await Self.quickly { try await m.phone.sync.letIn(m.summary, adaRow) } == .refused(ManageWords.earlierWaiting("Lindqvist family")))
             #expect(try m.kept.map(\.entry) == graceKept.map(\.entry), "Grace's kept call changed")
-            try await m.phone.sync.dropKeptAdmission(m.family.groupId, userId: ada.userId)
-            #expect(try m.kept.map(\.entry) == graceKept.map(\.entry))
+            m.server.lock.withLock { m.server.manage.admitAnswers = [] }
+            #expect(try await Self.quickly { try await m.phone.sync.letIn(m.summary, adaRow) } == .landed)
+            #expect(try m.kept.isEmpty)
+            #expect(await m.phone.sync.takeKeptEnds().contains { $0.end == .landed }, "what Grace's kept call came to went unsaid")
         }
 
         /*
@@ -383,10 +389,17 @@ extension OnFakeDrive {
             defer { m.phone.done() }
             m.server.lock.withLock { m.server.manage.admitAnswers = Array(repeating: Self.noAnswer, count: 6) }
             _ = try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) }
+            // Two calls kept, as an earlier version's outbox could hold them (the gate stages nothing over a kept call
+            // now): Grace's set aside while Ada's is staged, then put back.
+            let outbox = m.phone.records.folder.appendingPathComponent("outbox", isDirectory: true)
+            let graceFile = try #require(try FileManager.default.contentsOfDirectory(at: outbox, includingPropertiesForKeys: nil).first { $0.pathExtension == "call" })
+            let aside = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.moveItem(at: graceFile, to: aside)
             let ada = try await onLargeStack { try FamilyPerson() }
             m.server.waiting(ada, email: "ada@example.com", name: "Ada Lindqvist")
             let adaRow = try #require(try await m.phone.sync.waitingToJoin(m.family.groupId).first { $0.userId == ada.userId.lowercased() })
             _ = try await Self.quickly { try await m.phone.sync.letIn(m.summary, adaRow) }
+            try FileManager.default.moveItem(at: aside, to: graceFile)
             #expect(try m.kept.count == 2)
             m.server.lock.withLock {
                 m.server.manage.admitAnswers = [answering(409, ["code": "pool-full", "message": "No room."])] + Array(repeating: Self.noAnswer, count: 3)

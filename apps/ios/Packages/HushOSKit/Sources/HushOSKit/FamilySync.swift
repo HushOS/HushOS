@@ -219,6 +219,11 @@ public actor FamilySync: FamilyJudge {
     /* A 401 a sync met, until the app takes it (takeEnded). */
     var endedBy: (any Error)?
     /*
+     * What the kept calls the staging gate sent first came to (stageCall), by family, with their routes: said by the
+     * screens (takeKeptEnds), so a call that ended while another change was being staged is never lost unsaid.
+     */
+    var keptEnds: [(groupId: String, route: ChainRoute?, end: CallEnd)] = []
+    /*
      * Whether this person vouched for each family (Settings.familyChecked), read after every
      * accepted sync: until it is, a family reads as first use (an under-claim, never an over-claim).
      */

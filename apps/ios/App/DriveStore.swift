@@ -185,6 +185,10 @@ final class DriveStore {
     var manageChange: ManageChangeAsk?
     /* What resumed calls came to, each said until read. */
     var manageNotices = NoticeQueue()
+    /* A role change or the handover asked for (RoleConfirm), a promotion that asks for a check first, and the member whose change runs. */
+    var roleAsk: RoleAsk?
+    var checkFirstAsk: RoleAsk?
+    var roleBusy: String?
     @ObservationIgnored var managedLoads = ManagedLoads()
     /* The leave dialog, kept here rather than by the page, so a scene change or a redraw keeps it as it was (LeaveDialog). */
     var leaving: LeaveDialog?

@@ -289,6 +289,47 @@ extension FamilyRecords {
         }
     }
 
+    /*
+     * The organizer handover under way, by whom it goes to (Android's FamilyOutbox.markHandover): kept before its first
+     * call is signed, so a handover the app was stopped in the middle of (billing given, not yet let go of) is finished at
+     * the next open; `staged` once billing's call is kept. One that can't be read throws, never read as none.
+     */
+    struct KeptHandover: Sendable, Equatable {
+        let to: String
+        let staged: Bool
+    }
+
+    private func handoverFile(_ userId: String, _ groupId: String) -> URL? {
+        guard Self.valid(userId.lowercased()), Self.valid(groupId) else { return nil }
+        return outboxFolder.appendingPathComponent("\(userId.lowercased())_\(groupId).handover")
+    }
+
+    func markHandover(userId: String, groupId: String, to: String, staged: Bool = false) throws {
+        guard let url = handoverFile(userId, groupId), Self.valid(to.lowercased()) else { throw GuardError.unsaved }
+        Unbacked.folder(folder)
+        try underLock {
+            try FileManager.default.createDirectory(at: outboxFolder, withIntermediateDirectories: true)
+            do { try Data((to.lowercased() + (staged ? "\nstaged" : "")).utf8).write(to: url, options: .atomic) } catch { throw GuardError.unsaved }
+        }
+    }
+
+    func handover(userId: String, groupId: String) throws -> KeptHandover? {
+        guard let url = handoverFile(userId, groupId) else { return nil }
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) else { throw GuardError.unreadable }
+        let lines = text.split(separator: "\n").map(String.init)
+        guard let to = lines.first, Self.valid(to) else { throw GuardError.unreadable }
+        return KeptHandover(to: to, staged: lines.dropFirst().first == "staged")
+    }
+
+    func clearHandover(userId: String, groupId: String) throws {
+        guard let url = handoverFile(userId, groupId) else { return }
+        try underLock {
+            try? FileManager.default.removeItem(at: url)
+            if FileManager.default.fileExists(atPath: url.path) { throw GuardError.unsaved }
+        }
+    }
+
     /* A wipe of the family: every call kept for it goes, before the record that ties them to it. */
     func outboxDeleteAll(userId: String, groupId: String) throws {
         // Nothing ever kept: nothing to take (and no lock needed). One that can't be reached throws.
@@ -300,6 +341,11 @@ extension FamilyRecords {
             for url in names where url.lastPathComponent.hasPrefix(prefix) { try? FileManager.default.removeItem(at: url) }
             if names.contains(where: { $0.lastPathComponent.hasPrefix(prefix) && FileManager.default.fileExists(atPath: $0.path) }) {
                 throw GuardError.unsaved
+            }
+            // The handover under way goes with the family too.
+            if let handover = handoverFile(userId, groupId) {
+                try? FileManager.default.removeItem(at: handover)
+                if FileManager.default.fileExists(atPath: handover.path) { throw GuardError.unsaved }
             }
         }
     }
