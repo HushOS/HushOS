@@ -1,0 +1,38 @@
+.github/workflows/android-release.yml
+  s_566b8e0c4467a4::t_c4bb9a11823877 1-321
+.github/actions/android-toolchain/action.yml
+  s_566b8e0c4467a4::t_15f82aeb6e43a5 1-40
+apps/android/scripts/play-publish.sh
+  s_566b8e0c4467a4::t_2980c32507201e 1-200
+docs/release/google-play-ci.md
+  s_566b8e0c4467a4::t_7d1f12d4ef1fec 1-121
+apps/android/scripts/check-bundle.sh
+  s_566b8e0c4467a4::t_81a02db918ecf7 1-91
+  s_566b8e0c4467a4::t_ca22f268181af4 92-94
+CONTRIBUTING.md
+  s_566b8e0c4467a4::t_c914e978357774 147-148
+apps/android/scripts/release-apk.sh
+  s_566b8e0c4467a4::t_8b0449b9938500 7-9
+docs/release/README.md
+  s_566b8e0c4467a4::t_74278e64624d92 13
+docs/release/google.md
+  s_566b8e0c4467a4::t_9e619204bd68c9 183-184
+docs/release/signing.md
+  s_566b8e0c4467a4::t_95481d7d885d52 115
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c7f71ad0dbc10fd0e82fca2a587af053599b2461",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
