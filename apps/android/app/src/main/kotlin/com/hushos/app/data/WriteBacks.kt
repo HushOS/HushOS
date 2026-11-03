@@ -160,7 +160,8 @@ object WriteBacks {
 
     /*
      * Tests: runs at each step of keeping a save ("copy", "fsync", "json", "record", "delete"), of a landing ("landed-copy",
-     * "landed-mark", "landed-retire": after each) and of the others named where they run, to fail it there.
+     * "landed-mark", "landed-retire": after each), of a dismissal ("dismiss", as it begins), of a slot's clearing ("clear",
+     * once its contents went) and of the others named where they run, to fail it there.
      */
     @Volatile internal var fault: ((String) -> Unit)? = null
 
@@ -483,6 +484,7 @@ object WriteBacks {
      */
     fun dismissSave(context: Context, slot: String, number: Long) = lockOf(slot).withLock {
         val dir = dir(context, slot)
+        fault?.invoke("dismiss")
         if (!dir.isDirectory) return@withLock
         dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty().mapNotNull { read(it, slot) }.filter { it.generation == number }.forEach {
             File(dir, it.id + BIN).delete()
@@ -501,6 +503,7 @@ object WriteBacks {
      */
     private fun clear(dir: File) {
         dir.listFiles { f -> f.name.endsWith(BIN) }?.forEach { it.delete() }
+        fault?.invoke("clear")
         dir.deleteRecursively()
     }
 

@@ -1753,4 +1753,54 @@ class FilesSaveOrderTest {
             assertEquals(step, "landed save", serverText(notes))
         }
     }
+
+    /*
+     * A staging row is dismissed and the process dies as the dismissal reaches the slot (its first step): the row and its
+     * edit are still there, and its Retry keeps the save and sends it. Fails if the row goes first, so a death after it
+     * leaves the save without the row that would retry or dismiss it.
+     */
+    @Test
+    fun aDismissalThatDiesInTheSlotKeepsItsRowAndRetry() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.fault = { if (it == "copy") throw java.io.IOException("No space left on device") }
+        save(provider, notes, "kept for its retry")
+        WriteBacks.fault = { if (it == "dismiss") throw IllegalStateException("died dismissing") }
+        val row = FailedTransfers.of(app).all().single { it.slot == slot && it.stage != null }
+        assertThrows(IllegalStateException::class.java) { TransferQueue.dismiss(app, row) }
+        WriteBacks.fault = null
+        assertEquals("the row went before its save", listOf(row.id), FailedTransfers.of(app).all().map { it.id })
+        assertEquals("kept for its retry", File(row.file!!).readText())
+        assertTrue(TransferQueue.retry(app, row))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("kept for its retry", serverText(notes))
+    }
+
+    /*
+     * A failed save's row is dismissed while that save is still the pending one, and the process dies partway through
+     * clearing the slot (its contents gone, its descriptions and record left): nothing is pending after, so no look and
+     * no start publishes the dismissed save again or sends it. Fails if the slot is cleared in an order where a death can
+     * leave a generation whole (its record gone first, say).
+     */
+    @Test
+    fun aSlotClearingThatDiesPartwayLeavesNothingPending() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "dismissed save")
+        refuseBegins(true)
+        assertEquals(ListenableWorker.Result.failure()::class, runSlot(slot)::class)
+        refuseBegins(false)
+        val row = FailedTransfers.of(app).all().single { it.slot == slot }
+        WriteBacks.fault = { if (it == "clear") throw IllegalStateException("died clearing") }
+        assertThrows(IllegalStateException::class.java) { TransferQueue.dismiss(app, row) }
+        WriteBacks.fault = null
+        assertTrue("the slot's folder was meant to be left partway", WriteBacks.dir(app, slot).exists())
+        assertNull("the dismissed save is pending again", WriteBacks.pending(app, slot))
+        val queued = jobs(slot).size
+        TransferQueue.startupSweep(app)
+        assertEquals("a start queued the dismissed save", queued, jobs(slot).size)
+        assertEquals("original", opened(provider, notes, "r"))
+    }
 }
