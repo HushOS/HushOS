@@ -642,4 +642,51 @@ class FamilyRemovalTest {
         assertEquals(RemovalEnd.Changed, phone.sync.removeMember(summary, graceId, "Grace", since))
         assertTrue(phone.sync.outbox.removals(family.member.id, family.groupId).isEmpty())
     }
+
+    /*
+     * Codex #281 round 8: Grace's removal is kept unanswered, then its entry can no longer be opened on this phone (here
+     * overwritten). After a relaunch the resume deletes it and says the change was lost and must be made again; the intent
+     * goes with it, so nothing signs a fresh removal behind that word. Fails if an entry's end for good leaves its intent.
+     */
+    @Test
+    fun aRemovalLostUnopenedTakesItsIntentWithIt() {
+        val first = phone()
+        repeat(6) { family.rotatingAnswers.add { _, _ -> 503 to JSONObject().put("message", "Unavailable.") } }
+        assertTrue(remove(first) is RemovalEnd.Pending)
+        val entry = kept(first).single()
+        assertEquals(entry.outboxId.lowercase(), first.sync.outbox.removals(family.member.id, family.groupId).single().outboxId)
+        first.sync.outbox.put(family.member.id, family.groupId, entry.outboxId, "AAAA")
+        val removes = bodies("remove").size
+        val next = phone(first.folder)
+        val continued = ArrayList<RemovalEnd>()
+        val ends = next.sync.resumeOutbox(summary, continued = { _, end -> continued.add(end) })
+        assertTrue("$ends", (ends.values.single() as CallEnd.Refused).words.contains("Make it again"))
+        assertEquals("nothing continued", emptyList<RemovalEnd>(), continued)
+        assertEquals("no fresh removal", removes, bodies("remove").size)
+        assertTrue(next.sync.outbox.removals(family.member.id, family.groupId).isEmpty())
+        assertTrue(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
+    }
+
+    /*
+     * Codex #281 round 8: Grace's removal call is overtaken (`stale`), which retires the intent with the entry, and the
+     * read before it is built again gets no answer. The turn is pending, so its intent is kept again; after a relaunch the
+     * removal goes on and lands. Fails if a removal says it is kept for later after its entry's end took the intent.
+     */
+    @Test
+    fun aRemovalPendingAfterItsCallWasOvertakenKeepsItsIntent() {
+        val first = phone()
+        family.rotatingAnswers.add { _, _ ->
+            family.samChangesTheList()
+            family.rostersFail = true
+            409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
+        }
+        assertTrue(remove(first) is RemovalEnd.Pending)
+        assertEquals(listOf(graceId), first.sync.outbox.removals(family.member.id, family.groupId).map { it.userId })
+        family.rostersFail = false
+        val next = phone(first.folder)
+        val continued = ArrayList<RemovalEnd>()
+        next.sync.resumeOutbox(summary, continued = { _, end -> continued.add(end) })
+        assertEquals(listOf<RemovalEnd>(RemovalEnd.Removed), continued)
+        assertFalse(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
+    }
 }

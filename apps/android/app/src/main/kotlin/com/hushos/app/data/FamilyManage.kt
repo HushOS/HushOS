@@ -122,7 +122,9 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
      * takes when it lands (written before it is staged). An entry at neither is a state nobody confirmed: the intent ends
      * without acting on it (bound). -1 is an intent kept before the binding: never acted on.
      */
-    data class Removal(val userId: String, val first: String, val endsLapsed: List<String>, val demote: Boolean, val since: Long, val demotedAt: Long? = null) {
+    data class Removal(val userId: String, val first: String, val endsLapsed: List<String>, val demote: Boolean, val since: Long, val demotedAt: Long? = null,
+        /* The outbox entry this removal staged last (its demotion, a mark-left or the removal), linked before it is written. */
+        val outboxId: String? = null) {
         /* Whether `member` (their active entry now) is the membership this removal was confirmed against. */
         fun bound(member: FamilyMember): Boolean =
             since >= 0 && (member.since.toLong() == since || (demote && demotedAt != null && member.since.toLong() == demotedAt && "members" !in member.roles))
@@ -145,7 +147,7 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
                 val plans = row.getJSONArray("endsLapsed")
                 Removal(row.getString("userId").takeIf(FamilyRecords::valid) ?: throw OutboxUnreadable(), row.getString("first"),
                     (0 until plans.length()).map(plans::getString), row.getBoolean("demote"), row.optLong("since", -1L),
-                    row.optLong("demotedAt", -1L).takeIf { it >= 0 })
+                    row.optLong("demotedAt", -1L).takeIf { it >= 0 }, row.optString("outboxId").takeIf(FamilyRecords::valid))
             }
         } catch (unreadable: OutboxUnreadable) {
             throw unreadable
@@ -165,7 +167,7 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
             folder.mkdirs()
             val json = org.json.JSONArray(list.map {
                 JSONObject().put("userId", it.userId.lowercase()).put("first", it.first).put("endsLapsed", org.json.JSONArray(it.endsLapsed)).put("demote", it.demote)
-                    .put("since", it.since).apply { it.demotedAt?.let { at -> put("demotedAt", at) } }
+                    .put("since", it.since).apply { it.demotedAt?.let { at -> put("demotedAt", at) }; it.outboxId?.let { id -> put("outboxId", id) } }
             })
             val next = File(file.path + ".next")
             next.writeText(json.toString())
@@ -177,6 +179,13 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
 
     fun keepRemoval(userId: String, groupId: String, removal: Removal) = synchronized(FamilyCopies.LOCK) {
         writeRemovals(userId, groupId, removals(userId, groupId).filter { !it.userId.equals(removal.userId, ignoreCase = true) } + removal)
+    }
+
+    /* The removal whose entry this is retired: the entry ended for good (see sendKept's finish). */
+    fun dropRemovalOf(userId: String, groupId: String, outboxId: String) = synchronized(FamilyCopies.LOCK) {
+        val now = removals(userId, groupId)
+        if (now.none { it.outboxId.equals(outboxId, ignoreCase = true) }) return@synchronized
+        writeRemovals(userId, groupId, now.filter { !it.outboxId.equals(outboxId, ignoreCase = true) })
     }
 
     fun dropRemoval(userId: String, groupId: String, target: String) = synchronized(FamilyCopies.LOCK) {
@@ -461,9 +470,13 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
         told(on, end)
         // Documents a landed rotation carried on empty: kept to be said (FamilySync.takeCleared) before its notes go with the entry.
         if (end == CallEnd.Landed) outbox.keepUnsaid(userId, groupId, outbox.cleared(userId, groupId, current.outboxId).map(::clearedWords))
-        // A removal that landed (answered, or recognised as landed on a replay) is done: its intent goes first, durably, so
-        // nothing continues it over whatever the family became since (they may have been let in again elsewhere).
-        if (end == CallEnd.Landed) (on as? ChainRoute.Remove)?.let { outbox.dropRemoval(userId, groupId, it.userId) }
+        // Every finish is the entry's end for good. The removal it belongs to (by the link written before the entry was) goes
+        // first, durably, when that end is the removal's own: its removal call landed, refused or overtaken (said as the
+        // family having changed), or any entry of it lost unopened or refused (said as lost or refused). Nothing then continues
+        // it over what the person was told, or over whatever the family became since. A step that landed or was overtaken (its
+        // demotion, a departure marked left) keeps it: the removal goes on, bound to the membership confirmed. A removal's own
+        // turn that goes on after its call was overtaken links its next entry, keeping it again.
+        if (on == null || on is ChainRoute.Remove || end is CallEnd.Refused) outbox.dropRemovalOf(userId, groupId, current.outboxId)
         outbox.delete(userId, groupId, current.outboxId)
         return end
     }
@@ -859,7 +872,8 @@ private class CheckFirstNeeded : Exception()
  * since: synced and staged again). Then every member's ML-KEM key (route 6), the group key's seal opened when the core
  * asks (route 8), and `build` given the head's revision. Kept in the outbox before anything is sent.
  */
-internal fun FamilySync.stageCall(summary: GroupSummary, build: (view: FamilyView, revision: ULong, kems: Map<String, String>) -> RosterCall): Staged {
+internal fun FamilySync.stageCall(summary: GroupSummary, beforeKept: (outboxId: String) -> Unit = {},
+    build: (view: FamilyView, revision: ULong, kems: Map<String, String>) -> RosterCall): Staged {
     val groupId = summary.id
     // The outbox's one gate, for every roster call: whatever is kept for the family goes first, each as it was signed (what
     // it comes to is said: takeKeptEnds). If anything is still unresolved, nothing new is staged: a new roster would overtake
@@ -900,6 +914,8 @@ internal fun FamilySync.stageCall(summary: GroupSummary, build: (view: FamilyVie
         }
         when (call) {
             is RosterCall.Staged -> {
+                // Whatever the entry belongs to is linked to it first (a removal's intent): never an entry nothing ends with it.
+                beforeKept(call.call.outboxId)
                 // Documents it carried on empty are marked for a read-again before the entry exists: never sendable unchecked.
                 if (call.call.replaced.isNotEmpty()) {
                     outbox.markRecheck(this.userId, groupId, call.call.outboxId, FamilyOutbox.Recheck(emptySet(), call.call.replaced))
@@ -1062,7 +1078,8 @@ private const val ORGANIZER_FIRST = "Make someone else the organizer first."
  * A change that no longer changes anything after a landing or a win is done; `unchangedIsDone` says so from the start.
  */
 internal fun FamilySync.callFor(summary: GroupSummary, person: String, first: String, unchangedIsDone: Boolean,
-    check: String? = null, before: (FamilyView) -> Unit = {}, onStaged: () -> Unit = {}, build: (ULong, Map<String, String>) -> RosterCall): RoleEnd {
+    check: String? = null, before: (FamilyView) -> Unit = {}, onStaged: () -> Unit = {}, beforeKept: (String) -> Unit = {},
+    build: (ULong, Map<String, String>) -> RosterCall): RoleEnd {
     val route = ChainRoute.Member(person.lowercase())
     var moved = unchangedIsDone
     for (kept in outbox.list(userId, summary.id)) {
@@ -1078,7 +1095,7 @@ internal fun FamilySync.callFor(summary: GroupSummary, person: String, first: St
     repeat(3) {
         // A promotion: where they stand on this phone now, from the settings and this device's guard read together over
         // the member list just synced (the row's label may be old). A guard that can't be read throws: nothing is signed.
-        val built = stageCall(summary) { view, revision, kems ->
+        val built = stageCall(summary, beforeKept) { view, revision, kems ->
             before(view)
             if (check != null && memberStandings(view)[check.lowercase()] != MemberStanding.VERIFIED) throw CheckFirstNeeded()
             build(revision, kems)

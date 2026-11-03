@@ -185,8 +185,9 @@ sealed interface Rotated {
  * rotations of their folders made again (the server may have served junk to this device alone; the web's refetchReplaced),
  * and whatever still doesn't open is said once the call lands.
  */
-private fun FamilySync.rotatingCall(summary: GroupSummary, names: (String) -> String?, build: (FamilyView, ULong, Map<String, String>) -> RosterCall): Rotated =
-    when (val staged = stageCall(summary, build)) {
+private fun FamilySync.rotatingCall(summary: GroupSummary, names: (String) -> String?, beforeKept: (String) -> Unit = {},
+    build: (FamilyView, ULong, Map<String, String>) -> RosterCall): Rotated =
+    when (val staged = stageCall(summary, beforeKept, build)) {
         // sendKept settles the entry's recheck (its documents read again) before it is first sent.
         is Staged.Call -> Rotated.Sent(sendKept(summary, staged.kept, names = names))
         is Staged.Refused -> Rotated.Refused(staged.words, staged.retry)
@@ -255,15 +256,22 @@ private class NotConfirmed(val present: Boolean) : Exception("not the membership
  */
 private fun FamilySync.removeKept(summary: GroupSummary, removal: FamilyOutbox.Removal, names: (String) -> String?, onStep: (RemovalStep) -> Unit): RemovalEnd {
     outbox.keepRemoval(userId, summary.id, removal)
+    // The intent as the turn last wrote it (its demotion's version, its last entry): what a pending end keeps.
+    val turn = RemovalTurn(removal)
     val end = try {
-        removeInTurn(summary, removal, names, onStep)
+        removeInTurn(summary, turn, names, onStep)
     } catch (moved: NotConfirmed) {
         if (moved.present) RemovalEnd.Moved else RemovalEnd.Changed
     } catch (error: Exception) {
-        if (error is NotAuthenticated || error is kotlinx.coroutines.CancellationException || !FamilySync.transient(error)) throw error
+        if (error is kotlinx.coroutines.CancellationException) throw error
+        // Kept again in case an entry's end retired it on the way (finish): this turn hadn't ended.
+        outbox.keepRemoval(userId, summary.id, turn.removal)
+        if (error is NotAuthenticated || !FamilySync.transient(error)) throw error
         return RemovalEnd.Pending(keptForLater(summary.name))
     }
-    if (end !is RemovalEnd.Pending) outbox.dropRemoval(userId, summary.id, removal.userId)
+    // A pending end keeps the turn's intent (written again: an entry this turn went on from may have retired it).
+    if (end is RemovalEnd.Pending) outbox.keepRemoval(userId, summary.id, turn.removal)
+    else outbox.dropRemoval(userId, summary.id, removal.userId)
     return end
 }
 
@@ -304,12 +312,21 @@ private fun keptForLater(family: String) =
  * whose entry another manager or their own account changed, is Changed (nothing staged over them), never removed unasked.
  * The builds check the very list the call is signed over.
  */
-private fun FamilySync.removeInTurn(summary: GroupSummary, confirmed: FamilyOutbox.Removal, names: (String) -> String?, onStep: (RemovalStep) -> Unit): RemovalEnd {
+private class RemovalTurn(var removal: FamilyOutbox.Removal)
+
+private fun FamilySync.removeInTurn(summary: GroupSummary, turn: RemovalTurn, names: (String) -> String?, onStep: (RemovalStep) -> Unit): RemovalEnd {
+    val confirmed = turn.removal
     val userId = confirmed.userId
     val first = confirmed.first
     val demoteFirst = confirmed.demote
     val endsLapsed = confirmed.endsLapsed
-    var removal = confirmed
+    var removal by turn::removal
+    // Every entry this turn stages is linked to its intent before it is written (stageCall's beforeKept), so the entry's end
+    // for good retires the intent with it (sendKept's finish), and staging anew keeps it again.
+    fun link(outboxId: String) {
+        removal = removal.copy(outboxId = outboxId.lowercase())
+        outbox.keepRemoval(this.userId, summary.id, removal)
+    }
     fun entry(view: FamilyView) = view.members.firstOrNull { it.userId.equals(userId, ignoreCase = true) }
     fun requireBound(view: FamilyView) { entry(view)?.let { if (!removal.bound(it)) throw NotConfirmed(present = true) } }
     val groupId = summary.id
@@ -355,7 +372,8 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, confirmed: FamilyOutb
         onStep(RemovalStep.DEMOTE)
         // The member list the demotion is staged over (callFor hands it to `before` right before the build).
         var stagedOver: FamilyView? = null
-        when (val demoted = callFor(summary, userId, first, unchangedIsDone = true, before = { over -> requireBound(over); stagedOver = over }) { revision, kems ->
+        when (val demoted = callFor(summary, userId, first, unchangedIsDone = true, before = { over -> requireBound(over); stagedOver = over },
+            beforeKept = ::link) { revision, kems ->
             // The member list version this demotion takes if it lands (the core's next roster: its entry's since), kept before
             // it is staged. Never the chain's revision, which a standalone succession moves past the member list's version.
             removal = removal.copy(demotedAt = stagedOver!!.rosterVersion.toLong() + 1)
@@ -401,7 +419,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, confirmed: FamilyOutb
     repeat(MAX_REBUILDS) {
         // Placed again right before the folders are read: a long finish must not let it lapse while the epochs are drawn.
         placeHold(summary, userId, view!!)?.let { return it }
-        val sent = rotatingCall(summary, named) { signedOver, revision, kems ->
+        val sent = rotatingCall(summary, named, ::link) { signedOver, revision, kems ->
             if (!inFamily(signedOver, userId)) throw NotConfirmed(present = false)
             requireBound(signedOver)
             ledger.removalBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, revision, userId, gatherLive(groupId), endsLapsed,
@@ -426,7 +444,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, confirmed: FamilyOutb
                     // left is the whole removal. Not marked over a change kept unresolved (the staging gate): the removal is
                     // pending, its intent kept, and goes on at the next open.
                     val departed = leftDue(call.data)
-                    when (val marked = markDepartedLeft(summary, departed, named)) {
+                    when (val marked = markDepartedLeft(summary, departed, named, ::link)) {
                         is Rotated.Sent -> if (marked.end != CallEnd.Landed) return when (val m = marked.end) {
                             is CallEnd.Pending -> RemovalEnd.Pending(keptForLater(family))
                             is CallEnd.Refused -> RemovalEnd.Failed(m.words)
@@ -499,8 +517,9 @@ private fun leftDue(data: JSONObject?): List<String> =
  * Marking the departed left (route 7; the web's markDepartedLeft): a 409 left-due, or route 3's `due.markLeft`. Every live
  * folder rotated (a family roster that marks anyone left must), with the succession when one managed the family.
  */
-internal fun FamilySync.markDepartedLeft(summary: GroupSummary, userIds: List<String>, names: (String) -> String? = { null }): Rotated =
-    rotatingCall(summary, names) { _, revision, kems ->
+internal fun FamilySync.markDepartedLeft(summary: GroupSummary, userIds: List<String>, names: (String) -> String? = { null },
+    beforeKept: (String) -> Unit = {}): Rotated =
+    rotatingCall(summary, names, beforeKept) { _, revision, kems ->
         ledger.markLeftBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), summary.id, revision, userIds.map { it.lowercase() },
             gatherLive(summary.id), vault.accountKeyVersion(), kems)
     }
