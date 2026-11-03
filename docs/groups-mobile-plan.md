@@ -187,6 +187,7 @@ Every manager action the web has, except billing (owner decision): invite by ema
 - **Proof:** simulator plus web, two accounts: the phone lets a web newcomer in; both screens show the same join code; the phone makes them a manager and the web shows the role.
 
 - **Never buys a place:** the server refuses any admission from a client other than the web that would need a place bought (402 `seats`, reason `full`; `mayBuySeatFrom`, decided from `HushOS-Client`, so iOS's `ios/…` header already counts and a resend can't lose it). iOS says the web's "Every place in {family} is taken." for it, with no billing link. Built for Android in 6e; nothing to add on iOS but the wording.
+- **Built, part 1 (branch feat/ios-family-manage, after Android's #265):** invite, Waiting to join with Not now and Let them in, and Invitations with Cancel invitation, through the core's outbox (`admit_body`, `outbox_open`, `outbox_step`, `grants_body`, `open_group_key`), over #265's core rule (a first-seen pin admits). `FamilyManage.swift`, `GroupsAPI+Manage.swift`, `App/FamilyManaging.swift`. Roles and the organizer handover are part 2.
 
 ### iOS 5b: removing, replacing keys, deleting a folder
 

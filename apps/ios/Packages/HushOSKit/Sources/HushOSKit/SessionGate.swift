@@ -9,6 +9,12 @@ import Foundation
  * never ends it. Every step after a suspension checks the same token (`current`). `reset` moves
  * the generation on and cancels everything still running.
  */
+/* What a screen's action came to (`SessionGate.answer`): its answer, or dropped, which changes nothing on screen. */
+public enum Answered<T: Sendable>: Sendable {
+    case answered(T)
+    case dropped
+}
+
 @MainActor
 public final class SessionGate<Owner: AnyObject & Sendable> {
     /* Where an operation began: its session's owner, and the gate's generation then. */
@@ -83,6 +89,16 @@ public final class SessionGate<Owner: AnyObject & Sendable> {
         }
         let result = await owned.value
         return !Task.isCancelled && current(token) ? result : nil
+    }
+
+    /*
+     * `run` for a screen's action whose answer changes what the screen shows (a dialog closed, a
+     * row gone, "sent"): its value only when the work answered with one while its session stood;
+     * otherwise dropped, so an ended or replaced session is never taken as success. Its failure is thrown.
+     */
+    public func answer<T: Sendable>(_ token: Token, _ work: @escaping @Sendable (Owner) async throws -> T?) async throws -> Answered<T> {
+        guard let result = await run(token, work), let value = try result.get() else { return .dropped }
+        return .answered(value)
     }
 
     /* `run` for an operation of one step: its session is the one now. */

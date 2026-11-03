@@ -170,6 +170,22 @@ final class DriveStore {
     @ObservationIgnored var familyCheckedAt: [String: Date] = [:]
     /* The session's family sync this store listens to (attachFamilies): detached when the session ends or is replaced. */
     @ObservationIgnored weak var listenedFamilies: FamilySync?
+    /*
+     * A manager's lists and dialogs (iOS 5a), kept here rather than by the page so a scene change
+     * keeps them, and never in restorable scene state (the typed address included).
+     */
+    var waitingToJoin: [String: [PendingPerson]] = [:]
+    var familyInvitations: [String: [FamilyInvitation]] = [:]
+    var waitingRows: [String: WaitingRow] = [:]
+    var inviting: InviteAsk?
+    var turningDown: TurnDownAsk?
+    var cancellingInvitation: CancelInvitationAsk?
+    var managedErrors: [String: String] = [:]
+    /* Someone whose account changed since this phone pinned them, met by Let them in: the changed-account steps, then Let them in again once resolved. */
+    var manageChange: ManageChangeAsk?
+    /* What resumed calls came to, each said until read. */
+    var manageNotices = NoticeQueue()
+    @ObservationIgnored var managedLoads = ManagedLoads()
     /* The leave dialog, kept here rather than by the page, so a scene change or a redraw keeps it as it was (LeaveDialog). */
     var leaving: LeaveDialog?
     /* A family this person just left: its page goes back to Account once. */
