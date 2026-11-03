@@ -66,9 +66,9 @@ class FamilyRemovalTest {
     private fun view(phone: FamilyFixture.Phone) = (phone.sync.sync(summary) as FamilyState.Accepted).view
     private fun kept(phone: FamilyFixture.Phone) = phone.sync.outbox.list(family.member.id, family.groupId)
     /* Grace's entry as Maya's page shows it: the membership a removal is confirmed against. */
-    private fun graceSince(phone: FamilyFixture.Phone) = view(phone).members.single { it.userId.equals(graceId, ignoreCase = true) }.since
+    private fun graceEntry(phone: FamilyFixture.Phone) = view(phone).members.single { it.userId.equals(graceId, ignoreCase = true) }
     private fun remove(phone: FamilyFixture.Phone, endsLapsed: List<String> = emptyList(), steps: MutableList<RemovalStep> = ArrayList()) =
-        phone.sync.removeMember(summary, graceId, "Grace", graceSince(phone), endsLapsed = endsLapsed) { steps.add(it) }
+        phone.sync.removeMember(summary, graceId, "Grace", graceEntry(phone), endsLapsed = endsLapsed) { steps.add(it) }
     private fun bodies(kind: String) = family.rotatingCalls.filter { it.first == kind }.map { JSONObject(it.second) }
     private fun roster(body: JSONObject) = rosterParse(base64urlDecode(body.getJSONObject("roster").getString("statement")))
     private fun rotation(body: JSONObject) = (body.optJSONArray("rotations")?.getJSONObject(0) ?: body.getJSONObject("rotation"))
@@ -411,7 +411,7 @@ class FamilyRemovalTest {
     @Test
     fun aRemovalIntentOutlivesATransientFailureAndAProcess() {
         val first = phone()
-        first.sync.outbox.keepRemoval(family.member.id, family.groupId, FamilyOutbox.Removal(graceId, "Grace", emptyList(), false, graceSince(first).toLong()))
+        first.sync.outbox.keepRemoval(family.member.id, family.groupId, FamilyOutbox.Removal(graceId, "Grace", emptyList(), false, FamilyOutbox.Membership.of(graceEntry(first))))
         family.rostersFail = true
         val ended = ArrayList<RemovalEnd>()
         first.sync.resumeOutbox(summary, continued = { _, end -> ended.add(end) })
@@ -449,7 +449,7 @@ class FamilyRemovalTest {
     @Test
     fun aFirstRemovalIsKeptBeforeAnythingIsAskedOfTheServer() {
         val first = phone()
-        val since = graceSince(first)
+        val since = graceEntry(first)
         family.rostersFail = true
         assertTrue(first.sync.removeMember(summary, graceId, "Grace", since) is RemovalEnd.Pending)
         assertTrue("nothing asked", family.holdsAsked.isEmpty())
@@ -479,7 +479,7 @@ class FamilyRemovalTest {
                 409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
             }
         }
-        val end = first.sync.removeMember(summary, graceId, "Grace", graceSince(first), demoteFirst = true)
+        val end = first.sync.removeMember(summary, graceId, "Grace", graceEntry(first), demoteFirst = true)
         assertTrue("$end", end is RemovalEnd.Pending)
         assertEquals(listOf(graceId), first.sync.outbox.removals(family.member.id, family.groupId).map { it.userId })
         assertTrue("members" in view(first).members.single { it.userId.equals(graceId, ignoreCase = true) }.roles)
@@ -549,7 +549,7 @@ class FamilyRemovalTest {
     @Test
     fun anIntentNeverActsOnAMembershipNobodyConfirmed() {
         val first = phone()
-        first.sync.outbox.keepRemoval(family.member.id, family.groupId, FamilyOutbox.Removal(graceId, "Grace", emptyList(), false, graceSince(first).toLong()))
+        first.sync.outbox.keepRemoval(family.member.id, family.groupId, FamilyOutbox.Removal(graceId, "Grace", emptyList(), false, FamilyOutbox.Membership.of(graceEntry(first))))
         family.samGivesBilling(graceId)
         val next = phone(first.folder)
         val continued = ArrayList<RemovalEnd>()
@@ -578,7 +578,7 @@ class FamilyRemovalTest {
                 503 to JSONObject().put("message", "Unavailable.")
             }
         }
-        val end = first.sync.removeMember(summary, graceId, "Grace", graceSince(first), demoteFirst = true)
+        val end = first.sync.removeMember(summary, graceId, "Grace", graceEntry(first), demoteFirst = true)
         assertTrue("$end", end is RemovalEnd.Pending)
         assertTrue("demoted on the server", "members" !in family.creatorChain().roster().members.single { it.userId.equals(graceId, ignoreCase = true) }.roles.map { it.name.lowercase() })
         val next = phone(first.folder)
@@ -596,7 +596,7 @@ class FamilyRemovalTest {
     @Test
     fun aRemovalIsNeverSignedOverAnEntryThatChangedBeforeTheBuild() {
         val phone = phone()
-        val since = graceSince(phone)
+        val since = graceEntry(phone)
         var holds = 0
         server.beforeAnswer = { method, path ->
             if (method == "POST" && path.endsWith("/hold") && ++holds == 2) family.samGivesBilling(graceId)
@@ -621,7 +621,7 @@ class FamilyRemovalTest {
         assertEquals(RoleEnd.Landed, first.sync.changeRole(summary, graceId, "Grace", MembersRole.GRANT))
         family.standaloneSuccessions = 1
         val steps = ArrayList<RemovalStep>()
-        assertEquals(RemovalEnd.Removed, first.sync.removeMember(summary, graceId, "Grace", graceSince(first), demoteFirst = true) { steps.add(it) })
+        assertEquals(RemovalEnd.Removed, first.sync.removeMember(summary, graceId, "Grace", graceEntry(first), demoteFirst = true) { steps.add(it) })
         assertEquals(RemovalStep.DEMOTE, steps.first())
         assertFalse(view(first).members.any { it.userId.equals(graceId, ignoreCase = true) })
     }
@@ -636,7 +636,7 @@ class FamilyRemovalTest {
         val phone = phone()
         family.holdAnswer = refuse("members-changed")
         assertEquals(RemovalEnd.Moved, remove(phone))
-        val since = graceSince(phone)
+        val since = graceEntry(phone)
         family.holdAnswer = null
         assertEquals(RemovalEnd.Removed, remove(phone))
         assertEquals(RemovalEnd.Changed, phone.sync.removeMember(summary, graceId, "Grace", since))
@@ -753,5 +753,35 @@ class FamilyRemovalTest {
         val order = server.requests.filter { it.contains("/documents/tags") || it.endsWith("/remove") }
         assertTrue("read again before it was sent: $order", order.first().contains("/documents/tags"))
         assertTrue("nothing emptied, nothing said", next.sync.takeCleared(family.groupId).isEmpty())
+    }
+
+    /*
+     * Codex #281 round 10: Grace manages the family; taking that from her gets no answer and stays kept. Meanwhile Sam
+     * continues with her changed account at the very version the demotion would have taken, which names her new keys and
+     * also takes managing away. After a relaunch the kept demotion is overtaken, and her entry has the demotion's version
+     * and roles but not the keys anyone confirmed: the removal ends as moved, nothing staged. Fails if the binding matches
+     * a version (and roles) without the keys, removing a membership nobody confirmed.
+     */
+    @Test
+    fun aDemotionOvertakenByAnotherManagersContinuationNeverRemovesTheNewMembership() {
+        val first = phone()
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        assertEquals(RoleEnd.Landed, first.sync.changeRole(summary, graceId, "Grace", MembersRole.GRANT))
+        repeat(4) { family.memberAnswers.add { _ -> 503 to JSONObject().put("message", "Unavailable.") } }
+        val end = first.sync.removeMember(summary, graceId, "Grace", graceEntry(first), demoteFirst = true)
+        assertTrue("$end", end is RemovalEnd.Pending)
+        val version = view(first).rosterVersion
+        server.startOverGrace()
+        family.samContinuesWith(server.grace, emptyList())
+        val next = phone(first.folder)
+        val now = graceEntry(next)
+        assertEquals("at the version the demotion would have taken", version + 1uL, now.since)
+        assertTrue("members" !in now.roles)
+        val continued = ArrayList<RemovalEnd>()
+        next.sync.resumeOutbox(summary, continued = { _, it -> continued.add(it) })
+        assertEquals(listOf<RemovalEnd>(RemovalEnd.Moved), continued)
+        assertTrue("nothing staged", bodies("remove").isEmpty())
+        assertTrue(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
+        assertTrue(next.sync.outbox.removals(family.member.id, family.groupId).isEmpty())
     }
 }

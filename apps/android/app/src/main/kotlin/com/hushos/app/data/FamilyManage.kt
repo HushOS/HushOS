@@ -139,17 +139,39 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
      * end, so a removal stopped part way (a departure to mark left first, a demotion with no answer, a process killed) goes
      * on at the next open (resumeOutbox).
      *
-     * Bound to the membership confirmed: `since` is their entry's version on the row the person pressed (any change to it,
-     * a role, their keys, leaving and being let in again, moves it), and `demotedAt` the version this removal's own demotion
-     * takes when it lands (written before it is staged). An entry at neither is a state nobody confirmed: the intent ends
-     * without acting on it (bound). -1 is an intent kept before the binding: never acted on.
+     * Bound to the membership confirmed, by content and version: `confirmed` is their entry on the row the person pressed
+     * (its version, roles and keys), and `demoted` the entry this removal's own demotion leaves when it lands (the same keys,
+     * the roles without managing, at the member list's next version; written before it is staged). An entry matching
+     * neither exactly is a state nobody confirmed (a role or key change, being let in again, another manager's change at
+     * the version the demotion would have taken): the intent ends without acting on it (bound). An intent kept before the
+     * binding has neither: never acted on.
      */
-    data class Removal(val userId: String, val first: String, val endsLapsed: List<String>, val demote: Boolean, val since: Long, val demotedAt: Long? = null,
+    data class Removal(val userId: String, val first: String, val endsLapsed: List<String>, val demote: Boolean, val confirmed: Membership?,
+        val demoted: Membership? = null,
         /* The outbox entry this removal staged last (its demotion, a mark-left or the removal), linked before it is written. */
         val outboxId: String? = null) {
-        /* Whether `member` (their active entry now) is the membership this removal was confirmed against. */
-        fun bound(member: FamilyMember): Boolean =
-            since >= 0 && (member.since.toLong() == since || (demote && demotedAt != null && member.since.toLong() == demotedAt && "members" !in member.roles))
+        /* Whether `member` (their active entry now) is exactly the membership this removal was confirmed against, or the one its own demotion leaves. */
+        fun bound(member: FamilyMember): Boolean {
+            val now = Membership.of(member)
+            return confirmed != null && (now == confirmed || (demote && demoted != null && now == demoted))
+        }
+    }
+
+    /* A member's entry as a removal is bound to it: the member list version it last changed at, its roles, its keys' commitment. */
+    data class Membership(val since: Long, val roles: List<String>, val commitment: String?) {
+        /* The entry taking managing away leaves: the same keys, the roles without it, at `version`. */
+        fun demotedAt(version: Long) = Membership(version, roles - "members", commitment)
+
+        fun json(): JSONObject = JSONObject().put("since", since).put("roles", org.json.JSONArray(roles)).put("commitment", commitment ?: JSONObject.NULL)
+
+        companion object {
+            fun of(member: FamilyMember) = Membership(member.since.toLong(), member.roles.sorted(), member.commitment)
+
+            fun from(json: JSONObject?): Membership? = json?.let { m ->
+                val roles = m.getJSONArray("roles")
+                Membership(m.getLong("since"), (0 until roles.length()).map(roles::getString).sorted(), if (m.isNull("commitment")) null else m.getString("commitment"))
+            }
+        }
     }
 
     private fun removalsFile(userId: String, groupId: String): File? {
@@ -168,8 +190,8 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
                 val row = list.getJSONObject(i)
                 val plans = row.getJSONArray("endsLapsed")
                 Removal(row.getString("userId").takeIf(FamilyRecords::valid) ?: throw OutboxUnreadable(), row.getString("first"),
-                    (0 until plans.length()).map(plans::getString), row.getBoolean("demote"), row.optLong("since", -1L),
-                    row.optLong("demotedAt", -1L).takeIf { it >= 0 }, row.optString("outboxId").takeIf(FamilyRecords::valid))
+                    (0 until plans.length()).map(plans::getString), row.getBoolean("demote"), Membership.from(row.optJSONObject("confirmed")),
+                    Membership.from(row.optJSONObject("demoted")), row.optString("outboxId").takeIf(FamilyRecords::valid))
             }
         } catch (unreadable: OutboxUnreadable) {
             throw unreadable
@@ -189,7 +211,7 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
             folder.mkdirs()
             val json = org.json.JSONArray(list.map {
                 JSONObject().put("userId", it.userId.lowercase()).put("first", it.first).put("endsLapsed", org.json.JSONArray(it.endsLapsed)).put("demote", it.demote)
-                    .put("since", it.since).apply { it.demotedAt?.let { at -> put("demotedAt", at) }; it.outboxId?.let { id -> put("outboxId", id) } }
+                    .apply { it.confirmed?.let { m -> put("confirmed", m.json()) }; it.demoted?.let { m -> put("demoted", m.json()) }; it.outboxId?.let { id -> put("outboxId", id) } }
             })
             val next = File(file.path + ".next")
             next.writeText(json.toString())

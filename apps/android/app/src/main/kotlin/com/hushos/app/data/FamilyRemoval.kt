@@ -234,10 +234,10 @@ private const val MAX_REBUILDS = 3
  * first (route 7) and removes again; another manager's change (`stale`) is built over. A removal kept unanswered goes first:
  * a second press signs nothing new while it waits.
  */
-fun FamilySync.removeMember(summary: GroupSummary, userId: String, first: String, since: ULong, demoteFirst: Boolean = false, endsLapsed: List<String> = emptyList(),
+fun FamilySync.removeMember(summary: GroupSummary, userId: String, first: String, confirmed: FamilyMember, demoteFirst: Boolean = false, endsLapsed: List<String> = emptyList(),
     names: (String) -> String? = { null }, onStep: (RemovalStep) -> Unit = {}): RemovalEnd = exclusive(summary.id) {
     notMemberLetsGo(summary.id, { RemovalEnd.Wiped }) {
-        removeKept(summary, FamilyOutbox.Removal(userId.lowercase(), first, endsLapsed, demoteFirst, since.toLong()), names, onStep)
+        removeKept(summary, FamilyOutbox.Removal(userId.lowercase(), first, endsLapsed, demoteFirst, FamilyOutbox.Membership.of(confirmed)), names, onStep)
     }
 }
 
@@ -374,7 +374,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, turn: RemovalTurn, na
             beforeKept = ::link) { revision, kems ->
             // The member list version this demotion takes if it lands (the core's next roster: its entry's since), kept before
             // it is staged. Never the chain's revision, which a standalone succession moves past the member list's version.
-            removal = removal.copy(demotedAt = stagedOver!!.rosterVersion.toLong() + 1)
+            removal = removal.copy(demoted = removal.confirmed?.demotedAt(stagedOver!!.rosterVersion.toLong() + 1))
             outbox.keepRemoval(this.userId, groupId, removal)
             ledger.rolesBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, revision, userId, MembersRole.TAKE, kems)
         }) {

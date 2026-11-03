@@ -574,6 +574,18 @@ class FamilyFixture(val server: FakeDrive) {
         joined.add(person)
     }
 
+    /*
+     * Sam, on his device, continues with `person`'s changed account: their entry now names their new keys, with `roles`
+     * (another manager's account-change continuation, which can also take a role away).
+     */
+    fun samContinuesWith(person: FakeDrive.Person, roles: List<GroupRole>) {
+        val accepted = creatorChain()
+        val members = accepted.roster().members.map {
+            if (it.userId.equals(person.id, ignoreCase = true)) person.entry(roles, it.sinceVersion).copy(status = it.status) else it
+        }
+        chain = chain + rosterSign(rosterNext(accepted, members, creator.id, null, null, null), groupSeed, creator.keys)
+    }
+
     /* Sam changes the member list himself (a roster that only re-signs it): what another manager's win looks like. */
     fun samChangesTheList() {
         val accepted = creatorChain()

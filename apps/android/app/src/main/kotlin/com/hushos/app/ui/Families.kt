@@ -235,7 +235,7 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
                             }
                             // Last on a manager's menu (the web's MemberList): Remove from family, or why it can't be done yet.
                             val remove = if (!manages || you || who == null) null
-                                else RemoveItem(removeBlocker(member.userId, firstNameOf(who.name), named)) { families.askRemove(groupId, ref, member.since) }
+                                else RemoveItem(removeBlocker(member.userId, firstNameOf(who.name), named)) { families.askRemove(groupId, ref, member) }
                             MemberRow(who?.name ?: "Someone", who?.email, member.userId, FamilySync.rolesLine(member.roles), you, standing, roles,
                                 busy = families.roleBusy != null, remove = remove) { _ -> startCheck(ref, standing) }
                         }

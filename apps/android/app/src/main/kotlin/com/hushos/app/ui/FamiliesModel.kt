@@ -173,8 +173,8 @@ data class WaitingRow(val busy: String? = null, val error: String? = null, val k
  * (only when an earlier key change was running), remove; when someone paused this manager's changes it says so, and when
  * that someone is the person being removed (they manage the family too), it offers to stop them managing first.
  */
-/* `since`: the membership the row showed (FamilyMember.since), which the removal is bound to. */
-data class RemovalSheet(val groupId: String, val member: com.hushos.app.data.FamilyMemberRef, val since: ULong, val phase: RemovalPhase)
+/* `confirmed`: their entry as the row showed it (version, roles, keys), which the removal is bound to. */
+data class RemovalSheet(val groupId: String, val member: com.hushos.app.data.FamilyMemberRef, val confirmed: com.hushos.app.data.FamilyMember, val phase: RemovalPhase)
 sealed interface RemovalPhase {
     data object Confirm : RemovalPhase
     /* A lapsed plan they pay for ends with the removal: asked first, nothing changed yet. */
@@ -562,9 +562,9 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         private set
 
     /* Remove from family from a member's row: asked once first. */
-    fun askRemove(groupId: String, member: com.hushos.app.data.FamilyMemberRef, since: ULong) {
+    fun askRemove(groupId: String, member: com.hushos.app.data.FamilyMemberRef, confirmed: com.hushos.app.data.FamilyMember) {
         if (removal?.phase is RemovalPhase.Running) return
-        removal = RemovalSheet(groupId, member, since, RemovalPhase.Confirm)
+        removal = RemovalSheet(groupId, member, confirmed, RemovalPhase.Confirm)
     }
 
     /* Closed, never while the removal runs (it goes on in the families' scope regardless). */
@@ -586,7 +586,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         supersedeLoads(sheet.groupId)
         model.familyScope.launch {
             val result = gate.run(s) {
-                s.owner.families.removeMember(summary, sheet.member.userId, who, sheet.since, demote, endsLapsed, ::memberName) { step ->
+                s.owner.families.removeMember(summary, sheet.member.userId, who, sheet.confirmed, demote, endsLapsed, ::memberName) { step ->
                     if (step == com.hushos.app.data.RemovalStep.FINISH) finished = true
                     // Only while it still runs: a step that arrives after the outcome never covers it.
                     val now = finished

@@ -37,7 +37,8 @@ class FamilyRemovalModelTest {
     fun aSessionResetDropsTheRemovalAndTheDeletion() {
         val model = FamiliesModel(Host())
         val group = "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a"
-        model.askRemove(group, FamilyMemberRef("0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b", "sam@example.org", "Sam Lindqvist"), 1uL)
+        model.askRemove(group, FamilyMemberRef("0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b", "sam@example.org", "Sam Lindqvist"),
+            com.hushos.app.data.FamilyMember("0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b", emptyList(), null, 1uL))
         model.askDeleteFolder(group, "0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c", "Household")
         assertNotNull(model.removal)
         assertNotNull(model.deletingFolder)
