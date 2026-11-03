@@ -245,6 +245,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * removal, a fork, a refusal). A download or a listing begun before it never keeps, writes or shows what it opened.
      */
     internal val familyEpochs: ConcurrentHashMap<String, Pair<Long, String>> get() = familyState.epochs
+    internal val familyCopyEpochs: ConcurrentHashMap<String, Long> get() = familyState.copyEpochs
     /* Held while a forget deletes family copies or the session ends, and while a download makes its folder, writes or keeps its file. */
     internal val familyCopiesLock: Any get() = FamilyCopies.LOCK
     /* Set once this vault's session ended (close, by this vault or another of the session): nothing it downloads is written after. */
@@ -1383,9 +1384,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * the core returns only the file's own bytes.
      */
     fun download(id: String, destination: File, version: VersionListView? = null, expectedVersionId: String? = null, workspaceId: String? = null,
-                 progress: (Float) -> Unit = {}) {
-        // A family file's folder may be let go of while this runs (a removal): what it was before anything is opened.
+                 familyEpochAt: Long? = null, progress: (Float) -> Unit = {}) {
+        // A family file's folder may be let go of while this runs (a removal): what it was before anything is opened. Its
+        // read copies may be swept meanwhile too (a cache clean): nothing is written after that either.
         val began = HashMap(familyEpochs)
+        val beganCopies = HashMap(familyCopyEpochs)
         // The row of the workspace asked for, never another with the same id (resolve alone prefers this account's own).
         val item = if (workspaceId == null) resolve(id)
             else nodes.row(workspaceId, id) ?: run { resolve(id); nodes.row(workspaceId, id) } ?: throw NotFound("This item no longer exists.")
@@ -1393,7 +1396,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val family = isFamilyWorkspace(ws) || familyEpochs.containsKey(ws)
         // A family's file downloads only under the key its area ledger opened, never one a share mount left in the cache.
         if (family && !nodes.viaLedger(ws, item.id)) throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
-        val epoch = began[ws]?.first ?: 0L
+        // A caller that checked the folder's access first read its count before that check (`familyEpochAt`).
+        val epoch = familyEpochAt ?: began[ws]?.first ?: 0L
         try {
             val v = openVersion(item, version)
             // The copy's path is keyed by the version the caller saw: another version never goes there.
@@ -1405,9 +1409,17 @@ class Vault(internal val context: Context, val api: DriveApi) {
             Resumable.download(destination, v.layout.chunkCount, v.layout.chunkBytes.toLong(),
                 online = { Resumable.online(context) }, progress = progress, fileSize = v.content.plaintextSize.toLong(),
                 onExpired = { url = api.versionUrl(v.versionId, item.node.workspaceId) },
-                lock = familyCopiesLock, check = {
+                lock = familyCopiesLock,
+                // And only while the account it opened for is still here (the wipe's lock, after the copies lock as
+                // everywhere): an account's wipe before this vault closes (deletion, the device removed) stops it too.
+                guard = { step -> Reservations.whileAccount(ledgerGeneration) { step() } ?: throw SessionEnded() },
+                check = {
                     if (closed) throw SessionEnded()
-                    if (family) requireFamilyEpoch(ws, epoch)
+                    if (family) {
+                        requireFamilyEpoch(ws, epoch)
+                        // Its read copies swept meanwhile (a cache clean): nothing more is written where they were.
+                        if ((familyCopyEpochs[ws] ?: 0L) != (beganCopies[ws] ?: 0L)) throw FamilyFailure(FamilyWords.OPEN_AGAIN)
+                    }
                     // Proven a family's folder since this began (a share's): nothing more is written under the share's key.
                     else if (isFamilyWorkspace(ws)) throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
                 },

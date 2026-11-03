@@ -619,6 +619,8 @@ class FakeDrive : AutoCloseable {
         val get = method == "GET"
         val post = method == "POST"
         return when {
+            // An account in no family (route 2), as the Files app's provider asks on every poll; FamilyFixture serves its own.
+            get && at("groups") -> ok(JSONObject().put("groups", JSONArray()))
             // The account's own routes (Auth.call).
             get && at("auth", "identity") -> ok(JSONObject().put("identity", Auth.json(me.envelope)))
             get && at("auth", "identity", "history") -> ok(JSONObject().put("identities", JSONArray()))
@@ -753,6 +755,12 @@ class FakeDrive : AutoCloseable {
                 ok(JSONObject().put("node", copy.json()))
             }
             post && at("drive", "uploads") -> {
+                // A new version of a file at a key epoch it no longer has (a key change re-keyed it since): `stale`, as
+                // packages/db/src/drive.ts beginUpload answers.
+                body.optJSONObject("node")?.takeIf { it.optBoolean("existing") }?.let { n ->
+                    if (nodes[n.getString("id")]?.keyEpoch != n.getLong("keyEpoch"))
+                        return 409 to JSONObject().put("code", "stale").put("message", "This item changed since you last saw it.")
+                }
                 val id = UUID.randomUUID().toString()
                 uploads[id] = Upload(body.getString("workspaceId"), body)
                 val count = minOf(body.getLong("chunkCount"), 64L).toInt()

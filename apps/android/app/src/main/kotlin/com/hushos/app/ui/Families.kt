@@ -240,6 +240,7 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
                                 busy = families.roleBusy != null, remove = remove) { _ -> startCheck(ref, standing) }
                         }
                         if (manages) Invitations(model, groupId)
+                        FamilyPlanSection(model, groupId)
                         TechnicalDetailsRow(view)
                         Leaving(model, groupId, me)
                     }

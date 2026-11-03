@@ -13,8 +13,17 @@ class FamilySessionState internal constructor(val userId: String) {
     val areas = ConcurrentHashMap<String, String>()
     /* The write barrier's hold: each folder an accepted member list named, to every family that named it. */
     val held = ConcurrentHashMap<String, MutableSet<String>>()
-    /* Each family folder's invalidation: a count and the family's words, moved by every forget. */
+    /*
+     * Each family folder's revocation: a count and the family's words, moved by every forget that lets the folder go (a
+     * removal, a refusal, a fork, a family no longer accepted, the session's end). What gates every plaintext kept of it:
+     * reads, pending reads, edits and saves.
+     */
     val epochs = ConcurrentHashMap<String, Pair<Long, String>>()
+    /*
+     * Each family folder's read copies swept (the allowlist sweep, a cache clean that revokes nothing): moved only so a
+     * download running as its folder is deleted writes nothing after. Never gates edits or saves.
+     */
+    val copyEpochs = ConcurrentHashMap<String, Long>()
     /*
      * The guards owed, each acceptance's its own (GuardDebt), by family: the barrier is up over a family while any is
      * owed. An acceptance discharges only its own; one left owed by a failed store goes only once a stored guard covers

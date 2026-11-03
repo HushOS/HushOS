@@ -56,3 +56,19 @@ object FilesRoots {
         }
     }
 }
+
+/*
+ * A family appeared on this phone or went (a join, a relaunch's first acceptance, a leave, a removal, a fork or a refusal),
+ * found by any vault but the Files app provider's own: the provider checks its family roots again before it answers for a
+ * family (ProviderFamilies), and Files and the pickers are told to ask for the roots again.
+ */
+object FamilyRootsSignal {
+    private val generation = java.util.concurrent.atomic.AtomicLong()
+
+    fun now(): Long = generation.get()
+
+    fun moved(context: Context) {
+        generation.incrementAndGet()
+        runCatching { context.contentResolver.notifyChange(DocumentsContract.buildRootsUri(FilesRoots.authority(context)), null) }
+    }
+}

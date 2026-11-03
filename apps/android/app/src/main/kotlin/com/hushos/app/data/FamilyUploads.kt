@@ -41,10 +41,10 @@ object FamilyUploads {
 
     /*
      * The family opened in the job's vault: route 2 lists it and its sync accepts it (a not-member answer wipes it, as
-     * the app's sync does, and says so; no answer is the network's, retried), then the folder is listed in the family's
-     * workspace so its row opens through the ledger.
+     * the app's sync does, and says so; no answer is the network's, retried), then the folder (when one is given) is listed
+     * in the family's workspace so its row opens through the ledger.
      */
-    fun open(vault: Vault, groupId: String, workspaceId: String, folderId: String) {
+    fun open(vault: Vault, groupId: String, workspaceId: String, folderId: String?) {
         val sync = vault.jobFamilies
         val summary = transient { sync.list() }.firstOrNull { it.id.equals(groupId, ignoreCase = true) } ?: run {
             // Not listed: asked about as the app asks (route 5); only not-member is a removal. A family route 2 skipped
@@ -66,15 +66,58 @@ object FamilyUploads {
         if (!vault.isFamilyWorkspace(workspaceId) || vault.familyOf(workspaceId)?.equals(groupId, ignoreCase = true) != true) {
             throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
         }
-        vault.listChildren(folderId, workspaceId)
+        folderId?.let { vault.listChildren(it, workspaceId) }
     }
 
-    /* The upload itself, after `open`: a replaced file found again in the family's workspace, never by id alone. */
+    /*
+     * The upload itself, after `open`: a replaced file found again in the family's workspace by its node, never by id alone,
+     * and listed afresh on every look (a key change finishing between looks re-keys it; a row held from an earlier look
+     * would be refused for good): where this vault last saw it, else the folder it was queued from, else where the feed
+     * puts it (another member moved it, and those folders may be gone or in the trash). A new file goes into its folder.
+     */
     fun upload(vault: Vault, groupId: String, workspaceId: String, file: File, name: String, mime: String?, folderId: String, replacingId: String?,
                job: String, progress: (Float) -> Unit): Opened {
-        open(vault, groupId, workspaceId, folderId)
-        val replacing = replacingId?.let { vault.item(workspaceId, it) ?: throw NotFound("This item no longer exists.") }
+        open(vault, groupId, workspaceId, folderId.takeIf { replacingId == null })
+        val replacing = replacingId?.let { id ->
+            val last = vault.item(workspaceId, id)?.node?.parentId
+            listedIn(vault, workspaceId, last, id) ?: listedIn(vault, workspaceId, folderId.takeIf { it != last }, id)
+                ?: relocated(vault, workspaceId, id) ?: throw NotFound("This item no longer exists.")
+        }
         return vault.upload(file, name, mime, folderId, replacing, vault.makeThumbnail(file, mime), job = job, progress = progress)
+    }
+
+    /* A folder the server says is gone or in the trash: it holds nothing to look for (never the network's failure). */
+    fun folderGone(error: Throwable): Boolean = error is NotFound || (error is ApiError && (error.status == 404 || error.code == "trashed"))
+
+    /* `nodeId` as `folderId`, listed through the ledger now, holds it; null when it doesn't, or the folder is gone or in the trash. */
+    private fun listedIn(vault: Vault, workspaceId: String, folderId: String?, nodeId: String): Opened? {
+        folderId ?: return null
+        val listed = try {
+            vault.listChildren(folderId, workspaceId)
+        } catch (error: Exception) {
+            if (folderGone(error)) return null
+            throw error
+        }
+        return listed.firstOrNull { it.id.equals(nodeId, ignoreCase = true) && it.node.workspaceId.equals(workspaceId, ignoreCase = true) }
+    }
+
+    /*
+     * A file the folders above no longer list (another member moved it): found by its workspace and node, in the folder
+     * the workspace's change feed puts it in now, listed through the ledger. Null when the feed has it nowhere.
+     */
+    private fun relocated(vault: Vault, workspaceId: String, nodeId: String): Opened? {
+        var cursor = 0
+        var parent: String? = null
+        while (true) {
+            val page = vault.api.changes(workspaceId, cursor)
+            for (change in page.changes) {
+                val node = change.node ?: continue
+                if (node.id.equals(nodeId, ignoreCase = true) && node.workspaceId.equals(workspaceId, ignoreCase = true)) parent = node.parentId.takeIf { node.trashedAt == null }
+            }
+            if (!page.hasMore || page.nextCursor <= cursor) break
+            cursor = page.nextCursor
+        }
+        return listedIn(vault, workspaceId, parent, nodeId)
     }
 
     /* How long a waiting upload pauses between looks (iOS's and the web's cadence, never growing with the tries). */

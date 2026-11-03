@@ -513,14 +513,19 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         // The session's families go with it: the ledger's keys wiped, nothing of them left drawn, and no download of it
         // writes again (before Auth.signOut wipes the account's copies).
         endFamilyCleanups()
-        vault?.close()
-        vault?.areaLedger?.clear()
+        // Closed off the main thread (closing waits for the family copies' lock, which a save may hold for a moment), but
+        // still before Auth.signOut wipes the account's copies; nothing here uses it after this.
+        val ending = vault
         vault = null
         families.reset()
         notices.clear()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin)
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { Auth.signOut(context) }
+            withContext(Dispatchers.IO) {
+                ending?.close()
+                ending?.areaLedger?.clear()
+                Auth.signOut(context)
+            }
             filesAppChanged()
         }
     }
