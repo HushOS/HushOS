@@ -19,6 +19,8 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         }
     }
     func signal(_ identifier: String) async {}
+    private(set) var resolutions: [String] = []
+    func resolved(_ identifier: String) async { lock.withLock { resolutions.append(identifier) } }
 
     var names: [String: String] { lock.withLock { present } }
     func put(_ identifier: String, name: String) { lock.withLock { present[identifier] = name } }
@@ -43,30 +45,103 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
     static let group = UUID().uuidString.lowercased()
 
     /*
-     * A let-go takes the record at once, before any system call, and an acceptance from an earlier
-     * look that lands after it never brings the location back; a later look does. Fails if a
-     * revocation waits on the system, or a late acceptance undoes it.
+     * A let-go takes the record at once, before any system call, and an acceptance whose check
+     * began before it never brings the location back, even when the let-go came from another
+     * process (another lifecycle over the same store: the extension's); one that began after does.
+     * Fails if revocations are ordered only within one process, or a revocation waits on the system.
      */
-    @Test func aLetGoTakesTheRecordAtOnceAndAnOlderAcceptanceNeverUndoesIt() async throws {
-        let domains = self.domains
+    @Test func aLetGoInAnyProcessBeatsAnAcceptanceThatBeganBeforeIt() async throws {
+        let app = self.domains
+        let extensionProcess = FamilyFilesDomains(records: records, manager: manager)
         let session = TemporaryCopies.session(CopyEpoch())
-        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, revision: 5, session: session).value
-        #expect(try records.read()[Self.group] == FamilyDomainRecord(owner: Self.maya, name: "Lindqvist family"))
+        await app.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, observed: records.generation(Self.group), session: session).value
+        #expect(try records.read()[Self.group]?.owner == Self.maya)
         #expect(manager.names[FamilyFileIds.domain(Self.group)] == "Lindqvist family")
 
-        let removal = domains.letGo(Self.group, owner: Self.maya, revision: 7)
+        // The app's next check begins, then the extension finds the family let go of.
+        let stale = records.generation(Self.group)
+        let removal = extensionProcess.letGo(Self.group, owner: Self.maya)
         // Gone on disk before the system was asked: every extension call refuses from here.
         #expect(records.admission(Self.group, owner: Self.maya) == .letGo)
         await removal.value
         #expect(manager.names.isEmpty)
 
-        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, revision: 6, session: session).value
-        #expect(records.admission(Self.group, owner: Self.maya) == .letGo, "an acceptance from before the removal brought the location back")
+        await app.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, observed: stale, session: session).value
+        #expect(records.admission(Self.group, owner: Self.maya) == .letGo, "an acceptance begun before the removal brought the record back")
+        #expect(manager.names.isEmpty, "an acceptance begun before the removal brought the location back")
+        // Without a generation taken before the check (a join's, a member check's), nothing is added.
+        await app.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, observed: nil, session: session).value
         #expect(manager.names.isEmpty)
 
-        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, revision: 8, session: session).value
+        await app.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, observed: records.generation(Self.group), session: session).value
         #expect(records.admission(Self.group, owner: Self.maya) == .admitted)
         #expect(manager.names[FamilyFileIds.domain(Self.group)] != nil)
+    }
+
+    /*
+     * Signing in as the same account keeps its family locations and tells each that the session is
+     * back, as the drive's is; another account's goes and is told nothing. Fails if a kept family
+     * location stays paused on "not signed in".
+     */
+    @Test func aSignInTellsTheKeptFamilyLocationsTheSessionIsBack() async throws {
+        let domains = self.domains
+        let session = TemporaryCopies.session(CopyEpoch())
+        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, observed: records.generation(Self.group), session: session).value
+        let other = FamilyFileIds.domain(UUID().uuidString.lowercased())
+        manager.put(other, name: "Old family")
+        await domains.reconcile(owner: Self.maya).value
+        #expect(manager.resolutions == [FamilyFileIds.domain(Self.group)])
+    }
+
+    /*
+     * Copies of family folders: a let-go takes this process's copies of the folders its record
+     * named, and a process starting sweeps every family folder no record names, keeping those one
+     * does. A store that can't be read sweeps nothing. Fails if plaintext of a family let go of
+     * outlives it in a process's temporary folder.
+     */
+    @Test func copiesOfFamiliesNoRecordNamesGo() async throws {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("family-tmp-\(UUID().uuidString)", isDirectory: true)
+        let domains = FamilyFilesDomains(records: records, manager: manager, temporary: temporary)
+        let (kept, stray, revoked) = (UUID().uuidString.lowercased(), UUID().uuidString.lowercased(), UUID().uuidString.lowercased())
+        func copy(_ workspace: String) throws -> URL {
+            let folder = temporary.appendingPathComponent("opened/family/\(workspace)/files/x/y", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let file = folder.appendingPathComponent("content.part")
+            try Data("plaintext".utf8).write(to: file)
+            return file
+        }
+        let session = TemporaryCopies.session(CopyEpoch())
+        let other = UUID().uuidString.lowercased()
+        await domains.accepted(Self.group, name: "Lindqvist family", workspaces: [kept], owner: Self.maya, observed: records.generation(Self.group), session: session).value
+        await domains.accepted(other, name: "Holm family", workspaces: [revoked], owner: Self.maya, observed: records.generation(other), session: session).value
+        let (keptCopy, strayCopy, revokedCopy) = (try copy(kept), try copy(stray), try copy(revoked))
+
+        _ = domains.letGo(other, owner: Self.maya)
+        #expect(!FileManager.default.fileExists(atPath: revokedCopy.path), "a let-go left this process's copies of the family")
+
+        try Data("not json".utf8).write(to: records.file)
+        #expect(!domains.sweepUnrecorded())
+        #expect(FileManager.default.fileExists(atPath: strayCopy.path), "an unreadable store swept copies")
+        try FileManager.default.removeItem(at: records.file)
+        await domains.accepted(Self.group, name: "Lindqvist family", workspaces: [kept], owner: Self.maya, observed: records.generation(Self.group), session: session).value
+        #expect(domains.sweepUnrecorded())
+        #expect(!FileManager.default.fileExists(atPath: strayCopy.path), "a copy of a family no record names survived the sweep")
+        #expect(FileManager.default.fileExists(atPath: keptCopy.path), "a recorded family's copy was swept")
+    }
+
+    /*
+     * The sign-in sheet: each Files location asks once until someone signs in, whatever another
+     * asked. Fails if a family location can't ask because the drive's (or another family's) did.
+     */
+    @Test func eachLocationAsksForTheSignInSheetOnce() {
+        let asks = SignInAsks()
+        let drive = "com.hushos.app.drive", family = FamilyFileIds.domain(Self.group)
+        #expect(asks.first(drive))
+        #expect(asks.first(family), "a family location couldn't ask because the drive's had")
+        #expect(!asks.first(family))
+        #expect(!asks.first(drive))
+        asks.reset()
+        #expect(asks.first(family))
     }
 
     /*
@@ -77,11 +152,11 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
     @Test func anotherAccountsLocationIsNeverAdmittedAndGoesAtSignIn() async throws {
         let domains = self.domains
         let session = TemporaryCopies.session(CopyEpoch())
-        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, revision: 1, session: session).value
+        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, observed: records.generation(Self.group), session: session).value
         #expect(records.admission(Self.group, owner: Self.sam) == .otherAccount)
         #expect(records.admission(Self.group, owner: nil) == .otherAccount)
 
-        await domains.accepted(Self.group, name: "Holm family", owner: Self.sam, revision: 2, session: session).value
+        await domains.accepted(Self.group, name: "Holm family", owner: Self.sam, observed: records.generation(Self.group), session: session).value
         #expect(try records.read()[Self.group]?.owner == Self.maya, "another account's acceptance took the record over")
         #expect(records.admission(Self.group, owner: Self.sam) == .otherAccount)
 
@@ -104,7 +179,7 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
     @Test func aLocationThatStaysKeepsItsRecordAndAnUnreadableStoreDecidesNothing() async throws {
         let domains = self.domains
         let session = TemporaryCopies.session(CopyEpoch())
-        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, revision: 1, session: session).value
+        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, observed: records.generation(Self.group), session: session).value
         manager.removalFails = true
         await domains.removeAll()
         #expect(try records.read()[Self.group]?.owner == Self.maya, "the record went while its location stayed")
@@ -115,7 +190,7 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
 
         try Data("not json".utf8).write(to: records.file)
         #expect(records.admission(Self.group, owner: Self.maya) == .unreadable)
-        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, revision: 9, session: session).value
+        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, observed: records.generation(Self.group), session: session).value
         #expect(try Data(contentsOf: records.file) == Data("not json".utf8), "a store that couldn't be read was written over")
     }
 
@@ -124,7 +199,7 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         let account = CopyEpoch()
         let session = TemporaryCopies.session(account)
         TemporaryCopies.endAccount(account)
-        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, revision: 1, session: session).value
+        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, observed: records.generation(Self.group), session: session).value
         #expect(try records.read().isEmpty)
         #expect(manager.names.isEmpty)
     }
@@ -160,6 +235,7 @@ extension OnFakeDrive {
             let records: FamilyDomainRecords
             let clock: Clock
             let source: FamilyFilesSource
+            let temporary: URL
             var owner: AccountOwner { AccountOwner(userId: family.member.userId, origin: "https://family.test") }
         }
 
@@ -174,10 +250,12 @@ extension OnFakeDrive {
             let domains = FamilyFilesDomains(records: records, manager: manager)
             let phone = try await family.phone(server, filesDomains: domains)
             let owner = AccountOwner(userId: family.member.userId, origin: "https://family.test")
-            await domains.accepted(family.groupId, name: "Lindqvist family", owner: owner, revision: FamilySync.newestLook(), session: phone.vault.copySession).value
+            await domains.accepted(family.groupId, name: "Lindqvist family", workspaces: [family.workspaceId], owner: owner, observed: records.generation(family.groupId),
+                                   session: phone.vault.copySession).value
             let clock = Clock()
-            let source = FamilyFilesSource(groupId: family.groupId, vault: phone.vault, sync: phone.sync, records: records, now: { clock.now })
-            return Source(family: family, server: server, phone: phone, domains: domains, manager: manager, records: records, clock: clock, source: source)
+            let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("family-src-\(UUID().uuidString)", isDirectory: true)
+            let source = FamilyFilesSource(groupId: family.groupId, vault: phone.vault, sync: phone.sync, records: records, temporary: temporary, now: { clock.now })
+            return Source(family: family, server: server, phone: phone, domains: domains, manager: manager, records: records, clock: clock, source: source, temporary: temporary)
         }
 
         /*
@@ -194,8 +272,7 @@ extension OnFakeDrive {
             #expect(try await s.source.isFolderRoot(root))
             let children = try await s.source.children(of: root)
             #expect(children.contains { $0.ref == s.family.photo.ref })
-            let file = FileManager.default.temporaryDirectory.appendingPathComponent("family-files-\(UUID().uuidString)/content")
-            _ = try await s.source.download(s.family.photo.ref, to: file)
+            let (file, _) = try await s.source.download(s.family.photo.ref)
             #expect(try Data(contentsOf: file) == s.family.photoBytes)
 
             let own = NodeRef(workspaceId: s.family.personal, nodeId: s.family.personalRoot.id)
@@ -215,12 +292,12 @@ extension OnFakeDrive {
             let s = try await Self.source()
             defer { s.phone.done() }
             _ = try await s.source.folders()
-            _ = s.domains.letGo(s.family.groupId, owner: s.owner, revision: FamilySync.newestLook())
+            _ = s.domains.letGo(s.family.groupId, owner: s.owner)
             let root = NodeRef(workspaceId: s.family.workspaceId, nodeId: s.family.rootId)
             let before = s.server.count("/api/drive/nodes/\(s.family.rootId)/children")
             await #expect(throws: FamilyFilesError.letGo) { _ = try await s.source.folders() }
             await #expect(throws: FamilyFilesError.letGo) { _ = try await s.source.children(of: root) }
-            await #expect(throws: FamilyFilesError.letGo) { _ = try await s.source.download(s.family.photo.ref, to: FileManager.default.temporaryDirectory.appendingPathComponent("x-\(UUID().uuidString)")) }
+            await #expect(throws: FamilyFilesError.letGo) { _ = try await s.source.download(s.family.photo.ref) }
             #expect(s.server.count("/api/drive/nodes/\(s.family.rootId)/children") == before, "a revoked location asked the server")
             s.server.groupsFail = true
             s.clock.now = s.clock.now.addingTimeInterval(120)
@@ -264,10 +341,35 @@ extension OnFakeDrive {
             let root = NodeRef(workspaceId: s.family.workspaceId, nodeId: s.family.rootId)
             _ = try await s.source.children(of: root)
             let (domains, group, owner) = (s.domains, s.family.groupId, s.owner)
-            await s.phone.vault.setBeforeChunk { _ in _ = domains.letGo(group, owner: owner, revision: FamilySync.newestLook()) }
-            let file = FileManager.default.temporaryDirectory.appendingPathComponent("family-files-\(UUID().uuidString)/content")
-            await #expect(throws: FamilyFilesError.letGo) { _ = try await s.source.download(s.family.photo.ref, to: file) }
-            #expect(!FileManager.default.fileExists(atPath: file.path), "a copy outlived the revocation")
+            await s.phone.vault.setBeforeChunk { _ in _ = domains.letGo(group, owner: owner) }
+            await #expect(throws: FamilyFilesError.letGo) { _ = try await s.source.download(s.family.photo.ref) }
+            let copies = s.temporary.appendingPathComponent("opened/family/\(s.family.workspaceId)")
+            #expect(!FileManager.default.fileExists(atPath: copies.path), "a copy outlived the revocation")
+        }
+
+        /*
+         * Another process revokes the family while a file comes down, and the transfer then fails
+         * (here it is cancelled): nothing of the file stays, not even the partial a retry would
+         * continue. Fails if a failed transfer skips the revocation check and keeps its `.part`.
+         */
+        @Test func aRevocationDuringADownloadThatThenFailsLeavesNoPlaintext() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            let root = NodeRef(workspaceId: s.family.workspaceId, nodeId: s.family.rootId)
+            _ = try await s.source.children(of: root)
+            let extensionProcess = FamilyFilesDomains(records: s.records, manager: s.manager)
+            let (group, owner) = (s.family.groupId, s.owner)
+            let copies = s.temporary.appendingPathComponent("opened/family/\(s.family.workspaceId)")
+            await s.phone.vault.setBeforeChunk { _ in
+                // Something of the file is already on disk, as a partial a retry would continue.
+                let partial = copies.appendingPathComponent("files/partial.part")
+                try? FileManager.default.createDirectory(at: partial.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? Data("decrypted bytes".utf8).write(to: partial)
+                _ = extensionProcess.letGo(group, owner: owner)
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+            await #expect(throws: (any Error).self) { _ = try await s.source.download(s.family.photo.ref) }
+            #expect(!FileManager.default.fileExists(atPath: copies.path), "plaintext outlived a revocation whose transfer failed")
         }
 
         /*
@@ -279,7 +381,7 @@ extension OnFakeDrive {
             defer { s.phone.done() }
             await s.domains.removeAll()
             let other = AccountOwner(userId: UUID().uuidString, origin: "https://family.test")
-            await s.domains.accepted(s.family.groupId, name: "Lindqvist family", owner: other, revision: FamilySync.newestLook(), session: s.phone.vault.copySession).value
+            await s.domains.accepted(s.family.groupId, name: "Lindqvist family", owner: other, observed: s.records.generation(s.family.groupId), session: s.phone.vault.copySession).value
             await #expect(throws: FamilyFilesError.otherAccount) { _ = try await s.source.folders() }
         }
     }

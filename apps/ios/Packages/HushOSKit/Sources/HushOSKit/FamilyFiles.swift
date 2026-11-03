@@ -39,14 +39,16 @@ public enum FamilyFileIds {
     }
 }
 
-/* Whose a family's location is, and its name. */
+/* Whose a family's location is, its name, and the family's folders it was added with (whose copies a sweep keeps). */
 public struct FamilyDomainRecord: Codable, Sendable, Equatable {
     public let owner: AccountOwner
     public let name: String
+    public var workspaces: [String]?
 
-    public init(owner: AccountOwner, name: String) {
+    public init(owner: AccountOwner, name: String, workspaces: [String]? = nil) {
         self.owner = owner
         self.name = name
+        self.workspaces = workspaces
     }
 }
 
@@ -62,8 +64,9 @@ public enum FamilyAdmission: Equatable, Sendable {
 }
 
 /*
- * Every family location's record, in `local/files-family-domains.json` (app group, out of
- * backups), written under `local/files-family-domains.lock` by the app and any extension.
+ * Every family location's record, and each family's revocation generation (moved by every let-go
+ * in any process, never lowered), in `local/files-family-domains.json` (app group, out of backups),
+ * written under `local/files-family-domains.lock` by the app and any extension.
  */
 public struct FamilyDomainRecords: Sendable {
     let folder: URL
@@ -81,33 +84,47 @@ public struct FamilyDomainRecords: Sendable {
     var file: URL { folder.appendingPathComponent("files-family-domains.json") }
     private var lockPath: String { folder.appendingPathComponent("files-family-domains.lock").path }
 
-    /* Every record by family; empty when none was ever kept. A file that can't be read throws, never read as none. */
-    public func read() throws -> [String: FamilyDomainRecord] {
+    /* The file's contents: the records, and how many times each family was let go of. */
+    struct Stored: Codable, Equatable {
+        var records: [String: FamilyDomainRecord] = [:]
+        var revoked: [String: UInt64] = [:]
+    }
+
+    /* Both maps; empty when nothing was ever kept. A file that can't be read throws, never read as none. */
+    func stored() throws -> Stored {
         let data: Data
         do {
             data = try Data(contentsOf: file)
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
-            return [:]
+            return Stored()
         } catch {
             throw GuardError.unreadable
         }
-        guard let records = try? JSONDecoder().decode([String: FamilyDomainRecord].self, from: data) else { throw GuardError.unreadable }
-        return records
+        if let stored = try? JSONDecoder().decode(Stored.self, from: data) { return stored }
+        // This branch's first shape: the records alone.
+        if let records = try? JSONDecoder().decode([String: FamilyDomainRecord].self, from: data) { return Stored(records: records) }
+        throw GuardError.unreadable
     }
 
-    /* `body` over the records under their lock, written back when it changed them; false when that couldn't be done. */
+    /* Every record by family. */
+    public func read() throws -> [String: FamilyDomainRecord] { try stored().records }
+
+    /* The family's revocation generation now; nil when the store can't be read. */
+    public func generation(_ groupId: String) -> UInt64? { (try? stored())?.revoked[groupId.lowercased(), default: 0] }
+
+    /* `body` over what is stored, under the lock, written back when it changed; false when that couldn't be done. */
     @discardableResult
-    func update(_ body: (inout [String: FamilyDomainRecord]) -> Void) -> Bool {
+    func update(_ body: (inout Stored) -> Void) -> Bool {
         var done = false
         let locked = (try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)) != nil && FileLock.withLock(lockPath, activity: activity) {
-            guard var records = try? read() else { return }
-            let before = records
-            body(&records)
-            if records == before {
+            guard var stored = try? stored() else { return }
+            let before = stored
+            body(&stored)
+            if stored == before {
                 done = true
                 return
             }
-            guard let data = try? JSONEncoder().encode(records) else { return }
+            guard let data = try? JSONEncoder().encode(stored) else { return }
             done = (try? data.write(to: file, options: .atomic)) != nil
         }
         return locked && done
@@ -124,6 +141,12 @@ public struct FamilyDomainRecords: Sendable {
         guard let record = records[groupId.lowercased()] else { return .letGo }
         return record.owner == owner ? .admitted : .otherAccount
     }
+
+    /* Every family folder a record names: whose copies may stay in a process's temporary folder. */
+    public func recordedWorkspaces() -> Set<String>? {
+        guard let records = try? read() else { return nil }
+        return Set(records.values.flatMap { $0.workspaces ?? [] }.map { $0.lowercased() })
+    }
 }
 
 /* The system's family locations, as `FamilyFilesDomains` drives them (a test's own in tests). */
@@ -135,12 +158,15 @@ public protocol FamilyDomainManaging: Sendable {
     func remove(_ identifier: String) async throws
     /* Files is told something changed in it. */
     func signal(_ identifier: String) async
+    /* Someone signed in: a location Files paused on `.notAuthenticated` is told it is resolved, then listed again. */
+    func resolved(_ identifier: String) async
 }
 
 /*
- * The family locations' lifecycle in one process, its system calls one after another. A family
- * accepted at a look (`revision`, FamilySync.revise) is added only when no let-go at a later look
- * came first, so an older acceptance that lands after a removal never brings the location back.
+ * The family locations' lifecycle in one process, its system calls one after another. Ordering
+ * across processes is the store's: every let-go moves the family's revocation generation under the
+ * store's lock, and an acceptance carries the generation it saw before its check began, so one
+ * that began before a revocation (in this process or another) never writes the record back.
  */
 public final class FamilyFilesDomains: @unchecked Sendable {
     #if canImport(FileProvider)
@@ -149,14 +175,14 @@ public final class FamilyFilesDomains: @unchecked Sendable {
 
     let records: FamilyDomainRecords
     let manager: any FamilyDomainManaging
+    let temporary: URL
     private let lock = NSLock()
-    /* The latest look at which each family was let go of in this process (lowercase id). */
-    private var letGoAt: [String: UInt64] = [:]
     private var tail: Task<Void, Never>?
 
-    public init(records: FamilyDomainRecords, manager: any FamilyDomainManaging) {
+    public init(records: FamilyDomainRecords, manager: any FamilyDomainManaging, temporary: URL = FileManager.default.temporaryDirectory) {
         self.records = records
         self.manager = manager
+        self.temporary = temporary
     }
 
     @discardableResult
@@ -172,27 +198,28 @@ public final class FamilyFilesDomains: @unchecked Sendable {
         }
     }
 
+    /* The family's revocation generation, for a check about to begin (nil: the store can't be read, so nothing it accepts is added). */
+    public func generation(_ groupId: String) -> UInt64? { records.generation(groupId) }
+
     /*
-     * A sync of `session` accepted the family at `revision`: its record, then its location. Never
-     * over another account's record (that location goes at the next `reconcile`), never once the
-     * session ended, and never when the family was let go of at a later look.
+     * A sync of `session` accepted the family, having begun when its revocation generation was
+     * `observed`: its record, then its location. Never over another account's record (that location
+     * goes at the next `reconcile`), never once the session ended, and never when the family was let
+     * go of since the check began, here or in another process.
      */
     @discardableResult
-    public func accepted(_ groupId: String, name: String, owner: AccountOwner, revision: UInt64, session: CopySession) -> Task<Void, Never> {
+    public func accepted(_ groupId: String, name: String, workspaces: [String] = [], owner: AccountOwner, observed: UInt64?, session: CopySession) -> Task<Void, Never> {
         let groupId = groupId.lowercased()
         return enqueue { [self] in
-            guard FamilyRecords.valid(groupId), session.stands else { return }
-            let kept = lock.withLock { () -> Bool in
-                guard letGoAt[groupId, default: 0] < revision else { return false }
-                var ours = false
-                let wrote = records.update { held in
-                    if let record = held[groupId], record.owner != owner { return }
-                    held[groupId] = FamilyDomainRecord(owner: owner, name: name)
-                    ours = true
-                }
-                return wrote && ours
+            guard FamilyRecords.valid(groupId), let observed, session.stands else { return }
+            var ours = false
+            let wrote = records.update { stored in
+                guard stored.revoked[groupId, default: 0] <= observed else { return }
+                if let record = stored.records[groupId], record.owner != owner { return }
+                stored.records[groupId] = FamilyDomainRecord(owner: owner, name: name, workspaces: workspaces.map { $0.lowercased() }.sorted())
+                ours = true
             }
-            guard kept, session.stands else { return }
+            guard wrote, ours, session.stands else { return }
             let identifier = FamilyFileIds.domain(groupId)
             guard let existing = try? await manager.domains() else { return }
             if !existing.contains(identifier) { try? await manager.add(identifier, name: name) }
@@ -201,40 +228,50 @@ public final class FamilyFilesDomains: @unchecked Sendable {
     }
 
     /*
-     * The family was let go of at `revision` (by whatever process found it): its record goes now,
-     * on disk, so every extension call refuses from here on, then its location with what Files
-     * kept of it. Only `owner`'s record (nil: whoever's).
+     * The family was let go of (by whatever process found it): its revocation generation moves and
+     * its record goes now, on disk, so every extension call refuses from here on and no acceptance
+     * begun before writes it back; this process's copies of its folders go; then its location, with
+     * what Files kept of it. Only `owner`'s record (nil: whoever's); the generation moves regardless.
      */
     @discardableResult
-    public func letGo(_ groupId: String, owner: AccountOwner?, revision: UInt64) -> Task<Void, Never> {
+    public func letGo(_ groupId: String, owner: AccountOwner?) -> Task<Void, Never> {
         let groupId = groupId.lowercased()
-        lock.withLock {
-            letGoAt[groupId] = max(letGoAt[groupId, default: 0], revision)
-            records.update { held in
-                if let record = held[groupId], owner == nil || record.owner == owner { held[groupId] = nil }
+        var workspaces: [String] = []
+        records.update { stored in
+            stored.revoked[groupId, default: 0] += 1
+            if let record = stored.records[groupId], owner == nil || record.owner == owner {
+                workspaces = record.workspaces ?? []
+                stored.records[groupId] = nil
             }
         }
+        if !workspaces.isEmpty { TemporaryCopies.forgetFamily(workspaces, in: temporary) }
         return enqueue { [manager] in try? await manager.remove(FamilyFileIds.domain(groupId)) }
     }
 
     /*
      * Signed in (or found signed in) as `owner`: a family location without a record of this account
      * goes (another account's, or one whose record a revocation took), and another account's records
-     * go once their locations have. Families are added only by an acceptance.
+     * go once their locations have. Those that stay are told the session is back (Files paused them
+     * on `.notAuthenticated`, as it does the drive's). Families are added only by an acceptance.
      */
     @discardableResult
     public func reconcile(owner: AccountOwner) -> Task<Void, Never> {
         enqueue { [self] in
             guard let identifiers = try? await manager.domains(), let held = try? records.read() else { return }
             var present = Set(identifiers)
+            var kept: [String] = []
             for identifier in identifiers {
                 let groupId = FamilyFileIds.group(ofDomain: identifier)
-                if let groupId, held[groupId]?.owner == owner { continue }
+                if let groupId, held[groupId]?.owner == owner {
+                    kept.append(identifier)
+                    continue
+                }
                 if (try? await manager.remove(identifier)) != nil { present.remove(identifier) }
             }
-            records.update { held in
-                held = held.filter { $0.value.owner == owner || present.contains(FamilyFileIds.domain($0.key)) }
+            records.update { stored in
+                stored.records = stored.records.filter { $0.value.owner == owner || present.contains(FamilyFileIds.domain($0.key)) }
             }
+            for identifier in kept { await manager.resolved(identifier) }
         }
     }
 
@@ -247,14 +284,23 @@ public final class FamilyFilesDomains: @unchecked Sendable {
             guard let identifiers = try? await manager.domains() else { return }
             var present = Set(identifiers)
             for identifier in identifiers where (try? await manager.remove(identifier)) != nil { present.remove(identifier) }
-            records.update { held in held = held.filter { present.contains(FamilyFileIds.domain($0.key)) } }
-            lock.withLock { letGoAt = [:] }
+            records.update { stored in stored.records = stored.records.filter { present.contains(FamilyFileIds.domain($0.key)) } }
         }.value
     }
 
     /* Files is told a family's location changed (the app saw its folders change). */
     public func signal(_ groupId: String) {
         enqueue { [manager] in await manager.signal(FamilyFileIds.domain(groupId)) }
+    }
+
+    /*
+     * A process starting: copies of family folders no record names (a family let go of while this
+     * process was away, or never added) go from its temporary folder. Nothing when the store can't be read.
+     */
+    @discardableResult
+    public func sweepUnrecorded() -> Bool {
+        guard let keep = records.recordedWorkspaces() else { return false }
+        return TemporaryCopies.sweepFamily(keeping: keep, in: temporary)
     }
 
     /* Tests: every system call asked for so far, done. */
@@ -282,6 +328,13 @@ struct SystemFamilyDomains: FamilyDomainManaging {
 
     func signal(_ identifier: String) async {
         guard let manager = NSFileProviderManager(for: NSFileProviderDomain(identifier: NSFileProviderDomainIdentifier(identifier), displayName: "")) else { return }
+        manager.signalEnumerator(for: .workingSet) { _ in }
+        manager.signalEnumerator(for: .rootContainer) { _ in }
+    }
+
+    func resolved(_ identifier: String) async {
+        guard let manager = NSFileProviderManager(for: NSFileProviderDomain(identifier: NSFileProviderDomainIdentifier(identifier), displayName: "")) else { return }
+        try? await manager.signalErrorResolved(NSFileProviderError(.notAuthenticated))
         manager.signalEnumerator(for: .workingSet) { _ in }
         manager.signalEnumerator(for: .rootContainer) { _ in }
     }
@@ -337,26 +390,38 @@ public actor FamilyFilesSource {
     let records: FamilyDomainRecords
     let owner: AccountOwner
     let now: @Sendable () -> Date
+    /* This process's temporary folder: its `opened/family/<workspace>` holds the family's decrypted copies. */
+    let temporary: URL
     private var view: FamilyView?
     private var checkedAt: Date?
+    /* Every folder of the family this source has answered for: whose copies go once it is let go of. */
+    private var known: Set<String> = []
 
     static let fresh: TimeInterval = 60
 
-    public init(groupId: String, vault: Vault, sync: FamilySync, records: FamilyDomainRecords = .shared, now: @escaping @Sendable () -> Date = { Date() }) {
+    public init(groupId: String, vault: Vault, sync: FamilySync, records: FamilyDomainRecords = .shared,
+                temporary: URL = FileManager.default.temporaryDirectory, now: @escaping @Sendable () -> Date = { Date() }) {
         self.groupId = groupId.lowercased()
         self.vault = vault
         self.sync = sync
         self.records = records
+        self.temporary = temporary
         owner = AccountOwner(vault.session)
         self.now = now
     }
 
-    /* The record's say, before anything this process holds: a revocation on disk wins. */
+    /* The family's copies in this process, every one: partial downloads included. */
+    private func dropCopies() {
+        if !known.isEmpty { TemporaryCopies.forgetFamily(Array(known), in: temporary) }
+    }
+
+    /* The record's say, before anything this process holds: a revocation on disk wins, and takes this process's copies. */
     private func admit() throws {
         switch records.admission(groupId, owner: owner) {
         case .admitted: return
         case .letGo:
             view = nil
+            dropCopies()
             throw FamilyFilesError.letGo
         case .otherAccount:
             view = nil
@@ -399,6 +464,7 @@ public actor FamilyFilesSource {
             // A revocation that landed while the family was checked wins over it.
             try admit()
             view = accepted
+            known.formUnion(accepted.areas.map { $0.workspaceId.lowercased() })
             checkedAt = now()
             return accepted
         case .failed(let words) where words == FamilyWords.noAnswer:
@@ -407,6 +473,7 @@ public actor FamilyFilesSource {
         default:
             // The sync let it go (its release took the record and asked for the location to go).
             view = nil
+            dropCopies()
             throw FamilyFilesError.letGo
         }
     }
@@ -460,15 +527,27 @@ public actor FamilyFilesSource {
     }
 
     /*
-     * A file's current version, decrypted to `file` under the family's copy gate (made by the caller
-     * in the extension's temporary folder). Handed on only while the location's record still stands:
-     * a revocation that landed during the download leaves nothing behind.
+     * A file's current version, decrypted under the family's copy gate to the process's
+     * `opened/family/<workspace>/files/<node>/<version>/content` (where a forget of the family
+     * reaches it; a partial there is continued by the next try). However the download ends (done,
+     * failed, cancelled), the location's record is asked again: once a revocation landed, here or in
+     * another process, every copy of the family's folders goes, partials included, and nothing is
+     * handed on.
      */
-    public func download(_ ref: NodeRef, to file: URL, progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> Opened {
+    public func download(_ ref: NodeRef, progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> (file: URL, item: Opened) {
         let item = try await item(ref)
+        known.insert(ref.workspaceId)
+        let file = temporary.appendingPathComponent("opened/family/\(ref.workspaceId)/files/\(ref.nodeId)/\(item.node.currentVersion?.id ?? "none")", isDirectory: true)
+            .appendingPathComponent("content")
         let gate = vault.copyGate(familyWorkspace: ref.workspaceId)
-        try gate.perform { try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true) }
-        try await vault.download(ref.nodeId, ref: ref, expectedVersionId: item.node.currentVersion?.id, to: file, gate: gate, progress: progress)
+        do {
+            try gate.perform { try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true) }
+            try await vault.download(ref.nodeId, ref: ref, expectedVersionId: item.node.currentVersion?.id, to: file, gate: gate, progress: progress)
+        } catch {
+            // A revocation is the answer, whatever the transfer said, and leaves no plaintext behind.
+            try admit()
+            throw error
+        }
         do {
             try admit()
             try gate.check()
@@ -476,7 +555,7 @@ public actor FamilyFilesSource {
             try? FileManager.default.removeItem(at: file)
             throw error
         }
-        return await vault.item(ref) ?? item
+        return (file, await vault.item(ref) ?? item)
     }
 
     public func thumbnail(_ ref: NodeRef) async throws -> Data? {
@@ -541,4 +620,23 @@ public actor FamilyFilesSource {
         try admit()
         return FamilyChanges(added: added, updated: updated, deleted: deleted, next: next, hasMore: more)
     }
+}
+
+/*
+ * Which Files locations have asked for the sign-in sheet since someone last signed in: each asks
+ * once (signalling its own working set), whatever another location asked, so a family location
+ * that loses its session gets the sheet and not a dead-end alert.
+ */
+public final class SignInAsks: @unchecked Sendable {
+    public static let shared = SignInAsks()
+    private let lock = NSLock()
+    private var asked: Set<String> = []
+
+    public init() {}
+
+    /* True the first time `domain` asks until the next `reset`. */
+    public func first(_ domain: String) -> Bool { lock.withLock { asked.insert(domain).inserted } }
+
+    /* Someone signed in: every location may ask again. */
+    public func reset() { lock.withLock { asked = [] } }
 }

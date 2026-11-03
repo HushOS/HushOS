@@ -235,8 +235,10 @@ public actor FamilySync: FamilyJudge {
         self.vault = vault
         // Whoever finds a family let go of (this process's sync, its reconcile, a leave), its Files location goes with it.
         let owner = AccountOwner(vault.session)
-        if let domains = filesDomains ?? Self.defaultFilesDomains {
-            let lettingGo: @Sendable (String, UInt64) -> Void = { groupId, revision in domains.letGo(groupId, owner: owner, revision: revision) }
+        let domains = filesDomains ?? Self.defaultFilesDomains
+        self.filesDomains = domains
+        if let domains {
+            let lettingGo: @Sendable (String, UInt64) -> Void = { groupId, _ in domains.letGo(groupId, owner: owner) }
             releases = FamilyReleases(lettingGo: lettingGo)
         } else {
             releases = FamilyReleases()
@@ -264,6 +266,8 @@ public actor FamilySync: FamilyJudge {
      * pass. The screens take them from here, so none is shown only to whoever asked.
      */
     public nonisolated let releases: FamilyReleases
+    /* The families' Files locations this sync's let-gos take, and whose revocation generations its checks carry. */
+    nonisolated let filesDomains: FamilyFilesDomains?
     /* Whether this session's families need the background check (FamilyWalkWork), as a join or route 2 finds. */
     public nonisolated let familyWork = FamilyWorkHook()
 
@@ -492,6 +496,14 @@ public actor FamilySync: FamilyJudge {
     public struct Revised: Sendable {
         public let state: FamilyState
         public let revision: UInt64
+        /* The family's Files revocation generation as the check began (FamilyFilesDomains); nil when none was taken. */
+        public var filesGeneration: UInt64? = nil
+
+        public init(state: FamilyState, revision: UInt64, filesGeneration: UInt64? = nil) {
+            self.state = state
+            self.revision = revision
+            self.filesGeneration = filesGeneration
+        }
     }
 
     /*
@@ -522,7 +534,11 @@ public actor FamilySync: FamilyJudge {
         await vault.useFamilyJudge(self)
         running[summary.id, default: 0] += 1
         defer { running[summary.id, default: 1] -= 1 }
-        let revised = await exclusive(summary.id) { Revised(state: await self.run(summary), revision: Self.revise()) }
+        let revised = await exclusive(summary.id) {
+            // The Files location's revocation generation before the check begins: an acceptance a let-go overtook adds nothing.
+            let observed = self.filesDomains?.generation(summary.id)
+            return Revised(state: await self.run(summary), revision: Self.revise(), filesGeneration: observed)
+        }
         if FamilyReleases.letsGo(revised.state) { releases.post(summary.id, revised) }
         return revised
     }

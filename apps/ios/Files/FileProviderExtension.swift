@@ -76,6 +76,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         self.domain = domain
         family = FamilyFileIds.group(ofDomain: domain.identifier.rawValue)
         Unbacked.apply()
+        // Copies of family folders no record names any more (let go of while this process was away) go before anything is answered.
+        FamilyFilesDomains.shared.sweepUnrecorded()
         // Decrypted downloads (and partials) Files never took, older than a day.
         TemporaryCopies.sweep()
         super.init()
@@ -89,21 +91,23 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
      */
     func invalidate() {
         if SharedKeychain.session == nil { TemporaryCopies.claim(nil) }
+        // A family location removed (or any let go of meanwhile): its copies in this process go with it.
+        FamilyFilesDomains.shared.sweepUnrecorded()
     }
 
-    static func translate(_ error: Error) -> Error {
+    static func translate(_ error: Error, domain: NSFileProviderDomainIdentifier = FilesDomain.identifier) -> Error {
         // An error's text can carry decrypted names and paths: only its type is public.
         log.error("\(String(describing: type(of: error)), privacy: .public) \(String(describing: error), privacy: .private)")
         switch error {
         case let refused as NSFileProviderError:
             // The gate's refusal (signed out, or another account's location) reaches Files as it is.
-            if refused.code == .notAuthenticated { SignInPrompt.ask() }
+            if refused.code == .notAuthenticated { SignInPrompt.ask(domain) }
             return refused
         case DriveAPIError.notAuthenticated where !endsSession(error, current: SharedKeychain.session):
             // A late 401 of a session no longer stored (signed in again meanwhile): nothing to sign in to; Files tries again.
             return NSFileProviderError(.cannotSynchronize)
         case DriveAPIError.notAuthenticated:
-            SignInPrompt.ask()
+            SignInPrompt.ask(domain)
             return NSFileProviderError(.notAuthenticated)
         case DriveAPIError.transport:
             return NSFileProviderError(.serverUnreachable)
@@ -158,7 +162,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                 do {
                     completionHandler(try await familyItem(identifier, source: try requireFamily(), name: familyName), nil)
                 } catch {
-                    completionHandler(nil, FamilyErrors.translate(error))
+                    completionHandler(nil, FamilyErrors.translate(error, domain: self.domain.identifier))
                 }
                 progress.completedUnitCount = 1
             }
@@ -195,7 +199,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                     let (file, item) = try await familyContents(itemIdentifier, source: try requireFamily(), progress: progress)
                     completionHandler(file, item, nil)
                 } catch {
-                    completionHandler(nil, nil, FamilyErrors.translate(error))
+                    completionHandler(nil, nil, FamilyErrors.translate(error, domain: self.domain.identifier))
                 }
             }
             progress.cancellationHandler = { task.cancel() }
@@ -286,7 +290,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                     let current = try await familyItem(item.itemIdentifier, source: try requireFamily(), name: familyName)
                     completionHandler(current, [], false, nil)
                 } catch {
-                    completionHandler(nil, [], false, FamilyErrors.translate(error))
+                    completionHandler(nil, [], false, FamilyErrors.translate(error, domain: self.domain.identifier))
                 }
                 progress.completedUnitCount = 100
             }
@@ -378,13 +382,13 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                             guard let ref = FamilyFileIds.ref(identifier.rawValue) else { throw FamilyFilesError.notInFamily }
                             perThumbnailCompletionHandler(identifier, try await source.thumbnail(ref), nil)
                         } catch {
-                            perThumbnailCompletionHandler(identifier, nil, FamilyErrors.translate(error))
+                            perThumbnailCompletionHandler(identifier, nil, FamilyErrors.translate(error, domain: self.domain.identifier))
                         }
                         progress.completedUnitCount += 1
                     }
                     completionHandler(nil)
                 } catch {
-                    completionHandler(FamilyErrors.translate(error))
+                    completionHandler(FamilyErrors.translate(error, domain: self.domain.identifier))
                 }
             }
             return progress
@@ -412,8 +416,8 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
     func enumerator(for containerItemIdentifier: NSFileProviderItemIdentifier,
                     request: NSFileProviderRequest) throws -> NSFileProviderEnumerator {
         if family != nil {
-            do { _ = try requireFamily() } catch { throw FamilyErrors.translate(error) }
-            return FamilyEnumerator(container: containerItemIdentifier) { [weak self] in
+            do { _ = try requireFamily() } catch { throw FamilyErrors.translate(error, domain: self.domain.identifier) }
+            return FamilyEnumerator(container: containerItemIdentifier, domain: domain.identifier) { [weak self] in
                 guard let self else { throw NSFileProviderError(.noSuchItem) }
                 return try self.requireFamily()
             }
@@ -431,18 +435,12 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
  * into its signed-out state, where Files offers the sheet; once is enough until someone signs in.
  */
 enum SignInPrompt {
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var asked = false
-
-    static func ask() {
-        let first = lock.withLock { () -> Bool in
-            defer { asked = true }
-            return !asked
-        }
-        guard first, let manager = NSFileProviderManager(for: NSFileProviderDomain(identifier: FilesDomain.identifier, displayName: "HushOS"))
-        else { return }
+    /* The location `domain` (the drive's, or a family's) asks, once until someone signs in. */
+    static func ask(_ domain: NSFileProviderDomainIdentifier = FilesDomain.identifier) {
+        guard SignInAsks.shared.first(domain.rawValue),
+              let manager = NSFileProviderManager(for: NSFileProviderDomain(identifier: domain, displayName: "HushOS")) else { return }
         manager.signalEnumerator(for: .workingSet) { _ in }
     }
 
-    static func reset() { lock.withLock { asked = false } }
+    static func reset() { SignInAsks.shared.reset() }
 }

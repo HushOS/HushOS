@@ -81,7 +81,7 @@ final class FamilyContainerItem: NSObject, NSFileProviderItem {
 
 /* A family location's errors as Files takes them. */
 enum FamilyErrors {
-    static func translate(_ error: Error) -> Error {
+    static func translate(_ error: Error, domain: NSFileProviderDomainIdentifier) -> Error {
         log.error("family call refused: \(String(describing: type(of: error)), privacy: .public) \(String(describing: error), privacy: .private)")
         switch error {
         case FamilyFilesError.letGo, FamilyFilesError.notInFamily:
@@ -89,7 +89,7 @@ enum FamilyErrors {
             // unsynced, the location being read only.
             return NSFileProviderError(.noSuchItem)
         case FamilyFilesError.otherAccount:
-            return FileProviderExtension.translate(NSFileProviderError(.notAuthenticated))
+            return FileProviderExtension.translate(NSFileProviderError(.notAuthenticated), domain: domain)
         case FamilyFilesError.unavailable:
             return NSFileProviderError(.serverUnreachable)
         case let failure as GroupsAPIError where failure.status == 0:
@@ -98,7 +98,7 @@ enum FamilyErrors {
             // No answer from the server: Files asks again, and keeps what it holds.
             return NSFileProviderError(.serverUnreachable)
         default:
-            return FileProviderExtension.translate(error)
+            return FileProviderExtension.translate(error, domain: domain)
         }
     }
 }
@@ -106,10 +106,12 @@ enum FamilyErrors {
 /* A family location's listings and its change feed: each pass through the location's gate again. */
 final class FamilyEnumerator: NSObject, NSFileProviderEnumerator {
     private let container: NSFileProviderItemIdentifier
+    private let domain: NSFileProviderDomainIdentifier
     private let source: () throws -> FamilyFilesSource
 
-    init(container: NSFileProviderItemIdentifier, source: @escaping () throws -> FamilyFilesSource) {
+    init(container: NSFileProviderItemIdentifier, domain: NSFileProviderDomainIdentifier, source: @escaping () throws -> FamilyFilesSource) {
         self.container = container
+        self.domain = domain
         self.source = source
         super.init()
     }
@@ -137,7 +139,7 @@ final class FamilyEnumerator: NSObject, NSFileProviderEnumerator {
                 observer.finishEnumerating(upTo: nil)
             } catch {
                 log.error("family container failed: \(String(describing: type(of: error)), privacy: .public) \(String(describing: error), privacy: .private)")
-                observer.finishEnumeratingWithError(FamilyErrors.translate(error))
+                observer.finishEnumeratingWithError(FamilyErrors.translate(error, domain: self.domain))
             }
         }
     }
@@ -157,7 +159,7 @@ final class FamilyEnumerator: NSObject, NSFileProviderEnumerator {
                 observer.finishEnumeratingChanges(upTo: NSFileProviderSyncAnchor(try JSONEncoder().encode(changes.next)), moreComing: changes.hasMore)
             } catch {
                 log.error("family changes failed: \(String(describing: type(of: error)), privacy: .public) \(String(describing: error), privacy: .private)")
-                observer.finishEnumeratingWithError(FamilyErrors.translate(error))
+                observer.finishEnumeratingWithError(FamilyErrors.translate(error, domain: self.domain))
             }
         }
     }
@@ -189,11 +191,7 @@ extension FileProviderExtension {
      */
     func familyContents(_ identifier: NSFileProviderItemIdentifier, source: FamilyFilesSource, progress: Progress) async throws -> (URL, NSFileProviderItem) {
         guard let ref = FamilyFileIds.ref(identifier.rawValue) else { throw FamilyFilesError.notInFamily }
-        let held = try await source.item(ref)
-        let file = FileManager.default.temporaryDirectory
-            .appendingPathComponent("opened/family/\(ref.workspaceId)/files/\(ref.nodeId)/\(held.node.currentVersion?.id ?? "none")", isDirectory: true)
-            .appendingPathComponent("content")
-        let opened = try await source.download(ref, to: file) { fraction in progress.completedUnitCount = Int64(fraction * 100) }
+        let (file, opened) = try await source.download(ref) { fraction in progress.completedUnitCount = Int64(fraction * 100) }
         return (file, FamilyItem(opened))
     }
 }
