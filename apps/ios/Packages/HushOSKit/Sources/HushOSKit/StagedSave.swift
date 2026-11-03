@@ -10,8 +10,11 @@ import Foundation
 public enum StagedSave {
     public static let failed = "Couldn’t save it. Try again."
 
-    /* Runs `seal` on the copy moved to `directory/content`; the plaintext goes once `seal` returns, the copy comes back if it throws. */
-    public static func seal<T>(_ copy: URL, in directory: URL, _ seal: (URL) async throws -> T) async throws -> T {
+    /*
+     * Runs `seal` on the copy moved to `directory/content`; the plaintext goes once `seal` returns (unless `keep`: a family
+     * folder's upload keeps it there for the queue, to seal again after a key change), the copy comes back if it throws.
+     */
+    public static func seal<T>(_ copy: URL, in directory: URL, keep: Bool = false, _ seal: (URL) async throws -> T) async throws -> T {
         let content = directory.appendingPathComponent("content")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         // This process's, before the only copy moves in: the queue's sweep leaves it while the process may run,
@@ -20,7 +23,7 @@ public enum StagedSave {
         try FileManager.default.moveItem(at: copy, to: content)
         do {
             let result = try await seal(content)
-            try? FileManager.default.removeItem(at: content)
+            if !keep { try? FileManager.default.removeItem(at: content) }
             return result
         } catch {
             try? FileManager.default.moveItem(at: content, to: copy)

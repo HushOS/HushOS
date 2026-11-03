@@ -596,6 +596,8 @@ final class BackgroundTransfers {
             }
             var record = Record(id: note.id, kind: .upload, name: note.name, folderId: note.folderId, mime: note.mime)
             record.owner = note.owner
+            // A family folder's: the queue's family upload, finished (or sealed again from its kept plaintext) through FamilyUploads.
+            record.family = note.family
             record.state = .sending
             record.sealed = note.sealed
             record.size = note.size

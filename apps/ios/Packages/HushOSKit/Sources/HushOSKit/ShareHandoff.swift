@@ -30,10 +30,17 @@ public struct ShareHandoff: Codable, Sendable, Equatable {
     public let sealed: Vault.SealedUpload
     /* The account whose drive it goes to; the app adopts it only while that account is signed in (TransferOwnership). */
     public let owner: AccountOwner?
+    /*
+     * A family folder's: its family and the folder's workspace, sealed with the area ledger's keys (FamilyUploads) and its
+     * plaintext kept in the folder. The app adopts it as the queue's family upload, which finishes (or seals again) through
+     * FamilyUploads. Nil for your own drive's.
+     */
+    public let family: FamilyUpload.Family?
     /* The extension is done with it; until then only the extension may finish it. */
     public var released = false
 
-    public init(id: UUID, name: String, folderId: String, mime: String?, size: Int64?, sealed: Vault.SealedUpload, owner: AccountOwner) {
+    public init(id: UUID, name: String, folderId: String, mime: String?, size: Int64?, sealed: Vault.SealedUpload, owner: AccountOwner,
+                family: FamilyUpload.Family? = nil) {
         self.id = id
         self.name = name
         self.folderId = folderId
@@ -41,6 +48,7 @@ public struct ShareHandoff: Codable, Sendable, Equatable {
         self.size = size
         self.sealed = sealed
         self.owner = owner
+        self.family = family
     }
 
     /* The queue's folder in the app group, the same one BackgroundTransfers keeps. */
