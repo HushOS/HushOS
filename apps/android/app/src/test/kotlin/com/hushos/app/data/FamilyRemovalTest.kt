@@ -1,6 +1,7 @@
 package com.hushos.app.data
 
 import com.hushos.core.MemberStatus
+import com.hushos.core.MembersRole
 import com.hushos.core.base64urlDecode
 import com.hushos.core.rosterParse
 import org.json.JSONArray
@@ -336,7 +337,8 @@ class FamilyRemovalTest {
         val first = phone()
         family.documents["tags"] = 1 to com.hushos.core.base64urlEncode(ByteArray(80) { 7 })
         family.documentsFailFrom = 2
-        assertTrue(runCatching { remove(first) }.isFailure)
+        // No answer is pending, the removal kept for the next open as well as its entry.
+        assertTrue(remove(first) is RemovalEnd.Pending)
         assertEquals(1, kept(first).size)
         assertTrue(bodies("remove").isEmpty())
         family.documentsFailFrom = Int.MAX_VALUE
@@ -435,5 +437,78 @@ class FamilyRemovalTest {
         val next = phone(first.folder)
         assertEquals(listOf(clearedWords("tags")), next.sync.takeCleared(family.groupId))
         assertTrue(next.sync.takeCleared(family.groupId).isEmpty())
+    }
+
+    /*
+     * Codex #281 round 4, 1: the very first removal of Grace meets a sync that gets no answer (503), before any preview or
+     * call. It is pending, and its intent is already kept: after a relaunch the resume removes her. Fails if a removal says
+     * "kept for later" with nothing kept (the intent written only after the preview).
+     */
+    @Test
+    fun aFirstRemovalIsKeptBeforeAnythingIsAskedOfTheServer() {
+        val first = phone()
+        family.rostersFail = true
+        assertTrue(remove(first) is RemovalEnd.Pending)
+        assertTrue("nothing asked", family.holdsAsked.isEmpty())
+        assertEquals(listOf(graceId), first.sync.outbox.removals(family.member.id, family.groupId).map { it.userId })
+        family.rostersFail = false
+        val next = phone(first.folder)
+        val ended = ArrayList<RemovalEnd>()
+        next.sync.resumeOutbox(summary, continued = { _, end -> ended.add(end) })
+        assertEquals(listOf<RemovalEnd>(RemovalEnd.Removed), ended)
+        assertFalse(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
+        assertTrue(next.sync.outbox.removals(family.member.id, family.groupId).isEmpty())
+    }
+
+    /*
+     * Codex #281 round 4, 2: Grace manages the family, and taking that from her first keeps meeting another manager's change
+     * (`stale`, three times): nothing definite was said, so the removal is pending and its intent kept. After a relaunch the
+     * resume demotes and removes her. Fails if a demotion that may pass next time ends the removal as failed and forgets it.
+     */
+    @Test
+    fun aDemotionThatKeepsChangingKeepsTheRemoval() {
+        val first = phone()
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        assertEquals(RoleEnd.Landed, first.sync.changeRole(summary, graceId, "Grace", MembersRole.GRANT))
+        repeat(3) {
+            family.memberAnswers.add { _ ->
+                family.samChangesTheList()
+                409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
+            }
+        }
+        val end = first.sync.removeMember(summary, graceId, "Grace", demoteFirst = true)
+        assertTrue("$end", end is RemovalEnd.Pending)
+        assertEquals(listOf(graceId), first.sync.outbox.removals(family.member.id, family.groupId).map { it.userId })
+        assertTrue("members" in view(first).members.single { it.userId.equals(graceId, ignoreCase = true) }.roles)
+        val next = phone(first.folder)
+        val ended = ArrayList<RemovalEnd>()
+        next.sync.resumeOutbox(summary, continued = { _, it -> ended.add(it) })
+        assertEquals(listOf<RemovalEnd>(RemovalEnd.Removed), ended)
+        assertFalse(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
+    }
+
+    /*
+     * Codex #281 round 4, 4: the folder's tags don't open when the removal is staged, even read again, and are noted. Before
+     * the call lands the server says `document-stale` for them, and by now they are whole: the rebuild reads them fine, so
+     * the note goes with it. After no answer and a relaunch the call lands and nothing is said. Fails if an old note outlives
+     * a rebuild that read the document, warning that tags were emptied when they weren't.
+     */
+    @Test
+    fun aNoteGoesWhenARebuildReadsTheDocumentAfterARelaunch() {
+        val first = phone()
+        family.documents["tags"] = 1 to com.hushos.core.base64urlEncode(ByteArray(80) { 7 })
+        family.rotatingAnswers.add { _, _ ->
+            family.documents["tags"] = 2 to family.sealedTags(2, """{"version":2,"tags":[{"id":"t1","name":"Recipes"}],"items":{}}""")
+            refuse("document-stale", JSONObject().put("workspaceId", family.workspaceId).put("kind", "tags")
+                .put("stale", JSONArray().put(JSONObject().put("workspaceId", family.workspaceId).put("kind", "tags"))))
+        }
+        repeat(3) { family.rotatingAnswers.add { _, _ -> 503 to JSONObject().put("message", "Unavailable.") } }
+        assertTrue(remove(first) is RemovalEnd.Pending)
+        val keptCall = kept(first).single()
+        assertTrue("noted after the rebuild read them", first.sync.outbox.cleared(family.member.id, family.groupId, keptCall.outboxId).isEmpty())
+        val next = phone(first.folder)
+        assertEquals(listOf(CallEnd.Landed), next.sync.resumeOutbox(summary).values.toList())
+        assertTrue(next.sync.takeCleared(family.groupId).isEmpty())
+        assertFalse(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
     }
 }

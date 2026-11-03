@@ -98,36 +98,45 @@ internal fun FamilySync.rebuildKept(summary: GroupSummary, kept: FamilyOutbox.Ke
         else -> return Rebuilt.Unsent(pending)
     }
     holdAgain(summary, route)?.let { return it }
-    return Rebuilt.Kept(rebuildWith(summary.id, kept, areas.map { (ws, kinds) -> gather(groupId, ws, kinds) }))
+    return Rebuilt.Kept(rebuildWith(summary.id, kept, areas))
 }
 
 /*
- * The kept call's rotations of `rotations`' folders made again by the core, kept over the old entry under the same id.
- * Documents that didn't open are read again once and the rotations of their folders made again (the server may have served
- * junk to this device alone; the web's refetchReplaced); whatever still doesn't open is noted beside the entry, and said
- * once the call lands, whichever open sends it.
+ * The kept call's rotations of `areas`' folders (with the kinds named, or all) made again by the core, kept over the old
+ * entry under the same id. Documents that didn't open are read again once and the rotations of their folders made again
+ * (the server may have served junk to this device alone; the web's refetchReplaced). Every rebuild is marked first, with the
+ * folders it rebuilt, even when nothing was carried on empty: finishing it rewrites those folders' notes to what the call
+ * now carries on empty, so a note from an earlier rebuild never outlives a rebuild that read the document fine.
  */
-private fun FamilySync.rebuildWith(groupId: String, kept: FamilyOutbox.Kept, rotations: List<AreaRotation>): FamilyOutbox.Kept {
+private fun FamilySync.rebuildWith(groupId: String, kept: FamilyOutbox.Kept, areas: Map<String, List<String>>): FamilyOutbox.Kept {
+    val rotations = areas.map { (ws, kinds) -> gather(groupId, ws, kinds) }
     val first = ledger.outboxRebuild(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, kept.outboxId, kept.entry, rotations)
-    // Marked for its read-again before the rebuilt entry is kept: an entry that carries documents on empty is never sendable unchecked.
-    outbox.markRecheck(userId, groupId, first.outboxId, first.replaced)
+    // Marked before the rebuilt entry is kept: never sendable before its notes are settled.
+    val recheck = FamilyOutbox.Recheck(areas.keys.map { it.lowercase() }.toSet(), first.replaced)
+    outbox.markRecheck(userId, groupId, first.outboxId, recheck)
     outbox.put(userId, groupId, first.outboxId, first.entry)
-    return readAgain(groupId, FamilyOutbox.Kept(first.outboxId, first.entry), first.replaced)
+    return finishRecheck(groupId, FamilyOutbox.Kept(first.outboxId, first.entry), recheck)
 }
 
 /*
- * `replaced` read again once (their folders gathered with those kinds) and the call rebuilt. In this order, each durable before
- * the next: what still didn't open noted beside the entry, the rebuilt entry kept, and only then its recheck marker gone, so a
- * failure or a killed process anywhere leaves it marked, and the next send reads again first.
+ * An entry's recheck settled: documents carried on empty read again once (their folders gathered with those kinds) and the
+ * call rebuilt; then, each durable before the next, the notes of every folder the rebuild touched rewritten to what the call
+ * now carries on empty (only that: one read fine now loses its note), the rebuilt entry kept, and only then the marker gone.
+ * A failure or a killed process anywhere leaves it marked, and the next send settles it first.
  */
-internal fun FamilySync.readAgain(groupId: String, kept: FamilyOutbox.Kept, replaced: List<ReplacedDocument>): FamilyOutbox.Kept {
-    if (replaced.isEmpty()) return kept
-    val again = replaced.groupBy({ it.workspaceId.lowercase() }, { it.kind }).map { (ws, kinds) -> gather(groupId, ws, kinds) }
-    val call = ledger.outboxRebuild(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, kept.outboxId, kept.entry, again)
-    outbox.noteCleared(userId, groupId, call.outboxId, call.replaced.map { it.kind })
-    outbox.put(userId, groupId, call.outboxId, call.entry)
-    outbox.clearRecheck(userId, groupId, call.outboxId)
-    return FamilyOutbox.Kept(call.outboxId, call.entry)
+internal fun FamilySync.finishRecheck(groupId: String, kept: FamilyOutbox.Kept, recheck: FamilyOutbox.Recheck): FamilyOutbox.Kept {
+    var current = kept
+    var still = recheck.replaced
+    if (still.isNotEmpty()) {
+        val again = still.groupBy({ it.workspaceId.lowercase() }, { it.kind }).map { (ws, kinds) -> gather(groupId, ws, kinds) }
+        val call = ledger.outboxRebuild(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, kept.outboxId, kept.entry, again)
+        still = call.replaced
+        current = FamilyOutbox.Kept(call.outboxId, call.entry)
+    }
+    outbox.setCleared(userId, groupId, current.outboxId, recheck.areas + recheck.replaced.map { it.workspaceId.lowercase() }, still)
+    if (current !== kept) outbox.put(userId, groupId, current.outboxId, current.entry)
+    outbox.clearRecheck(userId, groupId, current.outboxId)
+    return current
 }
 
 /* A removal's hold placed again before its folders are read (route 27 extends a live one); a refusal keeps the call as it is. */
@@ -178,7 +187,8 @@ sealed interface Rotated {
  */
 private fun FamilySync.rotatingCall(summary: GroupSummary, names: (String) -> String?, build: (FamilyView, ULong, Map<String, String>) -> RosterCall): Rotated =
     when (val staged = stageCall(summary, build)) {
-        is Staged.Call -> Rotated.Sent(sendKept(summary, readAgain(summary.id, staged.kept, staged.replaced), names = names))
+        // sendKept settles the entry's recheck (its documents read again) before it is first sent.
+        is Staged.Call -> Rotated.Sent(sendKept(summary, staged.kept, names = names))
         is Staged.Refused -> Rotated.Refused(staged.words, staged.retry)
         Staged.Wiped -> Rotated.Wiped
         Staged.CheckFirst -> Rotated.Refused(CHECK_MANAGER_FIRST)
@@ -226,12 +236,21 @@ fun FamilySync.removeMember(summary: GroupSummary, userId: String, first: String
 }
 
 /*
- * One removal's turn, its intent kept on this device while it runs (removeInTurn keeps it once the plans are confirmed) and
- * dropped at a definite end; a pending end (a departure still to mark left, a demotion or the removal unanswered, a change
- * kept before it) keeps it, and the next open goes on with it (continueRemovals).
+ * One removal's turn. Its intent is kept on this device first, before any read or call (a write that may not be on disk
+ * throws, and nothing is asked of the server), so every pending end is a promise the next open keeps (continueRemovals).
+ * A definite end drops it: removed, changed, refused, plans to confirm, wiped. A pending end keeps it: a departure still to
+ * mark left, a demotion or the removal unanswered or retryable, a change kept before it, a sync that got no answer. A failure
+ * of the network's or the server's for now is pending too (said as kept for later). Any other failure is said as it is and
+ * keeps it as well: the removal may already be kept in the outbox, and the next open tries again from where it is.
  */
 private fun FamilySync.removeKept(summary: GroupSummary, removal: FamilyOutbox.Removal, names: (String) -> String?, onStep: (RemovalStep) -> Unit): RemovalEnd {
-    val end = removeInTurn(summary, removal.userId, removal.first, removal.demote, removal.endsLapsed, names, onStep)
+    outbox.keepRemoval(userId, summary.id, removal)
+    val end = try {
+        removeInTurn(summary, removal.userId, removal.first, removal.demote, removal.endsLapsed, names, onStep)
+    } catch (error: Exception) {
+        if (error is NotAuthenticated || error is kotlinx.coroutines.CancellationException || !FamilySync.transient(error)) throw error
+        return RemovalEnd.Pending(keptForLater(summary.name))
+    }
     if (end !is RemovalEnd.Pending) outbox.dropRemoval(userId, summary.id, removal.userId)
     return end
 }
@@ -306,8 +325,6 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
         throw error
     }
     if (plans.any { it.id !in endsLapsed }) return RemovalEnd.EndsLapsed(plans)
-    // Confirmed: from here the removal is a promise kept on this device until it ends (removeKept, continueRemovals).
-    outbox.keepRemoval(this.userId, groupId, FamilyOutbox.Removal(userId, first, endsLapsed, demoteFirst))
 
     if (demoteFirst && manages(view, userId)) {
         onStep(RemovalStep.DEMOTE)
@@ -316,7 +333,8 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
         }) {
             RoleEnd.Landed -> {}
             is RoleEnd.Pending -> return RemovalEnd.Pending(keptForLater(family))
-            is RoleEnd.Refused -> return RemovalEnd.Failed(demoted.words)
+            // A refusal that said nothing definite (the family couldn't be checked, kept changing) waits for the next open.
+            is RoleEnd.Refused -> return if (demoted.retry) RemovalEnd.Pending(keptForLater(family)) else RemovalEnd.Failed(demoted.words)
             is RoleEnd.Waiting -> return RemovalEnd.Pending(keptForLater(family))
             RoleEnd.CheckFirst -> return RemovalEnd.Failed("Nothing was changed.")
             RoleEnd.Wiped -> return RemovalEnd.Wiped

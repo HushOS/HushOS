@@ -206,6 +206,40 @@ class FamilyManageTest {
     }
 
     /*
+     * Codex #281 round 4, 2: an admission held for Grace's old keys, then another manager turns her down, so her waiting row
+     * (and its Drop it and let them in) is gone. After a relaunch the held entry no longer holds every change back: the next
+     * call (letting Ada in) retires it, said as an admission that wasn't sent, and lands. Fails if a held admission nobody
+     * can drop blocks the family's every change for good.
+     */
+    @Test
+    fun aHeldAdmissionWhosePersonWasTurnedDownNoLongerBlocks() {
+        val phone = phone()
+        val grace = grace
+        answer(3, 503)
+        assertTrue(phone.sync.letIn(summary, grace) is LetIn.Pending)
+        server.startOverGrace()
+        family.pendingRows.clear()
+        family.waiting(server.grace, "grace@example.org", "Grace Hopper")
+        val changed = phone.sync.letIn(summary, grace)
+        assertTrue("$changed", changed is LetIn.Changed)
+        phone.vault.continueWith((changed as LetIn.Changed).change)
+        assertEquals(listOf(CallEnd.OtherKeys), phone.sync.resumeOutbox(summary).values.toList())
+        // Turned down by another manager: no longer waiting, never in the family.
+        family.pendingRows.clear()
+        val next = phone(phone.folder)
+        val ada = server.another("ada@example.org", "Ada Lovelace")
+        family.waiting(ada, "ada@example.org", "Ada Lovelace")
+        val sends = family.callBodies.size
+        assertEquals(LetIn.Landed, next.sync.letIn(summary, family.pendingRows.map(PendingPerson::from).single()))
+        assertEquals(sends + 1, family.callBodies.size)
+        assertTrue(kept(next).isEmpty())
+        val told = next.sync.takeKeptEnds()
+        assertTrue("$told", told.any { (group, route, end) ->
+            group == family.groupId && (route as? com.hushos.core.ChainRoute.Admit)?.userId.equals(server.grace.id, ignoreCase = true) && end == CallEnd.Stale
+        })
+    }
+
+    /*
      * Grace's admission kept unanswered; another device then follows her account change (Continue), replacing the pin this
      * phone's ledger last read. The settings can't be read now: nothing is sent, the entry stays kept. Once they read, it
      * is held for the old keys. Fails if a send goes out judged against the settings the ledger held before.
