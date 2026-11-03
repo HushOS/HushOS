@@ -482,7 +482,8 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     override fun moveDocument(sourceDocumentId: String, sourceParentDocumentId: String, targetParentDocumentId: String): String? = guarded {
         val vault = requireVault()
         vault.move(nodeId(sourceDocumentId, vault), nodeId(targetParentDocumentId, vault))
-        null
+        // The moved document's id (unchanged: ids are node ids): DocumentsContract.moveDocument reads null as a failure.
+        sourceDocumentId
     }
 
     override fun deleteDocument(documentId: String) = guarded {

@@ -83,4 +83,19 @@ class FilesTreeGrantsTest {
         // Still inside the drive's own top.
         assertTrue(provider.isChildDocument("root", notes))
     }
+
+    /*
+     * A file moved by Files into another folder of the drive: the provider answers with the moved document's id, as
+     * DocumentsContract.moveDocument needs to report the move done. Fails if the move answers null (Files then says the
+     * move failed, though the file moved).
+     */
+    @Test
+    fun aMoveAnswersWithTheMovedDocument() {
+        val provider = provider()
+        val trips = provider.createDocument("root", DocumentsContract.Document.MIME_TYPE_DIR, "Trips")
+        val notes = provider.createDocument("root", "text/plain", "Notes.txt")
+        provider.queryChildDocuments("root", null, null as String?).close()
+        assertEquals(notes, provider.moveDocument(notes, "root", trips))
+        assertTrue(provider.isChildDocument(trips, notes))
+    }
 }
