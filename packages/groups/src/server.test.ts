@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { Client } from 'pg';
 import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { rosterDigest } from '@hushos/crypto/groups';
@@ -3602,7 +3602,7 @@ describe('roster calls the phones and the web build (Core 5a)', () => {
             area: {
                 workspaceId: a1!.workspaceId,
                 idSeed: a1!.idSeed,
-                root: await rootWire(a1!.workspaceId, p1),
+                root: gatheredRoot(doc, a1!.workspaceId) ?? (await rootWire(a1!.workspaceId, p1)),
                 selfGrant: selfGrant(a1!.workspaceId),
                 grant: {
                     envelope: (await grantWire(groupId, a1!.workspaceId, 1, p1, p1, await at(1)))
@@ -3648,7 +3648,7 @@ describe('roster calls the phones and the web build (Core 5a)', () => {
             area: {
                 workspaceId: a3!.workspaceId,
                 idSeed: a3!.idSeed,
-                root: await rootWire(a3!.workspaceId, p1),
+                root: gatheredRoot(doc, a3!.workspaceId) ?? (await rootWire(a3!.workspaceId, p1)),
                 selfGrant: selfGrant(a3!.workspaceId),
             },
             grants: await Promise.all(
@@ -3673,6 +3673,179 @@ describe('roster calls the phones and the web build (Core 5a)', () => {
         expect(await head(groupId)).toMatchObject({ revision: 7, rosterVersion: 7 });
         return { groupId, p1 };
     }
+
+    /*
+     * Core 5b: a live folder's root created as the twin's calls gathered it
+     * (`removalRoots`: the id from its seed, the name person 1 signed), so a
+     * rotation built from it re-keys the root the server holds.
+     */
+    function gatheredRoot(doc: Record<string, any>, workspaceId: string) {
+        const root = (doc.removalRoots as Record<string, any>[] | undefined)?.find(
+            (at) => at.workspaceId === workspaceId,
+        );
+        if (!root) return undefined;
+        return {
+            id: root.id as string,
+            idSeed: root.idSeed as string,
+            keyEpoch: 1,
+            parentKeyEpoch: 1,
+            keyEnvelope: root.keyEnvelope as string,
+            metadataEnvelope: root.metadataEnvelope as string,
+            metadataSignature: root.metadataSignature as string,
+        };
+    }
+
+    /*
+     * The live folders as route 25 served them when the twin built its calls:
+     * each root at its key and change sequence with its signed name (A3's walk
+     * after roster 7 finished, nothing pending), epochs drawn up to the call's
+     * target, the documents at the versions it read; and person 1's account key
+     * at `accountKey` (rotated since the identity, which stays at 1).
+     */
+    async function asGathered(doc: Record<string, any>, userId: string, accountKey: number) {
+        const bytes = (value: string) => Buffer.from(value, 'base64url');
+        for (const root of doc.removalRoots as Record<string, any>[]) {
+            await db
+                .update(driveNodes)
+                .set({
+                    keyEnvelope: bytes(root.keyEnvelope),
+                    keyEpoch: root.keyEpoch,
+                    parentKeyEpoch: root.parentKeyEpoch,
+                    prevKeyEnvelope: null,
+                    prevKeyEpoch: null,
+                    prevParentKeyEpoch: null,
+                    metadataEnvelope: bytes(root.metadataEnvelope),
+                    metadataSignerId: userId,
+                    metadataSignature: bytes(root.metadataSignature),
+                    metadataOriginEnvelope: null,
+                    metadataOriginKeyEnvelope: null,
+                    metadataOriginSignerId: null,
+                    metadataOriginSignature: null,
+                    metadataRekeySignature: null,
+                    changeSeq: root.changeSeq,
+                })
+                .where(eq(driveNodes.id, root.id));
+            await db
+                .update(driveRotations)
+                .set({ finishedAt: new Date() })
+                .where(
+                    and(
+                        eq(driveRotations.workspaceId, root.workspaceId),
+                        isNull(driveRotations.finishedAt),
+                    ),
+                );
+            await db
+                .update(workspaces)
+                .set({
+                    keyEpochSeq: root.targetEpoch,
+                    changeSeq: sql`greatest(${workspaces.changeSeq}, ${root.changeSeq})`,
+                })
+                .where(eq(workspaces.id, root.workspaceId));
+            for (const document of root.documents)
+                await db.insert(workspaceDocuments).values({
+                    workspaceId: root.workspaceId,
+                    kind: document.kind,
+                    version: document.version,
+                    envelope: bytes(document.envelope),
+                });
+        }
+        await db
+            .update(accountKeys)
+            .set({ keyVersion: accountKey })
+            .where(eq(accountKeys.userId, userId));
+    }
+
+    /* A Core 5b call posted on its route: removals on 19, marking left on 7, key replacements on 24, deletions on 30. */
+    function post5b(userId: string, groupId: string, call: Record<string, any>) {
+        const route = call.expected.route as {
+            kind: string;
+            userId?: string;
+            workspaceId?: string;
+        };
+        switch (route.kind) {
+            case 'remove':
+                return groups.removeMember(userId, groupId, route.userId!, call.body);
+            case 'rosters':
+                return groups.postRoster(userId, groupId, call.body);
+            case 'rotation':
+                return groups.rotateArea(userId, groupId, route.workspaceId!, call.body);
+            case 'delete':
+                return groups.deleteArea(userId, groupId, route.workspaceId!, call.body);
+            default:
+                throw new Error(route.kind);
+        }
+    }
+
+    for (const [twin, doc] of Object.entries(documents))
+        for (const call of (doc.removalCalls as Record<string, any>[]).filter(
+            (c) => c.body !== null,
+        ))
+            test(`the ${twin}'s ${call.name} (Core 5b) lands over the folders it was built from, and its resend is a replay`, async () => {
+                const { groupId, p1 } = await stored(doc);
+                await asGathered(doc, p1.userId, 2);
+                // Marking someone left follows their leaving.
+                if (call.expected.route.kind === 'rosters')
+                    for (const entry of call.expected.changed)
+                        await groups.leave(entry.userId, groupId);
+                expect(await post5b(p1.userId, groupId, call)).toMatchObject({
+                    version: 8,
+                    replayed: false,
+                });
+                expect(await post5b(p1.userId, groupId, call)).toMatchObject({
+                    version: 8,
+                    replayed: true,
+                });
+                for (const rotation of call.expected.rotations as Record<string, any>[]) {
+                    const [area] = await db
+                        .select()
+                        .from(workspaces)
+                        .where(eq(workspaces.id, rotation.workspaceId));
+                    expect(area!.workspaceKeyVersion).toBe(rotation.toVersion);
+                    const [own] = await db
+                        .select()
+                        .from(workspaceKeys)
+                        .where(
+                            and(
+                                eq(workspaceKeys.workspaceId, rotation.workspaceId),
+                                eq(workspaceKeys.userId, p1.userId),
+                            ),
+                        );
+                    expect(own).toMatchObject({
+                        keyVersion: 2,
+                        workspaceKeyVersion: rotation.toVersion,
+                    });
+                    const [root] = await db
+                        .select()
+                        .from(driveNodes)
+                        .where(eq(driveNodes.id, rotation.rootId));
+                    expect(root).toMatchObject({
+                        keyEpoch: rotation.targetEpoch,
+                        parentKeyEpoch: rotation.toVersion,
+                    });
+                    const stored = await db
+                        .select()
+                        .from(workspaceDocuments)
+                        .where(eq(workspaceDocuments.workspaceId, rotation.workspaceId));
+                    expect(stored.map((at) => [at.kind, at.version])).toEqual(
+                        rotation.documents.map((at: Record<string, any>) => [at.kind, at.version]),
+                    );
+                }
+            });
+
+    for (const [twin, doc] of Object.entries(documents))
+        test(`the ${twin}'s removal is refused while its self-grants name another account key version, and stores nothing`, async () => {
+            const { groupId, p1 } = await stored(doc);
+            // The account key as the identity's version (1): the self-grants (2) are not under it.
+            await asGathered(doc, p1.userId, 1);
+            const call = doc.removalCalls.find(
+                (c: Record<string, any>) => c.name === 'remove-member',
+            );
+            expect(await refusal(post5b(p1.userId, groupId, call))).toMatchObject({
+                code: 'invalid',
+                data: { reason: 'self-grant-key-version' },
+            });
+            expect(await head(groupId)).toMatchObject({ rosterVersion: 7 });
+        });
 
     for (const [twin, doc] of Object.entries(documents))
         for (const call of (doc.calls as Record<string, any>[]).filter((c) => c.body !== null))

@@ -24,7 +24,7 @@ use super::*;
 use crate::area_ledger::SHARED_IN_FAMILY;
 use crate::area_open::self_grant_seal;
 use crate::drive::{
-    document_open, document_seal, node_open, node_wrap, previous_root_key_open, previous_root_key_wrap,
+    document_plaintext, document_seal, node_open, node_wrap, previous_root_key_open, previous_root_key_wrap,
     DocumentContext, NodeKeyContext,
 };
 use crate::rotation_records::{rekey_node_records, RotatedRecord, RotatingNode};
@@ -45,6 +45,16 @@ const NOT_THIS_CHANGE: &str = "This saved change does not match its member list.
 pub(super) const NOT_ROTATED_HERE: &str = "This change does not rotate that folder.";
 /* JavaScript's Number.MAX_SAFE_INTEGER: the worker refuses a target epoch past it. */
 const MAX_SAFE: u64 = (1 << 53) - 1;
+/* An account key version a self-grant can name (open_family_area's words). */
+const BAD_ACCOUNT_KEY_VERSION: &str = "Invalid account key version.";
+
+fn account_key(version: u64) -> CoreResult<u64> {
+    if (1..=MAX_SAFE).contains(&version) {
+        Ok(version)
+    } else {
+        Err(input(BAD_ACCOUNT_KEY_VERSION))
+    }
+}
 
 /// One family folder's rotation, as the app gathers it for the call (the
 /// worker's `AreaRotationInput`): the target epoch drawn from route
@@ -125,16 +135,24 @@ fn record_wire(record: &RotatedRecord) -> (Value, Value) {
     (signature, rekey)
 }
 
-/* A document as the worker's openOrReplace opens it: its JSON text, or an empty `tags` document. */
+/*
+ * A document as the worker's openOrReplace opens it: its text exactly as
+ * written, when JSON.parse would take it, or an empty `tags` document. Judged
+ * by skipping over the value (`IgnoredAny`), never by building one: that
+ * accepts what JSON.parse accepts and a serde_json::Value refuses (a lone
+ * surrogate escape such as a tag named "\ud800", a number past an f64, nesting
+ * past 128 levels; iteratively, so no depth overflows the stack), and the text
+ * is sealed again untouched, so a document the web reads is never lost here.
+ */
 fn open_or_replace(document: &ServedDocument, key: &[u8], workspace_id: &str) -> CoreResult<(String, bool)> {
     let ctx = DocumentContext {
         workspace_id: workspace_id.into(),
         kind: document.kind.clone(),
         version: document.version,
     };
-    let opened = document_open(ctx, key.to_vec(), document.envelope.clone())
+    let opened = document_plaintext(&ctx, key, &document.envelope)
         .ok()
-        .filter(|text| serde_json::from_str::<Value>(text).is_ok());
+        .filter(|text| serde_json::from_str::<serde::de::IgnoredAny>(text).is_ok());
     match opened {
         Some(text) => Ok((text, false)),
         None if document.kind == "tags" => Ok((r#"{"version":2,"tags":[],"items":{}}"#.into(), true)),
@@ -359,10 +377,15 @@ impl AreaLedger {
     /// says), the new keys granted to everyone who stays, and the family key
     /// replaced (a succession) when they managed it. `ends_lapsed`: the lapsed
     /// plans (ids) the person pays for that the remover confirmed end, carried
-    /// on the route and in the body. Refused as [`AreaLedger::roles_body`] up
-    /// to the identity, then: someone not in the family now, rotations other
-    /// than exactly the live folders ([`EVERY_FOLDER`]); a folder not open here
-    /// answers [`RosterCall::OpenFoldersFirst`].
+    /// on the route and in the body. `account_key_version` is the account key's
+    /// version (the personal workspace grant's `keyVersion`, as for
+    /// [`AreaLedger::open_family_area`]), which each rotation's self-grant
+    /// names: never the identity's key version, which a succession moves on its
+    /// own. Refused for a version outside 1 to 2^53 - 1, as
+    /// [`AreaLedger::roles_body`] up to the identity, then: someone not in the
+    /// family now, rotations other than exactly the live folders
+    /// ([`EVERY_FOLDER`]); a folder not open here answers
+    /// [`RosterCall::OpenFoldersFirst`].
     ///
     /// ```
     /// use hushos_core::*;
@@ -372,7 +395,7 @@ impl AreaLedger {
     /// let identity = identity_create(me.user_id.clone(), vec![7u8; 32], 1)?;
     /// let refused = ledger
     ///     .removal_body(me, identity, "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a".into(), 5,
-    ///         "00000002-abcd-4abc-8abc-abcdefabcdef".into(), vec![], vec![], HashMap::new())
+    ///         "00000002-abcd-4abc-8abc-abcdefabcdef".into(), vec![], vec![], 1, HashMap::new())
     ///     .unwrap_err();
     /// assert_eq!(refused.to_string(), "Unlock your account first.");
     /// # Ok::<(), hushos_core::CoreError>(())
@@ -387,10 +410,12 @@ impl AreaLedger {
         user_id: String,
         rotations: Vec<AreaRotation>,
         ends_lapsed: Vec<String>,
+        account_key_version: u64,
         kems: HashMap<String, String>,
     ) -> CoreResult<RosterCall> {
         let user_id = user_id.to_lowercase();
         uuid(&user_id, "user id")?;
+        let account_key_version = account_key(account_key_version)?;
         let caller = match self.caller(me, identity, &group_id, true)? {
             Ok(caller) => caller,
             Err(first) => return Ok(first),
@@ -399,7 +424,7 @@ impl AreaLedger {
             caller,
             &group_id,
             expected_revision,
-            Change::Remove { user_id, ends_lapsed, rotations },
+            Change::Remove { user_id, ends_lapsed, rotations, account_key_version },
             kems,
         )
     }
@@ -417,7 +442,7 @@ impl AreaLedger {
     /// let me = OwnIdentities { user_id: "00000001-abcd-4abc-8abc-abcdefabcdef".into(), identities: vec![] };
     /// let identity = identity_create(me.user_id.clone(), vec![7u8; 32], 1)?;
     /// let refused = ledger
-    ///     .mark_left_body(me, identity, "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a".into(), 5, vec![], vec![], HashMap::new())
+    ///     .mark_left_body(me, identity, "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a".into(), 5, vec![], vec![], 1, HashMap::new())
     ///     .unwrap_err();
     /// assert_eq!(refused.to_string(), "Unlock your account first.");
     /// # Ok::<(), hushos_core::CoreError>(())
@@ -431,12 +456,14 @@ impl AreaLedger {
         expected_revision: u64,
         user_ids: Vec<String>,
         rotations: Vec<AreaRotation>,
+        account_key_version: u64,
         kems: HashMap<String, String>,
     ) -> CoreResult<RosterCall> {
         let user_ids: Vec<String> = user_ids.into_iter().map(|id| id.to_lowercase()).collect();
         for id in &user_ids {
             uuid(id, "user id")?;
         }
+        let account_key_version = account_key(account_key_version)?;
         let caller = match self.caller(me, identity, &group_id, true)? {
             Ok(caller) => caller,
             Err(first) => return Ok(first),
@@ -444,7 +471,13 @@ impl AreaLedger {
         if user_ids.is_empty() {
             return Err(input(NOBODY_LEFT));
         }
-        self.stage(caller, &group_id, expected_revision, Change::MarkLeft { user_ids, rotations }, kems)
+        self.stage(
+            caller,
+            &group_id,
+            expected_revision,
+            Change::MarkLeft { user_ids, rotations, account_key_version },
+            kems,
+        )
     }
 
     /// One family folder's key replacement (route 24, Replace keys), the
@@ -469,11 +502,12 @@ impl AreaLedger {
     ///     workspace_id: "f0f0f0f0-0000-4000-8000-00000000000f".into(), target_epoch: 2, root, change_seq: 1, documents: vec![],
     /// };
     /// let refused = ledger
-    ///     .area_rotation_body(me, identity, "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a".into(), 5, rotation, HashMap::new())
+    ///     .area_rotation_body(me, identity, "0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a".into(), 5, rotation, 1, HashMap::new())
     ///     .unwrap_err();
     /// assert_eq!(refused.to_string(), "Unlock your account first.");
     /// # Ok::<(), hushos_core::CoreError>(())
     /// ```
+    #[allow(clippy::too_many_arguments)]
     pub fn area_rotation_body(
         &self,
         me: OwnIdentities,
@@ -481,14 +515,22 @@ impl AreaLedger {
         group_id: String,
         expected_revision: u64,
         rotation: AreaRotation,
+        account_key_version: u64,
         kems: HashMap<String, String>,
     ) -> CoreResult<RosterCall> {
         uuid(&rotation.workspace_id, "workspace id")?;
+        let account_key_version = account_key(account_key_version)?;
         let caller = match self.caller(me, identity, &group_id, true)? {
             Ok(caller) => caller,
             Err(first) => return Ok(first),
         };
-        self.stage(caller, &group_id, expected_revision, Change::Rotate { rotation }, kems)
+        self.stage(
+            caller,
+            &group_id,
+            expected_revision,
+            Change::Rotate { rotation, account_key_version },
+            kems,
+        )
     }
 
     /// A family folder's deletion (route 30), the worker's `groupStage` kind

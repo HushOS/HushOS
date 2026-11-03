@@ -1401,6 +1401,8 @@ const AREA_ROOT: &str = "0e0e0e0e-0000-4000-8000-0000000000a1";
 const THIRD_ROOT: &str = "0e0e0e0e-0000-4000-8000-0000000000a3";
 const AREA_ROOT_KEY: [u8; 32] = [61; 32];
 const THIRD_ROOT_KEY: [u8; 32] = [64; 32];
+/* Person 1's account key, rotated once: its self-grants name 2 while their identity is still at 1. */
+const ACCOUNT_KEY: u64 = 2;
 const TAGS: &str = r#"{"version":2,"tags":[{"id":"t1","name":"Recipes"}],"items":{}}"#;
 
 /* A folder's root as the rotation work serves it: its key under the area key at `version`, its name under its key. */
@@ -1497,6 +1499,7 @@ impl Family {
             self.p[who - 1].user_id.clone(),
             rotations,
             vec![],
+            ACCOUNT_KEY,
             self.kems(),
         )
     }
@@ -1603,8 +1606,51 @@ fn a_removal_rotates_every_live_folder_and_grants_the_new_keys_only_to_those_who
                 vec![("tags".to_string(), 2, r#"{"version":2,"tags":[],"items":{}}"#.to_string())]
             );
         }
+        // The self-grant names the account key (2), never the identity's key version (1).
+        assert_eq!(wire["selfGrant"]["keyVersion"], json!(ACCOUNT_KEY));
         assert!(wire["selfGrant"]["encryptedKey"].is_string());
     }
+    assert!(body["grants"].as_array().unwrap().iter().all(|grant| grant["granteeKeyVersion"] == json!(1)));
+    // An account key version no self-grant can name is refused before anything is built.
+    for version in [0, 1 << 53] {
+        let refused = ledger.removal_body(
+            f.me(),
+            f.p[0].envelope.clone(),
+            GROUP.into(),
+            7,
+            f.p[1].user_id.clone(),
+            rotations(),
+            vec![],
+            version,
+            f.kems(),
+        );
+        assert_eq!(message(refused), "Invalid account key version.");
+    }
+}
+
+/*
+ * A document the web reads goes on as written, whatever a serde_json::Value would refuse (a tag
+ * named by a lone surrogate, a number past an f64); one JSON.parse refuses (a trailing no-break
+ * space is no JSON whitespace) goes on empty, as the worker carries it.
+ */
+#[test]
+fn a_rotation_carries_every_document_the_web_reads_as_written() {
+    const ODD: &str = r#"{"version":2,"tags":[{"id":"t1","name":"\ud800"}],"items":{},"n":1e400}"#;
+    let f = family();
+    let ledger = f.ledger(true, true);
+    let mut all = rotations();
+    all[0].documents = vec![document(AREA, "tags", 3, &AREA_KEY, ODD)];
+    all[1].documents = vec![document(&third(), "tags", 1, &third_key(2), "{\"version\":2}\u{a0}")];
+    let call = staged(f.remove(&ledger, 2, all)).unwrap();
+    assert_eq!(call.replaced, vec![ReplacedDocument { workspace_id: third(), kind: "tags".into() }]);
+    let body = body_of(&call);
+    let after = after_body(&f, &body);
+    let grants = open_grants(&f, &after, &body["grants"]);
+    let key_of = |at: &str| grants.iter().find(|(_, ws, _, _)| ws == at).unwrap().3.clone();
+    let wire =
+        body["rotations"].as_array().unwrap().iter().find(|w| w["workspaceId"] == json!(AREA)).unwrap();
+    let (_, _, _, documents) = opened_rotation(wire, &key_of(AREA));
+    assert_eq!(documents, vec![("tags".to_string(), 4, ODD.to_string())]);
 }
 
 #[test]
@@ -1738,6 +1784,7 @@ fn a_rebuild_reseals_what_was_gathered_again_under_the_same_keys_and_roster() {
         GROUP.into(),
         7,
         rotations().remove(1),
+        ACCOUNT_KEY,
         f.kems(),
     ))
     .unwrap();
@@ -1755,6 +1802,7 @@ fn a_key_replacement_rotates_the_one_folder_it_names() {
         GROUP.into(),
         7,
         rotation,
+        ACCOUNT_KEY,
         f.kems(),
     ))
     .unwrap();

@@ -12,6 +12,7 @@ import {
 } from './drive';
 import { pattern } from './group-testkit';
 import { parseRoster } from './groups';
+import { deriveId } from './ids';
 import { decode, encode } from './keys';
 import {
     areaKey,
@@ -31,6 +32,7 @@ import type {
     RotationWire,
     SignedStatementWire,
 } from './session-groups';
+import { metadataStatementAs, signStatement } from './signatures';
 import { openAreaSelfGrant } from './workspace';
 
 /*
@@ -39,17 +41,24 @@ import { openAreaSelfGrant } from './workspace';
  * over the family of roster-calls-testkit.ts. Each twin builds the same calls
  * on person 1's device (here the worker's groupStage kinds remove, markLeft,
  * rotate and retire, there the core's AreaLedger builders) with the same
- * folders gathered (each live folder's root under its fixed keys, A1's tags
- * sealed under its key and A3's junk nobody can open), and reads the other
- * twin's bodies through its own code:
+ * folders gathered (each live folder's root as the server serves it: an id
+ * derived from its seed, under its fixed keys, its name signed by person 1;
+ * A1's tags, one named by a lone surrogate, sealed under its key, and A3's junk
+ * nobody can open), with person 1's account key at version 2 and their
+ * identity at 1 (a master-key rotation since), and reads the other twin's
+ * bodies through its own code:
  *
  * - `removalCalls`: each body verified as every member takes it (the 5a
  *   verdict), then each folder's new key opened from its grants (the roster's
  *   commitment names it) and from it the root's new key (the roster's root
  *   commitment), the root's old key under its previous-root label, the root's
- *   name, the self-grant, and every workspace document sealed again; the
- *   roster's area rows exactly what the call writes (one tombstone for a
- *   deletion, nothing else). A refusal must be the same sentence.
+ *   name, the self-grant and the account key version it names, and every
+ *   workspace document's text sealed again; the roster's area rows exactly
+ *   what the call writes (one tombstone for a deletion, nothing else). A
+ *   refusal must be the same sentence.
+ * - `removalRoots`: the roots and documents this twin's calls were built
+ *   from, which packages/groups/src/server.test.ts stores before it posts the
+ *   bodies.
  * - `previousRoots`: route 25's served previous envelope checked by
  *   groupPreviousRoot (the core's previous_root_repair) on person 1's device.
  *   A repair needs an old key the device opened itself, which only a Drive
@@ -58,26 +67,41 @@ import { openAreaSelfGrant } from './workspace';
 
 type Json = Record<string, any>;
 
-/* The roots of A1, A2 (deleted) and A3, each at its key epoch, at the area's latest listed version. */
-const ROOTS = [
-    '0e0e0e0e-0000-4000-8000-0000000000a1',
-    '0e0e0e0e-0000-4000-8000-0000000000a2',
-    '0e0e0e0e-0000-4000-8000-0000000000a3',
-];
+/* The roots of A1, A2 (deleted) and A3: id seeds, key epochs, change sequences, at the area's latest listed version. */
+const rootSeed = (index: number) => encode(pattern(16, 51 + index));
+const rootId = async (index: number) =>
+    deriveId('node', (await family()).areas[index]!.workspaceId, rootSeed(index));
 const ROOT_EPOCHS = [1, 1, 2];
+const CHANGE_SEQS = [4, 5, 6];
 const LATEST = [1, 1, 2];
 const TARGET_EPOCH = 9;
-const TAGS = '{"version":2,"tags":[{"id":"t1","name":"Recipes"}],"items":{}}';
+/* Person 1's account key version: rotated once, while their identity is still at 1. */
+export const ACCOUNT_KEY = 2;
+/* A1's tags, one named by a lone surrogate (JSON.parse reads it, a serde_json Value cannot), as JSON.stringify writes them. */
+const TAGS =
+    '{"version":2,"tags":[{"id":"t1","name":"Recipes"},{"id":"t2","name":"\\ud800"}],"items":{}}';
+const EMPTY_TAGS = '{"version":2,"tags":[],"items":{}}';
 /* The key epoch of a previous root key in route 25's cases, and that key. */
 const PREVIOUS_EPOCH = 7;
 const previousKey = () => pattern(32, 77);
 
-/* One folder's rotation, gathered as the app gathers it for the call: the root as route 25 serves it, its documents. */
-export async function rotationInput(index: number): Promise<AreaRotationInput> {
+/*
+ * One folder's rotation, gathered as the app gathers it for the call: the root
+ * as route 25 serves it, its documents. Built once per twin, so every call in
+ * a document is built from the roots `removalRoots` writes.
+ */
+const gathered = new Map<number, Promise<AreaRotationInput>>();
+export function rotationInput(index: number): Promise<AreaRotationInput> {
+    let at = gathered.get(index);
+    if (!at) gathered.set(index, (at = gather(index)));
+    return at.then((rotation) => structuredClone(rotation));
+}
+async function gather(index: number): Promise<AreaRotationInput> {
     const f = await family();
+    const p1 = f.p[0]!;
     const workspaceId = f.areas[index]!.workspaceId;
     const version = LATEST[index]!;
-    const nodeId = ROOTS[index]!;
+    const nodeId = await rootId(index);
     const key = rootKey(index, version);
     const keyEnvelope = await wrapNodeKey(key, areaKey(index, version), {
         workspaceId,
@@ -90,6 +114,15 @@ export async function rotationInput(index: number): Promise<AreaRotationInput> {
         { name: 'Family', mime: null, size: null, modified: null },
         key,
         { workspaceId, nodeId, metadataVersion: 1 },
+    );
+    // Its creator's signature over the name, as every family folder's root carries one.
+    const metadataSignature = await signStatement(
+        await metadataStatementAs(
+            'ordinary',
+            { workspaceId, nodeId, kind: 'folder', metadataVersion: 1 },
+            metadataEnvelope,
+        ),
+        p1.signer.signingKey,
     );
     const documents =
         index === 0
@@ -120,12 +153,12 @@ export async function rotationInput(index: number): Promise<AreaRotationInput> {
             keyEnvelope: encode(keyEnvelope),
             metadataVersion: 1,
             metadataEnvelope: encode(metadataEnvelope),
-            metadataSigner: null,
-            metadataSignature: null,
+            metadataSigner: p1.userId,
+            metadataSignature: encode(metadataSignature),
             versions: [],
             shares: [],
             links: [],
-            changeSeq: 4 + index,
+            changeSeq: CHANGE_SEQS[index]!,
         },
         documents,
     };
@@ -148,22 +181,23 @@ export async function removalSpecs(): Promise<Json[]> {
         version,
         retired,
     });
+    const roots = await Promise.all([0, 1, 2].map(rootId));
     const rotated = (index: number, documents: Json[]) => ({
         workspaceId: a(index),
         fromVersion: LATEST[index]!,
         toVersion: LATEST[index]! + 1,
         targetEpoch: TARGET_EPOCH,
-        rootId: ROOTS[index],
+        rootId: roots[index],
         name: 'Family',
-        // A root's metadata nobody signed is signed by the rotator (no origin to keep).
-        record: 'signed',
+        // The creator's signed name is kept as its origin, re-keyed, never signed again.
+        record: 'rekey',
+        // The account key's version, never the identity's (1).
+        selfGrantKeyVersion: ACCOUNT_KEY,
         documents,
     });
-    const a3 = rotated(2, [
-        { kind: 'tags', version: 2, value: { version: 2, tags: [], items: {} } },
-    ]);
-    const both = [rotated(0, [{ kind: 'tags', version: 4, value: JSON.parse(TAGS) }]), a3].sort(
-        (x, y) => (x.workspaceId < y.workspaceId ? -1 : 1),
+    const a3 = rotated(2, [{ kind: 'tags', version: 2, text: EMPTY_TAGS }]);
+    const both = [rotated(0, [{ kind: 'tags', version: 4, text: TAGS }]), a3].sort((x, y) =>
+        x.workspaceId < y.workspaceId ? -1 : 1,
     );
     const allRows = [row(0, 2), row(2, 3)];
     const replaced = [{ workspaceId: a(2), kind: 'tags' }];
@@ -293,7 +327,11 @@ export async function removalRun(
     op: Json,
 ): Promise<{ body: RosterCallBody; route: Json; replaced: Json[] } | { refused: string }> {
     const f = await family();
-    const call = await session(1, { seed: true, area: op.noArea !== true });
+    const call = await session(1, {
+        seed: true,
+        area: op.noArea !== true,
+        accountKeyVersion: ACCOUNT_KEY,
+    });
     const kems = Object.fromEntries(f.p.map((p) => [p.userId, p.served.kemPublicKey]));
     const u = (n: number) => f.p[n - 1]!.userId;
     const rotations = async () =>
@@ -424,16 +462,20 @@ export async function removalVerdict(doc: Json, route: Json, body: RosterCallBod
             wire.selfGrant.workspaceKeyVersion !== wire.toVersion
         )
             throw new Error('the self-grant is not of the folder’s new key');
+        // Each document's text as JSON.stringify writes what it opens to: what the worker seals
+        // again, and what the core seals when the document was written that way.
         const documents: Json[] = [];
         for (const document of wire.documents)
             documents.push({
                 kind: document.kind,
                 version: document.version + 1,
-                value: await openDocument(decode(document.envelope), areaKey, {
-                    workspaceId: wire.workspaceId,
-                    kind: document.kind,
-                    version: document.version + 1,
-                }),
+                text: JSON.stringify(
+                    await openDocument(decode(document.envelope), areaKey, {
+                        workspaceId: wire.workspaceId,
+                        kind: document.kind,
+                        version: document.version + 1,
+                    }),
+                ),
             });
         rotations.push({
             workspaceId: wire.workspaceId,
@@ -443,6 +485,7 @@ export async function removalVerdict(doc: Json, route: Json, body: RosterCallBod
             rootId: wire.root.id,
             name,
             record: recordOf(wire.root.rotated!),
+            selfGrantKeyVersion: wire.selfGrant.keyVersion,
             documents,
         });
     }
@@ -486,7 +529,7 @@ export async function previousEnvelope(spec: Json): Promise<string | null> {
     const version = LATEST[spec.area]!;
     const ctx = {
         workspaceId,
-        nodeId: ROOTS[spec.area]!,
+        nodeId: await rootId(spec.area),
         parentId: workspaceId,
         parentKeyEpoch: version,
         keyEpoch: PREVIOUS_EPOCH,
@@ -517,7 +560,7 @@ export async function previousRootRun(spec: Json, envelope: string | null): Prom
             groupId: f.groupId,
             workspaceId: f.areas[spec.area]!.workspaceId,
             root: {
-                id: ROOTS[spec.area]!,
+                id: await rootId(spec.area),
                 parentKeyEpoch: version,
                 prevKeyEnvelope: envelope,
                 prevKeyEpoch: PREVIOUS_EPOCH,
@@ -528,6 +571,32 @@ export async function previousRootRun(spec: Json, envelope: string | null): Prom
     } catch (error) {
         return { status: 'refused', message: (error as Error).message };
     }
+}
+
+/* The live folders' roots and documents as this twin's calls gathered them: what the server stores first. */
+export async function removalRoots(): Promise<Json[]> {
+    const out: Json[] = [];
+    for (const index of [0, 2]) {
+        const { workspaceId, targetEpoch, root, documents } = await rotationInput(index);
+        out.push({
+            workspaceId,
+            id: root.id,
+            idSeed: rootSeed(index),
+            keyEpoch: root.keyEpoch,
+            parentKeyEpoch: root.wrappedParentKeyEpoch,
+            changeSeq: root.changeSeq,
+            keyEnvelope: root.keyEnvelope,
+            metadataEnvelope: root.metadataEnvelope,
+            metadataSignature: root.metadataSignature,
+            targetEpoch,
+            documents: documents.map(({ kind, version, envelope }) => ({
+                kind,
+                version,
+                envelope,
+            })),
+        });
+    }
+    return out;
 }
 
 /* This twin's Core 5b sections, each case checked against its declaration. */
@@ -559,7 +628,7 @@ export async function fixture(doc: Json) {
             throw new Error(`${spec.name}: ${JSON.stringify(outcome)}`);
         roots.push({ ...spec, served: envelope });
     }
-    return { removalCalls: calls, previousRoots: roots };
+    return { removalCalls: calls, previousRoots: roots, removalRoots: await removalRoots() };
 }
 
 /* The other twin's Core 5b sections through this one: every outcome the same (thrown otherwise). */

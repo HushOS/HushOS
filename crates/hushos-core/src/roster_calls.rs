@@ -631,12 +631,34 @@ struct Caller {
 /* The change a call makes to the roster (one per call, moved straight in: its size does not matter). */
 #[allow(clippy::large_enum_variant)]
 enum Change {
-    Admit { user_id: String, served: PublicIdentity, roles: Vec<GroupRole> },
-    Roles { user_id: String, roles: fn(&[GroupRole]) -> Vec<GroupRole> },
-    Remove { user_id: String, ends_lapsed: Vec<String>, rotations: Vec<AreaRotation> },
-    MarkLeft { user_ids: Vec<String>, rotations: Vec<AreaRotation> },
-    Rotate { rotation: AreaRotation },
-    Retire { workspace_id: String },
+    Admit {
+        user_id: String,
+        served: PublicIdentity,
+        roles: Vec<GroupRole>,
+    },
+    Roles {
+        user_id: String,
+        roles: fn(&[GroupRole]) -> Vec<GroupRole>,
+    },
+    /* `account_key_version`: the account key's version, which each rotation's self-grant names. */
+    Remove {
+        user_id: String,
+        ends_lapsed: Vec<String>,
+        rotations: Vec<AreaRotation>,
+        account_key_version: u64,
+    },
+    MarkLeft {
+        user_ids: Vec<String>,
+        rotations: Vec<AreaRotation>,
+        account_key_version: u64,
+    },
+    Rotate {
+        rotation: AreaRotation,
+        account_key_version: u64,
+    },
+    Retire {
+        workspace_id: String,
+    },
 }
 
 fn with_role(roles: &[GroupRole], role: GroupRole, on: bool) -> Vec<GroupRole> {
@@ -761,6 +783,9 @@ impl AreaLedger {
         let mut rotations: Vec<AreaRotation> = vec![];
         let mut rotate_one: Option<String> = None;
         let mut retire: Option<String> = None;
+        // The account key's version a rotation's self-grant names (the worker's unlocked().keyVersion):
+        // never the identity's, which moves on its own (a succession) and the server refuses.
+        let mut self_grant_version: Option<u64> = None;
         let active = |members: &[RosterMember], user_id: &str| -> CoreResult<RosterMember> {
             members
                 .iter()
@@ -770,24 +795,27 @@ impl AreaLedger {
                 .ok_or_else(|| input(NOT_IN))
         };
         let (route, admits) = match change {
-            Change::Remove { user_id, ends_lapsed, rotations: named } => {
+            Change::Remove { user_id, ends_lapsed, rotations: named, account_key_version } => {
                 let entry = active(&members, &user_id)?;
                 put(&mut members, RosterMember { status: MemberStatus::Left, ..entry });
                 rotations = named;
+                self_grant_version = Some(account_key_version);
                 (ChainRoute::Remove { user_id, ends_lapsed }, None)
             }
-            Change::MarkLeft { user_ids, rotations: named } => {
+            Change::MarkLeft { user_ids, rotations: named, account_key_version } => {
                 for user_id in &user_ids {
                     let entry = active(&members, user_id)?;
                     put(&mut members, RosterMember { status: MemberStatus::Left, ..entry });
                 }
                 rotations = named;
+                self_grant_version = Some(account_key_version);
                 (ChainRoute::Rosters, None)
             }
-            Change::Rotate { rotation } => {
+            Change::Rotate { rotation, account_key_version } => {
                 let workspace_id = rotation.workspace_id.clone();
                 rotate_one = Some(workspace_id.clone());
                 rotations = vec![rotation];
+                self_grant_version = Some(account_key_version);
                 (ChainRoute::Rotation { workspace_id }, None)
             }
             Change::Retire { workspace_id } => {
@@ -1035,7 +1063,7 @@ impl AreaLedger {
                     &account.user_id,
                     &chain.group_id,
                     workspace_id,
-                    keys.key_version,
+                    self_grant_version.ok_or_else(|| input(EVERY_FOLDER))?,
                     version,
                 )?;
                 let old = || self.rotation_root_key(workspace_id, &rotation.root);

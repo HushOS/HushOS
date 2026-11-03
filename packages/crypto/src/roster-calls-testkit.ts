@@ -254,6 +254,8 @@ export async function session(
         rosters?: SignedGroupStatement[];
         seed?: boolean;
         area?: boolean;
+        /* The account key's version (a master-key rotation moves it apart from the identity's). */
+        accountKeyVersion?: number;
     } = {},
 ): Promise<Call> {
     const f = await family();
@@ -261,7 +263,11 @@ export async function session(
     const p1 = f.p[0]!;
     const ledger = createAreaLedger();
     const host = {
-        unlocked: () => ({ userId: who.userId, root: ROOT.slice(), keyVersion: 1 }),
+        unlocked: () => ({
+            userId: who.userId,
+            root: ROOT.slice(),
+            keyVersion: options.accountKeyVersion ?? 1,
+        }),
         identity: () => ({ userId: who.userId, served: who.served, history: [] }),
         hybridKeys: () => ({
             signingKey: who.signer.signingKey.slice(),

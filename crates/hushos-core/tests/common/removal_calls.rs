@@ -4,18 +4,24 @@
 //! person 1's device (here [`AreaLedger::removal_body`], `mark_left_body`,
 //! `area_rotation_body` and `area_delete_body`, there the worker's
 //! `groupStage` kinds remove, markLeft, rotate and retire) with the same
-//! folders gathered (each live folder's root under its fixed keys, A1's tags
-//! sealed under its key and A3's junk nobody can open), and reads the other
-//! twin's bodies through its own code:
+//! folders gathered (each live folder's root as the server serves it: an id
+//! derived from its seed, under its fixed keys, its name signed by person 1;
+//! A1's tags, one named by a lone surrogate, sealed under its key, and A3's
+//! junk nobody can open), with person 1's account key at version 2 and their
+//! identity at 1 (a master-key rotation since), and reads the other twin's
+//! bodies through its own code:
 //!
 //! - `removalCalls`: each body verified as every member takes it (the 5a
 //!   verdict), then each folder's new key opened from its grants (the
 //!   roster's commitment names it) and from it the root's new key (the
 //!   roster's root commitment), the root's old key under its previous-root
-//!   label, the root's name, the self-grant, and every workspace document
-//!   sealed again; the roster's area rows exactly what the call writes (one
-//!   tombstone for a deletion, nothing else). A refusal must be the same
-//!   sentence.
+//!   label, the root's name, the self-grant and the account key version it
+//!   names, and every workspace document's text sealed again; the roster's
+//!   area rows exactly what the call writes (one tombstone for a deletion,
+//!   nothing else). A refusal must be the same sentence.
+//! - `removalRoots`: the roots and documents this twin's calls were built
+//!   from, which `packages/groups/src/server.test.ts` stores before it posts
+//!   the bodies.
 //! - `previousRoots`: route 25's served previous envelope checked by
 //!   [`AreaLedger::previous_root_repair`] (the worker's `groupPreviousRoot`)
 //!   on person 1's device. A repair needs an old key the device opened
@@ -29,18 +35,25 @@ use super::roster_calls::{area_key, chain_of, envelope, family, grant_key, ledge
 use hushos_core::*;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-/* The roots of A1, A2 (deleted) and A3, each at its key epoch, at the area's latest listed version. */
-const ROOTS: [&str; 3] = [
-    "0e0e0e0e-0000-4000-8000-0000000000a1",
-    "0e0e0e0e-0000-4000-8000-0000000000a2",
-    "0e0e0e0e-0000-4000-8000-0000000000a3",
-];
+/* The roots of A1, A2 (deleted) and A3: id seeds, key epochs, change sequences, at the area's latest listed version. */
+fn root_seed(index: usize) -> String {
+    e(&pattern(16, 51 + index as u8))
+}
+fn root_id(index: usize) -> String {
+    derive_id(IdKind::Node, family().areas[index].0.clone(), root_seed(index)).unwrap()
+}
 const ROOT_EPOCHS: [u64; 3] = [1, 1, 2];
+const CHANGE_SEQS: [u64; 3] = [4, 5, 6];
 const LATEST: [u64; 3] = [1, 1, 2];
 const TARGET_EPOCH: u64 = 9;
-const TAGS: &str = r#"{"version":2,"tags":[{"id":"t1","name":"Recipes"}],"items":{}}"#;
+/* Person 1's account key version: rotated once, while their identity is still at 1. */
+pub const ACCOUNT_KEY: u64 = 2;
+/* A1's tags, one named by a lone surrogate (JSON.parse reads it, a serde_json Value cannot), as JSON.stringify writes them. */
+const TAGS: &str =
+    r#"{"version":2,"tags":[{"id":"t1","name":"Recipes"},{"id":"t2","name":"\ud800"}],"items":{}}"#;
+const EMPTY_TAGS: &str = r#"{"version":2,"tags":[],"items":{}}"#;
 /* The key epoch of a previous root key in route 25's cases, and that key. */
 const PREVIOUS_EPOCH: u64 = 7;
 fn previous_key() -> Vec<u8> {
@@ -51,12 +64,22 @@ fn d(value: &Value) -> Vec<u8> {
     base64url_decode(value.as_str().expect("base64url text").into()).expect("base64url")
 }
 
-/* One folder's rotation, gathered as the app gathers it for the call: the root as route 25 serves it, its documents. */
+/*
+ * One folder's rotation, gathered as the app gathers it for the call: the root
+ * as route 25 serves it, its documents. Built once per process, so every call
+ * in a document is built from the roots `removalRoots` writes.
+ */
 pub fn rotation_input(index: usize) -> AreaRotation {
+    static GATHERED: OnceLock<Vec<AreaRotation>> = OnceLock::new();
+    GATHERED.get_or_init(|| (0..3).map(gather).collect())[index].clone()
+}
+
+fn gather(index: usize) -> AreaRotation {
     let f = family();
+    let p1 = &f.p[0];
     let workspace_id = f.areas[index].0.clone();
     let version = LATEST[index];
-    let node_id = ROOTS[index].to_string();
+    let node_id = root_id(index);
     let key = root_key(index, version);
     let key_envelope = node_wrap(
         NodeKeyContext {
@@ -82,6 +105,15 @@ pub fn rotation_input(index: usize) -> AreaRotation {
         },
     )
     .unwrap();
+    // Its creator's signature over the name, as every family folder's root carries one.
+    let statement = MetadataStatement {
+        workspace_id: workspace_id.clone(),
+        node_id: node_id.clone(),
+        kind: NodeKind::Folder,
+        metadata_version: 1,
+    };
+    let metadata_signature =
+        metadata_sign(p1.keys.signing_seed.to_vec(), statement, metadata_envelope.clone()).unwrap();
     let documents = if index == 0 {
         let ctx = DocumentContext { workspace_id: workspace_id.clone(), kind: "tags".into(), version: 3 };
         vec![ServedDocument {
@@ -105,14 +137,14 @@ pub fn rotation_input(index: usize) -> AreaRotation {
             kind: NodeKind::Folder,
             metadata_version: 1,
             metadata_envelope,
-            metadata_signer: None,
-            metadata_signature: None,
+            metadata_signer: Some(p1.user_id.clone()),
+            metadata_signature: Some(metadata_signature),
             metadata_rekey: None,
             versions: vec![],
             share_ids: vec![],
             link_ids: vec![],
         },
-        change_seq: 4 + index as u64,
+        change_seq: CHANGE_SEQS[index],
         documents,
     }
 }
@@ -136,19 +168,17 @@ pub fn removal_specs() -> Vec<Value> {
             "fromVersion": LATEST[index],
             "toVersion": LATEST[index] + 1,
             "targetEpoch": TARGET_EPOCH,
-            "rootId": ROOTS[index],
+            "rootId": root_id(index),
             "name": "Family",
-            // A root's metadata nobody signed is signed by the rotator (no origin to keep).
-            "record": "signed",
+            // The creator's signed name is kept as its origin, re-keyed, never signed again.
+            "record": "rekey",
+            // The account key's version, never the identity's (1).
+            "selfGrantKeyVersion": ACCOUNT_KEY,
             "documents": documents,
         })
     };
-    let a3 = rotated(
-        2,
-        json!([{ "kind": "tags", "version": 2, "value": { "version": 2, "tags": [], "items": {} } }]),
-    );
-    let tags: Value = serde_json::from_str(TAGS).unwrap();
-    let mut both = vec![rotated(0, json!([{ "kind": "tags", "version": 4, "value": tags }])), a3.clone()];
+    let a3 = rotated(2, json!([{ "kind": "tags", "version": 2, "text": EMPTY_TAGS }]));
+    let mut both = vec![rotated(0, json!([{ "kind": "tags", "version": 4, "text": TAGS }])), a3.clone()];
     both.sort_by_key(|rotation| s(rotation, "workspaceId"));
     let all_rows = sorted(vec![row(0, 2, false), row(2, 3, false)]);
     let replaced = json!([{ "workspaceId": a(2), "kind": "tags" }]);
@@ -227,12 +257,20 @@ pub fn removal_run(op: &Value) -> Result<StagedCall, String> {
     };
     let group = f.group_id.clone();
     let result = match op["kind"].as_str().unwrap() {
-        "remove" => {
-            ledger.removal_body(me(1), envelope(1), group, 7, user(&op["who"]), rotations(), vec![], kems)
-        }
+        "remove" => ledger.removal_body(
+            me(1),
+            envelope(1),
+            group,
+            7,
+            user(&op["who"]),
+            rotations(),
+            vec![],
+            ACCOUNT_KEY,
+            kems,
+        ),
         "markLeft" => {
             let ids = op["who"].as_array().unwrap().iter().map(user).collect();
-            ledger.mark_left_body(me(1), envelope(1), group, 7, ids, rotations(), kems)
+            ledger.mark_left_body(me(1), envelope(1), group, 7, ids, rotations(), ACCOUNT_KEY, kems)
         }
         "rotate" => ledger.area_rotation_body(
             me(1),
@@ -240,6 +278,7 @@ pub fn removal_run(op: &Value) -> Result<StagedCall, String> {
             group,
             7,
             rotation_input(op["area"].as_u64().unwrap() as usize),
+            ACCOUNT_KEY,
             kems,
         ),
         "retire" => ledger.area_delete_body(
@@ -386,7 +425,8 @@ pub fn removal_verdict(doc: &Value, route: &Value, body: &Value) -> Value {
                 let kind = s(document, "kind");
                 let ctx = DocumentContext { workspace_id: workspace_id.clone(), kind: kind.clone(), version };
                 let text = document_open(ctx, area.clone(), d(&document["envelope"])).expect("the document");
-                json!({ "kind": kind, "version": version, "value": serde_json::from_str::<Value>(&text).unwrap() })
+                // The text as sealed: the core seals what it read, the worker what JSON.stringify writes.
+                json!({ "kind": kind, "version": version, "text": text })
             })
             .collect();
         rotations.push(json!({
@@ -397,6 +437,7 @@ pub fn removal_verdict(doc: &Value, route: &Value, body: &Value) -> Value {
             "rootId": node_id,
             "name": name,
             "record": record_of(&wire["root"]["rotated"]),
+            "selfGrantKeyVersion": self_grant.key_version,
             "documents": documents,
         }));
     }
@@ -435,7 +476,7 @@ pub fn previous_envelope(spec: &Value) -> Option<Vec<u8>> {
     let version = LATEST[index];
     let ctx = NodeKeyContext {
         workspace_id: workspace_id.clone(),
-        node_id: ROOTS[index].into(),
+        node_id: root_id(index),
         parent_id: workspace_id,
         parent_key_epoch: version,
         key_epoch: PREVIOUS_EPOCH,
@@ -459,7 +500,7 @@ pub fn previous_root_run(spec: &Value, served: Option<Vec<u8>>) -> Value {
         f.group_id.clone(),
         f.areas[index].0.clone(),
         PreviousRoot {
-            node_id: ROOTS[index].into(),
+            node_id: root_id(index),
             parent_key_epoch: version,
             prev_key_envelope: served,
             prev_key_epoch: Some(PREVIOUS_EPOCH),
@@ -473,6 +514,34 @@ pub fn previous_root_run(spec: &Value, served: Option<Vec<u8>>) -> Value {
         Ok(PreviousRootRepair::Cannot) => json!({ "status": "cannot" }),
         Err(error) => json!({ "status": "refused", "message": error.to_string() }),
     }
+}
+
+/* The live folders' roots and documents as this twin's calls gathered them: what the server stores first. */
+pub fn removal_roots() -> Value {
+    Value::Array(
+        [0, 2]
+            .into_iter()
+            .map(|index| {
+                let AreaRotation { workspace_id, target_epoch, root, change_seq, documents } =
+                    rotation_input(index);
+                json!({
+                    "workspaceId": workspace_id,
+                    "id": root.node_id,
+                    "idSeed": root_seed(index),
+                    "keyEpoch": root.key_epoch,
+                    "parentKeyEpoch": root.wrapped_parent_key_epoch,
+                    "changeSeq": change_seq,
+                    "keyEnvelope": e(&root.key_envelope),
+                    "metadataEnvelope": e(&root.metadata_envelope),
+                    "metadataSignature": root.metadata_signature.as_ref().map(|s| e(s)),
+                    "targetEpoch": target_epoch,
+                    "documents": documents.iter().map(|at| json!({
+                        "kind": at.kind, "version": at.version, "envelope": e(&at.envelope),
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect(),
+    )
 }
 
 /* This core's Core 5b sections over `doc`'s family, each case checked against its declaration. */
@@ -505,7 +574,7 @@ pub fn fixture(doc: &Value) -> Value {
         spec["served"] = served.map(|bytes| json!(e(&bytes))).unwrap_or(Value::Null);
         roots.push(spec);
     }
-    json!({ "removalCalls": calls, "previousRoots": roots })
+    json!({ "removalCalls": calls, "previousRoots": roots, "removalRoots": removal_roots() })
 }
 
 /* The other twin's Core 5b sections through this core: every outcome the same. */
