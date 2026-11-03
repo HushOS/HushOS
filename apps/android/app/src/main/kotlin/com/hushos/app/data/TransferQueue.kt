@@ -346,22 +346,21 @@ object TransferQueue {
                 // Kept aside by a rebuild of unreadable bounds: sent only if nothing newer of the file was kept aside or
                 // retained (else it is moot, and goes), under a number newer than everything on disk (its own is within
                 // the rebuilt bounds), so it lands as the file's newest save and retires the older ones kept aside.
-                val number = if (WriteBacks.quarantinedAt(failed.stage) == null) own else {
+                // Moot when anything of the file is newer than it: a row or closed edit numbered above it (checked here), or
+                // a save pending or being sent, or landed or cancelled since (checked again as it is kept, under the slot's
+                // lock: `intoEmptyAbove`). Moot, nothing is sent and the row stays, its reason said, for the person to Dismiss.
+                val quarantined = WriteBacks.quarantinedAt(failed.stage)
+                val number = if (quarantined == null) own else {
                     val slot = WriteBacks.slotOf(target.workspaceId, target.nodeId)
                     val newer = records.all().any { it.id != failed.id && it.slot == slot && it.stage != null && (WriteBacks.stagedNumber(it.stage) ?: 0L) > own } ||
                         WriteBacks.closedEditsOf(context, slot).any { it.first > own }
-                    if (newer) {
-                        WriteBacks.discardEdit(edit)
-                        Reservations.whileAccount(generation) { records.forget(failed.id) }
-                        FailedTransfers.changed()
-                        return Retry.GONE
-                    }
+                    if (newer) return if (edit.isFile) Retry.NOT_KEPT else Retry.GONE
                     WriteBacks.reserve(context, slot, generation) ?: return Retry.GONE
                 }
                 // Kept or not, the edit stays when this try fails (a disk still full): the row and its reason stand.
                 var notKept = false
                 fun stage(publishUnder: ((() -> WriteBacks.Pending?) -> WriteBacks.Pending?)? = null): WriteBacks.Pending? = try {
-                    WriteBacks.stage(context, generation, target, edit, number, publishUnder)
+                    WriteBacks.stage(context, generation, target, edit, number, intoEmptyAbove = quarantined, publishUnder = publishUnder)
                 } catch (_: WriteBacks.Superseded) {
                     superseded = true
                     null
@@ -696,9 +695,10 @@ object TransferQueue {
                     stagingFailed(context, target, file, Exception("The save wasn't kept."), generation, number, epoch)
                 }
                 file.name.endsWith(".json") || file.name.endsWith(".incoming") -> {
-                    val edit = File(file.parentFile, file.name.substringBefore('.'))
-                    val closed = file.parentFile?.listFiles()?.any { it.name.startsWith(edit.name + ".") && it.name.endsWith(".closed") } == true
-                    if (startup && !edit.exists() && !closed && file.lastModified() < dayAgo) file.delete()
+                    // A target (or a copy being made) goes only once no edit of its name holds a save, whatever form it is in.
+                    val base = file.name.substringBefore('.')
+                    val held = file.parentFile?.listFiles()?.any { it.name.substringBefore('.') == base && it.name != file.name && WriteBacks.isRetainedEdit(it.name) } == true
+                    if (startup && !held && file.lastModified() < dayAgo) file.delete()
                 }
                 // An edit never closed, over a day old and no row naming it: no process holds it any more, but its close may
                 // have run with every step failing (the rename, the save, the row), so it may be a save. Never deleted here

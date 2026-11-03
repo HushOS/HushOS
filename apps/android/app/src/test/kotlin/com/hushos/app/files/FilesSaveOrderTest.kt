@@ -2052,7 +2052,7 @@ class FilesSaveOrderTest {
      * #274 P1 (rescue order), with everything ambiguous kept aside: save 1 is pending in the slot, save 2 couldn't be kept
      * (its closed edit and row), then the slot's bounds become unreadable and the process starts again. Both are kept
      * aside, each under its own number: neither is read as contents (reads go to the server), save 1's Retry is moot
-     * (save 2 is newer) and never touches save 2, and save 2's Retry lands it. Fails if the rescue is numbered as the
+     * (save 2 is newer: its row stays to Dismiss) and never touches save 2, and save 2's Retry lands it, retiring save 1. Fails if the rescue is numbered as the
      * newest save, or if a save kept aside is read or wins over a newer one.
      */
     @Test
@@ -2071,7 +2071,8 @@ class FilesSaveOrderTest {
         val rows = FailedTransfers.of(app).all().filter { it.slot == slot }
         val rescued = rows.single { File(it.file!!).readText() == "first save" }
         val newer = rows.single { File(it.file!!).readText() == "second save" }
-        assertEquals(TransferQueue.Retry.GONE, TransferQueue.retryOutcome(app, rescued))
+        assertEquals(TransferQueue.Retry.NOT_KEPT, TransferQueue.retryOutcome(app, rescued))
+        assertTrue("the older save's moot Retry dropped its row", FailedTransfers.of(app).all().any { it.id == rescued.id })
         assertTrue("the older save's Retry touched the newer one", File(newer.file!!).isFile)
         assertEquals(0, begins())
         assertEquals(TransferQueue.Retry.SENT, TransferQueue.retryOutcome(app, FailedTransfers.of(app).all().single { it.id == newer.id }))
@@ -2157,5 +2158,58 @@ class FilesSaveOrderTest {
         WriteBacks.pendingMeta(app, slot)
         provider.queryChildDocuments("root", null, null as String?).close()
         assertEquals("a lookup wrote the slot", before, dir.listFiles().orEmpty().associate { it.name to it.lastModified() })
+    }
+
+    /*
+     * #274 P1 (quarantined Retry): save 1 is kept aside by a rebuild, then the file gets a new save 2, pending in the slot.
+     * Save 1's Retry is moot: nothing is sent, its row stays (to Dismiss), and save 2 is untouched and lands. Fails if a
+     * Retry of a save kept aside takes a fresh number and replaces a newer pending save.
+     */
+    @Test
+    fun aRetryOfASaveKeptAsideNeverReplacesANewerPendingOne() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "save 1, kept aside")
+        File(app.filesDir, "${WriteBacks.NUMBERS}/$slot").writeText("not the numbers")
+        WriteBacks.forgetReservedHere()
+        TransferQueue.reconcileEdits(app, startup = true)
+        val aside = FailedTransfers.of(app).all().single { it.slot == slot }
+        save(provider, notes, "save 2, pending")
+        assertEquals(TransferQueue.Retry.NOT_KEPT, TransferQueue.retryOutcome(app, aside))
+        assertEquals("save 2, pending", WriteBacks.contentOf(app, slot).readText())
+        assertTrue(FailedTransfers.of(app).all().any { it.id == aside.id })
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("save 2, pending", serverText(notes))
+    }
+
+    /*
+     * #274 P2 (sweeps): a closed edit kept aside by a rebuild (`<id>.q<number>`) waits more than a day for its Retry, and the
+     * process starts again: its target is kept beside it, so the edit is kept and its Retry sends it. Fails if a sweep
+     * that knows only an edit's open and closed names deletes a kept-aside edit's target (and then the edit).
+     */
+    @Test
+    fun aKeptAsideEditKeepsItsTargetPastADay() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.fault = { if (it == "copy") throw java.io.IOException("No space left on device") }
+        save(provider, notes, "kept aside over a day")
+        WriteBacks.fault = null
+        File(app.filesDir, "${WriteBacks.NUMBERS}/$slot").writeText("not the numbers")
+        WriteBacks.forgetReservedHere()
+        TransferQueue.reconcileEdits(app, startup = true)
+        val row = FailedTransfers.of(app).all().single { it.slot == slot }
+        val edit = File(row.file!!)
+        assertTrue("the edit wasn't kept aside for this test", Regex(".*\\.q\\d+$").matches(edit.name))
+        val twoDaysAgo = System.currentTimeMillis() - 2 * 86_400_000L
+        File(app.filesDir, WriteBacks.EDITS).walkTopDown().forEach { it.setLastModified(twoDaysAgo) }
+        TransferQueue.reconcileEdits(app, startup = true)
+        TransferQueue.reconcileEdits(app, startup = true)
+        assertTrue("a kept-aside edit lost its target", WriteBacks.sidecarOf(edit).isFile)
+        assertTrue(edit.isFile)
+        assertEquals(TransferQueue.Retry.SENT, TransferQueue.retryOutcome(app, FailedTransfers.of(app).all().single { it.slot == slot }))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("kept aside over a day", serverText(notes))
     }
 }
