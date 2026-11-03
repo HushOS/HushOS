@@ -181,8 +181,8 @@ final class DriveStore {
     var turningDown: TurnDownAsk?
     var cancellingInvitation: CancelInvitationAsk?
     var managedErrors: [String: String] = [:]
-    /* Someone whose account changed since this phone pinned them, met by Let them in: the changed-account steps. */
-    var manageChange: AccountChange?
+    /* Someone whose account changed since this phone pinned them, met by Let them in: the changed-account steps, then Let them in again once resolved. */
+    var manageChange: ManageChangeAsk?
     /* What resumed calls came to, each said until read. */
     var manageNotices = NoticeQueue()
     @ObservationIgnored var managedLoads = ManagedLoads()

@@ -70,6 +70,19 @@ public enum ManageWords {
         first.map { "\($0) isn’t waiting to join any more." } ?? "They aren’t waiting to join any more."
     }
 
+    /*
+     * What a manager is told, until read, of a kept call the resume let go of: a refusal in its own
+     * words; an admission another change overtook (nothing of it was made: they're let in again,
+     * Android #276's words); nil for one that landed. `name`: a person's first name, if known.
+     */
+    public static func resumed(_ end: CallEnd, route: ChainRoute?, name: (String) -> String?) -> String? {
+        switch (end, route) {
+        case (.refused(let words), _): return words
+        case (.stale, .admit(let userId)?): return "An earlier admission of \(name(userId) ?? "someone waiting to join") wasn’t sent; let them in again."
+        default: return nil
+        }
+    }
+
     /* A roster call's refusal, code by code, in the web's words (copy.ts), "Try again" where the web says to reload. */
     public static func call(_ answer: CallAnswer, family: String?, first: String? = nil) -> String {
         let family = family ?? "this family"
@@ -153,8 +166,15 @@ extension FamilySync {
         try await notMemberLetsGo(groupId) { try await self.api.invite(groupId, email: email.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
-    /* Route 26: Not now. */
-    public func turnDown(_ groupId: String, userId: String) async throws { try await notMemberLetsGo(groupId) { try await self.api.decline(groupId, userId: userId) } }
+    /*
+     * Route 26: Not now. Once it is confirmed, every Let them in kept for them goes, in the
+     * family's turn: turning down and accepting again move no revision, so a kept admission would
+     * otherwise still apply after a later invitation, with nobody pressing Let them in.
+     */
+    public func turnDown(_ groupId: String, userId person: String) async throws {
+        try await notMemberLetsGo(groupId) { try await self.api.decline(groupId, userId: person) }
+        try await dropKeptAdmissions(groupId, of: person, heldOnly: false)
+    }
 
     /* Route 13: Cancel invitation. */
     public func cancelInvitation(_ groupId: String, invitationId: String) async throws {
@@ -179,7 +199,7 @@ extension FamilySync {
      * hears each call that is let go of, before its entry is deleted, so what it came to is said
      * even when whoever asked has stopped waiting (a page left mid-resend).
      */
-    public func resumeOutbox(_ groupId: String, handOver: (@Sendable (CallEnd) async -> Void)? = nil) async throws -> [String: CallEnd] {
+    public func resumeOutbox(_ groupId: String, handOver: (@Sendable (CallEnd, ChainRoute?) async -> Void)? = nil) async throws -> [String: CallEnd] {
         let user = userId
         return try await exclusive(groupId) {
             var out: [String: CallEnd] = [:]
@@ -203,12 +223,12 @@ extension FamilySync {
      * person's Let them in looks only at their own admission; anyone else's is `other`, untouched.
      */
     func sendKept(_ groupId: String, outboxId: String, entry: String, only: String?,
-                  handOver: (@Sendable (CallEnd) async -> Void)? = nil) async throws -> CallEnd {
+                  handOver: (@Sendable (CallEnd, ChainRoute?) async -> Void)? = nil) async throws -> CallEnd {
         var sends = 0
         var fixes = 0
         // What the call came to is handed over first, then its entry goes: a caller that stops waiting loses nothing.
-        func drop(_ end: CallEnd) async throws {
-            await handOver?(end)
+        func drop(_ end: CallEnd, _ route: ChainRoute?) async throws {
+            await handOver?(end, route)
             try records.outboxDelete(userId: userId, groupId: groupId, outboxId: outboxId)
         }
         while true {
@@ -227,7 +247,7 @@ extension FamilySync {
             } catch CoreError.Sealed {
                 // Not this account's, or doesn't open (a master-key rotation since): lost, and said so.
                 let end = CallEnd.refused(ManageWords.changesLost(familyName(groupId)))
-                try await drop(end)
+                try await drop(end, nil)
                 return end
             }
             let route: ChainRoute
@@ -239,18 +259,18 @@ extension FamilySync {
             case .hold(_, _, let reason):
                 return reason == .otherKeys ? .otherKeys : .pending(ManageWords.keptOnDevice)
             case .landed:
-                try await drop(.landed)
+                try await drop(.landed, route)
                 await syncInTurn(groupId)
                 return .landed
             case .superseded:
-                try await drop(.stale)
+                try await drop(.stale, route)
                 return .stale
             case .send(_, _, let body):
                 let answer = try await api.sendCall(groupId, route: route, body: body)
                 sends += 1
                 switch outboxStep(status: UInt16(clamping: max(0, answer.status)), code: answer.code) {
                 case .landed:
-                    try await drop(.landed)
+                    try await drop(.landed, route)
                     await syncInTurn(groupId)
                     return .landed
                 case .resend, .rebuild:
@@ -261,17 +281,17 @@ extension FamilySync {
                     if fixes > Self.fixesPerCall { return .pending(ManageWords.grantsDue) }
                     if let end = try await sendGrants(groupId, answer) { return end }
                 case .stale:
-                    try await drop(.stale)
+                    try await drop(.stale, route)
                     await syncInTurn(groupId)
                     return .stale
                 case .membershipMoved:
                     let end = CallEnd.refused(ManageWords.call(answer, family: familyName(groupId)))
-                    try await drop(end)
+                    try await drop(end, route)
                     await syncInTurn(groupId)
                     return end
                 case .refused:
                     let end = CallEnd.refused(ManageWords.call(answer, family: familyName(groupId)))
-                    try await drop(end)
+                    try await drop(end, route)
                     if answer.code == "forbidden" { await syncInTurn(groupId) }
                     return end
                 case .wiped:
@@ -479,6 +499,11 @@ extension FamilySync {
      * can be let in again. Only theirs, only held ones; one that doesn't open is left for its notice.
      */
     public func dropKeptAdmission(_ groupId: String, userId person: String) async throws {
+        try await dropKeptAdmissions(groupId, of: person, heldOnly: true)
+    }
+
+    /* The person's kept admissions deleted in the family's turn: only held ones, or all of them (turned down). */
+    private func dropKeptAdmissions(_ groupId: String, of person: String, heldOnly: Bool) async throws {
         let user = userId
         try await exclusive(groupId) {
             _ = try await self.vault.familyPin(groupId)
@@ -489,7 +514,12 @@ extension FamilySync {
                 } catch CoreError.Sealed {
                     continue
                 }
-                guard case .hold(_, .admit(let who), _) = opened, who.lowercased() == person.lowercased() else { continue }
+                let route: ChainRoute
+                switch opened {
+                case .send(_, let r, _), .landed(_, let r), .superseded(_, let r): if heldOnly { continue } else { route = r }
+                case .hold(_, let r, _): route = r
+                }
+                guard case .admit(let who) = route, who.lowercased() == person.lowercased() else { continue }
                 try self.records.outboxDelete(userId: user, groupId: groupId, outboxId: kept.outboxId)
             }
         }

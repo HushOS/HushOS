@@ -31,6 +31,14 @@ struct TurnDownAsk: Identifiable, Equatable {
     var id: String { "\(groupId)|\(person.userId)" }
 }
 
+/* Let them in stopped at their changed account: resumed once the change is resolved (Continue, or checked); closing only closes. */
+struct ManageChangeAsk: Identifiable {
+    let change: AccountChange
+    let summary: GroupSummary
+    let person: PendingPerson
+    var id: AccountChange.ID { change.id }
+}
+
 struct CancelInvitationAsk: Identifiable, Equatable {
     let groupId: String
     let invitation: FamilyInvitation
@@ -56,7 +64,7 @@ extension DriveStore {
         guard let session = beginSession() else { return }
         do {
             let resumed = try await inFamilyLanding(session, { sync in
-                try await sync.resumeOutbox(groupId) { end in await self.handOver(end, session: session) }
+                try await sync.resumeOutbox(groupId) { end, route in await self.handOver(end, route: route, groupId: groupId, session: session) }
             }, land: { result in await self.landResumed(summary, result, session: session) })
             guard let ends = resumed, !ends.values.contains(.wiped) else { return }
         } catch {
@@ -66,10 +74,16 @@ extension DriveStore {
         await reloadManaged(groupId, session: session)
     }
 
-    /* What a dropped kept call came to, for the session it began in: a refusal waits until it is read. */
-    private func handOver(_ end: CallEnd, session: Session) {
-        guard current(session), case .refused(let words) = end else { return }
-        manageNotices.untilRead(words)
+    /* What a dropped kept call came to, for the session it began in: a refusal, or an admission overtaken, waits until it is read. */
+    private func handOver(_ end: CallEnd, route: ChainRoute?, groupId: String, session: Session) {
+        guard current(session) else { return }
+        let named = { (userId: String) -> String? in
+            let id = userId.lowercased()
+            let name = self.waitingToJoin[groupId]?.first { $0.userId.lowercased() == id }?.name
+                ?? self.familyDetails[groupId]?.members.first { $0.userId.lowercased() == id }?.name
+            return name.map { HushOS.firstName($0) }
+        }
+        if let words = ManageWords.resumed(end, route: route, name: named) { manageNotices.untilRead(words) }
     }
 
     /* A resume's end, the session's: the family checked again after a call landed or was overtaken; a failure said. */
@@ -148,7 +162,7 @@ extension DriveStore {
                 case .refused(let words):
                     waitingRows[key]?.error = words
                 case .changed(let change):
-                    manageChange = change
+                    manageChange = ManageChangeAsk(change: change, summary: summary, person: person)
                 case .keptOther:
                     waitingRows[key]?.keptOther = true
                 case .wiped:
@@ -438,9 +452,10 @@ struct FamilyManageDialogs: ViewModifier {
             } message: { _ in
                 Text("The link in their email stops working. You can invite them again.")
             }
-            .sheet(item: Binding(get: { store.manageChange }, set: { store.manageChange = $0 })) { change in
+            .sheet(item: Binding(get: { store.manageChange }, set: { store.manageChange = $0 })) { ask in
                 NavigationStack {
-                    ContactStepView(step: .changed(change), presented: true) { store.manageChange = nil }
+                    // Resolved (Continue, or checked): Let them in goes on for them. Closing only closes.
+                    ContactStepView(step: .changed(ask.change), resolved: { store.letIn(ask.summary, ask.person) }, presented: true) { store.manageChange = nil }
                 }
                 .environment(store)
             }

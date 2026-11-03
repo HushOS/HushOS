@@ -377,8 +377,8 @@ extension OnFakeDrive {
             let sent = m.server.callBodies.count
             let resume = Task {
                 try await FamilySync.$resendPause.withValue(.milliseconds(200)) {
-                    try await sync.resumeOutbox(groupId) { end in
-                        await heard.add(end, keptThen: (try? records.outboxList(userId: me, groupId: groupId).count) ?? -1)
+                    try await sync.resumeOutbox(groupId) { end, route in
+                        await heard.add(end, route: route, keptThen: (try? records.outboxList(userId: me, groupId: groupId).count) ?? -1)
                     }
                 }
             }
@@ -390,6 +390,58 @@ extension OnFakeDrive {
             #expect(ends.map(\.end) == [.refused(ManageWords.poolFull)], "a refusal of a dropped call wasn't handed over")
             #expect(ends.first?.keptThen == 2, "the refusal was handed over after its entry went")
             #expect(try m.kept.count == 1)
+        }
+
+        /*
+         * Turned down with a Let them in still kept for them: the kept call goes. They accept a later
+         * invitation (no revision moves) and the outbox resumes: they aren't let in by the old call.
+         * Fails if a turned-down person's signed admission survives the decline.
+         */
+        @Test func turningDownDropsTheirKeptAdmission() async throws {
+            let m = try await Self.managed()
+            defer { m.phone.done() }
+            m.server.lock.withLock { m.server.manage.admitAnswers = [Self.noAnswer, Self.noAnswer, Self.noAnswer] }
+            _ = try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) }
+            #expect(try m.kept.count == 1)
+            try await m.phone.sync.turnDown(m.family.groupId, userId: m.grace.userId)
+            #expect(try m.kept.isEmpty, "a turned-down person's admission stayed kept")
+            // They accept another invitation: waiting again, under the same chain.
+            m.server.waiting(m.grace, email: Self.graceEmail, name: "Grace Holm")
+            let chain = m.server.lock.withLock { m.server.chain.count }
+            let sent = m.server.callBodies.count
+            _ = try await Self.quickly { try await m.phone.sync.resumeOutbox(m.family.groupId) }
+            #expect(m.server.callBodies.count == sent, "the old admission was sent after the decline")
+            #expect(m.server.lock.withLock { m.server.chain.count } == chain, "they were let in with nobody pressing Let them in")
+        }
+
+        /*
+         * A kept admission another change overtook is handed over, with its route, before its entry
+         * goes, and said until read: let them in again. Fails if a superseded admission vanishes
+         * without a word.
+         */
+        @Test func anOvertakenAdmissionIsSaidBeforeItsCallGoes() async throws {
+            let m = try await Self.managed()
+            defer { m.phone.done() }
+            m.server.lock.withLock { m.server.manage.admitAnswers = [Self.noAnswer, Self.noAnswer, Self.noAnswer] }
+            _ = try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) }
+            try m.server.creatorChangesTheList()
+            guard case .accepted = await m.phone.sync.sync(m.summary) else { Issue.record("not accepted"); return }
+            let heard = Heard()
+            let (records, me, groupId) = (m.phone.records, m.me, m.family.groupId)
+            _ = try await Self.quickly {
+                try await m.phone.sync.resumeOutbox(groupId) { end, route in
+                    await heard.add(end, route: route, keptThen: (try? records.outboxList(userId: me, groupId: groupId).count) ?? -1)
+                }
+            }
+            let ends = await heard.ends
+            let graceId = m.grace.userId.lowercased()
+            #expect(ends.map(\.end) == [.stale] && ends.map(\.route) == [.admit(userId: graceId)], "an overtaken admission wasn't handed over")
+            #expect(ends.first?.keptThen == 1, "it was handed over after its entry went")
+            #expect(try m.kept.isEmpty)
+            let said = ends.first.flatMap { ManageWords.resumed($0.end, route: $0.route) { $0 == graceId ? "Grace" : nil } }
+            #expect(said == "An earlier admission of Grace wasn’t sent; let them in again.")
+            #expect(ManageWords.resumed(.stale, route: .admit(userId: graceId)) { _ in nil } == "An earlier admission of someone waiting to join wasn’t sent; let them in again.")
+            #expect(ManageWords.resumed(.landed, route: .admit(userId: graceId)) { _ in "Grace" } == nil)
         }
 
         /*
@@ -657,6 +709,6 @@ extension OnFakeDrive {
 
 /* What a resume handed over, with how many calls were still kept as each was. */
 private actor Heard {
-    private(set) var ends: [(end: CallEnd, keptThen: Int)] = []
-    func add(_ end: CallEnd, keptThen: Int) { ends.append((end, keptThen)) }
+    private(set) var ends: [(end: CallEnd, route: ChainRoute?, keptThen: Int)] = []
+    func add(_ end: CallEnd, route: ChainRoute?, keptThen: Int) { ends.append((end, route, keptThen)) }
 }
