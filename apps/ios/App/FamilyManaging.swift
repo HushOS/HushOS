@@ -66,8 +66,8 @@ extension DriveStore {
 
     /*
      * The manager lists of a family: calls kept on this phone sent again first, as the session's
-     * own work (leaving the page doesn't stop it, and each refusal is handed to the notices before
-     * its call goes, said until read), then who waits and the open invitations read again.
+     * own work (leaving the page doesn't stop it; what each call let go of came to is kept on this
+     * phone until said, and said until read), then who waits and the open invitations read again.
      */
     func loadManaged(_ summary: GroupSummary) async {
         let groupId = summary.id
@@ -75,8 +75,7 @@ extension DriveStore {
         do {
             let names = memberNames(groupId)
             let resumed = try await inFamilyLanding(session, { sync in
-                try await sync.resumeOutbox(groupId, names: names, handOver: { end, route in await self.handOver(end, route: route, groupId: groupId, session: session) },
-                                            handed: { to, end in await self.handed(to, end, summary: summary, session: session) })
+                try await sync.resumeOutbox(groupId, names: names, handed: { to, end in await self.handed(to, end, summary: summary, session: session) })
             }, land: { result in await self.landResumed(summary, result, session: session) })
             guard let ends = resumed, !ends.values.contains(.wiped) else { return }
         } catch {
@@ -120,13 +119,18 @@ extension DriveStore {
         guard current(session) else { return }
         let who = memberNames(summary.id)[to.lowercased()] ?? "They"
         sayRole(end, kind: .organizer, who: who)
-        await refreshFamily(summary)
+        await refreshFamily(summary, session: session)
     }
 
-    /* What the staging gate's kept calls came to, said as the resume says them. */
+    /*
+     * What kept calls let go of came to (the resume's, the staging gate's), said as the resume says
+     * them, then let go of: only by the session that looked and is still current, so ends a reset
+     * came between stay kept on this phone for the next look (said twice at worst, never lost).
+     */
     private func sayKeptEnds(_ session: Session) async {
-        guard current(session), let ends = try? await inFamily(session, { await $0.takeKeptEnds() }) else { return }
+        guard current(session), let ends = try? await inFamily(session, { try await $0.keptEnds() }), !ends.isEmpty, current(session) else { return }
         for kept in ends { handOver(kept.end, route: kept.route, groupId: kept.groupId, session: session) }
+        _ = try? await inFamily(session, { try await $0.dropKeptEnds(ends) })
     }
 
     // MARK: Roles
@@ -163,29 +167,37 @@ extension DriveStore {
         Task {
             // Its own session's only: a reset meanwhile already let the page go on (RoleChanges).
             defer { roleChanges.end(token) }
+            var answer: Answered<RoleEnd>?
+            var failure: Error?
             do {
-                guard case .answered(let end) = try await familyAnswer(session, { sync -> RoleEnd in
+                answer = try await familyAnswer(session, { sync -> RoleEnd in
                     switch ask.kind {
                     case .manage: return try await sync.changeRole(summary, userId: person, first: who, change: .grant)
                     case .stop: return try await sync.changeRole(summary, userId: person, first: who, change: .take)
                     case .organizer: return try await sync.handOver(summary, to: person, first: who, names: names)
                     case .finish: return try await sync.finishHandingOver(summary, to: person, first: who, names: names)
                     }
-                }) else { return }
-                await sayKeptEnds(session)
-                if end == .checkFirst { checkFirstAsk = ask; return }
-                sayRole(end, kind: ask.kind, who: who)
-                if end == .wiped { await refreshFamilies(force: true); return }
-                await refreshFamily(summary)
+                })
             } catch {
-                guard current(session) else { return }
-                if endsSession(error) {
-                    report(error)
+                failure = error
+            }
+            // What the gate's kept calls came to, before this one's own words, answered or thrown (kept until said).
+            await sayKeptEnds(session)
+            guard current(session) else { return }
+            if let failure {
+                if endsSession(failure) {
+                    report(failure)
                     return
                 }
-                notify("Couldn’t change that. \(FamilyWords.error(error))")
-                await refreshFamily(summary)
+                notify("Couldn’t change that. \(FamilyWords.error(failure))")
+                await refreshFamily(summary, session: session)
+                return
             }
+            guard case .answered(let end)? = answer else { return }
+            if end == .checkFirst { checkFirstAsk = ask; return }
+            sayRole(end, kind: ask.kind, who: who)
+            if end == .wiped { await refreshFamilies(force: true, session: session); return }
+            await refreshFamily(summary, session: session)
         }
     }
 
@@ -206,10 +218,12 @@ extension DriveStore {
 
     /* A resume's end, the session's: the family checked again after a call landed or was overtaken; a failure said. */
     private func landResumed(_ summary: GroupSummary, _ result: Result<[String: CallEnd], Error>, session: Session) async {
+        // What the calls it let go of came to, first, whether or not it then failed.
+        await sayKeptEnds(session)
         guard current(session) else { return }
         switch result {
         case .success(let ends):
-            if !ends.values.contains(.wiped), ends.values.contains(where: { $0 == .landed || $0 == .stale }) { await refreshFamily(summary) }
+            if !ends.values.contains(.wiped), ends.values.contains(where: { $0 == .landed || $0 == .stale }) { await refreshFamily(summary, session: session) }
         case .failure(let error):
             if endsSession(error) {
                 report(error)
@@ -249,7 +263,9 @@ extension DriveStore {
 
     /* Pull to refresh: the families checked again, and the manager lists read again. */
     func refreshManagedPage(_ groupId: String) async {
-        await refreshFamilies(force: true)
+        guard let session = beginSession() else { return }
+        await refreshFamilies(force: true, session: session)
+        guard current(session) else { return }
         if manages(groupId), let summary = familyList?.first(where: { $0.id == groupId }) { await loadManaged(summary) }
     }
 
@@ -263,6 +279,8 @@ extension DriveStore {
         let first = HushOS.firstName(person.name)
         Task {
             defer { if current(session) { waitingRows[key]?.busy = nil } }
+            var answer: Answered<LetIn>?
+            var failure: Error?
             do {
                 if dropKept {
                     guard case .answered = try await familyAnswer(session, { try await $0.dropKeptAdmission(summary.id, userId: person.userId) }) else { return }
@@ -270,33 +288,38 @@ extension DriveStore {
                 }
                 // Pinning them may have moved trust: what they and anyone else signed is judged again, as after Contacts' add.
                 let trustMoved: @Sendable () async -> Void = { await self.trustMovedByLetIn(session) }
-                guard case .answered(let outcome) = try await familyAnswer(session, { try await $0.letIn(summary, person, trustMoved: trustMoved) }) else { return }
-                // What the gate's kept calls came to, before this one's own words.
-                await sayKeptEnds(session)
-                if let words = ManageWords.letIn(outcome, first: first, family: summary.name) { notify(words) }
-                switch outcome {
-                case .landed:
-                    await reloadManaged(summary.id, session: session)
-                    guard current(session) else { return }
-                    await refreshFamily(summary)
-                case .pending:
-                    break
-                case .refused(let words):
-                    waitingRows[key]?.error = words
-                case .changed(let change):
-                    manageChange = ManageChangeAsk(change: change, summary: summary, person: person)
-                case .keptOther:
-                    waitingRows[key]?.keptOther = true
-                case .wiped:
-                    await refreshFamilies(force: true)
-                }
+                answer = try await familyAnswer(session, { try await $0.letIn(summary, person, trustMoved: trustMoved) })
             } catch {
-                guard current(session) else { return }
-                if endsSession(error) {
-                    report(error)
+                failure = error
+            }
+            // What the gate's kept calls came to, before this one's own words, answered or thrown (kept until said).
+            await sayKeptEnds(session)
+            guard current(session) else { return }
+            if let failure {
+                if endsSession(failure) {
+                    report(failure)
                     return
                 }
-                waitingRows[key]?.error = FamilyWords.error(error)
+                waitingRows[key]?.error = FamilyWords.error(failure)
+                return
+            }
+            guard case .answered(let outcome)? = answer else { return }
+            if let words = ManageWords.letIn(outcome, first: first, family: summary.name) { notify(words) }
+            switch outcome {
+            case .landed:
+                await reloadManaged(summary.id, session: session)
+                guard current(session) else { return }
+                await refreshFamily(summary, session: session)
+            case .pending:
+                break
+            case .refused(let words):
+                waitingRows[key]?.error = words
+            case .changed(let change):
+                manageChange = ManageChangeAsk(change: change, summary: summary, person: person)
+            case .keptOther:
+                waitingRows[key]?.keptOther = true
+            case .wiped:
+                await refreshFamilies(force: true, session: session)
             }
         }
     }

@@ -15,7 +15,7 @@ import HushOSCore
  *   kept calls go with the wipe.
  * - A second press while a call is unanswered sends that call again; nothing new is signed.
  * - One staging gate for every roster call (`stageCall`, Android #281's): whatever is kept for the
- *   family is sent first (what each came to queued for the screens, takeKeptEnds), and nothing new
+ *   family is sent first (what each came to kept until the screens say it, keptEnds), and nothing new
  *   is staged while any is still unresolved, so a new roster never overtakes a kept call.
  * - Staging syncs the chain first and checks the head the server serves against it, and reads
  *   the newcomer's keys from route 16 again every time.
@@ -238,13 +238,13 @@ extension FamilySync {
 
     /*
      * Every call kept for the family, sent again (or let go of) in the family's turn: what each
-     * came to, by outbox id. Stops at a removal. A store that can't be read throws. `handOver`
-     * hears each call that is let go of, before its entry is deleted, so what it came to is said
-     * even when whoever asked has stopped waiting (a page left mid-resend): it runs inside the
-     * family's turn, so it must never wait on the family itself (a sync). `handed` hears what a
-     * handover the resume finished came to, after the turn is let go of: it may sync.
+     * came to, by outbox id. Stops at a removal. A store that can't be read throws. What each call
+     * that is let go of came to is kept to be said before its entry is deleted (`keptEnds`), so it
+     * is said even when whoever asked has stopped waiting (a page left mid-resend, a relaunch).
+     * `handed` hears what a handover the resume finished came to, after the turn is let go of: it
+     * may sync.
      */
-    public func resumeOutbox(_ groupId: String, names: [String: String] = [:], handOver: (@Sendable (CallEnd, ChainRoute?) async -> Void)? = nil,
+    public func resumeOutbox(_ groupId: String, names: [String: String] = [:],
                              handed: (@Sendable (String, RoleEnd) async -> Void)? = nil) async throws -> [String: CallEnd] {
         let user = userId
         let (out, settled) = try await exclusive(groupId) { () -> ([String: CallEnd], (String, RoleEnd)?) in
@@ -252,7 +252,7 @@ extension FamilySync {
             var settled: (String, RoleEnd)?
             do {
                 for kept in try self.records.outboxList(userId: user, groupId: groupId) {
-                    let end = try await self.sendKept(groupId, outboxId: kept.outboxId, entry: kept.entry, only: nil, handOver: handOver)
+                    let end = try await self.sendKept(groupId, outboxId: kept.outboxId, entry: kept.entry, only: nil, saysLater: true)
                     out[kept.outboxId] = end
                     if end == .wiped { break }
                 }
@@ -275,13 +275,15 @@ extension FamilySync {
      * call on that route (a person's admission, a change of their roles) looks only at its own;
      * anyone else's is `other`, untouched.
      */
-    func sendKept(_ groupId: String, outboxId: String, entry: String, only: ChainRoute?,
-                  handOver: (@Sendable (CallEnd, ChainRoute?) async -> Void)? = nil) async throws -> CallEnd {
+    func sendKept(_ groupId: String, outboxId: String, entry: String, only: ChainRoute?, saysLater: Bool = false) async throws -> CallEnd {
         var sends = 0
         var fixes = 0
-        // What the call came to is handed over first, then its entry goes: a caller that stops waiting loses nothing.
+        // `saysLater`: a call nobody waits on for its own answer (the resume, the gate) keeps what it came to to be said,
+        // first, then its entry goes: a crash in between says it once (one per outbox id), and a relaunch loses nothing.
         func drop(_ end: CallEnd, _ route: ChainRoute?) async throws {
-            await handOver?(end, route)
+            if saysLater, let unsaid = FamilyRecords.UnsaidEnd(outboxId: outboxId, end: end, route: route) {
+                try records.keepUnsaid(userId: userId, groupId: groupId, unsaid)
+            }
             try records.outboxDelete(userId: userId, groupId: groupId, outboxId: outboxId)
         }
         while true {
@@ -494,8 +496,8 @@ extension FamilySync {
 
     /*
      * The one staging path of every roster call (the web's stageLocked, Android's stageCall). First
-     * the gate: every call kept for the family is sent as it was signed (what each came to queued
-     * for the screens, takeKeptEnds), and while any is still unresolved nothing new is staged
+     * the gate: every call kept for the family is sent as it was signed (what each came to kept until
+     * the screens say it, keptEnds), and while any is still unresolved nothing new is staged
      * (`waiting`): a new roster would overtake it, and its next resume would drop it as superseded,
      * unseen. Then the chain synced in this turn, the head the server serves checked against it
      * (a change between the two: synced again), the settings read afresh, every member's ML-KEM key,
@@ -509,9 +511,7 @@ extension FamilySync {
         summaries[groupId] = summary
         families[groupId] = summary.name
         for call in try records.outboxList(userId: userId, groupId: groupId) {
-            let end = try await sendKept(groupId, outboxId: call.outboxId, entry: call.entry, only: nil) { end, route in
-                await self.noteKept(groupId, route, end)
-            }
+            let end = try await sendKept(groupId, outboxId: call.outboxId, entry: call.entry, only: nil, saysLater: true)
             if end == .wiped { return .wiped }
         }
         if try !records.outboxList(userId: userId, groupId: groupId).isEmpty { return .waiting }
@@ -567,13 +567,30 @@ extension FamilySync {
         return .refused(ManageWords.keepsChanging(summary.name))
     }
 
-    /* A kept call the gate let go of, for the screens. */
-    private func noteKept(_ groupId: String, _ route: ChainRoute?, _ end: CallEnd) { keptEnds.append((groupId, route, end)) }
+    /* One kept call let go of whose end is still to be said: `outboxId` is what `dropKeptEnds` lets go of once it is. */
+    public struct KeptEnd: Sendable, Equatable {
+        public let groupId: String
+        public let outboxId: String
+        public let route: ChainRoute?
+        public let end: CallEnd
+    }
 
-    /* What the kept calls the staging gate sent came to since the last look, each once. */
-    public func takeKeptEnds() -> [(groupId: String, route: ChainRoute?, end: CallEnd)] {
-        defer { keptEnds = [] }
-        return keptEnds
+    /*
+     * What the kept calls the resume and the staging gate let go of came to and is still to be said, for this account,
+     * read only: kept on this phone until a screen says it (`dropKeptEnds`), so one the session changed under, or the
+     * app stopped before, is said by the next look. A store that can't be read throws.
+     */
+    public func keptEnds() throws -> [KeptEnd] {
+        try records.unsaidList(userId: userId).compactMap { kept in
+            kept.end.said.map { KeptEnd(groupId: kept.groupId, outboxId: kept.end.outboxId, route: $0.route, end: $0.end) }
+        }
+    }
+
+    /* Lets go of the ends a screen said; one kept since it looked stays. */
+    public func dropKeptEnds(_ said: [KeptEnd]) throws {
+        for (groupId, ends) in Dictionary(grouping: said, by: \.groupId) {
+            try records.dropUnsaid(userId: userId, groupId: groupId, outboxIds: Set(ends.map(\.outboxId)))
+        }
     }
 
     /* Route 8's seal opened by the ledger (a first change after a key change); the words when it can't be. */

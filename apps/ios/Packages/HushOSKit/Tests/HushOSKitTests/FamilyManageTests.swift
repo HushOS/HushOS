@@ -210,7 +210,6 @@ extension OnFakeDrive {
             m.server.lock.withLock { m.server.manage.admitAnswers = [] }
             #expect(try await Self.quickly { try await m.phone.sync.letIn(m.summary, adaRow) } == .landed)
             #expect(try m.kept.isEmpty)
-            #expect(await m.phone.sync.takeKeptEnds().contains { $0.end == .landed }, "what Grace's kept call came to went unsaid")
         }
 
         /*
@@ -381,10 +380,11 @@ extension OnFakeDrive {
 
         /*
          * Whoever asked for the resume stops waiting mid-resend (its page left): a call already refused
-         * was handed over before its entry went, so the refusal is still said; the call after it stays
-         * kept. Fails if what a dropped call came to reaches only a caller that may have gone.
+         * was kept to be said before its entry went, so the refusal is still said, by the next process
+         * too; the call after it stays kept. Fails if what a dropped call came to reaches only a caller
+         * that may have gone.
          */
-        @Test func aRefusalIsHandedOverBeforeItsCallGoesEvenWhenTheResumeStops() async throws {
+        @Test func aRefusalIsKeptToBeSaidEvenWhenTheResumeStops() async throws {
             let m = try await Self.managed()
             defer { m.phone.done() }
             m.server.lock.withLock { m.server.manage.admitAnswers = Array(repeating: Self.noAnswer, count: 6) }
@@ -404,24 +404,19 @@ extension OnFakeDrive {
             m.server.lock.withLock {
                 m.server.manage.admitAnswers = [answering(409, ["code": "pool-full", "message": "No room."])] + Array(repeating: Self.noAnswer, count: 3)
             }
-            let heard = Heard()
-            let (records, me, groupId, sync) = (m.phone.records, m.me, m.family.groupId, m.phone.sync)
+            let (groupId, sync) = (m.family.groupId, m.phone.sync)
             let sent = m.server.callBodies.count
             let resume = Task {
-                try await FamilySync.$resendPause.withValue(.milliseconds(200)) {
-                    try await sync.resumeOutbox(groupId) { end, route in
-                        await heard.add(end, route: route, keptThen: (try? records.outboxList(userId: me, groupId: groupId).count) ?? -1)
-                    }
-                }
+                try await FamilySync.$resendPause.withValue(.milliseconds(200)) { try await sync.resumeOutbox(groupId) }
             }
             // The second call sent once and waiting out its pause: the caller stops waiting.
             for _ in 0 ..< 500 where m.server.callBodies.count < sent + 2 { try await Task.sleep(for: .milliseconds(10)) }
             resume.cancel()
             _ = await resume.result
-            let ends = await heard.ends
-            #expect(ends.map(\.end) == [.refused(ManageWords.poolFull)], "a refusal of a dropped call wasn't handed over")
-            #expect(ends.first?.keptThen == 2, "the refusal was handed over after its entry went")
             #expect(try m.kept.count == 1)
+            // The page that asked is gone, and so is the process: the next one still has it to say.
+            let next = try await m.family.phone(m.server, records: m.phone.records, guards: m.phone.guards)
+            #expect(try await next.sync.keptEnds().map(\.end) == [.refused(ManageWords.poolFull)], "a refusal of a dropped call went unsaid")
         }
 
         /*
@@ -524,8 +519,8 @@ extension OnFakeDrive {
         }
 
         /*
-         * A kept admission another change overtook is handed over, with its route, before its entry
-         * goes, and said until read: let them in again. Fails if a superseded admission vanishes
+         * A kept admission another change overtook is kept to be said, with its route, before its
+         * entry goes, and said until read: let them in again. Fails if a superseded admission vanishes
          * without a word.
          */
         @Test func anOvertakenAdmissionIsSaidBeforeItsCallGoes() async throws {
@@ -535,22 +530,72 @@ extension OnFakeDrive {
             _ = try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) }
             try m.server.creatorChangesTheList()
             guard case .accepted = await m.phone.sync.sync(m.summary) else { Issue.record("not accepted"); return }
-            let heard = Heard()
-            let (records, me, groupId) = (m.phone.records, m.me, m.family.groupId)
-            _ = try await Self.quickly {
-                try await m.phone.sync.resumeOutbox(groupId) { end, route in
-                    await heard.add(end, route: route, keptThen: (try? records.outboxList(userId: me, groupId: groupId).count) ?? -1)
-                }
-            }
-            let ends = await heard.ends
+            _ = try await Self.quickly { try await m.phone.sync.resumeOutbox(m.family.groupId) }
+            let ends = try await m.phone.sync.keptEnds()
             let graceId = m.grace.userId.lowercased()
-            #expect(ends.map(\.end) == [.stale] && ends.map(\.route) == [.admit(userId: graceId)], "an overtaken admission wasn't handed over")
-            #expect(ends.first?.keptThen == 1, "it was handed over after its entry went")
+            #expect(ends.map(\.end) == [.stale] && ends.map(\.route) == [.admit(userId: graceId)], "an overtaken admission wasn't kept to be said")
             #expect(try m.kept.isEmpty)
             let said = ends.first.flatMap { ManageWords.resumed($0.end, route: $0.route) { $0 == graceId ? "Grace" : nil } }
             #expect(said == "An earlier admission of Grace wasn’t sent; let them in again.")
             #expect(ManageWords.resumed(.stale, route: .admit(userId: graceId)) { _ in nil } == "An earlier admission of someone waiting to join wasn’t sent; let them in again.")
             #expect(ManageWords.resumed(.landed, route: .admit(userId: graceId)) { _ in "Grace" } == nil)
+        }
+
+        /*
+         * Codex #285 round 2: what the staging gate let go of is kept on this phone, not only in the
+         * process: Ada's Let them in sends Grace's kept call first, which another change overtook, and
+         * the next process (a relaunch before any screen said it, or a screen whose request then threw)
+         * still has it to say. Fails if the gate's ends live only in memory.
+         */
+        @Test func whatTheGateLetGoOfOutlivesTheProcess() async throws {
+            let m = try await Self.managed()
+            defer { m.phone.done() }
+            m.server.lock.withLock { m.server.manage.admitAnswers = [Self.noAnswer, Self.noAnswer, Self.noAnswer] }
+            _ = try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) }
+            try m.server.creatorChangesTheList()
+            guard case .accepted = await m.phone.sync.sync(m.summary) else { Issue.record("not accepted"); return }
+            m.server.lock.withLock { m.server.manage.admitAnswers = [] }
+            let ada = try await onLargeStack { try FamilyPerson() }
+            m.server.waiting(ada, email: "ada@example.com", name: "Ada Lindqvist")
+            let adaRow = try #require(try await m.phone.sync.waitingToJoin(m.family.groupId).first { $0.userId == ada.userId.lowercased() })
+            _ = try await Self.quickly { try await m.phone.sync.letIn(m.summary, adaRow) }
+            #expect(try m.kept.isEmpty)
+            let next = try await m.family.phone(m.server, records: m.phone.records, guards: m.phone.guards)
+            let ends = try await next.sync.keptEnds()
+            #expect(ends.map(\.end) == [.stale] && ends.map(\.route) == [.admit(userId: m.grace.userId.lowercased())], "the gate's end went with the process")
+        }
+
+        /*
+         * Said once, and only what was said goes: reading the ends lets go of none; an entry that
+         * comes back (the app stopped after keeping its end, before deleting it) and ends the same
+         * way again is kept once; letting go of what a screen said keeps an end kept after it looked.
+         * Fails if a look loses ends a reset came between, a crash says one twice, or a drop takes
+         * an end nobody said.
+         */
+        @Test func keptEndsAreLetGoOfOnlyOnceSaid() async throws {
+            let m = try await Self.managed()
+            defer { m.phone.done() }
+            m.server.lock.withLock { m.server.manage.admitAnswers = [Self.noAnswer, Self.noAnswer, Self.noAnswer] }
+            _ = try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) }
+            let outbox = m.phone.records.folder.appendingPathComponent("outbox", isDirectory: true)
+            let graceFile = try #require(try FileManager.default.contentsOfDirectory(at: outbox, includingPropertiesForKeys: nil).first { $0.pathExtension == "call" })
+            let copy = try Data(contentsOf: graceFile)
+            try m.server.creatorChangesTheList()
+            guard case .accepted = await m.phone.sync.sync(m.summary) else { Issue.record("not accepted"); return }
+            _ = try await Self.quickly { try await m.phone.sync.resumeOutbox(m.family.groupId) }
+            #expect(try await m.phone.sync.keptEnds().count == 1)
+            let looked = try await m.phone.sync.keptEnds()
+            #expect(looked.count == 1, "a look let go of what it read")
+            // The entry back, as if the app stopped between keeping its end and deleting it: overtaken again.
+            try copy.write(to: graceFile)
+            _ = try await Self.quickly { try await m.phone.sync.resumeOutbox(m.family.groupId) }
+            #expect(try m.kept.isEmpty)
+            #expect(try await m.phone.sync.keptEnds() == looked, "an entry that came back was said twice")
+            // Another end kept after the screen looked, then what it said let go of.
+            let later = try #require(FamilyRecords.UnsaidEnd(outboxId: UUID().uuidString, end: .refused("Later."), route: nil))
+            try m.phone.records.keepUnsaid(userId: m.me, groupId: m.family.groupId, later)
+            try await m.phone.sync.dropKeptEnds(looked)
+            #expect(try await m.phone.sync.keptEnds().map(\.end) == [.refused("Later.")], "letting go of what was said took an end kept since")
         }
 
         /*

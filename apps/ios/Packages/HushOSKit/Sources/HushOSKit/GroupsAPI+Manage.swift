@@ -330,6 +330,92 @@ extension FamilyRecords {
         }
     }
 
+    /*
+     * What a kept call that was let go of came to, while it is still to be said (Codex #285): kept from before its entry
+     * is deleted until a screen of the same account has said it, so a relaunch, a reset or a page that stopped waiting
+     * loses none. Only the ends that have words (`ManageWords.resumed`): a refusal, or an admission or role change that
+     * another change overtook. One per outbox id, so an entry that comes back after a crash is said once.
+     */
+    struct UnsaidEnd: Codable, Sendable, Equatable {
+        let outboxId: String
+        /* "refused", "admit" (an overtaken admission) or "member" (an overtaken role change). */
+        let kind: String
+        let words: String?
+        let userId: String?
+
+        init?(outboxId: String, end: CallEnd, route: ChainRoute?) {
+            self.outboxId = outboxId.lowercased()
+            switch (end, route) {
+            case (.refused(let words), _): (kind, self.words, userId) = ("refused", words, nil)
+            case (.stale, .admit(let userId)?): (kind, words, self.userId) = ("admit", nil, userId.lowercased())
+            case (.stale, .member(let userId)?): (kind, words, self.userId) = ("member", nil, userId.lowercased())
+            default: return nil
+            }
+        }
+
+        /* The end and route it was kept from, or nil for one this build can't read. */
+        var said: (end: CallEnd, route: ChainRoute?)? {
+            switch kind {
+            case "refused": return words.map { (.refused($0), nil) }
+            case "admit": return userId.map { (.stale, .admit(userId: $0)) }
+            case "member": return userId.map { (.stale, .member(userId: $0)) }
+            default: return nil
+            }
+        }
+    }
+
+    private func unsaidFile(_ userId: String, _ groupId: String) -> URL? {
+        guard Self.valid(userId.lowercased()), Self.valid(groupId) else { return nil }
+        return outboxFolder.appendingPathComponent("\(userId.lowercased())_\(groupId).unsaid")
+    }
+
+    private func unsaid(_ url: URL) throws -> [UnsaidEnd] {
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        guard let data = try? Data(contentsOf: url), let ends = try? JSONDecoder().decode([UnsaidEnd].self, from: data) else { throw GuardError.unreadable }
+        return ends
+    }
+
+    private func writeUnsaid(_ ends: [UnsaidEnd], to url: URL) throws {
+        if ends.isEmpty {
+            try? FileManager.default.removeItem(at: url)
+            if FileManager.default.fileExists(atPath: url.path) { throw GuardError.unsaved }
+            return
+        }
+        do { try JSONEncoder().encode(ends).write(to: url, options: .atomic) } catch { throw GuardError.unsaved }
+    }
+
+    /* Kept to be said, before the entry it is about is deleted; once per outbox id. */
+    func keepUnsaid(userId: String, groupId: String, _ end: UnsaidEnd) throws {
+        guard let url = unsaidFile(userId, groupId), Self.valid(end.outboxId) else { throw GuardError.unsaved }
+        Unbacked.folder(folder)
+        try underLock {
+            try FileManager.default.createDirectory(at: outboxFolder, withIntermediateDirectories: true)
+            let ends = try unsaid(url)
+            guard !ends.contains(where: { $0.outboxId == end.outboxId }) else { return }
+            try writeUnsaid(ends + [end], to: url)
+        }
+    }
+
+    /* Every end still to be said for this account, by family, oldest first; read only (said, then `dropUnsaid`). */
+    func unsaidList(userId: String) throws -> [(groupId: String, end: UnsaidEnd)] {
+        guard Self.valid(userId.lowercased()), let names = try outboxNames([]) else { return [] }
+        let prefix = "\(userId.lowercased())_"
+        var out: [(groupId: String, end: UnsaidEnd)] = []
+        for url in names.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+        where url.lastPathComponent.hasPrefix(prefix) && url.pathExtension == "unsaid" {
+            let groupId = String(url.deletingPathExtension().lastPathComponent.dropFirst(prefix.count))
+            guard Self.valid(groupId) else { continue }
+            for end in try unsaid(url) { out.append((groupId, end)) }
+        }
+        return out
+    }
+
+    /* Lets go of the ends a screen said, and only those: one kept since the list stays. */
+    func dropUnsaid(userId: String, groupId: String, outboxIds: Set<String>) throws {
+        guard let url = unsaidFile(userId, groupId) else { return }
+        try underLock { try writeUnsaid(try unsaid(url).filter { !outboxIds.contains($0.outboxId) }, to: url) }
+    }
+
     /* A wipe of the family: every call kept for it goes, before the record that ties them to it. */
     func outboxDeleteAll(userId: String, groupId: String) throws {
         // Nothing ever kept: nothing to take (and no lock needed). One that can't be reached throws.
@@ -342,10 +428,10 @@ extension FamilyRecords {
             if names.contains(where: { $0.lastPathComponent.hasPrefix(prefix) && FileManager.default.fileExists(atPath: $0.path) }) {
                 throw GuardError.unsaved
             }
-            // The handover under way goes with the family too.
-            if let handover = handoverFile(userId, groupId) {
-                try? FileManager.default.removeItem(at: handover)
-                if FileManager.default.fileExists(atPath: handover.path) { throw GuardError.unsaved }
+            // The handover under way, and what is still to be said about its calls, go with the family too.
+            for url in [handoverFile(userId, groupId), unsaidFile(userId, groupId)].compactMap({ $0 }) {
+                try? FileManager.default.removeItem(at: url)
+                if FileManager.default.fileExists(atPath: url.path) { throw GuardError.unsaved }
             }
         }
     }

@@ -88,7 +88,7 @@ extension FamilySync {
                     guard let opened = try? self.ledger.outboxOpen(groupId: groupId, outboxId: kept.outboxId, userId: me, entry: kept.entry) else { continue }
                     let about = Self.person(of: Self.route(of: opened))
                     guard about == earlier.to || about == me.lowercased() else { continue }
-                    if try await self.sendKept(groupId, outboxId: kept.outboxId, entry: kept.entry, only: nil) == .wiped { return .wiped }
+                    if try await self.sendKept(groupId, outboxId: kept.outboxId, entry: kept.entry, only: nil, saysLater: true) == .wiped { return .wiped }
                 }
                 let settled = try await self.finishHandover(groupId, names: names)
                 if try self.records.handover(userId: me, groupId: groupId) != nil { return .refused("Finish handing over to \(them) first.") }
