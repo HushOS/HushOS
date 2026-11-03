@@ -298,6 +298,10 @@ class FamilySyncTest {
      */
     @Test
     fun aFlatCopyAnEarlierReleaseLeftGoesAtStartUnlessItIsTheOwnDrives() {
+        // The mirror is one per process and Robolectric keeps statics between tests: one an earlier test left at the head
+        // of the same workspace's feed never files Mine.txt, and its copy would read as someone else's.
+        Mirror::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)
+        org.robolectric.RuntimeEnvironment.getApplication().deleteDatabase("mirror.db")
         val mine = server.file(server.root, "Mine.txt", "my own".toByteArray())
         val first = family.phone()
         first.vault.buildCatalogue()

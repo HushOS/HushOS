@@ -8,8 +8,6 @@ import android.database.Cursor
 import android.database.MatrixCursor
 import android.graphics.Point
 import android.os.CancellationSignal
-import android.os.Handler
-import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
@@ -352,8 +350,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             return@guarded ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         }
         val edit = personalEdit(vault, id, mode)
-        val handler = Handler(Looper.getMainLooper())
-        ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), handler) { error -> onEditClosed(error, vault, edit, item) }
+        ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), WriteBacks.closes) { error -> onEditClosed(error, vault, edit, item) }
     }
 
     /*

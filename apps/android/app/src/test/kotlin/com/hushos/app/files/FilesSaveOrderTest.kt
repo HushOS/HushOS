@@ -97,7 +97,8 @@ class FilesSaveOrderTest {
     /* Another app opens the file, writes `text` and closes it, through the provider's real close callback. */
     private fun save(provider: HushOSDocumentsProvider, notes: String, text: String, mode: String = "w") {
         ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(notes, mode, null)).use { it.write(text.toByteArray()) }
-        shadowOf(Looper.getMainLooper()).idle()
+        // The close callbacks' own thread (WriteBacks.closes), run until the save is kept.
+        shadowOf(WriteBacks.closes.looper).idle()
     }
 
     /* What another app opening the file in `mode` reads. */
@@ -626,6 +627,104 @@ class FilesSaveOrderTest {
         assertEquals(WorkInfo.State.ENQUEUED, jobs(slot).single { it.id != finished.id }.state)
         assertEquals(ListenableWorker.Result.success(), runSlot(slot))
         assertEquals("second save", serverText(notes))
+    }
+
+    /*
+     * Another app's close callback keeps its save on the saves' own thread, never the main one: copying a large file
+     * under the slot's lock there would hold up every screen of the app. Fails if close callbacks run on the main looper.
+     */
+    @Test
+    fun aSaveIsKeptOffTheMainThread() {
+        val provider = provider()
+        val notes = notes(provider)
+        var onMain: Boolean? = null
+        WriteBacks.afterContent = { WriteBacks.afterContent = null; onMain = Looper.myLooper() == Looper.getMainLooper() }
+        save(provider, notes, "kept off the main thread")
+        assertEquals(false, onMain)
+        assertEquals("kept off the main thread", opened(provider, notes, "r"))
+    }
+
+    /*
+     * A save's completion lands with its answer lost while a newer save arrives during that same upload: the run goes on to
+     * the newer save, settles the earlier one as landed, and sends the newer one over the version that landed. Fails if
+     * the newer save goes out from the vault that still holds the version before (the server refuses it for good).
+     */
+    @Test
+    fun aNewerSaveAfterAnUncertainCompletionReplacesTheVersionThatLanded() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "first save")
+        val target = WriteBacks.pending(app, slot)!!.target
+        // Every answer to the first save's completion lost (each try of it), the newer save arriving at the first.
+        var first: String? = null
+        server.dropReply = { method, path ->
+            if (method == "POST" && path.endsWith("/complete") && first == null) {
+                first = path
+                WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "meanwhile").apply { writeText("second save") })
+            }
+            path == first
+        }
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("second save", serverText(notes))
+        assertNull(WriteBacks.pending(app, slot))
+    }
+
+    /*
+     * An earlier save's completion answer is lost, and the next run can't settle it (its abort unanswered): a newer save
+     * waits rather than starting while the earlier one could still land under it. Once the earlier one settles, the newer
+     * goes. Fails if a save starts while an earlier save of the file has a reservation unsettled.
+     */
+    @Test
+    fun aNewerSaveWaitsWhileAnEarlierOnesReservationIsUnsettled() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "first save")
+        dropFromTheCompletion()
+        assertEquals(ListenableWorker.Result.retry(), runSlot(slot))
+        save(provider, notes, "second save")
+        server.dropReply = { _, path -> path.endsWith("/abort") }
+        assertEquals(ListenableWorker.Result.retry(), runSlot(slot))
+        assertEquals("a newer save started over an unsettled one", 1, begins())
+        server.dropReply = null
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals(2, begins())
+        assertEquals("second save", serverText(notes))
+    }
+
+    /*
+     * A save queued behind its file's running job when that job failed for good: WorkManager fails it with its predecessor
+     * without running it. The panel's rebuild makes no row of it, and the sweep gives the save a job of its own, which
+     * lands. Fails if a predecessor's failure strands a newer save until a manual Retry.
+     */
+    @Test
+    fun aSaveFailedOnlyWithItsPredecessorGetsAJobOfItsOwn() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "refused save")
+        val failedFile = WriteBacks.contentOf(app, slot)
+        val queued = jobs(slot).single()
+        refuseBegins(true)
+        assertEquals(ListenableWorker.Result.failure()::class, runSlot(slot)::class)
+        refuseBegins(false)
+        WorkManager.getInstance(app).cancelWorkById(queued.id).result.get()
+        WriteBacks.save(app, Reservations.generation, WriteBacks.pending(app, slot)!!.target, File(app.cacheDir, "behind").apply { writeText("newer save") })
+        val session = TransferQueue.accountTag(Shared.session(app)!!)
+        val predecessor = TransferQueue.slotRequest(java.util.UUID.fromString(FailedTransfers.of(app).all().single().id), slot, failedFile, session = session)
+        val behind = TransferQueue.slotRequest(java.util.UUID.randomUUID(), slot, WriteBacks.contentOf(app, slot), session = session)
+        val infos = listOf(
+            WorkInfo(predecessor.id, WorkInfo.State.FAILED, predecessor.tags, androidx.work.Data.Builder().putAll(predecessor.workSpec.input).putString("message", "Refused.").build()),
+            WorkInfo(behind.id, WorkInfo.State.FAILED, behind.tags),
+        )
+        TransferQueue.recordUnrecordedFailures(app, infos, emptySet(), Reservations.generation) { "Notes.txt" }
+        assertEquals(listOf(predecessor.id.toString()), FailedTransfers.of(app).all().map { it.id })
+        TransferQueue.sweep(app, infos)
+        assertEquals(WorkInfo.State.ENQUEUED, jobs(slot).single { it.id != queued.id }.state)
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("newer save", serverText(notes))
+        assertTrue(FailedTransfers.of(app).all().isEmpty())
     }
 
     /*

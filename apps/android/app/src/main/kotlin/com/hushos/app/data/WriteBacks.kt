@@ -178,6 +178,12 @@ object WriteBacks {
     }
 
     /*
+     * Where every close callback of another app's edit runs (personal and family alike): one thread of its own, so saves
+     * keep the order the app closed them in, and copying a large file under a slot's lock never holds up the main thread.
+     */
+    val closes: android.os.Handler by lazy { android.os.Handler(android.os.HandlerThread("HushOSSaves").apply { start() }.looper) }
+
+    /*
      * Slots a job landed while this process ran: the provider's own vault, which didn't send it, may still hold the
      * version before, so its next read of the file checks the version with the server first (then `caughtUp`).
      */
