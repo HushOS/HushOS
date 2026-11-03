@@ -1,0 +1,31 @@
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_9559cd41b2e635 141
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyFiles.swift
+  s_d90443f0bf4916::t_20661c941a78b4 268,328-329,334-339,342,344-345,347-354,359-360,364,369,481-482,541-542
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyFilesTests.swift
+  s_566b8e0c4467a4::t_dff00098a81e78 425,427,475,477-478,604,614,671-705
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "23db131c4faffd0628e67f66686e93f03ce82f5f",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_d90443f0bf4916": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1a3d4-4b1e-7af3-83af-f3b4c6ca2c5a",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
