@@ -112,7 +112,7 @@ storeFile=/Users/<you>/.hushos/hushos-upload.jks
 keyAlias=upload
 ```
 
-`apps/android/scripts/bundle-release.sh` (`bun run android:bundle`) takes the password from `HUSHOS_UPLOAD_STORE_PASSWORD` or, failing that, from the keychain item `hushos-android-upload`. It builds `app/build/outputs/bundle/release/app-release.aab`, refuses a debug-signed result, and prints the signing certificate's SHA-256. In CI you would set the four environment variables from the CI's secret store instead.
+`apps/android/scripts/bundle-release.sh` (`bun run android:bundle`) takes the password from `HUSHOS_UPLOAD_STORE_PASSWORD` or, failing that, from the keychain item `hushos-android-upload`. It builds `app/build/outputs/bundle/release/app-release.aab`, refuses a debug-signed result, and prints the signing certificate's SHA-256. In CI (`.github/workflows/android-release.yml`) the keystore and its password come from the `play` environment's secrets, as these variables (google-play-ci.md).
 
 Check which key a build would use without building: `cd apps/android && ./gradlew :app:signingReport` (the `release` variant shows `Config: upload` when the key is wired, `debug` otherwise).
 

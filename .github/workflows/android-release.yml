@@ -1,0 +1,321 @@
+name: Android release
+
+# The Android app of a release, built from its tag and sent to Google Play without anyone
+# dragging files into Play Console. When release.yml's release-please publishes vX.Y.Z (as the
+# release GitHub App, so the event starts this workflow), the bundle job builds the signed App
+# Bundle at the tag (apps/android/scripts/bundle-release.sh) and checks it (check-bundle.sh:
+# the upload key, the version, the phones it reaches against the previous release's APK); the
+# play job puts it on the internal testing track, rolled out to the testers
+# (play-publish.sh); then the apk job builds the APK, attaches it to the GitHub release and
+# writes the notes' Android section (release-apk.sh). Production is a separate, deliberate
+# step, run by hand from the tag once the internal build has been checked on a phone:
+#
+#   gh workflow run android-release.yml --ref vX.Y.Z -f action=promote
+#
+# Every job that holds a key runs in the `play` environment, which only v* tags may use, so a
+# run from a branch can neither sign nor publish: a run by hand must name the tag with --ref,
+# and this workflow takes the tag from that ref. Google is reached through Workload Identity
+# Federation (the environment's PLAY_WIF_PROVIDER and PLAY_SERVICE_ACCOUNT variables): no
+# Google key exists to leak. Until the environment holds those and the upload key, the bundle
+# job says what is missing and the run succeeds without doing anything.
+# See CONTRIBUTING.md (Releasing) and docs/release/google-play-ci.md.
+on:
+    release:
+        types: [published]
+    workflow_dispatch:
+        inputs:
+            action:
+                description: >-
+                    upload: build, check, and send to internal testing (then the APK). dry-run:
+                    build, check, and have Play validate it, committing nothing. promote: the
+                    internal release of this tag to production, 100%.
+                type: choice
+                options: [upload, dry-run, promote]
+                default: upload
+            accept-device-change:
+                description: >-
+                    Upload even though the phones the release reaches (minSdk, ABIs, required
+                    features) differ from the previous release's.
+                type: boolean
+                default: false
+
+permissions: {}
+
+# One run per tag at a time, and none cancelled half-way through a Play edit.
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    release:
+        name: Release tag
+        runs-on: ubuntu-latest
+        timeout-minutes: 2
+        outputs:
+            tag: ${{ steps.tag.outputs.tag }}
+            version: ${{ steps.tag.outputs.version }}
+            action: ${{ steps.tag.outputs.action }}
+        steps:
+            - name: The tag and what to do with it
+              id: tag
+              env:
+                  REF: ${{ github.ref }}
+                  ACTION: ${{ inputs.action || 'upload' }}
+                  PRERELEASE: ${{ github.event.release.prerelease || false }}
+              run: |
+                  if [[ ! "$REF" =~ ^refs/tags/(v([0-9]+\.[0-9]+\.[0-9]+))$ ]]; then
+                      if [[ "$GITHUB_EVENT_NAME" == release ]]; then
+                          echo "::notice title=Not a release tag::$REF is not a vX.Y.Z tag; nothing goes to Google Play."
+                          echo "action=none" >> "$GITHUB_OUTPUT"
+                          exit 0
+                      fi
+                      echo "::error title=Run it from the tag::This workflow takes the release from the ref it runs on, and $REF is not a vX.Y.Z tag: gh workflow run android-release.yml --ref vX.Y.Z -f action=$ACTION"
+                      exit 1
+                  fi
+                  if [[ "$PRERELEASE" == true ]]; then
+                      echo "::notice title=Prerelease::${BASH_REMATCH[1]} is a prerelease; nothing goes to Google Play."
+                      echo "action=none" >> "$GITHUB_OUTPUT"
+                      exit 0
+                  fi
+                  {
+                      echo "tag=${BASH_REMATCH[1]}"
+                      echo "version=${BASH_REMATCH[2]}"
+                      echo "action=$ACTION"
+                  } >> "$GITHUB_OUTPUT"
+                  echo "${BASH_REMATCH[1]}: $ACTION"
+
+    # Builds and checks the bundle; it holds the upload key and nothing that reaches Google.
+    bundle:
+        name: Build and check the bundle
+        needs: release
+        if: needs.release.outputs.action == 'upload' || needs.release.outputs.action == 'dry-run'
+        runs-on: ubuntu-latest
+        timeout-minutes: 60
+        environment: play
+        permissions:
+            contents: read
+        outputs:
+            configured: ${{ steps.setup.outputs.configured }}
+            code: ${{ steps.build.outputs.code }}
+        steps:
+            - name: Release credentials
+              id: setup
+              env:
+                  WIF_PROVIDER: ${{ vars.PLAY_WIF_PROVIDER }}
+                  SERVICE_ACCOUNT: ${{ vars.PLAY_SERVICE_ACCOUNT }}
+                  HAS_KEYSTORE: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 != '' }}
+                  HAS_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD != '' }}
+              run: |
+                  missing=()
+                  [[ -n "$WIF_PROVIDER" ]] || missing+=("variable PLAY_WIF_PROVIDER")
+                  [[ -n "$SERVICE_ACCOUNT" ]] || missing+=("variable PLAY_SERVICE_ACCOUNT")
+                  [[ "$HAS_KEYSTORE" == true ]] || missing+=("secret ANDROID_UPLOAD_KEYSTORE_BASE64")
+                  [[ "$HAS_PASSWORD" == true ]] || missing+=("secret ANDROID_UPLOAD_STORE_PASSWORD")
+                  if (( ${#missing[@]} )); then
+                      list=$(printf '%s, ' "${missing[@]}")
+                      echo "::notice title=Google Play is not set up::The play environment lacks ${list%, }; nothing was built or sent. See docs/release/google-play-ci.md."
+                      echo "configured=false" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "configured=true" >> "$GITHUB_OUTPUT"
+                  fi
+            # Full history: the versionCode is the commit count, and build-number.sh checks the
+            # tag is on origin/main.
+            - uses: actions/checkout@v7
+              if: steps.setup.outputs.configured == 'true'
+              with:
+                  ref: refs/tags/${{ needs.release.outputs.tag }}
+                  fetch-depth: 0
+                  persist-credentials: false
+            - uses: ./.github/actions/android-toolchain
+              if: steps.setup.outputs.configured == 'true'
+            # Outside the checkout, readable by this user only, gone with the runner.
+            - name: The upload key
+              if: steps.setup.outputs.configured == 'true'
+              env:
+                  KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+              run: |
+                  umask 077
+                  base64 -d <<< "$KEYSTORE_BASE64" > "$RUNNER_TEMP/upload.jks"
+                  [[ -s "$RUNNER_TEMP/upload.jks" ]] || { echo "::error::ANDROID_UPLOAD_KEYSTORE_BASE64 decodes to nothing"; exit 1; }
+                  echo "HUSHOS_UPLOAD_STORE_FILE=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+            # The password reaches this step only, never the job's environment.
+            - name: Build the signed bundle
+              id: build
+              if: steps.setup.outputs.configured == 'true'
+              env:
+                  HUSHOS_UPLOAD_STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
+                  HUSHOS_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS || 'upload' }}
+              run: |
+                  apps/android/scripts/bundle-release.sh
+                  echo "code=$(scripts/build-number.sh --store)" >> "$GITHUB_OUTPUT"
+            # The highest release below this one that has an APK attached: what the phones that
+            # have HushOS now were offered.
+            - name: The previous release's APK
+              id: previous
+              if: steps.setup.outputs.configured == 'true'
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  TAG: ${{ needs.release.outputs.tag }}
+              run: |
+                  mkdir -p "$RUNNER_TEMP/previous"
+                  for prev in $(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -rV); do
+                      [[ "$(printf '%s\n' "$prev" "$TAG" | sort -V | tail -n 1)" == "$TAG" && "$prev" != "$TAG" ]] || continue
+                      if gh release download "$prev" -R "$GITHUB_REPOSITORY" -p "HushOS-${prev#v}.apk" -D "$RUNNER_TEMP/previous" 2> /dev/null; then
+                          echo "apk=$RUNNER_TEMP/previous/HushOS-${prev#v}.apk" >> "$GITHUB_OUTPUT"
+                          echo "Comparing with $prev's APK."
+                          exit 0
+                      fi
+                  done
+                  echo "::warning title=No previous APK::No earlier release has an APK attached; only the ABIs are checked."
+            - name: Check the bundle
+              if: steps.setup.outputs.configured == 'true'
+              env:
+                  VERSION: ${{ needs.release.outputs.version }}
+                  CODE: ${{ steps.build.outputs.code }}
+                  PREVIOUS: ${{ steps.previous.outputs.apk }}
+                  HUSHOS_ACCEPT_DEVICE_CHANGE: ${{ inputs.accept-device-change && '1' || '' }}
+              run: |
+                  apps/android/scripts/check-bundle.sh apps/android/app/build/outputs/bundle/release/app-release.aab \
+                      "$VERSION" "$CODE" ${PREVIOUS:+"$PREVIOUS"}
+            - uses: actions/upload-artifact@v7
+              if: steps.setup.outputs.configured == 'true'
+              with:
+                  name: app-release-${{ needs.release.outputs.tag }}
+                  path: apps/android/app/build/outputs/bundle/release/app-release.aab
+                  if-no-files-found: error
+                  retention-days: 30
+
+    # Sends the checked bundle to Google Play. It can mint a Google token (id-token) but runs
+    # none of the build's code or dependencies: only the script, from the tag.
+    play:
+        name: Google Play internal testing (${{ needs.release.outputs.action }})
+        needs: [release, bundle]
+        if: needs.bundle.outputs.configured == 'true'
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        environment: play
+        permissions:
+            contents: read
+            id-token: write
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  ref: refs/tags/${{ needs.release.outputs.tag }}
+                  sparse-checkout: apps/android/scripts
+                  persist-credentials: false
+            - uses: actions/download-artifact@v8
+              with:
+                  name: app-release-${{ needs.release.outputs.tag }}
+                  path: ${{ runner.temp }}/bundle
+            - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+              id: google
+              with:
+                  workload_identity_provider: ${{ vars.PLAY_WIF_PROVIDER }}
+                  service_account: ${{ vars.PLAY_SERVICE_ACCOUNT }}
+                  token_format: access_token
+                  access_token_scopes: https://www.googleapis.com/auth/androidpublisher
+                  create_credentials_file: false
+                  export_environment_variables: false
+            - name: Send to Google Play
+              env:
+                  PLAY_ACCESS_TOKEN: ${{ steps.google.outputs.access_token }}
+                  ACTION: ${{ needs.release.outputs.action }}
+                  VERSION: ${{ needs.release.outputs.version }}
+                  CODE: ${{ needs.bundle.outputs.code }}
+              run: apps/android/scripts/play-publish.sh "$ACTION" "$RUNNER_TEMP/bundle/app-release.aab" "$VERSION" "$CODE"
+
+    # The APK for phones without Google Play, once Play has the bundle, as release-apk.sh does
+    # by hand. Its own job, so a failure here is re-run alone, without a second Play upload.
+    apk:
+        name: APK on the GitHub release
+        needs: [release, bundle, play]
+        if: needs.release.outputs.action == 'upload' && needs.play.result == 'success'
+        runs-on: ubuntu-latest
+        timeout-minutes: 60
+        environment: play
+        permissions:
+            contents: write
+        steps:
+            # release-apk.sh builds the tag in a worktree of its own, and checks it is on main.
+            - uses: actions/checkout@v7
+              with:
+                  ref: refs/tags/${{ needs.release.outputs.tag }}
+                  fetch-depth: 0
+                  persist-credentials: false
+            - uses: ./.github/actions/android-toolchain
+            - name: The upload key
+              env:
+                  KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+              run: |
+                  umask 077
+                  base64 -d <<< "$KEYSTORE_BASE64" > "$RUNNER_TEMP/upload.jks"
+                  echo "HUSHOS_UPLOAD_STORE_FILE=$RUNNER_TEMP/upload.jks" >> "$GITHUB_ENV"
+            - name: Build, check and attach the APK
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  GH_REPO: ${{ github.repository }}
+                  TAG: ${{ needs.release.outputs.tag }}
+                  HUSHOS_UPLOAD_STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
+                  HUSHOS_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS || 'upload' }}
+              run: apps/android/scripts/release-apk.sh "$TAG"
+
+    # Production: the release of this tag that internal testing holds, to every user once
+    # Google's review passes. Play Console shows a device-count review before a production
+    # rollout; the API does not, which is why the bundle job compares the phones with the
+    # previous release's before anything is uploaded.
+    promote:
+        name: Promote to production
+        needs: release
+        if: needs.release.outputs.action == 'promote'
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        environment: play
+        permissions:
+            contents: read
+            id-token: write
+        steps:
+            - name: Release credentials
+              id: setup
+              env:
+                  WIF_PROVIDER: ${{ vars.PLAY_WIF_PROVIDER }}
+                  SERVICE_ACCOUNT: ${{ vars.PLAY_SERVICE_ACCOUNT }}
+              run: |
+                  if [[ -z "$WIF_PROVIDER" || -z "$SERVICE_ACCOUNT" ]]; then
+                      echo "::notice title=Google Play is not set up::The play environment lacks PLAY_WIF_PROVIDER or PLAY_SERVICE_ACCOUNT; nothing was promoted. See docs/release/google-play-ci.md."
+                      echo "configured=false" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "configured=true" >> "$GITHUB_OUTPUT"
+                  fi
+            # Full history, for the versionCode the bundle job computed at this tag.
+            - uses: actions/checkout@v7
+              if: steps.setup.outputs.configured == 'true'
+              with:
+                  ref: refs/tags/${{ needs.release.outputs.tag }}
+                  fetch-depth: 0
+                  persist-credentials: false
+            - name: The tag's versionCode
+              id: code
+              if: steps.setup.outputs.configured == 'true'
+              env:
+                  VERSION: ${{ needs.release.outputs.version }}
+              run: |
+                  declared=$(jq -r .version package.json)
+                  [[ "$declared" == "$VERSION" ]] || { echo "::error::The tag's package.json says $declared, not $VERSION."; exit 1; }
+                  echo "code=$(scripts/build-number.sh --store)" >> "$GITHUB_OUTPUT"
+            - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+              id: google
+              if: steps.setup.outputs.configured == 'true'
+              with:
+                  workload_identity_provider: ${{ vars.PLAY_WIF_PROVIDER }}
+                  service_account: ${{ vars.PLAY_SERVICE_ACCOUNT }}
+                  token_format: access_token
+                  access_token_scopes: https://www.googleapis.com/auth/androidpublisher
+                  create_credentials_file: false
+                  export_environment_variables: false
+            - name: Promote to production
+              if: steps.setup.outputs.configured == 'true'
+              env:
+                  PLAY_ACCESS_TOKEN: ${{ steps.google.outputs.access_token }}
+                  VERSION: ${{ needs.release.outputs.version }}
+                  CODE: ${{ steps.code.outputs.code }}
+              run: apps/android/scripts/play-publish.sh promote "$VERSION" "$CODE"
