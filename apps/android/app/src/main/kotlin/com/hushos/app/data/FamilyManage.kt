@@ -484,8 +484,15 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
             is OutboxCall.Send -> read.route to read.body
             // AwaitingCheck and Committed are the web's own entries (an earlier web version's held-back admission, a
             // creation); a phone's outbox holds only what it staged, so only OtherKeys is met here.
-            is OutboxCall.Hold -> return if (read.reason != OutboxHold.OTHER_KEYS) CallEnd.Pending("Kept on this device.")
-                else retireOrphan(summary, read.route)?.let(::finish) ?: CallEnd.OtherKeys
+            is OutboxCall.Hold -> {
+                if (read.reason != OutboxHold.OTHER_KEYS) return CallEnd.Pending("Kept on this device.")
+                return when (val retired = retireOrphan(summary, read.route)) {
+                    null -> CallEnd.OtherKeys
+                    // The sync let go of the family (not-member): the wipe took the entry with it.
+                    CallEnd.Wiped -> CallEnd.Wiped
+                    else -> finish(retired)
+                }
+            }
             is OutboxCall.Landed -> { finish(CallEnd.Landed); syncRevised(summary); return CallEnd.Landed }
             is OutboxCall.Superseded -> return finish(CallEnd.Stale)
         }
@@ -548,13 +555,24 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
  * answered: they joined (in the family's member list now: the admission's end is in place, said by the list), or were
  * turned down or went (said as an admission that wasn't sent, in its approved words). Retired with that end (finish deletes
  * it), so a held entry nobody can drop (its waiting row is gone) never holds every later change back. Null keeps it held:
- * they still wait (their row offers Drop it and let them in), or a read didn't answer.
+ * they still wait (their row offers Drop it and let them in), or a read didn't answer. Definite answers are never swallowed:
+ * route 16's not-member is thrown (notMemberLetsGo wipes and publishes), a sync that let go of the family is Wiped, and a
+ * lost session is thrown.
  */
 private fun FamilySync.retireOrphan(summary: GroupSummary, route: ChainRoute): CallEnd? {
     val userId = (route as? ChainRoute.Admit)?.userId ?: return null
-    val waiting = runCatching { api.pending(summary.id) }.getOrElse { if (it is NotAuthenticated) throw it; return null }
+    val waiting = try {
+        api.pending(summary.id)
+    } catch (error: Exception) {
+        if (error is NotAuthenticated || (error is GroupsApiError && error.isNotMember)) throw error
+        return null
+    }
     if (waiting.any { it.userId.equals(userId, ignoreCase = true) }) return null
-    val view = (syncRevised(summary).state as? FamilyState.Accepted)?.view ?: return null
+    val view = when (val state = syncRevised(summary).state) {
+        is FamilyState.Accepted -> state.view
+        FamilyState.Wiped -> return CallEnd.Wiped
+        else -> return null
+    }
     return if (view.members.any { it.userId.equals(userId, ignoreCase = true) }) CallEnd.Landed else CallEnd.Stale
 }
 
@@ -1103,16 +1121,29 @@ fun FamilySync.dropKeptAdmission(groupId: String, userId: String) = exclusive(gr
 private const val RESENDS = 3
 private const val RESEND_DELAY_MS = 500L
 
+/*
+ * A manager's read or call outside the outbox whose not-member answer is let go of as every removal is (removedNow: the
+ * family's keys, copies and outbox wiped, published to the screens), then thrown as it came, so the screen says it.
+ */
+private fun <T> FamilySync.notMemberWipes(groupId: String, body: () -> T): T = try {
+    body()
+} catch (error: GroupsApiError) {
+    if (error.isNotMember) removedNow(groupId)
+    throw error
+}
+
 /* Invite someone (route 11): an email with a link; once they accept, a manager lets them in. Roles none. */
-fun FamilySync.invite(groupId: String, email: String) = api.invite(groupId, email.trim())
+fun FamilySync.invite(groupId: String, email: String) = notMemberWipes(groupId) { api.invite(groupId, email.trim()) }
 
 /* The invitations still open (route 12), and one cancelled (route 13). */
-fun FamilySync.invitations(groupId: String): List<OpenInvitation> = api.invitations(groupId)
-fun FamilySync.cancelInvitation(groupId: String, invitationId: String) = api.revokeInvitation(groupId, invitationId)
+fun FamilySync.invitations(groupId: String): List<OpenInvitation> = notMemberWipes(groupId) { api.invitations(groupId) }
+fun FamilySync.cancelInvitation(groupId: String, invitationId: String) = notMemberWipes(groupId) { api.revokeInvitation(groupId, invitationId) }
 
 /* Who accepted and waits to be let in (route 16), and Not now on one of them (route 26). */
-fun FamilySync.pending(groupId: String): List<PendingPerson> = api.pending(groupId)
-fun FamilySync.turnDown(groupId: String, userId: String) = exclusive(groupId) {
+fun FamilySync.pending(groupId: String): List<PendingPerson> = notMemberWipes(groupId) { api.pending(groupId) }
+fun FamilySync.turnDown(groupId: String, userId: String) = notMemberWipes(groupId) { turnDownInTurn(groupId, userId) }
+
+private fun FamilySync.turnDownInTurn(groupId: String, userId: String) = exclusive(groupId) {
     // A Let them in for them kept here must never admit them after they're turned down (if they accept a new invitation),
     // so every kept admission of theirs goes first, in the family's turn, and only then is the decline sent: a decline
     // whose answer is lost, or a cleanup that can't finish (a delete that doesn't hold throws), never leaves one to replay.

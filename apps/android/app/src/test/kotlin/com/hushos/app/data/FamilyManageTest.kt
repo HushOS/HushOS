@@ -240,6 +240,47 @@ class FamilyManageTest {
     }
 
     /*
+     * Codex #281 round 5: an admission held for Grace's old keys while Maya herself is removed from the family meanwhile.
+     * Route 16 answers not-member when the held entry is checked: that is Maya's removal, so the family is let go of
+     * (keys, records, the outbox) and the screens are told, never `KeptOther` with everything left on the phone.
+     */
+    @Test
+    fun aHeldAdmissionCheckThatMeetsNotMemberLetsGoOfTheFamily() {
+        val phone = phone()
+        val grace = grace
+        answer(3, 503)
+        assertTrue(phone.sync.letIn(summary, grace) is LetIn.Pending)
+        server.startOverGrace()
+        family.pendingRows.clear()
+        family.waiting(server.grace, "grace@example.org", "Grace Hopper")
+        val changed = phone.sync.letIn(summary, grace)
+        assertTrue("$changed", changed is LetIn.Changed)
+        phone.vault.continueWith((changed as LetIn.Changed).change)
+        assertEquals(listOf(CallEnd.OtherKeys), phone.sync.resumeOutbox(summary).values.toList())
+        phone.sync.takeRemovals()
+        family.pendingAnswer = 404 to JSONObject().put("code", "not-member").put("message", "You are not in this group.")
+        assertEquals(LetIn.Wiped, phone.sync.letIn(summary, grace))
+        assertEquals(listOf(FamilyState.Wiped to family.groupId), phone.sync.takeRemovals().map { it.state to it.groupId })
+        assertNull(phone.records.read(family.member.id, family.groupId))
+        assertTrue(kept(phone).isEmpty())
+    }
+
+    /*
+     * Codex #281 round 5, the same in 5a's reads: Waiting to join (route 16) answering not-member lets go of the family
+     * and tells the screens, then says why. Fails if a manager's list read swallows the removal into an error line.
+     */
+    @Test
+    fun aManagersListMeetingNotMemberLetsGoOfTheFamily() {
+        val phone = phone()
+        phone.sync.takeRemovals()
+        family.pendingAnswer = 404 to JSONObject().put("code", "not-member").put("message", "You are not in this group.")
+        val failed = runCatching { phone.sync.pending(family.groupId) }.exceptionOrNull()
+        assertTrue("$failed", failed is GroupsApiError && failed.isNotMember)
+        assertEquals(listOf(FamilyState.Wiped to family.groupId), phone.sync.takeRemovals().map { it.state to it.groupId })
+        assertNull(phone.records.read(family.member.id, family.groupId))
+    }
+
+    /*
      * Grace's admission kept unanswered; another device then follows her account change (Continue), replacing the pin this
      * phone's ledger last read. The settings can't be read now: nothing is sent, the entry stays kept. Once they read, it
      * is held for the old keys. Fails if a send goes out judged against the settings the ledger held before.

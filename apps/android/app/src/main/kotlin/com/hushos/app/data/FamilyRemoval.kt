@@ -421,7 +421,8 @@ private fun FamilySync.placeHold(summary: GroupSummary, userId: String, view: Fa
 } catch (error: GroupsApiError) {
     when (error.code) {
         "held" -> RemovalEnd.Held(whoHolds(summary.id), manages(view, userId))
-        "members-changed" -> { runCatching { syncRevised(summary) }; RemovalEnd.Changed }
+        // Read again so the page shows the list as it is; a sync that let go of the family (not-member) is the account's removal.
+        "members-changed" -> if (syncRevised(summary).state == FamilyState.Wiped) RemovalEnd.Wiped else RemovalEnd.Changed
         else -> when {
             error.isNotMember -> throw error
             // No answer, or the server's for now (a timeout, throttling, an outage): the removal goes on at the next open.
@@ -432,10 +433,15 @@ private fun FamilySync.placeHold(summary: GroupSummary, userId: String, view: Fa
 }
 
 /* Who holds this manager, from route 3's `due.holds` (listed to every holder); null when unknown: nobody is named on a guess. */
-private fun FamilySync.whoHolds(groupId: String): String? = runCatching {
+private fun FamilySync.whoHolds(groupId: String): String? = try {
     val mine = api.group(groupId).due?.holds.orEmpty().filter { it.userId.equals(userId, ignoreCase = true) }
     mine.singleOrNull()?.heldBy
-}.getOrNull()
+} catch (error: Exception) {
+    // Not-member is the account's removal (notMemberLetsGo wipes), and a lost session is lost; any other failure only
+    // leaves the holder unnamed.
+    if (error is NotAuthenticated || (error is GroupsApiError && error.isNotMember)) throw error
+    null
+}
 
 /* The departures a 409 left-due names. */
 private fun leftDue(data: JSONObject?): List<String> =
