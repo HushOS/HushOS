@@ -149,7 +149,8 @@ struct MainView: View {
                     if action == .search { tab = .search; return }
                     Task {
                         guard let root = await store.loadRoot() else { return }
-                        var folder = Places.last()?.id
+                        // Your own drive's only: a family folder last saved into is Save to HushOS's to check, not a quick action's.
+                        var folder = Places.last().flatMap { $0.family == nil ? $0.id : nil }
                         if let id = folder, id != root, await store.lookUp(id)?.isFolder != true {
                             Places.forget()
                             folder = nil

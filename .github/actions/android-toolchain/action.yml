@@ -1,0 +1,40 @@
+name: Android release toolchain
+description: >-
+    What apps/android/scripts/bundle-release.sh and release-apk.sh need on an Ubuntu runner: JDK
+    21, Bun, the NDK the app pins (ndkVersion in apps/android/app/build.gradle.kts, which the Rust
+    core must be built with too), build-tools for apksigner and aapt2, Rust's Android targets and
+    cargo-ndk. The runner's Android SDK, its accepted licences and its stable Rust are used as
+    they come; Gradle fetches the platform it compiles against. Run after actions/checkout.
+
+runs:
+    using: composite
+    steps:
+        - uses: actions/setup-java@v6
+          with:
+              distribution: temurin
+              java-version: 21
+        - uses: oven-sh/setup-bun@v2
+          with:
+              bun-version: 1.4.4
+        # The runner points ANDROID_NDK_HOME (and its aliases) at its own default NDK, and
+        # build-core.sh would take the newest one installed: both are pinned here instead, or
+        # the core would be built with one NDK and stripped by AGP with another.
+        - name: NDK and build-tools
+          shell: bash
+          run: |
+              ndk=$(sed -n 's/^[[:space:]]*ndkVersion = "\([0-9.]*\)".*/\1/p' apps/android/app/build.gradle.kts)
+              [[ -n "$ndk" ]] || { echo "::error::No ndkVersion in apps/android/app/build.gradle.kts"; exit 1; }
+              "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk" "build-tools;37.0.0" > /dev/null
+              [[ -d "$ANDROID_HOME/ndk/$ndk" ]] || { echo "::error::sdkmanager did not install ndk;$ndk"; exit 1; }
+              {
+                  echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk"
+                  echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$ndk"
+                  echo "ANDROID_NDK=$ANDROID_HOME/ndk/$ndk"
+              } >> "$GITHUB_ENV"
+              echo "NDK $ndk, build-tools 37.0.0"
+        # No build cache on purpose: what these jobs build is signed and shipped.
+        - name: Rust Android targets and cargo-ndk
+          shell: bash
+          run: |
+              rustup target add aarch64-linux-android x86_64-linux-android
+              cargo install cargo-ndk --version 4.1.2 --locked

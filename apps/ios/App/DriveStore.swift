@@ -170,6 +170,22 @@ final class DriveStore {
     @ObservationIgnored var familyCheckedAt: [String: Date] = [:]
     /* The session's family sync this store listens to (attachFamilies): detached when the session ends or is replaced. */
     @ObservationIgnored weak var listenedFamilies: FamilySync?
+    /*
+     * A manager's lists and dialogs (iOS 5a), kept here rather than by the page so a scene change
+     * keeps them, and never in restorable scene state (the typed address included).
+     */
+    var waitingToJoin: [String: [PendingPerson]] = [:]
+    var familyInvitations: [String: [FamilyInvitation]] = [:]
+    var waitingRows: [String: WaitingRow] = [:]
+    var inviting: InviteAsk?
+    var turningDown: TurnDownAsk?
+    var cancellingInvitation: CancelInvitationAsk?
+    var managedErrors: [String: String] = [:]
+    /* Someone whose account changed since this phone pinned them, met by Let them in: the changed-account steps, then Let them in again once resolved. */
+    var manageChange: ManageChangeAsk?
+    /* What resumed calls came to, each said until read. */
+    var manageNotices = NoticeQueue()
+    @ObservationIgnored var managedLoads = ManagedLoads()
     /* The leave dialog, kept here rather than by the page, so a scene change or a redraw keeps it as it was (LeaveDialog). */
     var leaving: LeaveDialog?
     /* A family this person just left: its page goes back to Account once. */
@@ -1903,6 +1919,8 @@ final class DriveStore {
             // A family folder's uploads go through the queue too: sealed with the area ledger's keys, and a key change
             // the folder hasn't reached yet is waited out there ("Finishing a key change…"), not failed.
             if let groupId = familyGroup(ofFolder: folder), let workspace = (try? await vault.workspaceId(of: folder)), familyFolderWritable(folder) {
+                // Where Save to HushOS adds next, with its family (which Save to HushOS checks again; the quick actions keep to your own drive).
+                if let name = known(folder)?.name { Places.used(Places.Folder(id: folder, name: name, groupId: groupId, workspaceId: workspace.lowercased())) }
                 BackgroundTransfers.shared.upload(fileURL: item.file.url, name: item.name, mime: mime, folderId: folder, replacingId: item.replacing?.id,
                                                   family: .init(groupId: groupId, workspaceId: workspace),
                                                   replacingVersionId: item.replacing?.node.currentVersion?.id)

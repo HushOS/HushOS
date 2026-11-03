@@ -147,6 +147,19 @@ class FamilyFixture(val server: FakeDrive) {
     val grantPosts = java.util.Collections.synchronizedList(ArrayList<Pair<String, String>>())
     @Volatile var grantsAnswer: Pair<Int, JSONObject>? = null
 
+    /* Route 18 (a role change): how each call is answered, in turn (empty: applied as the server would). */
+    val memberAnswers = java.util.concurrent.ConcurrentLinkedQueue<(JSONObject) -> Pair<Int, JSONObject>?>()
+    /* Every route 18 call, by whom it changes and its body, in order. */
+    val memberCalls = java.util.Collections.synchronizedList(ArrayList<Pair<String, String>>())
+    /* A person's name and address as route 3 names them: Grace's, or what FakeDrive.another was given. */
+    private fun nameOf(person: FakeDrive.Person) = if (person.id == server.grace.id) "Grace Hopper" else server.others.values.firstOrNull { it.first.id == person.id }?.second ?: "Someone"
+    private fun emailOf(person: FakeDrive.Person) = if (person.id == server.grace.id) "grace@example.org" else server.others.entries.firstOrNull { it.value.first.id == person.id }?.key ?: ""
+
+    /* People let in since (route 17): routes 3 and 6 name them and serve their identities beside Sam's and Maya's. */
+    val joined = java.util.Collections.synchronizedList(ArrayList<FakeDrive.Person>())
+    /* The successions the chain carries (a manager role taken away replaces the family's key), served on route 5. */
+    val successions = java.util.Collections.synchronizedList(ArrayList<SignedGroupStatement>())
+
     /* Route 20's answer: null leaves (and the server then answers not-member), else this refusal. */
     @Volatile var leaveRefusal: Pair<Int, JSONObject>? = null
     /* What each leave asked to end (`endsLapsed`). */
@@ -159,6 +172,8 @@ class FamilyFixture(val server: FakeDrive) {
     /* Route 2 lists the family (false: it stopped listing it); `groupsFail` and `rostersFail` answer with a 503. */
     @Volatile var listed = true
     @Volatile var groupsFail = false
+    /* The next this many route 5 reads answer 503, then it serves again: a connection that drops for a moment. */
+    @Volatile var rosterFailures = 0
     @Volatile var rostersFail = false
     @Volatile var groupState = "active"
     /* Maya's roles as route 2 lists them (`members` once Sam makes her a manager). */
@@ -171,7 +186,34 @@ class FamilyFixture(val server: FakeDrive) {
     @Volatile var onRosters: (() -> Unit)? = null
     val asked = java.util.Collections.synchronizedList(ArrayList<String>())
 
+    // Core 5b: removals, marking the departed left, key replacements and folder deletions.
+    /* Route 3's due for a manager: the departed to mark left, folders owed new keys, and who holds whom. */
+    @Volatile var dueMarkLeft: List<String> = emptyList()
+    @Volatile var dueRotations: List<String> = emptyList()
+    val holdRows = java.util.Collections.synchronizedList(ArrayList<JSONObject>())
+    /* Route 27: each hold asked, by whom it holds, and how it is answered while set (else placed). */
+    val holdsAsked = java.util.Collections.synchronizedList(ArrayList<String>())
+    @Volatile var holdAnswer: Pair<Int, JSONObject>? = null
+    /* The removal preview's plans (route 19, asked first). */
+    @Volatile var previewPlans: JSONArray = JSONArray()
+    /* The family folder's workspace documents by kind: (version, envelope). */
+    val documents = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, String>>()
+    /* Document reads so far, and the first one (counted from 1) answered 503 from then on: a read that fails part way. */
+    val documentReads = java.util.concurrent.atomic.AtomicInteger()
+    @Volatile var documentsFailFrom = Int.MAX_VALUE
+    /* Routes 19, 7, 24 and the deletion: each call (its route's last segment, its body) in order, and scripted answers in turn. */
+    val rotatingCalls = java.util.Collections.synchronizedList(ArrayList<Pair<String, String>>())
+    val rotatingAnswers = java.util.concurrent.ConcurrentLinkedQueue<(String, JSONObject) -> Pair<Int, JSONObject>?>()
+
     val summary get() = GroupSummary(groupId, "family", "Lindqvist family", emptyList(), groupState, chain.size.toLong(), 1L)
+
+    /* A tags document sealed under the family folder's first key at `version`, as a member's web wrote it (base64url). */
+    fun sealedTags(version: Int, json: String): String = base64urlEncode(com.hushos.core.documentSeal(
+        com.hushos.core.DocumentContext(workspaceId, "tags", version.toULong()), areaKey, json))
+
+    /* A workspace document of `kind` sealed under the family folder's first key at `version`, as a member's web wrote it. */
+    fun sealedDocument(kind: String, version: Int, json: String): String = base64urlEncode(com.hushos.core.documentSeal(
+        com.hushos.core.DocumentContext(workspaceId, kind, version.toULong()), areaKey, json))
 
     /* Maya's pin over `rosters`, as joining on the web left it. */
     fun pin(rosters: List<SignedGroupStatement>, checkedAt: String = "2026-10-18T09:00:00.000Z"): GroupPin {
@@ -204,22 +246,26 @@ class FamilyFixture(val server: FakeDrive) {
                     .put("roles", JSONArray(listedRoles)).put("state", groupState).put("rosterVersion", chain.size).put("groupKeyVersion", 1)))
             }
             method == "GET" && path == "groups/$groupId" -> if (notMember) notMemberAnswer() else 200 to JSONObject()
-                .put("head", JSONObject().put("version", chain.size).put("revision", chain.size)).put("members", JSONArray()
+                .put("due", JSONObject().put("grants", JSONArray()).put("markLeft", JSONArray(dueMarkLeft)).put("rotations", JSONArray(dueRotations))
+                    .put("holds", JSONArray(holdRows.toList())))
+                .put("head", JSONObject().put("version", chain.size).put("revision", revision)).put("members", JSONArray()
                 .put(JSONObject().put("userId", creator.id).put("name", "Sam Lindqvist").put("email", "sam@example.org").put("state", "active").put("roles", JSONArray().put("billing").put("members")))
-                .put(JSONObject().put("userId", member.id.lowercase()).put("name", "Maya").put("email", "me@example.org").put("state", "active").put("roles", JSONArray())))
+                .put(JSONObject().put("userId", member.id.lowercase()).put("name", "Maya").put("email", "me@example.org").put("state", "active").put("roles", JSONArray()))
+                .apply { joined.forEach { person -> put(JSONObject().put("userId", person.id.lowercase()).put("name", nameOf(person)).put("email", emailOf(person)).put("state", "active").put("roles", JSONArray())) } })
             method == "GET" && path == "groups/$groupId/rosters" -> {
                 if (notMember) return notMemberAnswer()
                 if (rostersFail) return 503 to JSONObject().put("message", "Drive is temporarily unavailable. Please try again.")
+                if (rosterFailures > 0) { rosterFailures--; return 503 to JSONObject().put("message", "Drive is temporarily unavailable. Please try again.") }
                 onRosters?.invoke()
                 val after = if (ignoringAfter) 0 else query["after"]?.toInt() ?: 0
                 val served = chain
-                200 to JSONObject().put("rosters", JSONArray(served.drop(after).map(::wire))).put("successions", JSONArray())
+                200 to JSONObject().put("rosters", JSONArray(served.drop(after).map(::wire))).put("successions", JSONArray(successions.toList().map(::wire)))
                     .put("firstKeys", groupPublicKey(groupSeed).let { JSONObject().put("ed25519PublicKey", it.ed25519PublicKey).put("mlDsaPublicKey", it.mlDsaPublicKey) })
                     .put("signerKeys", JSONObject(signerKeys)).put("head", JSONObject().put("version", served.size).put("digest", rosterDigest(served.last().statement)))
                     .put("next", JSONObject.NULL)
             }
             method == "GET" && path == "groups/$groupId/identities" -> if (notMember) notMemberAnswer() else
-                200 to JSONObject().put("identities", JSONArray().put(identity(creator)).put(identity(member))).put("next", JSONObject.NULL)
+                200 to JSONObject().put("identities", JSONArray().put(identity(creator)).put(identity(member)).apply { joined.forEach { put(identity(it)) } }).put("next", JSONObject.NULL)
             method == "PUT" && path == "groups/$groupId/areas/$workspaceId/self-grant" -> { selfGrant = body.getJSONObject("grant"); 200 to JSONObject() }
             method == "GET" && path == "groups/$groupId/key-seal" -> keySeal?.let { 200 to it }
                 ?: (409 to JSONObject().put("code", "no-seal").put("message", "Nobody has sealed the current group key to you yet."))
@@ -241,6 +287,12 @@ class FamilyFixture(val server: FakeDrive) {
                 if (notMember) return notMemberAnswer()
                 apply(body, segments[3])
             }
+            method == "PATCH" && segments.size == 4 && path.startsWith("groups/$groupId/members/") -> {
+                if (notMember) return notMemberAnswer()
+                memberCalls.add(segments[3] to body.toString())
+                memberAnswers.poll()?.invoke(body)?.let { return it }
+                apply(body, null)
+            }
             method == "POST" && path == "groups/$groupId/leave" -> {
                 if (notMember) return notMemberAnswer()
                 val ends = body.optJSONArray("endsLapsed")
@@ -251,6 +303,23 @@ class FamilyFixture(val server: FakeDrive) {
                 listed = false
                 200 to JSONObject().put("state", "left")
             }
+            method == "POST" && segments.size == 5 && path.startsWith("groups/$groupId/members/") && segments[4] == "hold" -> {
+                if (notMember) return notMemberAnswer()
+                holdsAsked.add(segments[3].lowercase())
+                holdAnswer ?: (200 to JSONObject())
+            }
+            method == "POST" && segments.size == 5 && path.startsWith("groups/$groupId/members/") && segments[4] == "remove-preview" ->
+                if (notMember) notMemberAnswer() else 200 to JSONObject().put("plans", previewPlans)
+            method == "POST" && segments.size == 5 && path.startsWith("groups/$groupId/members/") && segments[4] == "remove" -> applyRotating("remove", body)
+            method == "POST" && path == "groups/$groupId/rosters" -> applyRotating("rosters", body)
+            method == "POST" && path == "groups/$groupId/areas/$workspaceId/rotations" -> applyRotating("rotations", body)
+            method == "POST" && path == "groups/$groupId/areas/$workspaceId/delete" -> applyRotating("delete", body)
+            method == "GET" && path == "groups/$groupId/areas/$workspaceId/root" -> if (notMember) notMemberAnswer() else
+                200 to server.node(servedRootId ?: rootId).json().put("depth", 0).put("versions", JSONArray()).put("shares", JSONArray()).put("links", JSONArray())
+            method == "GET" && segments.size == 5 && path.startsWith("drive/workspaces/$workspaceId/documents/") ->
+                if (documentReads.incrementAndGet() >= documentsFailFrom) 503 to JSONObject().put("message", "Unavailable.") else 200 to JSONObject().put("document", documents[segments[4]]?.let { (version, envelope) ->
+                    JSONObject().put("kind", segments[4]).put("version", version).put("envelope", envelope).put("envelopeSuite", 1)
+                } ?: JSONObject.NULL)
             method == "GET" && path == "drive/spaces" -> 200 to JSONObject().put("spaces", JSONArray()
                 .put(JSONObject().put("space", JSONObject().put("kind", "personal")).put("areas", JSONArray()))
                 .apply {
@@ -314,16 +383,130 @@ class FamilyFixture(val server: FakeDrive) {
      * A roster call applied as the server applies it: refused as `stale` unless it was built at the head's revision, then
      * its roster appended to the chain and the person let in.
      */
-    fun apply(body: JSONObject, userId: String): Pair<Int, JSONObject> {
-        if (body.optLong("expectedRevision", -1) != chain.size.toLong())
-            return 409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
+    fun apply(body: JSONObject, userId: String?): Pair<Int, JSONObject> {
         val next = signedOf(body.getJSONObject("roster"))
-        // The roster must follow the head it names (the server's verify; `invalid`/`roster-chain` otherwise).
-        if (runCatching { creatorChain(chain + next) }.isFailure)
+        // A call the server took already, sent again (its answer was lost): answered with the head, as the server replays it.
+        if (chain.any { it.statement.contentEquals(next.statement) })
+            return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", revision))
+        if (body.optLong("expectedRevision", -1) != revision.toLong())
+            return 409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
+        val succession = body.optJSONObject("succession")?.let(::signedOf)
+        // The roster (and its succession) must follow the head it names (the server's verify; `invalid`/`roster-chain` otherwise).
+        if (runCatching { creatorChain(chain + next, successions.toList() + listOfNotNull(succession)) }.isFailure)
             return 400 to JSONObject().put("code", "invalid").put("message", "The change was refused.").put("data", JSONObject().put("reason", "roster-chain"))
         chain = chain + next
+        succession?.let(successions::add)
+        // The family's new key, sealed to Maya as a holder who stays: what route 8 serves her from now on.
+        body.optJSONArray("seals")?.let { seals ->
+            (0 until seals.length()).map(seals::getJSONObject).firstOrNull { it.optString("holderUserId").equals(member.id, ignoreCase = true) }?.let { seal ->
+                keySeal = JSONObject(seal.toString()).put("sealerUserId", member.id.lowercase()).apply { remove("holderUserId") }
+            }
+        }
+        if (userId == null) return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", revision))
+        (listOf(server.grace) + server.others.values.map { it.first }).firstOrNull { it.id.equals(userId, ignoreCase = true) }?.let(joined::add)
         pendingRows.removeIf { it.optString("userId").equals(userId, ignoreCase = true) }
-        return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", chain.size))
+        return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", revision))
+    }
+
+    /*
+     * A Core 5b call applied as the server applies it (writeChain with its rotations, applyRotation): a scripted answer
+     * first; a resend answered as a replay; `stale` unless built at the head; each rotation's top folder, epoch and
+     * documents checked against what is stored (`root-moved`, `epoch-stale`, `document-stale`), the roster checked as every
+     * member checks it; then the roster appended, people it marks left gone, each rotated folder at its new version (its
+     * top folder re-keyed at the target with its old key kept as the previous one, its documents at their next version,
+     * Maya's grant and self-grant of the new key served), and a deleted folder no longer listed.
+     */
+    private fun applyRotating(kind: String, body: JSONObject): Pair<Int, JSONObject> {
+        val answer = applyRotatingNow(kind, body)
+        if (repliesLost > 0) {
+            repliesLost--
+            return 503 to JSONObject().put("message", "Unavailable.")
+        }
+        return answer
+    }
+
+    /*
+     * Chain writes that aren't member lists (a group key's standalone succession, a manager leaving): each moves the
+     * server's chain revision, which every call names (`expectedRevision`), past the member list's version.
+     */
+    @Volatile var standaloneSuccessions = 0
+    val revision get() = chain.size + standaloneSuccessions
+
+    /* The next this many 5b calls are applied (or answered) as usual, and their replies lost: the phone hears a 503. */
+    @Volatile var repliesLost = 0
+
+    private fun applyRotatingNow(kind: String, body: JSONObject): Pair<Int, JSONObject> {
+        if (notMember) return notMemberAnswer()
+        rotatingCalls.add(kind to body.toString())
+        rotatingAnswers.poll()?.invoke(kind, body)?.let { return it }
+        val next = signedOf(body.getJSONObject("roster"))
+        val head = 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", revision))
+        if (chain.any { it.statement.contentEquals(next.statement) }) return head
+        if (body.optLong("expectedRevision", -1) != revision.toLong())
+            return 409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
+        val wires = (body.optJSONArray("rotations")?.let { list -> (0 until list.length()).map(list::getJSONObject) }.orEmpty()) +
+            listOfNotNull(body.optJSONObject("rotation"))
+        val root = server.node(servedRootId ?: rootId)
+        for (wire in wires) {
+            if (wire.getString("workspaceId") != workspaceId || wire.getJSONObject("root").getString("id") != root.id)
+                return 400 to JSONObject().put("code", "invalid").put("message", "The change was refused.").put("data", JSONObject().put("reason", "rotation-root"))
+            if (wire.getJSONObject("root").getInt("changeSeq") != root.changeSeq)
+                return 409 to JSONObject().put("code", "root-moved").put("message", "The folder changed.")
+            if (wire.getLong("targetEpoch") <= root.keyEpoch)
+                return 409 to JSONObject().put("code", "epoch-stale").put("message", "Draw a new epoch.")
+            val sent = wire.getJSONArray("documents").let { list -> (0 until list.length()).map(list::getJSONObject) }.associate { it.getString("kind") to it.getInt("version") }
+            val stale = documents.filter { (kind, stored) -> sent[kind] != stored.first }.keys.sorted()
+            if (stale.isNotEmpty() || sent.keys.any { !documents.containsKey(it) })
+                return 409 to JSONObject().put("code", "document-stale").put("message", "A document changed.").put("data", JSONObject()
+                    .put("workspaceId", workspaceId).put("kind", stale.firstOrNull() ?: sent.keys.first())
+                    .put("stale", JSONArray((stale.ifEmpty { sent.keys.filter { !documents.containsKey(it) } }).map { JSONObject().put("workspaceId", workspaceId).put("kind", it) })))
+        }
+        val succession = body.optJSONObject("succession")?.let(::signedOf)
+        val after = runCatching { creatorChain(chain + next, successions.toList() + listOfNotNull(succession)) }.getOrNull()
+            ?: return 400 to JSONObject().put("code", "invalid").put("message", "The change was refused.").put("data", JSONObject().put("reason", "roster-chain"))
+        chain = chain + next
+        succession?.let(successions::add)
+        body.optJSONArray("seals")?.let { seals ->
+            (0 until seals.length()).map(seals::getJSONObject).firstOrNull { it.optString("holderUserId").equals(member.id, ignoreCase = true) }?.let { seal ->
+                keySeal = JSONObject(seal.toString()).put("sealerUserId", member.id.lowercase()).apply { remove("holderUserId") }
+            }
+        }
+        // Whoever the roster marks left is out: route 3 and 6 no longer name them, and nothing is due for them.
+        val gone = after.roster().members.filter { it.status == MemberStatus.LEFT }.map { it.userId.lowercase() }.toSet()
+        joined.removeIf { it.id.lowercase() in gone }
+        dueMarkLeft = dueMarkLeft.filter { it.lowercase() !in gone }
+        for (wire in wires) {
+            val to = wire.getLong("toVersion")
+            val target = wire.getLong("targetEpoch")
+            val sent = wire.getJSONObject("root")
+            val rotated = sent.getJSONObject("rotated")
+            root.previous = Triple(wire.getString("previousRootKeyEnvelope"), root.keyEpoch, to)
+            root.keyEnvelope = sent.getString("keyEnvelope")
+            root.keyEpoch = target
+            root.parentKeyEpoch = to
+            val rekey = rotated.optJSONObject("metadataRekey")
+            root.metadataRekey = rekey?.let {
+                JSONObject().put("origin", JSONObject(root.metadataRekey?.getJSONObject("origin")?.toString() ?: JSONObject().put("envelope", root.metadataEnvelope)
+                    .put("signer", JSONObject().put("id", root.signer)).put("signature", root.signature).toString()).put("keyEnvelope", it.getString("originKeyEnvelope")))
+                    .put("signature", it.getString("signature"))
+            }
+            root.metadataEnvelope = rotated.getString("metadataEnvelope")
+            root.signature = if (rotated.isNull("metadataSignature")) "" else rotated.getString("metadataSignature")
+            root.signer = member.id.lowercase()
+            server.touch(root.id)
+            val docs = wire.getJSONArray("documents")
+            for (i in 0 until docs.length()) docs.getJSONObject(i).let { documents[it.getString("kind")] = (it.getInt("version") + 1) to it.getString("envelope") }
+            areaVersion = to
+            selfGrant = wire.getJSONObject("selfGrant")
+            val grants = body.optJSONArray("grants")?.let { list -> (0 until list.length()).map(list::getJSONObject) }.orEmpty()
+            grants.firstOrNull { it.getString("granteeUserId").equals(member.id, ignoreCase = true) && it.getLong("workspaceKeyVersion") == to }?.let { mine ->
+                grantRow = JSONObject().put("workspaceKeyVersion", to).put("granteeKeyVersion", mine.getLong("granteeKeyVersion")).put("granterUserId", member.id.lowercase())
+                    .put("rosterVersion", mine.getLong("rosterVersion")).put("rosterDigest", mine.getString("rosterDigest")).put("envelope", mine.getString("envelope"))
+            }
+        }
+        if (kind == "delete") areaListed = false
+        dueRotations = dueRotations.filter { ws -> wires.none { it.getString("workspaceId") == ws } }
+        return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", revision))
     }
 
     private fun signedOf(wire: JSONObject): SignedGroupStatement {
@@ -334,20 +517,27 @@ class FamilyFixture(val server: FakeDrive) {
     }
 
     /* The chain as Sam's device accepted it: what his next roster is built over. */
-    fun creatorChain(rosters: List<SignedGroupStatement> = chain): AcceptedRosters =
-        (acceptRosters(groupId, groupPublicKey(groupSeed), GroupAnchor.CREATED, emptyList(), rosters, emptyList(), signerKeys,
+    fun creatorChain(rosters: List<SignedGroupStatement> = chain, successions: List<SignedGroupStatement> = this.successions.toList()): AcceptedRosters =
+        (acceptRosters(groupId, groupPublicKey(groupSeed), GroupAnchor.CREATED, emptyList(), rosters, successions, signerKeys,
             OwnIdentities(creator.id, listOf(creator.servedKeys())), null) as RosterChain.Accepted).chain
 
     /*
      * Sam makes Maya a manager (roster 3, after her admission at 2) and seals the family's key to her: what she needs to
      * let anyone in. The chain from there.
      */
-    fun mayaManages(): List<SignedGroupStatement> {
+    fun mayaManages(organizer: Boolean = false): List<SignedGroupStatement> {
         val accepted = creatorChain(listOf(r1, r2))
-        val members = accepted.roster().members.map { if (it.userId == member.id.lowercase()) it.copy(roles = listOf(GroupRole.MEMBERS)) else it }
+        // As organizer, Maya holds billing as well and Sam keeps managing: what she hands over.
+        val members = accepted.roster().members.map {
+            when {
+                it.userId == member.id.lowercase() -> it.copy(roles = if (organizer) listOf(GroupRole.BILLING, GroupRole.MEMBERS) else listOf(GroupRole.MEMBERS))
+                organizer -> it.copy(roles = listOf(GroupRole.MEMBERS))
+                else -> it
+            }
+        }
         val r3m = rosterSign(rosterNext(accepted, members, creator.id, null, null, null), groupSeed, creator.keys)
         chain = listOf(r1, r2, r3m)
-        listedRoles = listOf("members")
+        listedRoles = if (organizer) listOf("billing", "members") else listOf("members")
         val head = creatorChain()
         val sealed = groupKeySeal(groupSeed, GroupKeySealContext(groupId, 1uL, member.id.lowercase(), member.keys.keyVersion, creator.id, 3uL,
             rosterDigest(r3m.statement)), head, base64urlDecode(member.keys.kemPublicKey!!), creator.keys)
@@ -356,11 +546,59 @@ class FamilyFixture(val server: FakeDrive) {
         return chain
     }
 
+    /* Sam, on his own device, moves billing from `from` (Maya unless named) to `userId`: a handover another device made meanwhile. */
+    fun samMovesBilling(userId: String, from: String = member.id) {
+        val accepted = creatorChain()
+        val members = accepted.roster().members.map {
+            when {
+                it.userId.equals(userId, ignoreCase = true) -> it.copy(roles = (it.roles + GroupRole.BILLING).distinct().sortedBy { role -> role.ordinal })
+                it.userId.equals(from, ignoreCase = true) -> it.copy(roles = it.roles - GroupRole.BILLING)
+                else -> it
+            }
+        }
+        chain = chain + rosterSign(rosterNext(accepted, members, creator.id, null, null, null), groupSeed, creator.keys)
+    }
+
+    /* Sam, on his own device, gives `userId` billing: another manager's handover landing meanwhile. */
+    fun samGivesBilling(userId: String) {
+        val accepted = creatorChain()
+        val members = accepted.roster().members.map {
+            if (it.userId.equals(userId, ignoreCase = true)) it.copy(roles = (it.roles + GroupRole.BILLING).distinct().sortedBy { role -> role.ordinal }) else it
+        }
+        chain = chain + rosterSign(rosterNext(accepted, members, creator.id, null, null, null), groupSeed, creator.keys)
+    }
+
+    /* Sam, on his own device, lets `person` (marked left) in again: a new membership, active with no roles. */
+    fun samLetsInAgain(person: FakeDrive.Person) {
+        val accepted = creatorChain()
+        val members = accepted.roster().members.map {
+            if (it.userId.equals(person.id, ignoreCase = true)) it.copy(status = MemberStatus.ACTIVE, roles = emptyList()) else it
+        }
+        chain = chain + rosterSign(rosterNext(accepted, members, creator.id, null, null, null), groupSeed, creator.keys)
+        joined.add(person)
+    }
+
+    /*
+     * Sam, on his device, continues with `person`'s changed account: their entry now names their new keys, with `roles`
+     * (another manager's account-change continuation, which can also take a role away).
+     */
+    fun samContinuesWith(person: FakeDrive.Person, roles: List<GroupRole>) {
+        val accepted = creatorChain()
+        val members = accepted.roster().members.map {
+            if (it.userId.equals(person.id, ignoreCase = true)) person.entry(roles, it.sinceVersion).copy(status = it.status) else it
+        }
+        chain = chain + rosterSign(rosterNext(accepted, members, creator.id, null, null, null), groupSeed, creator.keys)
+    }
+
     /* Sam changes the member list himself (a roster that only re-signs it): what another manager's win looks like. */
     fun samChangesTheList() {
         val accepted = creatorChain()
         chain = chain + rosterSign(rosterNext(accepted, accepted.roster().members, creator.id, null, null, null), groupSeed, creator.keys)
     }
+
+    /* Maya's own words check of `person`: a verified pin of the keys HushOS serves for them now, in her settings. */
+    fun verifyPin(person: FakeDrive.Person, email: String, name: String) =
+        server.editSettings { it.pin(ContactPin.ofServed(person.id, email, name, person.served, "2026-11-03T00:00:00.000Z")!!) }
 
     /* `person` accepted an invitation and waits to be let in (route 16), with the identity HushOS serves for them now. */
     fun waiting(person: FakeDrive.Person, email: String, name: String) {
@@ -380,6 +618,16 @@ class FamilyFixture(val server: FakeDrive) {
     }
 
     companion object {
+        /*
+         * Route 18 is a PATCH, which Android's HttpURLConnection sends and the JVM's refuses: the test JVM is taught it
+         * (its list of methods, opened by build.gradle.kts's --add-opens), so role changes run here as on a phone.
+         */
+        fun allowPatch() {
+            val field = java.net.HttpURLConnection::class.java.getDeclaredField("methods").apply { isAccessible = true }
+            @Suppress("UNCHECKED_CAST") val methods = field.get(null) as Array<String>
+            if ("PATCH" !in methods) methods[methods.indexOf("TRACE")] = "PATCH"
+        }
+
         /* The account signed in on this test's phone, as the other vault tests sign in. */
         fun signIn(server: FakeDrive, prefs: String) {
             val context: Context = RuntimeEnvironment.getApplication()

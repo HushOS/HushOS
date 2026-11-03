@@ -4,6 +4,9 @@
 #
 #   apps/android/scripts/release-apk.sh v1.2.3      # or: bun run android:release-apk v1.2.3
 #
+# .github/workflows/android-release.yml runs it on Linux once Google Play has the bundle, with
+# the key in the HUSHOS_UPLOAD_* variables (no keychain) and the runner's ANDROID_HOME.
+#
 # It builds in a temporary worktree at the tag, the Rust core included, whatever this checkout
 # has checked out, and refuses a tag whose package.json names another version. versionName is
 # that version and versionCode is scripts/build-number.sh --store at the tag, the Play bundle's.

@@ -9,8 +9,11 @@ import Foundation
  * finishes it once every part has landed.
  *
  * The two processes never write the same file: the extension writes the note and one
- * small file per landed part ("etag-<n>"); the app only reads them and removes them as
- * it takes them in. When the extension is gone before the parts land, iOS wakes the
+ * small file per landed part ("etag-<upload>-<n>", naming the server's upload it landed in);
+ * the app only reads them and removes them as it takes them in. A part of an upload since
+ * aborted and sealed again (a family folder's, after a key change) names the old upload, so
+ * neither its file nor its session callback (`<id>|<piece>|<upload>`) is ever taken for one of
+ * the new upload's parts. When the extension is gone before the parts land, iOS wakes the
  * app for the extension's session instead, and the app's own delegate takes the rest.
  *
  * A note is held while the extension's sheet is open: a small file often lands in that
@@ -30,10 +33,17 @@ public struct ShareHandoff: Codable, Sendable, Equatable {
     public let sealed: Vault.SealedUpload
     /* The account whose drive it goes to; the app adopts it only while that account is signed in (TransferOwnership). */
     public let owner: AccountOwner?
+    /*
+     * A family folder's: its family and the folder's workspace, sealed with the area ledger's keys (FamilyUploads) and its
+     * plaintext kept in the folder. The app adopts it as the queue's family upload, which finishes (or seals again) through
+     * FamilyUploads. Nil for your own drive's.
+     */
+    public let family: FamilyUpload.Family?
     /* The extension is done with it; until then only the extension may finish it. */
     public var released = false
 
-    public init(id: UUID, name: String, folderId: String, mime: String?, size: Int64?, sealed: Vault.SealedUpload, owner: AccountOwner) {
+    public init(id: UUID, name: String, folderId: String, mime: String?, size: Int64?, sealed: Vault.SealedUpload, owner: AccountOwner,
+                family: FamilyUpload.Family? = nil) {
         self.id = id
         self.name = name
         self.folderId = folderId
@@ -41,6 +51,7 @@ public struct ShareHandoff: Codable, Sendable, Equatable {
         self.size = size
         self.sealed = sealed
         self.owner = owner
+        self.family = family
     }
 
     /* The queue's folder in the app group, the same one BackgroundTransfers keeps. */
@@ -155,6 +166,23 @@ public struct ShareHandoff: Codable, Sendable, Equatable {
         }
     }
 
+    /* A part's session task, as the app's queue names its own: the upload's id, the piece (part - 1) and the server's upload. */
+    public static func taskDescription(_ id: UUID, part: Int, upload: String) -> String { "\(id.uuidString)|\(part - 1)|\(upload)" }
+
+    /* A part's task described by `taskDescription`; nil for any other (one with no upload named is never taken). */
+    public static func landing(_ description: String) -> (id: UUID, part: Int, upload: String)? {
+        let fields = description.split(separator: "|")
+        guard fields.count == 3, let id = UUID(uuidString: String(fields[0])), let piece = Int(fields[1]), valid(String(fields[2])) else { return nil }
+        return (id, piece + 1, String(fields[2]))
+    }
+
+    /* A server's upload id as a file name may hold it. */
+    static func valid(_ upload: String) -> Bool {
+        !upload.isEmpty && upload.count <= 64 && upload.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
+    }
+
+    private static func etagFile(_ upload: String, part: Int) -> String { "etag-\(upload)-\(part)" }
+
     /*
      * Notes taken into the queue, each with the parts it was adopted with: the queue's records are
      * written first (`persist`), and only once they are on disk do the notes and those parts' files
@@ -163,44 +191,44 @@ public struct ShareHandoff: Codable, Sendable, Equatable {
      * upload with neither note nor record, and the next sweep took it.
      */
     @discardableResult
-    public static func adopt(_ taken: [UUID: [Int]], in root: URL = transfers, persist: () -> Bool) -> Bool {
+    public static func adopt(_ taken: [UUID: (upload: String, parts: [Int])], in root: URL = transfers, persist: () -> Bool) -> Bool {
         guard persist() else { return false }
-        for (id, parts) in taken {
+        for (id, landed) in taken {
             try? FileManager.default.removeItem(at: note(id, in: root))
-            for part in parts {
-                try? FileManager.default.removeItem(at: root.appendingPathComponent(id.uuidString, isDirectory: true).appendingPathComponent("etag-\(part)"))
+            for part in landed.parts {
+                try? FileManager.default.removeItem(at: root.appendingPathComponent(id.uuidString, isDirectory: true).appendingPathComponent(etagFile(landed.upload, part: part)))
             }
         }
         return true
     }
 
-    /* The parts the extension saw land, read and left in place (`adopt` removes them once recorded). */
-    public static func landedParts(_ id: UUID, in root: URL = transfers) -> [Int: String] {
-        let folder = root.appendingPathComponent(id.uuidString, isDirectory: true)
-        var found: [Int: String] = [:]
+    /* The parts of `upload` the extension saw land, read and left in place (`adopt` removes them once recorded); another upload's are none. */
+    public static func landedParts(_ id: UUID, upload: String, in root: URL = transfers) -> [Int: String] {
+        parts(of: upload, in: root.appendingPathComponent(id.uuidString, isDirectory: true)).mapValues(\.etag)
+    }
+
+    /* A part of `upload` the extension saw land. */
+    public static func landed(_ id: UUID, part: Int, etag: String, upload: String, in root: URL = transfers) {
+        guard valid(upload) else { return }
+        try? Data(etag.utf8).write(to: root.appendingPathComponent(id.uuidString, isDirectory: true).appendingPathComponent(etagFile(upload, part: part)), options: .atomic)
+    }
+
+    /* The parts of `upload` the extension saw land since the last look, taken (their files removed); another upload's stay unread. */
+    public static func takeLanded(_ id: UUID, upload: String, in root: URL = transfers) -> [Int: String] {
+        let found = parts(of: upload, in: root.appendingPathComponent(id.uuidString, isDirectory: true))
+        for (_, landed) in found { try? FileManager.default.removeItem(at: landed.file) }
+        return found.mapValues(\.etag)
+    }
+
+    private static func parts(of upload: String, in folder: URL) -> [Int: (etag: String, file: URL)] {
+        guard valid(upload) else { return [:] }
+        let prefix = "etag-\(upload)-"
+        var found: [Int: (etag: String, file: URL)] = [:]
         for file in (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
-        where file.lastPathComponent.hasPrefix("etag-") {
-            guard let part = Int(file.lastPathComponent.dropFirst("etag-".count)),
+        where file.lastPathComponent.hasPrefix(prefix) {
+            guard let part = Int(file.lastPathComponent.dropFirst(prefix.count)),
                   let etag = try? String(contentsOf: file, encoding: .utf8), !etag.isEmpty else { continue }
-            found[part] = etag
-        }
-        return found
-    }
-
-    /* A part the extension saw land. */
-    public static func landed(_ id: UUID, part: Int, etag: String) {
-        try? Data(etag.utf8).write(to: directory(id).appendingPathComponent("etag-\(part)"), options: .atomic)
-    }
-
-    /* The parts the extension saw land since the last look, taken (their files removed). */
-    public static func takeLanded(_ id: UUID) -> [Int: String] {
-        let files = (try? FileManager.default.contentsOfDirectory(at: directory(id), includingPropertiesForKeys: nil)) ?? []
-        var found: [Int: String] = [:]
-        for file in files where file.lastPathComponent.hasPrefix("etag-") {
-            guard let part = Int(file.lastPathComponent.dropFirst("etag-".count)),
-                  let etag = try? String(contentsOf: file, encoding: .utf8), !etag.isEmpty else { continue }
-            found[part] = etag
-            try? FileManager.default.removeItem(at: file)
+            found[part] = (etag, file)
         }
         return found
     }

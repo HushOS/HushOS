@@ -276,7 +276,7 @@ internal fun Vault.openWalkParent(ws: String, parentId: String, checkStop: () ->
 }
 
 /* A node of the work as the ledger's walk takes it: its parent's key at the target, or the top folder's own. */
-private fun rotating(entry: RotationWorkNode, rootId: String, target: ULong, ws: String): RotatingNode {
+internal fun rotating(entry: RotationWorkNode, rootId: String, target: ULong, ws: String): RotatingNode {
     val node = entry.node
     val raw = runCatching { JSONObject(node.rawJson) }.getOrNull()
     fun bytes(value: String) = runCatching { base64urlDecode(value) }.getOrDefault(ByteArray(0))

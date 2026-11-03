@@ -118,6 +118,12 @@ import {
     verdict as rosterVerdict,
 } from '../src/roster-calls-testkit';
 import {
+    previousEnvelope,
+    previousRootRun,
+    removalRun,
+    removalVerdict,
+} from '../src/removal-calls-testkit';
+import {
     chain,
     core,
     coreJoin,
@@ -1115,6 +1121,10 @@ async function pins(value: Doc): Promise<Verdict | undefined> {
             return rosterCallKind(value);
         case 'roster_call_session':
             return rosterCallSessionKind(value);
+        case 'removal_call':
+            return removalCallKind(value);
+        case 'previous_root':
+            return previousRootKind(value);
         case 'settings':
             return settingsKind(value);
         case 'area_open':
@@ -2244,6 +2254,82 @@ async function rosterCallKind(value: Doc): Promise<Verdict | undefined> {
     if ('refused' in result) return refused;
     const doc = { family: familyJson(await rosterFamily()) };
     return ok(await rosterVerdict(doc, result.route, result.body));
+}
+
+/* One removal, key replacement or folder deletion by person 1 (the core's removal_call kind). */
+async function removalCallKind(value: Doc): Promise<Verdict | undefined> {
+    const op = value.op;
+    if (!isObject(op)) return undefined;
+    const kind = text(op, 'kind');
+    const person = (n: unknown) => {
+        const at = unsigned(n);
+        return at !== undefined && at >= 1 && at <= 5 ? at : undefined;
+    };
+    const area = (n: unknown) => {
+        const at = unsigned(n);
+        return at !== undefined && at <= 2 ? at : undefined;
+    };
+    const clean: Json = { kind };
+    switch (kind) {
+        case 'remove': {
+            const who = person(op.who);
+            if (who === undefined) return undefined;
+            clean.who = who;
+            break;
+        }
+        case 'markLeft': {
+            if (!Array.isArray(op.who) || op.who.length === 0 || op.who.length > 3)
+                return undefined;
+            const who = op.who.map(person);
+            if (who.some((n) => n === undefined)) return undefined;
+            clean.who = who;
+            break;
+        }
+        case 'rotate':
+        case 'retire': {
+            const at = area(op.area);
+            if (at === undefined) return undefined;
+            clean.area = at;
+            break;
+        }
+        default:
+            return undefined;
+    }
+    if (op.rotate !== undefined && op.rotate !== null) {
+        if (!Array.isArray(op.rotate) || op.rotate.length > 4) return undefined;
+        if (kind !== 'remove' && kind !== 'markLeft') return undefined;
+        const rotate = op.rotate.map(area);
+        if (rotate.some((n) => n === undefined)) return undefined;
+        clean.rotate = rotate;
+    }
+    if (op.noArea !== undefined && op.noArea !== null) {
+        if (typeof op.noArea !== 'boolean') return undefined;
+        clean.noArea = op.noArea;
+    }
+    const result = await removalRun(clean);
+    if ('refused' in result) return refused;
+    const doc = { family: familyJson(await rosterFamily()) };
+    return ok({
+        verdict: await removalVerdict(doc, result.route, result.body),
+        replaced: result.replaced,
+    });
+}
+
+/* Route 25's previous envelope of a family folder's root (the core's previous_root kind). */
+async function previousRootKind(value: Doc): Promise<Verdict | undefined> {
+    const area = unsigned(value.area);
+    if (area === undefined || area > 2) return undefined;
+    const envelope = text(value, 'envelope');
+    if (envelope === undefined || !['none', 'previous', 'node', 'junk'].includes(envelope))
+        return undefined;
+    const spec: Json = { area, envelope };
+    if (value.prevParentKeyEpoch !== undefined && value.prevParentKeyEpoch !== null) {
+        const at = unsigned(value.prevParentKeyEpoch);
+        if (at === undefined || at > 1000) return undefined;
+        spec.prevParentKeyEpoch = at;
+    }
+    const outcome = await previousRootRun(spec, await previousEnvelope(spec));
+    return outcome.status === 'refused' ? refused : ok(outcome);
 }
 
 /* A manager's device over time (the core's roster_call_session kind). */

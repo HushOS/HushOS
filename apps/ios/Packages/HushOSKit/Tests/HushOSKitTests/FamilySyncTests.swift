@@ -974,7 +974,10 @@ struct FamilyFixture {
 
     var summary: GroupSummary { GroupSummary(id: groupId, kind: "family", name: "Lindqvist family", roles: [], state: "active", rosterVersion: 2, groupKeyVersion: 1) }
     var firstKeys: GroupPublicKey { get throws { try groupPublicKey(seed: groupSeed) } }
-    var signerKeys: [String: String] { get throws { [try digest(creator.keys.mlDsaPublicKey!): creator.keys.mlDsaPublicKey!] } }
+    /* The creator's keys, and the member's, who signs a manager's calls once made one (memberManages). */
+    var signerKeys: [String: String] { get throws {
+        [try digest(creator.keys.mlDsaPublicKey!): creator.keys.mlDsaPublicKey!, try digest(member.keys.mlDsaPublicKey!): member.keys.mlDsaPublicKey!]
+    } }
 
     /* `namingPersonal`: roster 1 also names the member's own drive as a family folder (a server or creator lying). */
     /*
@@ -1184,6 +1187,8 @@ final class FamilyServer: @unchecked Sendable {
     var chain: [SignedGroupStatement] = []
     /* Key changes, the change feed and route 20 (FamilyRotationStub). */
     let rotations = RotationStub()
+    /* A manager's routes (FamilyManageStub). */
+    let manage = ManageStub()
     private var ignoringAfter = false
     var notMember = false
     /* Route 2 lists the family (false: the server stopped listing it); `groupsFail` answers route 2 with a 503. */
@@ -1431,6 +1436,7 @@ final class FamilyServer: @unchecked Sendable {
         // The session ended: every group route answers 401.
         if path.hasPrefix("/api/groups"), lock.withLock({ unauthorized }) { return (401, ["message": "Sign in."]) }
         if let routed = rotationRoute(method: method, path: path, sent: sent, query: query) { return routed }
+        if let routed = manageRoute(request, method: method, path: path, body: body, sent: sent) { return routed }
         switch (method, path) {
         case ("GET", "/api/auth/settings"):
             return lock.withLock {
@@ -1472,11 +1478,12 @@ final class FamilyServer: @unchecked Sendable {
         case ("GET", "/api/groups"):
             if lock.withLock({ groupsFail }) { return (503, ["message": "Drive is temporarily unavailable. Please try again."]) }
             if !lock.withLock({ listed }) { return (200, ["groups": [Any]()]) }
-            return (200, ["groups": [["id": f.groupId, "kind": "family", "name": "Lindqvist family", "roles": [String](), "state": lock.withLock { groupState },
+            return (200, ["groups": [["id": f.groupId, "kind": "family", "name": "Lindqvist family", "roles": lock.withLock { manage.listedRoles }, "state": lock.withLock { groupState },
                                       "rosterVersion": lock.withLock { chain.count }, "groupKeyVersion": 1]]])
         case ("GET", "/api/groups/\(f.groupId)"):
             if lock.withLock({ detailNotMember }) { return (404, ["code": "not-member", "message": "You are not in this group."]) }
-            return (200, ["members": lock.withLock { members }, "seats": ["used": 2, "limit": 6]])
+            return (200, ["members": lock.withLock { members }, "seats": ["used": 2, "limit": 6],
+                          "head": lock.withLock { ["version": chain.count, "revision": chain.count] }])
         case ("GET", "/api/groups/\(f.groupId)/identities"):
             var creator = identity(f.creator)
             if lock.withLock({ granterGone }) { creator["identity"] = NSNull() }
@@ -1484,7 +1491,8 @@ final class FamilyServer: @unchecked Sendable {
                 keys["mlDsaPublicKey"] = "not base64url!"
                 creator["identity"] = keys
             }
-            return (200, ["identities": [creator, identity(f.member)].sorted { ($0["userId"] as! String) < ($1["userId"] as! String) }, "next": NSNull()])
+            let others = lock.withLock { manage.people.values.map { identity($0.person) } }
+            return (200, ["identities": ([creator, identity(f.member)] + others).sorted { ($0["userId"] as! String) < ($1["userId"] as! String) }, "next": NSNull()])
         case ("PUT", "/api/groups/\(f.groupId)/areas/\(f.workspaceId)/self-grant"):
             return lock.withLock {
                 guard let grant = sent["grant"] as? [String: Any], (grant["workspaceKeyVersion"] as? NSNumber)?.uint64Value == areaVersion else {
