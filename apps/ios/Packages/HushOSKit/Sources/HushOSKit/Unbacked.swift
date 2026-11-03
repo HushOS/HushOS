@@ -376,6 +376,18 @@ public enum TemporaryCopies {
         forgetLock.withLock { account.value &+= 1 }
     }
 
+    /*
+     * An extension about to answer for `session`: when it replaces the session this process served
+     * before (a new token for the same account included: a sign-in again, a password change), that
+     * session ends here, so nothing begun under it (a sync's late let-go, a download) acts for the new one.
+     */
+    public static func follow(_ session: SharedKeychain.Session, account: CopyEpoch = .process) {
+        forgetLock.withLock {
+            if let followed = account.followed, followed != session { account.value &+= 1 }
+            account.followed = session
+        }
+    }
+
     /* The session open now, for cleanup and record writes that must do nothing once it ends (CopySession). */
     public static func session(_ account: CopyEpoch = .process) -> CopySession {
         forgetLock.withLock { CopySession(account: account, epoch: account.value) }
@@ -417,6 +429,8 @@ public final class CopyEpoch: @unchecked Sendable {
     public static let process = CopyEpoch()
     /* Read and moved only under TemporaryCopies.forgetLock. */
     var value: UInt64 = 0
+    /* The session this epoch serves now, as an extension last admitted it (`TemporaryCopies.follow`); under the same lock. */
+    var followed: SharedKeychain.Session?
     public init() {}
 }
 

@@ -524,11 +524,65 @@ public actor FamilyFilesSource {
         }
     }
 
+    /*
+     * Every answer of family data goes through here, so none can skip the last check: `body` runs
+     * (awaiting whatever it needs), then, with nothing awaited after it, the location's record, a
+     * pending let-go and the session are asked again, and `gate` (a copy's) is checked. A refusal
+     * deletes `copy` if one was made, and every copy of the family once it was let go of. A body that
+     * fails is asked about too: a revocation is the answer, whatever else went wrong.
+     */
+    private func serving<T>(copy: URL? = nil, gate: FamilyCopyGate? = nil, _ body: () async throws -> T) async throws -> T {
+        let value: T
+        do {
+            value = try await body()
+        } catch {
+            try admit()
+            throw error
+        }
+        #if DEBUG
+        // Tests: what lands during the body's last await (a revocation from another process).
+        lastAwait?()
+        #endif
+        do {
+            try admit()
+            try gate?.check()
+        } catch {
+            if let copy { try? FileManager.default.removeItem(at: copy) }
+            throw error
+        }
+        return value
+    }
+
+    #if DEBUG
+    /* Tests: runs as a body's last await ends, right before the final check. */
+    var lastAwait: (@Sendable () -> Void)?
+    func setLastAwait(_ hook: (@Sendable () -> Void)?) { lastAwait = hook }
+    #endif
+
     /* The family as accepted here, checked again when due. */
-    public func admitted() async throws -> FamilyView {
+    public func admitted() async throws -> FamilyView { try await serving { try await currentView() } }
+
+    private func currentView() async throws -> FamilyView {
         try admit()
         if let view, let checkedAt, now().timeIntervalSince(checkedAt) < Self.fresh { return view }
         return try await check()
+    }
+
+    /*
+     * Only no answer (offline, a timeout, the server busy or failing) keeps what was accepted; a lost
+     * session (401) or any other answer is passed on, so Files offers the sign-in sheet rather than a
+     * folder from before.
+     */
+    private func heldOnNoAnswer(_ error: Error) throws -> FamilyView {
+        guard let view, FamilySync.transient(error), !Self.endsSession(error) else { throw error }
+        return view
+    }
+
+    static func endsSession(_ error: Error) -> Bool {
+        if case DriveAPIError.notAuthenticated = error { return true }
+        if case AuthError.sessionEnded = error { return true }
+        if let error = error as? GroupsAPIError, error.status == 401 { return true }
+        return false
     }
 
     private func check() async throws -> FamilyView {
@@ -543,35 +597,22 @@ public actor FamilyFilesSource {
         } catch let error as FamilyFilesError {
             throw error
         } catch {
-            // No answer: what this process accepted stands, read only, unless a let-go landed meanwhile (asked again).
-            if let view {
-                try admit()
-                return view
-            }
-            throw error
+            return try heldOnNoAnswer(error)
         }
-        // Not listed, but not confirmed gone either: kept as it was until the server says not-member, and only while the
-        // record still stands (a let-go whose wipe couldn't finish takes the record without naming the family as removed).
+        // Not listed, but not confirmed gone either: kept as it was until the server says not-member (the caller's
+        // final check still asks the record: a let-go whose wipe couldn't finish takes it without naming the family).
         guard let summary = listed.first(where: { $0.id.lowercased() == groupId }) else {
-            if let view {
-                try admit()
-                return view
-            }
+            if let view { return view }
             throw FamilyFilesError.unavailable
         }
         switch await sync.sync(summary) {
         case .accepted(let accepted):
-            // A revocation that landed while the family was checked wins over it.
-            try admit()
             view = accepted
             known.formUnion(accepted.areas.map { $0.workspaceId.lowercased() })
             checkedAt = now()
             return accepted
         case .failed(let words) where words == FamilyWords.noAnswer:
-            if let view {
-                try admit()
-                return view
-            }
+            if let view { return view }
             throw FamilyFailure(message: words)
         default:
             // The sync let it go (its release took the record and asked for the location to go).
@@ -582,8 +623,10 @@ public actor FamilyFilesSource {
     }
 
     /* The family's folders that open here, as the location's top level. */
-    public func folders() async throws -> [FamilyArea] {
-        try await admitted().areas.filter(\.openable).sorted { ($0.name ?? "").localizedStandardCompare($1.name ?? "") == .orderedAscending }
+    public func folders() async throws -> [FamilyArea] { try await serving { try await openFolders() } }
+
+    private func openFolders() async throws -> [FamilyArea] {
+        try await currentView().areas.filter(\.openable).sorted { ($0.name ?? "").localizedStandardCompare($1.name ?? "") == .orderedAscending }
     }
 
     private func area(_ ref: NodeRef, in view: FamilyView) throws -> FamilyArea {
@@ -595,27 +638,27 @@ public actor FamilyFilesSource {
 
     /* Whether `ref` is a top folder of the family (its parent in Files is the location itself). */
     public func isFolderRoot(_ ref: NodeRef) async throws -> Bool {
-        let view = try await admitted()
-        return try area(ref, in: view).root?.id.lowercased() == ref.nodeId
+        try await serving { try area(ref, in: try await currentView()).root?.id.lowercased() == ref.nodeId }
     }
 
     /* A folder's children, in one of the family's folders. */
     public func children(of folder: NodeRef) async throws -> [Opened] {
-        let view = try await admitted()
-        _ = try area(folder, in: view)
-        let listing = try await vault.listChildren(of: folder.nodeId, in: folder.workspaceId)
-        try admit()
-        var out: [Opened] = []
-        for child in listing.children where child.ref.workspaceId == folder.workspaceId {
-            if let opened = await vault.item(child.ref) { out.append(opened) }
+        try await serving {
+            _ = try area(folder, in: try await currentView())
+            let listing = try await vault.listChildren(of: folder.nodeId, in: folder.workspaceId)
+            var out: [Opened] = []
+            for child in listing.children where child.ref.workspaceId == folder.workspaceId {
+                if let opened = await vault.item(child.ref) { out.append(opened) }
+            }
+            return out
         }
-        return out
     }
 
     /* An item of the family's folders: as held here, or opened by listing the folder it was last seen in. */
-    public func item(_ ref: NodeRef) async throws -> Opened {
-        let view = try await admitted()
-        let area = try area(ref, in: view)
+    public func item(_ ref: NodeRef) async throws -> Opened { try await serving { try await lookUp(ref) } }
+
+    private func lookUp(_ ref: NodeRef) async throws -> Opened {
+        let area = try area(ref, in: try await currentView())
         if let held = await vault.item(ref) { return held }
         if let root = area.root, root.id.lowercased() == ref.nodeId {
             _ = try await vault.listChildren(of: root.id, in: ref.workspaceId)
@@ -624,7 +667,6 @@ public actor FamilyFilesSource {
         } else {
             throw FamilyFailure(message: FamilyWords.openAgain)
         }
-        try admit()
         guard let opened = await vault.item(ref) else { throw DriveAPIError.notFound("This item no longer exists.") }
         return opened
     }
@@ -632,52 +674,46 @@ public actor FamilyFilesSource {
     /*
      * A file's current version, decrypted under the family's copy gate to the process's
      * `opened/family/<workspace>/files/<node>/<version>/content` (where a forget of the family
-     * reaches it; a partial there is continued by the next try). However the download ends (done,
-     * failed, cancelled), the location's record is asked again: once a revocation landed, here or in
-     * another process, every copy of the family's folders goes, partials included, and nothing is
-     * handed on.
+     * reaches it; a partial there is continued by the next try), handed on only through `serving`:
+     * however the download ends, a revocation found then (here or from another process) leaves no
+     * copy of the family's folders, partials included.
      */
     public func download(_ ref: NodeRef, progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> (file: URL, item: Opened) {
-        let item = try await item(ref)
         known.insert(ref.workspaceId)
-        let file = temporary.appendingPathComponent("opened/family/\(ref.workspaceId)/files/\(ref.nodeId)/\(item.node.currentVersion?.id ?? "none")", isDirectory: true)
-            .appendingPathComponent("content")
         let gate = vault.copyGate(familyWorkspace: ref.workspaceId)
+        var made: URL?
         do {
-            try gate.perform { try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true) }
-            try await vault.download(ref.nodeId, ref: ref, expectedVersionId: item.node.currentVersion?.id, to: file, gate: gate, progress: progress)
+            return try await serving(copy: nil, gate: gate) {
+                let item = try await lookUp(ref)
+                let file = temporary.appendingPathComponent("opened/family/\(ref.workspaceId)/files/\(ref.nodeId)/\(item.node.currentVersion?.id ?? "none")", isDirectory: true)
+                    .appendingPathComponent("content")
+                made = file
+                try gate.perform { try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true) }
+                try await vault.download(ref.nodeId, ref: ref, expectedVersionId: item.node.currentVersion?.id, to: file, gate: gate, progress: progress)
+                return (file, await vault.item(ref) ?? item)
+            }
         } catch {
-            // A revocation is the answer, whatever the transfer said, and leaves no plaintext behind.
-            try admit()
+            if let made { try? FileManager.default.removeItem(at: made) }
             throw error
         }
-        do {
-            try admit()
-            try gate.check()
-        } catch {
-            try? FileManager.default.removeItem(at: file)
-            throw error
-        }
-        return (file, await vault.item(ref) ?? item)
     }
 
     public func thumbnail(_ ref: NodeRef) async throws -> Data? {
-        let item = try await item(ref)
-        let data = try await vault.thumbnail(of: item)
-        try admit()
-        return data
+        try await serving { try await vault.thumbnail(of: try await lookUp(ref)) }
     }
 
     /* Where each folder's feed stands now (route 25's change sequences), for a new anchor. */
     public func anchor() async throws -> FamilyAnchor {
-        let folders = try await self.folders()
-        let heads = try await heads()
-        var anchor = FamilyAnchor()
-        for area in folders {
-            guard let root = area.root else { continue }
-            anchor.folders[area.workspaceId.lowercased()] = .init(root: root.id.lowercased(), cursor: heads[area.workspaceId.lowercased()] ?? 0)
+        try await serving {
+            let folders = try await openFolders()
+            let heads = try await heads()
+            var anchor = FamilyAnchor()
+            for area in folders {
+                guard let root = area.root else { continue }
+                anchor.folders[area.workspaceId.lowercased()] = .init(root: root.id.lowercased(), cursor: heads[area.workspaceId.lowercased()] ?? 0)
+            }
+            return anchor
         }
-        return anchor
     }
 
     private func heads() async throws -> [String: Int] {
@@ -693,7 +729,11 @@ public actor FamilyFilesSource {
      * top nodes deleted), then each folder's own feed. Nil when a feed asks to start over.
      */
     public func changes(since anchor: FamilyAnchor) async throws -> FamilyChanges? {
-        let folders = try await self.folders()
+        try await serving { try await changesSince(anchor) }
+    }
+
+    private func changesSince(_ anchor: FamilyAnchor) async throws -> FamilyChanges? {
+        let folders = try await openFolders()
         var next = FamilyAnchor()
         var added: [FamilyArea] = []
         var updated: [Opened] = []
@@ -728,7 +768,6 @@ public actor FamilyFilesSource {
             more = more || feed.hasMore
             next.folders[workspace] = .init(root: held.root, cursor: feed.nextCursor)
         }
-        try admit()
         return FamilyChanges(added: added, updated: updated, deleted: deleted, next: next, hasMore: more)
     }
 }

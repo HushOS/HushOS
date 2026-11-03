@@ -72,13 +72,15 @@ public final class FilesGate<Value>: @unchecked Sendable {
     private let session: () -> SharedKeychain.Session?
     private let make: (SharedKeychain.Session) -> Value?
     private let changed: (AccountOwner?) -> Void
+    private let account: CopyEpoch
     private let lock = NSLock()
     private var cached: (session: SharedKeychain.Session, value: Value)?
 
-    public init(owner: @escaping () -> AccountOwner?, session: @escaping () -> SharedKeychain.Session?,
+    public init(owner: @escaping () -> AccountOwner?, session: @escaping () -> SharedKeychain.Session?, account: CopyEpoch = .process,
                 changed: @escaping (AccountOwner?) -> Void = { _ in }, make: @escaping (SharedKeychain.Session) -> Value?) {
         self.owner = owner
         self.session = session
+        self.account = account
         self.changed = changed
         self.make = make
     }
@@ -91,6 +93,8 @@ public final class FilesGate<Value>: @unchecked Sendable {
             changed(nil)
             throw NSFileProviderError(.notAuthenticated)
         }
+        // A session that replaced the one served before (another token, the same account included) ends that one here first.
+        TemporaryCopies.follow(admitted, account: account)
         if let cached, cached.session == admitted { return cached.value }
         cached = nil
         changed(AccountOwner(admitted))

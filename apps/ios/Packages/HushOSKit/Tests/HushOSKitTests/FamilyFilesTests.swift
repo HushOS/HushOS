@@ -218,6 +218,34 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         #expect(records.admission(group, owner: maya) == .letGo)
     }
 
+    /*
+     * The same account signs in again (a new token) while the extension still serves the old
+     * session: the old session ends here as the new one is admitted, so a late let-go of the old
+     * session's sync touches nothing of the new location. Fails if a token change keeps the old
+     * session standing.
+     */
+    @Test func aNewTokenForTheSameAccountEndsTheOldSessionInTheExtension() async throws {
+        let account = CopyEpoch()
+        let owner = AccountOwner(userId: Self.maya.userId, origin: Self.maya.origin)
+        final class Current: @unchecked Sendable { var session: SharedKeychain.Session; init(session: SharedKeychain.Session) { self.session = session } }
+        let current = Current(session: SharedKeychain.Session(origin: Self.maya.origin, token: "old", userId: Self.maya.userId))
+        let gate = FilesGate<CopySession>(owner: { owner }, session: { current.session }, account: account) { _ in TemporaryCopies.session(account) }
+        let old = try gate.open()
+        #expect(old.stands)
+        current.session = SharedKeychain.Session(origin: Self.maya.origin, token: "new", userId: Self.maya.userId)
+        let now = try gate.open()
+        #expect(!old.stands, "the old token's session still stands in the extension")
+        #expect(now.stands)
+        let domains = self.domains
+        await domains.accepted(Self.group, name: "Lindqvist family", owner: owner, observed: records.generation(Self.group), session: now).value
+        await domains.letGo(Self.group, owner: owner, session: old).value
+        #expect(records.admission(Self.group, owner: owner) == .admitted, "the old session's let-go took the new session's location")
+        #expect(manager.removals.isEmpty)
+        // The same session asked again changes nothing.
+        _ = try gate.open()
+        #expect(now.stands)
+    }
+
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
     @Test func aRenamedFamilysLocationTakesTheNewName() async throws {
         let domains = self.domains
@@ -523,6 +551,62 @@ extension OnFakeDrive {
             _ = try await s.source.folders()
             TemporaryCopies.endAccount(account)
             await #expect(throws: FamilyFilesError.otherAccount) { _ = try await s.source.folders() }
+        }
+
+        /*
+         * A revocation from another process that lands during the last await of any read is caught
+         * by the read's final check, and nothing it fetched is handed on: folders, items, children,
+         * contents (and their copy), thumbnails, anchors, changes. Fails if any read returns family
+         * data without asking the record after its last await.
+         */
+        @Test func everyReadAsksAgainAfterItsLastAwait() async throws {
+            let reads: [(String, @Sendable (FamilyFilesSource, FamilyFixture) async throws -> Void)] = [
+                ("admitted", { source, _ in _ = try await source.admitted() }),
+                ("folders", { source, _ in _ = try await source.folders() }),
+                ("isFolderRoot", { source, f in _ = try await source.isFolderRoot(NodeRef(workspaceId: f.workspaceId, nodeId: f.rootId)) }),
+                ("children", { source, f in _ = try await source.children(of: NodeRef(workspaceId: f.workspaceId, nodeId: f.rootId)) }),
+                ("item", { source, f in _ = try await source.item(f.photo.ref) }),
+                ("download", { source, f in _ = try await source.download(f.photo.ref) }),
+                ("thumbnail", { source, f in _ = try await source.thumbnail(f.photo.ref) }),
+                ("anchor", { source, _ in _ = try await source.anchor() }),
+                ("changes", { source, f in _ = try await source.changes(since: FamilyAnchor(folders: [f.workspaceId: .init(root: f.rootId, cursor: 0)])) }),
+            ]
+            for (name, read) in reads {
+                let s = try await Self.source()
+                defer { s.phone.done() }
+                // Held from before: the read's own awaits are its lookups, not a first acceptance.
+                _ = try await s.source.children(of: NodeRef(workspaceId: s.family.workspaceId, nodeId: s.family.rootId))
+                let other = FamilyFilesDomains(records: s.records, manager: s.manager)
+                let (group, owner) = (s.family.groupId, s.owner)
+                await s.source.setLastAwait { _ = other.letGo(group, owner: owner) }
+                do {
+                    try await read(s.source, s.family)
+                    Issue.record("\(name) handed on family data after a revocation in its last await")
+                } catch {
+                    #expect(error as? FamilyFilesError == .letGo, "\(name): \(error)")
+                }
+                let copies = s.temporary.appendingPathComponent("opened/family/\(s.family.workspaceId)")
+                #expect(!FileManager.default.fileExists(atPath: copies.path), "\(name) left a copy behind")
+            }
+        }
+
+        /*
+         * The session ended on the server (401) while the extension checks the family again: that is
+         * passed on, never answered with the folders held from before. Fails if anything but no answer
+         * falls back to the cache, hiding the sign-in sheet.
+         */
+        @Test func aLostSessionIsPassedOnNotAnsweredFromTheCache() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            _ = try await s.source.folders()
+            s.server.lock.withLock { s.server.unauthorized = true }
+            s.clock.now = s.clock.now.addingTimeInterval(120)
+            do {
+                _ = try await s.source.folders()
+                Issue.record("a 401 was answered from the cache")
+            } catch {
+                #expect(FamilyFilesSource.endsSession(error), "\(error)")
+            }
         }
 
         /*
