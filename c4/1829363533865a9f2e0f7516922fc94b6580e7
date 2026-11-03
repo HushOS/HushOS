@@ -1,0 +1,33 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_9f19783163d062 88
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_7109f9e804230a::t_ace88d435f69e9 613-614,652-665
+apps/android/app/src/main/kotlin/com/hushos/app/data/WriteBacks.kt
+  s_566b8e0c4467a4::t_b587c0f589e0b2 345-350,352-360,364-372,625-626,628-629
+apps/android/app/src/test/kotlin/com/hushos/app/files/ProviderFamiliesTest.kt
+  s_566b8e0c4467a4::t_b83cc6ad5a7931 1607-1609,1626,1628,1632-1633,1722-1779
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c41829363533865a9f2e0f7516922fc94b6580e7",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_7109f9e804230a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a16011-997d-7320-af40-963b74d6a049",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
