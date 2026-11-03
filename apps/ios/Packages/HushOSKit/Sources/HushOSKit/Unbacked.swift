@@ -381,10 +381,18 @@ public enum TemporaryCopies {
      * before (a new token for the same account included: a sign-in again, a password change), that
      * session ends here, so nothing begun under it (a sync's late let-go, a download) acts for the new one.
      */
-    public static func follow(_ session: SharedKeychain.Session, account: CopyEpoch = .process) {
+    /*
+     * Follows `session` only while it is the one stored (`current`, read under the copies' lock): an
+     * observation a call made before another followed a newer token is stale and moves nothing, so the
+     * epoch only ever moves forward to the session stored now. False for a stale one.
+     */
+    @discardableResult
+    public static func follow(_ session: SharedKeychain.Session, account: CopyEpoch = .process, current: () -> SharedKeychain.Session?) -> Bool {
         forgetLock.withLock {
+            guard current() == session else { return false }
             if let followed = account.followed, followed != session { account.value &+= 1 }
             account.followed = session
+            return true
         }
     }
 

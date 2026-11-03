@@ -506,6 +506,42 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         }
     }
 
+    /*
+     * Two of the extension's gates share the process's copy epoch, and one read the keychain just
+     * before a new token landed: that stale read moves nothing back, and neither gate keeps serving
+     * a value from an epoch that moved; a token that went and came back is made afresh too. Fails
+     * if `follow` takes an older observation, or a gate's cache ignores the epoch it was made in.
+     */
+    @Test func gatesStraddlingATokenChangeServeTheSessionStoredNow() throws {
+        final class Reads: @unchecked Sendable { var stale: SharedKeychain.Session? }
+        let account = CopyEpoch()
+        let owner = Self.maya
+        let token = { (name: String) in SharedKeychain.Session(origin: owner.origin, token: name, userId: owner.userId) }
+        let keychain = OnFakeDrive.FamilyFilesSourceTests.Shared(token("old"))
+        let reads = Reads()
+        let a = FilesGate<CopySession>(owner: { owner }, session: {
+            if let stale = reads.stale { reads.stale = nil; return stale }
+            return keychain.session
+        }, account: account) { _ in TemporaryCopies.session(account) }
+        let b = FilesGate<CopySession>(owner: { owner }, session: { keychain.session }, account: account) { _ in TemporaryCopies.session(account) }
+        #expect(try b.open().stands)
+        keychain.session = token("new")
+        let fresh = try b.open()
+        #expect(fresh.stands)
+        // A read the old token before the new one landed; B already followed the new one.
+        reads.stale = token("old")
+        #expect(try a.open().stands)
+        #expect(fresh.stands, "a stale read ended the session B already serves (its downloads and records)")
+        #expect(try b.open().stands, "a stale read moved the epoch under the value B serves")
+
+        // Another token in and then this one again: the epoch moved twice while B's value sat cached.
+        keychain.session = token("other")
+        _ = try a.open()
+        keychain.session = token("new")
+        _ = try a.open()
+        #expect(try b.open().stands, "a gate served a value from an epoch that moved since")
+    }
+
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
     @Test func aRenamedFamilysLocationTakesTheNewName() async throws {
         let domains = self.domains
@@ -916,6 +952,47 @@ extension OnFakeDrive {
             let changes = try #require(try await s.source.changes(since: FamilyAnchor(folders: [f.workspaceId: .init(root: f.rootId, cursor: 0)])))
             #expect(changes.deleted.contains(FamilyFileIds.item(NodeRef(workspaceId: f.workspaceId, nodeId: f.personalRoot.id))))
             #expect(changes.updated.contains { $0.ref == f.photo.ref })
+        }
+
+        /*
+         * A live file's row names a folder that can't be listed (gone, as the listing says): the batch is
+         * asked again rather than call the file deleted, and a newer row (it moved back meanwhile) is read
+         * from its folder now. The same row failing again on the retry is a verdict, so nothing stalls;
+         * so is the folder's own trashed row in the same batch, at once. Fails if a failed folder listing
+         * deletes a live file on sight, or retries it for ever.
+         */
+        @Test func aLiveFileWhoseFolderCantBeListedIsAskedAgainThenDecided() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            _ = try await s.source.folders()
+            let f = s.family
+            let anchor = FamilyAnchor(folders: [f.workspaceId: .init(root: f.rootId, cursor: 0)])
+            let photo = FamilyFileIds.item(f.photo.ref)
+            let ghost = UUID().uuidString.lowercased()
+            s.server.put(f.photo.with(parentId: ghost))
+            await #expect(throws: FamilyFilesError.unavailable) { _ = try await s.source.changes(since: anchor) }
+            s.server.put(try #require(s.server.node(f.photo.id)).with(parentId: f.rootId))
+            let back = try #require(try await s.source.changes(since: anchor))
+            #expect(!back.deleted.contains(photo), "a file that moved back was deleted for the folder it left")
+            #expect(back.updated.contains { $0.ref == f.photo.ref })
+
+            s.server.put(try #require(s.server.node(f.photo.id)).with(parentId: ghost))
+            await #expect(throws: FamilyFilesError.unavailable) { _ = try await s.source.changes(since: anchor) }
+            let decided = try #require(try await s.source.changes(since: anchor), "the same row failing again stalled the feed")
+            #expect(decided.deleted.contains(photo))
+
+            // A folder trashed in this batch takes what's in it at once.
+            let folderKey = try randomBytes(length: 32)
+            let folderId = try newId(kind: .node, scopeId: f.workspaceId).id
+            let childId = try newId(kind: .node, scopeId: f.workspaceId).id
+            let folder = try FamilyFixture.node(id: folderId, in: f.workspaceId, parent: f.rootId, parentKey: f.rootKey, key: folderKey, kind: .folder,
+                                                name: "Old", writer: f.creator)
+            s.server.put(folder.with(trashedAt: "2026-11-04T00:00:00.000Z"),
+                         try FamilyFixture.node(id: childId, in: f.workspaceId, parent: folderId, parentKey: folderKey, key: randomBytes(length: 32), kind: .file,
+                                                name: "Inside.txt", writer: f.creator))
+            s.server.put(try #require(s.server.node(f.photo.id)).with(parentId: f.rootId))
+            let trashed = try #require(try await s.source.changes(since: anchor), "a child of a folder trashed in the batch was retried")
+            #expect(trashed.deleted.contains(FamilyFileIds.item(NodeRef(workspaceId: f.workspaceId, nodeId: childId))))
         }
 
         /*

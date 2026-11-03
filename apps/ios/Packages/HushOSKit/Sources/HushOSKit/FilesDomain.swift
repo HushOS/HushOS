@@ -76,7 +76,8 @@ public final class FilesGate<Value>: @unchecked Sendable {
     private let refusedForeign: (AccountOwner) -> Void
     private let account: CopyEpoch
     private let lock = NSLock()
-    private var cached: (session: SharedKeychain.Session, value: Value)?
+    /* The value made for a session, at the copy epoch it was made in: one whose epoch moved since is made again. */
+    private var cached: (session: SharedKeychain.Session, copy: CopySession, value: Value)?
 
     public init(owner: @escaping () -> AccountOwner?, session: @escaping () -> SharedKeychain.Session?, account: CopyEpoch = .process,
                 changed: @escaping (AccountOwner?) -> Void = { _ in }, refusedForeign: @escaping (AccountOwner) -> Void = { _ in },
@@ -92,22 +93,29 @@ public final class FilesGate<Value>: @unchecked Sendable {
     public func open() throws -> Value {
         lock.lock()
         defer { lock.unlock() }
-        let stored = session()
-        guard let admitted = FilesDomainOwner.admit(recorded: owner(), session: stored) else {
-            if cached != nil { cached = nil }
-            // Only nobody signed in clears what this process holds; a location of another account than the one signed in
-            // (one that outlived a switch) is refused alone, and the account signed in now keeps its copies and sessions.
-            if stored == nil { changed(nil) } else { refusedForeign(AccountOwner(stored!)) }
-            throw NSFileProviderError(.notAuthenticated)
+        // A read the keychain moved past before it was followed (another call, maybe another gate, followed a newer token)
+        // is read again; a keychain that keeps changing under it is asked again by Files.
+        for _ in 0 ..< 3 {
+            let stored = session()
+            guard let admitted = FilesDomainOwner.admit(recorded: owner(), session: stored) else {
+                if cached != nil { cached = nil }
+                // Only nobody signed in clears what this process holds; a location of another account than the one signed in
+                // (one that outlived a switch) is refused alone, and the account signed in now keeps its copies and sessions.
+                if stored == nil { changed(nil) } else { refusedForeign(AccountOwner(stored!)) }
+                throw NSFileProviderError(.notAuthenticated)
+            }
+            // A session that replaced the one served before (another token, the same account included) ends that one here first.
+            guard TemporaryCopies.follow(admitted, account: account, current: session) else { continue }
+            let copy = TemporaryCopies.session(account)
+            // Made for this session and still in the epoch it was made in: a token that came and went since moved the epoch.
+            if let cached, cached.session == admitted, cached.copy.stands { return cached.value }
+            cached = nil
+            changed(AccountOwner(admitted))
+            guard let value = make(admitted) else { throw NSFileProviderError(.notAuthenticated) }
+            cached = (admitted, copy, value)
+            return value
         }
-        // A session that replaced the one served before (another token, the same account included) ends that one here first.
-        TemporaryCopies.follow(admitted, account: account)
-        if let cached, cached.session == admitted { return cached.value }
-        cached = nil
-        changed(AccountOwner(admitted))
-        guard let value = make(admitted) else { throw NSFileProviderError(.notAuthenticated) }
-        cached = (admitted, value)
-        return value
+        throw NSFileProviderError(.serverUnreachable)
     }
 }
 

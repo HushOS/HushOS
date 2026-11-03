@@ -966,6 +966,11 @@ extension Vault {
         // Each folder listed once per batch, its rows or its error kept: siblings changed together (a bulk upload, a
         // re-key) are read from the one listing rather than each listing their folder again.
         var listings: [String: Result<FolderRows, Error>] = [:]
+        // Folders this batch itself says are gone (trashed rows, tombstones): what's in them goes with them, at once.
+        let goneHere = Set(feed.changes.compactMap { change -> String? in
+            if change.kind == "tombstone" { return change.nodeId?.lowercased() }
+            return change.node?.trashedAt != nil ? change.node?.id.lowercased() : nil
+        })
         for change in feed.changes {
             switch change.kind {
             case "node":
@@ -1009,7 +1014,17 @@ extension Vault {
                     // where it was, and the family is checked again before Files asks again.
                     throw FamilyFilesError.keyChange
                 } catch DriveAPIError.notFound, DriveAPIError.trashed {
-                    deleted.append(node.id)
+                    // The folder its own live row names couldn't be listed. A verdict only when the folder's own row says it went
+                    // (in this batch), or when the same row fails again on the retry (nothing moved it since): never for a row
+                    // that moved out between the feed and the listing, which the retried feed reads from its new folder.
+                    let row = "\(node.changeSeq ?? -1):\(folder.lowercased())"
+                    if goneHere.contains(folder.lowercased()) || feedSuspects[node.ref] == row {
+                        feedSuspects[node.ref] = nil
+                        deleted.append(node.id)
+                    } else {
+                        feedSuspects[node.ref] = row
+                        throw FamilyFilesError.unavailable
+                    }
                 } catch is CoreError {
                     // A row of the listing didn't open, maybe a sibling's: the node's own envelope decides, never another's.
                     let parentOpen = node.parentId.map { ledgerOpened.contains(NodeRef(workspaceId: workspaceId, nodeId: $0)) } ?? true

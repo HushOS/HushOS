@@ -172,6 +172,12 @@ public actor Vault {
     /* Raised by `forgetSigners` (and so by `forgetIdentity`): a set built from what was forgotten meanwhile is not kept. */
     var signersGeneration: UInt64 = 0
     var parents: [String: String]
+    /*
+     * Family feed rows whose named folder couldn't be listed (gone or trashed) and that were asked
+     * again once, by the row they were (its change sequence and folder): the same row failing again
+     * is a verdict, a newer one (moved meanwhile) is read afresh. This process only; a cold one asks once more.
+     */
+    var feedSuspects: [NodeRef: String] = [:]
     private let indexURL: URL?
     /* The tree mirror on disk and the catalogue built from it (see Vault+Catalogue); a test sets its own. */
     var mirror: Mirror?
