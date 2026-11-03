@@ -39,18 +39,58 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
         return File(folder, "${ids[0]}_${ids[1]}_${ids[2]}.call")
     }
 
-    /* Kept before the first send: a write that may not be on disk throws, and nothing is sent. */
-    fun put(userId: String, groupId: String, outboxId: String, entry: String) = synchronized(FamilyCopies.LOCK) {
-        if (!open()) throw OutboxUnsaved()
-        val target = file(userId, groupId, outboxId) ?: throw OutboxUnsaved()
+    /*
+     * One entry, as one file: the core's sealed entry, its recheck marker (none once settled) and its notes, written beside
+     * and moved over in one rename, so no crash leaves a marker or notes describing another version of the call than the one
+     * on disk. An entry from before (5a: the sealed entry alone) reads as that entry, settled, with no notes.
+     */
+    private data class Stored(val entry: String, val recheck: Recheck?, val cleared: List<Pair<String, String>>)
+
+    private fun read(target: File): Stored? {
+        if (!target.exists()) return null
+        val text = try { target.readText() } catch (_: Exception) { throw OutboxUnreadable() }
+        if (!text.startsWith("{")) return Stored(text, null, emptyList())
+        return try {
+            val json = JSONObject(text)
+            val recheck = json.optJSONObject("recheck")?.let { r ->
+                val areas = r.getJSONArray("areas").let { a -> (0 until a.length()).map { a.getString(it).lowercase() }.toSet() }
+                val docs = r.getJSONArray("replaced").let { a -> (0 until a.length()).map { a.getJSONArray(it) } }
+                Recheck(areas, docs.map { com.hushos.core.ReplacedDocument(it.getString(0), it.getString(1)) })
+            }
+            val cleared = json.optJSONArray("cleared")?.let { a -> (0 until a.length()).map { a.getJSONArray(it).let { row -> row.getString(0) to row.getString(1) } } }.orEmpty()
+            Stored(json.getString("entry"), recheck, cleared)
+        } catch (_: Exception) {
+            throw OutboxUnreadable()
+        }
+    }
+
+    private fun write(outboxId: String, target: File, stored: Stored) {
         try {
             folder.mkdirs()
+            val json = JSONObject().put("entry", stored.entry)
+                .put("cleared", org.json.JSONArray(stored.cleared.map { org.json.JSONArray(listOf(it.first, it.second)) }))
+            stored.recheck?.let { r ->
+                json.put("recheck", JSONObject().put("areas", org.json.JSONArray(r.areas.map { it.lowercase() }.sorted()))
+                    .put("replaced", org.json.JSONArray(r.replaced.map { org.json.JSONArray(listOf(it.workspaceId.lowercase(), it.kind)) })))
+            }
             val next = File(target.path + ".next")
-            next.writeText(entry)
+            next.writeText(json.toString())
+            beforeWrite(outboxId, stored.entry)
             if (!next.renameTo(target)) throw java.io.IOException("not moved")
         } catch (_: Exception) {
             throw OutboxUnsaved()
         }
+    }
+
+    /*
+     * Kept before the first send, with its recheck marker when it carries documents on empty (never sendable before the
+     * read-again), its notes as they were: one write that may not be on disk throws, and nothing is sent.
+     */
+    fun put(userId: String, groupId: String, outboxId: String, entry: String, recheck: Recheck? = null) = synchronized(FamilyCopies.LOCK) {
+        if (!open()) throw OutboxUnsaved()
+        val target = file(userId, groupId, outboxId) ?: throw OutboxUnsaved()
+        val before = try { read(target) } catch (_: OutboxUnreadable) { throw OutboxUnsaved() }
+        write(outboxId, target, Stored(entry, recheck, before?.cleared.orEmpty()))
     }
 
     /*
@@ -61,54 +101,36 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
         if (!open()) return@synchronized
         val target = file(userId, groupId, outboxId) ?: return@synchronized
         if (!target.delete() && target.exists()) throw OutboxUnsaved()
-        File(target.path.removeSuffix(".call") + ".cleared").delete()
-        File(target.path.removeSuffix(".call") + ".recheck").delete()
     }
 
     /*
      * A kept entry whose notes aren't settled yet: the folders a staging or rebuild made rotations for (`areas`) and the
-     * documents the core carried on empty in them (`replaced`). Written before the entry, removed only once the read-again
-     * finished and those folders' notes are rewritten (`setCleared`). While it stands the entry is never sent (sendKept
+     * documents the core carried on empty in them (`replaced`). Kept in the entry's own file, with the call it describes;
+     * removed only by `settle`, in the same write as the notes it rewrites. While it stands the entry is never sent (sendKept
      * finishes it first), whatever process or open finds it.
      */
     data class Recheck(val areas: Set<String>, val replaced: List<com.hushos.core.ReplacedDocument>)
 
-    fun markRecheck(userId: String, groupId: String, outboxId: String, recheck: Recheck) = synchronized(FamilyCopies.LOCK) {
-        if (!open()) throw OutboxUnsaved()
-        val target = file(userId, groupId, outboxId)?.let { File(it.path.removeSuffix(".call") + ".recheck") } ?: throw OutboxUnsaved()
-        try {
-            folder.mkdirs()
-            val lines = recheck.areas.map { "area " + it.lowercase() } + recheck.replaced.map { "doc " + it.workspaceId.lowercase() + " " + it.kind }
-            val next = File(target.path + ".next")
-            next.writeText(lines.joinToString("\n"))
-            if (!next.renameTo(target)) throw java.io.IOException("not moved")
-        } catch (_: Exception) {
-            throw OutboxUnsaved()
-        }
-    }
-
     /* The entry's unsettled recheck, or none. One that can't be read throws, never reads as none. */
     fun recheck(userId: String, groupId: String, outboxId: String): Recheck? {
-        val target = file(userId, groupId, outboxId)?.let { File(it.path.removeSuffix(".call") + ".recheck") } ?: return null
-        if (!target.exists()) return null
-        val lines = try { target.readLines().filter { it.isNotBlank() } } catch (_: Exception) { throw OutboxUnreadable() }
-        val areas = HashSet<String>()
-        val replaced = ArrayList<com.hushos.core.ReplacedDocument>()
-        for (line in lines) {
-            val parts = line.split(" ")
-            when {
-                parts.size == 2 && parts[0] == "area" -> areas.add(parts[1])
-                parts.size == 3 && parts[0] == "doc" -> replaced.add(com.hushos.core.ReplacedDocument(parts[1], parts[2]))
-                else -> throw OutboxUnreadable()
-            }
-        }
-        return Recheck(areas, replaced)
+        val target = file(userId, groupId, outboxId) ?: return null
+        return read(target)?.recheck
     }
 
-    fun clearRecheck(userId: String, groupId: String, outboxId: String) = synchronized(FamilyCopies.LOCK) {
-        if (!open()) return@synchronized
-        val target = file(userId, groupId, outboxId)?.let { File(it.path.removeSuffix(".call") + ".recheck") } ?: return@synchronized
-        if (!target.delete() && target.exists()) throw OutboxUnsaved()
+    /*
+     * The recheck settled, in one write: the entry as read again (`entry`), the notes of every folder it rebuilt (`areas`)
+     * replaced by what it now carries on empty (`replaced`: a document read fine in a later rebuild is never announced as
+     * emptied; other folders' notes stay), and no marker. Notes are the web's entry notices, said once the call lands.
+     */
+    fun settle(userId: String, groupId: String, outboxId: String, entry: String, areas: Collection<String>,
+        replaced: Collection<com.hushos.core.ReplacedDocument>) = synchronized(FamilyCopies.LOCK) {
+        if (!open()) throw OutboxUnsaved()
+        val target = file(userId, groupId, outboxId) ?: throw OutboxUnsaved()
+        val before = try { read(target) } catch (_: OutboxUnreadable) { throw OutboxUnsaved() }
+        val rebuilt = (areas + replaced.map { it.workspaceId }).map { it.lowercase() }.toSet()
+        val kept = before?.cleared.orEmpty().filter { (ws, _) -> ws !in rebuilt }
+        val all = (kept + replaced.map { it.workspaceId.lowercase() to it.kind }).distinct().sortedBy { it.first + " " + it.second }
+        write(outboxId, target, Stored(entry, null, all))
     }
 
     /*
@@ -195,41 +217,6 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
     }
 
     /*
-     * The workspace documents a kept rotating call carries on empty (they didn't open, even read again), by folder, kept beside
-     * the entry (the web's entry notices): said once the call lands, whichever open or process sends it. Each rebuild of
-     * folders `areas` replaces their notes with `replaced` (what the rotations now in the entry carry on empty), so a document
-     * read fine in a later rebuild is never announced as emptied; other folders' notes stay.
-     */
-    fun setCleared(userId: String, groupId: String, outboxId: String, areas: Collection<String>, replaced: Collection<com.hushos.core.ReplacedDocument>) = synchronized(FamilyCopies.LOCK) {
-        if (!open()) throw OutboxUnsaved()
-        val target = file(userId, groupId, outboxId)?.let { File(it.path.removeSuffix(".call") + ".cleared") } ?: throw OutboxUnsaved()
-        val rebuilt = (areas + replaced.map { it.workspaceId }).map { it.lowercase() }.toSet()
-        try {
-            val kept = clearedRows(target).filter { (ws, _) -> ws !in rebuilt }
-            val all = (kept + replaced.map { it.workspaceId.lowercase() to it.kind }).distinct().sortedBy { it.first + " " + it.second }
-            if (all.isEmpty()) {
-                if (!target.delete() && target.exists()) throw java.io.IOException("not deleted")
-                return@synchronized
-            }
-            folder.mkdirs()
-            val next = File(target.path + ".next")
-            next.writeText(all.joinToString("\n") { it.first + " " + it.second })
-            if (!next.renameTo(target)) throw java.io.IOException("not moved")
-        } catch (_: Exception) {
-            throw OutboxUnsaved()
-        }
-    }
-
-    private fun clearedRows(target: File): List<Pair<String, String>> {
-        if (!target.exists()) return emptyList()
-        return target.readLines().filter { it.isNotBlank() }.map { line ->
-            val parts = line.split(" ")
-            if (parts.size != 2) throw OutboxUnreadable()
-            parts[0] to parts[1]
-        }
-    }
-
-    /*
      * Words still to be said to the person about this family (a landed rotation's documents carried on empty), kept from the
      * moment the call landed until the screens take them (`takeUnsaid`): a process that dies in between loses none.
      */
@@ -273,10 +260,10 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
         }
     }
 
-    /* The kinds `setCleared` left noted for an entry (words only: one that can't be read is none); none when nothing was. */
+    /* The kinds `settle` left noted for an entry (words only: one that can't be read is none); none when nothing was. */
     fun cleared(userId: String, groupId: String, outboxId: String): List<String> {
-        val target = file(userId, groupId, outboxId)?.let { File(it.path.removeSuffix(".call") + ".cleared") } ?: return emptyList()
-        return try { clearedRows(target).map { it.second }.distinct() } catch (_: Exception) { emptyList() }
+        val target = file(userId, groupId, outboxId) ?: return emptyList()
+        return try { read(target)?.cleared.orEmpty().map { it.second }.distinct() } catch (_: Exception) { emptyList() }
     }
 
     /* Every entry of this account's for the family, and its handover: a not-member wipe takes them with the family (the web's forgetGroup). */
@@ -284,8 +271,6 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
         if (!open()) return@synchronized
         for (file in entries(userId, groupId)) {
             if (!file.delete() && file.exists()) throw OutboxUnsaved()
-            File(file.path.removeSuffix(".call") + ".cleared").delete()
-            File(file.path.removeSuffix(".call") + ".recheck").delete()
         }
         clearHandover(userId, groupId)
         removalsFile(userId, groupId)?.let { if (!it.delete() && it.exists()) throw OutboxUnsaved() }
@@ -342,8 +327,7 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
         val prefix = "${userId.lowercase()}_${groupId.lowercase()}_"
         return entries(userId, groupId).sortedBy { it.lastModified() }.map { file ->
             val id = file.name.removePrefix(prefix).removeSuffix(".call")
-            val entry = try { file.readText() } catch (_: Exception) { throw OutboxUnreadable() }
-            Kept(id, entry)
+            Kept(id, read(file)?.entry ?: throw OutboxUnreadable())
         }
     }
 
@@ -356,6 +340,9 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
     }
 
     companion object {
+        /* Called before each entry file is moved into place (a test's crash between writes); the default does nothing. */
+        @Volatile internal var beforeWrite: (outboxId: String, entry: String) -> Unit = { _, _ -> }
+
         fun of(context: android.content.Context, open: () -> Boolean = { true }) =
             FamilyOutbox(File(File(context.noBackupFilesDir, FamilyRecords.FOLDER), "outbox"), open)
     }
@@ -917,10 +904,8 @@ internal fun FamilySync.stageCall(summary: GroupSummary, beforeKept: (outboxId: 
                 // Whatever the entry belongs to is linked to it first (a removal's intent): never an entry nothing ends with it.
                 beforeKept(call.call.outboxId)
                 // Documents it carried on empty are marked for a read-again before the entry exists: never sendable unchecked.
-                if (call.call.replaced.isNotEmpty()) {
-                    outbox.markRecheck(this.userId, groupId, call.call.outboxId, FamilyOutbox.Recheck(emptySet(), call.call.replaced))
-                }
-                outbox.put(this.userId, groupId, call.call.outboxId, call.call.entry)
+                outbox.put(this.userId, groupId, call.call.outboxId, call.call.entry,
+                    call.call.replaced.takeIf { it.isNotEmpty() }?.let { FamilyOutbox.Recheck(emptySet(), it) })
                 return Staged.Call(FamilyOutbox.Kept(call.call.outboxId, call.call.entry), call.call.replaced)
             }
             // Synced at the top of the next round.

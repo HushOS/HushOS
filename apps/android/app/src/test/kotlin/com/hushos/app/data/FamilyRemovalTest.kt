@@ -689,4 +689,69 @@ class FamilyRemovalTest {
         assertEquals(listOf<RemovalEnd>(RemovalEnd.Removed), continued)
         assertFalse(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
     }
+
+    /*
+     * Codex #281 round 9: the folder's tags don't open when the removal is staged (junk served to this phone alone), even
+     * read again, and are noted. The server then asks for a rebuild (`epoch-stale`); by now the same tags read fine, so the
+     * rebuilt call carries them. The process dies as that rebuilt entry is written. After a relaunch the call on disk is the
+     * one first staged, which carries the tags on empty: it lands, and that is said. Fails if a crash can leave the rebuild's
+     * marker (nothing emptied) beside the call it replaced, clearing the warning for a call that does empty the tags.
+     */
+    @Test
+    fun aCrashWhileARebuildIsWrittenLeavesTheCallAndItsNotesTogether() {
+        val first = phone()
+        family.documents["tags"] = 1 to com.hushos.core.base64urlEncode(ByteArray(80) { 7 })
+        family.rotatingAnswers.add { _, _ ->
+            family.documents["tags"] = 1 to family.sealedTags(1, """{"version":2,"tags":[{"id":"t1","name":"Recipes"}],"items":{}}""")
+            val staged = kept(first).single().entry
+            // The process dies as the rebuilt call is written: any write of a call other than the one on disk.
+            FamilyOutbox.beforeWrite = { _, entry -> if (entry != staged) throw IllegalStateException("killed") }
+            409 to JSONObject().put("code", "epoch-stale").put("message", "Draw a new epoch.")
+        }
+        try {
+            assertTrue(runCatching { remove(first) }.isFailure)
+        } finally {
+            FamilyOutbox.beforeWrite = { _, _ -> }
+        }
+        assertEquals(listOf("tags"), first.sync.outbox.cleared(family.member.id, family.groupId, kept(first).single().outboxId))
+        val next = phone(first.folder)
+        assertEquals(listOf(CallEnd.Landed), next.sync.resumeOutbox(summary).values.toList())
+        assertEquals("the landed call emptied the tags: said", listOf(clearedWords("tags")), next.sync.takeCleared(family.groupId))
+        assertFalse(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
+    }
+
+    /*
+     * Codex #281 round 9, the recheck's own write: the folder's tags don't open when the removal is staged, and read again
+     * they do, so the call is rebuilt carrying them. The process dies as that is written. After a relaunch the entry on disk
+     * is still the one staged, still marked: it is read again first, and the call that lands carries the tags as they read,
+     * with nothing said. Fails if the notes and the marker can be settled apart from the call they describe (the staged
+     * call, which empties the tags, would then be sent unmarked and unannounced).
+     */
+    @Test
+    fun aCrashWhileARecheckIsSettledLeavesTheCallAndItsMarkerTogether() {
+        val first = phone()
+        val tags = """{"version":2,"tags":[{"id":"t1","name":"Recipes"}],"items":{}}"""
+        family.documents["tags"] = 1 to com.hushos.core.base64urlEncode(ByteArray(80) { 7 })
+        var reads = 0
+        server.beforeAnswer = { method, path ->
+            if (method == "GET" && path.endsWith("/documents/tags") && ++reads == 2) family.documents["tags"] = 1 to family.sealedTags(1, tags)
+        }
+        var staged: String? = null
+        FamilyOutbox.beforeWrite = { _, entry -> if (staged == null) staged = entry else if (entry != staged) throw IllegalStateException("killed") }
+        try {
+            assertTrue(runCatching { remove(first) }.isFailure)
+        } finally {
+            FamilyOutbox.beforeWrite = { _, _ -> }
+            server.beforeAnswer = null
+        }
+        assertTrue(bodies("remove").isEmpty())
+        assertEquals("the staged call, still marked", listOf(com.hushos.core.ReplacedDocument(family.workspaceId, "tags")),
+            first.sync.outbox.recheck(family.member.id, family.groupId, kept(first).single().outboxId)?.replaced)
+        val next = phone(first.folder)
+        server.requests.clear()
+        assertEquals(listOf(CallEnd.Landed), next.sync.resumeOutbox(summary).values.toList())
+        val order = server.requests.filter { it.contains("/documents/tags") || it.endsWith("/remove") }
+        assertTrue("read again before it was sent: $order", order.first().contains("/documents/tags"))
+        assertTrue("nothing emptied, nothing said", next.sync.takeCleared(family.groupId).isEmpty())
+    }
 }

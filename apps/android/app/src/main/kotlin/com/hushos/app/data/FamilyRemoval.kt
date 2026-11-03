@@ -111,18 +111,17 @@ internal fun FamilySync.rebuildKept(summary: GroupSummary, kept: FamilyOutbox.Ke
 private fun FamilySync.rebuildWith(groupId: String, kept: FamilyOutbox.Kept, areas: Map<String, List<String>>): FamilyOutbox.Kept {
     val rotations = areas.map { (ws, kinds) -> gather(groupId, ws, kinds) }
     val first = ledger.outboxRebuild(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, kept.outboxId, kept.entry, rotations)
-    // Marked before the rebuilt entry is kept: never sendable before its notes are settled.
     val recheck = FamilyOutbox.Recheck(areas.keys.map { it.lowercase() }.toSet(), first.replaced)
-    outbox.markRecheck(userId, groupId, first.outboxId, recheck)
-    outbox.put(userId, groupId, first.outboxId, first.entry)
+    // The rebuilt entry and its marker, in one write: no crash leaves the marker describing the call it replaced.
+    outbox.put(userId, groupId, first.outboxId, first.entry, recheck)
     return finishRecheck(groupId, FamilyOutbox.Kept(first.outboxId, first.entry), recheck)
 }
 
 /*
  * An entry's recheck settled: documents carried on empty read again once (their folders gathered with those kinds) and the
- * call rebuilt; then, each durable before the next, the notes of every folder the rebuild touched rewritten to what the call
- * now carries on empty (only that: one read fine now loses its note), the rebuilt entry kept, and only then the marker gone.
- * A failure or a killed process anywhere leaves it marked, and the next send settles it first.
+ * call rebuilt; then, in one write of the entry's file, the call as rebuilt, the notes of every folder the rebuild touched
+ * rewritten to what the call now carries on empty (only that: one read fine now loses its note), and the marker gone. A
+ * failure or a killed process before that write leaves the entry as it was, marked, and the next send settles it first.
  */
 internal fun FamilySync.finishRecheck(groupId: String, kept: FamilyOutbox.Kept, recheck: FamilyOutbox.Recheck): FamilyOutbox.Kept {
     var current = kept
@@ -133,9 +132,8 @@ internal fun FamilySync.finishRecheck(groupId: String, kept: FamilyOutbox.Kept, 
         still = call.replaced
         current = FamilyOutbox.Kept(call.outboxId, call.entry)
     }
-    outbox.setCleared(userId, groupId, current.outboxId, recheck.areas + recheck.replaced.map { it.workspaceId.lowercase() }, still)
-    if (current !== kept) outbox.put(userId, groupId, current.outboxId, current.entry)
-    outbox.clearRecheck(userId, groupId, current.outboxId)
+    // The entry read again, its folders' notes and the marker gone, in one write.
+    outbox.settle(userId, groupId, current.outboxId, current.entry, recheck.areas + recheck.replaced.map { it.workspaceId.lowercase() }, still)
     return current
 }
 
