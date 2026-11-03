@@ -76,6 +76,7 @@ class ProviderFamiliesTest {
     @After
     fun close() {
         WriteBacks.afterContent = null
+        WriteBacks.beforeSlotId = null
         Reservations.forgetHeld()
         server.close()
         assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
@@ -1452,6 +1453,56 @@ class ProviderFamiliesTest {
         server.beforeAnswer = null
         assertEquals("landed save", families.readCopy(doc).readText())
         assertNull(WriteBacks.landing(app, slot))
+    }
+
+    /*
+     * Another vault of the session revokes the family's folder (a refusal or a fork the app found), and the provider's next
+     * load gets no answer: the revoked root isn't kept from cache, and a pending save of its file is never copied back into
+     * its read copies. Once a load accepts the family again, it is back. Fails if a load that got no answer keeps a root
+     * revoked since it was accepted.
+     */
+    @Test
+    fun aRootRevokedElsewhereStaysRevokedWhenTheNextLoadGetsNoAnswer() {
+        var now = 0L
+        val vault = Vault(app, DriveApi(Shared.session(app)!!))
+        val families = ProviderFamilies(vault, FamilySync(vault, sweeps = false, tellsFiles = false)) { now }
+        families.load()
+        val doc = FamilyDoc.Node(family.groupId, family.workspaceId, family.fileId)
+        families.children(FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId))
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("pending save") })
+        Vault(app, DriveApi(Shared.session(app)!!)).forgetFamilyCopies(listOf(family.workspaceId))
+        // Before any load, from the roots held: refused at once.
+        assertFalse(families.due())
+        assertTrue("a root revoked since it was accepted was used", runCatching { families.pendingRead(doc) }.isFailure)
+        server.beforeAnswer = { _, path -> if (path.startsWith("groups")) throw IllegalStateException("dropped") }
+        now += 6 * 60_000L
+        assertEquals("a revoked root was kept", emptyList<FamilyRoot>(), families.load())
+        assertTrue(runCatching { families.pendingRead(doc) }.isFailure)
+        val copies = FamilyCopies.folder(app.cacheDir, family.workspaceId)
+        assertTrue("a pending save's plaintext was copied back", copies == null || !copies.walkTopDown().any { it.isFile })
+        server.beforeAnswer = null
+        now += 60_000L
+        assertEquals(listOf(family.groupId), families.load().map { it.groupId })
+        assertEquals("pending save", families.pendingRead(doc)!!.readText())
+    }
+
+    /*
+     * Another app closes a family file and its save can't be kept in the slot (the disk refuses the slot's first write): its
+     * edit stays, with a row whose Retry keeps it and sends it. Fails if a family save that couldn't be kept deletes the edit.
+     */
+    @Test
+    fun aFamilySaveThatCantBeKeptKeepsItsEditAndRetriesIt() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        WriteBacks.beforeSlotId = { WriteBacks.beforeSlotId = null; throw java.io.IOException("No space left on device") }
+        ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("save the disk refused".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
+        assertNull(WriteBacks.pending(app, slot))
+        val row = com.hushos.app.data.FailedTransfers.of(app).all().single()
+        assertEquals("save the disk refused", File(row.file!!).readText())
+        assertTrue(TransferQueue.retry(app, row))
+        assertEquals(ListenableWorker.Result.success(), runJob(slot))
+        assertEquals("save the disk refused", serverText())
     }
 
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =

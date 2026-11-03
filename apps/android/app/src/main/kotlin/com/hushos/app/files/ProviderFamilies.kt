@@ -70,7 +70,12 @@ data class FamilyRoot(
     /* Kept from an earlier load because the family couldn't be checked now (no answer, left out of route 2): readable, written to only once accepted again. */
     val unanswered: Boolean = false,
 ) {
-    data class Folder(val workspaceId: String, val rootId: String, val name: String, val writable: Boolean)
+    /*
+     * `epoch`: the folder's revocation count when the family was accepted (read before its sync). Kept from cache only
+     * while that is still the count: a revocation since (a refusal or fork another vault found) is never undone by a load
+     * that got no answer, and the folder is refused until a load accepts the family again.
+     */
+    data class Folder(val workspaceId: String, val rootId: String, val name: String, val writable: Boolean, val epoch: Long = 0L)
 
     val documentId: String get() = FamilyDoc.Top(groupId).id
     val rootId: String get() = FamilyDoc.PREFIX + groupId
@@ -82,9 +87,9 @@ data class FamilyRoot(
 
     companion object {
         /* An accepted family's root: only folders that opened through the ledger, writable as the app has them. */
-        fun of(groupId: String, name: String, view: FamilyView): FamilyRoot = FamilyRoot(groupId, name, view.areas.mapNotNull { area ->
+        fun of(groupId: String, name: String, view: FamilyView, epochOf: (String) -> Long = { 0L }): FamilyRoot = FamilyRoot(groupId, name, view.areas.mapNotNull { area ->
             val root = area.root?.takeIf { area.openable } ?: return@mapNotNull null
-            Folder(area.workspaceId, root.id, area.name!!, area.write == AreaWrite.WRITABLE)
+            Folder(area.workspaceId, root.id, area.name!!, area.write == AreaWrite.WRITABLE, epochOf(area.workspaceId))
         })
     }
 }
@@ -142,19 +147,25 @@ class ProviderFamilies internal constructor(
         } catch (error: NotAuthenticated) {
             throw error
         } catch (_: Exception) {
-            snapshot = Snapshot(before.orEmpty(), clock(), signal, failed = true)
-            return before.orEmpty()
+            // No answer: the roots it had stay, but never a folder revoked since it was accepted.
+            val kept = before.orEmpty().mapNotNull(::unrevoked)
+            snapshot = Snapshot(kept, clock(), signal, failed = true)
+            tell(before, kept)
+            return kept
         }
         var failed = false
         val wiped = HashSet<String>()
         val next = listed.filter { it.state == "active" }.mapNotNull { summary ->
+            // Each folder's revocation count before the sync accepts it: a revocation landing after this read makes the root
+            // fail its next check (the count moved), never pass it.
+            val epochs = HashMap(vault.familyEpochs)
             when (val state = sync.sync(summary)) {
-                is FamilyState.Accepted -> FamilyRoot.of(summary.id, summary.name, state.view)
+                is FamilyState.Accepted -> FamilyRoot.of(summary.id, summary.name, state.view) { ws -> epochs[ws.lowercase()]?.first ?: 0L }
                 // No answer: the root it had stays readable (its ledger kept the family), but nothing is written into it
                 // until a sync accepts the family again.
                 is FamilyState.Failed -> {
                     if (state.removal) wiped.add(summary.id.lowercase())
-                    if (state.words == FamilyWords.NO_ANSWER) { failed = true; kept[summary.id.lowercase()]?.readOnly() } else null
+                    if (state.words == FamilyWords.NO_ANSWER) { failed = true; kept[summary.id.lowercase()]?.let(::unrevoked)?.readOnly() } else null
                 }
                 FamilyState.Wiped -> { wiped.add(summary.id.lowercase()); null }
                 else -> null
@@ -168,13 +179,17 @@ class ProviderFamilies internal constructor(
         // their plaintext, their jobs and rows), only while this session is still the one signed in.
         for (groupId in removed + wiped) endTransfers(groupId)
         val shown = listed.map { it.id.lowercase() }.toSet()
-        val pending = before.orEmpty().filter { it.groupId.lowercase() !in shown && it.groupId.lowercase() !in removed }.map { it.readOnly() }
+        val pending = before.orEmpty().filter { it.groupId.lowercase() !in shown && it.groupId.lowercase() !in removed }.mapNotNull { unrevoked(it)?.readOnly() }
         if (pending.isNotEmpty()) failed = true
         val roots = next + pending
         snapshot = Snapshot(roots, clock(), signal, failed)
         tell(before, roots)
         return roots
     }
+
+    /* A root kept from an earlier load, with only the folders not revoked since it was accepted; none if all were. */
+    private fun unrevoked(root: FamilyRoot): FamilyRoot? =
+        root.copy(folders = root.folders.filter { it.epoch == vault.familyEpoch(it.workspaceId) }).takeIf { it.folders.isNotEmpty() }
 
     /* A removed family's transfers ended (TransferQueue.endFamily), only while this session is still the one signed in. */
     private fun endTransfers(groupId: String) {
@@ -212,7 +227,10 @@ class ProviderFamilies internal constructor(
 
     private fun folderOf(doc: FamilyDoc.Node): Pair<FamilyRoot, FamilyRoot.Folder> {
         val root = require(doc.groupId)
-        return root to (root.folder(doc.workspaceId) ?: throw FileNotFoundException(FamilyWords.NOT_IN_FAMILY))
+        val folder = root.folder(doc.workspaceId) ?: throw FileNotFoundException(FamilyWords.NOT_IN_FAMILY)
+        // Revoked since the family was accepted (another vault found a refusal or a fork): refused until a load accepts it again.
+        if (folder.epoch != vault.familyEpoch(folder.workspaceId)) throw FileNotFoundException(vault.familyWordsSince(folder.workspaceId, folder.epoch) ?: FamilyWords.OPEN_AGAIN)
+        return root to folder
     }
 
     /*
@@ -544,7 +562,13 @@ class ProviderFamilies internal constructor(
         // the session lasts, under the copies lock a removal's cleanup takes: a family let go of since keeps no plaintext.
         val kept = synchronized(FamilyCopies.LOCK) {
             if (vault.closed || vault.familyWordsSince(doc.workspaceId, epoch) != null) null
-            else WriteBacks.save(vault.context, vault.ledgerGeneration, target, edit)
+            else try {
+                WriteBacks.save(vault.context, vault.ledgerGeneration, target, edit)
+            } catch (failure: Exception) {
+                // Not kept (a full disk, say): the edit stays with a row whose Retry keeps it; a removal's cleanup deletes it.
+                if (TransferQueue.stagingFailed(vault.context, target, edit, failure, vault.ledgerGeneration)) throw EditKept(failure)
+                throw failure
+            }
         } ?: return false
         TransferQueue.enqueueSlot(vault.context, kept.slot, opened.name, target.family)
         // Its listing shows the save's size and date now: Files reads the folder again, by the plain node id its listing of
@@ -552,6 +576,9 @@ class ProviderFamilies internal constructor(
         FilesRoots.foldersChanged(vault.context, listOf(parent), null)
         return true
     }
+
+    /* A save that couldn't be kept but whose edit was kept for a Retry (TransferQueue.stagingFailed): the edit must stay. */
+    class EditKept(cause: Exception) : Exception("The save was kept for a retry.", cause)
 
     /* A new folder, or an empty file whose bytes follow through a write, in a writable family folder. Its document id. */
     fun create(parentDoc: FamilyDoc.Node, mimeType: String, name: String): String {

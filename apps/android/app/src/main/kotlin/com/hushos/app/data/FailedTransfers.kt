@@ -22,6 +22,11 @@ data class FailedTransfer(
     val ledger: String? = null,
     /* A file's slot of saves another app made (WriteBacks): its Retry sends whatever the slot holds then. */
     val slot: String? = null,
+    /*
+     * A save another app made that couldn't be kept in its slot (a full disk, say): the file it would replace (WriteBacks'
+     * Target, as JSON), its edit kept at `file`. Its Retry keeps it in the slot again, then sends it.
+     */
+    val stage: String? = null,
 ) {
     /* Whose reservations this row's upload holds: its ledger key, or its own id for a job that carried none. */
     val ledgerKey: String get() = ledger ?: id
@@ -44,7 +49,7 @@ data class FailedTransfer(
     }
 
     /* An upload whose staged copy is gone can't be sent again: the row says to pick it again. */
-    fun sourceGone(): Boolean = kind == TransferQueue.UPLOAD && (file == null ||
+    fun sourceGone(): Boolean = kind == TransferQueue.UPLOAD && (file == null || if (stage != null) !File(file).isFile else
         // A file's failed save: gone once its slot holds no save (Retry sends whatever the slot holds, its own or newer).
         if (slot != null) !File(File(file).parentFile, "record.json").exists() else !File(file).exists())
 }
@@ -78,13 +83,13 @@ class FailedTransfers(private val store: File) {
 
     private fun encode(t: FailedTransfer) = listOf(
         t.id, t.kind, t.name, t.reason, t.at.toString(), t.file, t.mime, t.folder, t.replacing, t.node, t.isFolder.toString(), t.shareRoot,
-        t.family, t.familyWorkspace, t.ledger, t.slot,
+        t.family, t.familyWorkspace, t.ledger, t.slot, t.stage,
     ).joinToString("\t") { if (it == null) "-" else "=" + URLEncoder.encode(it, "UTF-8") }
 
     private fun decode(line: String): FailedTransfer? = runCatching {
         val f = line.split("\t").map { if (it == "-") null else URLDecoder.decode(it.removePrefix("="), "UTF-8") }
         FailedTransfer(f[0]!!, f[1]!!, f[2]!!, f[3]!!, f[4]!!.toLong(), f[5], f[6], f[7], f[8], f[9], f[10] == "true", f[11], f.getOrNull(12), f.getOrNull(13), f.getOrNull(14),
-            f.getOrNull(15))
+            f.getOrNull(15), f.getOrNull(16))
     }.getOrNull()
 
     companion object {
