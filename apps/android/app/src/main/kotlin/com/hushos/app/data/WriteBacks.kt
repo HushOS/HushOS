@@ -218,6 +218,17 @@ object WriteBacks {
         superseded(context, slot, dir, number)
         val suffix = if (staged) STAGED else ""
         val id = "n$number-" + java.util.UUID.randomUUID()
+        // A step failing leaves nothing of this generation (its contents are a whole plaintext copy): the edit stays.
+        try {
+            writeGeneration(dir, target, edit, number, id, suffix)
+        } catch (failure: Throwable) {
+            for (name in listOf("$id$BIN.incoming", id + BIN + suffix, "$id$META.incoming", id + META + suffix)) File(dir, name).delete()
+            throw failure
+        }
+        return id
+    }
+
+    private fun writeGeneration(dir: File, target: Target, edit: File, number: Long, id: String, suffix: String) {
         val contents = File(dir, "$id$BIN.incoming")
         fault?.invoke("copy")
         java.io.FileOutputStream(contents).use { out ->
@@ -234,7 +245,18 @@ object WriteBacks {
         val written = File(dir, "$id$META.incoming")
         java.io.FileOutputStream(written).use { out -> out.write(description.toString().toByteArray()); out.fd.sync() }
         check(written.renameTo(File(dir, id + META + suffix))) { "The save couldn't be kept." }
-        return id
+    }
+
+    /*
+     * Reconcile, as the process starts: family generations copied but never published (`.staged`: a process that died, or a
+     * step that failed before its cleanup) go, each a whole plaintext copy no look would ever take or remove. One written
+     * to in the last minutes may be a save of this process under way, and stays.
+     */
+    fun dropStaged(context: Context) {
+        val idle = System.currentTimeMillis() - 10 * 60 * 1000L
+        File(context.filesDir, "queue").listFiles()?.filter { isSlot(it.name) }?.forEach { dir ->
+            lockOf(dir.name).withLock { dir.listFiles { f -> f.name.endsWith(STAGED) && f.lastModified() < idle }?.forEach { it.delete() } }
+        }
     }
 
     /* A number no newer than the slot's newest save, pending or landed or cancelled, keeps nothing; bounds unknown keep nothing either. */
@@ -359,15 +381,42 @@ object WriteBacks {
         // read as contents (not closed), to Retry or Dismiss. Its row names a number above the rebuilt bounds.
         generations.maxByOrNull { it.generation }?.let { save ->
             val rescued = File(editDirOf(context, save.target), "rescued-${save.id}")
+            // There only once copied whole: written beside it and synced, then renamed into place (a copy cut short leaves
+            // only the one beside it, which is never taken for the rescue and is made again).
             if (!rescued.isFile) {
                 editIn(rescued.parentFile!!, save.target, Shared.session(context)?.userId, rescued.name)
-                File(dir, save.id + BIN).copyTo(rescued, overwrite = true)
+                val copying = File(rescued.parentFile, "${rescued.name}.incoming")
+                try {
+                    val source = File(dir, save.id + BIN)
+                    java.io.FileOutputStream(copying).use { out ->
+                        source.inputStream().use { input ->
+                            // Tests: "rescue" fails it halfway, as a death or a full disk would.
+                            val half = source.length() / 2
+                            val buffer = ByteArray(64 * 1024)
+                            var copied = 0L
+                            var faulted = false
+                            while (true) {
+                                if (!faulted && copied >= half) { faulted = true; fault?.invoke("rescue") }
+                                val read = input.read(buffer, 0, if (!faulted) minOf(buffer.size.toLong(), half - copied).toInt().coerceAtLeast(1) else buffer.size)
+                                if (read < 0) break
+                                out.write(buffer, 0, read)
+                                copied += read
+                            }
+                        }
+                        out.fd.sync()
+                    }
+                    check(copying.renameTo(rescued)) { "The save couldn't be kept." }
+                } finally {
+                    copying.delete()
+                }
             }
-            if (runCatching { FailedTransfers.of(context).all() }.getOrDefault(emptyList()).none { it.file == rescued.path })
+            // Its row before the bounds move past it: without one (a row refused), nothing is rebuilt yet.
+            val rowed = runCatching { FailedTransfers.of(context).all() }.getOrDefault(emptyList()).any { it.file == rescued.path } ||
                 // A family's: no revocation count is known for it here (a revocation deletes the edit, as it deletes every
                 // edit of the folder), so none moves past it.
                 TransferQueue.stagingFailed(context, save.target, rescued, Exception("The save wasn't kept."), Reservations.generation, newest + 1,
                     save.target.familyWorkspace?.let { Long.MAX_VALUE })
+            if (!rowed) return null
         }
         val rebuilt = Numbers(newest + 1, newest, newest, Landing(java.util.UUID.randomUUID().toString(), null))
         return runCatching { writeNumbers(context, slot, rebuilt); rebuilt }.getOrNull()
@@ -425,8 +474,8 @@ object WriteBacks {
      * null when it left, and nothing of it is written.
      */
     fun reserve(context: Context, slot: String, accountGeneration: Long): Long? = Reservations.whileAccount(accountGeneration) { lockOf(slot).withLock {
-        // Unreadable and not rebuilt: numbered from what else is on disk, and the counter left alone.
-        val trusted = repaired(context, slot)
+        // Unreadable and not rebuilt: numbered from what else is on disk, and the counter left alone (never throws).
+        val trusted = runCatching { repaired(context, slot) }.getOrNull()
         val held = trusted ?: Numbers(0L, 0L)
         // From what is on disk (the closed edits first: they are the saves, the counter and rows only caches of them), so a
         // counter that couldn't be written, and a restart, never give a number again.
@@ -473,15 +522,6 @@ object WriteBacks {
         true
     }
 
-    /* A copy of the slot's newest save in `dest` (an open starts from it); false when there is none. */
-    fun copyTo(context: Context, slot: String, dest: File): Boolean = lockOf(slot).withLock {
-        val dir = dir(context, slot)
-        val pending = current(dir, slot) ?: return false
-        dest.parentFile?.mkdirs()
-        File(dir, pending.id + BIN).copyTo(dest, overwrite = true)
-        true
-    }
-
     /*
      * The newest save to send: its description and a copy of its contents of its own (sending-<id>), so the generation
      * going meanwhile (a newer save replacing it) never changes or removes the bytes under the upload. Null when empty.
@@ -517,7 +557,18 @@ object WriteBacks {
         val sending = File(dir, "sending-$id")
         val kept = if (version != null && readCopy != null && sending.isFile) {
             readCopy.parentFile?.mkdirs()
-            sending.renameTo(readCopy) || runCatching { sending.copyTo(readCopy, overwrite = true); true }.getOrDefault(false)
+            // Renamed, or copied beside it and renamed: a read takes the read copy by its existence, so it is never there
+            // half-written (a copy cut short leaves only the one beside it, deleted here or with the cache).
+            sending.renameTo(readCopy) || runCatching {
+                val copying = File(readCopy.parentFile, "${readCopy.name}.incoming")
+                try {
+                    sending.copyTo(copying, overwrite = true)
+                    check(copying.renameTo(readCopy))
+                } finally {
+                    copying.delete()
+                }
+                true
+            }.getOrDefault(false)
         } else false
         fault?.invoke("landed-copy")
         // 2-3. The landing recorded (recordLanding, as every landing is). Refused, nothing below runs (the caller's job tries again).

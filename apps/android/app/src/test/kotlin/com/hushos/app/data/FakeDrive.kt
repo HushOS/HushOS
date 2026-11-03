@@ -173,6 +173,9 @@ class FakeDrive : AutoCloseable {
     private val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
     /* Runs before a request is answered, outside the server's lock: a test holds one request there while others go on. */
     @Volatile var beforeAnswer: ((method: String, path: String) -> Unit)? = null
+
+    /* The object store's answer to a request, when this gives one (a status with no body): a download refused for good. */
+    @Volatile var storeStatus: ((method: String, path: String) -> Int?)? = null
     /* Runs after a request was handled, before its reply: true drops the reply (the work is done, the answer lost). */
     @Volatile var dropReply: ((method: String, path: String) -> Boolean)? = null
     private val workers = java.util.concurrent.Executors.newCachedThreadPool()
@@ -577,6 +580,7 @@ class FakeDrive : AutoCloseable {
     }
 
     private fun store(exchange: HttpExchange, method: String, path: String, raw: ByteArray) {
+        storeStatus?.invoke(method, path)?.let { status -> exchange.sendResponseHeaders(status, -1); exchange.close(); return }
         val parts = path.removePrefix("/store/").split("/")
         when {
             method == "PUT" && parts[0] == "parts" -> {

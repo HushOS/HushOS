@@ -1856,6 +1856,28 @@ class ProviderFamiliesTest {
         assertTrue(families.load().single().folders.single().writable)
     }
 
+    /*
+     * #266 P2: a family save's contents are staged and then its description can't be written (a full disk): nothing of the
+     * staged copy is left in the slot, and its edit stays with a row. A staged copy a dead process left goes at the next
+     * start. Fails if a failed staging leaves a whole plaintext copy no look would ever take or remove.
+     */
+    @Test
+    fun aFamilySaveWhoseStagingFailsLeavesNoStagedCopy() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        WriteBacks.fault = { at -> if (at == "json") throw java.io.IOException("No space left on device") }
+        ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("a family save the disk refused".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
+        WriteBacks.fault = null
+        val dir = WriteBacks.dir(app, slot)
+        assertEquals("a staged copy outlived its failed write", emptyList<String>(), dir.listFiles().orEmpty().map { it.name }.filter { ".bin" in it || it.endsWith(".staged") })
+        val row = com.hushos.app.data.FailedTransfers.of(app).all().single { it.slot == slot }
+        assertEquals("a family save the disk refused", File(row.file!!).readText())
+        val left = File(dir, "n9-left.bin.staged").apply { writeText("plaintext a dead process left"); setLastModified(System.currentTimeMillis() - 60 * 60 * 1000L) }
+        TransferQueue.reconcileEdits(app, startup = true)
+        assertFalse("a staged copy a dead process left was kept", left.exists())
+    }
+
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =
         HushOSDocumentsProvider::class.java.getDeclaredField("families").apply { isAccessible = true }.get(provider) as ProviderFamilies
 }

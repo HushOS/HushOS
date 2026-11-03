@@ -118,4 +118,19 @@ class FilesTreeGrantsTest {
         assertThrows(Exception::class.java) { provider.openDocument(notes, "r", null).close() }
         assertEquals("a download outlived the sign-out", emptyList<String>(), app.cacheDir.walkTopDown().filter { it.isFile && !it.path.contains("jna") }.map { it.name }.toList())
     }
+
+    /*
+     * Another app reads a file of the drive and the object store refuses its bytes for good: the read fails and nothing of
+     * the download is left in the cache, its partial included. Fails if a failed download's `.part` is left behind.
+     */
+    @Test
+    fun aFailedReadDownloadLeavesNoPartial() {
+        val provider = provider()
+        val notes = server.file(server.root, "Notes.txt", "never kept".toByteArray())
+        provider.queryChildDocuments("root", null, null as String?).close()
+        server.storeStatus = { method, _ -> if (method == "GET") 404 else null }
+        assertThrows(Exception::class.java) { provider.openDocument(notes, "r", null).close() }
+        server.storeStatus = null
+        assertEquals("a failed download left a partial", emptyList<String>(), app.cacheDir.walkTopDown().filter { it.isFile && !it.path.contains("jna") }.map { it.name }.toList())
+    }
 }
