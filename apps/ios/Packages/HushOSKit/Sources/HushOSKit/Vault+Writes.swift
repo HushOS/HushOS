@@ -971,6 +971,10 @@ extension Vault {
                 do {
                     _ = try await listChildren(of: node.parentId ?? node.id, in: workspaceId)
                     if let row = opened[node.ref] { updated.append(row) } else { deleted.append(node.id) }
+                } catch let error where FamilyFilesError.keyChanging(error) {
+                    // A key change this device hasn't followed yet: no verdict on the node. The batch fails with its cursor
+                    // where it was, and the family is checked again before Files asks again.
+                    throw FamilyFilesError.keyChange
                 } catch DriveAPIError.notFound, DriveAPIError.trashed, is CoreError {
                     deleted.append(node.id)
                 }

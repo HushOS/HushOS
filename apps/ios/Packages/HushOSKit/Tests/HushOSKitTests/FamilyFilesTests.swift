@@ -130,6 +130,64 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
     }
 
     /*
+     * A let-go from a session that ended (an old sync answering after the same account signed in
+     * again) touches nothing of the session now: its record, generation and location stay. Fails if
+     * a late refusal of the last session takes the new session's location.
+     */
+    @Test func aLateLetGoOfAnEndedSessionTouchesNothing() async throws {
+        let domains = self.domains
+        let account = CopyEpoch()
+        let old = TemporaryCopies.session(account)
+        TemporaryCopies.endAccount(account)
+        let now = TemporaryCopies.session(account)
+        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, observed: records.generation(Self.group), session: now).value
+        let generation = records.generation(Self.group)
+        await domains.letGo(Self.group, owner: Self.maya, session: old).value
+        #expect(records.admission(Self.group, owner: Self.maya) == .admitted, "an ended session's let-go took the record")
+        #expect(records.generation(Self.group) == generation)
+        #expect(manager.removals.isEmpty, "an ended session's let-go removed the location")
+        await domains.letGo(Self.group, owner: Self.maya, session: now).value
+        #expect(records.admission(Self.group, owner: Self.maya) == .letGo)
+    }
+
+    /*
+     * The store's lock can't be had when a let-go comes: the location still goes, the let-go is kept
+     * in this process and written before anything else is decided, so an acceptance begun before it
+     * is refused once the lock frees, and nothing is added while it is pending. Fails if a let-go the
+     * store refused is simply lost.
+     */
+    @Test func aLetGoTheStoreRefusesIsKeptUntilItIsWritten() async throws {
+        let domains = self.domains
+        let session = TemporaryCopies.session(CopyEpoch())
+        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, observed: records.generation(Self.group), session: session).value
+        let before = records.generation(Self.group)
+        let held = open(records.lockPath, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        #expect(flock(held, LOCK_EX | LOCK_NB) == 0)
+        await domains.letGo(Self.group, owner: Self.maya).value
+        #expect(manager.removals == [FamilyFileIds.domain(Self.group)], "the location stayed because the store refused the let-go")
+        #expect(try records.read()[Self.group] != nil, "the lock was taken after all")
+        #expect(domains.revocationPending(Self.group))
+        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, observed: records.generation(Self.group), session: session).value
+        #expect(manager.names.isEmpty, "a location was added while a let-go was pending")
+        flock(held, LOCK_UN)
+        close(held)
+        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, observed: before, session: session).value
+        #expect(!domains.revocationPending(Self.group))
+        #expect(records.admission(Self.group, owner: Self.maya) == .letGo, "an acceptance begun before the pending let-go wrote the record back")
+        #expect(manager.names.isEmpty)
+    }
+
+    /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
+    @Test func aRenamedFamilysLocationTakesTheNewName() async throws {
+        let domains = self.domains
+        let session = TemporaryCopies.session(CopyEpoch())
+        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, observed: records.generation(Self.group), session: session).value
+        await domains.accepted(Self.group, name: "The Lindqvists", owner: Self.maya, observed: records.generation(Self.group), session: session).value
+        #expect(manager.names[FamilyFileIds.domain(Self.group)] == "The Lindqvists")
+        #expect(try records.read()[Self.group]?.name == "The Lindqvists")
+    }
+
+    /*
      * The sign-in sheet: each Files location asks once until someone signs in, whatever another
      * asked. Fails if a family location can't ask because the drive's (or another family's) did.
      */
@@ -240,7 +298,7 @@ extension OnFakeDrive {
         }
 
         /* The member's phone, its family accepted by the app and its location added, and the extension's source over the same vault. */
-        static func source() async throws -> Source {
+        static func source(account: CopyEpoch = CopyEpoch()) async throws -> Source {
             let family = try FamilyFixture()
             let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
             server.put(family.photo)
@@ -248,7 +306,7 @@ extension OnFakeDrive {
             let manager = TestFamilyDomains()
             let records = FamilyDomainRecords(folder: FileManager.default.temporaryDirectory.appendingPathComponent("family-domains-\(UUID().uuidString)"), activity: .expired)
             let domains = FamilyFilesDomains(records: records, manager: manager)
-            let phone = try await family.phone(server, filesDomains: domains)
+            let phone = try await family.phone(server, account: account, filesDomains: domains)
             let owner = AccountOwner(userId: family.member.userId, origin: "https://family.test")
             await domains.accepted(family.groupId, name: "Lindqvist family", workspaces: [family.workspaceId], owner: owner, observed: records.generation(family.groupId),
                                    session: phone.vault.copySession).value
@@ -345,6 +403,62 @@ extension OnFakeDrive {
             await #expect(throws: FamilyFilesError.letGo) { _ = try await s.source.download(s.family.photo.ref) }
             let copies = s.temporary.appendingPathComponent("opened/family/\(s.family.workspaceId)")
             #expect(!FileManager.default.fileExists(atPath: copies.path), "a copy outlived the revocation")
+        }
+
+        /*
+         * A key change lands in the family's folder while Files reads its feed: nothing is called
+         * deleted and the batch fails with the anchor where it was; the next read checks the family
+         * first and brings the items back. Fails if a key change mid-feed is taken for a deletion.
+         */
+        @Test func aKeyChangeMidFeedDeletesNothingAndTheItemsComeBack() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            _ = try await s.source.folders()
+            let anchor = FamilyAnchor(folders: [s.family.workspaceId: .init(root: s.family.rootId, cursor: 0)])
+            try s.server.replaceKeys()
+            do {
+                let changes = try await s.source.changes(since: anchor)
+                Issue.record("a key change mid-feed answered \(changes?.deleted.count ?? -1) deletions")
+            } catch {
+                #expect(error as? FamilyFilesError == .keyChange)
+            }
+            let again = try #require(try await s.source.changes(since: anchor))
+            #expect(again.deleted.isEmpty, "items were deleted after the key change")
+            #expect(again.updated.contains { $0.ref == s.family.photo.ref })
+        }
+
+        /*
+         * The sync of a session that ended (the account signed in again) finds the family let go of
+         * late: the hook it carries touches nothing of the session now. Fails if a sync's let-go
+         * isn't bound to the session it was made in.
+         */
+        @Test func aLateLetGoFromAnEndedSessionsSyncKeepsTheNewSessionsLocation() async throws {
+            let account = CopyEpoch()
+            let s = try await Self.source(account: account)
+            defer { s.phone.done() }
+            TemporaryCopies.endAccount(account)
+            await s.domains.accepted(s.family.groupId, name: "Lindqvist family", owner: s.owner, observed: s.records.generation(s.family.groupId),
+                                     session: TemporaryCopies.session(account)).value
+            s.phone.sync.releases.post(s.family.groupId, FamilySync.Revised(state: .wiped, revision: FamilySync.newestLook()))
+            await s.domains.settled()
+            #expect(s.records.admission(s.family.groupId, owner: s.owner) == .admitted, "an ended session's sync took the new session's location")
+            #expect(s.manager.removals.isEmpty)
+        }
+
+        /*
+         * A let-go this process couldn't write keeps the extension refusing the family, though the
+         * record on disk still stands. Fails if the extension admits by the record alone.
+         */
+        @Test func aPendingLetGoRefusesTheExtension() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            _ = try await s.source.folders()
+            let held = open(s.records.lockPath, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+            #expect(flock(held, LOCK_EX | LOCK_NB) == 0)
+            defer { flock(held, LOCK_UN); close(held) }
+            await s.domains.letGo(s.family.groupId, owner: s.owner).value
+            #expect(try s.records.read()[s.family.groupId] != nil)
+            await #expect(throws: FamilyFilesError.letGo) { _ = try await s.source.folders() }
         }
 
         /*

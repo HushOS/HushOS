@@ -238,7 +238,9 @@ public actor FamilySync: FamilyJudge {
         let domains = filesDomains ?? Self.defaultFilesDomains
         self.filesDomains = domains
         if let domains {
-            let lettingGo: @Sendable (String, UInt64) -> Void = { groupId, _ in domains.letGo(groupId, owner: owner) }
+            // Bound to the session this sync belongs to: a late refusal of an ended session lets nothing of the next one go.
+            let born = vault.copySession
+            let lettingGo: @Sendable (String, UInt64) -> Void = { groupId, _ in domains.letGo(groupId, owner: owner, session: born) }
             releases = FamilyReleases(lettingGo: lettingGo)
         } else {
             releases = FamilyReleases()

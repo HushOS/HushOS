@@ -90,7 +90,8 @@ enum FamilyErrors {
             return NSFileProviderError(.noSuchItem)
         case FamilyFilesError.otherAccount:
             return FileProviderExtension.translate(NSFileProviderError(.notAuthenticated), domain: domain)
-        case FamilyFilesError.unavailable:
+        case FamilyFilesError.unavailable, FamilyFilesError.keyChange:
+            // Asked again later, with nothing of what Files holds dropped.
             return NSFileProviderError(.serverUnreachable)
         case let failure as GroupsAPIError where failure.status == 0:
             return NSFileProviderError(.serverUnreachable)

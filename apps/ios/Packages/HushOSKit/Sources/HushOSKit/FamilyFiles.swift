@@ -82,7 +82,7 @@ public struct FamilyDomainRecords: Sendable {
     public static var shared: FamilyDomainRecords { FamilyDomainRecords(folder: Unbacked.local) }
 
     var file: URL { folder.appendingPathComponent("files-family-domains.json") }
-    private var lockPath: String { folder.appendingPathComponent("files-family-domains.lock").path }
+    var lockPath: String { folder.appendingPathComponent("files-family-domains.lock").path }
 
     /* The file's contents: the records, and how many times each family was let go of. */
     struct Stored: Codable, Equatable {
@@ -178,6 +178,12 @@ public final class FamilyFilesDomains: @unchecked Sendable {
     let temporary: URL
     private let lock = NSLock()
     private var tail: Task<Void, Never>?
+    /*
+     * Let-gos this process couldn't write (the store's lock not had, or the write refused), by family,
+     * with whose record they take: written again before anything else is decided about the family, and
+     * until then its acceptances add nothing and this process's extension calls refuse.
+     */
+    private var pending: [String: AccountOwner?] = [:]
 
     public init(records: FamilyDomainRecords, manager: any FamilyDomainManaging, temporary: URL = FileManager.default.temporaryDirectory) {
         self.records = records
@@ -212,17 +218,22 @@ public final class FamilyFilesDomains: @unchecked Sendable {
         let groupId = groupId.lowercased()
         return enqueue { [self] in
             guard FamilyRecords.valid(groupId), let observed, session.stands else { return }
+            // A let-go this process couldn't write is written first; while it still can't be, nothing is added.
+            guard !revocationPending(groupId) else { return }
             var ours = false
+            var renamed = false
             let wrote = records.update { stored in
                 guard stored.revoked[groupId, default: 0] <= observed else { return }
                 if let record = stored.records[groupId], record.owner != owner { return }
+                renamed = stored.records[groupId].map { $0.name != name } ?? false
                 stored.records[groupId] = FamilyDomainRecord(owner: owner, name: name, workspaces: workspaces.map { $0.lowercased() }.sorted())
                 ours = true
             }
             guard wrote, ours, session.stands else { return }
             let identifier = FamilyFileIds.domain(groupId)
             guard let existing = try? await manager.domains() else { return }
-            if !existing.contains(identifier) { try? await manager.add(identifier, name: name) }
+            // Adding an identifier that exists updates its name: a renamed family's location says the new one.
+            if !existing.contains(identifier) || renamed { try? await manager.add(identifier, name: name) }
             await manager.signal(identifier)
         }
     }
@@ -234,10 +245,29 @@ public final class FamilyFilesDomains: @unchecked Sendable {
      * what Files kept of it. Only `owner`'s record (nil: whoever's); the generation moves regardless.
      */
     @discardableResult
-    public func letGo(_ groupId: String, owner: AccountOwner?) -> Task<Void, Never> {
+    public func letGo(_ groupId: String, owner: AccountOwner?, session: CopySession? = nil) -> Task<Void, Never> {
         let groupId = groupId.lowercased()
+        // A late let-go of a session that ended (the account signed in again since) touches nothing of the session now.
+        if let session, !session.stands { return enqueue {} }
+        let written = lock.withLock { () -> Bool in
+            let written = (0 ..< 3).contains { _ in write(groupId, owner: owner, session: session) }
+            if !written { pending[groupId] = owner }
+            return written
+        }
+        _ = written
+        // The location goes whether or not the store took the let-go: Files drops what it holds of it.
+        return enqueue { [manager] in try? await manager.remove(FamilyFileIds.domain(groupId)) }
+    }
+
+    /* One let-go written: the generation moved and `owner`'s record (nil: whoever's) gone, its copies here with it; false when the store refused. */
+    private func write(_ groupId: String, owner: AccountOwner?, session: CopySession?) -> Bool {
         var workspaces: [String] = []
-        records.update { stored in
+        var stale = false
+        let wrote = records.update { stored in
+            if let session, !session.stands {
+                stale = true
+                return
+            }
             stored.revoked[groupId, default: 0] += 1
             if let record = stored.records[groupId], owner == nil || record.owner == owner {
                 workspaces = record.workspaces ?? []
@@ -245,7 +275,20 @@ public final class FamilyFilesDomains: @unchecked Sendable {
             }
         }
         if !workspaces.isEmpty { TemporaryCopies.forgetFamily(workspaces, in: temporary) }
-        return enqueue { [manager] in try? await manager.remove(FamilyFileIds.domain(groupId)) }
+        return wrote || stale
+    }
+
+    /*
+     * Whether a let-go of the family is still unwritten in this process, after trying to write it
+     * again: while it is, the family's acceptances add nothing and the extension refuses it.
+     */
+    public func revocationPending(_ groupId: String) -> Bool {
+        let groupId = groupId.lowercased()
+        return lock.withLock {
+            guard let owner = pending[groupId] else { return false }
+            if write(groupId, owner: owner, session: nil) { pending[groupId] = nil }
+            return pending[groupId] != nil
+        }
     }
 
     /*
@@ -351,6 +394,20 @@ public enum FamilyFilesError: Error, Equatable, Sendable {
     case notInFamily
     /* The family couldn't be checked and nothing was accepted before: Files asks again. */
     case unavailable
+    /* A key change in the family's folders that this device hasn't followed yet: checked again, then Files asks again. */
+    case keyChange
+
+    /*
+     * Whether `error` is a key change met mid-way rather than an answer about the item: the ledger's
+     * pending key change, a folder served under a key version or epoch this device hasn't accepted
+     * the member list for yet (older or newer), or the server's `rotating` or `stale`.
+     */
+    static func keyChanging(_ error: Error) -> Bool {
+        if KeyChangeWait.meets(error, waited: true) { return true }
+        guard let core = error as? CoreError else { return false }
+        let message = FamilyWords.message(of: core).lowercased()
+        return ["workspace key", "folder key", "key epoch", "keys changed", "key change", "rotation holds"].contains { message.contains($0) }
+    }
 }
 
 /* Where the location's change feed stands: each folder's top node and its feed cursor. */
@@ -388,6 +445,8 @@ public actor FamilyFilesSource {
     public let vault: Vault
     let sync: FamilySync
     let records: FamilyDomainRecords
+    /* This process's lifecycle: a let-go it couldn't write yet refuses the family here too. */
+    let domains: FamilyFilesDomains?
     let owner: AccountOwner
     let now: @Sendable () -> Date
     /* This process's temporary folder: its `opened/family/<workspace>` holds the family's decrypted copies. */
@@ -399,12 +458,13 @@ public actor FamilyFilesSource {
 
     static let fresh: TimeInterval = 60
 
-    public init(groupId: String, vault: Vault, sync: FamilySync, records: FamilyDomainRecords = .shared,
+    public init(groupId: String, vault: Vault, sync: FamilySync, records: FamilyDomainRecords = .shared, domains: FamilyFilesDomains? = nil,
                 temporary: URL = FileManager.default.temporaryDirectory, now: @escaping @Sendable () -> Date = { Date() }) {
         self.groupId = groupId.lowercased()
         self.vault = vault
         self.sync = sync
         self.records = records
+        self.domains = domains ?? sync.filesDomains
         self.temporary = temporary
         owner = AccountOwner(vault.session)
         self.now = now
@@ -417,6 +477,12 @@ public actor FamilyFilesSource {
 
     /* The record's say, before anything this process holds: a revocation on disk wins, and takes this process's copies. */
     private func admit() throws {
+        // A let-go this process found but couldn't write: the record on disk still stands, the family doesn't.
+        if domains?.revocationPending(groupId) == true {
+            view = nil
+            dropCopies()
+            throw FamilyFilesError.letGo
+        }
         switch records.admission(groupId, owner: owner) {
         case .admitted: return
         case .letGo:
@@ -611,7 +677,15 @@ public actor FamilyFilesSource {
                 next.folders[workspace] = .init(root: root.id.lowercased(), cursor: heads?[workspace] ?? 0)
                 continue
             }
-            guard let feed = try await vault.familyChanges(in: workspace, since: held.cursor) else { return nil }
+            let feed: Vault.Changes?
+            do {
+                feed = try await vault.familyChanges(in: workspace, since: held.cursor)
+            } catch FamilyFilesError.keyChange {
+                // Nothing of this batch is answered: the anchor stays, and the next call checks the family first.
+                checkedAt = nil
+                throw FamilyFilesError.keyChange
+            }
+            guard let feed else { return nil }
             updated += feed.updated
             deleted += feed.deleted.map { FamilyFileIds.item(NodeRef(workspaceId: workspace, nodeId: $0)) }
             more = more || feed.hasMore
