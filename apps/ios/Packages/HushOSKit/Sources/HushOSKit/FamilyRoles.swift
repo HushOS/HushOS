@@ -105,10 +105,19 @@ extension FamilySync {
             }
             // Confirmed again for the same person: the record stays as it is (`staged` once billing's call is kept), so a
             // kept call later refused or overtaken is never taken for one never staged and signed afresh.
-            if try self.records.handover(userId: me, groupId: groupId)?.to != to.lowercased() {
-                try self.records.markHandover(userId: me, groupId: groupId, to: to)
+            let created = try self.records.handover(userId: me, groupId: groupId)?.to != to.lowercased()
+            if created { try self.records.markHandover(userId: me, groupId: groupId, to: to) }
+            do {
+                return try await self.giveThenStepDown(summary, to: to, first: first, names: names)
+            } catch {
+                // A read before billing was staged threw (the screen says it couldn't change that): a record this attempt
+                // made and never staged goes with it, so the next open never hands the organizer role over unasked. One
+                // that was there already (a resumed or re-confirmed handover) stays as it was.
+                if created, let kept = try? self.records.handover(userId: me, groupId: groupId), !kept.staged {
+                    try? self.records.clearHandover(userId: me, groupId: groupId)
+                }
+                throw error
             }
-            return try await self.giveThenStepDown(summary, to: to, first: first, names: names)
         }
     }
 

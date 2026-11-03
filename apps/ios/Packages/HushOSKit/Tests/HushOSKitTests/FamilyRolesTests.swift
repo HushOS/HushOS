@@ -324,6 +324,53 @@ extension OnFakeDrive {
         }
 
         /*
+         * Codex #285 round 7 (billing): Make them the organizer whose settings read throws as it is
+         * staged (after the sync and the head read, before anything is signed). The screen says it
+         * couldn't change that, and the record this attempt made goes with it, so the next open hands
+         * nothing over. A staged handover confirmed again over the same failure stays as it was.
+         * Fails if a failed attempt leaves an unstaged record that the next open then finishes,
+         * making someone the organizer nobody confirmed.
+         */
+        @Test func aHandoverThatFailsBeforeStagingLeavesNoRecord() async throws {
+            let m = try await Self.organizer()
+            defer { m.phone.done() }
+            try await Self.checkMaya(m)
+            let maya = m.family.creator.userId.lowercased()
+            let server = m.server
+            // The second read of route 3 in a press is the staging's head read: every settings read after it fails.
+            func failAfterTheHeadRead() {
+                let reads = Calls()
+                server.lock.withLock {
+                    server.manage.beforeAnswer = { method, path in
+                        guard method == "GET", path == "/api/groups/\(server.family.groupId)" else { return }
+                        reads.append(true)
+                        if reads.values.count == 2 { server.lock.withLock { server.manage.failSettingsReads = true } }
+                    }
+                }
+            }
+            func heal() { server.lock.withLock { server.manage.beforeAnswer = nil; server.manage.failSettingsReads = false } }
+            failAfterTheHeadRead()
+            var failed = false
+            do { _ = try await Self.quickly { try await m.phone.sync.handOver(m.summary, to: maya, first: "Maya") } } catch { failed = true }
+            heal()
+            guard failed else { Issue.record("the handover didn't fail before staging"); return }
+            #expect(try Self.handover(m) == nil, "a failed handover left its record")
+            #expect(m.server.lock.withLock { m.server.manage.memberCalls }.isEmpty)
+            _ = try await Self.quickly { try await m.phone.sync.resumeOutbox(m.family.groupId, names: [maya: "Maya"]) }
+            #expect(m.server.lock.withLock { m.server.manage.memberCalls }.isEmpty, "the next open handed over a handover nobody confirmed")
+            #expect(try await !Self.roles(m, maya).contains("billing"))
+            // One already kept, confirmed again over the same failure: left as it was.
+            m.server.lock.withLock { m.server.manage.memberAnswers = Array(repeating: Self.noAnswer, count: 3) }
+            guard case .pending = try await Self.quickly({ try await m.phone.sync.handOver(m.summary, to: maya, first: "Maya") }) else {
+                Issue.record("the handover wasn't kept"); return
+            }
+            failAfterTheHeadRead()
+            _ = try? await Self.quickly { try await m.phone.sync.handOver(m.summary, to: maya, first: "Maya") }
+            heal()
+            #expect(try Self.handover(m) == FamilyRecords.KeptHandover(to: maya, staged: true))
+        }
+
+        /*
          * Billing moved to someone else meanwhile (another device): this account no longer holds it,
          * so it isn't this account's to give. Nothing is signed or sent. Fails if a former organizer
          * hands billing over.
