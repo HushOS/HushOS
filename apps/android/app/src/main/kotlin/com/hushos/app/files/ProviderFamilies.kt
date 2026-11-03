@@ -498,7 +498,7 @@ class ProviderFamilies internal constructor(
         if (!keepContents) return editCopy(folder, item, epoch) { it.createNewFile(); true }!!
         // The file's pending save, when it has one (what another app last wrote, not landed yet, whatever its job's state):
         // the server's version is older than it, and an edit built on that would drop the save.
-        editCopy(folder, item, epoch) { WriteBacks.copyTo(vault.context, slotOf(doc), it) }?.let { return it }
+        editCopy(folder, item, epoch) { WriteBacks.copyNewestTo(vault.context, slotOf(doc), it) }?.let { return it }
         val source = readCopy(doc, strict = true)
         return editCopy(folder, item, epoch) { source.copyTo(it, overwrite = true); true }!!
     }
@@ -536,7 +536,7 @@ class ProviderFamilies internal constructor(
         return synchronized(FamilyCopies.LOCK) {
             if (vault.closed) throw SessionEnded()
             vault.familyWordsSince(folder.workspaceId, epoch)?.let { throw FileNotFoundException(it) }
-            file.takeIf { WriteBacks.copyTo(vault.context, slotOf(doc), it) }
+            file.takeIf { WriteBacks.copyNewestTo(vault.context, slotOf(doc), it) }
         }
     }
 
@@ -558,15 +558,17 @@ class ProviderFamilies internal constructor(
         if (!edit.exists()) return false
         val parent = opened.node.parentId ?: return false
         val target = WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime, parent, doc.groupId.lowercase(), doc.workspaceId.lowercase())
+        // Its order among the file's saves, given now, before anything is kept: a Retry of it keeps that order.
+        val number = WriteBacks.reserve(vault.context, slotOf(doc))
         // Kept only while the folder's invalidation count is still the one the open read before it checked anything, and
         // the session lasts, under the copies lock a removal's cleanup takes: a family let go of since keeps no plaintext.
         val kept = synchronized(FamilyCopies.LOCK) {
             if (vault.closed || vault.familyWordsSince(doc.workspaceId, epoch) != null) null
             else try {
-                WriteBacks.save(vault.context, vault.ledgerGeneration, target, edit)
+                WriteBacks.stage(vault.context, vault.ledgerGeneration, target, edit, number)
             } catch (failure: Exception) {
                 // Not kept (a full disk, say): the edit stays with a row whose Retry keeps it; a removal's cleanup deletes it.
-                if (TransferQueue.stagingFailed(vault.context, target, edit, failure, vault.ledgerGeneration, epoch)) throw EditKept(failure)
+                if (TransferQueue.stagingFailed(vault.context, target, edit, failure, vault.ledgerGeneration, number, epoch)) throw EditKept(failure)
                 throw failure
             }
         } ?: return false

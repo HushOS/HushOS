@@ -77,6 +77,7 @@ class ProviderFamiliesTest {
     fun close() {
         WriteBacks.afterContent = null
         WriteBacks.beforeSlotId = null
+        WriteBacks.fault = null
         Reservations.forgetHeld()
         server.close()
         assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
@@ -1550,6 +1551,25 @@ class ProviderFamiliesTest {
         assertTrue(TransferQueue.retry(app, row))
         assertEquals(ListenableWorker.Result.success(), runJob(slot))
         assertEquals("save after a revocation", serverText())
+    }
+
+    /*
+     * A family file's save couldn't be kept in its slot (its edit kept for a Retry); the other app then opens the file to
+     * read and to append: both start from that edit, not the server's older version. Fails if an open that keeps the
+     * contents skips an edit whose save couldn't be kept.
+     */
+    @Test
+    fun aFamilyOpenAfterASaveCouldntBeKeptStartsFromIt() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        WriteBacks.fault = { at -> if (at == "json") { WriteBacks.fault = null; throw java.io.IOException("No space left on device") } }
+        ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("kept for a retry".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
+        assertEquals(1, com.hushos.app.data.FailedTransfers.of(app).all().size)
+        assertEquals("kept for a retry", read(provider, file))
+        assertEquals("kept for a retry", families.editFor(doc, "wa").readText())
     }
 
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =
