@@ -1,0 +1,49 @@
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_7037973adcc8c2 140
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyManage.swift
+  s_40d2b9b4b510c1::t_6c639ffd60f036 278
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyRoles.swift
+  s_7109f9e804230a::t_f3302fa32e3c44 166,227-230,236,243-254
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyRolesTests.swift
+  s_3f1bca51df9980::t_cb22304a6447e0 146-151,159-160,164-167,171-206
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1d17ff874bf713f4a3ac703e721cb4b5d1cd4d8a",
+  "prompts": {},
+  "sessions": {
+    "s_3f1bca51df9980": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a524c8fbbc95ae9b5",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_40d2b9b4b510c1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1a381-0ffa-7582-ba73-07d269c25081",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_7109f9e804230a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a16011-997d-7320-af40-963b74d6a049",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
