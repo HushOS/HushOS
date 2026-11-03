@@ -1,0 +1,41 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_a0fe58ed9d866c 88
+apps/android/app/src/main/kotlin/com/hushos/app/data/FailedTransfers.kt
+  s_739762ec357fbf::t_93d3d5c543b928 25-29,52,86,92
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferNotices.kt
+  s_739762ec357fbf::t_0115c76ab238ef 137-166
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_739762ec357fbf::t_0d8bcf2e88e02b 314-320,322,346-349,517-532,673-674,715-720,731-735
+apps/android/app/src/main/kotlin/com/hushos/app/data/WriteBacks.kt
+  s_739762ec357fbf::t_646d30bcbec4c4 122-135,152
+apps/android/app/src/main/kotlin/com/hushos/app/files/HushOSDocumentsProvider.kt
+  s_566b8e0c4467a4::t_9f4bf5b34d1b6d 495-496,499-500,504
+apps/android/app/src/main/kotlin/com/hushos/app/files/ProviderFamilies.kt
+  s_566b8e0c4467a4::t_bdb1d497dd05b8 73-78,90,92,150-154,159-161,163,168,182,190-193,230-233,565-571,580-582
+apps/android/app/src/test/kotlin/com/hushos/app/files/ProviderFamiliesTest.kt
+  s_566b8e0c4467a4::t_da017ca8a4d8e8 79,1458-1507
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ee3b7fa228f32d199e59ab24c2c7d9df580abd85",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_739762ec357fbf": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a19d48-25ae-7581-be3d-b3cc3e712342",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
