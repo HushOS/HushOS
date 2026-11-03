@@ -388,8 +388,7 @@ export async function callSpecs(): Promise<Json[]> {
             }),
         },
         {
-            // Never with a role: the invitation's roles are the server's word (3.6). The core
-            // still builds it until the phones' release follows (PR 5).
+            // Never with a role: the invitation's roles are the server's word (3.6), in both twins.
             name: 'admit-manager',
             op: { kind: 'admit', who: 5, roles: ['members'] },
             refused: 'Let them in first. Roles are given afterwards.',

@@ -455,7 +455,7 @@ class ProviderFamilies internal constructor(
      * blocks a write only for now (no answer, so the root is read only; a guard owed; keys still being checked) is the
      * job's to wait out with its own gates: queued, never dropped. The edit moves into the queue's own folder. The job's id.
      */
-    fun writeBack(doc: FamilyDoc.Node, edit: File, order: Long = WriteBacks.nextOrder(), opened: Opened? = null): java.util.UUID {
+    fun writeBack(doc: FamilyDoc.Node, edit: File, order: Long = WriteBacks.nextOrder(vault.context), opened: Opened? = null): java.util.UUID {
         if (!edit.exists()) throw FileNotFoundException(FamilyWords.OPEN_AGAIN)
         if (vault.closed) throw SessionEnded()
         require(doc.groupId)

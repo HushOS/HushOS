@@ -508,7 +508,9 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         // An earlier run's completion landed though its answer was lost (Reservations' landed row): done, said, its copy
         // gone, the row used up last. Looked at first, and again before the job reserves (Vault.upload).
         fun landedEarlier(): Result {
-            forItsAccount(generation) {
+            // The document's lock before the account's (WriteBacks.underLock), as every landing takes them: a save of it
+            // uploading meanwhile holds the first and needs the second.
+            WriteBacks.underLock(chain) { forItsAccount(generation) {
                 // It landed: no older save of its document lands over it.
                 if (chain != null && order != null) WriteBacks.markLanded(applicationContext, chain, order)
                 // The success kept first (LandedJobs), before anything is deleted: a stop anywhere after this ends a rerun as uploaded.
@@ -517,7 +519,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 file.parentFile?.deleteRecursively()
                 TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = folder))
                 Reservations.forgetLanded(applicationContext, ledger)
-            }
+            } }
             return Result.success()
         }
         // An unreadable ledger decides nothing: the job runs again later.
@@ -572,6 +574,9 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                     // the newer save is the whole file as the app wrote it last.
                     end.error is WriteBacks.Superseded -> {
                         forItsAccount(generation) {
+                            // Its success kept first, as every success is: a stop or a death after the copy goes still ends
+                            // its rerun as done, never as "pick it again".
+                            LandedJobs.of(applicationContext).markOrLog(this@UploadWorker.id.toString())
                             waits.forget(this@UploadWorker.id.toString())
                             file.parentFile?.deleteRecursively()
                         }

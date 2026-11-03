@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.12.0](https://github.com/HushOS/HushOS/compare/v0.11.0...v0.12.0) (2026-11-02)
+
+
+### Features
+
+* find files by kind in search and drop Home's type chips ([#264](https://github.com/HushOS/HushOS/issues/264)) ([133fff8](https://github.com/HushOS/HushOS/commit/133fff83bf7d14d3979635a172e7f45ff4805a13))
+* invite people to a family and let them in from Android ([#265](https://github.com/HushOS/HushOS/issues/265)) ([44cbf5c](https://github.com/HushOS/HushOS/commit/44cbf5cf349d6b622c8cd45585ab2ce01a397411))
+* **ios:** leave a family and walk its key changes in the background ([#271](https://github.com/HushOS/HushOS/issues/271)) ([5791910](https://github.com/HushOS/HushOS/commit/5791910beadbca18fcf6fba84576448551a201b8))
+* **ios:** publish an unsigned IPA for sideloading ([#272](https://github.com/HushOS/HushOS/issues/272)) ([ab60102](https://github.com/HushOS/HushOS/commit/ab6010251290538d89fe5d1e62f0432261aec000))
+
+
+### Bug fixes
+
+* **android:** end a landed family upload as uploaded when the family ends ([#268](https://github.com/HushOS/HushOS/issues/268)) ([e5a4ada](https://github.com/HushOS/HushOS/commit/e5a4adaa7d7a260bac2a2bb0419914bb8ce1d4f2))
+* **android:** keep a file's contents when another app opens it to append ([#269](https://github.com/HushOS/HushOS/issues/269)) ([749da31](https://github.com/HushOS/HushOS/commit/749da317ba764dbfec05c0526ed764bba6204ae0))
+
 ## [0.11.0](https://github.com/HushOS/HushOS/compare/v0.10.0...v0.11.0) (2026-11-02)
 
 

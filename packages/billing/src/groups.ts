@@ -2281,6 +2281,11 @@ export type SeatResult =
     | { status: 'busy' }
     /* Polar charged for the place, but billed it on a plan changed meanwhile: nobody let in. */
     | { status: 'changed' }
+    /*
+     * The payer would have to buy a place, on a client that never sells one (the phone apps: their
+     * billing is read only, so a purchase there is never made, nor offered).
+     */
+    | { status: 'full' }
     | { status: 'unavailable' };
 
 /* A refused raise, by what Polar said. */
@@ -2490,9 +2495,15 @@ async function raisePlaces(
  * billing nothing is asked. With it, the plan must have room (a scheduled cut
  * counts), or the payer, and only the payer, buys the place now; the
  * admission goes ahead only on Polar's 200. The repository counts the seats
- * again under the group's lock, against the limit this wrote.
+ * again under the group's lock, against the limit this wrote. `mayBuy` false
+ * (an admission from a client that sells nothing, a phone app's) never buys:
+ * a full plan is `full`, and Polar isn't asked.
  */
-export async function ensureGroupSeat(groupId: string, admitterId: string): Promise<SeatResult> {
+export async function ensureGroupSeat(
+    groupId: string,
+    admitterId: string,
+    { mayBuy = true }: { mayBuy?: boolean } = {},
+): Promise<SeatResult> {
     if (!billingEnabled()) return { status: 'ok' };
     const live = await billingRepository.getLiveGroupSubscription(groupId);
     if (!live) return { status: 'no-plan' };
@@ -2501,6 +2512,7 @@ export async function ensureGroupSeat(groupId: string, admitterId: string): Prom
     if (target <= billingRepository.seatLimitOf(live)) return { status: 'ok' };
     const customer = await billingRepository.getGroupCustomer(groupId);
     if (!customer || customer.payerUserId !== admitterId) return { status: 'payer' };
+    if (!mayBuy) return { status: 'full' };
     const result = await changePlaces(groupId, live, target);
     if (result.status !== 'confirm') return result;
     return {
@@ -2899,6 +2911,9 @@ export function seatError(result: Exclude<SeatResult, { status: 'ok' | 'confirm'
             return new BillingError('This family has no plan.', 404);
         case 'payer':
             return new BillingError('Only the person who pays for this family can do that.', 403);
+        // Only an admission that may not buy one says this; billing's own routes never do.
+        case 'full':
+            return new BillingError('Every place in the family is taken.', 409);
         case 'unavailable':
             return new BillingError('Billing is temporarily unavailable. Please try again.', 503);
     }

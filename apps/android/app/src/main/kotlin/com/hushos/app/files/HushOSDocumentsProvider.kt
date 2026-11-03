@@ -376,13 +376,39 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         val familyDoc = FamilyDoc.of(documentId)
         // Never across a family's root and the drive, or two families.
         if (familyParent != null || familyDoc != null) return@guarded familyParent != null && familyDoc != null && familiesOf(vault).isChild(familyParent, familyDoc)
-        var current: String? = nodeId(documentId, vault)
-        val parent = nodeId(parentDocumentId, vault)
-        while (current != null) {
-            if (current == parent) return@guarded true
-            current = runCatching { vault.resolve(current!!).node.parentId }.getOrNull()
+        isUnder(vault, nodeId(parentDocumentId, vault), nodeId(documentId, vault))
+    }
+
+    /*
+     * Whether `id` sits under `parent` now, as the server says, before a tree grant is honoured: this account's own drive
+     * brought to the feed's head first (Vault.sync), so a node another device moved out of the tree since is where it is
+     * now, never where the cache last saw it. The provider lists only this account's own drive, so a node of any other
+     * workspace is outside every tree, as is anything that can't be confirmed (no answer, a node the drive doesn't hold).
+     */
+    private fun isUnder(vault: Vault, parent: String, id: String): Boolean {
+        val own = vault.ownWorkspaceId
+        var synced = false
+        var current: String? = id
+        repeat(MAX_TREE_DEPTH) {
+            val at = current ?: return false
+            if (at == parent) return true
+            current = try {
+                val held = vault.resolve(at)
+                val ws = held.node.workspaceId
+                if (ws.equals(own, ignoreCase = true)) {
+                    if (!synced) {
+                        if (vault.sync() == null) return false
+                        synced = true
+                    }
+                    vault.resolve(at).node.parentId
+                } else return false
+            } catch (error: NotAuthenticated) {
+                throw error
+            } catch (_: Exception) {
+                return false
+            }
         }
-        false
+        return false
     }
 
     /* Per version, so a download resumed after a replacement never mixes two versions' bytes. */
@@ -405,19 +431,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         val handler = Handler(Looper.getMainLooper())
         ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), handler) { error ->
             if (error != null) { edit.delete(); return@open }
-            Thread {
-                val fresh = runCatching { vault.resolve(id) }.getOrNull()
-                val sent = fresh != null && runCatching {
-                    vault.upload(edit, fresh.name, fresh.metadata.mime, fresh.node.parentId ?: vault.rootId, fresh, vault.makeThumbnail(edit, fresh.metadata.mime))
-                    context!!.contentResolver.notifyChange(DocumentsContract.buildDocumentUri(authority, documentId), null)
-                }.isSuccess
-                // Not sent now (no network, or the name it keeps couldn't be checked): the queue takes the edit and tries
-                // again, rather than the edit being dropped.
-                if (!sent && fresh != null) runCatching {
-                    com.hushos.app.data.TransferQueue.upload(context!!, edit, fresh.name, fresh.metadata.mime, fresh.node.parentId ?: vault.rootId, fresh.id)
-                }
-                edit.delete()
-            }.start()
+            Thread { personalWriteBack(vault, id, documentId, edit, item) }.start()
         }
     }
 
@@ -425,12 +439,13 @@ class HushOSDocumentsProvider : DocumentsProvider() {
      * Where another app writes a file of the drive: a file of its own that goes up as a new version when it closes, never
      * the version's read copy (if the upload fails, a later read must not show edits the server never got). It starts
      * from the current version whenever the mode keeps the contents (WriteModes): appending, or reading and writing
-     * without truncating.
+     * without truncating. That version is checked with the server first (currentVersion), so an edit never builds on a
+     * version that was replaced since, as one a queued write-back landed from its own vault.
      */
     internal fun personalEdit(vault: Vault, id: String, mode: String): File {
-        val item = vault.resolve(id)
         val edit = File(context!!.cacheDir, "edits/$id/${java.util.UUID.randomUUID()}").also { it.parentFile?.mkdirs() }
         if (WriteModes.keepsContents(mode)) {
+            val item = currentVersion(vault, id)
             val file = cacheFile(id, item.node.currentVersion?.id)
             if (!file.exists()) vault.download(id, file)
             file.copyTo(edit, overwrite = true)
@@ -453,7 +468,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             if (error != null) { edit.delete(); return@open }
             // Its place among the file's saves, taken here in the close callback before anything runs elsewhere (WriteBacks):
             // two closes back to back keep their order whichever thread gets further first.
-            val order = WriteBacks.nextOrder()
+            val order = WriteBacks.nextOrder(context!!)
             WriteBacks.closing(chain, order, edit)
             spawn(Runnable {
                 // Queued: the job tells Files once it lands (Vault.foldersChanged). Refused (the family let go of it, the
@@ -471,6 +486,39 @@ class HushOSDocumentsProvider : DocumentsProvider() {
 
     /* Tests: where a closed edit's write-back runs (a thread of its own). */
     internal var spawn: (Runnable) -> Unit = { Thread(it).start() }
+
+    /*
+     * The file as the server holds it now: this account's own drive brought up to the feed's head (Vault.sync), a share's
+     * folder listed again. A version that landed elsewhere (another device, a transfer job's vault) replaces the row held
+     * here. No answer is refused: an edit built on a version that can't be checked could replace a newer one.
+     */
+    private fun currentVersion(vault: Vault, id: String): com.hushos.app.data.Opened {
+        val held = vault.resolve(id)
+        val ws = held.node.workspaceId
+        if (ws.equals(vault.ownWorkspaceId, ignoreCase = true)) {
+            if (vault.sync() == null) throw FileNotFoundException(com.hushos.app.data.GroupsApiError.NO_ANSWER)
+        } else held.node.parentId?.let { vault.listChildren(it, ws) }
+        return vault.resolve(id)
+    }
+
+    /*
+     * What another app wrote, once it closed the file: a new version, sent now when it can be. Not sent now (no network,
+     * the name it keeps couldn't be checked, or the file's row couldn't be looked up now): the queue takes the edit and
+     * tries again, rather than the edit being dropped. `opened` is the file as it was when the app opened it, which the
+     * queued job is told of when the lookup fails; the job looks it up again itself.
+     */
+    internal fun personalWriteBack(vault: Vault, id: String, documentId: String, edit: File, opened: com.hushos.app.data.Opened) {
+        val fresh = runCatching { vault.resolve(id) }.getOrNull()
+        val sent = fresh != null && runCatching {
+            vault.upload(edit, fresh.name, fresh.metadata.mime, fresh.node.parentId ?: vault.rootId, fresh, vault.makeThumbnail(edit, fresh.metadata.mime))
+            context!!.contentResolver.notifyChange(DocumentsContract.buildDocumentUri(authority, documentId), null)
+        }.isSuccess
+        if (!sent) runCatching {
+            val known = fresh ?: opened
+            com.hushos.app.data.TransferQueue.upload(context!!, edit, known.name, known.metadata.mime, known.node.parentId ?: vault.rootId, known.id)
+        }
+        edit.delete()
+    }
 
     /* Through a pipe, never a plaintext file in the cache: the decrypted JPEG exists only in memory and in transit. */
     override fun openDocumentThumbnail(documentId: String, sizeHint: Point, signal: CancellationSignal?): AssetFileDescriptor = guarded {
@@ -547,5 +595,6 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         private const val TRUST_TTL_MS = 5 * 60_000L
         private const val TRUST_RETRY_MS = 30_000L
         private const val REFRESH_WAIT_MS = 5_000L
+        private const val MAX_TREE_DEPTH = 256
     }
 }

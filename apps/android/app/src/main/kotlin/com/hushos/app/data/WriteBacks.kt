@@ -24,14 +24,22 @@ object WriteBacks {
     const val CHAIN = "chain:"
     const val ORDER = "order:"
     private const val PREFS = "write-backs"
+    /* The save counter: no account data, so it outlives a sign-out and keeps increasing. */
+    private const val COUNTER = "write-back-order"
 
     /* A document's saves: its workspace and node, both ids. */
     fun chainOf(workspaceId: String, nodeId: String): String = "writeback-${workspaceId.lowercase()}-${nodeId.lowercase()}"
 
-    private var last = 0L
-
-    /* A save's place among every save made on this phone: increasing, and from the clock, so it still holds after a restart. */
-    @Synchronized fun nextOrder(): Long = maxOf(System.currentTimeMillis() * 1000, last + 1).also { last = it }
+    /*
+     * A save's place among every save made on this phone: a counter kept on disk and moved with one atomic write before it
+     * is handed out, so it only ever increases, across a restart and whatever the clock does.
+     */
+    @Synchronized fun nextOrder(context: Context): Long {
+        val prefs = context.getSharedPreferences(COUNTER, Context.MODE_PRIVATE)
+        val next = prefs.getLong("next", 0L) + 1
+        check(prefs.edit().putLong("next", next).commit()) { "The save counter couldn't be kept." }
+        return next
+    }
 
     private val locks = ConcurrentHashMap<String, ReentrantLock>()
     private fun lockOf(chain: String) = locks.getOrPut(chain) { ReentrantLock() }
@@ -41,8 +49,20 @@ object WriteBacks {
     /* The place of the newest save of the document that landed; 0 when none did (as far as this phone knows). */
     fun landed(context: Context, chain: String): Long = prefs(context).getLong(chain, 0L)
 
-    /* Tests: forgets every document's landed place. */
-    internal fun forgetAll(context: Context) { prefs(context).edit().clear().commit() }
+    /*
+     * The account is gone from this phone (sign-out, deletion, another account): every document's landed place goes with
+     * it, and nothing in flight here is the next account's.
+     */
+    fun forgetAll(context: Context) {
+        prefs(context).edit().clear().commit()
+        inFlight.clear()
+    }
+
+    /*
+     * `body` under the document's lock, when there is one: taken before any lock of the account's or its upload ledger
+     * (Reservations), the order every landing (`land`) takes them in, so no two paths ever wait on each other.
+     */
+    fun <T> underLock(chain: String?, body: () -> T): T = if (chain == null) body() else lockOf(chain).withLock(body)
 
     class Superseded : Exception("A newer save of this file landed first.")
 

@@ -483,11 +483,19 @@ fn an_admission_takes_the_pin_only_from_the_settings_and_refuses_a_member_unchec
     let via = VerifiedPin { trusted_via: Some(GROUP.into()), ..pin_of(&f.p[3]) };
     let trusted = f.ledger_of(1, [(f.p[3].user_id.clone(), via)].into(), true, true);
     assert_eq!(message(f.admit(&trusted, 4, vec![])), "These are not the keys whose words were checked.");
-    // A first-seen pin of the newcomer's very keys: roster_entry_new would build from it, but letting
-    // someone in over one waits for the manager rule beside it (design 3.6): still a words check only.
+    // A first-seen pin of the newcomer's very keys (no words compared): let in over it as over a
+    // verified one (design 3.2, the worker since #231), as a plain member.
     let seen = VerifiedPin { fingerprint: String::new(), ..pin_of(&f.p[3]) };
     let first_seen = f.ledger_of(1, [(f.p[3].user_id.clone(), seen)].into(), true, true);
-    assert_eq!(message(f.admit(&first_seen, 4, vec![])), "These are not the keys whose words were checked.");
+    assert!(matches!(f.admit(&first_seen, 4, vec![]).unwrap(), RosterCall::Staged { .. }));
+    // A first-seen pin filed for them over someone else's keys still admits nobody.
+    let other_seen =
+        VerifiedPin { user_id: f.p[3].user_id.clone(), fingerprint: String::new(), ..pin_of(&f.p[4]) };
+    let other_first_seen = f.ledger_of(1, [(f.p[3].user_id.clone(), other_seen)].into(), true, true);
+    assert_eq!(
+        message(f.admit(&other_first_seen, 4, vec![])),
+        "These are not the keys whose words were checked."
+    );
     // A live folder not opened here: answered before anything is signed.
     assert_eq!(f.admit(&f.ledger(true, false), 4, vec![]).unwrap(), RosterCall::OpenFoldersFirst);
     // Settings that file a pin under another person are refused outright.

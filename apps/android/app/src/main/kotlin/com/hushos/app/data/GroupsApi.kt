@@ -119,17 +119,46 @@ data class GroupSummary(val id: String, val kind: String, val name: String, val 
     }
 }
 
-/* Route 3: the family's members as the server names them (rosters carry no names). */
-data class GroupDetail(val members: List<Member>) {
+/*
+ * Route 3: the family's members as the server names them (rosters carry no names), and the head's revision a roster call
+ * is built against (0 when the server sent none).
+ */
+data class GroupDetail(val members: List<Member>, val revision: Long? = null, val headVersion: Long? = null) {
     data class Member(val userId: String, val name: String, val email: String?, val state: String, val roles: List<String>)
 
     companion object {
         fun from(json: JSONObject) = GroupDetail(json.getJSONArray("members").objects().map {
             Member(it.getString("userId"), it.optString("name"), if (it.isNull("email")) null else it.optString("email").ifEmpty { null },
                 it.getString("state"), it.optJSONArray("roles").strings())
-        })
+        }, json.optJSONObject("head")?.takeIf { it.has("revision") }?.getLong("revision"), json.optJSONObject("head")?.takeIf { it.has("version") }?.getLong("version"))
     }
 }
+
+/* Route 16's row: someone who accepted an invitation, waiting to be let in, with their identity as HushOS serves it now. */
+data class PendingPerson(val userId: String, val name: String, val email: String, val identity: com.hushos.core.PublicIdentity?, val inFamily: Boolean) {
+    companion object {
+        fun from(json: JSONObject) = PendingPerson(json.getString("userId"), json.optString("name"), json.optString("email"),
+            // None served is none; one served that doesn't read whole throws (the list fails, never a person without keys).
+            json.optJSONObject("identity")?.let {
+                com.hushos.core.PublicIdentity(it.getLong("keyVersion").toULong(), it.getString("encryptionPublicKey"), it.getString("signingPublicKey"),
+                    it.getString("mlDsaPublicKey"), it.getString("kemPublicKey"), it.getString("keysSignature"))
+            }, json.optBoolean("inFamily"))
+    }
+}
+
+/* Route 12's row: an invitation still open. */
+data class OpenInvitation(val id: String, val email: String?, val invitedBy: String?, val expiresAt: String) {
+    companion object {
+        fun from(json: JSONObject) = OpenInvitation(json.getString("id"), json.optString("email").ifEmpty { null },
+            json.optString("invitedBy").ifEmpty { null }, json.optString("expiresAt"))
+    }
+}
+
+/*
+ * A roster call's answer as the outbox reads it (the core's outbox_step): the status (0 for no answer at all), the
+ * refusal's code and its data, and the server's sentence.
+ */
+data class CallAnswer(val status: Int, val code: String?, val data: JSONObject?, val message: String?)
 
 /* Route 5's page. */
 class RosterPage(val rosters: List<SignedGroupStatement>, val successions: List<SignedGroupStatement>, val firstKeys: GroupPublicKey,
@@ -294,6 +323,81 @@ class GroupsApi(private val session: Shared.Session) {
     fun leave(groupId: String, endsLapsed: List<String> = emptyList()): Boolean =
         call("/groups/${id(groupId)}/leave", "POST", JSONObject().put("endsLapsed", JSONArray(endsLapsed))).optBoolean("dissolved")
 
+    /* 8: the family's current group key, sealed to this account by a holder. */
+    fun keySeal(groupId: String): com.hushos.core.ServedKeySeal = call("/groups/${id(groupId)}/key-seal").let {
+        com.hushos.core.ServedKeySeal(it.getLong("groupKeyVersion").toULong(), it.getLong("holderKeyVersion").toULong(), it.getString("sealerUserId"),
+            it.getLong("rosterVersion").toULong(), it.getString("rosterDigest"), base64urlDecode(it.getString("envelope")))
+    }
+
+    /* 11: an invitation by email; roles none (a role is given once they're in). */
+    fun invite(groupId: String, email: String) {
+        call("/groups/${id(groupId)}/invitations", "POST", JSONObject().put("email", email).put("roles", JSONArray()))
+    }
+
+    /* 12 */
+    fun invitations(groupId: String): List<OpenInvitation> =
+        call("/groups/${id(groupId)}/invitations").getJSONArray("invitations").whole().map(OpenInvitation::from)
+
+    /* 13 */
+    fun revokeInvitation(groupId: String, invitationId: String) {
+        if (!FamilyRecords.valid(invitationId.lowercase())) throw GroupsApiError(410, "gone", "This invitation is no longer open.")
+        call("/groups/${id(groupId)}/invitations/${invitationId.lowercase()}", "DELETE", JSONObject())
+    }
+
+    /* 16 */
+    fun pending(groupId: String): List<PendingPerson> =
+        call("/groups/${id(groupId)}/pending").getJSONArray("pending").whole().map(PendingPerson::from).filter { FamilyRecords.valid(it.userId.lowercase()) }
+
+    /* 26: Not now on someone waiting. */
+    fun decline(groupId: String, userId: String) {
+        call("/groups/${id(groupId)}/members/${id(userId.lowercase())}/decline", "POST", JSONObject())
+    }
+
+    /*
+     * A roster call sent as it was signed, byte for byte (17, admit; 18, member), answered for the outbox: never thrown
+     * for a refusal or no answer (the outbox decides), only for a lost session.
+     */
+    fun sendCall(groupId: String, route: com.hushos.core.ChainRoute, body: String): CallAnswer {
+        val path = when (route) {
+            is com.hushos.core.ChainRoute.Admit -> "/groups/${id(groupId)}/members/${id(route.userId.lowercase())}/admit" to "POST"
+            is com.hushos.core.ChainRoute.Member -> "/groups/${id(groupId)}/members/${id(route.userId.lowercase())}" to "PATCH"
+            else -> return CallAnswer(400, "unsupported", null, "Update HushOS to do this.")
+        }
+        return raw(path.first, path.second, body)
+    }
+
+    /* 22: grants a call met as `grants-due`, one folder's at a time, as the core sealed them. */
+    fun postGrants(groupId: String, workspaceId: String, body: String): CallAnswer {
+        if (!FamilyRecords.valid(workspaceId.lowercase())) return CallAnswer(400, "invalid", null, "Please try again.")
+        return raw("/groups/${id(groupId)}/areas/${workspaceId.lowercase()}/grants", "POST", body)
+    }
+
+    private fun raw(path: String, method: String, body: String): CallAnswer {
+        val status: Int
+        val text: String
+        try {
+            val connection = URL(session.origin + "/api" + path).openConnection() as HttpURLConnection
+            // Android's HttpURLConnection takes PATCH (DriveApi.updateLink sends one too).
+            connection.requestMethod = method
+            connection.setRequestProperty("Cookie", cookie)
+            connection.setRequestProperty("Origin", session.origin)
+            connection.setRequestProperty("HushOS-Client", CLIENT_HEADER)
+            connection.connectTimeout = 30_000
+            connection.readTimeout = 60_000
+            connection.doOutput = true
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.outputStream.use { it.write(body.toByteArray()) }
+            status = connection.responseCode
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            text = stream?.bufferedReader()?.use { it.readText() } ?: ""
+        } catch (_: java.io.IOException) {
+            return CallAnswer(0, null, null, GroupsApiError.NO_ANSWER)
+        }
+        if (status == 401) throw NotAuthenticated()
+        val json = runCatching { JSONObject(text) }.getOrNull()
+        return CallAnswer(status, json?.optString("code")?.ifEmpty { null }, json?.optJSONObject("data"), json?.optString("message")?.ifEmpty { null })
+    }
+
     /* 23: this account's self-grant of a family folder's current key, as the ledger wrapped it. */
     fun putSelfGrant(groupId: String, workspaceId: String, grant: WorkspaceGrant) {
         if (!FamilyRecords.valid(workspaceId)) throw GroupsApiError(400, "invalid", "Please try again.")
@@ -303,6 +407,8 @@ class GroupsApi(private val session: Shared.Session) {
     }
 }
 
+/* Every row an object: a list that doesn't read whole throws, never read as shorter. */
+private fun JSONArray.whole(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
 private fun JSONArray?.objects(): List<JSONObject> = this?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) } }.orEmpty()
 
 private fun JSONArray?.strings(): List<String> = this?.let { a -> (0 until a.length()).mapNotNull { a.optString(it).ifEmpty { null } } }.orEmpty()
