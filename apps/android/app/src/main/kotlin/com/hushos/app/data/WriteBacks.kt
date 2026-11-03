@@ -88,7 +88,9 @@ object WriteBacks {
     private fun current(dir: File, slot: String): Pending? {
         if (!dir.isDirectory) return null
         // A save a cancel took is never pending again, whatever is left of it on disk.
-        val through = cancelledThrough(dir)
+        // A save at or below the slot's durable bounds (the newest landed, a cancel's) is never pending again, whatever is
+        // left of it on disk.
+        val through = numbersOf(dir, slot).let { maxOf(it.landed, it.cancelled) }
         val published = read(File(dir, RECORD), slot)?.takeIf { File(dir, it.id + BIN).isFile && it.generation > through }
         val newest = dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty()
             .mapNotNull { read(it, slot) }.filter { File(dir, it.id + BIN).isFile && it.generation > through }.maxByOrNull { it.generation }
@@ -178,7 +180,7 @@ object WriteBacks {
                 check(incoming.renameTo(file)) { "The save couldn't be kept." }
             }
             val numbers = readNumbers(context, slot)
-            if (number <= maxOf(current(dir, slot)?.generation ?: 0L, numbers.landed, numbers.cancelled, cancelledThrough(dir))) throw Superseded()
+            if (number <= maxOf(current(dir, slot)?.generation ?: 0L, numbers.landed, numbers.cancelled)) throw Superseded()
             val id = java.util.UUID.randomUUID().toString()
             val contents = File(dir, "$id$BIN.incoming")
             fault?.invoke("copy")
@@ -274,8 +276,13 @@ object WriteBacks {
 
     private fun numbersFile(context: Context, slot: String) = File(context.filesDir, "$NUMBERS/$slot")
 
-    private fun readNumbers(context: Context, slot: String): Numbers = runCatching {
-        val parts = numbersFile(context, slot).readText().trim().split(" ")
+    private fun readNumbers(context: Context, slot: String): Numbers = readNumbersAt(numbersFile(context, slot))
+
+    /* The numbers of the slot whose folder is `dir` (queue/<slot> under filesDir): the one place the durable bounds are read. */
+    private fun numbersOf(dir: File, slot: String): Numbers = readNumbersAt(File(dir.parentFile?.parentFile, "$NUMBERS/$slot"))
+
+    private fun readNumbersAt(file: File): Numbers = runCatching {
+        val parts = file.readText().trim().split(" ")
         Numbers(parts[0].toLong(), parts[1].toLong(), parts.getOrNull(2)?.toLong() ?: 0L)
     }.getOrDefault(Numbers(0L, 0L))
 
@@ -297,7 +304,7 @@ object WriteBacks {
         // counter that couldn't be written, and a restart, never give a number again.
         val onDisk = runCatching {
             val dir = dir(context, slot)
-            maxOf(held.reserved, held.landed, held.cancelled, read(File(dir, RECORD), slot)?.generation ?: 0L, cancelledThrough(dir),
+            maxOf(held.reserved, held.landed, held.cancelled, read(File(dir, RECORD), slot)?.generation ?: 0L,
                 dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty().mapNotNull { read(it, slot)?.generation }.maxOrNull() ?: 0L,
                 closedEditsOf(context, slot).maxOfOrNull { it.first } ?: 0L,
                 runCatching { FailedTransfers.of(context).all() }.getOrDefault(emptyList())
@@ -315,11 +322,13 @@ object WriteBacks {
      * A copy in `dest`; false when there is neither.
      */
     fun copyNewestTo(context: Context, slot: String, dest: File): Boolean {
-        // The closed edits on disk, row or not (a row that couldn't be written leaves only the edit), and any row's edit.
+        // The closed edits on disk, row or not (a row that couldn't be written leaves only the edit), and any row's edit; never
+        // one at or below the newest landed save or a cancel's bound (a newer save stands, or the save was cancelled).
+        val settled = readNumbers(context, slot).let { maxOf(it.landed, it.cancelled) }
         val staged = (closedEditsOf(context, slot) + runCatching { FailedTransfers.of(context).all() }.getOrDefault(emptyList())
             .filter { it.slot == slot && it.stage != null }
             .mapNotNull { row -> stagedNumber(row.stage!!)?.let { it to File(row.file ?: return@mapNotNull null) } })
-            .filter { it.second.isFile }.maxByOrNull { it.first }
+            .filter { it.first > settled && it.second.isFile }.maxByOrNull { it.first }
         return lockOf(slot).withLock {
             val dir = dir(context, slot)
             val pending = current(dir, slot)
@@ -368,8 +377,10 @@ object WriteBacks {
      */
     fun landed(context: Context, slot: String, id: String, version: String? = null, readCopy: File? = null, generation: Long = 0L): Pending? = lockOf(slot).withLock {
         val dir = dir(context, slot)
-        // The newest number landed, kept past the slot: a save numbered at or below it (a staging retry) is never kept again.
+        // The newest number landed, kept past the slot: a save numbered at or below it (a staging retry) is never kept again,
+        // and every one that never made it into the slot goes now, found on disk (a closed edit no row names included).
         readNumbers(context, slot).let { held -> if (generation > held.landed) runCatching { writeNumbers(context, slot, held.copy(landed = generation)) } }
+        if (generation > 0L) retireStagedThrough(context, slot, generation)
         // What a read of the file is served from now on until it has caught up with the server (`landing`): the landed
         // bytes, moved from the copy that was sent to the read copy of the version they became, when that is known.
         val sending = File(dir, "sending-$id")
@@ -431,6 +442,21 @@ object WriteBacks {
         if (current(dir, slot) == null) dir.deleteRecursively()
     }
 
+    /*
+     * A staging row's save `number` dismissed: whatever of it reached the slot (a generation written whose record couldn't be
+     * published) goes too, under the slot's lock, so no later look publishes it; any other save is untouched.
+     */
+    fun dismissSave(context: Context, slot: String, number: Long) = lockOf(slot).withLock {
+        val dir = dir(context, slot)
+        if (!dir.isDirectory) return@withLock
+        dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty().mapNotNull { read(it, slot) }.filter { it.generation == number }.forEach {
+            File(dir, it.id + BIN).delete()
+            File(dir, it.id + META).delete()
+        }
+        if (read(File(dir, RECORD), slot)?.generation == number) File(dir, RECORD).delete()
+        current(dir, slot)
+    }
+
     /* The slot's saves dropped (its family ended): under its lock, so a save landing in it meanwhile is either kept whole or gone. */
     fun drop(context: Context, slot: String) = lockOf(slot).withLock { dir(context, slot).deleteRecursively() }
 
@@ -463,13 +489,12 @@ object WriteBacks {
         if (cancelled == null || !dir.isDirectory || runCatching { File(dir, INCARNATION).readText() }.getOrNull() != cancelled.incarnation)
             return@withLock current(dir, slot)
         val through = cancelled.generation
-        // Kept past the slot (with its numbers), so it outlives the slot's deletion and no later save at or below it is kept;
-        // and every save at or below it that never made it into the slot (a staging row's edit, a closed edit) goes too.
-        readNumbers(context, slot).let { held -> if (through > held.cancelled) runCatching { writeNumbers(context, slot, held.copy(cancelled = through)) } }
+        // The bound first, kept past the slot (with its numbers): from here no look takes a save at or below it as pending, a
+        // job already sending one stops before landing it, and no later save at or below it is kept. Not kept: no cancel.
+        readNumbers(context, slot).let { held -> if (through > held.cancelled) writeNumbers(context, slot, held.copy(cancelled = through)) }
+        fault?.invoke("cancel")
+        // Every save at or below it that never made it into the slot (a staging row's edit, a closed edit) goes too.
         retireStagedThrough(context, slot, through)
-        // Every save up to it cancelled, kept on the slot: a job already sending one of them stops before landing it.
-        val marker = File(dir, "$CANCELLED.incoming").apply { writeText(maxOf(through, cancelledThrough(dir)).toString()) }
-        check(marker.renameTo(File(dir, CANCELLED))) { "The cancel couldn't be kept." }
         dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty().mapNotNull { read(it, slot) }.filter { it.generation <= through }.forEach {
             File(dir, it.id + BIN).delete()
             File(dir, it.id + META).delete()
@@ -483,9 +508,6 @@ object WriteBacks {
         left
     }
 
-    private const val CANCELLED = "cancelled-through"
-
-    private fun cancelledThrough(dir: File): Long = runCatching { File(dir, CANCELLED).readText().trim().toLong() }.getOrDefault(0L)
 
     /*
      * Every save of `slot` numbered at or below `through` that never made it into the slot (its staging row and edit, or a
@@ -510,7 +532,7 @@ object WriteBacks {
      * (the marker and the numbers each change by one rename), since a sending job asks at every step of its upload.
      */
     fun isCancelled(context: Context, slot: String, generation: Long): Boolean =
-        generation <= maxOf(cancelledThrough(dir(context, slot)), readNumbers(context, slot).cancelled)
+        generation <= readNumbers(context, slot).cancelled
 
     /*
      * The file's folder told that its listing changed (a save kept, cancelled or dismissed): its children's URI by the
