@@ -1445,6 +1445,75 @@ class FilesSaveOrderTest {
     }
 
     /*
+     * On a full disk, a save can't be kept and its row can't be written: only its closed edit holds it. The next open of the
+     * file, to read or to keep the contents, starts from that edit, not the older contents. Fails if a reopen looks only at
+     * rows and the slot (a later edit then writes over the save).
+     */
+    @Test
+    fun aReopenStartsFromAClosedEditNoRowNames() {
+        val provider = provider()
+        val notes = notes(provider)
+        WriteBacks.fault = { at -> if (at == "copy") throw java.io.IOException("No space left on device") }
+        FailedTransfers.beforeWrite = { throw java.io.IOException("No space left on device") }
+        save(provider, notes, "only in its closed edit")
+        WriteBacks.fault = null
+        FailedTransfers.beforeWrite = null
+        assertTrue(FailedTransfers.of(app).all().isEmpty())
+        assertEquals("only in its closed edit", opened(provider, notes, "r"))
+        assertEquals("only in its closed edit", provider.personalEdit(vaultOf(provider), notes, "rw").readText())
+    }
+
+    /*
+     * On a full disk the file's save counter can't be written either: two saves are numbered in memory and kept only as
+     * closed edits. After a restart (the numbers given in memory forgotten), the next save is numbered above both (read
+     * from their names), so it is the newest: kept, and never replaced by the older ones once they get their rows. Fails if
+     * a restart can give a number a closed edit already has.
+     */
+    @Test
+    fun aRestartNeverGivesANumberAClosedEditHas() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.fault = { at -> if (at == "copy" || at == "numbers") throw java.io.IOException("No space left on device") }
+        FailedTransfers.beforeWrite = { throw java.io.IOException("No space left on device") }
+        save(provider, notes, "first, on a full disk")
+        save(provider, notes, "second, on a full disk")
+        WriteBacks.fault = null
+        FailedTransfers.beforeWrite = null
+        WriteBacks.forgetReservedHere()
+        save(provider, notes, "after the restart")
+        assertTrue(WriteBacks.pending(app, slot)!!.generation > 2)
+        TransferQueue.reconcileEdits(app, startup = true)
+        FailedTransfers.of(app).all().forEach { TransferQueue.retry(app, it) }
+        assertEquals("after the restart", WriteBacks.contentOf(app, slot).readText())
+        assertEquals("after the restart", opened(provider, notes, "r"))
+    }
+
+    /*
+     * A close whose rename can't be made (the edit keeps its own name) and whose save can't be kept either: its row names
+     * the edit as it is. More than a day later, at a start of the process, the edit isn't taken for an abandoned open: it is
+     * still there and its Retry sends it. Fails if the abandoned-edit cleanup deletes an edit a row names.
+     */
+    @Test
+    fun anEditARowNamesIsNeverTakenForAnAbandonedOpen() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.fault = { at -> if (at == "close" || at == "copy") throw java.io.IOException("No space left on device") }
+        save(provider, notes, "kept under its own name")
+        WriteBacks.fault = null
+        val row = FailedTransfers.of(app).all().single()
+        assertFalse(row.file!!.endsWith(".closed"))
+        val twoDaysAgo = System.currentTimeMillis() - 2 * 86_400_000L
+        File(app.filesDir, WriteBacks.EDITS).walkTopDown().forEach { it.setLastModified(twoDaysAgo) }
+        TransferQueue.reconcileEdits(app, startup = true)
+        assertEquals("kept under its own name", File(row.file!!).readText())
+        assertTrue(TransferQueue.retry(app, row))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("kept under its own name", serverText(notes))
+    }
+
+    /*
      * A save kept while its file's running job is about to fail for good, after the job's last look at the slot: the
      * save's own job is untouched by that failure (WorkManager runs both here, on a thread of its own) and lands it, with
      * no transfers panel and no sweep. Fails if a newer save's job is chained behind a running one, which WorkManager
