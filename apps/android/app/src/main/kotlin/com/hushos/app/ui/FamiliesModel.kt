@@ -32,6 +32,9 @@ import com.hushos.app.data.invite
 import com.hushos.app.data.dropKeptAdmission
 import com.hushos.app.data.walkTarget
 import com.hushos.app.data.rethrowIfCancelled
+import com.hushos.app.data.changeRole
+import com.hushos.app.data.handOver
+import com.hushos.app.data.finishHandingOver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.StateFlow
@@ -142,6 +145,18 @@ interface FamilyHost {
 /* The address typed is the model's, never the screen's saved state: it goes with the session (reset), never into a bundle. */
 data class InviteAsk(val groupId: String, val busy: Boolean = false, val error: String? = null, val email: String = "")
 
+/*
+ * Which check of a member opens, from a row or from Check it's {first} first (6.10): their own twelve words when their
+ * account changed, or after a family check over keys that changed since; otherwise the family check. True for their own.
+ */
+fun personalCheck(userId: String, standing: com.hushos.app.data.MemberStanding?, checkedWith: String?): Boolean =
+    standing == com.hushos.app.data.MemberStanding.CHANGED ||
+        (checkedWith?.equals(userId, ignoreCase = true) == true && standing != com.hushos.app.data.MemberStanding.VERIFIED)
+
+/* A role change asked for on a member's row (the web's RoleChange): letting them manage, stopping it, or the handover. */
+enum class RoleKind { MANAGE, STOP, ORGANIZER, FINISH }
+data class RoleAsk(val groupId: String, val member: com.hushos.app.data.FamilyMemberRef, val kind: RoleKind)
+
 /* One waiting person's row: Let them in or Not now under way, its words, and an earlier Let them in kept for other keys. */
 data class WaitingRow(val busy: String? = null, val error: String? = null, val keptOther: Boolean = false)
 
@@ -224,13 +239,38 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         val summary = list?.firstOrNull { it.id == groupId } ?: return
         if (!manages(groupId)) return
         val known = waiting[groupId].orEmpty()
-        val names = { userId: String -> known.firstOrNull { it.userId.equals(userId, ignoreCase = true) }?.let { com.hushos.app.data.firstNameOf(it.name) } }
-        // Each refusal is all that's left of its call: said as the outbox hands it over, before its entry is deleted
-        // (so a later entry that throws can't take it along), until read, one after another.
-        val told = { end: com.hushos.app.data.CallEnd ->
-            if (end is com.hushos.app.data.CallEnd.Refused && gate.current(s)) model.notice(end.words, untilRead = true)
+        val members = details[groupId]?.members.orEmpty()
+        val names = { userId: String ->
+            (known.firstOrNull { it.userId.equals(userId, ignoreCase = true) }?.name ?: members.firstOrNull { it.userId.equals(userId, ignoreCase = true) }?.name)
+                ?.let { com.hushos.app.data.firstNameOf(it) }
         }
-        val resumed = gate.run(s) { s.owner.families.resumeOutbox(summary, names, told) } ?: return
+        // Each refusal is all that's left of its call: said as the outbox hands it over, before its entry is deleted
+        // (so a later entry that throws can't take it along), until read, one after another. A call another manager's
+        // change overtook is said too: nothing of it was made, so the person makes it again.
+        val told = { route: com.hushos.core.ChainRoute?, end: com.hushos.app.data.CallEnd ->
+            if (gate.current(s)) when {
+                end is com.hushos.app.data.CallEnd.Refused -> model.notice(end.words, untilRead = true)
+                end == com.hushos.app.data.CallEnd.Stale && route is com.hushos.core.ChainRoute.Admit ->
+                    model.notice("An earlier admission of ${names(route.userId) ?: "someone waiting to join"} wasn’t sent; let them in again.", untilRead = true)
+                end == com.hushos.app.data.CallEnd.Stale && route is com.hushos.core.ChainRoute.Member ->
+                    model.notice("${summary.name} changed while you were working on it. Try again.", untilRead = true)
+            }
+        }
+        // A handover the app stopped in the middle of, finished: said as the web's Make them the organizer says it, and the
+        // family read again so its page shows who the organizer is now.
+        // Any handover outcome (landed, refused, a check asked for) may have changed who holds billing part way.
+        var handedOver = false
+        val handed = { to: String, end: com.hushos.app.data.RoleEnd ->
+            val who = names(to) ?: "They"
+            handedOver = true
+            if (gate.current(s)) when (end) {
+                com.hushos.app.data.RoleEnd.Landed -> model.notice("$who is the organizer", untilRead = false)
+                is com.hushos.app.data.RoleEnd.Refused -> model.notice("Couldn’t change that. ${end.words}", untilRead = true)
+                com.hushos.app.data.RoleEnd.CheckFirst -> model.notice("Couldn’t change that. ${com.hushos.app.data.CHECK_MANAGER_FIRST}", untilRead = true)
+                else -> {}
+            }
+        }
+        val resumed = gate.run(s) { s.owner.families.resumeOutbox(summary, names, told, handed) } ?: return
         if (!gate.current(s)) return
         // One that landed shows the family as it is now. A removal is published by the sync (removedNow) and shown from
         // there; no answer stays kept and says nothing. A failure part way says why; what came before it was said already.
@@ -238,10 +278,12 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             error.rethrowIfCancelled()
             if (error is NotAuthenticated) { model.lostSession(); return }
             if (!FamilySync.unanswered(error)) model.notice(FamilyWords.error(error), untilRead = false)
+            // Failed part way: what landed before the failure (a handover's billing) shows only once the family is read.
+            handedOver = true
             emptyMap()
         }
         if (ends.values.any { it == com.hushos.app.data.CallEnd.Wiped }) return
-        if (ends.values.any { it == com.hushos.app.data.CallEnd.Landed || it == com.hushos.app.data.CallEnd.Stale }) refreshFamily(summary, session = s)
+        if (handedOver || ends.values.any { it == com.hushos.app.data.CallEnd.Landed || it == com.hushos.app.data.CallEnd.Stale }) refreshFamily(summary, session = s)
         reloadManaged(groupId, s)
     }
 
@@ -322,6 +364,90 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                 is com.hushos.app.data.LetIn.Changed -> model.accountChangedFor(outcome.change)
                 com.hushos.app.data.LetIn.KeptOther -> waitingRows[key] = WaitingRow(keptOther = true)
                 com.hushos.app.data.LetIn.Wiped -> refreshFamilies(force = true, session = s)
+            }
+        }
+    }
+
+    /* A role change confirming, the check its manager rule asks for first, and the row whose change is under way. */
+    var roleAsk by mutableStateOf<RoleAsk?>(null)
+        private set
+    var checkFirst by mutableStateOf<RoleAsk?>(null)
+        private set
+    var roleBusy by mutableStateOf<String?>(null)
+        private set
+
+    /*
+     * A role change from a member's row: Let them manage the family waits for a check of their words first when this
+     * phone hasn't verified them (the manager rule, 3.6; the core refuses it anyway); everything else is confirmed.
+     */
+    fun askRole(ask: RoleAsk, verified: Boolean) {
+        if (roleBusy != null) return
+        // Both promotions wait for a check (the web's needsCheckFor): managing holds the family's key, and the organizer
+        // runs its plan. The data layer reads their standing again before anything is signed.
+        if ((ask.kind == RoleKind.MANAGE || ask.kind == RoleKind.ORGANIZER) && !verified) checkFirst = ask else roleAsk = ask
+    }
+
+    fun dismissRole() { roleAsk = null }
+
+    /* Finish handing over to {first} (a handover whose last step didn't land): the step the person already asked for. */
+    fun finishHandingOver(groupId: String, member: com.hushos.app.data.FamilyMemberRef) {
+        if (roleBusy != null) return
+        roleAsk = RoleAsk(groupId, member, RoleKind.FINISH)
+        confirmRole()
+    }
+
+    /* A member's first name as route 3 or route 16 last named them, for a sentence about them. */
+    private fun memberName(userId: String): String? =
+        (details.values.flatMap { it.members }.firstOrNull { it.userId.equals(userId, ignoreCase = true) }?.name
+            ?: waiting.values.flatten().firstOrNull { it.userId.equals(userId, ignoreCase = true) }?.name)?.let { com.hushos.app.data.firstNameOf(it) }
+    fun dismissCheckFirst() { checkFirst = null }
+
+    /* The confirmed change, in the families' scope: said once it lands, kept here when no answer came. */
+    fun confirmRole() {
+        val ask = roleAsk ?: return
+        roleAsk = null
+        val summary = list?.firstOrNull { it.id == ask.groupId } ?: return
+        val s = begin() ?: return
+        supersedeLoads(ask.groupId)
+        val who = com.hushos.app.data.firstNameOf(ask.member.name)
+        roleBusy = rowKey(ask.groupId, ask.member.userId)
+        model.familyScope.launch {
+            val result = gate.run(s) {
+                val sync = s.owner.families
+                when (ask.kind) {
+                    RoleKind.MANAGE -> sync.changeRole(summary, ask.member.userId, who, com.hushos.core.MembersRole.GRANT)
+                    RoleKind.STOP -> sync.changeRole(summary, ask.member.userId, who, com.hushos.core.MembersRole.TAKE)
+                    RoleKind.ORGANIZER -> sync.handOver(summary, ask.member.userId, who, ::memberName)
+                    RoleKind.FINISH -> sync.finishHandingOver(summary, ask.member.userId, who, ::memberName)
+                }
+            }
+            // An ended session's answer touches nothing: the next session's own change may be under way.
+            if (result == null || !gate.current(s)) return@launch
+            roleBusy = null
+            val outcome = result.getOrElse { error ->
+                error.rethrowIfCancelled()
+                if (error is NotAuthenticated) { model.lostSession(); return@launch }
+                model.notice("Couldn’t change that. ${FamilyWords.error(error)}", untilRead = false)
+                // Part of it may have landed (billing given before the step down failed): the page shows the family as it is.
+                refreshFamily(summary, session = s)
+                return@launch
+            }
+            // Anything short of a landing may have changed the family part way (a handover's billing given, its last step
+            // refused or kept): read again, so Finish handing over shows at once.
+            if (outcome is com.hushos.app.data.RoleEnd.Refused || outcome is com.hushos.app.data.RoleEnd.Pending) refreshFamily(summary, session = s)
+            when (outcome) {
+                com.hushos.app.data.RoleEnd.Landed -> {
+                    model.notice(when (ask.kind) {
+                        RoleKind.MANAGE -> "$who can manage the family"
+                        RoleKind.STOP -> "$who no longer manages the family"
+                        RoleKind.ORGANIZER, RoleKind.FINISH -> "$who is the organizer"
+                    }, untilRead = false)
+                    refreshFamily(summary, session = s)
+                }
+                is com.hushos.app.data.RoleEnd.Pending -> model.notice("Saved on this device. ${outcome.reason}", untilRead = false)
+                is com.hushos.app.data.RoleEnd.Refused -> model.notice("Couldn’t change that. ${outcome.words}", untilRead = false)
+                com.hushos.app.data.RoleEnd.CheckFirst -> checkFirst = ask
+                com.hushos.app.data.RoleEnd.Wiped -> refreshFamilies(force = true, session = s)
             }
         }
     }
@@ -945,6 +1071,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         checkedAt.clear(); joining.clear(); syncedAt = 0L; folders = FamilyFolders(); held = null; heldStack = emptyMap(); shownRevision.clear()
         walks.clear(); walking.clear(); walkEnded.clear(); leaving = null; leftFamily = null
         waiting.clear(); invitations.clear(); managedErrors.clear(); managedLoads.clear(); waitingRows.clear(); inviting = null; turningDown = null; cancelling = null
+        roleAsk = null; checkFirst = null; roleBusy = null
     }
 
     /*

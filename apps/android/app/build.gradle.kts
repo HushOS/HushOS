@@ -177,4 +177,7 @@ val hostCore = tasks.register<Exec>("hostCore") {
 tasks.withType<Test>().configureEach {
     dependsOn(hostCore)
     systemProperty("jna.library.path", File(repoRoot, "target/release").path)
+    // The JVM's HttpURLConnection has no PATCH (Android's has): FamilyFixture.allowPatch adds it to the test JVM only,
+    // so route 18's role changes run in unit tests as on a phone.
+    jvmArgs("--add-opens=java.base/java.net=ALL-UNNAMED")
 }

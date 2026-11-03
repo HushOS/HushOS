@@ -68,6 +68,7 @@ class FamilyManageModelTest {
 
     @Before
     fun signIn() {
+        FamilyFixture.allowPatch()
         FamilyFixture.signIn(server, "family-manage-model-test")
         family = FamilyFixture(server)
         family.storePin(family.pin(family.mayaManages()))
@@ -327,5 +328,59 @@ class FamilyManageModelTest {
         model.letIn(family.groupId, grace)
         until("Let them in finished") { model.waitingRow(family.groupId, grace.userId).busy == null && host.shown != null }
         assertEquals(listOf("Saved on this device. That’s been tried too often. Wait a little, then try again."), host.read())
+    }
+
+    /*
+     * Two kept calls: Grace's admission, which another manager's change then overtook, and Ada's, whose settings can't be
+     * read on the resume. The overtaken one is still said, before its entry goes, so the person lets Grace in again.
+     * Fails if an overtaken admission is dropped without a word, or its word is lost to a later call that throws.
+     */
+    @Test
+    fun anOvertakenAdmissionIsSaidEvenWhenALaterCallThrows() {
+        answers(3, 503)
+        assertTrue(host.vault.families.letIn(family.summary, grace) is LetIn.Pending)
+        val outbox = FamilyOutbox.of(RuntimeEnvironment.getApplication())
+        val graceEntry = outbox.list(family.member.id, family.groupId).single()
+        val ada = server.another("ada@example.org", "Ada Lovelace")
+        family.waiting(ada, "ada@example.org", "Ada Lovelace")
+        answers(3, 503)
+        assertTrue(host.vault.families.letIn(family.summary, family.pendingRows.map(PendingPerson::from).single { it.userId.equals(ada.id, ignoreCase = true) }) is LetIn.Pending)
+        val folder = File(File(RuntimeEnvironment.getApplication().noBackupFilesDir, com.hushos.app.data.FamilyRecords.FOLDER), "outbox")
+        folder.listFiles()!!.single { it.name.contains(graceEntry.outboxId) }.setLastModified(System.currentTimeMillis() - 60_000)
+        family.samChangesTheList()
+        // Grace's entry is read with the settings as they are; every read after it is refused.
+        server.onNextSettingsGet = { server.settingsReadAnswer = 400 to JSONObject().put("message", "Bad request.") }
+        runBlocking { model.loadManaged(family.groupId) }
+        server.settingsReadAnswer = null
+        assertTrue(host.read().contains("An earlier admission of Grace wasn’t sent; let them in again."))
+    }
+
+    /*
+     * Let them manage the family from a member's row: not verified on this phone, it asks for the check first and signs
+     * nothing; the core refuses it the same way when the screen thought otherwise; once Maya's words check of Grace is
+     * in, it lands and says so. Fails if a manager is made, or the role change sent, before a check.
+     */
+    @Test
+    fun managingTheFamilyAsksForACheckFirstThenSaysItLanded() {
+        assertEquals(LetIn.Landed, host.vault.families.letIn(family.summary, grace))
+        runBlocking { model.refreshFamilies(force = true) }
+        val ref = com.hushos.app.data.FamilyMemberRef(server.grace.id, "grace@example.org", "Grace Hopper")
+        val manage = RoleAsk(family.groupId, ref, RoleKind.MANAGE)
+        model.askRole(manage, verified = false)
+        assertEquals(manage, model.checkFirst)
+        assertEquals(null, model.roleAsk)
+        model.dismissCheckFirst()
+        // The screen thought them checked; the core's manager rule still asks.
+        model.askRole(manage, verified = true)
+        model.confirmRole()
+        until("the core asked for the check") { model.checkFirst == manage }
+        assertTrue(family.memberCalls.isEmpty())
+        model.dismissCheckFirst()
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        model.askRole(manage, verified = true)
+        model.confirmRole()
+        until("it landed") { model.roleBusy == null && host.shown != null }
+        assertEquals(listOf("Grace can manage the family"), host.read())
+        assertEquals(1, family.memberCalls.size)
     }
 }

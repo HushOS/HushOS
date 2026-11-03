@@ -623,6 +623,36 @@ fn granting_members_seals_the_current_key_to_them_and_nothing_else_changes() {
 }
 
 #[test]
+fn members_is_given_only_over_this_accounts_own_verified_pin_of_the_keys_their_entry_names() {
+    // The manager rule (docs/optional-verification.md 3.6), the worker's CHECK_MANAGER_FIRST twin.
+    let f = family();
+    let two = f.p[1].user_id.clone();
+    let with = |pin: Option<VerifiedPin>| {
+        let mut contacts = f.contacts();
+        match pin {
+            Some(pin) => contacts.insert(two.clone(), pin),
+            None => contacts.remove(&two),
+        };
+        f.ledger_of(1, contacts, true, true)
+    };
+    // No pin of them, a first-seen one (no words compared), one trusted via the family, and a
+    // verified pin filed for them over someone else's keys: none gives the role.
+    assert_eq!(message(f.roles(&with(None), 2, MembersRole::Grant)), CHECK_MANAGER_FIRST);
+    let seen = VerifiedPin { fingerprint: String::new(), ..pin_of(&f.p[1]) };
+    assert_eq!(message(f.roles(&with(Some(seen.clone())), 2, MembersRole::Grant)), CHECK_MANAGER_FIRST);
+    let via = VerifiedPin { trusted_via: Some(GROUP.into()), ..pin_of(&f.p[1]) };
+    assert_eq!(message(f.roles(&with(Some(via)), 2, MembersRole::Grant)), CHECK_MANAGER_FIRST);
+    let other = VerifiedPin { user_id: two.clone(), ..pin_of(&f.p[3]) };
+    assert_eq!(message(f.roles(&with(Some(other)), 2, MembersRole::Grant)), CHECK_MANAGER_FIRST);
+    // Their own words compared, over the keys their entry names: given.
+    assert!(staged(f.roles(&with(Some(pin_of(&f.p[1]))), 2, MembersRole::Grant)).is_ok());
+    // Taking it away, and billing, ask for no check: a first-seen pin is enough.
+    let first_seen = with(Some(seen));
+    assert!(staged(f.roles(&first_seen, 3, MembersRole::Take)).is_ok());
+    assert!(staged(f.handover(&first_seen, Handover::To { user_id: two })).is_ok());
+}
+
+#[test]
 fn taking_members_away_replaces_the_group_key_and_seals_it_only_to_those_who_keep_it() {
     let f = family();
     let ledger = f.ledger(true, true);

@@ -494,4 +494,119 @@ class FamilyManageTest {
             phone.sync.letIn(summary, grace))
         assertTrue(kept(phone).isEmpty())
     }
+
+    /*
+     * Let them in meets `stale` because another manager turned Grace down meanwhile (she left route 16, and no roster lets
+     * her in): refused as no longer waiting, never said to be in. Fails if leaving the waiting list is taken for a landing.
+     */
+    @Test
+    fun overtakenByATurnDownIsRefused() {
+        val phone = phone()
+        family.admitAnswers.add { _ ->
+            family.pendingRows.clear()
+            family.samChangesTheList()
+            409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
+        }
+        assertEquals(LetIn.Refused("Grace isn’t waiting to join any more."), phone.sync.letIn(summary, grace))
+        // Sam's change on top of the three rosters, and no admission.
+        assertEquals(4, family.chain.size)
+        assertTrue(kept(phone).isEmpty())
+    }
+
+    /*
+     * Let them in meets `stale` because Grace's admission landed first (another manager's, or this very one answered
+     * late): she is on the member list, so it is a landing. Fails if a stale answer over her own admission is refused.
+     */
+    @Test
+    fun overtakenByTheirOwnAdmissionLands() {
+        val phone = phone()
+        family.admitAnswers.add { body ->
+            family.apply(body, server.grace.id)
+            409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
+        }
+        assertEquals(LetIn.Landed, phone.sync.letIn(summary, grace))
+        assertEquals(4, family.chain.size)
+        assertTrue(family.pendingRows.isEmpty())
+    }
+
+    /*
+     * A Let them in kept unanswered, then Not now: the decline lands and the kept admission goes with it. Grace accepts a
+     * new invitation and waits again; the page's resume sends nothing for her. Fails if a turned-down person's kept
+     * admission can still let them in later.
+     */
+    @Test
+    fun turningSomeoneDownDropsTheirKeptAdmission() {
+        val phone = phone()
+        answer(3, 503)
+        assertTrue(phone.sync.letIn(summary, grace) is LetIn.Pending)
+        val sends = family.callBodies.size
+        val rosters = family.chain.size
+        phone.sync.turnDown(family.groupId, server.grace.id)
+        assertTrue(kept(phone).isEmpty())
+        // Waiting again, on a new invitation.
+        assertEquals(1, family.pendingRows.size)
+        assertTrue(phone.sync.resumeOutbox(summary).isEmpty())
+        assertEquals("nothing sent", sends, family.callBodies.size)
+        assertEquals("no one let in", rosters, family.chain.size)
+    }
+
+    private fun declines() = family.asked.count { it.startsWith("POST") && it.endsWith("/decline") }
+
+    /*
+     * Not now whose answer is lost (the server may have turned Grace down): the kept Let them in was dropped before the
+     * decline went, so when she waits again the resume sends nothing for her. Fails if the cleanup waits for a decline's
+     * answer that may never come.
+     */
+    @Test
+    fun aTurnDownWhoseAnswerIsLostLeavesNoAdmissionToReplay() {
+        val phone = phone()
+        answer(3, 503)
+        assertTrue(phone.sync.letIn(summary, grace) is LetIn.Pending)
+        val sends = family.callBodies.size
+        val rosters = family.chain.size
+        family.manageAnswer = 503 to JSONObject().put("message", "Drive is temporarily unavailable. Please try again.")
+        assertTrue(runCatching { phone.sync.turnDown(family.groupId, server.grace.id) }.isFailure)
+        family.manageAnswer = null
+        assertEquals(1, declines())
+        assertTrue(kept(phone).isEmpty())
+        assertTrue(phone.sync.resumeOutbox(summary).isEmpty())
+        assertEquals("nothing sent", sends, family.callBodies.size)
+        assertEquals("no one let in", rosters, family.chain.size)
+    }
+
+    /*
+     * Not now while the kept Let them in can't be deleted (the outbox can't be written): nothing is declined, so the kept
+     * call and Grace's waiting stay as they were, together. Fails if a decline goes out with an admission still kept.
+     */
+    @Test
+    fun aTurnDownWhoseCleanupFailsDeclinesNothing() {
+        val phone = phone()
+        answer(3, 503)
+        assertTrue(phone.sync.letIn(summary, grace) is LetIn.Pending)
+        assertTrue(outboxFolder.setWritable(false))
+        try {
+            assertTrue(runCatching { phone.sync.turnDown(family.groupId, server.grace.id) }.exceptionOrNull() is OutboxUnsaved)
+        } finally {
+            outboxFolder.setWritable(true)
+        }
+        assertEquals("no decline sent", 0, declines())
+        assertEquals(1, kept(phone).size)
+    }
+
+    /*
+     * Let them in meets `stale` because Grace's admission landed first, and the sync that would show her in fails: neither
+     * let in nor turned down is known, so it says the family couldn't be checked, never that she isn't waiting. Fails if a
+     * sync that didn't read is taken for her absence from the member list.
+     */
+    @Test
+    fun aStaleWhoseFollowUpSyncFailsIsAFailedCheck() {
+        val phone = phone()
+        family.admitAnswers.add { body ->
+            family.apply(body, server.grace.id)
+            family.rosterFailures = 2
+            409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
+        }
+        assertEquals(LetIn.Refused("Couldn’t check Lindqvist family. Try again."), phone.sync.letIn(summary, grace))
+        assertEquals(4, family.chain.size)
+    }
 }
