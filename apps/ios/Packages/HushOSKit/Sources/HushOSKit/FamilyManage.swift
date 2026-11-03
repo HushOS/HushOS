@@ -240,27 +240,33 @@ extension FamilySync {
      * Every call kept for the family, sent again (or let go of) in the family's turn: what each
      * came to, by outbox id. Stops at a removal. A store that can't be read throws. `handOver`
      * hears each call that is let go of, before its entry is deleted, so what it came to is said
-     * even when whoever asked has stopped waiting (a page left mid-resend).
+     * even when whoever asked has stopped waiting (a page left mid-resend): it runs inside the
+     * family's turn, so it must never wait on the family itself (a sync). `handed` hears what a
+     * handover the resume finished came to, after the turn is let go of: it may sync.
      */
     public func resumeOutbox(_ groupId: String, names: [String: String] = [:], handOver: (@Sendable (CallEnd, ChainRoute?) async -> Void)? = nil,
                              handed: (@Sendable (String, RoleEnd) async -> Void)? = nil) async throws -> [String: CallEnd] {
         let user = userId
-        return try await exclusive(groupId) {
+        let (out, settled) = try await exclusive(groupId) { () -> ([String: CallEnd], (String, RoleEnd)?) in
             var out: [String: CallEnd] = [:]
+            var settled: (String, RoleEnd)?
             do {
                 for kept in try self.records.outboxList(userId: user, groupId: groupId) {
                     let end = try await self.sendKept(groupId, outboxId: kept.outboxId, entry: kept.entry, only: nil, handOver: handOver)
                     out[kept.outboxId] = end
                     if end == .wiped { break }
                 }
-                // A handover the app stopped in the middle of is finished (`handed` told how, before its record goes).
-                if !out.values.contains(.wiped), let (to, end) = try await self.finishHandover(groupId, names: names) { await handed?(to, end) }
+                // A handover the app stopped in the middle of is finished.
+                if !out.values.contains(.wiped) { settled = try await self.finishHandover(groupId, names: names) }
             } catch let error as GroupsAPIError where error.isNotMember {
                 _ = await self.removedInTurn(groupId)
                 out["wiped"] = .wiped
             }
-            return out
+            return (out, settled)
         }
+        // Told once the family's turn is let go of: whoever hears it may sync the family (its own turn), which waited on this one for ever.
+        if let (to, end) = settled { await handed?(to, end) }
+        return out
     }
 
     /*
@@ -691,6 +697,41 @@ public struct NoticeQueue: Sendable, Equatable {
  * Each family's manager lists as loads numbered as they start: an answer of a load begun before
  * the last one started (a refresh answered after a cancel's own reload) is dropped.
  */
+/*
+ * Whose role change runs on the family page (one at a time), as the session's: a change begun
+ * before a reset (sign-out, another account, the same account's session adopted in place) never
+ * leaves the next session's menus disabled, and its late end never clears the next one's.
+ */
+public struct RoleChanges: Sendable, Equatable {
+    public struct Token: Sendable, Equatable {
+        let generation: UInt64
+        let member: String
+    }
+
+    public private(set) var busy: String?
+    private var generation: UInt64 = 0
+
+    public init() {}
+
+    /* The change of `member` begins; nil while another runs. */
+    public mutating func begin(_ member: String) -> Token? {
+        guard busy == nil else { return nil }
+        busy = member.lowercased()
+        return Token(generation: generation, member: member.lowercased())
+    }
+
+    /* The change `token` began ended: only its own session's, only its own. */
+    public mutating func end(_ token: Token) {
+        if token.generation == generation, busy == token.member { busy = nil }
+    }
+
+    /* The session ended or was replaced: nothing runs any more as far as the page goes. */
+    public mutating func reset() {
+        busy = nil
+        generation &+= 1
+    }
+}
+
 public struct ManagedLoads: Sendable, Equatable {
     private var latest: [String: UInt64] = [:]
     public init() {}

@@ -99,6 +99,10 @@ extension DriveStore {
         manageChange = nil
         manageNotices.clear()
         managedLoads.reset()
+        // A role change of the ended session neither keeps the menus disabled nor asks anything of the next one.
+        roleAsk = nil
+        checkFirstAsk = nil
+        roleChanges.reset()
         for groupId in familyStates.keys { familyGenerations.published(groupId) }
         familyRevisions = FamilyRevisions()
         familyList = nil
@@ -1103,7 +1107,7 @@ struct FamilyPage: View {
                         memberRow(member, you: false)
                     }
                     .accessibilityLabel("More for \(ref.name)")
-                    .disabled(store.roleBusy != nil)
+                    .disabled(store.roleChanges.busy != nil)
                     .alpineRow()
                 }
             }
@@ -1119,7 +1123,7 @@ struct FamilyPage: View {
                         store.finishHandingOver(groupId, member: FamilyMemberRef(userId: who.userId, email: who.email ?? "", name: who.name))
                     }
                     .buttonStyle(PrimaryCapsuleStyle())
-                    .disabled(store.roleBusy != nil)
+                    .disabled(store.roleChanges.busy != nil)
                 }
                 .padding(.vertical, Alpine.Space.s2)
                 .alpineRow()

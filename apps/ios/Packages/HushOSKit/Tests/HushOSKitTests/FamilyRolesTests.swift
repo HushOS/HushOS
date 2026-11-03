@@ -102,6 +102,47 @@ extension OnFakeDrive {
         }
 
         /*
+         * Codex #285, 1: a handover left half done (both hold billing, its record kept, nothing in the
+         * outbox) is finished by the next open, and whoever hears how it ended syncs the family right
+         * away, as the page does. That sync waits for the family's turn: it is told only once the
+         * resume let go of it, so the resume ends. Fails (times out) if `handed` is heard inside the
+         * family's turn, which the sync then waits on for ever.
+         */
+        @Test func aResumedHandoverIsToldOutsideTheFamilysTurn() async throws {
+            let m = try await Self.organizer()
+            defer { m.phone.done() }
+            try m.server.creatorSetsRoles([m.family.creator.userId.lowercased(): [.billing, .members]])
+            _ = await m.phone.sync.sync(m.summary)
+            try m.phone.records.markHandover(userId: m.me, groupId: m.family.groupId, to: m.family.creator.userId, staged: true)
+            let (sync, summary, groupId) = (m.phone.sync, m.summary, m.family.groupId)
+            let heard = HandedEnds()
+            // Not a task group: a child stuck on the family's turn can't be cancelled, and the group would wait on it.
+            let resume = await Self.quickly {
+                Task {
+                    let out = try await sync.resumeOutbox(groupId, handed: { _, end in
+                        // As the page does: the family read again at once.
+                        _ = await sync.sync(summary)
+                        await heard.add(end)
+                    })
+                    await heard.finish()
+                    return out
+                }
+            }
+            let deadline = ContinuousClock.now + .seconds(30)
+            while await !heard.finished, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(50)) }
+            guard await heard.finished else {
+                // Nothing below may touch the family: its turn is still held by the stuck resume.
+                resume.cancel()
+                Issue.record("the resume never ended: the family's sync waited on its turn")
+                return
+            }
+            _ = try await resume.value
+            #expect(await heard.ends == [.landed])
+            #expect(try await !Self.roles(m, m.me).contains("billing"))
+            #expect(try Self.handover(m) == nil)
+        }
+
+        /*
          * Billing moved to someone else meanwhile (another device): this account no longer holds it,
          * so it isn't this account's to give. Nothing is signed or sent. Fails if a former organizer
          * hands billing over.
@@ -179,4 +220,12 @@ extension OnFakeDrive {
             #expect(m.server.callBodies.count == calls, "a call was signed over a family that couldn't be read")
         }
     }
+}
+
+/* What a resume's `handed` heard, in order. */
+private actor HandedEnds {
+    var ends: [RoleEnd] = []
+    var finished = false
+    func add(_ end: RoleEnd) { ends.append(end) }
+    func finish() { finished = true }
 }

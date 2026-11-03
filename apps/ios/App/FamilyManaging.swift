@@ -137,13 +137,13 @@ extension DriveStore {
      * layer reads their standing again before anything is signed.
      */
     func askRole(_ ask: RoleAsk, verified: Bool) {
-        guard roleBusy == nil else { return }
+        guard roleChanges.busy == nil else { return }
         if (ask.kind == .manage || ask.kind == .organizer) && !verified { checkFirstAsk = ask } else { roleAsk = ask }
     }
 
     /* Finish handing over to {first}: the step the person already asked for, asked again to confirm. */
     func finishHandingOver(_ groupId: String, member: FamilyMemberRef) {
-        guard roleBusy == nil else { return }
+        guard roleChanges.busy == nil else { return }
         roleAsk = RoleAsk(groupId: groupId, member: member, kind: .finish)
     }
 
@@ -154,14 +154,15 @@ extension DriveStore {
      */
     func confirmRole(_ ask: RoleAsk) {
         roleAsk = nil
-        guard roleBusy == nil, let summary = familyList?.first(where: { $0.id == ask.groupId }), let session = beginSession() else { return }
+        guard roleChanges.busy == nil, let summary = familyList?.first(where: { $0.id == ask.groupId }), let session = beginSession() else { return }
         _ = managedLoads.begin(ask.groupId)
         let who = HushOS.firstName(ask.member.name)
         let names = memberNames(ask.groupId)
         let person = ask.member.userId
-        roleBusy = person.lowercased()
+        guard let token = roleChanges.begin(person) else { return }
         Task {
-            defer { if current(session) { roleBusy = nil } }
+            // Its own session's only: a reset meanwhile already let the page go on (RoleChanges).
+            defer { roleChanges.end(token) }
             do {
                 guard case .answered(let end) = try await familyAnswer(session, { sync -> RoleEnd in
                     switch ask.kind {
