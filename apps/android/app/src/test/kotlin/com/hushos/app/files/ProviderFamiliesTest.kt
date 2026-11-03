@@ -1360,9 +1360,98 @@ class ProviderFamiliesTest {
         val families = familiesOf(provider)
         val doc = FamilyDoc.of(file) as FamilyDoc.Node
         val edit = families.editFor(doc, "w").apply { writeText("pending save") }
+        // The URI Files' listing of the folder watches, as the provider registered it.
+        val watched = provider.queryChildDocuments(folder, null, null as String?).use { it.notificationUri }
         shadowOf(app.contentResolver).notifiedUris.clear()
         writeBack(families, doc, edit)
-        assertTrue(shadowOf(app.contentResolver).notifiedUris.any { it.uri == DocumentsContract.buildChildDocumentsUri(authority, folder) })
+        assertTrue(shadowOf(app.contentResolver).notifiedUris.any { it.uri == watched })
+    }
+
+    /*
+     * A family folder Files is showing, and a save of one of its files kept without telling it (as a save another vault
+     * kept would be): the next poll sees the listing changed (the pending save's size and date) and tells Files at the URI
+     * its listing watches. Fails if the poll compares only the server's rows.
+     */
+    @Test
+    fun aPollTellsFilesOfAPendingSave() {
+        val provider = provider()
+        val watched = provider.queryChildDocuments(folder, null, null as String?).use { it.notificationUri }
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        val opened = families.vault.item(doc.workspaceId, doc.nodeId)!!
+        WriteBacks.save(app, Reservations.generation, WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime,
+            opened.node.parentId!!, family.groupId.lowercase(), family.workspaceId.lowercase()), File(app.cacheDir, "kept").apply { writeText("kept elsewhere") })
+        shadowOf(app.contentResolver).notifiedUris.clear()
+        assertTrue(provider.pollOnce())
+        assertTrue("the poll didn't see the pending save", shadowOf(app.contentResolver).notifiedUris.any { it.uri == watched })
+    }
+
+    /*
+     * Another app has a family file open to read and write when HushOS starts: the app's first family sync sweeps the
+     * family's read copies (nothing accepted yet in this process), which revokes nothing. The editor's save is kept and
+     * sent. Fails if a cache sweep counts as letting the folder go (the save is then refused and the edit deleted).
+     */
+    @Test
+    fun anEditOpenAcrossTheAppsFirstSweepIsKeptAndSent() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        assertEquals("marker-family", read(provider, file))
+        val copies = FamilyCopies.folder(app.cacheDir, family.workspaceId)!!
+        assertTrue(copies.walkTopDown().any { it.isFile })
+        val pfd = provider.openDocument(file, "rw", null)
+        // HushOS starts: its own vault and family sync, whose first act is the allowlist sweep.
+        FamilySync(Vault(app, DriveApi(Shared.session(app)!!)))
+        assertFalse("the app's first sweep didn't run", copies.walkTopDown().any { it.isFile })
+        ParcelFileDescriptor.AutoCloseOutputStream(pfd).use { it.write("edited across the start".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
+        assertTrue("the save was refused", WriteBacks.pending(app, slot) != null)
+        assertEquals(ListenableWorker.Result.success(), runJob(slot))
+        assertEquals("edited across the start" + "marker-family".drop("edited across the start".length), serverText())
+    }
+
+    /*
+     * Files refreshes a family's own listing while the server is slow to answer: the refresh gives the binder back within
+     * its wait, and tells Files the listing changed once the families were loaded again. Fails if the refresh loads the
+     * families on the binder thread (a slow server then holds it past the binder's limit).
+     */
+    @Test
+    fun aFamilyRootRefreshNeverHoldsTheBinder() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(top, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val release = java.util.concurrent.CountDownLatch(1)
+        server.beforeAnswer = { _, path -> if (path.startsWith("groups")) release.await(15, java.util.concurrent.TimeUnit.SECONDS) }
+        val listing = DocumentsContract.buildChildDocumentsUri(authority, top)
+        shadowOf(app.contentResolver).notifiedUris.clear()
+        val began = System.nanoTime()
+        provider.refresh(listing, null, null)
+        val tookMs = (System.nanoTime() - began) / 1_000_000
+        release.countDown()
+        server.beforeAnswer = null
+        assertTrue("the refresh held the binder ${tookMs}ms", tookMs < 7_000)
+        val until = System.currentTimeMillis() + 15_000
+        while (shadowOf(app.contentResolver).notifiedUris.none { it.uri == listing } && System.currentTimeMillis() < until) Thread.sleep(50)
+        assertTrue("Files wasn't told once the families loaded", shadowOf(app.contentResolver).notifiedUris.any { it.uri == listing })
+    }
+
+    /*
+     * A family file read (its version cached here), saved, and the save lands from its job's own vault; then the folder
+     * can't be asked. A read fails rather than serve the cached version before the landing, which an editor that reads
+     * then saves would write over the landed save; once the folder answers, the landed version is read.
+     */
+    @Test
+    fun aFamilyReadAfterALandingWithNoAnswerNeverServesTheVersionBefore() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        assertEquals("marker-family", families.readCopy(doc).readText())
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("landed save") })
+        assertEquals(ListenableWorker.Result.success(), runJob(slot))
+        server.beforeAnswer = { _, path -> if (path.endsWith("/children") || path.endsWith("/changes")) throw IllegalStateException("dropped") }
+        assertTrue("a read served the version before the landing", runCatching { families.readCopy(doc) }.isFailure)
+        server.beforeAnswer = null
+        assertEquals("landed save", families.readCopy(doc).readText())
+        assertNull(WriteBacks.landing(app, slot))
     }
 
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =

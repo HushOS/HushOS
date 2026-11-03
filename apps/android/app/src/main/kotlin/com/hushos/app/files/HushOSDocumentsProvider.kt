@@ -337,10 +337,18 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         val ctx = context ?: return false
         val documentId = runCatching { DocumentsContract.getDocumentId(uri) }.getOrNull() ?: return false
         // A family folder lists from the server each time: false, and Files reloads it itself. A family's own listing (its
-        // folders) comes from the loaded roots, so those are loaded again first.
+        // folders) comes from the loaded roots: those are loaded again off the binder thread, which waits at most
+        // REFRESH_WAIT_MS, and Files is told the listing changed once the load is done, however long it took.
         FamilyDoc.of(documentId)?.let { doc ->
-            if (doc is FamilyDoc.Top) liveVault()?.let { runCatching { familiesOf(it).reload() } }
-            return false
+            if (doc !is FamilyDoc.Top) return false
+            val families = liveVault()?.let { runCatching { familiesOf(it) }.getOrNull() } ?: return false
+            return ProviderRefresh.run(
+                submit = { background.submit(it) },
+                sync = { families.reload(); true },
+                tell = { ctx.contentResolver.notifyChange(DocumentsContract.buildChildDocumentsUri(authority, doc.id), null) },
+                waitMs = REFRESH_WAIT_MS,
+                cancelled = { cancellationSignal?.isCanceled == true },
+            )
         }
         val vault = liveVault() ?: return false
         val rootId = vault.rootId

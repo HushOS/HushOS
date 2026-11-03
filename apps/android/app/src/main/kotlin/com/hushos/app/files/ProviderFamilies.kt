@@ -328,8 +328,11 @@ class ProviderFamilies internal constructor(
     /* The family folders Files listed lately, with when and what they held. */
     private val shown = java.util.concurrent.ConcurrentHashMap<FamilyDoc.Node, Pair<Long, String>>()
 
-    private fun signature(items: List<Opened>): String =
-        items.map { "${it.id}|${it.node.parentId}|${it.node.metadataVersion}|${it.node.keyEpoch}|${it.node.currentVersion?.id}" }.sorted().joinToString("\n")
+    /* What a listing shows of its items: the server's rows and each file's pending save (its size and date). */
+    private fun signature(items: List<Opened>): String = items.map {
+        val pending = if (it.isFolder) null else WriteBacks.pendingMeta(vault.context, WriteBacks.slotOf(it.node.workspaceId, it.id))
+        "${it.id}|${it.node.parentId}|${it.node.metadataVersion}|${it.node.keyEpoch}|${it.node.currentVersion?.id}|$pending"
+    }.sorted().joinToString("\n")
 
     /*
      * A poll (FilesPoll) for the family folders Files listed within `window`: each listed again through the ledger, and
@@ -423,7 +426,11 @@ class ProviderFamilies internal constructor(
         // The folder's invalidation count before its access is checked: the download keeps nothing once it moved.
         val epoch = vault.familyEpoch(doc.workspaceId)
         val (_, folder) = folderOf(doc)
-        val item = current(doc, strict)
+        // A save of it landed from its job's own vault since: the row held here may be the version before, so the folder
+        // must answer (no fallback to that row: an app that reads then saves would write over the landed save).
+        val landing = WriteBacks.landing(vault.context, slotOf(doc))
+        val item = current(doc, strict || landing != null)
+        landing?.let { WriteBacks.caughtUp(vault.context, slotOf(doc), it.id) }
         afterAccessChecked?.invoke()
         val version = item.node.currentVersion?.id ?: throw FileNotFoundException("This file has no content yet.")
         val copies = FamilyCopies.folder(vault.context.cacheDir, folder.workspaceId) ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
@@ -540,11 +547,9 @@ class ProviderFamilies internal constructor(
             else WriteBacks.save(vault.context, vault.ledgerGeneration, target, edit)
         } ?: return false
         TransferQueue.enqueueSlot(vault.context, kept.slot, opened.name, target.family)
-        // Its listing shows the save's size and date now: Files reads the folder again.
-        runCatching {
-            vault.context.contentResolver.notifyChange(DocumentsContract.buildChildDocumentsUri(FilesRoots.authority(vault.context),
-                FamilyDoc.Node(doc.groupId, doc.workspaceId, parent).id), null)
-        }
+        // Its listing shows the save's size and date now: Files reads the folder again, by the plain node id its listing of
+        // a family folder watches (queryChildDocuments), as every family write tells it (Vault.foldersChanged).
+        FilesRoots.foldersChanged(vault.context, listOf(parent), null)
         return true
     }
 
