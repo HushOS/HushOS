@@ -1,0 +1,21 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyManage.kt
+  s_566b8e0c4467a4::t_8d657dfd9aca2b 508-513,1130-1132
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyRolesTest.kt
+  s_566b8e0c4467a4::t_d10bda006919c4 242-292
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a0b2ac0075e8a04a3ddfb5b9cc2590b95d940ba8",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
