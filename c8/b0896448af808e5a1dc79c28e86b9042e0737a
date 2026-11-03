@@ -1,0 +1,33 @@
+.release-please-manifest.json
+  s_566b8e0c4467a4::t_7db829002e80aa 2
+CHANGELOG.md
+  s_566b8e0c4467a4::t_be43464432904e 3-18
+Cargo.lock
+  s_566b8e0c4467a4::t_451723b2ac0edb 753
+apps/android/app/build.gradle.kts
+  s_566b8e0c4467a4::t_6ad0eb8fc33e21 72
+apps/ios/project.yml
+  s_566b8e0c4467a4::t_ae5e075b6d6096 23
+crates/hushos-core/Cargo.toml
+  s_566b8e0c4467a4::t_1a4cf1e494b59c 3
+crates/hushos-core/fuzz/Cargo.lock
+  s_566b8e0c4467a4::t_d8418747114802 566
+package.json
+  s_566b8e0c4467a4::t_f22a6b75be5e80 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c8b0896448af808e5a1dc79c28e86b9042e0737a",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
