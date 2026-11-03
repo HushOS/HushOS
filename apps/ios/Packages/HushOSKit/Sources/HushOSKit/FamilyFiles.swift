@@ -143,8 +143,9 @@ public struct FamilyDomainRecords: Sendable {
     }
 
     public static func admission(_ groupId: String, records: [String: FamilyDomainRecord], owner: AccountOwner?) -> FamilyAdmission {
-        guard let owner else { return .otherAccount }
+        // No record is a let-go whoever asks, nobody signed in included: Files drops the location's items, never asks to sign in for it.
         guard let record = records[groupId.lowercased()] else { return .letGo }
+        guard let owner else { return .otherAccount }
         return record.owner == owner ? .admitted : .otherAccount
     }
 

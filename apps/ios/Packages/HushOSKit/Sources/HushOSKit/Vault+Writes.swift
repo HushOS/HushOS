@@ -958,6 +958,9 @@ extension Vault {
         if feed.resync { return nil }
         var updated: [Opened] = []
         var deleted: [String] = []
+        // Each folder listed once per batch, its rows or its error kept: siblings changed together (a bulk upload, a
+        // re-key) are read from the one listing rather than each listing their folder again.
+        var listings: [String: Result<[NodeRef: Opened], Error>] = [:]
         for change in feed.changes {
             switch change.kind {
             case "node":
@@ -968,9 +971,27 @@ extension Vault {
                     continue
                 }
                 if let parent = node.parentId { rememberParent(node.id, parent: parent) }
+                let folder = node.parentId ?? node.id
+                if listings[folder] == nil {
+                    do {
+                        let listing = try await listChildren(of: folder, in: workspaceId)
+                        var rows: [NodeRef: Opened] = [:]
+                        for row in [listing.folder] + listing.ancestors + listing.children {
+                            if let held = opened[row.ref] { rows[row.ref] = held }
+                        }
+                        listings[folder] = .success(rows)
+                    } catch {
+                        listings[folder] = .failure(error)
+                    }
+                }
                 do {
-                    _ = try await listChildren(of: node.parentId ?? node.id, in: workspaceId)
-                    if let row = opened[node.ref] { updated.append(row) } else { deleted.append(node.id) }
+                    if let row = try listings[folder]?.get()[node.ref] {
+                        // Held again as the listing opened it (cleared above when an earlier change of the batch listed it).
+                        opened[node.ref] = row
+                        updated.append(row)
+                    } else {
+                        deleted.append(node.id)
+                    }
                 } catch let error where FamilyFilesError.keyChanging(error) {
                     // A key change this device hasn't followed yet: no verdict on the node. The batch fails with its cursor
                     // where it was, and the family is checked again before Files asks again.

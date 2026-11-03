@@ -388,6 +388,22 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         #expect(manager.signals == [FamilyFileIds.domain(Self.group)])
     }
 
+    /*
+     * A location whose record a let-go took is asked for while nobody is signed in: it is let go of
+     * (Files drops it), not another account's (which asks for the sign-in sheet for a family that is
+     * gone). A record with nobody signed in is still refused as another account's. Fails if a missing
+     * record is asked about only after who is signed in.
+     */
+    @Test func aLocationWithoutItsRecordIsLetGoEvenSignedOut() async throws {
+        let session = TemporaryCopies.session(CopyEpoch())
+        let kept = UUID().uuidString.lowercased()
+        await domains.accepted(kept, name: "Holm family", owner: Self.maya, observed: records.generation(kept), session: session).value
+        #expect(records.admission(Self.group, owner: nil) == .letGo)
+        #expect(records.admission(kept, owner: nil) == .otherAccount)
+        #expect(records.admission(kept, owner: Self.sam) == .otherAccount)
+        #expect(records.admission(kept, owner: Self.maya) == .admitted)
+    }
+
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
     @Test func aRenamedFamilysLocationTakesTheNewName() async throws {
         let domains = self.domains
@@ -937,6 +953,34 @@ extension OnFakeDrive {
             #expect(!changes.deleted.contains(FamilyFileIds.item(f.photo.ref)), "a healthy file was deleted for a broken sibling")
             #expect(changes.updated.contains { $0.ref == f.photo.ref })
             #expect(changes.deleted.contains(FamilyFileIds.item(NodeRef(workspaceId: f.workspaceId, nodeId: brokenId))))
+        }
+
+        /*
+         * Many files change in one folder at once (a bulk upload, a re-key): the batch lists that folder
+         * once, and every file still comes back as itself. Fails if each changed sibling lists its
+         * folder again (a folder's whole listing per row, squared over the batch).
+         */
+        @Test func aBatchListsEachFolderOnce() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            _ = try await s.source.folders()
+            let f = s.family
+            var added: [NodeRef] = []
+            for index in 0 ..< 5 {
+                let id = try newId(kind: .node, scopeId: f.workspaceId).id
+                s.server.put(try FamilyFixture.node(id: id, in: f.workspaceId, parent: f.rootId, parentKey: f.rootKey, key: randomBytes(length: 32), kind: .file,
+                                                    name: "Upload \(index).txt", writer: f.creator))
+                added.append(NodeRef(workspaceId: f.workspaceId, nodeId: id))
+            }
+            let path = "/api/drive/nodes/\(f.rootId)/children"
+            let before = s.server.count(path)
+            let changes = try #require(try await s.source.changes(since: FamilyAnchor(folders: [f.workspaceId: .init(root: f.rootId, cursor: 0)])))
+            #expect(s.server.count(path) - before == 1, "the folder was listed \(s.server.count(path) - before) times for one batch")
+            for ref in added + [f.photo.ref] {
+                #expect(changes.updated.contains { $0.ref == ref }, "a changed file didn't come back")
+                #expect(await s.phone.vault.item(ref) != nil, "a changed file read from the batch's listing isn't held")
+            }
+            #expect(changes.deleted.isEmpty)
         }
 
         /*
