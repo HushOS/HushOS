@@ -134,10 +134,13 @@ object WriteBacks {
     @Volatile internal var beforeSlotId: (() -> Unit)? = null
 
     /* A save's file as a failed row keeps it (FailedTransfer.stage), and back. */
-    fun encodeTarget(t: Target, familyEpoch: Long? = null, number: Long? = null): String = JSONObject().put("number", number ?: JSONObject.NULL).put("workspaceId", t.workspaceId).put("nodeId", t.nodeId).put("name", t.name)
+    fun encodeTarget(t: Target, familyEpoch: Long? = null, number: Long? = null, account: String? = null): String = JSONObject().put("number", number ?: JSONObject.NULL).put("workspaceId", t.workspaceId).put("nodeId", t.nodeId).put("name", t.name)
         .put("mime", t.mime ?: JSONObject.NULL).put("folder", t.folder).put("family", t.family ?: JSONObject.NULL)
         .put("familyWorkspace", t.familyWorkspace ?: JSONObject.NULL).put("root", t.root ?: JSONObject.NULL)
-        .put("familyEpoch", familyEpoch ?: JSONObject.NULL).toString()
+        .put("familyEpoch", familyEpoch ?: JSONObject.NULL).put("account", account ?: JSONObject.NULL).toString()
+
+    /* The account (its user id) an edit's target names: the one signed in as the edit was made. Null for none named. */
+    fun accountOf(json: String): String? = runCatching { JSONObject(json).opt("account") as? String }.getOrNull()
 
     /* The save number a staging row's save was given as its app closed the file. */
     fun stagedNumber(json: String): Long? = runCatching { JSONObject(json).opt("number") as? Number }.getOrNull()?.toLong()
@@ -181,43 +184,79 @@ object WriteBacks {
      * so a failure at any step leaves it whole for the caller to keep (and the earlier save pending as it was). A number
      * no newer than the slot's newest save, landed or pending, keeps nothing (Superseded). Null when the account left.
      */
-    fun stage(context: Context, accountGeneration: Long, target: Target, edit: File, number: Long): Pending? = Reservations.whileAccount(accountGeneration) {
+    fun stage(context: Context, accountGeneration: Long, target: Target, edit: File, number: Long,
+              publishUnder: ((() -> Pending?) -> Pending?)? = null): Pending? {
         val slot = slotOf(target.workspaceId, target.nodeId)
-        lockOf(slot).withLock {
-            val dir = dir(context, slot).also { it.mkdirs() }
-            // The slot's own id for as long as it exists: what tells a cancel pressed on an earlier slot of the file from this one.
-            File(dir, INCARNATION).takeIf { !it.isFile }?.let { file ->
-                beforeSlotId?.invoke()
-                val incoming = File(dir, "$INCARNATION.incoming").apply { writeText(java.util.UUID.randomUUID().toString()) }
-                check(incoming.renameTo(file)) { "The save couldn't be kept." }
-            }
-            val numbers = repaired(context, slot) ?: throw IllegalStateException("The save couldn't be kept.")
-            if (number <= maxOf(current(dir, slot)?.generation ?: 0L, numbers.landed, numbers.cancelled)) throw Superseded()
-            val id = "n$number-" + java.util.UUID.randomUUID()
-            val contents = File(dir, "$id$BIN.incoming")
-            fault?.invoke("copy")
-            java.io.FileOutputStream(contents).use { out ->
-                edit.inputStream().use { it.copyTo(out) }
-                fault?.invoke("fsync")
-                out.fd.sync()
-            }
-            check(contents.renameTo(File(dir, id + BIN))) { "The save couldn't be kept." }
-            val description = JSONObject().put("generation", number).put("id", id).put("workspaceId", target.workspaceId).put("nodeId", target.nodeId)
-                .put("name", target.name).put("mime", target.mime ?: JSONObject.NULL).put("folder", target.folder)
-                .put("family", target.family ?: JSONObject.NULL).put("familyWorkspace", target.familyWorkspace ?: JSONObject.NULL)
-                .put("root", target.root ?: JSONObject.NULL)
-            fault?.invoke("json")
-            val written = File(dir, "$id$META.incoming")
-            java.io.FileOutputStream(written).use { out -> out.write(description.toString().toByteArray()); out.fd.sync() }
-            check(written.renameTo(File(dir, id + META))) { "The save couldn't be kept." }
-            afterContent?.invoke()
-            publish(dir, id)
-            current(dir, slot)
-            // Kept: only now does the edit go, with its target beside it (a failure to delete it leaves a stray copy, never a
-            // lost save: the next reconcile finds its number kept and deletes it).
-            runCatching { fault?.invoke("delete"); discardEdit(edit) }
-            Pending(slot, number, id, target)
+        if (publishUnder == null) return Reservations.whileAccount(accountGeneration) {
+            lockOf(slot).withLock { publishGeneration(context, slot, target, edit, number, write(context, slot, target, edit, number, staged = false), staged = false) }
         }
+        // A family's: copied and synced under the slot's lock alone (staged: no look publishes or removes it), then published
+        // under whatever `publishUnder` holds (the copies lock a revocation's cleanup takes, its recheck first) for the short
+        // rename; not published (revoked meanwhile, the account gone, a step failing), the copy goes.
+        val id = Reservations.whileAccount(accountGeneration) { lockOf(slot).withLock { write(context, slot, target, edit, number, staged = true) } } ?: return null
+        var kept: Pending? = null
+        try {
+            kept = publishUnder { Reservations.whileAccount(accountGeneration) { lockOf(slot).withLock { publishGeneration(context, slot, target, edit, number, id, staged = true) } } }
+            return kept
+        } finally {
+            if (kept == null) lockOf(slot).withLock { dir(context, slot).let { File(it, id + BIN + STAGED).delete(); File(it, id + META + STAGED).delete() } }
+        }
+    }
+
+    /* A family save's generation copied but not yet published: no look takes it as pending or removes it. */
+    private const val STAGED = ".staged"
+
+    /* `edit`'s bytes and description written into a new generation of the slot (synced), named `staged` if so. Its id. */
+    private fun write(context: Context, slot: String, target: Target, edit: File, number: Long, staged: Boolean): String {
+        val dir = dir(context, slot).also { it.mkdirs() }
+        // The slot's own id for as long as it exists: what tells a cancel pressed on an earlier slot of the file from this one.
+        File(dir, INCARNATION).takeIf { !it.isFile }?.let { file ->
+            beforeSlotId?.invoke()
+            val incoming = File(dir, "$INCARNATION.incoming").apply { writeText(java.util.UUID.randomUUID().toString()) }
+            check(incoming.renameTo(file)) { "The save couldn't be kept." }
+        }
+        superseded(context, slot, dir, number)
+        val suffix = if (staged) STAGED else ""
+        val id = "n$number-" + java.util.UUID.randomUUID()
+        val contents = File(dir, "$id$BIN.incoming")
+        fault?.invoke("copy")
+        java.io.FileOutputStream(contents).use { out ->
+            edit.inputStream().use { it.copyTo(out) }
+            fault?.invoke("fsync")
+            out.fd.sync()
+        }
+        check(contents.renameTo(File(dir, id + BIN + suffix))) { "The save couldn't be kept." }
+        val description = JSONObject().put("generation", number).put("id", id).put("workspaceId", target.workspaceId).put("nodeId", target.nodeId)
+            .put("name", target.name).put("mime", target.mime ?: JSONObject.NULL).put("folder", target.folder)
+            .put("family", target.family ?: JSONObject.NULL).put("familyWorkspace", target.familyWorkspace ?: JSONObject.NULL)
+            .put("root", target.root ?: JSONObject.NULL)
+        fault?.invoke("json")
+        val written = File(dir, "$id$META.incoming")
+        java.io.FileOutputStream(written).use { out -> out.write(description.toString().toByteArray()); out.fd.sync() }
+        check(written.renameTo(File(dir, id + META + suffix))) { "The save couldn't be kept." }
+        return id
+    }
+
+    /* A number no newer than the slot's newest save, pending or landed or cancelled, keeps nothing; bounds unknown keep nothing either. */
+    private fun superseded(context: Context, slot: String, dir: File, number: Long) {
+        val numbers = repaired(context, slot) ?: throw IllegalStateException("The save couldn't be kept.")
+        if (number <= maxOf(current(dir, slot)?.generation ?: 0L, numbers.landed, numbers.cancelled)) throw Superseded()
+    }
+
+    /* The generation `id` published as the slot's save (a staged one checked again and named for good first); the edit goes. */
+    private fun publishGeneration(context: Context, slot: String, target: Target, edit: File, number: Long, id: String, staged: Boolean): Pending {
+        val dir = dir(context, slot)
+        if (staged) {
+            superseded(context, slot, dir, number)
+            check(File(dir, id + BIN + STAGED).renameTo(File(dir, id + BIN)) && File(dir, id + META + STAGED).renameTo(File(dir, id + META))) { "The save couldn't be kept." }
+        }
+        afterContent?.invoke()
+        publish(dir, id)
+        current(dir, slot)
+        // Kept: only now does the edit go, with its target beside it (a failure to delete it leaves a stray copy, never a
+        // lost save: the next reconcile finds its number kept and deletes it).
+        runCatching { fault?.invoke("delete"); discardEdit(edit) }
+        return Pending(slot, number, id, target)
     }
 
     const val NUMBERS = "writeback-numbers"
@@ -244,20 +283,22 @@ object WriteBacks {
     }.getOrDefault(emptyList())
 
     /* Tests: the numbers given in this process forgotten, as a restart forgets them. */
-    internal fun forgetReservedHere() = reservedHere.clear()
+    internal fun forgetReservedHere() = forgetHere()
 
     /* A new edit in `dir`, its target written beside it. */
-    fun editIn(dir: File, target: Target): File {
+    fun editIn(dir: File, target: Target, account: String?, id: String = java.util.UUID.randomUUID().toString()): File {
         dir.mkdirs()
-        val id = java.util.UUID.randomUUID().toString()
-        val incoming = File(dir, "$id.json.incoming").apply { writeText(encodeTarget(target)) }
+        val incoming = File(dir, "$id.json.incoming").apply { writeText(encodeTarget(target, account = account)) }
         check(incoming.renameTo(File(dir, "$id.json"))) { "The edit couldn't be made." }
         return File(dir, id)
     }
 
     /* An open of this account's own file: its edit under filesDir/edits/personal/<node>. */
-    fun personalEdit(context: Context, target: Target): File =
-        editIn(File(context.filesDir, "$EDITS/personal/${target.nodeId.lowercase()}"), target)
+    fun personalEdit(context: Context, target: Target, account: String?): File = editIn(editDirOf(context, target), target, account)
+
+    /* Where `target`'s edits live: edits/personal/<node>, or edits/family/<workspace>/<node> (FamilyCopies.edits). */
+    private fun editDirOf(context: Context, target: Target): File = File(context.filesDir,
+        target.familyWorkspace?.let { "$EDITS/family/${it.lowercase()}/${target.nodeId.lowercase()}" } ?: "$EDITS/personal/${target.nodeId.lowercase()}")
 
     /* The file an edit would replace, written beside it as it was made. */
     fun sidecarOf(edit: File): File = File(edit.parentFile, edit.name.substringBefore('.') + ".json")
@@ -307,8 +348,28 @@ object WriteBacks {
     private fun repaired(context: Context, slot: String): Numbers? {
         val held = readNumbers(context, slot)
         if (!held.unknown) return held
-        val newest = dir(context, slot).listFiles { f -> f.name.endsWith(META) }.orEmpty().mapNotNull { read(it, slot)?.generation }.maxOrNull() ?: 0L
-        val rebuilt = Numbers(newest, newest, newest, Landing(java.util.UUID.randomUUID().toString(), null))
+        // Known in this process: those bounds again, exactly (a save above them stays pending).
+        lastKnown[slot]?.let { known -> return runCatching { writeNumbers(context, slot, known); known }.getOrNull() }
+        val dir = dir(context, slot)
+        val generations = dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty().mapNotNull { read(it, slot) }
+            .filter { File(dir, it.id + BIN).isFile }
+        val newest = generations.maxOfOrNull { it.generation } ?: 0L
+        // Not known: every generation on disk counts as passed, so none is sent again; but the newest complete one may be a
+        // save still pending, so it is kept first as an edit of its own with a staging row ("The save wasn't kept."), never
+        // read as contents (not closed), to Retry or Dismiss. Its row names a number above the rebuilt bounds.
+        generations.maxByOrNull { it.generation }?.let { save ->
+            val rescued = File(editDirOf(context, save.target), "rescued-${save.id}")
+            if (!rescued.isFile) {
+                editIn(rescued.parentFile!!, save.target, Shared.session(context)?.userId, rescued.name)
+                File(dir, save.id + BIN).copyTo(rescued, overwrite = true)
+            }
+            if (runCatching { FailedTransfers.of(context).all() }.getOrDefault(emptyList()).none { it.file == rescued.path })
+                // A family's: no revocation count is known for it here (a revocation deletes the edit, as it deletes every
+                // edit of the folder), so none moves past it.
+                TransferQueue.stagingFailed(context, save.target, rescued, Exception("The save wasn't kept."), Reservations.generation, newest + 1,
+                    save.target.familyWorkspace?.let { Long.MAX_VALUE })
+        }
+        val rebuilt = Numbers(newest + 1, newest, newest, Landing(java.util.UUID.randomUUID().toString(), null))
         return runCatching { writeNumbers(context, slot, rebuilt); rebuilt }.getOrNull()
     }
 
@@ -316,6 +377,12 @@ object WriteBacks {
     fun repair(context: Context, slot: String) { lockOf(slot).withLock { repaired(context, slot) } }
 
     private val reservedHere = ConcurrentHashMap<String, Long>()
+
+    /* The numbers last read or written whole, per slot, in this process: what an unreadable file is rebuilt from first. */
+    private val lastKnown = ConcurrentHashMap<String, Numbers>()
+
+    /* The account left (AccountStore.wipe): what this process held of its slots goes too. */
+    fun forgetHere() { reservedHere.clear(); lastKnown.clear() }
 
     private fun numbersFile(context: Context, slot: String) = File(context.filesDir, "$NUMBERS/$slot")
 
@@ -331,7 +398,7 @@ object WriteBacks {
             val parts = lines[0].trim().split(" ")
             require(parts.size in 2..3)
             val landing = lines.getOrNull(1)?.takeIf { it.isNotEmpty() }?.let { Landing(it, lines.getOrNull(2)?.ifEmpty { null }) }
-            Numbers(parts[0].toLong(), parts[1].toLong(), parts.getOrNull(2)?.toLong() ?: 0L, landing)
+            Numbers(parts[0].toLong(), parts[1].toLong(), parts.getOrNull(2)?.toLong() ?: 0L, landing).also { lastKnown[file.name] = it }
         }.getOrDefault(UNKNOWN)
     }
 
@@ -343,6 +410,7 @@ object WriteBacks {
         val text = "${numbers.reserved} ${numbers.landed} ${numbers.cancelled}" + (numbers.landing?.let { "\n${it.id}\n${it.version ?: ""}" } ?: "")
         java.io.FileOutputStream(incoming).use { out -> out.write(text.toByteArray()); out.fd.sync() }
         check(incoming.renameTo(file)) { "The save's number couldn't be kept." }
+        lastKnown[slot] = numbers
         runCatching {
             val fd = android.system.Os.open(file.parentFile!!.path, android.system.OsConstants.O_RDONLY, 0)
             try { android.system.Os.fsync(fd) } finally { android.system.Os.close(fd) }
@@ -547,6 +615,8 @@ object WriteBacks {
      */
     fun removeIfEmpty(context: Context, slot: String) = lockOf(slot).withLock {
         val dir = dir(context, slot)
+        // A slot whose bounds can't be read is never empty: what it holds waits for them to be rebuilt.
+        if (readNumbers(context, slot).unknown) return@withLock
         if (current(dir, slot) == null) dir.deleteRecursively()
     }
 

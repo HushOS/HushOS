@@ -366,7 +366,11 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             return@guarded ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
         }
         val edit = personalEdit(vault, id, mode)
-        ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), WriteBacks.closes) { error -> onEditClosed(error, vault, edit, item) }
+        // Opened only while the account it was made for is still here (under the wipe's lock): a mode that creates would
+        // otherwise make the file again after a sign-out.
+        com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) {
+            ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), WriteBacks.closes) { error -> onEditClosed(error, vault, edit, item) }
+        } ?: run { WriteBacks.discardEdit(edit); throw authenticationRequired() }
     }
 
     /*
@@ -423,18 +427,34 @@ class HushOSDocumentsProvider : DocumentsProvider() {
      */
     internal fun personalEdit(vault: Vault, id: String, mode: String): File {
         // Durable (filesDir/edits): a save that couldn't be kept is retried from it, whatever clears the cache meanwhile.
+        // Made, filled and its target written only while the account it opens for is still here (under the wipe's lock,
+        // each step): after a sign-out (another account signed in since, say) nothing of it is written, what was made goes,
+        // and the open fails. The target names the account, so no later start takes it for another account's.
         val opened = vault.resolve(id)
-        val edit = WriteBacks.personalEdit(context!!, WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime,
-            opened.node.parentId ?: vault.rootId, root = vault.rootId))
-        if (WriteModes.keepsContents(mode)) {
-            if (WriteBacks.copyNewestTo(context!!, WriteBacks.slotOf(vault.resolve(id).node.workspaceId, id), edit)) return edit
-            val item = currentVersion(vault, id)
-            val file = cacheFile(id, item.node.currentVersion?.id)
-            if (!file.exists()) vault.download(id, file)
-            file.copyTo(edit, overwrite = true)
+        val ctx = context!!
+        fun <T> forItsAccount(body: () -> T): T = com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration, body) ?: throw authenticationRequired()
+        val edit = forItsAccount {
+            WriteBacks.personalEdit(ctx, WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime,
+                opened.node.parentId ?: vault.rootId, root = vault.rootId), vault.api.session.userId)
         }
-        return edit
+        try {
+            afterEditMade?.invoke()
+            if (WriteModes.keepsContents(mode)) {
+                if (forItsAccount { WriteBacks.copyNewestTo(ctx, WriteBacks.slotOf(opened.node.workspaceId, id), edit) }) return edit
+                val item = currentVersion(vault, id)
+                val file = cacheFile(id, item.node.currentVersion?.id)
+                if (!file.exists()) vault.download(id, file)
+                forItsAccount { file.copyTo(edit, overwrite = true) }
+            }
+            return edit
+        } catch (failure: Throwable) {
+            WriteBacks.discardEdit(edit)
+            throw failure
+        }
     }
+
+    /* Tests: runs once an open's edit is made, before it is filled. */
+    @Volatile internal var afterEditMade: (() -> Unit)? = null
 
     /*
      * The file as the server holds it now: this account's own drive brought up to the feed's head (Vault.sync), a share's

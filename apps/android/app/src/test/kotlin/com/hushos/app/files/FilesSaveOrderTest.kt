@@ -1959,4 +1959,65 @@ class FilesSaveOrderTest {
         assertEquals(0, begins())
         assertEquals("original", serverText(notes))
     }
+
+    /*
+     * #274 P2 (account): another app opens a file to write it, keeping its contents, and the account signs out and another
+     * signs in while the open is being made. Nothing of the old account is left (no edit, no target, no plaintext), and
+     * the open fails. Separately, an edit whose target names another account (one that outlived a sign-out) is deleted at
+     * the next start, never taken for this account's failed save. Fails if an open writes its edit unguarded, or if a
+     * start adopts another account's edit.
+     */
+    @Test
+    fun anOpenThatOutlivesItsAccountLeavesNothingAndIsNeverAdopted() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        val vault = vaultOf(provider)
+        val target = vault.resolve(notes).let { WriteBacks.Target(it.node.workspaceId, it.id, it.name, it.metadata.mime, it.node.parentId ?: vault.rootId, root = vault.rootId) }
+        provider.afterEditMade = {
+            provider.afterEditMade = null
+            Shared.clearSession(app)
+            AccountStore.of(app).wipe()
+            Shared.writeSession(app, Shared.Session(server.origin, "another-token", java.util.UUID.randomUUID().toString(), "sam@example.org"))
+        }
+        assertThrows(Exception::class.java) { provider.openDocument(notes, "rw", null).close() }
+        assertFalse("an open made the old account's edit after its sign-out", File(app.filesDir, WriteBacks.EDITS).exists())
+        // An edit another account's open left: never adopted at a start.
+        val foreign = WriteBacks.personalEdit(app, target, "someone-else").apply { writeText("another account's words") }
+        val closed = WriteBacks.close(foreign, 1)
+        TransferQueue.reconcileEdits(app, startup = true)
+        assertFalse("another account's edit was kept", closed.exists())
+        assertTrue("another account's edit was adopted", FailedTransfers.of(app).all().isEmpty())
+        assertNull(WriteBacks.pending(app, slot))
+    }
+
+    /*
+     * #274 P2 (unreadable bounds): a save is pending when its slot's numbers file can't be read, and the process starts
+     * again (nothing of the bounds in memory). While the bounds can't be rebuilt, the old-slot sweep leaves the slot (its
+     * save) alone. Once they are, the save that may still be pending is never sent from the slot but kept as a row whose
+     * Retry sends it. Fails if an unknown slot is swept as empty, or if the rebuild drops its newest save.
+     */
+    @Test
+    fun aSlotWithUnreadableBoundsIsNeverSweptAndItsSaveIsKeptForARetry() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "pending as its numbers broke")
+        File(app.filesDir, "${WriteBacks.NUMBERS}/$slot").writeText("not the numbers")
+        WriteBacks.forgetReservedHere()
+        val dir = WriteBacks.dir(app, slot)
+        val bins = { dir.listFiles().orEmpty().count { it.name.endsWith(".bin") } }
+        WriteBacks.fault = { if (it == "numbers") throw java.io.IOException("No space left on device") }
+        dir.setLastModified(System.currentTimeMillis() - 60 * 60 * 1000L)
+        TransferQueue.sweep(app, emptySet())
+        assertEquals("the sweep deleted a slot whose bounds it couldn't read", 1, bins())
+        WriteBacks.fault = null
+        TransferQueue.reconcileEdits(app, startup = true)
+        assertNull(WriteBacks.pending(app, slot))
+        val row = FailedTransfers.of(app).all().single { it.slot == slot }
+        assertEquals("pending as its numbers broke", File(row.file!!).readText())
+        assertTrue(TransferQueue.retry(app, row))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("pending as its numbers broke", serverText(notes))
+    }
 }
