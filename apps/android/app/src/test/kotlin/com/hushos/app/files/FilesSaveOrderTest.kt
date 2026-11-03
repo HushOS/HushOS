@@ -255,7 +255,7 @@ class FilesSaveOrderTest {
                 server.beforeAnswer = null
                 WriteBacks.drop(app, slot)
                 val edit = File(app.cacheDir, "again").apply { writeText("second save") }
-                assertEquals(1L, WriteBacks.save(app, Reservations.generation, target, edit)!!.generation)
+                assertEquals(2L, WriteBacks.save(app, Reservations.generation, target, edit)!!.generation)
             }
         }
         assertEquals(ListenableWorker.Result.success(), runSlot(slot))
@@ -1802,5 +1802,69 @@ class FilesSaveOrderTest {
         TransferQueue.startupSweep(app)
         assertEquals("a start queued the dismissed save", queued, jobs(slot).size)
         assertEquals("original", opened(provider, notes, "r"))
+    }
+
+    /*
+     * #274 P1 (recovered landing): save A's completion lands with its answer lost, save B replaces it, and B's run settles
+     * A as landed, then B fails for good and its row is dismissed. Nothing is pending then, and an offline read never
+     * serves the version before A (an editor reading it then saving would overwrite A); online it reads A. Fails if a
+     * landing found by settling a superseded save's reservation is not recorded where reads look.
+     */
+    @Test
+    fun aSupersededSaveFoundLandedLateIsNeverReadAsTheVersionBefore() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        assertEquals("original", opened(provider, notes, "r"))
+        save(provider, notes, "first save")
+        dropFromTheCompletion()
+        assertEquals(ListenableWorker.Result.retry(), runSlot(slot))
+        server.dropReply = null
+        save(provider, notes, "second save")
+        refuseBegins(true)
+        assertEquals(ListenableWorker.Result.failure()::class, runSlot(slot)::class)
+        refuseBegins(false)
+        assertEquals("first save", serverText(notes))
+        TransferQueue.dismiss(app, FailedTransfers.of(app).all().single { it.slot == slot })
+        assertNull(WriteBacks.pending(app, slot))
+        server.dropReply = { _, path -> path.endsWith("/changes") }
+        val read = runCatching { opened(provider, notes, "r") }.getOrNull()
+        assertTrue("an offline read served the version before the landed save: $read", read == null || read == "first save")
+        server.dropReply = null
+        assertEquals("first save", opened(provider, notes, "r"))
+    }
+
+    /*
+     * #274 P2 (landing bookkeeping): a failed save's row, then a newer save lands and the process dies before the landing's
+     * bookkeeping removed that row. The slot's next run (nothing left to send) removes it, and so does the next start on
+     * its own. Fails if the rows a landing made obsolete are removed only by the landing's own run.
+     */
+    @Test
+    fun rowsALandingMadeObsoleteGoAtTheNextRunAndTheNextStart() {
+        val provider = provider()
+        val run = server.file(server.root, "Run.txt", "original".toByteArray())
+        val start = server.file(server.root, "Start.txt", "original".toByteArray())
+        provider.queryChildDocuments("root", null, null as String?).close()
+        fun landWithItsBookkeepingCut(notes: String): String {
+            val slot = slotOf(provider, notes)
+            save(provider, notes, "failed save")
+            refuseBegins(true)
+            assertEquals(ListenableWorker.Result.failure()::class, runSlot(slot)::class)
+            refuseBegins(false)
+            assertEquals(1, FailedTransfers.of(app).all().count { it.slot == slot })
+            save(provider, notes, "landed save")
+            WriteBacks.fault = { if (it == "landed-retire") throw IllegalStateException("died before the bookkeeping") }
+            assertEquals(ListenableWorker.Result.retry(), runSlot(slot))
+            WriteBacks.fault = null
+            assertEquals("landed save", serverText(notes))
+            assertEquals("the failed row went before the death", 1, FailedTransfers.of(app).all().count { it.slot == slot })
+            return slot
+        }
+        val ran = landWithItsBookkeepingCut(run)
+        assertEquals(ListenableWorker.Result.success(), runSlot(ran))
+        assertEquals("the next run left the landing's obsolete row", emptyList<FailedTransfer>(), FailedTransfers.of(app).all().filter { it.slot == ran })
+        val started = landWithItsBookkeepingCut(start)
+        TransferQueue.reconcileEdits(app, startup = true)
+        assertEquals("the next start left the landing's obsolete row", emptyList<FailedTransfer>(), FailedTransfers.of(app).all().filter { it.slot == started })
     }
 }

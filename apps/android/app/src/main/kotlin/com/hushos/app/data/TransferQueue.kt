@@ -615,7 +615,14 @@ object TransferQueue {
     fun reconcileEdits(context: Context, startup: Boolean) {
         val session = Shared.session(context) ?: return
         val generation = Reservations.generation
-        // First what a landing or a cancel that died after its bound left (staging rows and closed edits at or below it).
+        // First every landing the ledger knows of that reads don't yet (a reservation settled as completed whose recording
+        // was refused), then what a landing's bookkeeping left (rows a death kept), for the account it started in.
+        Reservations.whileAccount(generation) {
+            runCatching { Reservations.all(context) }.getOrDefault(emptyList()).filter { it.landed }.forEach { runCatching { WriteBacks.recoveredLanding(context, it.job) } }
+            runCatching { FailedTransfers.of(context).all() }.getOrDefault(emptyList()).mapNotNull { it.slot }.toSet()
+                .forEach { slot -> runCatching { retireLanded(context, slot) } }
+        }
+        // Then what a landing or a cancel that died after its bound left (staging rows and closed edits at or below it).
         val rows = runCatching { FailedTransfers.of(context).all() }.getOrElse { return }
         val edits = File(context.filesDir, WriteBacks.EDITS).walkTopDown().filter { it.isFile && it.name.endsWith(".closed") }.mapNotNull { closed ->
             runCatching { WriteBacks.decodeTarget(WriteBacks.sidecarOf(closed).readText()) }.getOrNull()?.let { WriteBacks.slotOf(it.workspaceId, it.nodeId) }
@@ -645,6 +652,27 @@ object TransferQueue {
                 else -> if (startup && file.path !in named && file.lastModified() < dayAgo) WriteBacks.discardEdit(file)
             }
         }
+    }
+
+    /*
+     * What a landing of `slot` made obsolete, gone: rows of failed saves numbered at or below its landed bound (a staging
+     * row's edit too) and their failures still waiting to be summed up (a file that uploaded is never said not to have).
+     * With `superseded` (the landing itself), every slot failure row but the still-pending save's (`keep`) too. Can be run
+     * again and again: the landing's own job, its next run, and every reconcile run it, so a death mid-way leaves nothing.
+     */
+    internal fun retireLanded(context: Context, slot: String, keep: String? = null, superseded: Boolean = false) {
+        val records = FailedTransfers.of(context)
+        val through = WriteBacks.landedThrough(context, slot)
+        val stale = records.all().filter { it.slot == slot }.filter { row ->
+            if (row.stage != null) (WriteBacks.stagedNumber(row.stage) ?: Long.MAX_VALUE) <= through
+            else (WriteBacks.numberOfId(WriteBacks.idOf(row.file)) ?: Long.MAX_VALUE) <= through || (superseded && WriteBacks.idOf(row.file) != keep)
+        }
+        if (stale.isEmpty()) return
+        stale.filter { it.stage != null }.forEach { row -> row.file?.let { WriteBacks.discardEdit(File(it)) } }
+        val obsolete = stale.map { it.id }.toSet()
+        records.forgetWhere { it.id in obsolete }
+        FailedTransfers.changed()
+        TransferNotices.retire(context, obsolete)
     }
 
     /* Tests: runs after a cancel's saves went, before the job's cancel is published. */
@@ -832,6 +860,8 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             val (pending, sending) = taken ?: run {
                 // Nothing (more) to send. A job that sent nothing still ends as one the summary waits for: what others
                 // gathered goes out now if no other job is left (nothing of this one is said).
+                // A landing whose bookkeeping a death cut short (or one recorded from a settled reservation) is finished here.
+                forItsAccount(generation) { TransferQueue.retireLanded(applicationContext, slot) }
                 if (!sentHere) forItsAccount(generation) { TransferNotices.settled(applicationContext, this@UploadWorker.id.toString()) }
                 return Result.success()
             }
@@ -845,17 +875,8 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             fun landed(version: String? = null): Boolean = forItsAccount(generation) {
                 val readCopy = if (target.family == null && version != null) java.io.File(applicationContext.cacheDir, "files/${target.nodeId}/$version") else null
                 val left = WriteBacks.landed(applicationContext, slot, pending.id, version, readCopy, pending.generation)
-                // Obsolete: a failed save's row that isn't the one still pending, and a save never kept in the slot (its edit
-                // kept for a Retry) numbered at or below the one that landed, whose edit goes too.
-                val rows = FailedTransfers.of(applicationContext).all().filter { it.slot == slot }
-                val stale = rows.filter { row ->
-                    if (row.stage != null) (WriteBacks.stagedNumber(row.stage) ?: 0L) <= pending.generation else WriteBacks.idOf(row.file) != left?.id
-                }
-                stale.filter { it.stage != null }.forEach { row -> row.file?.let { WriteBacks.discardEdit(java.io.File(it)) } }
-                val obsolete = stale.map { it.id }.toSet()
-                FailedTransfers.of(applicationContext).forgetWhere { it.id in obsolete }
-                // Their failures still waiting to be summed up go too: a file that uploaded is never said not to have.
-                TransferNotices.retire(applicationContext, obsolete)
+                // Obsolete: every failed save's row but the one still pending (superseded ones too, as the landing tells).
+                TransferQueue.retireLanded(applicationContext, slot, left?.id, superseded = true)
                 sentHere = true
                 waits.forget(this@UploadWorker.id.toString())
                 TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = target.folder))
