@@ -98,4 +98,24 @@ class FilesTreeGrantsTest {
         assertEquals(notes, provider.moveDocument(notes, "root", trips))
         assertTrue(provider.isChildDocument(trips, notes))
     }
+
+    /*
+     * Another app reads a file of the drive, and the account signs out (another signing in) as its bytes start to come
+     * down: nothing of the download is kept in the cache afterwards, and the read fails. Fails if a download writes the old
+     * account's plaintext into the cache's copies outside the lock a sign-out's wipe takes.
+     */
+    @Test
+    fun aReadDownloadingAsTheAccountSignsOutKeepsNothing() {
+        val provider = provider()
+        val notes = server.file(server.root, "Notes.txt", "the old account's words".toByteArray())
+        provider.queryChildDocuments("root", null, null as String?).close()
+        provider.beforeCacheDownload = {
+            provider.beforeCacheDownload = null
+            Shared.clearSession(app)
+            com.hushos.app.data.AccountStore(app.filesDir, app.cacheDir, app.noBackupFilesDir).wipe()
+            Shared.writeSession(app, Shared.Session(server.origin, "another-token", java.util.UUID.randomUUID().toString(), "sam@example.org"))
+        }
+        assertThrows(Exception::class.java) { provider.openDocument(notes, "r", null).close() }
+        assertEquals("a download outlived the sign-out", emptyList<String>(), app.cacheDir.walkTopDown().filter { it.isFile && !it.path.contains("jna") }.map { it.name }.toList())
+    }
 }

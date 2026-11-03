@@ -333,7 +333,34 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     @Volatile internal var afterResolve: (() -> Unit)? = null
 
     /* Per version, so a download resumed after a replacement never mixes two versions' bytes. */
-    private fun cacheFile(id: String, versionId: String?): File = File(context!!.cacheDir, "files/$id/${versionId ?: "new"}").also { it.parentFile?.mkdirs() }
+    private fun cacheFile(id: String, versionId: String?): File = File(context!!.cacheDir, "files/$id/${versionId ?: "new"}")
+
+    /*
+     * `id`'s bytes as `versionId`, the cache's copy of them (kept per version), for the account `vault` opens for: a copy
+     * already there, or one downloaded now into a file named by nothing of the account (cache/incoming/<random>, outside
+     * any lock) and moved into place only while that account is still here (under the wipe's lock). The account gone
+     * meanwhile (a sign-out mid-download), the download is deleted and the open fails: nothing of it outlives the wipe.
+     * A process that dies mid-download leaves its file for a later start to delete (HushOSApplication).
+     */
+    /* Tests: runs as a download for the cache is about to start. */
+    @Volatile internal var beforeCacheDownload: (() -> Unit)? = null
+
+    private fun cached(vault: Vault, id: String, versionId: String?): File {
+        val file = cacheFile(id, versionId)
+        if (file.isFile) return file
+        val incoming = File(context!!.cacheDir, "$INCOMING/${java.util.UUID.randomUUID()}")
+        try {
+            beforeCacheDownload?.invoke()
+            vault.download(id, incoming)
+            com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) {
+                file.parentFile?.mkdirs()
+                check(incoming.renameTo(file) || file.isFile) { "The file couldn't be kept." }
+            } ?: throw authenticationRequired()
+        } finally {
+            incoming.delete()
+        }
+        return file
+    }
 
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor = guarded {
         val vault = requireVault()
@@ -345,7 +372,9 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             // A save of it still pending (waiting, retrying, failed) is what another app last wrote: read that, never the
             // server's older version, which an app that reads then truncates would write the save away with.
             val pending = File(context!!.cacheDir, "files/$id/pending-${java.util.UUID.randomUUID()}")
-            if (WriteBacks.copyNewestTo(context!!, slot, pending)) return@guarded ParcelFileDescriptor.open(pending, ParcelFileDescriptor.MODE_READ_ONLY).also { pending.delete() }
+            // Copied only while the account the read is for is still here, as every copy the cache keeps.
+            val copied = com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) { WriteBacks.copyNewestTo(context!!, slot, pending) } ?: throw authenticationRequired()
+            if (copied) return@guarded ParcelFileDescriptor.open(pending, ParcelFileDescriptor.MODE_READ_ONLY).also { pending.delete() }
             // A save of it landed from its job's own vault since: this vault may still hold the version before. The version is
             // checked with the server first; without an answer, the landed bytes are read (kept as that version's read copy),
             // or nothing is: never the version before, which an app that reads then saves would write over the landed save.
@@ -359,11 +388,9 @@ class HushOSDocumentsProvider : DocumentsProvider() {
                     return@guarded ParcelFileDescriptor.open(landed, ParcelFileDescriptor.MODE_READ_ONLY)
                 }
             }
-            val file = cacheFile(id, item.node.currentVersion?.id)
-            // A kept file opens from the phone, network or not; anything else comes down, or resumes, once per version.
+            // A kept file opens from the phone, network or not; anything else comes down once per version.
             Offline.localCopy(context!!, item)?.let { return@guarded ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY) }
-            if (!file.exists()) vault.download(id, file)
-            return@guarded ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+            return@guarded ParcelFileDescriptor.open(cached(vault, id, item.node.currentVersion?.id), ParcelFileDescriptor.MODE_READ_ONLY)
         }
         val edit = personalEdit(vault, id, mode)
         // Opened only while the account it was made for is still here (under the wipe's lock): a mode that creates would
@@ -442,8 +469,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             if (WriteModes.keepsContents(mode)) {
                 if (forItsAccount { WriteBacks.copyNewestTo(ctx, WriteBacks.slotOf(opened.node.workspaceId, id), edit) }) return edit
                 val item = currentVersion(vault, id)
-                val file = cacheFile(id, item.node.currentVersion?.id)
-                if (!file.exists()) vault.download(id, file)
+                val file = cached(vault, id, item.node.currentVersion?.id)
                 forItsAccount { file.copyTo(edit, overwrite = true) }
             }
             return edit
@@ -519,6 +545,9 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     override fun removeDocument(documentId: String, parentDocumentId: String) = deleteDocument(documentId)
 
     companion object {
+        /* Where a download for the cache is written before it is kept (HushOSDocumentsProvider.cached); a start deletes what a dead process left. */
+        const val INCOMING = "incoming"
+
         /* The provider's one instance in this process (the system makes it as the process starts), for FilesPoll's jobs. */
         @Volatile internal var current: HushOSDocumentsProvider? = null
 
