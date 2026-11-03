@@ -426,7 +426,34 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     }
 
     /* Per version, so a download resumed after a replacement never mixes two versions' bytes. */
-    private fun cacheFile(id: String, versionId: String?): File = File(context!!.cacheDir, "files/$id/${versionId ?: "new"}").also { it.parentFile?.mkdirs() }
+    private fun cacheFile(id: String, versionId: String?): File = File(context!!.cacheDir, "files/$id/${versionId ?: "new"}")
+
+    /*
+     * `id`'s bytes as `versionId`, the cache's copy of them (kept per version), for the account `vault` opens for: a copy
+     * already there, or one downloaded now into a file named by nothing of the account (cache/incoming/<random>, outside
+     * any lock) and moved into place only while that account is still here (under the wipe's lock). The account gone
+     * meanwhile (a sign-out mid-download), the download is deleted and the open fails: nothing of it outlives the wipe.
+     * A process that dies mid-download leaves its file for a later start to delete (HushOSApplication).
+     */
+    /* Tests: runs as a download for the cache is about to start. */
+    @Volatile internal var beforeCacheDownload: (() -> Unit)? = null
+
+    private fun cached(vault: Vault, id: String, versionId: String?): File {
+        val file = cacheFile(id, versionId)
+        if (file.isFile) return file
+        val incoming = File(context!!.cacheDir, "$INCOMING/${java.util.UUID.randomUUID()}")
+        try {
+            beforeCacheDownload?.invoke()
+            vault.download(id, incoming)
+            com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) {
+                file.parentFile?.mkdirs()
+                check(incoming.renameTo(file) || file.isFile) { "The file couldn't be kept." }
+            } ?: throw authenticationRequired()
+        } finally {
+            incoming.delete()
+        }
+        return file
+    }
 
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor = guarded {
         val vault = requireVault()
@@ -434,12 +461,10 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         if (FamilyDoc.of(documentId) != null) throw FileNotFoundException("Choose a file.")
         val id = nodeId(documentId, vault)
         val item = vault.resolve(id)
-        val file = cacheFile(id, item.node.currentVersion?.id)
         if (mode.contains("r") && !mode.contains("w")) {
-            // A kept file opens from the phone, network or not; anything else comes down, or resumes, once per version.
+            // A kept file opens from the phone, network or not; anything else comes down once per version.
             Offline.localCopy(context!!, item)?.let { return@guarded ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY) }
-            if (!file.exists()) vault.download(id, file)
-            return@guarded ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+            return@guarded ParcelFileDescriptor.open(cached(vault, id, item.node.currentVersion?.id), ParcelFileDescriptor.MODE_READ_ONLY)
         }
         val edit = personalEdit(vault, id, mode)
         val handler = Handler(Looper.getMainLooper())
@@ -460,9 +485,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         val edit = File(context!!.cacheDir, "edits/$id/${java.util.UUID.randomUUID()}").also { it.parentFile?.mkdirs() }
         if (WriteModes.keepsContents(mode)) {
             val item = currentVersion(vault, id)
-            val file = cacheFile(id, item.node.currentVersion?.id)
-            if (!file.exists()) vault.download(id, file)
-            file.copyTo(edit, overwrite = true)
+            cached(vault, id, item.node.currentVersion?.id).copyTo(edit, overwrite = true)
         }
         return edit
     }
@@ -608,6 +631,9 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     override fun removeDocument(documentId: String, parentDocumentId: String) = deleteDocument(documentId)
 
     companion object {
+        /* Where a download for the cache is written before it is kept (HushOSDocumentsProvider.cached); a start deletes what a dead process left. */
+        const val INCOMING = "incoming"
+
         /* The provider's one instance in this process (the system makes it as the process starts), for FilesPoll's jobs. */
         @Volatile internal var current: HushOSDocumentsProvider? = null
 
