@@ -319,13 +319,32 @@ public final class FamilyFilesDomains: @unchecked Sendable {
             // Left pending: the generation its write reached since, if it did (until then nothing is accepted).
             let generation = wrote ?? lock.withLock { landed[groupId] }
             guard mayRemove(groupId, owner: owner, session: session, after: generation) else { return }
-            let identifier = FamilyFileIds.domain(groupId)
-            try? await manager.remove(identifier)
-            // An acceptance that came after the let-go and landed while the system removed the location (in another
-            // process, which found it still there): its record stands, so its location comes back.
-            guard let generation = generation ?? lock.withLock({ landed[groupId] }), let name = acceptedSince(groupId, generation) else { return }
-            await addVerified(identifier, name: name, holds: { acceptedSince(groupId, generation) != nil })
+            // Kept: a record written at the let-go's generation or later (an acceptance that came after it).
+            await removeVerified(groupId) { [self] record in
+                guard let generation = generation ?? lock.withLock({ landed[groupId] }), let written = record.generation else { return false }
+                return written >= generation
+            }
         }
+    }
+
+    /*
+     * Every removal of one family's location but the account wipe (`removeAll`) goes through here: the
+     * location is removed, then its record is read again under the store's lock, and one that `keeps`
+     * (an acceptance this removal didn't decide against, landed while the system removed the location
+     * in a process that found it still there) gets its location back through `addVerified`. True when
+     * the location is gone.
+     */
+    @discardableResult
+    private func removeVerified(_ groupId: String, keeps: @escaping (FamilyDomainRecord) -> Bool) async -> Bool {
+        let identifier = FamilyFileIds.domain(groupId)
+        let removed = (try? await manager.remove(identifier)) != nil
+        func kept() -> FamilyDomainRecord? {
+            var record: FamilyDomainRecord?
+            guard records.update({ stored in record = stored.records[groupId] }), let record, keeps(record) else { return nil }
+            return record
+        }
+        guard let record = kept() else { return removed }
+        return !(await addVerified(identifier, name: record.name, holds: { kept() != nil }))
     }
 
     /*
@@ -344,12 +363,6 @@ public final class FamilyFilesDomains: @unchecked Sendable {
         return true
     }
 
-    /* The name of the family's record if it was written at `generation` or later (an acceptance after that let-go), read under the store's lock. */
-    private func acceptedSince(_ groupId: String, _ generation: UInt64) -> String? {
-        var record: FamilyDomainRecord?
-        guard records.update({ stored in record = stored.records[groupId] }), let record, let written = record.generation, written >= generation else { return nil }
-        return record.name
-    }
 
     /*
      * Whether a let-go of `owner` and `session`, which moved the family's generation to `generation`,
@@ -447,7 +460,9 @@ public final class FamilyFilesDomains: @unchecked Sendable {
                     kept.append(identifier)
                     continue
                 }
-                if (try? await manager.remove(identifier)) != nil { present.remove(identifier) }
+                // Kept: this account's record, an acceptance that landed while the location was removed.
+                let gone = if let groupId { await removeVerified(groupId) { $0.owner == owner } } else { (try? await manager.remove(identifier)) != nil }
+                if gone { present.remove(identifier) }
             }
             records.update { stored in
                 stored.records = stored.records.filter { $0.value.owner == owner || present.contains(FamilyFileIds.domain($0.key)) }
@@ -459,6 +474,9 @@ public final class FamilyFilesDomains: @unchecked Sendable {
     /*
      * Sign-out, deletion, another account in: every family location goes, each record only once
      * its location went (one that stays is refused to anyone else). Unknown locations: nothing.
+     * The one removal not verified (`removeVerified`): it is the account wipe, and the account count
+     * it moves first refuses every acceptance begun before it; one begun after loses its record with
+     * its location here, and the next sync adds both.
      */
     public func removeAll() async {
         // At once, before any queued call: every acceptance begun before this (in any process) is refused from here.
@@ -485,7 +503,8 @@ public final class FamilyFilesDomains: @unchecked Sendable {
                 guard records.update({ stored in record = stored.records[groupId] }), let record else { return false }
                 return record.owner != current
             }
-            guard foreign(), (try? await manager.remove(FamilyFileIds.domain(groupId))) != nil else { return }
+            // Kept: the account signed in now's record, an acceptance that landed while the location was removed.
+            guard foreign(), await removeVerified(groupId, keeps: { $0.owner == current }) else { return }
             records.update { stored in
                 if let record = stored.records[groupId], record.owner != current { stored.records[groupId] = nil }
             }

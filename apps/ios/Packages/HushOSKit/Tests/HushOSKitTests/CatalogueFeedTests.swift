@@ -28,6 +28,31 @@ extension OnFakeDrive {
 
     func listed(_ vault: Vault) async -> Set<String> { Set(await vault.catalogueAll().map(\.id)) }
 
+    /*
+     * The own drive's feed names a file's folder, and the file moves out of it before that folder is
+     * listed: the batch fails as a retry (Files asks again from the same cursor), never answering the
+     * file deleted. Fails if a row missing from its named folder is taken for a deletion.
+     */
+    @Test func aFileMovedMidBatchIsNotCalledDeleted() async throws {
+        let feed = try FeedServer()
+        let server = feed.drive
+        let vault = try await vault(feed)
+        #expect(await vault.buildCatalogue())
+        await vault.forget(server.f)
+        let held = feed.hold(request: feed.asked.count + 1)
+        let batch = Task { try await vault.changes(since: 0) }
+        await held.arrived()
+        server.nodes[server.f] = server.nodes[server.f]!.with(parentId: server.b)
+        held.release()
+        do {
+            let changes = try await batch.value
+            Issue.record("a file moved mid-batch was answered: \(changes?.deleted ?? []) deleted")
+        } catch DriveAPIError.transport {
+        } catch {
+            Issue.record("a move mid-batch failed as \(error), not a retry")
+        }
+    }
+
     @Test func aRefillLongerThanAPageEndsAndListsEverything() async throws {
         let feed = try FeedServer()
         // Tombstones were dropped through 4: every cursor from 1 to 3 is below them, a refill's second page included.

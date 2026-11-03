@@ -478,6 +478,34 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         #expect(manager.names[FamilyFileIds.domain(group)] == nil, "a location restored over a second let-go stayed")
     }
 
+    /*
+     * The removals that aren't a let-go meet an acceptance that lands while the system removes the
+     * location (in a process that found it still there): a sign-in's reconcile of a location without
+     * this account's record, and the refusal of another account's location once its record went. Each
+     * gives the fresh acceptance its location back. Fails if any single-family removal skips the
+     * reread after it.
+     */
+    @Test func everyRemovalGivesAnAcceptanceThatLandedDuringItItsLocationBack() async throws {
+        for path in ["reconcile", "foreign"] {
+            let lifecycle = FamilyFilesDomains(records: records, manager: manager)
+            let app = FamilyFilesDomains(records: records, manager: manager)
+            let session = TemporaryCopies.session(CopyEpoch())
+            let (group, maya, sam, records) = (UUID().uuidString.lowercased(), Self.maya, Self.sam, self.records)
+            let identifier = FamilyFileIds.domain(group)
+            // The location stands without Maya's record: none at all, or Sam's from before a switch.
+            manager.put(identifier, name: "Lindqvist family")
+            if path == "foreign" { records.update { $0.records[group] = FamilyDomainRecord(owner: sam, name: "Lindqvist family") } }
+            manager.duringRemove = {
+                // Elsewhere, Sam's leftover record goes, and Maya's sync accepts the family.
+                records.update { $0.records[group] = nil }
+                await app.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value
+            }
+            if path == "reconcile" { await lifecycle.reconcile(owner: maya).value } else { await lifecycle.dropForeign(group, current: maya).value }
+            #expect(records.admission(group, owner: maya) == .admitted, "\(path) took Maya's fresh record")
+            #expect(manager.names[identifier] == "Lindqvist family", "\(path) took the location of an acceptance that landed during it")
+        }
+    }
+
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
     @Test func aRenamedFamilysLocationTakesTheNewName() async throws {
         let domains = self.domains
@@ -842,6 +870,52 @@ extension OnFakeDrive {
 
             await s.phone.vault.rememberParent(f.photo.id, parent: UUID().uuidString.lowercased())
             await #expect(throws: FamilyFilesError.unavailable) { _ = try await s.source.item(f.photo.ref) }
+        }
+
+        /*
+         * A file moves out of its folder between the feed being read and that folder being listed: the
+         * feed still names the old folder, which no longer holds it. The batch fails and is asked again
+         * (its cursor where it was), never answering the file deleted. Fails if a row missing from its
+         * named folder is taken for a deletion.
+         */
+        @Test func aFileMovedMidBatchFailsTheBatchNotDeletesIt() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            _ = try await s.source.folders()
+            let (f, server) = (s.family, s.server)
+            let moved = f.photo.with(parentId: UUID().uuidString.lowercased())
+            server.lock.withLock {
+                server.manage.beforeAnswer = { method, path in
+                    guard method == "GET", path == "/api/drive/nodes/\(f.rootId)/children" else { return }
+                    server.lock.withLock { server.manage.beforeAnswer = nil }
+                    server.put(moved)
+                }
+            }
+            do {
+                let changes = try await s.source.changes(since: FamilyAnchor(folders: [f.workspaceId: .init(root: f.rootId, cursor: 0)]))
+                Issue.record("a file moved mid-batch was answered: \(changes?.deleted ?? []) deleted")
+            } catch {
+                #expect(error as? FamilyFilesError == .unavailable, "a move mid-batch failed as \(error)")
+            }
+        }
+
+        /*
+         * A row the folder's listing names but that doesn't open here (its id clashes with one of the
+         * phone's own rows) is a verdict about that row: it leaves the location, and the batch still
+         * answers. Fails if a listed row that can't open is retried for ever like a missing one.
+         */
+        @Test func aListedRowThatCantOpenHereLeavesWithoutStallingTheBatch() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            _ = try await s.source.folders()
+            let f = s.family
+            _ = try await s.phone.vault.listChildren(of: f.personalRoot.id, in: f.personal)
+            #expect(await s.phone.vault.item(NodeRef(workspaceId: f.personal, nodeId: f.personalRoot.id)) != nil, "the clash needs the phone's own row held")
+            s.server.put(try FamilyFixture.node(id: f.personalRoot.id, in: f.workspaceId, parent: f.rootId, parentKey: f.rootKey, key: randomBytes(length: 32),
+                                                kind: .file, name: "Clash.txt", writer: f.creator))
+            let changes = try #require(try await s.source.changes(since: FamilyAnchor(folders: [f.workspaceId: .init(root: f.rootId, cursor: 0)])))
+            #expect(changes.deleted.contains(FamilyFileIds.item(NodeRef(workspaceId: f.workspaceId, nodeId: f.personalRoot.id))))
+            #expect(changes.updated.contains { $0.ref == f.photo.ref })
         }
 
         /*

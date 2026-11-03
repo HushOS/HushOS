@@ -820,6 +820,25 @@ public actor Vault {
     }
 
     /* A node this process has not opened yet: listing the folder it was last seen in opens it and everything above. */
+    /*
+     * For the own drive's feed: a node as the folder it was last seen in lists it now. `listed` is false
+     * when that listing doesn't name it (moved or trashed since), which is no verdict on the node.
+     */
+    func listedNow(_ nodeId: String) async throws -> (row: Opened?, listed: Bool) {
+        if let done = opened[nodeId] { return (done, true) }
+        let workspace = try await loadWorkspace()
+        let listing: Listing
+        if let root = workspace.root, root.id == nodeId {
+            listing = try await listChildren(of: root.id)
+        } else if let parent = parents[nodeId] {
+            listing = try await listChildren(of: parent)
+        } else {
+            throw DriveAPIError.server(500, "This item has not been seen yet; open its folder first.")
+        }
+        let listed = ([listing.folder] + listing.ancestors + listing.children).contains { $0.id == nodeId }
+        return (opened[nodeId], listed)
+    }
+
     public func resolve(_ nodeId: String) async throws -> Opened {
         if let done = opened[nodeId] { return done }
         let workspace = try await loadWorkspace()

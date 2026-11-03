@@ -929,7 +929,12 @@ extension Vault {
                 }
                 if let parent = node.parentId { rememberParent(node.id, parent: parent) }
                 do {
-                    updated.append(try await resolve(node.id))
+                    let found = try await listedNow(node.id)
+                    // Not in the folder the feed names (moved or trashed since the feed was read): no verdict, and the batch
+                    // fails so Files asks again from the same cursor, where the node's newer row names where it is now.
+                    guard found.listed else { throw DriveAPIError.transport("HushOS is catching up with a change. Try again.") }
+                    guard let row = found.row else { throw DriveAPIError.notFound("This item no longer exists.") }
+                    updated.append(row)
                 } catch DriveAPIError.notFound, DriveAPIError.trashed, is CoreError {
                     // Gone, under a trashed folder, or no longer openable here: it leaves the Files location.
                     deleted.append(node.id)
@@ -960,7 +965,7 @@ extension Vault {
         var deleted: [String] = []
         // Each folder listed once per batch, its rows or its error kept: siblings changed together (a bulk upload, a
         // re-key) are read from the one listing rather than each listing their folder again.
-        var listings: [String: Result<[NodeRef: Opened], Error>] = [:]
+        var listings: [String: Result<FolderRows, Error>] = [:]
         for change in feed.changes {
             switch change.kind {
             case "node":
@@ -975,9 +980,10 @@ extension Vault {
                 if listings[folder] == nil {
                     do {
                         let listing = try await listChildren(of: folder, in: workspaceId)
-                        var rows: [NodeRef: Opened] = [:]
+                        var rows = FolderRows()
                         for row in [listing.folder] + listing.ancestors + listing.children {
-                            if let held = opened[row.ref] { rows[row.ref] = held }
+                            rows.listed.insert(row.ref)
+                            if let held = opened[row.ref] { rows.opened[row.ref] = held }
                         }
                         listings[folder] = .success(rows)
                     } catch {
@@ -985,11 +991,17 @@ extension Vault {
                     }
                 }
                 do {
-                    if let row = try listings[folder]?.get()[node.ref] {
+                    guard let rows = try listings[folder]?.get(), rows.listed.contains(node.ref) else {
+                        // Not in the folder the feed names (moved or trashed since the feed was read): no verdict. The batch
+                        // fails with its cursor where it was, and the node's newer row says where it is now.
+                        throw FamilyFilesError.unavailable
+                    }
+                    if let row = rows.opened[node.ref] {
                         // Held again as the listing opened it (cleared above when an earlier change of the batch listed it).
                         opened[node.ref] = row
                         updated.append(row)
                     } else {
+                        // Listed and not opened here (a row sealed in a suite this app doesn't read): it leaves the location.
                         deleted.append(node.id)
                     }
                 } catch let error where FamilyFilesError.keyChanging(error) {
@@ -1023,6 +1035,12 @@ extension Vault {
             }
         }
         return Changes(updated: updated, deleted: deleted, nextCursor: feed.nextCursor, hasMore: feed.hasMore)
+    }
+
+    /* A folder's listing as a change batch keeps it: every row it names, and those that opened here. */
+    struct FolderRows {
+        var listed: Set<NodeRef> = []
+        var opened: [NodeRef: Opened] = [:]
     }
 
     /* The folder a node was last seen in (the index a cold process lists from); nil when none is known. */
