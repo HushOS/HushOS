@@ -124,6 +124,12 @@ class ProviderFamilies internal constructor(
      */
     fun load(): List<FamilyRoot> = synchronized(loadLock) { loadHeld() }
 
+    /* A load now, whether or not the roots are due: Files asked to refresh a family's own listing (its folders). */
+    fun reload(): List<FamilyRoot> = synchronized(loadLock) {
+        snapshot?.let { snapshot = Snapshot(it.roots, Long.MIN_VALUE / 4, it.signal, it.failed) }
+        loadHeld()
+    }
+
     private fun loadHeld(): List<FamilyRoot> {
         snapshot?.let { if (!due()) return it.roots }
         if (vault.closed) throw SessionEnded()
@@ -369,8 +375,10 @@ class ProviderFamilies internal constructor(
             flags = flags or Document.FLAG_SUPPORTS_DELETE or Document.FLAG_SUPPORTS_RENAME or Document.FLAG_SUPPORTS_MOVE
             if (!item.isFolder) flags = flags or Document.FLAG_SUPPORTS_WRITE
         }
+        // A file with a pending save shows that save's size and date: the bytes a read returns.
+        val pending = if (item.isFolder) null else WriteBacks.pendingMeta(vault.context, WriteBacks.slotOf(item.node.workspaceId, item.id))
         return FamilyRow(FamilyDoc.Node(root.groupId, folder.workspaceId, item.id).id, mimeOf(item), if (top) folder.name else item.name,
-            item.modifiedMillis, flags, if (item.isFolder) null else item.size, summary)
+            pending?.second ?: item.modifiedMillis, flags, if (item.isFolder) null else pending?.first ?: item.size, summary)
     }
 
     /* Whether `doc` sits under `parent`: in one family, under the family's top or up a folder's own parents. */

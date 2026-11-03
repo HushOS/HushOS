@@ -242,13 +242,15 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             flags = flags or Document.FLAG_SUPPORTS_WRITE
             if (item.hasThumbnail) flags = flags or Document.FLAG_SUPPORTS_THUMBNAIL
         }
+        // A file with a pending save shows that save's size and date: the bytes a read returns.
+        val pending = if (item.isFolder) null else WriteBacks.pendingMeta(context!!, WriteBacks.slotOf(item.node.workspaceId, item.id))
         cursor.newRow()
             .add(Document.COLUMN_DOCUMENT_ID, docId(item.id, vault))
             .add(Document.COLUMN_MIME_TYPE, mimeOf(item))
             .add(Document.COLUMN_DISPLAY_NAME, if (item.id == vault.rootId) "HushOS" else item.name)
-            .add(Document.COLUMN_LAST_MODIFIED, item.modifiedMillis)
+            .add(Document.COLUMN_LAST_MODIFIED, pending?.second ?: item.modifiedMillis)
             .add(Document.COLUMN_FLAGS, flags)
-            .add(Document.COLUMN_SIZE, item.size)
+            .add(Document.COLUMN_SIZE, pending?.first ?: item.size)
             // The same verdict the app's rows show, so a planted file is not passed off as clean in a picker.
             .add(Document.COLUMN_SUMMARY, if (item.id == vault.rootId) null else summaryOf(item, trust))
     }
@@ -334,8 +336,12 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     override fun refresh(uri: android.net.Uri, extras: android.os.Bundle?, cancellationSignal: CancellationSignal?): Boolean = runCatching {
         val ctx = context ?: return false
         val documentId = runCatching { DocumentsContract.getDocumentId(uri) }.getOrNull() ?: return false
-        // A family folder lists from the server each time: false, and Files reloads it itself.
-        if (FamilyDoc.of(documentId) != null) return false
+        // A family folder lists from the server each time: false, and Files reloads it itself. A family's own listing (its
+        // folders) comes from the loaded roots, so those are loaded again first.
+        FamilyDoc.of(documentId)?.let { doc ->
+            if (doc is FamilyDoc.Top) liveVault()?.let { runCatching { familiesOf(it).reload() } }
+            return false
+        }
         val vault = liveVault() ?: return false
         val rootId = vault.rootId
         val folder = FilesRoots.nodeId(documentId, rootId)

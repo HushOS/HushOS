@@ -74,6 +74,7 @@ class ProviderFamiliesTest {
 
     @After
     fun close() {
+        WriteBacks.afterContent = null
         Reservations.forgetHeld()
         server.close()
         assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
@@ -1202,6 +1203,102 @@ class ProviderFamiliesTest {
         assertThrows(FileNotFoundException::class.java) { read(provider, file) }
         val copies = FamilyCopies.folder(app.cacheDir, family.workspaceId)
         assertTrue("a pending read's plaintext was copied after the family let go", copies == null || !File(copies, "pending").walkTopDown().any { it.isFile })
+    }
+
+    /*
+     * Cancelling a family file's save while the other app saves it again (the new save holding the slot's lock, not yet
+     * published): the cancelled save goes, the save made after the cancel was pressed stays, gets a job of its own and
+     * lands. Fails if a cancel's cleanup deletes whatever the slot holds when it runs.
+     */
+    @Test
+    fun aFamilySaveMadeAfterACancelSurvivesIt() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("cancelled save") })
+        val job = jobs(slot).single()
+        val target = WriteBacks.pending(app, slot)!!.target
+        val holding = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        WriteBacks.afterContent = { WriteBacks.afterContent = null; holding.countDown(); release.await(2, java.util.concurrent.TimeUnit.SECONDS) }
+        val saving = Thread { WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "after").apply { writeText("save after the cancel") }) }.apply { start() }
+        assertTrue(holding.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        val cleanup = TransferQueue.cancel(app, job.id, job.tags.first { it.startsWith("file:") }.removePrefix("file:"))
+        release.countDown()
+        saving.join(5_000)
+        cleanup.get(5, java.util.concurrent.TimeUnit.SECONDS)
+        assertEquals("save after the cancel", WriteBacks.contentOf(app, slot).readText())
+        assertEquals(ListenableWorker.Result.success(), runJob(slot))
+        assertEquals("save after the cancel", serverText())
+    }
+
+    /*
+     * A family's cleanup settling a slot's reservation blocks on its abort while the account signs out and the next one
+     * saves the same family file (the same slot): the cleanup, finishing for the account that left, deletes nothing of
+     * the next account's. Fails if a slot is dropped without checking the account it began for is still the one here.
+     */
+    @Test
+    fun aFamilyCleanupNeverDropsTheNextAccountsSave() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("first account's save") })
+        val target = WriteBacks.pending(app, slot)!!.target
+        // A reservation a dead run of the slot left (no upload of this process holds it).
+        val leftover = UUID.randomUUID().toString()
+        Reservations.reserved(app, leftover, family.workspaceId, "$slot#leftover", System.currentTimeMillis(), null)
+        Reservations.idle(leftover)
+        val began = Reservations.generation
+        TransferQueue.dropSlot(app, slot, null, { body -> Reservations.whileAccount(began) { body() } }) { _, _ ->
+            // The abort blocks across a sign-out; the next account saves the same file.
+            com.hushos.app.data.AccountStore.of(app).wipe()
+            WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "next").apply { writeText("next account's save") })
+            Reservations.Abort.PENDING
+        }
+        assertEquals("next account's save", WriteBacks.contentOf(app, slot).readText())
+    }
+
+    /*
+     * A family file with a save waiting is listed with that save's size and date, the bytes a read returns. Fails if a
+     * family listing describes the server's version while reads return the pending save.
+     */
+    @Test
+    fun aFamilyListingShowsThePendingSavesSize() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        val text = "a pending family save, longer than the marker"
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText(text) })
+        val kept = File(WriteBacks.dir(app, slot), WriteBacks.pending(app, slot)!!.id + ".bin")
+        provider.queryChildDocuments(folder, null, null as String?).use { cursor ->
+            val id = cursor.getColumnIndexOrThrow(Document.COLUMN_DOCUMENT_ID)
+            var found = false
+            while (cursor.moveToNext()) if (cursor.getString(id) == file) {
+                found = true
+                assertEquals(text.length.toLong(), cursor.getLong(cursor.getColumnIndexOrThrow(Document.COLUMN_SIZE)))
+                assertEquals(kept.lastModified(), cursor.getLong(cursor.getColumnIndexOrThrow(Document.COLUMN_LAST_MODIFIED)))
+            }
+            assertTrue(found)
+        }
+    }
+
+    /*
+     * Files refreshes a family's own listing (its folders) after the family changed on the server (here: this account was
+     * removed): the refresh loads the families again, so the listing after it isn't the one loaded minutes before. Fails
+     * if a family's listing answers from roots loaded before the refresh until they expire.
+     */
+    @Test
+    fun aRefreshOfAFamilysListingLoadsItAgain() {
+        val provider = provider()
+        assertEquals(listOf(family.rootId), rows(provider.queryChildDocuments(top, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+            .map { (FamilyDoc.of(it!!) as FamilyDoc.Node).nodeId })
+        family.notMember = true
+        family.listed = false
+        provider.refresh(DocumentsContract.buildChildDocumentsUri(authority, top), null, null)
+        assertThrows(FileNotFoundException::class.java) { provider.queryChildDocuments(top, null, null as String?).close() }
     }
 
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =
