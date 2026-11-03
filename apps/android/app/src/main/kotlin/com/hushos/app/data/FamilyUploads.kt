@@ -73,28 +73,8 @@ object FamilyUploads {
     fun upload(vault: Vault, groupId: String, workspaceId: String, file: File, name: String, mime: String?, folderId: String, replacingId: String?,
                job: String, progress: (Float) -> Unit): Opened {
         open(vault, groupId, workspaceId, folderId)
-        val replacing = replacingId?.let { vault.item(workspaceId, it) ?: relocated(vault, workspaceId, it) ?: throw NotFound("This item no longer exists.") }
+        val replacing = replacingId?.let { vault.item(workspaceId, it) ?: throw NotFound("This item no longer exists.") }
         return vault.upload(file, name, mime, folderId, replacing, vault.makeThumbnail(file, mime), job = job, progress = progress)
-    }
-
-    /*
-     * A file the folder it was queued from no longer lists (another member moved it): found by its workspace and node, in
-     * the folder the workspace's change feed puts it in now, listed through the ledger. Null when the feed has it nowhere.
-     */
-    private fun relocated(vault: Vault, workspaceId: String, nodeId: String): Opened? {
-        var cursor = 0
-        var parent: String? = null
-        while (true) {
-            val page = vault.api.changes(workspaceId, cursor)
-            for (change in page.changes) {
-                val node = change.node ?: continue
-                if (node.id == nodeId && node.workspaceId.equals(workspaceId, ignoreCase = true)) parent = node.parentId.takeIf { node.trashedAt == null }
-            }
-            if (!page.hasMore || page.nextCursor <= cursor) break
-            cursor = page.nextCursor
-        }
-        vault.listChildren(parent ?: return null, workspaceId)
-        return vault.item(workspaceId, nodeId)
     }
 
     /* How long a waiting upload pauses between looks (iOS's and the web's cadence, never growing with the tries). */
