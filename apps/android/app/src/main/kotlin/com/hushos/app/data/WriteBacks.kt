@@ -125,7 +125,9 @@ object WriteBacks {
         val slot = slotOf(target.workspaceId, target.nodeId)
         lockOf(slot).withLock {
             val dir = dir(context, slot).also { it.mkdirs() }
-            val generation = (current(dir, slot)?.generation ?: 0L) + 1
+            // Above every generation the slot holds (a cancelled record's newer saves included), so it is the newest.
+            val generation = maxOf(current(dir, slot)?.generation ?: 0L,
+                dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty().mapNotNull { read(it, slot)?.generation }.maxOrNull() ?: 0L) + 1
             val id = java.util.UUID.randomUUID().toString()
             val contents = File(dir, "$id$BIN.incoming")
             if (!edit.renameTo(contents)) edit.copyTo(contents, overwrite = true)
@@ -199,8 +201,44 @@ object WriteBacks {
     /* A read refreshed after landing `seen`: only that landing is caught up with, never one that came during the refresh. */
     fun caughtUp(slot: String, seen: Long) { landedHere.remove(slot, seen) }
 
-    /* The slot's saves dropped (cancelled): under its lock, so a save landing in it meanwhile is either kept whole or gone. */
+    /* The slot's saves dropped (its family ended): under its lock, so a save landing in it meanwhile is either kept whole or gone. */
     fun drop(context: Context, slot: String) = lockOf(slot).withLock { dir(context, slot).deleteRecursively() }
+
+    /*
+     * The save the slot's record names now, read without its lock (the record changes by one rename, so it is whole):
+     * what a cancel pressed now cancels, before any save that arrives after it. Null when none is published.
+     */
+    fun publishedId(context: Context, slot: String): String? = read(File(dir(context, slot), RECORD), slot)?.id
+
+    /*
+     * A cancel of the save `id` (what the slot held when it was pressed), under the slot's lock: that save and every older
+     * one go, and only those; a save made after the cancel was pressed stays pending, published if it was waiting behind
+     * a cancelled record. Nothing when `id` is gone already (it landed, or a newer save replaced it). The save left, if any.
+     */
+    fun cancelThrough(context: Context, slot: String, id: String?): Pending? = lockOf(slot).withLock {
+        val dir = dir(context, slot)
+        if (id == null || !dir.isDirectory) return@withLock current(dir, slot)
+        val through = read(File(dir, id + META), slot)?.generation ?: return@withLock current(dir, slot)
+        dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty().mapNotNull { read(it, slot) }.filter { it.generation <= through }.forEach {
+            File(dir, it.id + BIN).delete()
+            File(dir, it.id + META).delete()
+        }
+        if ((read(File(dir, RECORD), slot)?.generation ?: Long.MAX_VALUE) <= through) File(dir, RECORD).delete()
+        val left = current(dir, slot)
+        // Nothing left to send and no upload copy in use: the slot goes.
+        if (left == null && dir.listFiles().orEmpty().none { it.name.startsWith("sending-") }) dir.deleteRecursively()
+        left
+    }
+
+    /*
+     * What a listing shows of a file with a pending save: that save's size and when it was kept, so the size and date
+     * Files shows are those of the bytes a read returns. Null when the file has none (no lock taken for a file without a slot).
+     */
+    fun pendingMeta(context: Context, slot: String): Pair<Long, Long>? {
+        val dir = dir(context, slot)
+        if (!dir.isDirectory) return null
+        return lockOf(slot).withLock { current(dir, slot)?.let { File(dir, it.id + BIN) }?.let { it.length() to it.lastModified() } }
+    }
 
     /*
      * A failed save's row dismissed (`file`, its generation): only that save goes. While it is still the pending one the

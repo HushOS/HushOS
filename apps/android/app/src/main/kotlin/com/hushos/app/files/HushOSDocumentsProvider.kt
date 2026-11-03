@@ -183,13 +183,15 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             flags = flags or Document.FLAG_SUPPORTS_WRITE
             if (item.hasThumbnail) flags = flags or Document.FLAG_SUPPORTS_THUMBNAIL
         }
+        // A file with a pending save shows that save's size and date: the bytes a read returns.
+        val pending = if (item.isFolder) null else WriteBacks.pendingMeta(context!!, WriteBacks.slotOf(item.node.workspaceId, item.id))
         cursor.newRow()
             .add(Document.COLUMN_DOCUMENT_ID, docId(item.id, vault))
             .add(Document.COLUMN_MIME_TYPE, mimeOf(item))
             .add(Document.COLUMN_DISPLAY_NAME, if (item.id == vault.rootId) "HushOS" else item.name)
-            .add(Document.COLUMN_LAST_MODIFIED, item.modifiedMillis)
+            .add(Document.COLUMN_LAST_MODIFIED, pending?.second ?: item.modifiedMillis)
             .add(Document.COLUMN_FLAGS, flags)
-            .add(Document.COLUMN_SIZE, item.size)
+            .add(Document.COLUMN_SIZE, pending?.first ?: item.size)
             // The same verdict the app's rows show, so a planted file is not passed off as clean in a picker.
             .add(Document.COLUMN_SUMMARY, if (item.id == vault.rootId) null else summaryOf(item, trust))
     }

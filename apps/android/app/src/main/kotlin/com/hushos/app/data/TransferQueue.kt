@@ -101,13 +101,16 @@ object TransferQueue {
      * A slot dropped for good (its family ended): every reservation its saves made settled (`slot#<save>`, superseded
      * saves' included), their landed rows used up, and its saves deleted. Whether one of them landed after all.
      */
-    internal fun dropSlot(context: Context, slot: String, workId: String?, abort: (uploadId: String, workspaceId: String) -> Reservations.Abort): Boolean {
+    internal fun dropSlot(context: Context, slot: String, workId: String?, guarded: (() -> Unit) -> Unit,
+                          abort: (uploadId: String, workspaceId: String) -> Reservations.Abort): Boolean {
         var landed = workId != null && LandedJobs.of(context).has(workId)
         for (key in slotKeys(context, slot)) {
             if (runCatching { Reservations.settleJob(context, key, abort) }.getOrNull() == Reservations.Settle.LANDED) landed = true
             Reservations.forgetLanded(context, key)
         }
-        WriteBacks.drop(context, slot)
+        // Only while the account that began this is still the one here (`guarded`: under the wipe's lock): an abort can
+        // block across a sign-out, and the next account's save of the same family file has the same slot.
+        guarded { WriteBacks.drop(context, slot) }
         return landed
     }
 
@@ -248,7 +251,7 @@ object TransferQueue {
         } ?: (runCatching { Reservations.settleJob(context, ledgerOf(info), abort) }.getOrNull() == Reservations.Settle.LANDED)
         fun dropSlotHere(slot: String, workId: String): Boolean {
             current()
-            val landed = dropSlot(context, slot, workId, abort)
+            val landed = dropSlot(context, slot, workId, write, abort)
             current()
             return landed
         }
@@ -468,11 +471,22 @@ object TransferQueue {
 
     /* Stops a queued or running transfer and drops an upload's copy. */
     fun cancel(context: Context, id: UUID, file: String?): java.util.concurrent.Future<*> {
-        WorkManager.getInstance(context).cancelWorkById(id)
-        // Off the caller's thread (the panel's button): a slot's lock may be held for a whole file's copy meanwhile.
+        val dir = file?.let { File(it).parentFile }
+        val queue = File(context.filesDir, "queue")
+        if (dir == null || dir.parentFile != queue || !dir.name.startsWith("writeback-")) {
+            WorkManager.getInstance(context).cancelWorkById(id)
+            return cleanups.submit { dir?.deleteRecursively() }
+        }
+        // A file's slot: the save it holds as Cancel is pressed is what is cancelled (read now, without its lock); a save
+        // made after that stays. Off the caller's thread (the panel's button), since the slot's lock may be held for a
+        // whole file's copy: first those saves go, under the lock, then the job is cancelled (until then it is unfinished,
+        // so no sweep queues the slot again), then a save left gets a job of its own (the cancelled one would have sent it).
+        val slot = dir.name
+        val cancelled = WriteBacks.publishedId(context, slot)
         return cleanups.submit {
-            val dir = file?.let { File(it).parentFile } ?: return@submit
-            if (dir.parentFile == File(context.filesDir, "queue") && WriteBacks.pending(context, dir.name) != null) WriteBacks.drop(context, dir.name) else dir.deleteRecursively()
+            val left = WriteBacks.cancelThrough(context, slot, cancelled)
+            WorkManager.getInstance(context).cancelWorkById(id).result.get()
+            if (left != null) enqueueSlot(context, slot, left.target.name, left.target.family)
         }
     }
 
@@ -616,7 +630,9 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 vault.api.abortUpload(uploadId, workspaceId)
             }
             if (!forItsAccount(generation) {}) return Result.failure()
-            TransferQueue.dropSlot(applicationContext, slot, this@UploadWorker.id.toString()) { uploadId, workspaceId -> vault.api.abortUpload(uploadId, workspaceId) }
+            TransferQueue.dropSlot(applicationContext, slot, this@UploadWorker.id.toString(), { body -> forItsAccount(generation) { body() } }) { uploadId, workspaceId ->
+                vault.api.abortUpload(uploadId, workspaceId)
+            }
             return failed(FamilyWords.NOT_IN_FAMILY, androidx.work.Data.EMPTY, generation)
         }
         while (true) {

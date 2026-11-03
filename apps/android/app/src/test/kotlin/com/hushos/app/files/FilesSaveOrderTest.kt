@@ -779,31 +779,89 @@ class FilesSaveOrderTest {
     }
 
     /*
-     * Cancelling a file's save from the panel while another save of it holds its slot (a large file's copy): the cancel
-     * returns at once, and its cleanup drops the slot once the save is done. Fails if a cancel waits on the slot's lock
-     * on the caller's thread (the panel's button, the main thread).
+     * Cancelling a file's save from the panel while the other app is saving it again (the new save holding the slot's lock
+     * for a large file's copy, not published yet): the cancel returns at once; until its cleanup ran the job stays
+     * unfinished, so the panel's sweep queues nothing; then the cancelled save goes, and the save made after the cancel was
+     * pressed stays and gets a job of its own, which lands it. Fails if a cancel waits on the slot's lock on the caller's
+     * thread, publishes the job's cancel before the slot is cleaned (the sweep then queues the cancelled save), or
+     * deletes whatever the slot holds when its cleanup runs.
      */
     @Test
-    fun aCancelNeverWaitsOnASaveInProgress() {
+    fun aCancelTakesOnlyTheSavesBeforeItAndNeverWaits() {
         val provider = provider()
         val notes = notes(provider)
         val slot = slotOf(provider, notes)
-        save(provider, notes, "first save")
+        save(provider, notes, "cancelled save")
         val job = jobs(slot).single()
         val target = WriteBacks.pending(app, slot)!!.target
         val holding = CountDownLatch(1)
         val release = CountDownLatch(1)
         WriteBacks.afterContent = { WriteBacks.afterContent = null; holding.countDown(); release.await(2, TimeUnit.SECONDS) }
-        val saving = Thread { WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "large").apply { writeText("large save") }) }.apply { start() }
+        val saving = Thread { WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "large").apply { writeText("save after the cancel") }) }.apply { start() }
         assertTrue(holding.await(5, TimeUnit.SECONDS))
         val began = System.nanoTime()
         val cleanup = TransferQueue.cancel(app, job.id, job.tags.first { it.startsWith("file:") }.removePrefix("file:"))
         val tookMs = (System.nanoTime() - began) / 1_000_000
+        assertEquals("the job's cancel was published before the slot was cleaned", WorkInfo.State.ENQUEUED, jobs(slot).single().state)
+        TransferQueue.sweep(app, WorkManager.getInstance(app).getWorkInfosByTag(TransferQueue.TAG).get())
+        assertEquals(1, jobs(slot).size)
         release.countDown()
         saving.join(5_000)
         cleanup.get(5, TimeUnit.SECONDS)
         assertTrue("the cancel waited ${tookMs}ms on the slot", tookMs < 1_000)
-        assertNull(WriteBacks.pending(app, slot))
+        assertEquals(WorkInfo.State.CANCELLED, jobs(slot).single { it.id == job.id }.state)
+        assertEquals("the save left has no job", WorkInfo.State.ENQUEUED, jobs(slot).single { it.id != job.id }.state)
+        assertEquals("save after the cancel", opened(provider, notes, "r"))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("save after the cancel", serverText(notes))
+    }
+
+    /*
+     * Cancel pressed for a file whose slot held nothing then (its earlier save had landed), while the other app's first
+     * save of it is being written: that save stays and is sent. Fails if a cancel's cleanup deletes a slot it finds
+     * empty, or one it finds holding a save made after the cancel was pressed.
+     */
+    @Test
+    fun aCancelOfAnEmptySlotNeverTakesTheSaveBeingWritten() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "landed save")
+        val job = jobs(slot).single()
+        val file = job.tags.first { it.startsWith("file:") }.removePrefix("file:")
+        val target = WriteBacks.pending(app, slot)!!.target
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        val holding = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        WriteBacks.afterContent = { WriteBacks.afterContent = null; holding.countDown(); release.await(2, TimeUnit.SECONDS) }
+        val saving = Thread { WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "new").apply { writeText("new save") }) }.apply { start() }
+        assertTrue(holding.await(5, TimeUnit.SECONDS))
+        val cleanup = TransferQueue.cancel(app, job.id, file)
+        release.countDown()
+        saving.join(5_000)
+        cleanup.get(5, TimeUnit.SECONDS)
+        assertEquals("new save", WriteBacks.contentOf(app, slot).readText())
+    }
+
+    /*
+     * A file with a save waiting (its job not run) is listed with that save's size and date, the bytes a read returns,
+     * not the server version's. Fails if a listing describes the server's version while reads return the pending save.
+     */
+    @Test
+    fun aListingShowsThePendingSavesSizeAndDate() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        val before = System.currentTimeMillis()
+        save(provider, notes, "a pending save, longer than the original")
+        val kept = File(WriteBacks.dir(app, slot), WriteBacks.pending(app, slot)!!.id + ".bin")
+        provider.queryDocument(notes, null).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("a pending save, longer than the original".length.toLong(), cursor.getLong(cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_SIZE)))
+            val modified = cursor.getLong(cursor.getColumnIndexOrThrow(android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED))
+            assertEquals(kept.lastModified(), modified)
+            assertTrue(modified >= before - 1_000)
+        }
     }
 
     /*
