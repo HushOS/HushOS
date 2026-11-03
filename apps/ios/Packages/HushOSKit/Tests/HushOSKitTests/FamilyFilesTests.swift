@@ -31,7 +31,12 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
             present[identifier] = name
         }
     }
+    /* Awaited before a removal takes effect: what another process does while the system removes the location. */
+    var duringRemove: (@Sendable () async -> Void)?
+
     func remove(_ identifier: String) async throws {
+        let hook = lock.withLock { () -> (@Sendable () async -> Void)? in defer { duringRemove = nil }; return duringRemove }
+        await hook?()
         try lock.withLock {
             removals.append(identifier)
             if removalFails { throw CocoaError(.fileWriteUnknown) }
@@ -404,6 +409,25 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         #expect(records.admission(kept, owner: Self.maya) == .admitted)
     }
 
+    /*
+     * The app accepts the family again (the member let back in) while the system is still removing
+     * the location an earlier let-go asked to go: the app found it there and added nothing, so once
+     * the removal finishes the location comes back for the record that stands. Fails if a removal
+     * deletes the location of an acceptance that landed while it ran.
+     */
+    @Test func anAcceptanceDuringTheRemovalGetsItsLocationBack() async throws {
+        let app = self.domains
+        let extensionProcess = FamilyFilesDomains(records: records, manager: manager)
+        let session = TemporaryCopies.session(CopyEpoch())
+        let (group, maya, records) = (Self.group, Self.maya, self.records)
+        await app.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value
+        manager.duringRemove = { await app.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value }
+        await extensionProcess.letGo(group, owner: maya).value
+        #expect(manager.removals == [FamilyFileIds.domain(group)])
+        #expect(records.admission(group, owner: maya) == .admitted)
+        #expect(manager.names[FamilyFileIds.domain(group)] == "Lindqvist family", "the removal took the location of an acceptance that came after its let-go")
+    }
+
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
     @Test func aRenamedFamilysLocationTakesTheNewName() async throws {
         let domains = self.domains
@@ -724,6 +748,31 @@ extension OnFakeDrive {
             await s.domains.settled()
             #expect(s.records.admission(s.family.groupId, owner: s.owner) == .admitted, "an ended session's sync took the new session's location")
             #expect(s.manager.removals.isEmpty)
+        }
+
+        /*
+         * Files lists the location from the start (its first look, or after its anchor expired) while
+         * a folder it was shown is mid key change: the listing asks again rather than leave the folder
+         * out, and answers it once it opens. A folder this source never showed open is left out, so it
+         * holds nothing else back. Fails if a full listing drops a folder that only can't open yet.
+         */
+        @Test func aFullListingKeepsAFolderMidKeyChange() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            s.server.servedRootId = s.family.fileId
+            #expect(try await s.source.folders().isEmpty, "a folder never shown open held the listing back")
+
+            s.server.servedRootId = nil
+            s.clock.now = s.clock.now.addingTimeInterval(120)
+            #expect(try await s.source.folders().map(\.workspaceId) == [s.family.workspaceId])
+
+            s.server.servedRootId = s.family.fileId
+            s.clock.now = s.clock.now.addingTimeInterval(120)
+            await #expect(throws: FamilyFilesError.keyChange) { _ = try await s.source.folders() }
+            await #expect(throws: FamilyFilesError.keyChange) { _ = try await s.source.anchor() }
+            s.server.servedRootId = nil
+            #expect(try await s.source.folders().map(\.workspaceId) == [s.family.workspaceId])
+            #expect(try await s.source.anchor().folders[s.family.workspaceId.lowercased()] != nil)
         }
 
         /*

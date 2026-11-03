@@ -312,8 +312,20 @@ public final class FamilyFilesDomains: @unchecked Sendable {
             // Left pending: the generation its write reached since, if it did (until then nothing is accepted).
             let generation = wrote ?? lock.withLock { landed[groupId] }
             guard mayRemove(groupId, owner: owner, session: session, after: generation) else { return }
-            try? await manager.remove(FamilyFileIds.domain(groupId))
+            let identifier = FamilyFileIds.domain(groupId)
+            try? await manager.remove(identifier)
+            // An acceptance that came after the let-go and landed while the system removed the location (in another
+            // process, which found it still there): its record stands, so its location comes back.
+            guard let generation = generation ?? lock.withLock({ landed[groupId] }), let name = acceptedSince(groupId, generation) else { return }
+            try? await manager.add(identifier, name: name)
         }
+    }
+
+    /* The name of the family's record if it was written at `generation` or later (an acceptance after that let-go), read under the store's lock. */
+    private func acceptedSince(_ groupId: String, _ generation: UInt64) -> String? {
+        var record: FamilyDomainRecord?
+        guard records.update({ stored in record = stored.records[groupId] }), let record, let written = record.generation, written >= generation else { return nil }
+        return record.name
     }
 
     /*
@@ -590,6 +602,8 @@ public actor FamilyFilesSource {
     private var checkedAt: Date?
     /* Every folder of the family this source has answered for: whose copies go once it is let go of. */
     private var known: Set<String> = []
+    /* Folders this source has shown Files open: one of them that doesn't open now is a key change met mid-way, never gone. */
+    private var shownOpen: Set<String> = []
 
     static let fresh: TimeInterval = 60
 
@@ -770,7 +784,19 @@ public actor FamilyFilesSource {
     /* The family's folders that open here, as the location's top level. */
     public func folders() async throws -> [FamilyArea] { try await serving { try await openFolders() } }
 
-    private func openFolders() async throws -> [FamilyArea] { Self.open(in: try await currentView()) }
+    /*
+     * The top level for a full listing (Files' first, or after its anchor expired). A folder shown open
+     * before that the family still lists but that doesn't open now (a key change between the member
+     * list and the folders) asks the whole listing again rather than drop it from Files. One that never
+     * opened here (its keys never checked out) is left out, so it can't hold the location's other folders back.
+     */
+    private func openFolders() async throws -> [FamilyArea] {
+        let view = try await currentView()
+        if view.areas.contains(where: { !$0.openable && shownOpen.contains($0.workspaceId.lowercased()) }) { throw FamilyFilesError.keyChange }
+        let folders = Self.open(in: view)
+        shownOpen.formUnion(folders.map { $0.workspaceId.lowercased() })
+        return folders
+    }
 
     private static func open(in view: FamilyView) -> [FamilyArea] {
         view.areas.filter(\.openable).sorted { ($0.name ?? "").localizedStandardCompare($1.name ?? "") == .orderedAscending }
@@ -893,6 +919,7 @@ public actor FamilyFilesSource {
         var deleted: [String] = []
         var more = false
         let open = Set(folders.map { $0.workspaceId.lowercased() })
+        shownOpen.formUnion(open)
         let listed = Set(view.areas.map { $0.workspaceId.lowercased() })
         for (workspace, folder) in anchor.folders where !open.contains(workspace) {
             // Still listed but not open here yet (a key change between the member list and the folders): nothing of the
