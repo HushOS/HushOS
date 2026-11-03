@@ -505,6 +505,12 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
             vault.familyPin(groupId)
         } catch (failed: Exception) {
             if (failed is NotAuthenticated || !settingsUnavailable(failed)) throw failed
+            // Pending only for the caller's own call: whose it is read from the entry (the settings as last read), and one
+            // of anyone else, or that doesn't open, is left alone, never said as kept for them.
+            if (only != null) {
+                val whose = try { ledger.outboxOpen(groupId, current.outboxId, userId, current.entry).route() } catch (_: CoreException) { null }
+                if (whose == null || !sameRoute(whose, only)) return CallEnd.Other
+            }
             return CallEnd.Pending(GroupsApiError.NO_ANSWER)
         }
         val read = try {
@@ -1121,7 +1127,9 @@ internal fun FamilySync.callFor(summary: GroupSummary, person: String, first: St
         if (kept.operation != operation.wire) {
             // Another change for them (or one kept before operations were noted): never this one's outcome.
             when (val end = sendKept(summary, kept, only = route, names = { first }, told = { on, end -> keptEnds.add(Triple(summary.id, on, end)) })) {
-                CallEnd.Other, CallEnd.Landed, CallEnd.Stale, is CallEnd.Refused -> {}
+                // Landed or overtaken: the member list moved, so a request it already satisfies (Unchanged below) is done.
+                CallEnd.Landed, CallEnd.Stale -> moved = true
+                CallEnd.Other, is CallEnd.Refused -> {}
                 is CallEnd.Pending -> return if (waitsKept) RoleEnd.Pending(end.reason) else RoleEnd.Waiting(earlierWaiting(summary.name))
                 CallEnd.OtherKeys -> return RoleEnd.Waiting(earlierWaiting(summary.name))
                 CallEnd.Wiped -> return RoleEnd.Wiped
