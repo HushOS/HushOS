@@ -784,4 +784,49 @@ class FamilyRemovalTest {
         assertTrue(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
         assertTrue(next.sync.outbox.removals(family.member.id, family.groupId).isEmpty())
     }
+
+    /*
+     * Codex #281 round 11: Grace's removal is kept unanswered. Before the next open Ada leaves, so the replayed call is
+     * refused `left-due`. That ends the call, never the removal: its intent stays, the continuation marks Ada left, then
+     * removes Grace (still bound to the membership confirmed). Fails if a replay's `left-due` retires the intent, leaving the
+     * departure marked and the person confirmed never removed.
+     */
+    @Test
+    fun aReplayMeetingLeftDueStillRemovesThePersonConfirmed() {
+        val first = phone()
+        val ada = server.another("ada@example.org", "Ada Lovelace")
+        family.waiting(ada, "ada@example.org", "Ada Lovelace")
+        assertEquals(LetIn.Landed, first.sync.letIn(summary, family.pendingRows.map(PendingPerson::from).single()))
+        val adaId = ada.id.lowercase()
+        repeat(3) { family.rotatingAnswers.add { _, _ -> 503 to JSONObject().put("message", "Unavailable.") } }
+        assertTrue(remove(first) is RemovalEnd.Pending)
+        family.rotatingAnswers.add { _, _ -> refuse("left-due", JSONObject().put("userIds", JSONArray().put(adaId))) }
+        // The continuation's own removal meets it too: Ada marked left first, then Grace removed.
+        family.rotatingAnswers.add { _, _ -> refuse("left-due", JSONObject().put("userIds", JSONArray().put(adaId))) }
+        val next = phone(first.folder)
+        val continued = ArrayList<RemovalEnd>()
+        next.sync.resumeOutbox(summary, continued = { _, end -> continued.add(end) })
+        assertEquals(listOf<RemovalEnd>(RemovalEnd.Removed), continued)
+        val members = view(next).members.map { it.userId.lowercase() }
+        assertFalse(adaId in members || graceId in members)
+        assertTrue(next.sync.outbox.removals(family.member.id, family.groupId).isEmpty())
+    }
+
+    /*
+     * Codex #281 round 11, the other "not yet": the replayed removal is refused `busy` (a plan's lock, for a moment). The
+     * call ends, the removal doesn't: the continuation makes it again and Grace is removed. Fails if a refusal that only
+     * means "try again in a moment" ends a removal the person confirmed.
+     */
+    @Test
+    fun aReplayMeetingABusyPlanStillRemovesThePersonConfirmed() {
+        val first = phone()
+        repeat(3) { family.rotatingAnswers.add { _, _ -> 503 to JSONObject().put("message", "Unavailable.") } }
+        assertTrue(remove(first) is RemovalEnd.Pending)
+        family.rotatingAnswers.add { _, _ -> refuse("busy") }
+        val next = phone(first.folder)
+        val continued = ArrayList<RemovalEnd>()
+        next.sync.resumeOutbox(summary, continued = { _, end -> continued.add(end) })
+        assertEquals(listOf<RemovalEnd>(RemovalEnd.Removed), continued)
+        assertFalse(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
+    }
 }

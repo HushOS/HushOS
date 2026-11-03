@@ -344,6 +344,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, turn: RemovalTurn, na
             // Refused as kept: a departure still to mark left is done below (staged anew); the rest is definite.
             is CallEnd.Refused -> when (end.code) {
                 "left-due" -> {}
+                "busy" -> return RemovalEnd.Pending(keptForLater(family))
                 "members-changed" -> return membersChanged(summary, userId)
                 "ends-lapsed" -> return RemovalEnd.EndsLapsed(FamilyLapsedPlan.listIn(end.data))
                 else -> return RemovalEnd.Failed(end.words)
@@ -445,7 +446,8 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, turn: RemovalTurn, na
                     when (val marked = markDepartedLeft(summary, departed, named, ::link)) {
                         is Rotated.Sent -> if (marked.end != CallEnd.Landed) return when (val m = marked.end) {
                             is CallEnd.Pending -> RemovalEnd.Pending(keptForLater(family))
-                            is CallEnd.Refused -> RemovalEnd.Failed(m.words)
+                            // Another departure to mark first, or a plan busy for a moment: goes on at the next open.
+                            is CallEnd.Refused -> if (removalGoesOn(m.code)) RemovalEnd.Pending(keptForLater(family)) else RemovalEnd.Failed(m.words)
                             CallEnd.Wiped -> RemovalEnd.Wiped
                             // Overtaken, or held: nothing definite about the removal; it goes on at the next open.
                             else -> RemovalEnd.Pending(keptForLater(family))
@@ -456,6 +458,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, turn: RemovalTurn, na
                     }
                     if (departed.any { it.equals(userId, ignoreCase = true) }) return RemovalEnd.Removed
                 }
+                "busy" -> return RemovalEnd.Pending(keptForLater(family))
                 "members-changed" -> return membersChanged(summary, userId)
                 "ends-lapsed" -> return RemovalEnd.EndsLapsed(FamilyLapsedPlan.listIn(call.data))
                 else -> return RemovalEnd.Failed(call.words)

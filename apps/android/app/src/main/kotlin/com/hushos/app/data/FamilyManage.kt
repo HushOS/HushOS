@@ -485,7 +485,10 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
         // it over what the person was told, or over whatever the family became since. A step that landed or was overtaken (its
         // demotion, a departure marked left) keeps it: the removal goes on, bound to the membership confirmed. A removal's own
         // turn that goes on after its call was overtaken links its next entry, keeping it again.
-        if (on == null || on is ChainRoute.Remove || end is CallEnd.Refused) outbox.dropRemovalOf(userId, groupId, current.outboxId)
+        // A refusal that only means "not yet" (removalGoesOn: someone else's departure to mark left first, a plan busy for
+        // a moment) ends the call, never the removal: its intent stays for the continuation.
+        val goesOn = end is CallEnd.Refused && removalGoesOn(end.code)
+        if (on == null || (!goesOn && (on is ChainRoute.Remove || end is CallEnd.Refused))) outbox.dropRemovalOf(userId, groupId, current.outboxId)
         outbox.delete(userId, groupId, current.outboxId)
         return end
     }
@@ -611,6 +614,15 @@ private fun FamilySync.retireOrphan(summary: GroupSummary, route: ChainRoute): C
     }
     return if (view.members.any { it.userId.equals(userId, ignoreCase = true) }) CallEnd.Landed else CallEnd.Stale
 }
+
+/*
+ * The refusals of a removal's calls that end the call but not the removal (the outcome table's "goes on"): `left-due`
+ * (someone else left and is marked left first, then the removal is made again) and `busy` (a plan's lock, for a moment).
+ * Every other refusal is the removal's end. The rest of the server's answers never reach a refusal: no answer, 5xx, 408,
+ * 429, `signed-out` and `rate-limited` resend; `grants-due` posts grants; `rotating`, `epoch-stale`, `root-moved` and
+ * `document-stale` rebuild; `stale` is overtaken; `not-member` is the account's removal.
+ */
+internal fun removalGoesOn(code: String?): Boolean = code == "left-due" || code == "busy"
 
 /* A settings read that may pass next time: no answer, or the server's for now (a timeout, throttling, a server error). */
 private fun settingsUnavailable(error: Exception): Boolean = FamilySync.transient(error) ||
