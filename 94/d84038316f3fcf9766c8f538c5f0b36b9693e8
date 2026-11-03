@@ -1,0 +1,35 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_a45fbeeca8f03a 20
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_566b8e0c4467a4::t_2bfd4f348589f1 104-105,111-113,254,474-485,487-489,633-635
+apps/android/app/src/main/kotlin/com/hushos/app/data/WriteBacks.kt
+  s_566b8e0c4467a4::t_3ea4675afb250c 128-130,204,207-242
+apps/android/app/src/main/kotlin/com/hushos/app/files/HushOSDocumentsProvider.kt
+  s_7109f9e804230a::t_74793f3bafd9c9 186-187,192,194
+apps/android/app/src/test/kotlin/com/hushos/app/files/FilesSaveOrderTest.kt
+  s_566b8e0c4467a4::t_e90f4ed77f83c7 782-787,790,794,800,805-807,812-864
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "94d84038316f3fcf9766c8f538c5f0b36b9693e8",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_7109f9e804230a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a16011-997d-7320-af40-963b74d6a049",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
