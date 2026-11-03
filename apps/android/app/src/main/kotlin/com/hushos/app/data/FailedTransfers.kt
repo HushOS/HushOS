@@ -77,6 +77,7 @@ class FailedTransfers(private val store: File) {
 
     @Synchronized
     private fun write(list: List<FailedTransfer>) {
+        beforeWrite?.invoke()
         store.parentFile?.mkdirs()
         if (list.isEmpty()) store.delete() else store.writeText(list.joinToString("\n", transform = ::encode))
     }
@@ -93,6 +94,9 @@ class FailedTransfers(private val store: File) {
     }.getOrNull()
 
     companion object {
+        /* Tests: runs before the record is written (a full disk refusing it). */
+        @Volatile internal var beforeWrite: (() -> Unit)? = null
+
         /* Beside the account's other files under filesDir; AccountStore lists it so it goes with them. */
         const val FILE = "transfers-failed.tsv"
 

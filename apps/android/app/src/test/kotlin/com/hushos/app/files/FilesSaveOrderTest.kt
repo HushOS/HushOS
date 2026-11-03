@@ -72,6 +72,7 @@ class FilesSaveOrderTest {
         WriteBacks.afterContent = null
         WriteBacks.beforeSlotId = null
         WriteBacks.fault = null
+        FailedTransfers.beforeWrite = null
         TransferQueue.beforeSlotFails = null
         TransferQueue.afterCancelCleans = null
         TransferQueue.beforeSweepRemoves = null
@@ -1340,6 +1341,107 @@ class FilesSaveOrderTest {
         assertNotNull("the landing wasn't recorded", WriteBacks.landing(app, slot))
         assertTrue(Reservations.all(app).none { WriteBacks.ledgerOf(slot, it.job) })
         assertEquals("landed save", serverText(notes))
+    }
+
+    /* Every closed edit on disk (filesDir/edits): what a save left that wasn't kept in its slot. */
+    private fun closedEdits() = File(app.filesDir, WriteBacks.EDITS).walkTopDown().filter { it.isFile && it.name.endsWith(".closed") }.toList()
+
+    /*
+     * A save can't be kept in its slot and its row can't be written either (the same full disk): the closed edit stays on
+     * disk, and the next start of the process finds it and gives it its row, whose Retry keeps and sends it. Fails if a
+     * save whose row couldn't be written loses its edit.
+     */
+    @Test
+    fun aSaveWhoseRowCantBeWrittenIsRecoveredAtTheNextStart() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.fault = { at -> if (at == "copy") throw java.io.IOException("No space left on device") }
+        FailedTransfers.beforeWrite = { throw java.io.IOException("No space left on device") }
+        save(provider, notes, "save on a full disk")
+        WriteBacks.fault = null
+        FailedTransfers.beforeWrite = null
+        assertTrue(FailedTransfers.of(app).all().isEmpty())
+        assertEquals("save on a full disk", closedEdits().single().readText())
+        TransferQueue.reconcileEdits(app, startup = true)
+        val row = FailedTransfers.of(app).all().single()
+        assertTrue(TransferQueue.retry(app, row))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("save on a full disk", serverText(notes))
+        assertTrue(closedEdits().isEmpty())
+    }
+
+    /*
+     * A save that couldn't be kept waits more than a day for its Retry, and the process starts again (its cache swept of
+     * copies over a day old): the edit is still there, and the Retry sends it. An edit opened and never closed, as old, is
+     * an open no process holds any more and goes at that start. Fails if a retained edit is swept with the cache, or an
+     * abandoned open is kept for ever.
+     */
+    @Test
+    fun aRetainedEditOutlivesADayAndARestartWhileAnAbandonedOneGoes() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.fault = { at -> if (at == "copy") { WriteBacks.fault = null; throw java.io.IOException("No space left on device") } }
+        save(provider, notes, "kept over a day")
+        val row = FailedTransfers.of(app).all().single()
+        val abandoned = provider.personalEdit(vaultOf(provider), notes, "w").apply { writeText("never closed") }
+        val twoDaysAgo = System.currentTimeMillis() - 2 * 86_400_000L
+        File(app.filesDir, WriteBacks.EDITS).walkTopDown().forEach { it.setLastModified(twoDaysAgo) }
+        com.hushos.app.data.DecryptedCopies.sweep(app.cacheDir)
+        TransferQueue.reconcileEdits(app, startup = true)
+        assertFalse("an abandoned open was kept", abandoned.exists())
+        assertEquals("kept over a day", File(row.file!!).readText())
+        assertTrue(TransferQueue.retry(app, row))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("kept over a day", serverText(notes))
+    }
+
+    /*
+     * The disk refuses every record of the file's slot for a while: each close still gets its number (reserving only reads)
+     * and its closed edit and row, and nothing escapes the close thread. Once the disk takes writes again, the newest save
+     * lands. Fails if reserving a number tries to publish (and throws), leaving the latest save without a row.
+     */
+    @Test
+    fun savesWhileTheRecordCantBePublishedEachKeepTheirEdit() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.fault = { at -> if (at == "record") throw java.io.IOException("No space left on device") }
+        save(provider, notes, "first save")
+        save(provider, notes, "second save")
+        WriteBacks.fault = null
+        val rows = FailedTransfers.of(app).all()
+        assertEquals(2, rows.size)
+        assertEquals(setOf("first save", "second save"), rows.map { File(it.file!!).readText() }.toSet())
+        rows.sortedByDescending { WriteBacks.stagedNumber(it.stage!!) }.forEach { TransferQueue.retry(app, it) }
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("second save", serverText(notes))
+    }
+
+    /*
+     * A save couldn't be kept (its row and edit retained); a newer save is kept, then cancelled. The cancel takes the older
+     * retained save with it: its row and edit go, reads go back to the server's version, and its Retry keeps nothing, even
+     * after the slot is gone. A save made after the cancel is kept. Fails if a cancel leaves an older save it covers to
+     * be read or sent.
+     */
+    @Test
+    fun aCancelTakesTheRetainedSavesItCovers() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.fault = { at -> if (at == "copy") { WriteBacks.fault = null; throw java.io.IOException("No space left on device") } }
+        save(provider, notes, "older, retained")
+        val retained = FailedTransfers.of(app).all().single()
+        save(provider, notes, "newer, cancelled")
+        val job = jobs(slot).single { !it.state.isFinished }
+        TransferQueue.cancel(app, job.id, job.tags.first { it.startsWith("file:") }.removePrefix("file:")).get(5, TimeUnit.SECONDS)
+        assertTrue(FailedTransfers.of(app).all().isEmpty())
+        assertFalse(File(retained.file!!).exists())
+        assertEquals("original", opened(provider, notes, "r"))
+        assertFalse(TransferQueue.retry(app, retained))
+        save(provider, notes, "after the cancel")
+        assertEquals("after the cancel", WriteBacks.contentOf(app, slot).readText())
     }
 
     /*

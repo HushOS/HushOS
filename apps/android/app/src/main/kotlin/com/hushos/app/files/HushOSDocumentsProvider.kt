@@ -376,25 +376,37 @@ class HushOSDocumentsProvider : DocumentsProvider() {
      * overtook keeps nothing.
      */
     internal fun onEditClosed(error: java.io.IOException?, vault: Vault, edit: File, opened: com.hushos.app.data.Opened) {
-        if (error != null) { edit.delete(); return }
-        val target = WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime, opened.node.parentId ?: vault.rootId, root = vault.rootId)
-        // A save that couldn't be kept leaves its edit (the only copy of what the app believes it saved) and a row to retry
-        // it; one the sign-out overtook keeps nothing.
-        var keep = false
-        // Its order among the file's saves, given now, before anything is kept: a Retry of it keeps that order.
-        val number = WriteBacks.reserve(context!!, WriteBacks.slotOf(target.workspaceId, target.nodeId))
+        // Nothing escapes the close thread, whatever happens: a closed edit left on disk is the next reconcile's to keep.
         try {
-            if (WriteBacks.stage(context!!, vault.ledgerGeneration, target, edit, number) != null) {
-                com.hushos.app.data.TransferQueue.enqueueSlot(context!!, WriteBacks.slotOf(target.workspaceId, target.nodeId), opened.name)
-                // Its listing shows the save's size and date now: Files reads the folder again.
-                WriteBacks.notifyFolder(context!!, target)
-            }
+            closeEdit(error, vault, edit, opened)
+        } catch (failure: Throwable) {
+            android.util.Log.w("HushOSFiles", "a save couldn't be kept: ${failure.javaClass.name}")
+        }
+    }
+
+    private fun closeEdit(error: java.io.IOException?, vault: Vault, edit: File, opened: com.hushos.app.data.Opened) {
+        // The other app's write failed: what it left was never saved.
+        if (error != null) { WriteBacks.discardEdit(edit); return }
+        val ctx = context!!
+        val target = WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime, opened.node.parentId ?: vault.rootId, root = vault.rootId)
+        val slot = WriteBacks.slotOf(target.workspaceId, target.nodeId)
+        // Its order among the file's saves (only read, never fails), then the edit marked as that save by one rename (no room
+        // needed): from here it goes only once kept, dismissed, or with the account.
+        val number = WriteBacks.reserve(ctx, slot)
+        val closed = WriteBacks.close(edit, number)
+        val kept = try {
+            WriteBacks.stage(ctx, vault.ledgerGeneration, target, closed, number)
         } catch (failure: Exception) {
             android.util.Log.w("HushOSFiles", "a save couldn't be kept: ${failure.javaClass.name}")
-            keep = com.hushos.app.data.TransferQueue.stagingFailed(context!!, target, edit, failure, vault.ledgerGeneration, number)
-        } finally {
-            if (!keep) edit.delete()
+            // A row to retry it, when one can be written; when not, the closed edit waits for the next reconcile.
+            com.hushos.app.data.TransferQueue.stagingFailed(ctx, target, closed, failure, vault.ledgerGeneration, number)
+            return
         }
+        // The account left meanwhile: nothing of it is kept.
+        if (kept == null) { WriteBacks.discardEdit(closed); return }
+        com.hushos.app.data.TransferQueue.enqueueSlot(ctx, slot, opened.name)
+        // Its listing shows the save's size and date now: Files reads the folder again.
+        WriteBacks.notifyFolder(ctx, target)
     }
 
     /*
@@ -405,7 +417,10 @@ class HushOSDocumentsProvider : DocumentsProvider() {
      * on a version replaced since.
      */
     internal fun personalEdit(vault: Vault, id: String, mode: String): File {
-        val edit = File(context!!.cacheDir, "edits/$id/${java.util.UUID.randomUUID()}").also { it.parentFile?.mkdirs() }
+        // Durable (filesDir/edits): a save that couldn't be kept is retried from it, whatever clears the cache meanwhile.
+        val opened = vault.resolve(id)
+        val edit = WriteBacks.personalEdit(context!!, WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime,
+            opened.node.parentId ?: vault.rootId, root = vault.rootId))
         if (WriteModes.keepsContents(mode)) {
             if (WriteBacks.copyNewestTo(context!!, WriteBacks.slotOf(vault.resolve(id).node.workspaceId, id), edit)) return edit
             val item = currentVersion(vault, id)

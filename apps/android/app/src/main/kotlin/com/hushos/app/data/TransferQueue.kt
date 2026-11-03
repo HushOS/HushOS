@@ -338,7 +338,7 @@ object TransferQueue {
                     val saved = synchronized(FamilyCopies.LOCK) {
                         val now = state.epochs[target.familyWorkspace.lowercase()]?.first ?: 0L
                         revoked = state.closed || !edit.isFile || now > (WriteBacks.stagedEpoch(failed.stage) ?: 0L)
-                        if (revoked) { edit.delete(); null }
+                        if (revoked) { WriteBacks.discardEdit(edit); null }
                         else stage()
                     }
                     if (revoked) {
@@ -349,7 +349,7 @@ object TransferQueue {
                     saved
                 } else if (edit.isFile) stage() else null
                 if (superseded) {
-                    edit.delete()
+                    WriteBacks.discardEdit(edit)
                     records.forget(failed.id)
                     FailedTransfers.changed()
                     return false
@@ -384,7 +384,7 @@ object TransferQueue {
         FailedTransfers.of(context).forget(failed.id)
         // A save that was never kept in its slot: its edit goes. A file's failed save: only that save goes (the slot with it
         // while it is still the pending one), never a newer one.
-        if (failed.kind == UPLOAD && failed.stage != null) failed.file?.let { File(it).delete() }
+        if (failed.kind == UPLOAD && failed.stage != null) failed.file?.let { WriteBacks.discardEdit(File(it)) }
         else if (failed.kind == UPLOAD && failed.slot != null) WriteBacks.discard(context, failed.slot, failed.file)
         else if (failed.kind == UPLOAD) discard(context, failed.file)
     }
@@ -444,6 +444,7 @@ object TransferQueue {
      * alone, since a copy lands before its job is queued.
      */
     fun sweep(context: Context, infos: List<WorkInfo>) {
+        runCatching { reconcileEdits(context, startup = false) }
         val dirOf = { info: WorkInfo -> info.tags.firstOrNull { it.startsWith("file:") }?.removePrefix("file:")?.let { File(it).parent } }
         sweep(context, infos.mapNotNull(dirOf).toSet(), infos.map { it.id.toString() }.toSet(), infos.filter { !it.state.isFinished }.mapNotNull(dirOf).toSet())
     }
@@ -559,7 +560,8 @@ object TransferQueue {
      * Only while the account it was made under is still here. Whether the row was made (else the edit can go).
      */
     fun stagingFailed(context: Context, target: WriteBacks.Target, edit: File, error: Exception, accountGeneration: Long, number: Long,
-                      familyEpoch: Long? = null): Boolean =
+                      familyEpoch: Long? = null): Boolean = runCatching {
+        // Never throws: a row that can't be written (the same full disk) leaves the closed edit for the next reconcile.
         Reservations.whileAccount(accountGeneration) {
             if (!edit.isFile) return@whileAccount false
             FailedTransfers.of(context).record(FailedTransfer(UUID.randomUUID().toString(), UPLOAD, target.name, Problems.say(error, "The transfer failed."),
@@ -569,6 +571,40 @@ object TransferQueue {
             FailedTransfers.changed()
             true
         } == true
+    }.getOrDefault(false)
+
+    /*
+     * Edits on disk set right (as the process starts, and at every sweep of the queue): a closed edit no row names and whose
+     * number the slot hasn't kept gets its staging row (one kept or superseded meanwhile goes); as the process starts, an
+     * edit never closed and over a day old is an open no process holds any more, and goes. Only for the account signed in.
+     */
+    fun reconcileEdits(context: Context, startup: Boolean) {
+        val session = Shared.session(context) ?: return
+        val generation = Reservations.generation
+        val named = runCatching { FailedTransfers.of(context).all().mapNotNull { it.file }.toSet() }.getOrElse { return }
+        val dayAgo = System.currentTimeMillis() - 86_400_000L
+        File(context.filesDir, WriteBacks.EDITS).walkTopDown().filter { it.isFile }.toList().forEach { file ->
+            when {
+                file.name.endsWith(".closed") -> {
+                    if (file.path in named) return@forEach
+                    val number = WriteBacks.closedNumber(file) ?: return@forEach
+                    val target = runCatching { WriteBacks.decodeTarget(WriteBacks.sidecarOf(file).readText()) }.getOrNull() ?: return@forEach
+                    if (WriteBacks.keptAtOrAbove(context, WriteBacks.slotOf(target.workspaceId, target.nodeId), number)) { WriteBacks.discardEdit(file); return@forEach }
+                    // A family's: made under the folder's revocation count it has now (a revocation would have deleted it).
+                    val epoch = target.familyWorkspace?.let { ws ->
+                        synchronized(FamilyCopies.LOCK) { if (!file.isFile) return@forEach; FamilySessions.of(session).epochs[ws.lowercase()]?.first ?: 0L }
+                    }
+                    stagingFailed(context, target, file, Exception("The save wasn't kept."), generation, number, epoch)
+                }
+                file.name.endsWith(".json") || file.name.endsWith(".incoming") -> {
+                    val edit = File(file.parentFile, file.name.substringBefore('.'))
+                    val closed = file.parentFile?.listFiles()?.any { it.name.startsWith(edit.name + ".") && it.name.endsWith(".closed") } == true
+                    if (startup && !edit.exists() && !closed && file.lastModified() < dayAgo) file.delete()
+                }
+                else -> if (startup && file.lastModified() < dayAgo) WriteBacks.discardEdit(file)
+            }
+        }
+    }
 
     /* Tests: runs after a cancel's saves went, before the job's cancel is published. */
     @Volatile internal var afterCancelCleans: (() -> Unit)? = null
@@ -774,7 +810,7 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 val stale = rows.filter { row ->
                     if (row.stage != null) (WriteBacks.stagedNumber(row.stage) ?: 0L) <= pending.generation else WriteBacks.idOf(row.file) != left?.id
                 }
-                stale.filter { it.stage != null }.forEach { row -> row.file?.let { java.io.File(it).delete() } }
+                stale.filter { it.stage != null }.forEach { row -> row.file?.let { WriteBacks.discardEdit(java.io.File(it)) } }
                 val obsolete = stale.map { it.id }.toSet()
                 FailedTransfers.of(applicationContext).forgetWhere { it.id in obsolete }
                 // Their failures still waiting to be summed up go too: a file that uploaded is never said not to have.
