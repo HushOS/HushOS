@@ -1,0 +1,63 @@
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_f7d1762146a6b1 89-90
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_566b8e0c4467a4::t_35d1572e095732 740-742
+apps/android/app/src/main/kotlin/com/hushos/app/data/DecryptedCopies.kt
+  s_566b8e0c4467a4::t_892384a770b444 63-77,79
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyPlan.kt
+  s_566b8e0c4467a4::t_cc4d7f1e0d1ed0 1-67
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySessions.kt
+  s_566b8e0c4467a4::t_358bd9e4d5bc04 16-20,22-26
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_566b8e0c4467a4::t_2272c05bfdd427 157-161,253-254,439-440
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyUploads.kt
+  s_566b8e0c4467a4::t_294d99d5d9f09b 44-45,47,69,72-77,80-85,89-122
+apps/android/app/src/main/kotlin/com/hushos/app/data/FilesRoots.kt
+  s_566b8e0c4467a4::t_439e0affac5f23 59-74
+apps/android/app/src/main/kotlin/com/hushos/app/data/Resumable.kt
+  s_566b8e0c4467a4::t_93cece8bd9d275 95-97,100-104
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_204e6fee7826a7 248,1387-1389,1391,1399-1400,1412-1416,1418-1422
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_566b8e0c4467a4::t_e8e76ad121f0f6 402,420,425,427-428,436-437
+apps/android/app/src/main/kotlin/com/hushos/app/data/WriteBacks.kt
+  s_566b8e0c4467a4::t_8582f655f7ff14 866-871,876-878
+apps/android/app/src/main/kotlin/com/hushos/app/files/HushOSDocumentsProvider.kt
+  s_566b8e0c4467a4::t_50a87e586d1eea 52-53,77,85-86,95,172-179,183-225,265-268,278-286,322-325,337-350,375-377,387-390,463-464,582-619,637-639,652-655,669-672,679-686,694-697
+apps/android/app/src/main/kotlin/com/hushos/app/files/ProviderFamilies.kt
+  s_566b8e0c4467a4::t_03a65cbe2e7b6c 1-699
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_2bdcc8442d5b81 516-518,524-528
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Families.kt
+  s_566b8e0c4467a4::t_feb554d4cbd04a 243
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamilyPlan.kt
+  s_566b8e0c4467a4::t_19ded366cf0d27 1-85
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_566b8e0c4467a4::t_119c0c18004ca7 622-623,758-763
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyUploadsTest.kt
+  s_566b8e0c4467a4::t_3392aa1130ae05 433-478
+apps/android/app/src/test/kotlin/com/hushos/app/files/ProviderFamiliesTest.kt
+  s_566b8e0c4467a4::t_40c52bc7e65b94 1-2075
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyFoldersTest.kt
+  s_566b8e0c4467a4::t_8c226bc5f2845e 54
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyPlanTest.kt
+  s_566b8e0c4467a4::t_50e5f1482bc502 1-114
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_02afdff24e2963 233
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "37601c8589cabd4ce13678dc47ef79dacc3069ce",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
