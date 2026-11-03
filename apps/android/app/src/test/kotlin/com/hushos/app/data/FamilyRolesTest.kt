@@ -218,6 +218,79 @@ class FamilyRolesTest {
     }
 
     /*
+     * Make them the organizer is kept unanswered for Grace (billing to her), then Let them manage is asked for her. Both are
+     * on her `member` route but are different changes: the kept one goes first and is still unanswered, so the grant waits,
+     * said so, with nothing new kept; Make them the organizer pressed again is the kept one's, still saved on this device.
+     * Fails if another kept change for the same person is said as this one's ("Saved on this device" with nothing kept for
+     * it), or the same change pressed again is refused as another's.
+     */
+    @Test
+    fun aDifferentKeptChangeForThemMakesThisOneWait() {
+        val phone = phone(organizer = true)
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        answer(12, 503)
+        assertTrue(phone.sync.handOver(summary, graceId, "Grace") is RoleEnd.Pending)
+        val billingKept = kept(phone).single()
+        assertEquals(RoleOperation.BILLING_TO.wire, billingKept.operation)
+        assertEquals("another kept change for Grace was said as the grant's", RoleEnd.Waiting(earlierWaiting(summary.name)), grant(phone))
+        assertEquals("something new was kept over the handover", listOf(billingKept), kept(phone))
+        assertTrue("the same change pressed again wasn't the kept one's", phone.sync.handOver(summary, graceId, "Grace") is RoleEnd.Pending)
+        assertEquals(listOf(billingKept), kept(phone))
+        assertEquals("only the kept handover was ever sent", 1, bodies().toSet().size)
+    }
+
+    /*
+     * A grant kept by a build that noted no operation (an entry from before #286): Let them manage pressed again sends it,
+     * it lands, and the member list then already says what was asked, so it is said as made. Fails if a kept change of no
+     * known operation that lands leaves the request refused as changing nothing.
+     */
+    @Test
+    fun aKeptChangeWithNoOperationThatLandsSatisfiesTheRequest() {
+        val phone = phone()
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        answer(3, 503)
+        assertTrue(grant(phone) is RoleEnd.Pending)
+        val entry = kept(phone).single()
+        // As an earlier build kept it: the entry's file without its operation.
+        val outbox = java.io.File(java.io.File(RuntimeEnvironment.getApplication().noBackupFilesDir, FamilyRecords.FOLDER), "outbox")
+        val file = java.io.File(outbox, "${family.member.id.lowercase()}_${family.groupId.lowercase()}_${entry.outboxId.lowercase()}.call")
+        val stored = JSONObject(file.readText())
+        assertEquals(RoleOperation.GRANT.wire, stored.remove("operation"))
+        file.writeText(stored.toString())
+        assertNull(kept(phone).single().operation)
+        assertEquals(RoleEnd.Landed, grant(phone))
+        assertTrue("members" in rolesOf(phone, graceId))
+        assertTrue(kept(phone).isEmpty())
+        assertEquals("the kept grant was signed again", 1, bodies().toSet().size)
+    }
+
+    /*
+     * Grace's grant is kept unanswered, then the settings can't be read when Ada's grant is asked for. The same operation,
+     * but not the same person: Ada's is never said as saved on this device; it waits behind Grace's, nothing kept for it.
+     * Fails if a kept call's failure is reported as another person's request kept.
+     */
+    @Test
+    fun anotherPersonsKeptChangeIsNeverThisOnesPending() {
+        val phone = phone()
+        val ada = server.another("ada@example.org", "Ada Lovelace")
+        family.waiting(ada, "ada@example.org", "Ada Lovelace")
+        assertEquals(LetIn.Landed, phone.sync.letIn(summary, family.pendingRows.map(PendingPerson::from).single()))
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        family.verifyPin(ada, "ada@example.org", "Ada Lovelace")
+        answer(3, 503)
+        assertTrue(grant(phone) is RoleEnd.Pending)
+        val graceKept = kept(phone).single()
+        server.failSettingsReads = true
+        try {
+            assertEquals("Grace's kept grant was said as Ada's", RoleEnd.Waiting(earlierWaiting(summary.name)),
+                phone.sync.changeRole(summary, ada.id, "Ada", MembersRole.GRANT))
+        } finally {
+            server.failSettingsReads = false
+        }
+        assertEquals(listOf(graceKept), kept(phone))
+    }
+
+    /*
      * The half-finished handover: billing given to Grace, then the app stops before Maya lets go of it (here, her
      * connection drops). On relaunch the family page's resume finishes it: one organizer, Grace, and the person told.
      * Fails if a handover stopped in the middle leaves two organizers for good.

@@ -208,7 +208,7 @@ sealed interface Rotated {
  */
 private fun FamilySync.rotatingCall(summary: GroupSummary, names: (String) -> String?, beforeKept: (String) -> Unit = {},
     build: (FamilyView, ULong, Map<String, String>) -> RosterCall): Rotated =
-    when (val staged = stageCall(summary, beforeKept, build)) {
+    when (val staged = stageCall(summary, beforeKept, build = build)) {
         // sendKept settles the entry's recheck (its documents read again) before it is first sent.
         is Staged.Call -> Rotated.Sent(sendKept(summary, staged.kept, names = names))
         is Staged.Refused -> Rotated.Refused(staged.words, staged.retry)
@@ -403,7 +403,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, turn: RemovalTurn, na
         onStep(RemovalStep.DEMOTE)
         // The member list the demotion is staged over (callFor hands it to `before` right before the build).
         var stagedOver: FamilyView? = null
-        when (val demoted = callFor(summary, userId, first, unchangedIsDone = true, before = { over -> requireBound(over); stagedOver = over },
+        when (val demoted = callFor(summary, userId, first, RoleOperation.TAKE, unchangedIsDone = true, before = { over -> requireBound(over); stagedOver = over },
             beforeKept = ::link) { revision, kems ->
             // The member list version this demotion takes if it lands (the core's next roster: its entry's since), kept before
             // it is staged. Never the chain's revision, which a standalone succession moves past the member list's version.

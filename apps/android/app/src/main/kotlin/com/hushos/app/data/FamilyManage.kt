@@ -31,7 +31,8 @@ import java.io.File
  * (FamilyRecords.deleteAll). One file per entry, written beside and moved over; under the records' lock and session.
  */
 class FamilyOutbox(private val folder: File, private val open: () -> Boolean = { true }) {
-    data class Kept(val outboxId: String, val entry: String)
+    /* `operation`: what a role call does (RoleOperation's wire name), kept in the entry's own file; null for any other call or an earlier entry. */
+    data class Kept(val outboxId: String, val entry: String, val operation: String? = null)
 
     private fun file(userId: String, groupId: String, outboxId: String): File? {
         val ids = listOf(userId.lowercase(), groupId.lowercase(), outboxId.lowercase())
@@ -44,7 +45,7 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
      * and moved over in one rename, so no crash leaves a marker or notes describing another version of the call than the one
      * on disk. An entry from before (5a: the sealed entry alone) reads as that entry, settled, with no notes.
      */
-    private data class Stored(val entry: String, val recheck: Recheck?, val cleared: List<Pair<String, String>>)
+    private data class Stored(val entry: String, val recheck: Recheck?, val cleared: List<Pair<String, String>>, val operation: String? = null)
 
     private fun read(target: File): Stored? {
         if (!target.exists()) return null
@@ -58,7 +59,8 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
                 Recheck(areas, docs.map { com.hushos.core.ReplacedDocument(it.getString(0), it.getString(1)) })
             }
             val cleared = json.optJSONArray("cleared")?.let { a -> (0 until a.length()).map { a.getJSONArray(it).let { row -> row.getString(0) to row.getString(1) } } }.orEmpty()
-            Stored(json.getString("entry"), recheck, cleared)
+            val operation = if (json.isNull("operation")) null else json.optString("operation").takeIf { it.isNotEmpty() }
+            Stored(json.getString("entry"), recheck, cleared, operation)
         } catch (_: Exception) {
             throw OutboxUnreadable()
         }
@@ -69,6 +71,7 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
             folder.mkdirs()
             val json = JSONObject().put("entry", stored.entry)
                 .put("cleared", org.json.JSONArray(stored.cleared.map { org.json.JSONArray(listOf(it.first, it.second)) }))
+            stored.operation?.let { json.put("operation", it) }
             stored.recheck?.let { r ->
                 json.put("recheck", JSONObject().put("areas", org.json.JSONArray(r.areas.map { it.lowercase() }.sorted()))
                     .put("replaced", org.json.JSONArray(r.replaced.map { org.json.JSONArray(listOf(it.workspaceId.lowercase(), it.kind)) })))
@@ -84,13 +87,14 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
 
     /*
      * Kept before the first send, with its recheck marker when it carries documents on empty (never sendable before the
-     * read-again), its notes as they were: one write that may not be on disk throws, and nothing is sent.
+     * read-again), its notes as they were, and what a role call does (`operation`, in the same write: never an entry
+     * without it; a rebuild keeps the one it had): one write that may not be on disk throws, and nothing is sent.
      */
-    fun put(userId: String, groupId: String, outboxId: String, entry: String, recheck: Recheck? = null) = synchronized(FamilyCopies.LOCK) {
+    fun put(userId: String, groupId: String, outboxId: String, entry: String, recheck: Recheck? = null, operation: String? = null) = synchronized(FamilyCopies.LOCK) {
         if (!open()) throw OutboxUnsaved()
         val target = file(userId, groupId, outboxId) ?: throw OutboxUnsaved()
         val before = try { read(target) } catch (_: OutboxUnreadable) { throw OutboxUnsaved() }
-        write(outboxId, target, Stored(entry, recheck, before?.cleared.orEmpty()))
+        write(outboxId, target, Stored(entry, recheck, before?.cleared.orEmpty(), operation ?: before?.operation))
     }
 
     /*
@@ -130,7 +134,7 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
         val rebuilt = (areas + replaced.map { it.workspaceId }).map { it.lowercase() }.toSet()
         val kept = before?.cleared.orEmpty().filter { (ws, _) -> ws !in rebuilt }
         val all = (kept + replaced.map { it.workspaceId.lowercase() to it.kind }).distinct().sortedBy { it.first + " " + it.second }
-        write(outboxId, target, Stored(entry, null, all))
+        write(outboxId, target, Stored(entry, null, all, before?.operation))
     }
 
     /*
@@ -349,7 +353,8 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
         val prefix = "${userId.lowercase()}_${groupId.lowercase()}_"
         return entries(userId, groupId).sortedBy { it.lastModified() }.map { file ->
             val id = file.name.removePrefix(prefix).removeSuffix(".call")
-            Kept(id, read(file)?.entry ?: throw OutboxUnreadable())
+            val stored = read(file) ?: throw OutboxUnreadable()
+            Kept(id, stored.entry, stored.operation)
         }
     }
 
@@ -500,6 +505,12 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
             vault.familyPin(groupId)
         } catch (failed: Exception) {
             if (failed is NotAuthenticated || !settingsUnavailable(failed)) throw failed
+            // Pending only for the caller's own call: whose it is read from the entry (the settings as last read), and one
+            // of anyone else, or that doesn't open, is left alone, never said as kept for them.
+            if (only != null) {
+                val whose = try { ledger.outboxOpen(groupId, current.outboxId, userId, current.entry).route() } catch (_: CoreException) { null }
+                if (whose == null || !sameRoute(whose, only)) return CallEnd.Other
+            }
             return CallEnd.Pending(GroupsApiError.NO_ANSWER)
         }
         val read = try {
@@ -893,7 +904,7 @@ private class CheckFirstNeeded : Exception()
  * since: synced and staged again). Then every member's ML-KEM key (route 6), the group key's seal opened when the core
  * asks (route 8), and `build` given the head's revision. Kept in the outbox before anything is sent.
  */
-internal fun FamilySync.stageCall(summary: GroupSummary, beforeKept: (outboxId: String) -> Unit = {},
+internal fun FamilySync.stageCall(summary: GroupSummary, beforeKept: (outboxId: String) -> Unit = {}, operation: RoleOperation? = null,
     build: (view: FamilyView, revision: ULong, kems: Map<String, String>) -> RosterCall): Staged {
     val groupId = summary.id
     // The outbox's one gate, for every roster call: whatever is kept for the family goes first, each as it was signed (what
@@ -939,8 +950,8 @@ internal fun FamilySync.stageCall(summary: GroupSummary, beforeKept: (outboxId: 
                 beforeKept(call.call.outboxId)
                 // Documents it carried on empty are marked for a read-again before the entry exists: never sendable unchecked.
                 outbox.put(this.userId, groupId, call.call.outboxId, call.call.entry,
-                    call.call.replaced.takeIf { it.isNotEmpty() }?.let { FamilyOutbox.Recheck(emptySet(), it) })
-                return Staged.Call(FamilyOutbox.Kept(call.call.outboxId, call.call.entry), call.call.replaced)
+                    call.call.replaced.takeIf { it.isNotEmpty() }?.let { FamilyOutbox.Recheck(emptySet(), it) }, operation?.wire)
+                return Staged.Call(FamilyOutbox.Kept(call.call.outboxId, call.call.entry, operation?.wire), call.call.replaced)
             }
             // Synced at the top of the next round.
             RosterCall.SyncFirst, RosterCall.OpenFoldersFirst -> {}
@@ -987,7 +998,8 @@ sealed interface RoleEnd {
  */
 fun FamilySync.changeRole(summary: GroupSummary, userId: String, first: String, change: MembersRole): RoleEnd = exclusive(summary.id) {
     notMemberLetsGo(summary.id, { RoleEnd.Wiped }) {
-        callFor(summary, userId, first, unchangedIsDone = false, check = userId.takeIf { change == MembersRole.GRANT }) { revision, kems ->
+        callFor(summary, userId, first, if (change == MembersRole.GRANT) RoleOperation.GRANT else RoleOperation.TAKE, unchangedIsDone = false,
+            check = userId.takeIf { change == MembersRole.GRANT }) { revision, kems ->
             ledger.rolesBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), summary.id, revision, userId.lowercase(), change, kems)
         }
     }
@@ -1042,7 +1054,7 @@ fun handoverToFinish(view: FamilyView, me: String): String? {
  * or a change for them kept before it) keeps the record for the next open; a refusal or a check asked for ends it.
  */
 private fun FamilySync.giveThenStepDown(summary: GroupSummary, to: String, first: String, names: (String) -> String?): RoleEnd =
-    when (val given = callFor(summary, to, first, unchangedIsDone = true, check = to,
+    when (val given = callFor(summary, to, first, RoleOperation.BILLING_TO, unchangedIsDone = true, check = to, waitsKept = true,
         // The member list itself on every attempt (a first one, a re-sign after `stale`, a resumed handover): while this
         // account and someone else hold billing, it goes to nobody else until that handover is finished. A handover left
         // half done here, or one another device made meanwhile, ends this one, refused.
@@ -1071,7 +1083,7 @@ private fun FamilySync.stepDown(summary: GroupSummary, to: String, first: String
     // `stale`), they must still hold billing. Moved to someone else meanwhile (another device), this account stays the
     // organizer, and the person is told who holds it now.
     var moved: String? = null
-    val end = callFor(summary, userId, first, unchangedIsDone = true, before = { view ->
+    val end = callFor(summary, userId, first, RoleOperation.STEP_DOWN, unchangedIsDone = true, before = { view ->
         if (view.members.none { it.userId.equals(to, ignoreCase = true) && "billing" in it.roles }) {
             val now = view.members.firstOrNull { !it.userId.equals(userId, ignoreCase = true) && "billing" in it.roles }?.userId
             moved = now?.let { "${names(it) ?: "Someone else"} is the organizer now." } ?: ORGANIZER_FIRST
@@ -1092,16 +1104,38 @@ private fun FamilySync.stepDown(summary: GroupSummary, to: String, first: String
 private const val ORGANIZER_FIRST = "Make someone else the organizer first."
 
 /*
+ * Which change a kept role call makes. Every one of them (managing given or taken away, billing to someone, a step down)
+ * goes to the person's `member` route, so the route alone can't tell an earlier call of theirs from this one.
+ */
+internal enum class RoleOperation(val wire: String) { GRANT("grant"), TAKE("take"), BILLING_TO("billing-to"), STEP_DOWN("step-down") }
+
+/*
  * One role change of `person` sent through the outbox: an earlier one for them kept here goes first (an unanswered one
  * stays the only one), then the core's call is staged and sent, and signed again over another manager's win (`stale`).
+ * The earlier one is this change's own only when it is the same `operation` (every role call of a person shares their
+ * route): another one's end is never said as this one's. It ends (its words kept for the screens, `keptEnds`) and this one
+ * goes on; still unresolved, this one Waits, nothing staged, unless `waitsKept` (the handover's billing step, whose record
+ * the next open goes on from once the earlier change lands), which is Pending.
  * A change that no longer changes anything after a landing or a win is done; `unchangedIsDone` says so from the start.
  */
-internal fun FamilySync.callFor(summary: GroupSummary, person: String, first: String, unchangedIsDone: Boolean,
-    check: String? = null, before: (FamilyView) -> Unit = {}, onStaged: () -> Unit = {}, beforeKept: (String) -> Unit = {},
+internal fun FamilySync.callFor(summary: GroupSummary, person: String, first: String, operation: RoleOperation, unchangedIsDone: Boolean,
+    check: String? = null, waitsKept: Boolean = false, before: (FamilyView) -> Unit = {}, onStaged: () -> Unit = {}, beforeKept: (String) -> Unit = {},
     build: (ULong, Map<String, String>) -> RosterCall): RoleEnd {
     val route = ChainRoute.Member(person.lowercase())
     var moved = unchangedIsDone
     for (kept in outbox.list(userId, summary.id)) {
+        if (kept.operation != operation.wire) {
+            // Another change for them (or one kept before operations were noted): never this one's outcome.
+            when (val end = sendKept(summary, kept, only = route, names = { first }, told = { on, end -> keptEnds.add(Triple(summary.id, on, end)) })) {
+                // Landed or overtaken: the member list moved, so a request it already satisfies (Unchanged below) is done.
+                CallEnd.Landed, CallEnd.Stale -> moved = true
+                CallEnd.Other, is CallEnd.Refused -> {}
+                is CallEnd.Pending -> return if (waitsKept) RoleEnd.Pending(end.reason) else RoleEnd.Waiting(earlierWaiting(summary.name))
+                CallEnd.OtherKeys -> return RoleEnd.Waiting(earlierWaiting(summary.name))
+                CallEnd.Wiped -> return RoleEnd.Wiped
+            }
+            continue
+        }
         when (val end = sendKept(summary, kept, only = route, names = { first })) {
             CallEnd.Other -> {}
             CallEnd.Landed, CallEnd.Stale -> moved = true
@@ -1114,7 +1148,7 @@ internal fun FamilySync.callFor(summary: GroupSummary, person: String, first: St
     repeat(3) {
         // A promotion: where they stand on this phone now, from the settings and this device's guard read together over
         // the member list just synced (the row's label may be old). A guard that can't be read throws: nothing is signed.
-        val built = stageCall(summary, beforeKept) { view, revision, kems ->
+        val built = stageCall(summary, beforeKept, operation) { view, revision, kems ->
             before(view)
             if (check != null && memberStandings(view)[check.lowercase()] != MemberStanding.VERIFIED) throw CheckFirstNeeded()
             build(revision, kems)
