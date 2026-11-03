@@ -265,6 +265,65 @@ extension OnFakeDrive {
         }
 
         /*
+         * Codex #285 round 6: Make them the organizer kept unanswered for Maya, then Stop them managing
+         * is asked for her: the kept billing call is sent first and lands, and from then on the
+         * settings can't be read. The landed call is settled; it is never sent again as this one's,
+         * so the stop is never said as saved on this device with nothing of it kept. Fails if a
+         * deleted entry's call is taken up again after it settled.
+         */
+        @Test func aSettledDifferentKeptChangeIsNeverTakenUpAgain() async throws {
+            let m = try await Self.organizer()
+            defer { m.phone.done() }
+            try await Self.checkMaya(m)
+            let maya = m.family.creator.userId
+            m.server.lock.withLock { m.server.manage.memberAnswers = Array(repeating: Self.noAnswer, count: 3) }
+            guard case .pending = try await Self.quickly({ try await m.phone.sync.handOver(m.summary, to: maya, first: "Maya") }) else {
+                Issue.record("the handover wasn't kept"); return
+            }
+            let server = m.server
+            server.lock.withLock {
+                server.manage.beforeAnswer = { method, _ in
+                    // The kept billing call goes out and lands; every settings read after it fails.
+                    if method == "PATCH" { server.lock.withLock { server.manage.failSettingsReads = true } }
+                }
+            }
+            let end = try? await Self.quickly { try await m.phone.sync.changeRole(m.summary, userId: maya, first: "Maya", change: .take) }
+            server.lock.withLock { server.manage.beforeAnswer = nil; server.manage.failSettingsReads = false }
+            let saidSaved: Bool = { if case .pending? = end { return true }; return false }()
+            #expect(try !saidSaved || !m.kept.isEmpty, "the stop was said saved on this device with nothing of it kept")
+            #expect(try await Self.roles(m, maya).contains("billing"), "the kept billing call didn't land")
+        }
+
+        /*
+         * Codex #285 round 6 (billing): Make them the organizer kept unanswered (its record staged),
+         * confirmed again for the same person while still unanswered: the record stays staged. Then
+         * the kept billing call is refused; the next open takes that as the handover's end and signs
+         * no fresh billing change. Fails if confirming again resets the record to unstaged, so a
+         * definite refusal is followed by a new billing call.
+         */
+        @Test func confirmingTheSameHandoverAgainKeepsItStaged() async throws {
+            let m = try await Self.organizer()
+            defer { m.phone.done() }
+            try await Self.checkMaya(m)
+            let maya = m.family.creator.userId.lowercased()
+            m.server.lock.withLock { m.server.manage.memberAnswers = Array(repeating: Self.noAnswer, count: 6) }
+            guard case .pending = try await Self.quickly({ try await m.phone.sync.handOver(m.summary, to: maya, first: "Maya") }) else {
+                Issue.record("the handover wasn't kept"); return
+            }
+            #expect(try Self.handover(m) == FamilyRecords.KeptHandover(to: maya, staged: true))
+            guard case .pending = try await Self.quickly({ try await m.phone.sync.handOver(m.summary, to: maya, first: "Maya") }) else {
+                Issue.record("the second confirm wasn't the kept one's"); return
+            }
+            #expect(try Self.handover(m) == FamilyRecords.KeptHandover(to: maya, staged: true), "confirming again reset the handover to unstaged")
+            let billing = Set(m.server.callBodies)
+            m.server.lock.withLock { m.server.manage.memberAnswers = [answering(409, ["code": "held", "message": "Paused."])] }
+            _ = try await Self.quickly { try await m.phone.sync.resumeOutbox(m.family.groupId, names: [maya: "Maya"]) }
+            #expect(Set(m.server.callBodies) == billing, "a fresh billing change was signed after the kept one was refused")
+            #expect(try Self.handover(m) == nil)
+            #expect(try await !Self.roles(m, maya).contains("billing"))
+        }
+
+        /*
          * Billing moved to someone else meanwhile (another device): this account no longer holds it,
          * so it isn't this account's to give. Nothing is signed or sent. Fails if a former organizer
          * hands billing over.

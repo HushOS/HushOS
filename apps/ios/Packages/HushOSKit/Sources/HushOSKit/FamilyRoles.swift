@@ -103,7 +103,11 @@ extension FamilySync {
                 if try self.records.handover(userId: me, groupId: groupId) != nil { return .refused("Finish handing over to \(them) first.") }
                 if settled?.1 == .landed { return .refused("\(them) is the organizer now.") }
             }
-            try self.records.markHandover(userId: me, groupId: groupId, to: to)
+            // Confirmed again for the same person: the record stays as it is (`staged` once billing's call is kept), so a
+            // kept call later refused or overtaken is never taken for one never staged and signed afresh.
+            if try self.records.handover(userId: me, groupId: groupId)?.to != to.lowercased() {
+                try self.records.markHandover(userId: me, groupId: groupId, to: to)
+            }
             return try await self.giveThenStepDown(summary, to: to, first: first, names: names)
         }
     }
@@ -246,7 +250,10 @@ extension FamilySync {
                 // step, whose record the next open goes on from once the earlier change lands).
                 switch try await sendKept(groupId, outboxId: call.outboxId, entry: call.entry, only: route, saysLater: true) {
                 // Landed or overtaken: the member list moved, so a request it already satisfies (`unchanged` below) is done.
-                case .landed, .stale: moved = true
+                // Settled either way: on to the next entry, never this one's deleted entry sent again below.
+                case .landed, .stale:
+                    moved = true
+                    continue
                 case .other, .refused: continue
                 case .pending(let words): return waitsKept ? .pending(words) : .waiting(ManageWords.earlierWaiting(summary.name))
                 case .otherKeys: return .waiting(ManageWords.earlierWaiting(summary.name))
