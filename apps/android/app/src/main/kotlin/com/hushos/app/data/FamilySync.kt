@@ -89,7 +89,8 @@ data class FamilyArea(
 }
 
 /* A member as the accepted member list names them: roles are the list's, names come from route 3. */
-data class FamilyMember(val userId: String, val roles: List<String>, val commitment: String?)
+/* `since`: the member list version their entry last changed at (keys, roles or status): which membership a row shows. */
+data class FamilyMember(val userId: String, val roles: List<String>, val commitment: String?, val since: ULong)
 
 /* Folders this family's member list names that aren't its own (the ledger's foreign_listings), one notice per owner. */
 data class ForeignNotice(val owner: String?, val count: Int) {
@@ -176,6 +177,22 @@ class FamilySync(
 
     internal val ledger get() = vault.areaLedger
     internal val userId get() = vault.familyUserId
+
+
+    /* What kept calls the staging gate sent first came to (family, route, end), for whoever draws the families next to say. */
+    internal val keptEnds = java.util.concurrent.ConcurrentLinkedQueue<Triple<String, com.hushos.core.ChainRoute?, CallEnd>>()
+
+    fun takeKeptEnds(): List<Triple<String, com.hushos.core.ChainRoute?, CallEnd>> = generateSequence { keptEnds.poll() }.toList()
+
+    /* The documents-cleared words kept for the family since they were last taken, each once (kept on disk until taken). */
+    fun takeCleared(groupId: String): List<String> = outbox.takeUnsaid(userId, groupId)
+
+    /*
+     * The family folders the chain this process last committed lists as live (every listed area less its tombstones): what
+     * a removal or marking someone left must rotate, as the worker reads them. None before a commit.
+     */
+    internal fun liveAreas(groupId: String): List<String>? =
+        chains[groupId]?.let { chain -> (chain.areaKeys().keys - chain.retiredAreas().toSet()).map { it.lowercase() }.sorted() }
 
     /* Route 2: the families whose ids are ids (a server's other strings never reach a path or a file name). */
     fun list(): List<GroupSummary> = api.listGroups().filter { FamilyRecords.valid(it.id) }.onEach { names[it.id] = it.name }
@@ -862,7 +879,7 @@ class FamilySync(
         val owners = ledger.foreignListings().filter { it.groupId.equals(groupId, ignoreCase = true) }.groupingBy { it.openedBy }.eachCount()
         return FamilyView(
             groupId, roster.rosterVersion, chain.rosterDigest(), chain.groupKeyVersion(),
-            roster.members.filter { it.status == MemberStatus.ACTIVE }.map { FamilyMember(it.userId, it.roles.map(::role), commitment(it)) },
+            roster.members.filter { it.status == MemberStatus.ACTIVE }.map { FamilyMember(it.userId, it.roles.map(::role), commitment(it), it.sinceVersion) },
             areas, reset, chain.ownEntryWrongAt().isNotEmpty(), chain.ownEntryBehindAt().isNotEmpty(),
             owners.map { ForeignNotice(it.key, it.value) }.sortedBy { it.owner.orEmpty() },
         )
