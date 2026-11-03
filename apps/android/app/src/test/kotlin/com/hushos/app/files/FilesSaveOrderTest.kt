@@ -80,6 +80,7 @@ class FilesSaveOrderTest {
         TransferQueue.afterCancelCleans = null
         TransferQueue.beforeSweepRemoves = null
         TransferQueue.beforeAsideReserve = null
+        TransferQueue.beforeReconcileWalk = null
         TransferQueue.beforeSlotEnqueued = null
         server.close()
         assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
@@ -2273,5 +2274,32 @@ class FilesSaveOrderTest {
         TransferQueue.reconcileEdits(app, startup = true)
         assertFalse("a dead process's sending copy outlived a start", again.exists())
         assertFalse(left.exists())
+    }
+
+    /*
+     * #274 P1 (reconcile and accounts): a reconcile starts for one account, and before it walks the edits on disk that
+     * account signs out and another signs in, whose closed edit is already there. The walk deletes nothing of the new
+     * account's (it stops), and the new account's own reconcile gives that edit its row. Fails if a reconcile that began
+     * for one account deletes another's edits as made "for another account".
+     */
+    @Test
+    fun aReconcileTheAccountLeftPartwayDeletesNothingOfTheNext() {
+        val provider = provider()
+        val notes = notes(provider)
+        val vault = vaultOf(provider)
+        val target = vault.resolve(notes).let { WriteBacks.Target(it.node.workspaceId, it.id, it.name, it.metadata.mime, it.node.parentId ?: vault.rootId, root = vault.rootId) }
+        val next = java.util.UUID.randomUUID().toString()
+        var theirs: File? = null
+        TransferQueue.beforeReconcileWalk = {
+            TransferQueue.beforeReconcileWalk = null
+            Shared.clearSession(app)
+            AccountStore.of(app).wipe()
+            Shared.writeSession(app, Shared.Session(server.origin, "another-token", next, "sam@example.org"))
+            theirs = WriteBacks.close(WriteBacks.personalEdit(app, target, next).apply { writeText("the next account's save") }, 1)
+        }
+        TransferQueue.reconcileEdits(app, startup = true)
+        assertTrue("a reconcile for the account that left deleted the next one's edit", theirs!!.exists())
+        TransferQueue.reconcileEdits(app, startup = true)
+        assertEquals(theirs!!.path, FailedTransfers.of(app).all().single().file)
     }
 }

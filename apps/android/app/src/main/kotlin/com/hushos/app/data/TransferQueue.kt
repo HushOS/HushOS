@@ -539,7 +539,9 @@ object TransferQueue {
         // The account it looks for: a job it queues is that account's, or none (a sign-out since took the slots it read).
         val generation = Reservations.generation
         // A landed job's mark stays while WorkManager still lists the job: its FAILED entry is never read as a failure again.
-        LandedJobs.of(context).sweep(keep = known)
+        // Its deletes only while that account is still here (under the wipe's lock): a sign-out partway stops it.
+        fun stillItsAccount(body: () -> Unit): Boolean = Reservations.whileAccount(generation) { body(); true } == true
+        if (!stillItsAccount { LandedJobs.of(context).sweep(keep = known) }) return
         val cutoff = System.currentTimeMillis() - 10 * 60 * 1000
         // A failed upload on the app's own record keeps its copy for Retry, however old its job.
         val rows = FailedTransfers.of(context).all()
@@ -558,11 +560,11 @@ object TransferQueue {
                 // so a save published since the look above is never deleted.
                 if (dir.path !in inUse && dir.lastModified() < cutoff) {
                     beforeSweepRemoves?.invoke(dir)
-                    WriteBacks.removeIfEmpty(context, dir.name)
+                    if (!stillItsAccount { WriteBacks.removeIfEmpty(context, dir.name) }) return
                 }
                 return@forEach
             }
-            if (dir.path !in inUse && dir.path !in recorded && dir.lastModified() < cutoff) dir.deleteRecursively()
+            if (dir.path !in inUse && dir.path !in recorded && dir.lastModified() < cutoff && !stillItsAccount { dir.deleteRecursively() }) return
         }
     }
 
@@ -670,7 +672,10 @@ object TransferQueue {
         val generation = Reservations.generation
         // First every landing the ledger knows of that reads don't yet (a reservation settled as completed whose recording
         // was refused), then what a landing's bookkeeping left (rows a death kept), for the account it started in.
-        if (startup) runCatching { WriteBacks.dropStaged(context) }
+        // Every delete below is made under the wipe's lock, only while the account it began for is still here: a sign-out
+        // (and another sign-in) partway through stops it, so it never deletes what the next account has on disk.
+        fun stillItsAccount(body: () -> Unit): Boolean = Reservations.whileAccount(generation) { body(); true } == true
+        if (startup && !stillItsAccount { runCatching { WriteBacks.dropStaged(context) } }) return
         Reservations.whileAccount(generation) {
             // Numbers that can't be read rebuilt first, so nothing old is published again from what they bounded.
             File(context.filesDir, WriteBacks.NUMBERS).listFiles()?.filter { !it.name.endsWith(".incoming") }?.forEach { runCatching { WriteBacks.repair(context, it.name) } }
@@ -688,6 +693,7 @@ object TransferQueue {
         Reservations.whileAccount(generation) { (rows.filter { it.stage != null }.mapNotNull { it.slot } + edits).toSet().forEach { WriteBacks.retireSettled(context, it) } }
         val named = runCatching { FailedTransfers.of(context).all().mapNotNull { it.file }.toSet() }.getOrElse { return }
         val dayAgo = System.currentTimeMillis() - 86_400_000L
+        beforeReconcileWalk?.invoke()
         File(context.filesDir, WriteBacks.EDITS).walkTopDown().filter { it.isFile }.toList().forEach { file ->
             when {
                 file.name.endsWith(".closed") -> {
@@ -696,8 +702,13 @@ object TransferQueue {
                     val sidecar = runCatching { WriteBacks.sidecarOf(file).readText() }.getOrNull() ?: return@forEach
                     val target = WriteBacks.decodeTarget(sidecar) ?: return@forEach
                     // Made for another account (an open that outlived a sign-out): never this one's, and gone.
-                    if (WriteBacks.accountOf(sidecar)?.let { !it.equals(session.userId, ignoreCase = true) } == true) { WriteBacks.discardEdit(file); return@forEach }
-                    if (WriteBacks.keptAtOrAbove(context, WriteBacks.slotOf(target.workspaceId, target.nodeId), number)) { WriteBacks.discardEdit(file); return@forEach }
+                    if (WriteBacks.accountOf(sidecar)?.let { !it.equals(session.userId, ignoreCase = true) } == true) {
+                        if (!stillItsAccount { WriteBacks.discardEdit(file) }) return
+                        return@forEach
+                    }
+                    var moot = false
+                    if (!stillItsAccount { moot = WriteBacks.keptAtOrAbove(context, WriteBacks.slotOf(target.workspaceId, target.nodeId), number); if (moot) WriteBacks.discardEdit(file) }) return
+                    if (moot) return@forEach
                     // A family's: made under the folder's revocation count it has now (a revocation would have deleted it).
                     val epoch = target.familyWorkspace?.let { ws ->
                         synchronized(FamilyCopies.LOCK) { if (!file.isFile) return@forEach; FamilySessions.of(session).epochs[ws.lowercase()]?.first ?: 0L }
@@ -708,7 +719,7 @@ object TransferQueue {
                     // A target (or a copy being made) goes only once no edit of its name holds a save, whatever form it is in.
                     val base = file.name.substringBefore('.')
                     val held = file.parentFile?.listFiles()?.any { it.name.substringBefore('.') == base && it.name != file.name && WriteBacks.isRetainedEdit(it.name) } == true
-                    if (startup && !held && file.lastModified() < dayAgo) file.delete()
+                    if (startup && !held && file.lastModified() < dayAgo && !stillItsAccount { file.delete() }) return
                 }
                 // An edit never closed, over a day old and no row naming it: no process holds it any more, but its close may
                 // have run with every step failing (the rename, the save, the row), so it may be a save. Never deleted here
@@ -718,8 +729,14 @@ object TransferQueue {
                     val sidecar = WriteBacks.sidecarOf(file)
                     val written = runCatching { sidecar.readText() }.getOrNull()
                     val target = written?.let(WriteBacks::decodeTarget)
-                    if (target == null) { if (!sidecar.exists()) WriteBacks.discardEdit(file); return@forEach }
-                    if (WriteBacks.accountOf(written)?.let { !it.equals(session.userId, ignoreCase = true) } == true) { WriteBacks.discardEdit(file); return@forEach }
+                    if (target == null) {
+                        if (!sidecar.exists() && !stillItsAccount { WriteBacks.discardEdit(file) }) return
+                        return@forEach
+                    }
+                    if (WriteBacks.accountOf(written)?.let { !it.equals(session.userId, ignoreCase = true) } == true) {
+                        if (!stillItsAccount { WriteBacks.discardEdit(file) }) return
+                        return@forEach
+                    }
                     val slot = WriteBacks.slotOf(target.workspaceId, target.nodeId)
                     val epoch = target.familyWorkspace?.let { ws ->
                         synchronized(FamilyCopies.LOCK) { if (!file.isFile) return@forEach; FamilySessions.of(session).epochs[ws.lowercase()]?.first ?: 0L }
@@ -750,6 +767,9 @@ object TransferQueue {
         FailedTransfers.changed()
         TransferNotices.retire(context, obsolete)
     }
+
+    /* Tests: runs as reconcile is about to walk the edits on disk. */
+    @Volatile internal var beforeReconcileWalk: (() -> Unit)? = null
 
     /* Tests: runs after a cancel's saves went, before the job's cancel is published. */
     @Volatile internal var afterCancelCleans: (() -> Unit)? = null
