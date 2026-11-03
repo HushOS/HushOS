@@ -390,13 +390,14 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
                     jobNames.retain(infos.map { it.id.toString() }.toSet())
                 }
                 // Failed rows come from the app's own record, which outlives WorkManager's; its FAILED jobs are not shown twice.
-                val failedRows = withContext(Dispatchers.IO) { records.all() }.map { failed ->
+                // Whether each row's file is still there, read off the main thread (a slot's look reads the disk).
+                val failedRows = withContext(Dispatchers.IO) { records.all().map { it to it.sourceGone() } }.map { (failed, gone) ->
                     TransferItem(
                         id = failed.id, kind = failed.kind, name = failed.name, fraction = 0f, done = true, failed = true,
                         // A family upload a removal ended says so (its copy went with it), never "pick it again".
-                        message = if (failed.sourceGone() && failed.reason != com.hushos.app.data.FamilyWords.NOT_IN_FAMILY) "The file isn’t there any more. Pick it again." else failed.reason,
+                        message = if (gone && failed.reason != com.hushos.app.data.FamilyWords.NOT_IN_FAMILY) "The file isn’t there any more. Pick it again." else failed.reason,
                         dismiss = { viewModelScope.launch(Dispatchers.IO) { com.hushos.app.data.TransferQueue.dismiss(context, failed); failedChanged.value++ } },
-                        retry = if (failed.sourceGone()) null else ({ retryRecorded(failed) }),
+                        retry = if (gone) null else ({ retryRecorded(failed) }),
                         node = failed.node, folder = failed.isFolder,
                     )
                 }

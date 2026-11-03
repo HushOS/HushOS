@@ -406,6 +406,14 @@ object TransferQueue {
                     WriteBacks.discardEdit(edit)
                     Reservations.whileAccount(generation) { records.forget(failed.id) }
                     FailedTransfers.changed()
+                    // Superseded by its own copy: the save reached the slot before (a death before its record), and the slot
+                    // holds it now. It goes from there: its job queued, the Retry done.
+                    val slot = WriteBacks.slotOf(target.workspaceId, target.nodeId)
+                    if (WriteBacks.pending(context, slot)?.generation == number) {
+                        enqueueSlot(context, slot, target.name, target.family, generation) ?: return Retry.GONE
+                        WriteBacks.notifyFolder(context, target)
+                        return Retry.SENT
+                    }
                     return Retry.GONE
                 }
                 if (kept == null && notKept && edit.isFile) return Retry.NOT_KEPT
@@ -652,6 +660,8 @@ object TransferQueue {
         // Never throws: a row that can't be written (the same full disk) leaves the closed edit for the next reconcile.
         Reservations.whileAccount(accountGeneration) {
             if (!edit.isFile) return@whileAccount false
+            // One row per edit: two sweeps overlapping (each read the rows before the other wrote) never make a second.
+            if (FailedTransfers.of(context).all().any { it.stage != null && it.file == edit.path }) return@whileAccount true
             FailedTransfers.of(context).record(FailedTransfer(UUID.randomUUID().toString(), UPLOAD, target.name, Problems.say(error, "The transfer failed."),
                 System.currentTimeMillis(), file = edit.path, mime = target.mime, folder = target.folder, replacing = target.nodeId,
                 family = target.family, familyWorkspace = target.familyWorkspace, slot = WriteBacks.slotOf(target.workspaceId, target.nodeId),
@@ -761,12 +771,18 @@ object TransferQueue {
             else (WriteBacks.numberOfId(WriteBacks.idOf(row.file)) ?: Long.MAX_VALUE) <= through || (superseded && WriteBacks.idOf(row.file) != keep)
         }
         if (stale.isEmpty()) return
-        stale.filter { it.stage != null }.forEach { row -> row.file?.let { WriteBacks.discardEdit(File(it)) } }
         val obsolete = stale.map { it.id }.toSet()
+        // Their failures still waiting to be summed up first: a death between leaves rows the next run retires again, never a
+        // failure posted for a file that uploaded (once its rows are gone nothing would retire that).
+        TransferNotices.retire(context, obsolete)
+        afterLandedNoticesRetired?.invoke()
+        stale.filter { it.stage != null }.forEach { row -> row.file?.let { WriteBacks.discardEdit(File(it)) } }
         records.forgetWhere { it.id in obsolete }
         FailedTransfers.changed()
-        TransferNotices.retire(context, obsolete)
     }
+
+    /* Tests: runs once a landing's obsolete failures were retired from the summary, before their rows go. */
+    @Volatile internal var afterLandedNoticesRetired: (() -> Unit)? = null
 
     /* Tests: runs as reconcile is about to walk the edits on disk. */
     @Volatile internal var beforeReconcileWalk: (() -> Unit)? = null
