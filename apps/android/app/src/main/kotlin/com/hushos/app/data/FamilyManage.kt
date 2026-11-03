@@ -686,6 +686,12 @@ private fun FamilySync.giveThenStepDown(summary: GroupSummary, to: String, first
         // account and someone else hold billing, it goes to nobody else until that handover is finished. A handover left
         // half done here, or one another device made meanwhile, ends this one, refused.
         before = { view ->
+            // Not the organizer any more (another device finished a handover meanwhile, or this one's earlier step down
+            // just landed): billing is not this account's to give.
+            if (view.members.none { it.userId.equals(userId, ignoreCase = true) && "billing" in it.roles }) {
+                val now = view.members.firstOrNull { "billing" in it.roles }?.userId
+                throw StageRefused("${now?.let(names) ?: "Someone else"} is the organizer now.")
+            }
             handoverToFinish(view, userId)?.takeIf { !it.equals(to, ignoreCase = true) }?.let { other ->
                 throw StageRefused("Finish handing over to ${names(other) ?: "them"} first.")
             }

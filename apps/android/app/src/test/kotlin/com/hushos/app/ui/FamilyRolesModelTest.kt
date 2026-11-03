@@ -38,7 +38,7 @@ class FamilyRolesModelTest {
     private val server = FakeDrive()
     private lateinit var family: FamilyFixture
 
-    private class Host(val vault: Vault) : FamilyHost {
+    private class Host(@Volatile var vault: Vault) : FamilyHost {
         override val currentVault: Vault get() = vault
         override val cacheDir: File = RuntimeEnvironment.getApplication().cacheDir
         override val state = MutableStateFlow(DriveState())
@@ -189,5 +189,41 @@ class FamilyRolesModelTest {
         family.memberAnswers.add { body -> val landed = family.apply(body, null); family.rosterFailures = 2; landed }
         runBlocking { model.loadManaged(family.groupId) }
         assertEquals(server.grace.id.lowercase(), halfDoneShown())
+    }
+
+    /*
+     * A role change still out when the account signs out and back in (a new session), and the new session starts its own:
+     * the old one's answer arrives and leaves the new one's busy row alone. Fails if an ended session's answer clears what
+     * the next session is doing (its row would take another press mid-change).
+     */
+    @Test
+    fun anEndedSessionsAnswerLeavesTheNewSessionsChangeAlone() {
+        runBlocking { model.refreshFamilies(force = true) }
+        val ref = com.hushos.app.data.FamilyMemberRef(server.grace.id, "grace@example.org", "Grace Hopper")
+        val first = java.util.concurrent.CountDownLatch(1)
+        val second = java.util.concurrent.CountDownLatch(1)
+        val sends = java.util.concurrent.atomic.AtomicInteger()
+        server.beforeAnswer = { method, path ->
+            if (method == "PATCH" && path.contains("/members/")) (if (sends.incrementAndGet() == 1) first else second).await(15, java.util.concurrent.TimeUnit.SECONDS)
+        }
+        model.askRole(RoleAsk(family.groupId, ref, RoleKind.MANAGE), verified = true)
+        model.confirmRole()
+        until("the old session's change is out") { sends.get() == 1 }
+        // Signed out and in again, as DriveViewModel does: a new vault, the families reset; the new session starts its own change.
+        host.vault = RuntimeEnvironment.getApplication().let { Vault(it, DriveApi(Shared.session(it)!!)) }
+        model.reset()
+        runBlocking { model.refreshFamilies(force = true) }
+        model.askRole(RoleAsk(family.groupId, ref, RoleKind.MANAGE), verified = true)
+        model.confirmRole()
+        val busy = model.roleBusy
+        assertTrue(busy != null)
+        // The old change answers (the family's turn it held is let go of); the new one goes out after it.
+        first.countDown()
+        until("the new session's change is out") { sends.get() == 2 }
+        Thread.sleep(500)
+        assertEquals("the old answer cleared the new session's change", busy, model.roleBusy)
+        second.countDown()
+        until("the new session's change finished") { model.roleBusy == null }
+        server.beforeAnswer = null
     }
 }

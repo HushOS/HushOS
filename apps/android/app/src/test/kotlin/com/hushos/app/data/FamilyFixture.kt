@@ -399,6 +399,19 @@ class FamilyFixture(val server: FakeDrive) {
         return chain
     }
 
+    /* Sam, on his own device, moves billing from Maya to `userId`: a handover another device finished meanwhile. */
+    fun samMovesBilling(userId: String) {
+        val accepted = creatorChain()
+        val members = accepted.roster().members.map {
+            when {
+                it.userId.equals(userId, ignoreCase = true) -> it.copy(roles = (it.roles + GroupRole.BILLING).distinct().sortedBy { role -> role.ordinal })
+                it.userId.equals(member.id, ignoreCase = true) -> it.copy(roles = it.roles - GroupRole.BILLING)
+                else -> it
+            }
+        }
+        chain = chain + rosterSign(rosterNext(accepted, members, creator.id, null, null, null), groupSeed, creator.keys)
+    }
+
     /* Sam, on his own device, gives `userId` billing: another manager's handover landing meanwhile. */
     fun samGivesBilling(userId: String) {
         val accepted = creatorChain()

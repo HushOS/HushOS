@@ -421,7 +421,8 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                     RoleKind.FINISH -> sync.finishHandingOver(summary, ask.member.userId, who)
                 }
             }
-            if (result == null || !gate.current(s)) { roleBusy = null; return@launch }
+            // An ended session's answer touches nothing: the next session's own change may be under way.
+            if (result == null || !gate.current(s)) return@launch
             roleBusy = null
             val outcome = result.getOrElse { error ->
                 error.rethrowIfCancelled()

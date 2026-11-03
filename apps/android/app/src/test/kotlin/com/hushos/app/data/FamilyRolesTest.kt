@@ -436,4 +436,36 @@ class FamilyRolesTest {
         assertEquals(setOf(family.member.id.lowercase(), ada), organizers(phone))
         assertNull(phone.sync.outbox.handover(family.member.id, family.groupId))
     }
+
+    /*
+     * Make them the organizer on Grace while another device had already handed the organizer role to Ada: Maya holds no
+     * billing on the member list just synced, so nothing is given and the person is told who the organizer is now. Fails
+     * if someone who isn't the organizer any more gives billing away (two organizers).
+     */
+    @Test
+    fun aHandoverBySomeoneWhoIsNoLongerTheOrganizerIsRefused() {
+        val (phone, ada) = withAda()
+        family.samMovesBilling(ada)
+        assertEquals(RoleEnd.Refused("Ada is the organizer now."), phone.sync.handOver(summary, graceId, "Grace", names))
+        assertEquals(setOf(ada), organizers(phone))
+        assertTrue("nothing sent", family.memberCalls.isEmpty())
+        assertNull(phone.sync.outbox.handover(family.member.id, family.groupId))
+    }
+
+    /*
+     * A handover to Grace whose last step's answer was lost (kept); then Make them the organizer on Ada. Settling the earlier
+     * one sends the kept step again, which lands: Maya isn't the organizer any more, so Ada's is refused, Grace named.
+     * Fails if a replayed step down that finished the earlier handover lets billing go to a second person.
+     */
+    @Test
+    fun aHandoverAfterAReplayedStepDownIsRefused() {
+        val (phone, ada) = withAda()
+        family.memberAnswers.add { body -> family.apply(body, null) }
+        family.memberAnswers.add { body -> family.apply(body, null); 503 to JSONObject().put("message", "Lost.") }
+        answer(2, 503)
+        assertTrue(phone.sync.handOver(summary, graceId, "Grace", names) is RoleEnd.Pending)
+        assertEquals(RoleEnd.Refused("Grace is the organizer now."), phone.sync.handOver(summary, ada, "Ada", names))
+        assertEquals(setOf(graceId), organizers(phone))
+        assertTrue("Ada never staged", family.memberCalls.none { it.first.equals(ada, ignoreCase = true) })
+    }
 }
