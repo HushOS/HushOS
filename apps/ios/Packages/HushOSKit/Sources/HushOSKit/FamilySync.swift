@@ -500,12 +500,49 @@ public actor FamilySync: FamilyJudge {
         public let revision: UInt64
         /* The family's Files revocation generation as the check began (FamilyFilesDomains); nil when none was taken. */
         public var filesGeneration: UInt64? = nil
+        /* Why a `.failed` sync failed; nil for any other state, and for a failure that is a definite refusal of the family. */
+        public var cause: FailureCause? = nil
 
-        public init(state: FamilyState, revision: UInt64, filesGeneration: UInt64? = nil) {
+        public init(state: FamilyState, revision: UInt64, filesGeneration: UInt64? = nil, cause: FailureCause? = nil) {
             self.state = state
             self.revision = revision
             self.filesGeneration = filesGeneration
+            self.cause = cause
         }
+
+        /* Whether it lets the family's Files location go: a definite removal, refusal, fork, or a family not in; never no answer or a lost session. */
+        public var letsFilesGo: Bool {
+            guard FamilyReleases.letsGo(state) else { return false }
+            if case .failed = state, cause == .noAnswer || cause == .session { return false }
+            return true
+        }
+    }
+
+    /* `run` in the family's turn, with its revision and, for a failure, its cause. */
+    func revisedRun(_ summary: GroupSummary, observed: UInt64? = nil) async -> Revised {
+        failureCause[summary.id] = nil
+        let state = await run(summary)
+        let cause: FailureCause? = if case .failed = state { failureCause.removeValue(forKey: summary.id) } else { nil }
+        return Revised(state: state, revision: Self.revise(), filesGeneration: observed, cause: cause)
+    }
+
+    /* Why a sync failed, as far as the Files locations care. */
+    public enum FailureCause: Sendable, Equatable {
+        /* No answer, a timeout, the server busy or failing: nothing is decided about the family. */
+        case noAnswer
+        /* The session ended (401): the person signs in again. */
+        case session
+        /* A definite refusal (the chain didn't check, a rollback, keys that didn't verify). */
+        case refusal
+    }
+
+    /* The cause of the sync that just failed in the family's turn, for its `Revised` (set and read in that turn). */
+    private var failureCause: [String: FailureCause] = [:]
+
+    static func cause(of error: Error) -> FailureCause {
+        if FamilyFilesSource.endsSession(error) { return .session }
+        if transient(error) { return .noAnswer }
+        return .refusal
     }
 
     /*
@@ -539,7 +576,7 @@ public actor FamilySync: FamilyJudge {
         let revised = await exclusive(summary.id) {
             // The Files location's revocation generation before the check begins: an acceptance a let-go overtook adds nothing.
             let observed = self.filesDomains?.generation(summary.id)
-            return Revised(state: await self.run(summary), revision: Self.revise(), filesGeneration: observed)
+            return await self.revisedRun(summary, observed: observed)
         }
         if FamilyReleases.letsGo(revised.state) { releases.post(summary.id, revised) }
         return revised
@@ -608,6 +645,8 @@ public actor FamilySync: FamilyJudge {
             if !Self.unanswered(error) { await refuse(groupId) }
             // A 401: kept for the app (takeEnded), which asks whether the session ended.
             if endsSession(error) { endedBy = error }
+            // Why, for the Files locations: only a definite refusal lets the family's location go (`Revised.letsFilesGo`).
+            failureCause[groupId] = Self.cause(of: error)
             return .failed(FamilyWords.error(error))
         }
     }

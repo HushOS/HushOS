@@ -88,7 +88,7 @@ enum FamilyErrors {
             // Gone from this account's families (or never one of them): Files drops what it holds of it. Nothing here is
             // unsynced, the location being read only.
             return NSFileProviderError(.noSuchItem)
-        case FamilyFilesError.otherAccount:
+        case FamilyFilesError.otherAccount, FamilyFilesError.signedOut:
             return FileProviderExtension.translate(NSFileProviderError(.notAuthenticated), domain: domain)
         case FamilyFilesError.unavailable, FamilyFilesError.keyChange:
             // Asked again later, with nothing of what Files holds dropped.

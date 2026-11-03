@@ -151,8 +151,8 @@ public struct FamilyDomainRecords: Sendable {
 
 /* The system's family locations, as `FamilyFilesDomains` drives them (a test's own in tests). */
 public protocol FamilyDomainManaging: Sendable {
-    /* The family locations there are, by identifier. */
-    func domains() async throws -> [String]
+    /* The family locations there are: each one's display name, by identifier. */
+    func domains() async throws -> [String: String]
     func add(_ identifier: String, name: String) async throws
     /* Removed with everything Files kept in it (`.removeAll`). */
     func remove(_ identifier: String) async throws
@@ -221,19 +221,18 @@ public final class FamilyFilesDomains: @unchecked Sendable {
             // A let-go this process couldn't write is written first; while it still can't be, nothing is added.
             guard !revocationPending(groupId) else { return }
             var ours = false
-            var renamed = false
             let wrote = records.update { stored in
                 guard stored.revoked[groupId, default: 0] <= observed else { return }
                 if let record = stored.records[groupId], record.owner != owner { return }
-                renamed = stored.records[groupId].map { $0.name != name } ?? false
                 stored.records[groupId] = FamilyDomainRecord(owner: owner, name: name, workspaces: workspaces.map { $0.lowercased() }.sorted())
                 ours = true
             }
             guard wrote, ours, session.stands else { return }
             let identifier = FamilyFileIds.domain(groupId)
             guard let existing = try? await manager.domains() else { return }
-            // Adding an identifier that exists updates its name: a renamed family's location says the new one.
-            if !existing.contains(identifier) || renamed {
+            // Missing, or named otherwise than the family is now (a rename, or one whose add failed before): added, which
+            // for an identifier that exists updates its name. Compared with the system's name, never the record's.
+            if existing[identifier] != name {
                 // Another process may have let the family go while this one waited: asked again, under the store's lock,
                 // right before the add, and again after it, when a let-go that landed during the add takes the location back.
                 guard stands(groupId, owner: owner, observed: observed, session: session) else { return }
@@ -322,7 +321,7 @@ public final class FamilyFilesDomains: @unchecked Sendable {
     @discardableResult
     public func reconcile(owner: AccountOwner) -> Task<Void, Never> {
         enqueue { [self] in
-            guard let identifiers = try? await manager.domains(), let held = try? records.read() else { return }
+            guard let identifiers = (try? await manager.domains()).map({ Array($0.keys) }), let held = try? records.read() else { return }
             var present = Set(identifiers)
             var kept: [String] = []
             for identifier in identifiers {
@@ -346,7 +345,7 @@ public final class FamilyFilesDomains: @unchecked Sendable {
      */
     public func removeAll() async {
         await enqueue { [self] in
-            guard let identifiers = try? await manager.domains() else { return }
+            guard let identifiers = (try? await manager.domains()).map({ Array($0.keys) }) else { return }
             var present = Set(identifiers)
             for identifier in identifiers where (try? await manager.remove(identifier)) != nil { present.remove(identifier) }
             records.update { stored in stored.records = stored.records.filter { present.contains(FamilyFileIds.domain($0.key)) } }
@@ -375,8 +374,12 @@ public final class FamilyFilesDomains: @unchecked Sendable {
 #if canImport(FileProvider)
 /* The system's family locations. A new one on iOS starts disabled until the person turns it on in Files, as the drive's. */
 struct SystemFamilyDomains: FamilyDomainManaging {
-    func domains() async throws -> [String] {
-        try await NSFileProviderManager.domains().map(\.identifier.rawValue).filter { $0.hasPrefix(FamilyFileIds.prefix) }
+    func domains() async throws -> [String: String] {
+        var out: [String: String] = [:]
+        for domain in try await NSFileProviderManager.domains() where domain.identifier.rawValue.hasPrefix(FamilyFileIds.prefix) {
+            out[domain.identifier.rawValue] = domain.displayName
+        }
+        return out
     }
 
     func add(_ identifier: String, name: String) async throws {
@@ -418,6 +421,8 @@ public enum FamilyFilesError: Error, Equatable, Sendable {
     case unavailable
     /* A key change in the family's folders that this device hasn't followed yet: checked again, then Files asks again. */
     case keyChange
+    /* The session ended while the family was checked: the location asks for the sign-in sheet. */
+    case signedOut
 
     /*
      * Whether `error` is a key change met mid-way rather than an answer about the item: the ledger's
@@ -574,7 +579,8 @@ public actor FamilyFilesSource {
      * folder from before.
      */
     private func heldOnNoAnswer(_ error: Error) throws -> FamilyView {
-        guard let view, FamilySync.transient(error), !Self.endsSession(error) else { throw error }
+        if Self.endsSession(error) { throw FamilyFilesError.signedOut }
+        guard let view, FamilySync.transient(error) else { throw error }
         return view
     }
 
@@ -605,15 +611,20 @@ public actor FamilyFilesSource {
             if let view { return view }
             throw FamilyFilesError.unavailable
         }
-        switch await sync.sync(summary) {
+        let revised = await sync.syncRevised(summary)
+        switch revised.state {
         case .accepted(let accepted):
             view = accepted
             known.formUnion(accepted.areas.map { $0.workspaceId.lowercased() })
             checkedAt = now()
             return accepted
-        case .failed(let words) where words == FamilyWords.noAnswer:
+        case .failed(let words) where words == FamilyWords.noAnswer || revised.cause == .noAnswer:
+            // No answer, or the server busy or failing: nothing is decided, what was accepted stands.
             if let view { return view }
-            throw FamilyFailure(message: words)
+            throw FamilyFilesError.unavailable
+        case .failed where revised.cause == .session:
+            // The session ended: the location asks for the sign-in sheet, and keeps what it holds.
+            throw FamilyFilesError.signedOut
         default:
             // The sync let it go (its release took the record and asked for the location to go).
             view = nil
@@ -690,7 +701,8 @@ public actor FamilyFilesSource {
                 made = file
                 try gate.perform { try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true) }
                 try await vault.download(ref.nodeId, ref: ref, expectedVersionId: item.node.currentVersion?.id, to: file, gate: gate, progress: progress)
-                return (file, await vault.item(ref) ?? item)
+                // The row the bytes are of (`expectedVersionId`), never one a listing learned meanwhile: Files gets one version.
+                return (file, item)
             }
         } catch {
             if let made { try? FileManager.default.removeItem(at: made) }

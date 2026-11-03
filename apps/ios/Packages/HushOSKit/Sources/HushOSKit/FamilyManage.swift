@@ -327,7 +327,7 @@ extension FamilySync {
     @discardableResult
     func syncInTurn(_ groupId: String) async -> FamilyState? {
         guard let summary = summaries[groupId] else { return nil }
-        let revised = Revised(state: await run(summary), revision: Self.revise())
+        let revised = await revisedRun(summary)
         if FamilyReleases.letsGo(revised.state) { releases.post(groupId, revised) }
         return revised.state
     }

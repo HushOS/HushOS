@@ -15,17 +15,20 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
     var duringAdd: (@Sendable () async -> Void)?
     private(set) var adds: [String] = []
 
-    func domains() async throws -> [String] {
+    var addFails = false
+
+    func domains() async throws -> [String: String] {
         let hook = lock.withLock { () -> (@Sendable () -> Void)? in defer { duringDomains = nil }; return duringDomains }
         hook?()
-        return lock.withLock { Array(present.keys) }
+        return lock.withLock { present }
     }
     func add(_ identifier: String, name: String) async throws {
         let hook = lock.withLock { () -> (@Sendable () async -> Void)? in defer { duringAdd = nil }; return duringAdd }
         await hook?()
-        lock.withLock {
-            present[identifier] = name
+        try lock.withLock {
             adds.append(identifier)
+            if addFails { throw CocoaError(.fileWriteUnknown) }
+            present[identifier] = name
         }
     }
     func remove(_ identifier: String) async throws {
@@ -244,6 +247,44 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         // The same session asked again changes nothing.
         _ = try gate.open()
         #expect(now.stands)
+    }
+
+    /*
+     * A rename whose system call fails is tried again by the next acceptance, though the record
+     * already holds the new name. Fails if the name is compared with the record, not the location.
+     */
+    @Test func aRenameWhoseAddFailedIsTriedAgain() async throws {
+        let domains = self.domains
+        let session = TemporaryCopies.session(CopyEpoch())
+        let identifier = FamilyFileIds.domain(Self.group)
+        await domains.accepted(Self.group, name: "Lindqvist family", owner: Self.maya, observed: records.generation(Self.group), session: session).value
+        manager.addFails = true
+        await domains.accepted(Self.group, name: "The Lindqvists", owner: Self.maya, observed: records.generation(Self.group), session: session).value
+        #expect(manager.names[identifier] == "Lindqvist family")
+        manager.addFails = false
+        await domains.accepted(Self.group, name: "The Lindqvists", owner: Self.maya, observed: records.generation(Self.group), session: session).value
+        #expect(manager.names[identifier] == "The Lindqvists", "a rename whose add failed was never tried again")
+    }
+
+    /*
+     * What lets a family's Files location go: a removal, a fork, a family waiting or unchecked, a
+     * definite refusal; never no answer or a lost session. Fails if a recoverable failure takes the
+     * location (and with it what Files holds), or a definite one keeps it.
+     */
+    @Test func onlyADefiniteLetGoTakesTheLocation() {
+        func revised(_ state: FamilyState, _ cause: FamilySync.FailureCause? = nil) -> FamilySync.Revised { .init(state: state, revision: 1, cause: cause) }
+        #expect(!revised(.failed("HushOS is temporarily unavailable."), .noAnswer).letsFilesGo)
+        #expect(!revised(.failed("You were signed out. Sign in again, then retry."), .session).letsFilesGo)
+        #expect(!revised(.failed(FamilyWords.noAnswer)).letsFilesGo)
+        #expect(revised(.failed("This member list doesn’t check."), .refusal).letsFilesGo)
+        #expect(revised(.failed("A wipe that couldn’t finish.")).letsFilesGo)
+        #expect(revised(.wiped).letsFilesGo)
+        #expect(revised(.waiting).letsFilesGo)
+        #expect(revised(.unchecked).letsFilesGo)
+        #expect(FamilySync.cause(of: GroupsAPIError(status: 503, code: nil, message: "Busy.")) == .noAnswer)
+        #expect(FamilySync.cause(of: DriveAPIError.transport("offline")) == .noAnswer)
+        #expect(FamilySync.cause(of: GroupsAPIError(status: 401, code: nil, message: "Sign in.")) == .session)
+        #expect(FamilySync.cause(of: FamilyFailure(message: "The chain didn’t check.")) == .refusal)
     }
 
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
@@ -605,8 +646,67 @@ extension OnFakeDrive {
                 _ = try await s.source.folders()
                 Issue.record("a 401 was answered from the cache")
             } catch {
-                #expect(FamilyFilesSource.endsSession(error), "\(error)")
+                #expect(error as? FamilyFilesError == .signedOut, "\(error)")
             }
+        }
+
+        /*
+         * The member list doesn't load mid-sync (a 503), or the session ends mid-sync (a 401 after
+         * route 2 answered): the family's location and its record stay, the folders held from before
+         * are kept on the first, and the second asks for the sign-in sheet. Fails if a recoverable
+         * failure lets the location go.
+         */
+        @Test func aSyncThatFailsRecoverablyKeepsTheLocation() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            _ = try await s.source.folders()
+            s.server.lock.withLock { s.server.rostersFail = true }
+            s.clock.now = s.clock.now.addingTimeInterval(120)
+            #expect(try await s.source.folders().count == 1, "a 503 mid-sync didn't keep the folders")
+            #expect(s.records.admission(s.family.groupId, owner: s.owner) == .admitted, "a 503 mid-sync took the record")
+
+            let server = s.server
+            server.lock.withLock {
+                server.rostersFail = false
+                server.manage.beforeAnswer = { method, path in
+                    guard method == "GET", path == "/api/groups" else { return }
+                    server.lock.withLock {
+                        server.manage.beforeAnswer = nil
+                        server.unauthorized = true
+                    }
+                }
+            }
+            s.clock.now = s.clock.now.addingTimeInterval(120)
+            await #expect(throws: FamilyFilesError.signedOut) { _ = try await s.source.folders() }
+            #expect(s.records.admission(s.family.groupId, owner: s.owner) == .admitted, "a 401 mid-sync took the record")
+            await s.domains.settled()
+            #expect(s.manager.removals.isEmpty)
+        }
+
+        /*
+         * A listing learns a newer version of the file while its older one comes down: Files is
+         * handed the row the bytes are of. Fails if the bytes of one version go out under another's
+         * metadata.
+         */
+        @Test func aDownloadReturnsTheVersionItsBytesAreOf() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            let root = NodeRef(workspaceId: s.family.workspaceId, nodeId: s.family.rootId)
+            _ = try await s.source.children(of: root)
+            let started = try #require(s.family.photo.currentVersion)
+            let newer = s.family.photo.with(version: VersionView(id: UUID().uuidString.lowercased(), objectId: UUID().uuidString.lowercased(),
+                                                                 contentKeyEnvelope: started.contentKeyEnvelope, status: "ready", contentSuite: started.contentSuite,
+                                                                 chunkCount: started.chunkCount, contentNonce: started.contentNonce, plaintextSize: nil,
+                                                                 ciphertextSize: started.ciphertextSize, readyAt: "2026-10-19T10:05:00.000Z"))
+            let (server, vault, ws, rootId) = (s.server, s.phone.vault, s.family.workspaceId, s.family.rootId)
+            await vault.setBeforeChunk { _ in
+                server.put(newer)
+                _ = try? await vault.listChildren(of: rootId, in: ws)
+            }
+            let (file, item) = try await s.source.download(s.family.photo.ref)
+            #expect(await vault.item(s.family.photo.ref)?.node.currentVersion?.id == newer.currentVersion?.id, "the listing didn't learn the newer version")
+            #expect(item.node.currentVersion?.id == started.id, "the bytes of one version were handed out under another's row")
+            #expect(try Data(contentsOf: file) == s.family.photoBytes)
         }
 
         /*
