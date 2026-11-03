@@ -83,7 +83,7 @@ class FamilyRemovalTest {
     fun aRemovalRotatesTheFolderAndGrantsTheNewKeyOnlyToThoseWhoStay() {
         val phone = phone()
         val steps = ArrayList<RemovalStep>()
-        assertEquals(RemovalEnd.Removed(), remove(phone, steps = steps))
+        assertEquals(RemovalEnd.Removed, remove(phone, steps = steps))
         assertEquals(listOf(RemovalStep.HOLD, RemovalStep.REMOVE), steps)
         val body = bodies("remove").single()
         assertEquals(setOf(samId, mayaId), grantees(body))
@@ -108,7 +108,7 @@ class FamilyRemovalTest {
         val phone = phone()
         server.requests.clear()
         family.asked.clear()
-        assertEquals(RemovalEnd.Removed(), remove(phone))
+        assertEquals(RemovalEnd.Removed, remove(phone))
         val order = family.asked.filter { it.endsWith("/hold") || it.endsWith("/root") || it.endsWith("/remove") }
         assertTrue(order.toString(), order.first().endsWith("/hold"))
         val lastHold = order.indexOfLast { it.endsWith("/hold") }
@@ -144,7 +144,7 @@ class FamilyRemovalTest {
         assertEquals(RemovalEnd.EndsLapsed(listOf(FamilyLapsedPlan("plan-1", "Family Pro (monthly)", true))), asked)
         assertTrue(family.holdsAsked.isEmpty())
         assertTrue(family.rotatingCalls.isEmpty())
-        assertEquals(RemovalEnd.Removed(), remove(phone, endsLapsed = listOf("plan-1")))
+        assertEquals(RemovalEnd.Removed, remove(phone, endsLapsed = listOf("plan-1")))
         assertEquals("plan-1", bodies("remove").single().getJSONArray("endsLapsed").getString(0))
     }
 
@@ -158,7 +158,7 @@ class FamilyRemovalTest {
         repeat(3) { family.rotatingAnswers.add { _, _ -> 503 to JSONObject().put("message", "Unavailable.") } }
         assertTrue(remove(phone) is RemovalEnd.Pending)
         assertEquals(1, kept(phone).size)
-        assertEquals(RemovalEnd.Removed(), remove(phone))
+        assertEquals(RemovalEnd.Removed, remove(phone))
         assertEquals(4, family.rotatingCalls.size)
         assertEquals(1, family.rotatingCalls.map { it.second }.toSet().size)
     }
@@ -184,7 +184,7 @@ class FamilyRemovalTest {
     fun anOvertakenEpochRebuildsTheRotationUnderTheSameRosterAndKeys() {
         val phone = phone()
         family.rotatingAnswers.add { _, _ -> refuse("epoch-stale") }
-        assertEquals(RemovalEnd.Removed(), remove(phone))
+        assertEquals(RemovalEnd.Removed, remove(phone))
         val (first, second) = bodies("remove")
         assertEquals(first.getJSONObject("roster").toString(), second.getJSONObject("roster").toString())
         assertEquals(first.getJSONArray("grants").toString(), second.getJSONArray("grants").toString())
@@ -206,8 +206,8 @@ class FamilyRemovalTest {
                 .put("stale", JSONArray().put(JSONObject().put("workspaceId", family.workspaceId).put("kind", "tags"))))
         }
         // The tags this phone was served never open (junk): read again once, then carried on empty, and said.
-        val removed = remove(phone)
-        assertTrue(removed is RemovalEnd.Removed && removed.cleared == listOf(clearedWords("tags")))
+        assertEquals(RemovalEnd.Removed, remove(phone))
+        assertEquals(listOf(clearedWords("tags")), phone.sync.takeCleared())
         val (first, second) = bodies("remove")
         assertEquals(1, rotation(first).getJSONArray("documents").getJSONObject(0).getInt("version"))
         assertEquals(2, rotation(second).getJSONArray("documents").getJSONObject(0).getInt("version"))
@@ -227,7 +227,7 @@ class FamilyRemovalTest {
         assertEquals(LetIn.Landed, phone.sync.letIn(summary, family.pendingRows.map(PendingPerson::from).single()))
         val adaId = ada.id.lowercase()
         family.rotatingAnswers.add { _, _ -> refuse("left-due", JSONObject().put("userIds", JSONArray().put(adaId))) }
-        assertEquals(RemovalEnd.Removed(), remove(phone))
+        assertEquals(RemovalEnd.Removed, remove(phone))
         assertEquals(listOf("remove", "rosters", "remove"), family.rotatingCalls.map { it.first })
         val marked = roster(bodies("rosters").single())
         assertEquals(MemberStatus.LEFT, marked.members.single { it.userId == adaId }.status)
@@ -250,7 +250,7 @@ class FamilyRemovalTest {
         assertEquals(MemberStatus.LEFT, roster(body).members.single { it.userId == graceId }.status)
         assertEquals(setOf(samId, mayaId), grantees(body))
         assertTrue(family.dueMarkLeft.isEmpty())
-        assertEquals(DueDone(), phone.sync.runDue(summary).copy(said = emptyList()))
+        assertEquals(DueDone(), phone.sync.runDue(summary))
     }
 
     /*
@@ -282,5 +282,72 @@ class FamilyRemovalTest {
         assertTrue(rows.single().retired && rows.single().workspaceId == family.workspaceId)
         assertFalse(body.has("grants") || body.has("rotation") || body.has("rotations"))
         assertTrue(view(phone).areas.isEmpty())
+    }
+
+    /*
+     * Codex #281 1: a removal kept unanswered, then the next open's due work (a folder owed new keys): nothing new is staged
+     * while the removal is kept, so it can't be overtaken; it lands at the next resume, and its rotation was what was due. Fails if a
+     * due roster overtakes a kept removal, which the next resume would drop as superseded, leaving the person in.
+     */
+    @Test
+    fun dueWorkWaitsWhileAKeptRemovalIsUnresolved() {
+        val phone = phone()
+        repeat(3) { family.rotatingAnswers.add { _, _ -> 503 to JSONObject().put("message", "Unavailable.") } }
+        assertTrue(remove(phone) is RemovalEnd.Pending)
+        family.dueRotations = listOf(family.workspaceId)
+        assertEquals(DueDone(deferred = true), phone.sync.runDue(summary))
+        assertTrue(bodies("rotations").isEmpty())
+        assertEquals(listOf(CallEnd.Landed), phone.sync.resumeOutbox(summary).values.toList())
+        assertFalse(view(phone).members.any { it.userId.equals(graceId, ignoreCase = true) })
+        // The removal gave the folder its new keys: nothing is due any more, and no second key change is made.
+        assertEquals(DueDone(), phone.sync.runDue(summary))
+        assertTrue(bodies("rotations").isEmpty())
+    }
+
+    /*
+     * Codex #281 1, the mark-left path: Bob's admission is kept unanswered when the removal meets `left-due`; the departed
+     * aren't marked left over it (that roster would overtake the admission unseen). The removal waits for the next open.
+     * Fails if a removal's mark-left is staged while another change is kept.
+     */
+    @Test
+    fun leftDueWaitsWhileAnotherChangeIsKept() {
+        val phone = phone()
+        val ada = server.another("ada@example.org", "Ada Lovelace")
+        family.waiting(ada, "ada@example.org", "Ada Lovelace")
+        assertEquals(LetIn.Landed, phone.sync.letIn(summary, family.pendingRows.map(PendingPerson::from).single()))
+        val bob = server.another("bob@example.org", "Bob Lindqvist")
+        family.waiting(bob, "bob@example.org", "Bob Lindqvist")
+        repeat(3) { family.admitAnswers.add { _ -> 503 to JSONObject().put("message", "Unavailable.") } }
+        assertTrue(phone.sync.letIn(summary, family.pendingRows.map(PendingPerson::from).single()) is LetIn.Pending)
+        family.rotatingAnswers.add { _, _ -> refuse("left-due", JSONObject().put("userIds", JSONArray().put(ada.id.lowercase()))) }
+        assertTrue(remove(phone) is RemovalEnd.Pending)
+        assertTrue(bodies("rosters").isEmpty())
+        assertEquals(1, kept(phone).size)
+    }
+
+    /*
+     * Codex #281 2: the folder's tags open when first read; a member writes junk over them before the call is sent
+     * (`document-stale`). The rebuild reads them again once more, carries them on empty, and the note is kept with the entry:
+     * after no answer and a relaunch, the resumed call lands and says the tags started again empty. Fails if a document that
+     * didn't open in a rebuild is emptied without a second read or a word.
+     */
+    @Test
+    fun aDocumentClearedInARebuildIsReadAgainAndSaidWhenItLandsAfterARelaunch() {
+        val first = phone()
+        family.documents["tags"] = 1 to family.sealedTags(1, """{"version":2,"tags":[{"id":"t1","name":"Recipes"}],"items":{}}""")
+        family.rotatingAnswers.add { _, _ ->
+            family.documents["tags"] = 2 to com.hushos.core.base64urlEncode(ByteArray(80) { 9 })
+            refuse("document-stale", JSONObject().put("workspaceId", family.workspaceId).put("kind", "tags")
+                .put("stale", JSONArray().put(JSONObject().put("workspaceId", family.workspaceId).put("kind", "tags"))))
+        }
+        repeat(3) { family.rotatingAnswers.add { _, _ -> 503 to JSONObject().put("message", "Unavailable.") } }
+        server.requests.clear()
+        assertTrue(remove(first) is RemovalEnd.Pending)
+        // Read when gathered, read in the rebuild, and read once more when it didn't open there.
+        assertEquals(3, server.requests.count { it.contains("/documents/tags") })
+        assertTrue("nothing said before it lands", first.sync.takeCleared().isEmpty())
+        val next = phone(first.folder)
+        assertEquals(listOf(CallEnd.Landed), next.sync.resumeOutbox(summary).values.toList())
+        assertEquals(listOf(clearedWords("tags")), next.sync.takeCleared())
     }
 }

@@ -55,18 +55,47 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
 
     /*
      * Dropped after a definite answer. A file that stays throws: left, it would be read again at the next open (judged
-     * by the core then, never signed again), but the answer that dropped it isn't to be taken as done.
+     * by the core then, never signed again), but the answer that dropped it isn't to be taken as done. Its notes go with it.
      */
     fun delete(userId: String, groupId: String, outboxId: String) = synchronized(FamilyCopies.LOCK) {
         if (!open()) return@synchronized
         val target = file(userId, groupId, outboxId) ?: return@synchronized
         if (!target.delete() && target.exists()) throw OutboxUnsaved()
+        File(target.path.removeSuffix(".call") + ".cleared").delete()
+    }
+
+    /*
+     * The kinds of workspace document a kept rotating call carries on empty (they didn't open, even read again), kept beside
+     * the entry (the web's entry notices): said once the call lands, whichever open or process sends it.
+     */
+    fun noteCleared(userId: String, groupId: String, outboxId: String, kinds: Collection<String>) = synchronized(FamilyCopies.LOCK) {
+        if (kinds.isEmpty()) return@synchronized
+        if (!open()) throw OutboxUnsaved()
+        val target = file(userId, groupId, outboxId)?.let { File(it.path.removeSuffix(".call") + ".cleared") } ?: throw OutboxUnsaved()
+        try {
+            val all = (cleared(userId, groupId, outboxId) + kinds).distinct().sorted()
+            val next = File(target.path + ".next")
+            next.writeText(all.joinToString("\n"))
+            if (!next.renameTo(target)) throw java.io.IOException("not moved")
+        } catch (_: Exception) {
+            throw OutboxUnsaved()
+        }
+    }
+
+    /* What `noteCleared` kept for an entry; none when nothing was. */
+    fun cleared(userId: String, groupId: String, outboxId: String): List<String> {
+        val target = file(userId, groupId, outboxId)?.let { File(it.path.removeSuffix(".call") + ".cleared") } ?: return emptyList()
+        if (!target.exists()) return emptyList()
+        return try { target.readLines().filter { it.isNotBlank() } } catch (_: Exception) { emptyList() }
     }
 
     /* Every entry of this account's for the family, and its handover: a not-member wipe takes them with the family (the web's forgetGroup). */
     fun deleteGroup(userId: String, groupId: String) = synchronized(FamilyCopies.LOCK) {
         if (!open()) return@synchronized
-        for (file in entries(userId, groupId)) if (!file.delete() && file.exists()) throw OutboxUnsaved()
+        for (file in entries(userId, groupId)) {
+            if (!file.delete() && file.exists()) throw OutboxUnsaved()
+            File(file.path.removeSuffix(".call") + ".cleared").delete()
+        }
         clearHandover(userId, groupId)
     }
 
@@ -246,6 +275,8 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
     var current = kept
     fun finish(end: CallEnd): CallEnd {
         told(on, end)
+        // Documents a landed rotation carried on empty are said (FamilySync.takeCleared) before its notes go with the entry.
+        if (end == CallEnd.Landed) outbox.cleared(userId, groupId, current.outboxId).forEach { clearedSaid.add(clearedWords(it)) }
         outbox.delete(userId, groupId, current.outboxId)
         return end
     }

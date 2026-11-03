@@ -101,10 +101,25 @@ internal fun FamilySync.rebuildKept(summary: GroupSummary, kept: FamilyOutbox.Ke
     return Rebuilt.Kept(rebuildWith(summary.id, kept, areas.map { (ws, kinds) -> gather(groupId, ws, kinds) }))
 }
 
-/* The kept call's rotations of `rotations`' folders made again by the core, kept over the old entry under the same id. */
+/*
+ * The kept call's rotations of `rotations`' folders made again by the core, kept over the old entry under the same id.
+ * Documents that didn't open are read again once and the rotations of their folders made again (the server may have served
+ * junk to this device alone; the web's refetchReplaced); whatever still doesn't open is noted beside the entry, and said
+ * once the call lands, whichever open sends it.
+ */
 private fun FamilySync.rebuildWith(groupId: String, kept: FamilyOutbox.Kept, rotations: List<AreaRotation>): FamilyOutbox.Kept {
-    val call = ledger.outboxRebuild(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, kept.outboxId, kept.entry, rotations)
+    val first = ledger.outboxRebuild(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, kept.outboxId, kept.entry, rotations)
+    outbox.put(userId, groupId, first.outboxId, first.entry)
+    return readAgain(groupId, FamilyOutbox.Kept(first.outboxId, first.entry), first.replaced)
+}
+
+/* `replaced` read again once (their folders gathered with those kinds) and the call rebuilt; what still didn't open noted on the entry. */
+private fun FamilySync.readAgain(groupId: String, kept: FamilyOutbox.Kept, replaced: List<ReplacedDocument>): FamilyOutbox.Kept {
+    if (replaced.isEmpty()) return kept
+    val again = replaced.groupBy({ it.workspaceId.lowercase() }, { it.kind }).map { (ws, kinds) -> gather(groupId, ws, kinds) }
+    val call = ledger.outboxRebuild(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, kept.outboxId, kept.entry, again)
     outbox.put(userId, groupId, call.outboxId, call.entry)
+    outbox.noteCleared(userId, groupId, call.outboxId, call.replaced.map { it.kind })
     return FamilyOutbox.Kept(call.outboxId, call.entry)
 }
 
@@ -139,9 +154,9 @@ private fun staleDocuments(data: JSONObject?): Map<String, List<String>> {
     }.groupBy({ it.first }, { it.second }).mapValues { (_, kinds) -> kinds.distinct().sorted() }
 }
 
-/* What one rotating call came to: sent (with the documents carried on empty), refused before anything was signed, or a removal. */
+/* What one rotating call came to: sent, refused before anything was signed, or a removal. Documents carried on empty are said on landing (takeCleared). */
 sealed interface Rotated {
-    data class Sent(val end: CallEnd, val cleared: List<ReplacedDocument>) : Rotated
+    data class Sent(val end: CallEnd) : Rotated
     data class Refused(val words: String) : Rotated
     data object Wiped : Rotated
 }
@@ -153,18 +168,7 @@ sealed interface Rotated {
  */
 private fun FamilySync.rotatingCall(summary: GroupSummary, names: (String) -> String?, build: (FamilyView, ULong, Map<String, String>) -> RosterCall): Rotated =
     when (val staged = stageCall(summary, build)) {
-        is Staged.Call -> {
-            var kept = staged.kept
-            var cleared = staged.replaced
-            if (cleared.isNotEmpty()) {
-                val again = cleared.groupBy({ it.workspaceId.lowercase() }, { it.kind }).map { (ws, kinds) -> gather(summary.id, ws, kinds) }
-                val call = ledger.outboxRebuild(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), summary.id, kept.outboxId, kept.entry, again)
-                outbox.put(userId, summary.id, call.outboxId, call.entry)
-                kept = FamilyOutbox.Kept(call.outboxId, call.entry)
-                cleared = call.replaced
-            }
-            Rotated.Sent(sendKept(summary, kept, names = names), cleared)
-        }
+        is Staged.Call -> Rotated.Sent(sendKept(summary, readAgain(summary.id, staged.kept, staged.replaced), names = names))
         is Staged.Refused -> Rotated.Refused(staged.words)
         Staged.Wiped -> Rotated.Wiped
         Staged.CheckFirst -> Rotated.Refused(CHECK_MANAGER_FIRST)
@@ -180,8 +184,8 @@ enum class RemovalStep { DEMOTE, HOLD, FINISH, REMOVE }
 
 /* What Remove from family came to (the web's RemovalOutcome). */
 sealed interface RemovalEnd {
-    /* They're out. `cleared`: documents a folder's rotation carried on empty. */
-    data class Removed(val cleared: List<String> = emptyList()) : RemovalEnd
+    /* They're out. */
+    data object Removed : RemovalEnd
     /* Someone paused this manager's changes (route 27 answered `held`): who, when route 3 says, and whether the person removed manages the family. */
     data class Held(val heldBy: String?, val targetManages: Boolean) : RemovalEnd
     /* They're not an active member any more: nothing to remove. */
@@ -237,7 +241,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
             CallEnd.Landed -> {
                 val (view, stop) = syncedView(summary)
                 if (view == null) return stop!!
-                if (!inFamily(view, userId)) return RemovalEnd.Removed()
+                if (!inFamily(view, userId)) return RemovalEnd.Removed
             }
             is CallEnd.Pending -> return RemovalEnd.Pending(keptForLater(family))
             is CallEnd.Refused -> return RemovalEnd.Failed(end.words)
@@ -306,7 +310,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
             is Rotated.Sent -> sent
         }
         when (val call = end.end) {
-            CallEnd.Landed -> return RemovalEnd.Removed(end.cleared.map { clearedWords(it.kind) })
+            CallEnd.Landed -> return RemovalEnd.Removed
             is CallEnd.Pending -> return RemovalEnd.Pending(keptForLater(family))
             CallEnd.Wiped -> return RemovalEnd.Wiped
             CallEnd.OtherKeys, CallEnd.Other -> return RemovalEnd.Failed("Nothing was changed.")
@@ -315,7 +319,9 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
             is CallEnd.Refused -> when (call.code) {
                 "left-due" -> {
                     // Marked left first (every folder rotated), then the removal again; if they left meanwhile, marking them
-                    // left is the whole removal.
+                    // left is the whole removal. Never over another change kept unanswered here: a new roster would overtake
+                    // it unseen. It goes first at the next open, then the departure.
+                    if (outbox.list(this.userId, groupId).isNotEmpty()) return RemovalEnd.Pending(keptForLater(family))
                     val departed = leftDue(call.data)
                     when (val marked = markDepartedLeft(summary, departed, named)) {
                         is Rotated.Sent -> if (marked.end != CallEnd.Landed) return when (val m = marked.end) {
@@ -327,7 +333,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
                         is Rotated.Refused -> return RemovalEnd.Failed(marked.words)
                         Rotated.Wiped -> return RemovalEnd.Wiped
                     }
-                    if (departed.any { it.equals(userId, ignoreCase = true) }) return RemovalEnd.Removed()
+                    if (departed.any { it.equals(userId, ignoreCase = true) }) return RemovalEnd.Removed
                 }
                 "members-changed" -> return RemovalEnd.Changed
                 "ends-lapsed" -> return RemovalEnd.EndsLapsed(FamilyLapsedPlan.listIn(call.data))
@@ -335,7 +341,7 @@ private fun FamilySync.removeInTurn(summary: GroupSummary, userId: String, first
             }
         }
         syncedView(summary).let { (now, stopped) -> view = now ?: return stopped!! }
-        if (!inFamily(view!!, userId)) return RemovalEnd.Removed()
+        if (!inFamily(view!!, userId)) return RemovalEnd.Removed
     }
     return RemovalEnd.Failed("$family kept changing. Try again in a moment.")
 }
@@ -448,8 +454,11 @@ internal fun FamilySync.repairPreviousRoots(summary: GroupSummary, view: FamilyV
     return repaired
 }
 
-/* What a manager's due work did, for the page: the departed marked left, folders given new keys, keys repaired, and what to say. */
-data class DueDone(val markedLeft: Boolean = false, val rotated: Int = 0, val repaired: Int = 0, val said: List<String> = emptyList())
+/*
+ * What a manager's due work did, for the page: the departed marked left, folders given new keys, keys repaired, what to say,
+ * and whether it waited (`deferred`) for changes kept unanswered on this phone.
+ */
+data class DueDone(val markedLeft: Boolean = false, val rotated: Int = 0, val repaired: Int = 0, val said: List<String> = emptyList(), val deferred: Boolean = false)
 
 /*
  * What route 3 says is due, done by a manager's device at each open of the family (the web's runDue, its manager half):
@@ -458,13 +467,16 @@ data class DueDone(val markedLeft: Boolean = false, val rotated: Int = 0, val re
  */
 fun FamilySync.runDue(summary: GroupSummary, names: (String) -> String? = { null }): DueDone = exclusive(summary.id) {
     notMemberLetsGo(summary.id, { DueDone() }) {
+        // Nothing new while a change kept here is unresolved (an unanswered removal, say): a due roster would overtake it, and
+        // the next resume would drop it as superseded. It waits for the next open, after resumeOutbox.
+        if (outbox.list(userId, summary.id).isNotEmpty()) return@notMemberLetsGo DueDone(deferred = true)
         val said = ArrayList<String>()
         var due = api.group(summary.id).due ?: return@notMemberLetsGo DueDone()
         var marked = false
         if (due.markLeft.isNotEmpty()) {
             when (val sent = markDepartedLeft(summary, due.markLeft, names)) {
                 is Rotated.Sent -> when (val end = sent.end) {
-                    CallEnd.Landed -> { marked = true; said += sent.cleared.map { clearedWords(it.kind) } }
+                    CallEnd.Landed -> marked = true
                     is CallEnd.Refused -> said += end.words
                     CallEnd.Wiped -> return@notMemberLetsGo DueDone()
                     else -> {}
@@ -478,7 +490,7 @@ fun FamilySync.runDue(summary: GroupSummary, names: (String) -> String? = { null
         for (workspaceId in due.rotations) {
             when (val sent = replaceKeys(summary, workspaceId)) {
                 is Rotated.Sent -> when (val end = sent.end) {
-                    CallEnd.Landed -> { rotated++; said += sent.cleared.map { clearedWords(it.kind) } }
+                    CallEnd.Landed -> rotated++
                     is CallEnd.Refused -> said += end.words
                     CallEnd.Wiped -> return@notMemberLetsGo DueDone()
                     else -> {}

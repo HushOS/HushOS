@@ -177,6 +177,12 @@ class FamilySync(
     internal val ledger get() = vault.areaLedger
     internal val userId get() = vault.familyUserId
 
+    /* What landed rotations carried on empty, in the web's documents-cleared words, for whoever draws the families next. */
+    internal val clearedSaid = java.util.concurrent.ConcurrentLinkedQueue<String>()
+
+    /* The documents-cleared words gathered since the last call, each once. */
+    fun takeCleared(): List<String> = generateSequence { clearedSaid.poll() }.toList().distinct()
+
     /*
      * The family folders the chain this process last committed lists as live (every listed area less its tombstones): what
      * a removal or marking someone left must rotate, as the worker reads them. None before a commit.

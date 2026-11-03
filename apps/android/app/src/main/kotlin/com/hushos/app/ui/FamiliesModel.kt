@@ -273,7 +273,10 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                 end is com.hushos.app.data.CallEnd.Refused -> model.notice(end.words, untilRead = true)
                 end == com.hushos.app.data.CallEnd.Stale && route is com.hushos.core.ChainRoute.Admit ->
                     model.notice("An earlier admission of ${names(route.userId) ?: "someone waiting to join"} wasn’t sent; let them in again.", untilRead = true)
-                end == com.hushos.app.data.CallEnd.Stale && route is com.hushos.core.ChainRoute.Member ->
+                // A role change, removal or folder deletion another change overtook: nothing of it was made. (Due work, marking
+                // someone left or a folder's new keys, is worked out again from route 3 and needs no word.)
+                end == com.hushos.app.data.CallEnd.Stale && (route is com.hushos.core.ChainRoute.Member || route is com.hushos.core.ChainRoute.Remove ||
+                    route is com.hushos.core.ChainRoute.Delete) ->
                     model.notice("${summary.name} changed while you were working on it. Try again.", untilRead = true)
             }
         }
@@ -303,10 +306,17 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             handedOver = true
             emptyMap()
         }
+        sayCleared(s)
         if (ends.values.any { it == com.hushos.app.data.CallEnd.Wiped }) return
         if (handedOver || ends.values.any { it == com.hushos.app.data.CallEnd.Landed || it == com.hushos.app.data.CallEnd.Stale }) refreshFamily(summary, session = s)
         runDue(summary, names, s)
         reloadManaged(groupId, s)
+    }
+
+    /* Documents landed rotations carried on empty (FamilySync.takeCleared), each said until read. */
+    private fun sayCleared(s: FamilySession) {
+        if (!gate.current(s)) return
+        s.owner.families.takeCleared().forEach { model.notice(it, untilRead = true) }
     }
 
     /* Families whose due work (the departed marked left, folders given new keys) runs on this phone now. */
@@ -333,6 +343,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             return
         }
         did.said.distinct().forEach { model.notice(it, untilRead = true) }
+        sayCleared(s)
         if (did.markedLeft || did.rotated > 0) refreshFamily(summary, session = s)
         loadMembers(summary.id, s)
     }
@@ -553,7 +564,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                     shown(RemovalPhase.ConfirmPlan(com.hushos.app.data.FamilyLapsedPlan.endsWhenRemoved(summary.name, end.plans, who), end.plans.map { it.id }, demote))
                 else -> {
                     shown(RemovalPhase.Done(end, demote, finished))
-                    if (end is com.hushos.app.data.RemovalEnd.Removed) end.cleared.distinct().forEach { model.notice(it, untilRead = true) }
+                    sayCleared(s)
                 }
             }
             if (end == com.hushos.app.data.RemovalEnd.Wiped) refreshFamilies(force = true, session = s)
@@ -1221,6 +1232,8 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         walks.clear(); walking.clear(); walkEnded.clear(); leaving = null; leftFamily = null
         waiting.clear(); invitations.clear(); managedErrors.clear(); managedLoads.clear(); waitingRows.clear(); inviting = null; turningDown = null; cancelling = null
         roleAsk = null; checkFirst = null; roleBusy = null
+        // A removal or deletion under way belongs to the session that ended: never left running, or asked, into the next one.
+        removal = null; deletingFolder = null; dueRunning.clear()
     }
 
     /*
