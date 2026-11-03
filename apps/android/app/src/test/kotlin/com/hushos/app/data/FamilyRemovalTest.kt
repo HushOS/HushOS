@@ -144,7 +144,7 @@ class FamilyRemovalTest {
         val phone = phone()
         family.previewPlans = JSONArray().put(JSONObject().put("id", "plan-1").put("name", "Family Pro (monthly)").put("standing", "paused"))
         val asked = remove(phone)
-        assertEquals(RemovalEnd.EndsLapsed(listOf(FamilyLapsedPlan("plan-1", "Family Pro (monthly)", true))), asked)
+        assertEquals(listOf(FamilyLapsedPlan("plan-1", "Family Pro (monthly)", true)), (asked as RemovalEnd.EndsLapsed).plans)
         assertTrue(family.holdsAsked.isEmpty())
         assertTrue(family.rotatingCalls.isEmpty())
         assertEquals(RemovalEnd.Removed, remove(phone, endsLapsed = listOf("plan-1")))
@@ -828,5 +828,24 @@ class FamilyRemovalTest {
         next.sync.resumeOutbox(summary, continued = { _, end -> continued.add(end) })
         assertEquals(listOf<RemovalEnd>(RemovalEnd.Removed), continued)
         assertFalse(view(next).members.any { it.userId.equals(graceId, ignoreCase = true) })
+    }
+
+    /*
+     * Codex #281 round 12, 2: the folder's tags don't open, and it also holds a settings document this phone doesn't read
+     * on its own, so the server names it (`document-stale`). The rebuild gathers both; the recheck that follows reads the
+     * tags again and must gather the settings too. The call lands carrying the settings, and the tags warning is said.
+     * Fails if a recheck gathers only the kinds it reads again (the settings dropped, `document-stale` at every send, the
+     * removal pending for good and the family blocked behind it).
+     */
+    @Test
+    fun aRecheckKeepsEveryKindTheRotationCarries() {
+        val first = phone()
+        family.documents["tags"] = 1 to com.hushos.core.base64urlEncode(ByteArray(80) { 7 })
+        family.documents["settings"] = 1 to family.sealedDocument("settings", 1, """{"colour":"blue"}""")
+        assertEquals(RemovalEnd.Removed, remove(first))
+        val landed = rotation(bodies("remove").last()).getJSONArray("documents")
+        assertEquals(listOf("settings", "tags"), (0 until landed.length()).map { landed.getJSONObject(it).getString("kind") }.sorted())
+        assertEquals(listOf(clearedWords("tags")), first.sync.takeCleared(family.groupId))
+        assertTrue(kept(first).isEmpty())
     }
 }

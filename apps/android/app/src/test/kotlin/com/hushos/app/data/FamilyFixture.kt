@@ -211,6 +211,10 @@ class FamilyFixture(val server: FakeDrive) {
     fun sealedTags(version: Int, json: String): String = base64urlEncode(com.hushos.core.documentSeal(
         com.hushos.core.DocumentContext(workspaceId, "tags", version.toULong()), areaKey, json))
 
+    /* A workspace document of `kind` sealed under the family folder's first key at `version`, as a member's web wrote it. */
+    fun sealedDocument(kind: String, version: Int, json: String): String = base64urlEncode(com.hushos.core.documentSeal(
+        com.hushos.core.DocumentContext(workspaceId, kind, version.toULong()), areaKey, json))
+
     /* Maya's pin over `rosters`, as joining on the web left it. */
     fun pin(rosters: List<SignedGroupStatement>, checkedAt: String = "2026-10-18T09:00:00.000Z"): GroupPin {
         val accepted: AcceptedRosters = (acceptRosters(groupId, groupPublicKey(groupSeed), GroupAnchor.CREATED, emptyList(), rosters, emptyList(), signerKeys,

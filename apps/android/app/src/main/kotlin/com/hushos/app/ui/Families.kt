@@ -672,7 +672,7 @@ private fun RemoveDialog(model: DriveViewModel, sheet: RemovalSheet, family: Str
         },
         confirmButton = {
             when {
-                plan != null -> TextButton(onClick = { families.runRemove(plan.demote, plan.ids) }) { Text("Remove and end the plan", color = alpine.danger) }
+                plan != null -> TextButton(onClick = { families.runRemove(plan.demote, plan.ids, plan.carried) }) { Text("Remove and end the plan", color = alpine.danger) }
                 asking -> TextButton(onClick = { families.runRemove(demote = false) }) { Text("Remove from family", color = alpine.danger) }
                 else -> TextButton(onClick = { families.dismissRemove() }, enabled = !running) { Text(if (removed) "Done" else "Close") }
             }

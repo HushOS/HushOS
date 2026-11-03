@@ -34,15 +34,16 @@ internal fun Vault.drawFamilyEpoch(workspaceId: String): ULong = writing {
 
 /*
  * One family folder gathered for a rotation (the web's createRotationSource): its top folder as route 29 serves it, a target
- * epoch drawn after it was read (above every epoch the folder carries), and every workspace document of the kinds this
- * client knows and of `kinds` (a 409 document-stale names them). Read again for every rebuild, never kept. Shares and links
- * are never handed on: nothing records who made them in a family folder, so the rotation closes them (the web does too).
+ * epoch drawn after it was read (above every epoch the folder carries), and every workspace document of `kinds` (always
+ * `folderKinds`: staging, every rebuild and every recheck ask the same function). Read again for every rebuild, never kept.
+ * Shares and links are never handed on: nothing records who made them in a family folder, so the rotation closes them (the
+ * web does too).
  */
-internal fun FamilySync.gather(groupId: String, workspaceId: String, kinds: Collection<String> = emptyList()): AreaRotation {
+internal fun FamilySync.gather(groupId: String, workspaceId: String, kinds: FolderKinds): AreaRotation {
     val ws = workspaceId.lowercase()
     val served = api.areaRoot(groupId, ws)
     val target = vault.drawFamilyEpoch(ws)
-    val documents = (DOCUMENT_KINDS + kinds.filter(KIND::matches)).toSortedSet().mapNotNull { kind ->
+    val documents = kinds.kinds.mapNotNull { kind ->
         vault.api.document(ws, kind)?.let { (envelope, version) -> ServedDocument(kind, version.toULong(), base64urlDecode(envelope)) }
     }
     val node = served.node
@@ -51,9 +52,29 @@ internal fun FamilySync.gather(groupId: String, workspaceId: String, kinds: Coll
     return AreaRotation(ws, target, root, (node.changeSeq ?: 0).toULong(), documents)
 }
 
+/*
+ * The document kinds a folder's rotation carries, the one answer for staging, rebuilds and rechecks: the kinds this client
+ * knows, every kind the call's rotation of that folder already carries (`body`: a kind a 409 once named stays named, so a
+ * later rebuild or recheck never drops it and meets `document-stale` for it again), and any the server names now.
+ */
+@JvmInline internal value class FolderKinds(val kinds: List<String>)
+
+internal fun folderKinds(body: String?, workspaceId: String, named: Collection<String> = emptyList()): FolderKinds =
+    FolderKinds((DOCUMENT_KINDS + kindsIn(body, workspaceId) + named).filter(KIND::matches).toSortedSet().toList())
+
+/* The kinds `body`'s rotation of the folder carries. */
+private fun kindsIn(body: String?, workspaceId: String): List<String> {
+    val json = body?.let { runCatching { JSONObject(it) }.getOrNull() } ?: return emptyList()
+    val wires = json.optJSONArray("rotations")?.let { list -> (0 until list.length()).mapNotNull(list::optJSONObject) }.orEmpty() +
+        listOfNotNull(json.optJSONObject("rotation"))
+    val wire = wires.firstOrNull { it.optString("workspaceId").equals(workspaceId, ignoreCase = true) } ?: return emptyList()
+    val documents = wire.optJSONArray("documents") ?: return emptyList()
+    return (0 until documents.length()).mapNotNull { documents.optJSONObject(it)?.optString("kind")?.takeIf(String::isNotEmpty) }
+}
+
 /* Every live family folder gathered: what a removal or marking someone left rotates. */
 private fun FamilySync.gatherLive(groupId: String): List<AreaRotation> =
-    (liveAreas(groupId) ?: throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)).map { gather(groupId, it) }
+    (liveAreas(groupId) ?: throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)).map { gather(groupId, it, folderKinds(null, it)) }
 
 /* What a rotating call's rebuild came to. */
 internal sealed interface Rebuilt {
@@ -98,7 +119,7 @@ internal fun FamilySync.rebuildKept(summary: GroupSummary, kept: FamilyOutbox.Ke
         else -> return Rebuilt.Unsent(pending)
     }
     holdAgain(summary, route)?.let { return it }
-    return Rebuilt.Kept(rebuildWith(summary.id, kept, areas))
+    return Rebuilt.Kept(rebuildWith(summary.id, kept, areas.mapValues { (ws, named) -> folderKinds(body, ws, named) }))
 }
 
 /*
@@ -108,13 +129,13 @@ internal fun FamilySync.rebuildKept(summary: GroupSummary, kept: FamilyOutbox.Ke
  * folders it rebuilt, even when nothing was carried on empty: finishing it rewrites those folders' notes to what the call
  * now carries on empty, so a note from an earlier rebuild never outlives a rebuild that read the document fine.
  */
-private fun FamilySync.rebuildWith(groupId: String, kept: FamilyOutbox.Kept, areas: Map<String, List<String>>): FamilyOutbox.Kept {
+private fun FamilySync.rebuildWith(groupId: String, kept: FamilyOutbox.Kept, areas: Map<String, FolderKinds>): FamilyOutbox.Kept {
     val rotations = areas.map { (ws, kinds) -> gather(groupId, ws, kinds) }
     val first = ledger.outboxRebuild(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, kept.outboxId, kept.entry, rotations)
     val recheck = FamilyOutbox.Recheck(areas.keys.map { it.lowercase() }.toSet(), first.replaced)
     // The rebuilt entry and its marker, in one write: no crash leaves the marker describing the call it replaced.
     outbox.put(userId, groupId, first.outboxId, first.entry, recheck)
-    return finishRecheck(groupId, FamilyOutbox.Kept(first.outboxId, first.entry), recheck)
+    return finishRecheck(groupId, FamilyOutbox.Kept(first.outboxId, first.entry), first.body, recheck)
 }
 
 /*
@@ -123,11 +144,13 @@ private fun FamilySync.rebuildWith(groupId: String, kept: FamilyOutbox.Kept, are
  * rewritten to what the call now carries on empty (only that: one read fine now loses its note), and the marker gone. A
  * failure or a killed process before that write leaves the entry as it was, marked, and the next send settles it first.
  */
-internal fun FamilySync.finishRecheck(groupId: String, kept: FamilyOutbox.Kept, recheck: FamilyOutbox.Recheck): FamilyOutbox.Kept {
+internal fun FamilySync.finishRecheck(groupId: String, kept: FamilyOutbox.Kept, body: String, recheck: FamilyOutbox.Recheck): FamilyOutbox.Kept {
     var current = kept
     var still = recheck.replaced
     if (still.isNotEmpty()) {
-        val again = still.groupBy({ it.workspaceId.lowercase() }, { it.kind }).map { (ws, kinds) -> gather(groupId, ws, kinds) }
+        // Each folder gathered with every kind its rotation carries (folderKinds), not only the ones read again: a kind
+        // dropped here would be refused `document-stale` at every send.
+        val again = still.groupBy({ it.workspaceId.lowercase() }, { it.kind }).map { (ws, kinds) -> gather(groupId, ws, folderKinds(body, ws, kinds)) }
         val call = ledger.outboxRebuild(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), groupId, kept.outboxId, kept.entry, again)
         still = call.replaced
         current = FamilyOutbox.Kept(call.outboxId, call.entry)
@@ -220,7 +243,11 @@ sealed interface RemovalEnd {
     data class Failed(val words: String) : RemovalEnd
     data object Wiped : RemovalEnd
     /* Plans they pay for that give nothing end with the removal: asked first, nothing changed. */
-    data class EndsLapsed(val plans: List<FamilyLapsedPlan>) : RemovalEnd
+    /*
+     * `carried`: the removal as it stood (its bindings: the membership confirmed and the one its own demotion left), handed
+     * back with the plans' confirmation (removeMember's `carried`), so a demotion already made is still this removal's.
+     */
+    data class EndsLapsed(val plans: List<FamilyLapsedPlan>, val carried: FamilyOutbox.Removal? = null) : RemovalEnd
 }
 
 private const val MAX_REBUILDS = 3
@@ -235,9 +262,12 @@ private const val MAX_REBUILDS = 3
  * a second press signs nothing new while it waits.
  */
 fun FamilySync.removeMember(summary: GroupSummary, userId: String, first: String, confirmed: FamilyMember, demoteFirst: Boolean = false, endsLapsed: List<String> = emptyList(),
-    names: (String) -> String? = { null }, onStep: (RemovalStep) -> Unit = {}): RemovalEnd = exclusive(summary.id) {
+    names: (String) -> String? = { null }, carried: FamilyOutbox.Removal? = null, onStep: (RemovalStep) -> Unit = {}): RemovalEnd = exclusive(summary.id) {
     notMemberLetsGo(summary.id, { RemovalEnd.Wiped }) {
-        removeKept(summary, FamilyOutbox.Removal(userId.lowercase(), first, endsLapsed, demoteFirst, FamilyOutbox.Membership.of(confirmed)), names, onStep)
+        // Plans confirmed after `ends-lapsed`: the same removal goes on with its bindings, only the confirmed plans new.
+        val removal = carried?.takeIf { it.userId.equals(userId, ignoreCase = true) }?.copy(endsLapsed = endsLapsed, outboxId = null)
+            ?: FamilyOutbox.Removal(userId.lowercase(), first, endsLapsed, demoteFirst, FamilyOutbox.Membership.of(confirmed))
+        removeKept(summary, removal, names, onStep)
     }
 }
 
@@ -270,6 +300,8 @@ private fun FamilySync.removeKept(summary: GroupSummary, removal: FamilyOutbox.R
     // A pending end keeps the turn's intent (written again: an entry this turn went on from may have retired it).
     if (end is RemovalEnd.Pending) outbox.keepRemoval(userId, summary.id, turn.removal)
     else outbox.dropRemoval(userId, summary.id, removal.userId)
+    // Plans to confirm: handed back with the removal's bindings, for the confirmation to go on with.
+    if (end is RemovalEnd.EndsLapsed) return end.copy(carried = turn.removal)
     return end
 }
 
@@ -576,7 +608,7 @@ private fun folderEnd(end: CallEnd, family: String): FolderEnd? = when (end) {
  * `due.rotations` asks of a manager (a share or link stopped in the folder).
  */
 internal fun FamilySync.replaceKeys(summary: GroupSummary, workspaceId: String): Rotated = rotatingCall(summary, { null }) { _, revision, kems ->
-    ledger.areaRotationBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), summary.id, revision, gather(summary.id, workspaceId),
+    ledger.areaRotationBody(vault.ownIdentities(), Auth.identity(vault.context, vault.api.session), summary.id, revision, gather(summary.id, workspaceId, folderKinds(null, workspaceId)),
         vault.accountKeyVersion(), kems)
 }
 

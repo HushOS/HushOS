@@ -515,7 +515,7 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
         if (read is OutboxCall.Send) {
             val recheck = outbox.recheck(userId, groupId, current.outboxId)
             if (recheck != null) {
-                current = finishRecheck(groupId, current, recheck)
+                current = finishRecheck(groupId, current, read.body, recheck)
                 continue
             }
         }

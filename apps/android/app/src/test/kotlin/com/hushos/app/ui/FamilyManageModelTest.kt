@@ -12,6 +12,7 @@ import com.hushos.app.data.PendingPerson
 import com.hushos.app.data.Shared
 import com.hushos.app.data.Vault
 import com.hushos.app.data.letIn
+import com.hushos.app.data.changeRole
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -418,5 +419,34 @@ class FamilyManageModelTest {
         runBlocking { model.loadManaged(family.groupId) }
         assertFalse(graceId in shown())
         assertTrue(host.read().contains("Grace is no longer in Lindqvist family."))
+    }
+
+    /*
+     * Codex #281 round 12, 1: Remove from family on Grace, who manages the family: taking that from her lands, then the
+     * removal meets `ends-lapsed` and the sheet asks about her plan. Remove and end the plan goes on with the same removal
+     * (its demotion still its own) and she is removed. Fails if the confirmation starts a fresh removal from the row as it
+     * was drawn, which takes her demoted entry for a change nobody confirmed and stops as moved.
+     */
+    @Test
+    fun confirmingAPlanAfterADemotionStillRemoves() {
+        val graceId = server.grace.id.lowercase()
+        assertEquals(LetIn.Landed, host.vault.families.letIn(family.summary, grace))
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        assertEquals(com.hushos.app.data.RoleEnd.Landed, host.vault.families.changeRole(family.summary, graceId, "Grace", com.hushos.core.MembersRole.GRANT))
+        runBlocking { model.refreshFamilies(force = true) }
+        val entry = (model.states[family.groupId] as FamilyState.Accepted).view.members.single { it.userId.equals(graceId, ignoreCase = true) }
+        assertTrue("members" in entry.roles)
+        family.rotatingAnswers.add { _, _ ->
+            409 to JSONObject().put("code", "ends-lapsed").put("message", "A plan would end.")
+                .put("data", JSONObject().put("plans", org.json.JSONArray().put(JSONObject().put("id", "plan-1").put("name", "Family Pro (monthly)").put("standing", "paused"))))
+        }
+        model.askRemove(family.groupId, com.hushos.app.data.FamilyMemberRef(graceId, "grace@example.org", "Grace Hopper"), entry)
+        model.runRemove(demote = true)
+        until("the plan asked about") { model.removal?.phase is RemovalPhase.ConfirmPlan }
+        val plan = model.removal!!.phase as RemovalPhase.ConfirmPlan
+        model.runRemove(plan.demote, plan.ids, plan.carried)
+        until("the removal ended") { model.removal?.phase is RemovalPhase.Done }
+        assertEquals(com.hushos.app.data.RemovalEnd.Removed, (model.removal!!.phase as RemovalPhase.Done).end)
+        assertEquals("plan-1", JSONObject(family.rotatingCalls.last { it.first == "remove" }.second).getJSONArray("endsLapsed").getString(0))
     }
 }

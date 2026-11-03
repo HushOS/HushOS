@@ -178,7 +178,8 @@ data class RemovalSheet(val groupId: String, val member: com.hushos.app.data.Fam
 sealed interface RemovalPhase {
     data object Confirm : RemovalPhase
     /* A lapsed plan they pay for ends with the removal: asked first, nothing changed yet. */
-    data class ConfirmPlan(val line: String, val ids: List<String>, val demote: Boolean) : RemovalPhase
+    /* `carried`: the removal as it stood, its bindings handed on to the confirmation (removeMember's `carried`). */
+    data class ConfirmPlan(val line: String, val ids: List<String>, val demote: Boolean, val carried: com.hushos.app.data.FamilyOutbox.Removal? = null) : RemovalPhase
     data class Running(val step: com.hushos.app.data.RemovalStep, val demote: Boolean, val finished: Boolean) : RemovalPhase
     data class Done(val end: com.hushos.app.data.RemovalEnd, val demoted: Boolean, val finished: Boolean) : RemovalPhase
     data class Error(val words: String) : RemovalPhase
@@ -574,7 +575,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
      * The removal, in the families' scope: each step shown as it starts; a lapsed plan it would end is asked about first;
      * whatever it came to stays on the sheet. `demote` stops them managing the family first (the way out of their hold).
      */
-    fun runRemove(demote: Boolean, endsLapsed: List<String> = emptyList()) {
+    fun runRemove(demote: Boolean, endsLapsed: List<String> = emptyList(), carried: com.hushos.app.data.FamilyOutbox.Removal? = null) {
         val sheet = removal ?: return
         if (sheet.phase is RemovalPhase.Running) return
         val summary = list?.firstOrNull { it.id == sheet.groupId } ?: return
@@ -586,7 +587,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         supersedeLoads(sheet.groupId)
         model.familyScope.launch {
             val result = gate.run(s) {
-                s.owner.families.removeMember(summary, sheet.member.userId, who, sheet.confirmed, demote, endsLapsed, ::memberName) { step ->
+                s.owner.families.removeMember(summary, sheet.member.userId, who, sheet.confirmed, demote, endsLapsed, ::memberName, carried) { step ->
                     if (step == com.hushos.app.data.RemovalStep.FINISH) finished = true
                     // Only while it still runs: a step that arrives after the outcome never covers it.
                     val now = finished
@@ -603,7 +604,7 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             }
             when (end) {
                 is com.hushos.app.data.RemovalEnd.EndsLapsed ->
-                    shown(RemovalPhase.ConfirmPlan(com.hushos.app.data.FamilyLapsedPlan.endsWhenRemoved(summary.name, end.plans, who), end.plans.map { it.id }, demote))
+                    shown(RemovalPhase.ConfirmPlan(com.hushos.app.data.FamilyLapsedPlan.endsWhenRemoved(summary.name, end.plans, who), end.plans.map { it.id }, demote, end.carried))
                 else -> {
                     shown(RemovalPhase.Done(end, demote, finished))
                     sayCleared(s)
