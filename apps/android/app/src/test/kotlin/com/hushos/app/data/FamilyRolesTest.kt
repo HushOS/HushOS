@@ -218,6 +218,28 @@ class FamilyRolesTest {
     }
 
     /*
+     * Make them the organizer is kept unanswered for Grace (billing to her), then Let them manage is asked for her. Both are
+     * on her `member` route but are different changes: the kept one goes first and is still unanswered, so the grant waits,
+     * said so, with nothing new kept; Make them the organizer pressed again is the kept one's, still saved on this device.
+     * Fails if another kept change for the same person is said as this one's ("Saved on this device" with nothing kept for
+     * it), or the same change pressed again is refused as another's.
+     */
+    @Test
+    fun aDifferentKeptChangeForThemMakesThisOneWait() {
+        val phone = phone(organizer = true)
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        answer(12, 503)
+        assertTrue(phone.sync.handOver(summary, graceId, "Grace") is RoleEnd.Pending)
+        val billingKept = kept(phone).single()
+        assertEquals(RoleOperation.BILLING_TO.wire, billingKept.operation)
+        assertEquals("another kept change for Grace was said as the grant's", RoleEnd.Waiting(earlierWaiting(summary.name)), grant(phone))
+        assertEquals("something new was kept over the handover", listOf(billingKept), kept(phone))
+        assertTrue("the same change pressed again wasn't the kept one's", phone.sync.handOver(summary, graceId, "Grace") is RoleEnd.Pending)
+        assertEquals(listOf(billingKept), kept(phone))
+        assertEquals("only the kept handover was ever sent", 1, bodies().toSet().size)
+    }
+
+    /*
      * The half-finished handover: billing given to Grace, then the app stops before Maya lets go of it (here, her
      * connection drops). On relaunch the family page's resume finishes it: one organizer, Grace, and the person told.
      * Fails if a handover stopped in the middle leaves two organizers for good.
