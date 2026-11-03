@@ -8,8 +8,6 @@ import android.database.Cursor
 import android.database.MatrixCursor
 import android.graphics.Point
 import android.os.CancellationSignal
-import android.os.Handler
-import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
@@ -425,6 +423,9 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         return false
     }
 
+    /* Tests: runs right after an open looked its file up, before anything else. */
+    @Volatile internal var afterResolve: (() -> Unit)? = null
+
     /* Per version, so a download resumed after a replacement never mixes two versions' bytes. */
     private fun cacheFile(id: String, versionId: String?): File = File(context!!.cacheDir, "files/$id/${versionId ?: "new"}")
 
@@ -463,34 +464,120 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         if (FamilyDoc.of(documentId) != null) throw FileNotFoundException("Choose a file.")
         val id = nodeId(documentId, vault)
         val item = vault.resolve(id)
+        val slot = WriteBacks.slotOf(item.node.workspaceId, id)
+        afterResolve?.invoke()
         if (mode.contains("r") && !mode.contains("w")) {
+            // A save of it still pending (waiting, retrying, failed) is what another app last wrote: read that, never the
+            // server's older version, which an app that reads then truncates would write the save away with.
+            val pending = File(context!!.cacheDir, "files/$id/pending-${java.util.UUID.randomUUID()}")
+            // Copied only while the account the read is for is still here, as every copy the cache keeps.
+            val copied = com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) { WriteBacks.copyNewestTo(context!!, slot, pending) } ?: throw authenticationRequired()
+            if (copied) return@guarded ParcelFileDescriptor.open(pending, ParcelFileDescriptor.MODE_READ_ONLY).also { pending.delete() }
+            // A save of it landed from its job's own vault since: this vault may still hold the version before. The version is
+            // checked with the server first; without an answer, the landed bytes are read (kept as that version's read copy),
+            // or nothing is: never the version before, which an app that reads then saves would write over the landed save.
+            // The row is looked up again after the landing is read: a read that refreshed for it and cleared it meanwhile
+            // left the fresh row here, so a row taken before that is never served.
+            val landing = WriteBacks.landing(context!!, slot)
+            val item = if (landing == null) vault.resolve(id) else {
+                runCatching { currentVersion(vault, id) }.getOrNull()?.also { WriteBacks.caughtUp(context!!, slot, landing.id, vault.ledgerGeneration) } ?: run {
+                    val landed = landing.version?.let { cacheFile(id, it) }?.takeIf { it.isFile }
+                        ?: throw FileNotFoundException(com.hushos.app.data.GroupsApiError.NO_ANSWER)
+                    return@guarded ParcelFileDescriptor.open(landed, ParcelFileDescriptor.MODE_READ_ONLY)
+                }
+            }
             // A kept file opens from the phone, network or not; anything else comes down once per version.
             Offline.localCopy(context!!, item)?.let { return@guarded ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY) }
             return@guarded ParcelFileDescriptor.open(cached(vault, id, item.node.currentVersion?.id), ParcelFileDescriptor.MODE_READ_ONLY)
         }
         val edit = personalEdit(vault, id, mode)
-        val handler = Handler(Looper.getMainLooper())
-        ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), handler) { error ->
-            if (error != null) { edit.delete(); return@open }
-            Thread { personalWriteBack(vault, id, documentId, edit, item) }.start()
-        }
+        // Opened only while the account it was made for is still here (under the wipe's lock): a mode that creates would
+        // otherwise make the file again after a sign-out.
+        com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) {
+            ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), WriteBacks.closes) { error -> onEditClosed(error, vault, edit, item) }
+        } ?: run { WriteBacks.discardEdit(edit); throw authenticationRequired() }
     }
 
     /*
-     * Where another app writes a file of the drive: a file of its own that goes up as a new version when it closes, never
-     * the version's read copy (if the upload fails, a later read must not show edits the server never got). It starts
-     * from the current version whenever the mode keeps the contents (WriteModes): appending, or reading and writing
-     * without truncating. That version is checked with the server first (currentVersion), so an edit never builds on a
-     * version that was replaced since, as one a queued write-back landed from its own vault.
+     * The other app closed what it wrote: it becomes the file's pending save (WriteBacks.save, in the close callback
+     * itself, so saves land in the order the app closed them), and the file's job is queued to send it. Nothing is sent
+     * from here: the job sends the newest save, and the provider never uploads past it. A save the account's sign-out
+     * overtook keeps nothing.
+     */
+    internal fun onEditClosed(error: java.io.IOException?, vault: Vault, edit: File, opened: com.hushos.app.data.Opened) {
+        // Nothing escapes the close thread, whatever happens: a closed edit left on disk is the next reconcile's to keep.
+        try {
+            closeEdit(error, vault, edit, opened)
+        } catch (failure: Throwable) {
+            android.util.Log.w("HushOSFiles", "a save couldn't be kept: ${failure.javaClass.name}")
+        }
+    }
+
+    private fun closeEdit(error: java.io.IOException?, vault: Vault, edit: File, opened: com.hushos.app.data.Opened) {
+        // The other app's write failed: what it left was never saved.
+        if (error != null) { WriteBacks.discardEdit(edit); return }
+        val ctx = context!!
+        val target = WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime, opened.node.parentId ?: vault.rootId, root = vault.rootId)
+        val slot = WriteBacks.slotOf(target.workspaceId, target.nodeId)
+        // Its order among the file's saves (never fails), then the edit marked as that save by one rename (no room needed):
+        // from here it goes only once kept, dismissed, or with the account. Both only while the account it was opened in is
+        // still here (under the wipe's lock): after a sign-out nothing of it is written, not even its number (a counter
+        // naming the account's file would outlive the account).
+        // The account left meanwhile: the edit goes (deleting writes nothing of it back).
+        val (number, closed) = WriteBacks.reserveAndClose(ctx, slot, edit, vault.ledgerGeneration) ?: run { WriteBacks.discardEdit(edit); return }
+        val kept = try {
+            WriteBacks.stage(ctx, vault.ledgerGeneration, target, closed, number)
+        } catch (failure: Exception) {
+            android.util.Log.w("HushOSFiles", "a save couldn't be kept: ${failure.javaClass.name}")
+            // A row to retry it, when one can be written; when not, the closed edit waits for the next reconcile.
+            com.hushos.app.data.TransferQueue.stagingFailed(ctx, target, closed, failure, vault.ledgerGeneration, number)
+            // Its listing shows the kept edit's size and date (what a read returns) now.
+            WriteBacks.notifyFolder(ctx, target)
+            return
+        }
+        // The account left meanwhile: nothing of it is kept.
+        if (kept == null) { WriteBacks.discardEdit(closed); return }
+        com.hushos.app.data.TransferQueue.enqueueSlot(ctx, slot, opened.name, accountGeneration = vault.ledgerGeneration)
+        // Its listing shows the save's size and date now: Files reads the folder again.
+        WriteBacks.notifyFolder(ctx, target)
+    }
+
+    /*
+     * Where another app writes a file of the drive: a file of its own that becomes the file's pending save when it
+     * closes, never the version's read copy. It starts from the current contents whenever the mode keeps them (WriteModes):
+     * appending, or reading and writing without truncating. Those are the file's pending save when it has one (what the
+     * app last wrote, not landed yet); else the server's version, checked first (currentVersion), so an edit never builds
+     * on a version replaced since.
      */
     internal fun personalEdit(vault: Vault, id: String, mode: String): File {
-        val edit = File(context!!.cacheDir, "edits/$id/${java.util.UUID.randomUUID()}").also { it.parentFile?.mkdirs() }
-        if (WriteModes.keepsContents(mode)) {
-            val item = currentVersion(vault, id)
-            cached(vault, id, item.node.currentVersion?.id).copyTo(edit, overwrite = true)
+        // Durable (filesDir/edits): a save that couldn't be kept is retried from it, whatever clears the cache meanwhile.
+        // Made, filled and its target written only while the account it opens for is still here (under the wipe's lock,
+        // each step): after a sign-out (another account signed in since, say) nothing of it is written, what was made goes,
+        // and the open fails. The target names the account, so no later start takes it for another account's.
+        val opened = vault.resolve(id)
+        val ctx = context!!
+        fun <T> forItsAccount(body: () -> T): T = com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration, body) ?: throw authenticationRequired()
+        val edit = forItsAccount {
+            WriteBacks.personalEdit(ctx, WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime,
+                opened.node.parentId ?: vault.rootId, root = vault.rootId), vault.api.session.userId)
         }
-        return edit
+        try {
+            afterEditMade?.invoke()
+            if (WriteModes.keepsContents(mode)) {
+                if (forItsAccount { WriteBacks.copyNewestTo(ctx, WriteBacks.slotOf(opened.node.workspaceId, id), edit) }) return edit
+                val item = currentVersion(vault, id)
+                val file = cached(vault, id, item.node.currentVersion?.id)
+                forItsAccount { file.copyTo(edit, overwrite = true) }
+            }
+            return edit
+        } catch (failure: Throwable) {
+            WriteBacks.discardEdit(edit)
+            throw failure
+        }
     }
+
+    /* Tests: runs once an open's edit is made, before it is filled. */
+    @Volatile internal var afterEditMade: (() -> Unit)? = null
 
     /*
      * A family file: read from the family folder's copies; written into an edit of its own, queued as a new version when
@@ -542,25 +629,6 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             if (vault.sync() == null) throw FileNotFoundException(com.hushos.app.data.GroupsApiError.NO_ANSWER)
         } else held.node.parentId?.let { vault.listChildren(it, ws) }
         return vault.resolve(id)
-    }
-
-    /*
-     * What another app wrote, once it closed the file: a new version, sent now when it can be. Not sent now (no network,
-     * the name it keeps couldn't be checked, or the file's row couldn't be looked up now): the queue takes the edit and
-     * tries again, rather than the edit being dropped. `opened` is the file as it was when the app opened it, which the
-     * queued job is told of when the lookup fails; the job looks it up again itself.
-     */
-    internal fun personalWriteBack(vault: Vault, id: String, documentId: String, edit: File, opened: com.hushos.app.data.Opened) {
-        val fresh = runCatching { vault.resolve(id) }.getOrNull()
-        val sent = fresh != null && runCatching {
-            vault.upload(edit, fresh.name, fresh.metadata.mime, fresh.node.parentId ?: vault.rootId, fresh, vault.makeThumbnail(edit, fresh.metadata.mime))
-            context!!.contentResolver.notifyChange(DocumentsContract.buildDocumentUri(authority, documentId), null)
-        }.isSuccess
-        if (!sent) runCatching {
-            val known = fresh ?: opened
-            com.hushos.app.data.TransferQueue.upload(context!!, edit, known.name, known.metadata.mime, known.node.parentId ?: vault.rootId, known.id)
-        }
-        edit.delete()
     }
 
     /* Through a pipe, never a plaintext file in the cache: the decrypted JPEG exists only in memory and in transit. */
