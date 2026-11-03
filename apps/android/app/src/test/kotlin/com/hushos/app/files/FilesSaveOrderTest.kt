@@ -30,6 +30,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -769,7 +770,7 @@ class FilesSaveOrderTest {
         server.dropReply = { _, path ->
             if (landing && path.endsWith("/changes")) {
                 landing = false
-                WriteBacks.noteLanded(slot)
+                WriteBacks.noteLanding(app, slot, null)
             }
             false
         }
@@ -950,6 +951,83 @@ class FilesSaveOrderTest {
         save(provider, notes, "kept save")
         val authority = "${app.packageName}.documents"
         assertTrue(notified.notifiedUris.any { it.uri == android.provider.DocumentsContract.buildChildDocumentsUri(authority, "root") })
+    }
+
+    /*
+     * A file read once (its version cached here), saved, and the save lands from its job's own vault; then this phone goes
+     * offline. The next read serves the landed bytes (kept as the read copy of the version they became), not the cached
+     * version before, which an editor that reads then saves would write over the landed save. When the landed version
+     * isn't known (its answer was lost), the read fails rather than serve the version before. Fails if a read after a
+     * landing can fall back to the version before it.
+     */
+    @Test
+    fun aReadAfterALandingWithNoAnswerServesTheLandedBytes() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        assertEquals("original", opened(provider, notes, "r"))
+        save(provider, notes, "landed save")
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        server.dropReply = { _, path -> path.endsWith("/changes") }
+        assertEquals("landed save", opened(provider, notes, "r"))
+        // A landing whose version isn't known: no answer, no read.
+        WriteBacks.noteLanding(app, slot, null)
+        assertThrows(java.io.FileNotFoundException::class.java) { opened(provider, notes, "r") }
+        server.dropReply = null
+        assertEquals("landed save", opened(provider, notes, "r"))
+        assertNull(WriteBacks.landing(app, slot))
+    }
+
+    /*
+     * A job is sending a save when Cancel is pressed for the file's other job, which would have sent that same save: the
+     * sending job stops before the save lands (it honours the cancel), and a save made after the cancel is sent instead.
+     * Fails if only the job Cancel named is stopped while another still lands the cancelled save.
+     */
+    @Test
+    fun aCancelStopsTheJobAlreadySendingTheCancelledSave() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "cancelled save")
+        val waiting = jobs(slot).single()
+        val target = WriteBacks.pending(app, slot)!!.target
+        var pressed = false
+        server.beforeAnswer = { method, path ->
+            if (!pressed && method == "POST" && path == "drive/uploads") {
+                pressed = true
+                TransferQueue.cancel(app, waiting.id, waiting.tags.first { it.startsWith("file:") }.removePrefix("file:")).get(5, TimeUnit.SECONDS)
+                WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "after").apply { writeText("save after the cancel") })
+            }
+        }
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertTrue(pressed)
+        assertEquals("save after the cancel", serverText(notes))
+        assertEquals("the cancelled save was completed", 1, server.requests.count { it.startsWith("POST ") && it.endsWith("/complete") })
+    }
+
+    /*
+     * A pending save cancelled, or its failed row dismissed: the file's listing goes back to the server's size and date, so
+     * Files is told, at the URI its listing of the folder watches. Fails if a pending save goes without telling Files.
+     */
+    @Test
+    fun aCancelOrADismissTellsTheFolderFilesIsWatching() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        val watched = provider.queryChildDocuments("root", null, null as String?).use { it.notificationUri }
+        save(provider, notes, "cancelled save")
+        val job = jobs(slot).single()
+        shadowOf(app.contentResolver).notifiedUris.clear()
+        TransferQueue.cancel(app, job.id, job.tags.first { it.startsWith("file:") }.removePrefix("file:")).get(5, TimeUnit.SECONDS)
+        assertTrue("a cancel didn't tell Files", shadowOf(app.contentResolver).notifiedUris.any { it.uri == watched })
+        save(provider, notes, "dismissed save")
+        refuseBegins(true)
+        runSlot(slot)
+        refuseBegins(false)
+        shadowOf(app.contentResolver).notifiedUris.clear()
+        TransferQueue.dismiss(app, FailedTransfers.of(app).all().single())
+        assertNull(WriteBacks.pending(app, slot))
+        assertTrue("a dismiss didn't tell Files", shadowOf(app.contentResolver).notifiedUris.any { it.uri == watched })
     }
 
     /*

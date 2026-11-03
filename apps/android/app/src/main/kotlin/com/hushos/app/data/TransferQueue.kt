@@ -690,10 +690,11 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             // Landed: the slot cleared only while it still holds this save, said once, the landed row used up last (once the
             // slot is empty, every landed row of its saves: a superseded save's, found landed late, too).
             // Rows of the slot's failed saves go too, all but a still-pending save's (WorkManager's entries make none again:
-            // obsolete), and the provider hears that the file has a new version (WriteBacks.noteLanded).
-            fun landed(): Boolean = forItsAccount(generation) {
-                val left = WriteBacks.landed(applicationContext, slot, pending.id)
-                WriteBacks.noteLanded(slot)
+            // obsolete). The landed bytes become the read copy of the version they became (this account's own drive; a
+            // family's copies are its folder's to make), and a read serves those until it caught up (WriteBacks.landing).
+            fun landed(version: String? = null): Boolean = forItsAccount(generation) {
+                val readCopy = if (target.family == null && version != null) java.io.File(applicationContext.cacheDir, "files/${target.nodeId}/$version") else null
+                val left = WriteBacks.landed(applicationContext, slot, pending.id, version, readCopy)
                 FailedTransfers.of(applicationContext).forgetWhere { it.slot == slot && WriteBacks.idOf(it.file) != left?.id }
                 waits.forget(this@UploadWorker.id.toString())
                 TransferNotices.ended(applicationContext, TransferNotices.Outcome(this@UploadWorker.id.toString(), name, upload = true, folder = target.folder))
@@ -701,7 +702,8 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
             }
             attempt { setForeground(getForegroundInfo()) }
             val end = withContext(Dispatchers.IO) {
-                stoppable({ isStopped }) { checkStop ->
+                // Stopped by WorkManager, or by a cancel that took this save meanwhile (another job's): never landed then.
+                stoppable({ isStopped || WriteBacks.isCancelled(applicationContext, slot, pending.generation) }) { checkStop ->
                     var shown = 0
                     val progress = { fraction: Float ->
                         checkStop()
@@ -718,11 +720,12 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                         waiting = { setProgressAsync(workDataOf("fraction" to 0f)) }, progress = progress, waitKey = this@UploadWorker.id.toString())
                 }
             }
-            sending.delete()
+            // A landing keeps it (as the read copy) or deletes it with the slot (WriteBacks.landed).
+            if (end !is JobEnd.Done && !(end is JobEnd.Failed && end.error is Reservations.Landed)) sending.delete()
             when (end) {
-                is JobEnd.Done -> if (!landed()) return Result.success()
-                // Nothing said, nothing recorded: the slot stays for the next run.
-                JobEnd.Stopped -> return Result.retry()
+                is JobEnd.Done -> if (!landed(end.value.node.currentVersion?.id)) return Result.success()
+                // Its save cancelled while it went up: nothing landed; whatever the slot holds now is next.
+                JobEnd.Stopped -> if (!isStopped && WriteBacks.isCancelled(applicationContext, slot, pending.generation)) continue else return Result.retry()
                 is JobEnd.Failed -> when {
                     // Its completion landed after all (its answer lost, or a step after it failed): landed.
                     end.error is Reservations.Landed -> if (!landed()) return Result.success()

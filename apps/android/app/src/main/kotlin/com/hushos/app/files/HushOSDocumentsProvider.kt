@@ -344,8 +344,17 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             if (WriteBacks.copyTo(context!!, slot, pending)) return@guarded ParcelFileDescriptor.open(pending, ParcelFileDescriptor.MODE_READ_ONLY).also { pending.delete() }
             // A save of it landed from its job's own vault since: this vault may still hold the version before, so the
             // version is checked with the server first (without an answer, the row held is read).
-            val seen = WriteBacks.landedSince(slot)
-            val item = if (seen == null) item else runCatching { currentVersion(vault, id) }.getOrNull()?.also { WriteBacks.caughtUp(slot, seen) } ?: item
+            // A save of it landed from its job's own vault since: this vault may still hold the version before. The version is
+            // checked with the server first; without an answer, the landed bytes are read (kept as that version's read copy),
+            // or nothing is: never the version before, which an app that reads then saves would write over the landed save.
+            val landing = WriteBacks.landing(context!!, slot)
+            val item = if (landing == null) item else {
+                runCatching { currentVersion(vault, id) }.getOrNull()?.also { WriteBacks.caughtUp(context!!, slot, landing.id) } ?: run {
+                    val landed = landing.version?.let { cacheFile(id, it) }?.takeIf { it.isFile }
+                        ?: throw FileNotFoundException(com.hushos.app.data.GroupsApiError.NO_ANSWER)
+                    return@guarded ParcelFileDescriptor.open(landed, ParcelFileDescriptor.MODE_READ_ONLY)
+                }
+            }
             val file = cacheFile(id, item.node.currentVersion?.id)
             // A kept file opens from the phone, network or not; anything else comes down, or resumes, once per version.
             Offline.localCopy(context!!, item)?.let { return@guarded ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY) }
@@ -365,11 +374,11 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     internal fun onEditClosed(error: java.io.IOException?, vault: Vault, edit: File, opened: com.hushos.app.data.Opened) {
         if (error != null) { edit.delete(); return }
         try {
-            val target = WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime, opened.node.parentId ?: vault.rootId)
+            val target = WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime, opened.node.parentId ?: vault.rootId, root = vault.rootId)
             if (WriteBacks.save(context!!, vault.ledgerGeneration, target, edit) != null) {
                 com.hushos.app.data.TransferQueue.enqueueSlot(context!!, WriteBacks.slotOf(target.workspaceId, target.nodeId), opened.name)
                 // Its listing shows the save's size and date now: Files reads the folder again.
-                FilesRoots.foldersChanged(context!!, listOf(target.folder), vault.rootId)
+                WriteBacks.notifyFolder(context!!, target)
             }
         } catch (failure: Exception) {
             android.util.Log.w("HushOSFiles", "a save couldn't be kept: ${failure.javaClass.name}")

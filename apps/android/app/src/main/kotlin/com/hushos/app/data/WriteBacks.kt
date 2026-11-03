@@ -43,6 +43,8 @@ object WriteBacks {
     data class Target(
         val workspaceId: String, val nodeId: String, val name: String, val mime: String?, val folder: String,
         val family: String? = null, val familyWorkspace: String? = null,
+        /* The drive's top folder when the file is in this account's own drive: its listing is watched as "root" too. */
+        val root: String? = null,
     )
 
     /*
@@ -74,7 +76,7 @@ object WriteBacks {
 
     private fun describe(json: JSONObject, slot: String) = Pending(slot, json.getLong("generation"), json.getString("id"), Target(
         json.getString("workspaceId"), json.getString("nodeId"), json.getString("name"), json.opt("mime") as? String, json.getString("folder"),
-        json.opt("family") as? String, json.opt("familyWorkspace") as? String,
+        json.opt("family") as? String, json.opt("familyWorkspace") as? String, json.opt("root") as? String,
     ))
 
     private fun read(file: File, slot: String): Pending? = runCatching { describe(JSONObject(file.readText()), slot) }.getOrNull()
@@ -85,9 +87,11 @@ object WriteBacks {
      */
     private fun current(dir: File, slot: String): Pending? {
         if (!dir.isDirectory) return null
-        val published = read(File(dir, RECORD), slot)?.takeIf { File(dir, it.id + BIN).isFile }
+        // A save a cancel took is never pending again, whatever is left of it on disk.
+        val through = cancelledThrough(dir)
+        val published = read(File(dir, RECORD), slot)?.takeIf { File(dir, it.id + BIN).isFile && it.generation > through }
         val newest = dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty()
-            .mapNotNull { read(it, slot) }.filter { File(dir, it.id + BIN).isFile }.maxByOrNull { it.generation }
+            .mapNotNull { read(it, slot) }.filter { File(dir, it.id + BIN).isFile && it.generation > through }.maxByOrNull { it.generation }
         val pending = if (newest != null && (published == null || newest.generation > published.generation)) {
             publish(dir, newest.id)
             newest
@@ -128,8 +132,9 @@ object WriteBacks {
         val slot = slotOf(target.workspaceId, target.nodeId)
         lockOf(slot).withLock {
             val dir = dir(context, slot).also { it.mkdirs() }
-            // Above every generation the slot holds (a cancelled record's newer saves included), so it is the newest.
-            val generation = maxOf(current(dir, slot)?.generation ?: 0L,
+            // Above every generation the slot holds (a cancelled record's newer saves included) and every one a cancel took,
+            // so it is the newest and never taken for a cancelled one.
+            val generation = maxOf(current(dir, slot)?.generation ?: 0L, cancelledThrough(dir),
                 dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty().mapNotNull { read(it, slot)?.generation }.maxOrNull() ?: 0L) + 1
             val id = java.util.UUID.randomUUID().toString()
             val contents = File(dir, "$id$BIN.incoming")
@@ -138,6 +143,7 @@ object WriteBacks {
             val description = JSONObject().put("generation", generation).put("id", id).put("workspaceId", target.workspaceId).put("nodeId", target.nodeId)
                 .put("name", target.name).put("mime", target.mime ?: JSONObject.NULL).put("folder", target.folder)
                 .put("family", target.family ?: JSONObject.NULL).put("familyWorkspace", target.familyWorkspace ?: JSONObject.NULL)
+                .put("root", target.root ?: JSONObject.NULL)
             val written = File(dir, "$id$META.incoming").apply { writeText(description.toString()) }
             check(written.renameTo(File(dir, id + META))) { "The save couldn't be kept." }
             afterContent?.invoke()
@@ -179,8 +185,16 @@ object WriteBacks {
      * by id, so a save made after the slot emptied (its generation counting from one again) is never taken for it. Under
      * the slot's lock, inside the account's (the caller's forItsAccount). The save still pending after, if any.
      */
-    fun landed(context: Context, slot: String, id: String): Pending? = lockOf(slot).withLock {
+    fun landed(context: Context, slot: String, id: String, version: String? = null, readCopy: File? = null): Pending? = lockOf(slot).withLock {
         val dir = dir(context, slot)
+        // What a read of the file is served from now on until it has caught up with the server (`landing`): the landed
+        // bytes, moved from the copy that was sent to the read copy of the version they became, when that is known.
+        val sending = File(dir, "sending-$id")
+        val kept = if (version != null && readCopy != null && sending.isFile) {
+            readCopy.parentFile?.mkdirs()
+            sending.renameTo(readCopy) || runCatching { sending.copyTo(readCopy, overwrite = true); true }.getOrDefault(false)
+        } else false
+        noteLanding(context, slot, if (kept) version else null)
         val held = current(dir, slot)
         if (held == null || held.id == id) { dir.deleteRecursively(); null } else {
             dir.listFiles()?.filter { it.name.startsWith("sending-") }?.forEach { it.delete() }
@@ -195,20 +209,35 @@ object WriteBacks {
     val closes: android.os.Handler by lazy { android.os.Handler(android.os.HandlerThread("HushOSSaves").apply { start() }.looper) }
 
     /*
-     * Slots a job landed while this process ran: the provider's own vault, which didn't send it, may still hold the
-     * version before, so its next read of the file checks the version with the server first (then `caughtUp`).
+     * A file's save landed from its job's own vault: the reader's vault may still hold the version before. Kept on disk
+     * (filesDir/writeback-landings/<slot>, an account file a sign-out wipes) until a read caught up with the server: a
+     * landing id of its own (so a read only clears the landing it refreshed for) and the version the save became, when
+     * its bytes were kept as that version's read copy. A read that can't reach the server serves those bytes, or fails;
+     * never the version before.
      */
-    private val landedHere = ConcurrentHashMap<String, Long>()
-    private val landings = java.util.concurrent.atomic.AtomicLong()
+    data class Landing(val id: String, val version: String?)
 
-    /* A slot's save landed: a landing count of its own, so a read refreshed before it never takes it for seen. */
-    fun noteLanded(slot: String) { landedHere[slot] = landings.incrementAndGet() }
+    const val LANDINGS = "writeback-landings"
 
-    /* The slot's latest landing not caught up with, if any: what a read refreshes for, and then says it saw. */
-    fun landedSince(slot: String): Long? = landedHere[slot]
+    private fun landingFile(context: Context, slot: String) = File(context.filesDir, "$LANDINGS/$slot")
 
-    /* A read refreshed after landing `seen`: only that landing is caught up with, never one that came during the refresh. */
-    fun caughtUp(slot: String, seen: Long) { landedHere.remove(slot, seen) }
+    internal fun noteLanding(context: Context, slot: String, version: String?) {
+        val file = landingFile(context, slot).also { it.parentFile?.mkdirs() }
+        val incoming = File(file.parentFile, "$slot.incoming")
+        incoming.writeText(java.util.UUID.randomUUID().toString() + "\n" + (version ?: ""))
+        check(incoming.renameTo(file)) { "The landing couldn't be kept." }
+    }
+
+    /* The file's latest landing a read hasn't caught up with, if any. */
+    fun landing(context: Context, slot: String): Landing? = runCatching {
+        val lines = landingFile(context, slot).readText().split("\n")
+        Landing(lines[0], lines.getOrNull(1)?.ifEmpty { null })
+    }.getOrNull()
+
+    /* A read caught up with the server after landing `seen`: only that landing goes, never one that came meanwhile. */
+    fun caughtUp(context: Context, slot: String, seen: String) = lockOf(slot).withLock {
+        if (landing(context, slot)?.id == seen) landingFile(context, slot).delete()
+    }
 
     /*
      * An old slot the sweep found with nothing to send and no job: deleted only if, looked at again under its lock, it still
@@ -236,7 +265,11 @@ object WriteBacks {
     fun cancelThrough(context: Context, slot: String, id: String?): Pending? = lockOf(slot).withLock {
         val dir = dir(context, slot)
         if (id == null || !dir.isDirectory) return@withLock current(dir, slot)
-        val through = read(File(dir, id + META), slot)?.generation ?: return@withLock current(dir, slot)
+        val cancelled = read(File(dir, id + META), slot) ?: return@withLock current(dir, slot)
+        val through = cancelled.generation
+        // Every save up to it cancelled, kept on the slot: a job already sending one of them stops before landing it.
+        val marker = File(dir, "$CANCELLED.incoming").apply { writeText(maxOf(through, cancelledThrough(dir)).toString()) }
+        check(marker.renameTo(File(dir, CANCELLED))) { "The cancel couldn't be kept." }
         dir.listFiles { f -> f.name.endsWith(META) && f.name != RECORD }.orEmpty().mapNotNull { read(it, slot) }.filter { it.generation <= through }.forEach {
             File(dir, it.id + BIN).delete()
             File(dir, it.id + META).delete()
@@ -245,8 +278,26 @@ object WriteBacks {
         val left = current(dir, slot)
         // Nothing left to send and no upload copy in use: the slot goes.
         if (left == null && dir.listFiles().orEmpty().none { it.name.startsWith("sending-") }) dir.deleteRecursively()
+        // Its listing no longer shows the cancelled save's size and date.
+        notifyFolder(context, cancelled.target)
         left
     }
+
+    private const val CANCELLED = "cancelled-through"
+
+    private fun cancelledThrough(dir: File): Long = runCatching { File(dir, CANCELLED).readText().trim().toLong() }.getOrDefault(0L)
+
+    /*
+     * Whether a cancel took the save of `generation` (a job sending it stops before it lands). Read without the slot's lock
+     * (the marker changes by one rename), since a sending job asks at every step of its upload.
+     */
+    fun isCancelled(context: Context, slot: String, generation: Long): Boolean = generation <= cancelledThrough(dir(context, slot))
+
+    /*
+     * The file's folder told that its listing changed (a save kept, cancelled or dismissed): its children's URI by the
+     * folder's node id, which every listing of it watches, and "root" too for this account's own top folder.
+     */
+    fun notifyFolder(context: Context, target: Target) = FilesRoots.foldersChanged(context, listOf(target.folder), target.root)
 
     /*
      * What a listing shows of a file with a pending save: that save's size and when it was kept, so the size and date
@@ -265,6 +316,9 @@ object WriteBacks {
     fun discard(context: Context, slot: String, file: String?) = lockOf(slot).withLock {
         val dir = dir(context, slot)
         val held = current(dir, slot) ?: return@withLock
-        if (held.id == idOf(file)) dir.deleteRecursively()
+        if (held.id == idOf(file)) {
+            dir.deleteRecursively()
+            notifyFolder(context, held.target)
+        }
     }
 }
