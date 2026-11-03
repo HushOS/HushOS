@@ -1,0 +1,55 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SaveTargets.swift
+  s_566b8e0c4467a4::t_d453ac54de5971 1-132
+  s_566b8e0c4467a4::t_cfe77675154d00 133-149
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveTargetsTests.swift
+  s_566b8e0c4467a4::t_488a8347381097 1-115
+  s_566b8e0c4467a4::t_62d29027b23753 116-140
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveTargets.kt
+  s_566b8e0c4467a4::t_2c2546f3cd023e 1-105
+  s_566b8e0c4467a4::t_8149241f84311f 106-108
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveTargetsTest.kt
+  s_566b8e0c4467a4::t_4975f52b5f72e6 1-123
+  s_566b8e0c4467a4::t_9a3cc6c9551177 124-125
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_ef50c02c0c3123 97
+apps/android/app/src/main/kotlin/com/hushos/app/data/Places.kt
+  s_566b8e0c4467a4::t_92bf453392159f 13-16,21-25,28-32
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_370619823c09b9 1932-1933,1935-1937
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SaveToHushOS.kt
+  s_566b8e0c4467a4::t_1c74182b2d28bd 66-67,88-89,92,169-172,179,182-185,193-194,196-208,211-215,220,222,225-231,233-243,326-329,337,355-361,368-377
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_a1a60423a0eb08 22
+apps/ios/App/BackgroundTransfers.swift
+  s_566b8e0c4467a4::t_cf19a14e924633 599-600
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_a851cc1b5a91d8 1922-1923
+apps/ios/App/MainView.swift
+  s_566b8e0c4467a4::t_47d128d59d1dd4 152-153
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Places.swift
+  s_566b8e0c4467a4::t_daf5354740bb44 10,12,15-16,21-31,37-39,41
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ShareHandoff.swift
+  s_566b8e0c4467a4::t_798cce03d2c34a 33-38,42-43,51
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/StagedSave.swift
+  s_566b8e0c4467a4::t_33e7f325363f97 13-17,26
+apps/ios/Share/SaveModel.swift
+  s_566b8e0c4467a4::t_6a9bb6759da2fa 10-12,35-36,42,54-55,57,69-72,77-79,84,87-96,225,228-243,253-267,269,285,294-301
+apps/ios/Share/SaveView.swift
+  s_566b8e0c4467a4::t_1605444918586e 109-112,133,135-145,169-180,182
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "aad7462d6701064266fe3bb8fc74dca02254f1f3",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
