@@ -79,6 +79,7 @@ class FilesSaveOrderTest {
         TransferQueue.beforeSlotFails = null
         TransferQueue.afterCancelCleans = null
         TransferQueue.beforeSweepRemoves = null
+        TransferQueue.beforeAsideReserve = null
         TransferQueue.beforeSlotEnqueued = null
         server.close()
         assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
@@ -2211,5 +2212,66 @@ class FilesSaveOrderTest {
         assertEquals(TransferQueue.Retry.SENT, TransferQueue.retryOutcome(app, FailedTransfers.of(app).all().single { it.slot == slot }))
         assertEquals(ListenableWorker.Result.success(), runSlot(slot))
         assertEquals("kept aside over a day", serverText(notes))
+    }
+
+    /*
+     * #274 P1 (set-aside Retry and closes): a save kept aside is retried, and another app closes the file in the middle of
+     * that Retry (between its check for anything newer and its number), the close's save not kept (a full disk on its
+     * thread). The newer save is never retired by the older one's landing: its edit stays, and it lands last. Fails if a
+     * close can fall between the Retry's check and its number.
+     */
+    @Test
+    fun aCloseDuringASetAsideRetryNeverLosesTheNewerSave() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        val vault = vaultOf(provider)
+        val opened = vault.resolve(notes)
+        save(provider, notes, "set aside")
+        File(app.filesDir, "${WriteBacks.NUMBERS}/$slot").writeText("not the numbers")
+        WriteBacks.forgetReservedHere()
+        TransferQueue.reconcileEdits(app, startup = true)
+        val aside = FailedTransfers.of(app).all().single { it.slot == slot }
+        val edit = provider.personalEdit(vault, notes, "w").apply { writeText("newer, closed meanwhile") }
+        WriteBacks.fault = { if (it == "copy" && Thread.currentThread().name == "closer") throw java.io.IOException("No space left on device") }
+        var closer: Thread? = null
+        TransferQueue.beforeAsideReserve = {
+            TransferQueue.beforeAsideReserve = null
+            closer = Thread({ provider.onEditClosed(null, vault, edit, opened) }, "closer").apply { start(); join(500) }
+        }
+        val outcome = TransferQueue.retryOutcome(app, aside)
+        closer!!.join(10_000)
+        WriteBacks.fault = null
+        if (outcome == TransferQueue.Retry.SENT) assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        val newer = FailedTransfers.of(app).all().single { it.file != null && File(it.file!!).isFile && File(it.file!!).readText() == "newer, closed meanwhile" }
+        assertEquals(TransferQueue.Retry.SENT, TransferQueue.retryOutcome(app, newer))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("newer, closed meanwhile", serverText(notes))
+    }
+
+    /*
+     * #274 P2 (orphaned sending copies): a save kept aside, and a copy being sent that a dead process left in its slot (no
+     * job holds it). The copy doesn't block the Retry, which sends the save, and the next start deletes such a copy.
+     * Fails if a sending copy no live job holds counts as a send under way.
+     */
+    @Test
+    fun aSendingCopyADeadProcessLeftBlocksNothing() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "kept aside, then retried")
+        File(app.filesDir, "${WriteBacks.NUMBERS}/$slot").writeText("not the numbers")
+        WriteBacks.forgetReservedHere()
+        TransferQueue.reconcileEdits(app, startup = true)
+        val aside = FailedTransfers.of(app).all().single { it.slot == slot }
+        val dir = WriteBacks.dir(app, slot).apply { mkdirs() }
+        val left = File(dir, "sending-n9-left").apply { writeText("a dead process's copy") }
+        assertEquals(TransferQueue.Retry.SENT, TransferQueue.retryOutcome(app, aside))
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("kept aside, then retried", serverText(notes))
+        val again = File(dir.apply { mkdirs() }, "sending-n9-again").apply { writeText("another dead process's copy") }
+        TransferQueue.reconcileEdits(app, startup = true)
+        assertFalse("a dead process's sending copy outlived a start", again.exists())
+        assertFalse(left.exists())
     }
 }

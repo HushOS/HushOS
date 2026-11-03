@@ -428,8 +428,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         // still here (under the wipe's lock): after a sign-out nothing of it is written, not even its number (a counter
         // naming the account's file would outlive the account).
         // The account left meanwhile: the edit goes (deleting writes nothing of it back).
-        val number = WriteBacks.reserve(ctx, slot, vault.ledgerGeneration) ?: run { WriteBacks.discardEdit(edit); return }
-        val closed = com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) { WriteBacks.close(edit, number) } ?: run { WriteBacks.discardEdit(edit); return }
+        val (number, closed) = WriteBacks.reserveAndClose(ctx, slot, edit, vault.ledgerGeneration) ?: run { WriteBacks.discardEdit(edit); return }
         val kept = try {
             WriteBacks.stage(ctx, vault.ledgerGeneration, target, closed, number)
         } catch (failure: Exception) {

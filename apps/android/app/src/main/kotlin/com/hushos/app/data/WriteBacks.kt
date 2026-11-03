@@ -218,7 +218,7 @@ object WriteBacks {
      * no newer than the slot's newest save, landed or pending, keeps nothing (Superseded). Null when the account left.
      */
     fun stage(context: Context, accountGeneration: Long, target: Target, edit: File, number: Long,
-              intoEmptyAbove: Long? = null, publishUnder: ((() -> Pending?) -> Pending?)? = null): Pending? {
+              intoEmptyAbove: Pair<Long, Long>? = null, publishUnder: ((() -> Pending?) -> Pending?)? = null): Pending? {
         val slot = slotOf(target.workspaceId, target.nodeId)
         if (publishUnder == null) return Reservations.whileAccount(accountGeneration) {
             lockOf(slot).withLock {
@@ -257,7 +257,7 @@ object WriteBacks {
     private const val STAGED = ".staged"
 
     /* `edit`'s bytes and description written into a new generation of the slot (synced), named `staged` if so. Its id. */
-    private fun write(context: Context, slot: String, target: Target, edit: File, number: Long, staged: Boolean, intoEmptyAbove: Long? = null): String {
+    private fun write(context: Context, slot: String, target: Target, edit: File, number: Long, staged: Boolean, intoEmptyAbove: Pair<Long, Long>? = null): String {
         val dir = dir(context, slot).also { it.mkdirs() }
         // The slot's own id for as long as it exists: what tells a cancel pressed on an earlier slot of the file from this one.
         File(dir, INCARNATION).takeIf { !it.isFile }?.let { file ->
@@ -305,24 +305,35 @@ object WriteBacks {
     fun dropStaged(context: Context) {
         val idle = System.currentTimeMillis() - 10 * 60 * 1000L
         File(context.filesDir, "queue").listFiles()?.filter { isSlot(it.name) }?.forEach { dir ->
-            lockOf(dir.name).withLock { dir.listFiles { f -> f.name.endsWith(STAGED) && f.lastModified() < idle }?.forEach { it.delete() } }
+            lockOf(dir.name).withLock {
+                dir.listFiles { f -> f.name.endsWith(STAGED) && f.lastModified() < idle }?.forEach { it.delete() }
+                // And copies being sent that no job of this process holds (a process that died sending): a job takes its own.
+                if (!JobLocks.held(dir.name)) dir.listFiles { f -> f.name.startsWith("sending-") }?.forEach { it.delete() }
+            }
         }
     }
 
     /* A number no newer than the slot's newest save, pending or landed or cancelled, keeps nothing; bounds unknown keep nothing either. */
-    private fun superseded(context: Context, slot: String, dir: File, number: Long, intoEmptyAbove: Long? = null) {
+    private fun superseded(context: Context, slot: String, dir: File, number: Long, intoEmptyAbove: Pair<Long, Long>? = null) {
         val numbers = repaired(context, slot) ?: throw IllegalStateException("The save couldn't be kept.")
         val pending = recovered(dir, slot)
-        // A save kept aside (its ceiling `intoEmptyAbove`) goes only into a slot with nothing of the file newer than it:
-        // no save pending or being sent, nothing landed or cancelled since it was kept aside. Else it is moot, and stays.
-        if (intoEmptyAbove != null && (pending != null || dir.listFiles().orEmpty().any { it.name.startsWith("sending-") } ||
-                numbers.landed > intoEmptyAbove || numbers.cancelled > intoEmptyAbove)) throw Moot()
+        // A save kept aside (its ceiling and its own number, `intoEmptyAbove`) goes only into a slot with nothing of the
+        // file newer than it, all of it looked at here under the slot's lock (which every close takes too): no save
+        // pending, none being sent by a live job, nothing landed or cancelled since it was kept aside, no staging row or
+        // closed edit numbered above its own. Else it is moot, and stays.
+        if (intoEmptyAbove != null) {
+            val (ceiling, own) = intoEmptyAbove
+            val sending = JobLocks.held(slot) && dir.listFiles().orEmpty().any { it.name.startsWith("sending-") }
+            val newerKept = runCatching { FailedTransfers.of(context).all() }.getOrDefault(emptyList())
+                .any { it.slot == slot && it.stage != null && (stagedNumber(it.stage) ?: 0L) > own } || closedEditsOf(context, slot).any { it.first > own }
+            if (pending != null || sending || numbers.landed > ceiling || numbers.cancelled > ceiling || newerKept) throw Moot()
+        }
         if (number <= maxOf(pending?.generation ?: 0L, numbers.landed, numbers.cancelled)) throw Superseded()
     }
 
     /* The generation `id` published as the slot's save (a staged one checked again and named for good first); the edit goes. */
     private fun publishGeneration(context: Context, slot: String, target: Target, edit: File, number: Long, id: String, staged: Boolean,
-                                  intoEmptyAbove: Long? = null): Pending {
+                                  intoEmptyAbove: Pair<Long, Long>? = null): Pending {
         val dir = dir(context, slot)
         if (staged) {
             superseded(context, slot, dir, number, intoEmptyAbove)
@@ -380,6 +391,20 @@ object WriteBacks {
 
     /* The file an edit would replace, written beside it as it was made. */
     fun sidecarOf(edit: File): File = File(edit.parentFile, edit.name.substringBefore('.') + ".json")
+
+    /*
+     * A close: its number (`reserve`) and the edit renamed with it, in one hold of the file's slot lock, so a Retry of a
+     * save kept aside (which checks, reserves and keeps under that lock) never falls between them. Only while the account
+     * `accountGeneration` names is still here: null when it left (nothing of it is written then).
+     */
+    fun reserveAndClose(context: Context, slot: String, edit: File, accountGeneration: Long): Pair<Long, File>? =
+        Reservations.whileAccount(accountGeneration) { lockOf(slot).withLock { reserve(context, slot, accountGeneration)?.let { it to close(edit, it) } } }
+
+    /*
+     * Runs `body` in one hold of the file's slot lock, for the account `accountGeneration` names (null when it left): what a
+     * Retry of a save kept aside checks and reserves under, so no close falls between them.
+     */
+    fun <T> withSlot(slot: String, accountGeneration: Long, body: () -> T): T? = Reservations.whileAccount(accountGeneration) { lockOf(slot).withLock(body) }
 
     /* A closed edit: renamed with its save's number (one rename, no room needed); the edit itself if the rename failed. */
     fun close(edit: File, number: Long): File {
