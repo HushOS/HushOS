@@ -245,7 +245,9 @@ extension FamilySync {
                 // to be said) and this one goes on; still unresolved, this one waits, unless `waitsKept` (the handover's billing
                 // step, whose record the next open goes on from once the earlier change lands).
                 switch try await sendKept(groupId, outboxId: call.outboxId, entry: call.entry, only: route, saysLater: true) {
-                case .other, .landed, .stale, .refused: continue
+                // Landed or overtaken: the member list moved, so a request it already satisfies (`unchanged` below) is done.
+                case .landed, .stale: moved = true
+                case .other, .refused: continue
                 case .pending(let words): return waitsKept ? .pending(words) : .waiting(ManageWords.earlierWaiting(summary.name))
                 case .otherKeys: return .waiting(ManageWords.earlierWaiting(summary.name))
                 case .wiped: return .wiped

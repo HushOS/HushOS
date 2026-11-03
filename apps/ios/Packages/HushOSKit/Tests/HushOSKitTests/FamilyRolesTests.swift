@@ -39,6 +39,16 @@ extension OnFakeDrive {
             #expect(saved.verified)
         }
 
+        /* `row` let in (a plain member) and checked on this phone: a verified pin of them, as a promotion needs. */
+        static func letInAndCheck(_ m: Managed, _ row: PendingPerson, email: String) async throws {
+            #expect(try await Self.quickly { try await m.phone.sync.letIn(m.summary, row) } == .landed)
+            guard case .code(let version, let words, _) = try await m.phone.sync.checkCode(m.summary, with: row.userId).code else {
+                throw FamilyFailure(message: "no words")
+            }
+            let ref = FamilyMemberRef(userId: row.userId, email: email, name: row.name)
+            #expect(try await m.phone.sync.checkMatch(m.family.groupId, member: ref, rosterVersion: version, code: words).verified)
+        }
+
         static func roles(_ m: Managed, _ userId: String) async throws -> [String] {
             guard case .accepted(let view) = await m.phone.sync.sync(m.summary) else { throw FamilyFailure(message: "not accepted") }
             return try #require(view.members.first { $0.userId.lowercased() == userId.lowercased() }).roles
@@ -181,11 +191,8 @@ extension OnFakeDrive {
         @Test func aHandoverBlockedBehindAnEarlierChangeForThemGoesOnOnceThatLands() async throws {
             let m = try await Self.organizer()
             defer { m.phone.done() }
-            #expect(try await Self.quickly { try await m.phone.sync.letIn(m.summary, try await m.waitingGrace()) } == .landed)
+            try await Self.letInAndCheck(m, try await m.waitingGrace(), email: FamilyManageTests.graceEmail)
             let grace = m.grace.userId.lowercased()
-            guard case .code(let version, let words, _) = try await m.phone.sync.checkCode(m.summary, with: grace).code else { Issue.record("no words"); return }
-            let ref = FamilyMemberRef(userId: grace, email: FamilyManageTests.graceEmail, name: "Grace Holm")
-            #expect(try await m.phone.sync.checkMatch(m.family.groupId, member: ref, rosterVersion: version, code: words).verified)
             m.server.lock.withLock { m.server.manage.memberAnswers = Array(repeating: Self.noAnswer, count: 9) }
             let granted = try await Self.quickly { try await m.phone.sync.changeRole(m.summary, userId: grace, first: "Grace", change: .grant) }
             guard case .pending = granted else { Issue.record("the grant wasn't kept: \(granted)"); return }
@@ -204,6 +211,57 @@ extension OnFakeDrive {
             #expect(Set(try await Self.roles(m, grace)) == ["billing", "members"])
             #expect(try await !Self.roles(m, m.me).contains("billing"))
             #expect(try Self.handover(m) == nil)
+        }
+
+        /*
+         * Codex #286: a grant kept by a build that noted no operation (an entry from before operations
+         * were noted). Let them manage pressed again sends it, it lands, and the member list then
+         * already says what was asked: said as made. Fails if a kept change of no known operation that
+         * lands leaves the request refused as changing nothing.
+         */
+        @Test func aKeptChangeWithNoOperationThatLandsSatisfiesTheRequest() async throws {
+            let m = try await Self.organizer()
+            defer { m.phone.done() }
+            try await Self.letInAndCheck(m, try await m.waitingGrace(), email: FamilyManageTests.graceEmail)
+            let grace = m.grace.userId.lowercased()
+            let before = m.server.callBodies.count
+            m.server.lock.withLock { m.server.manage.memberAnswers = Array(repeating: Self.noAnswer, count: 3) }
+            guard case .pending = try await Self.quickly({ try await m.phone.sync.changeRole(m.summary, userId: grace, first: "Grace", change: .grant) }) else {
+                Issue.record("the grant wasn't kept"); return
+            }
+            // As an earlier build kept it: no operation beside the entry.
+            let outbox = m.phone.records.folder.appendingPathComponent("outbox", isDirectory: true)
+            let note = try #require(try FileManager.default.contentsOfDirectory(at: outbox, includingPropertiesForKeys: nil).first { $0.pathExtension == "op" })
+            try FileManager.default.removeItem(at: note)
+            #expect(try await Self.quickly { try await m.phone.sync.changeRole(m.summary, userId: grace, first: "Grace", change: .grant) } == .landed)
+            #expect(try await Self.roles(m, grace).contains("members"))
+            #expect(try m.kept.isEmpty)
+            #expect(Set(m.server.callBodies.dropFirst(before)).count == 1, "the kept grant was signed again")
+        }
+
+        /*
+         * Codex #285 round 5: Grace's grant is kept unanswered, then the settings can't be read when
+         * Ada's grant is asked for. The same operation, but not the same person: Ada's is never said
+         * as saved on this device; it waits behind Grace's, nothing kept for it. Fails if a kept call's
+         * failure is reported as another person's request kept.
+         */
+        @Test func anotherPersonsKeptChangeIsNeverThisOnesPending() async throws {
+            let m = try await Self.organizer()
+            defer { m.phone.done() }
+            try await Self.letInAndCheck(m, try await m.waitingGrace(), email: FamilyManageTests.graceEmail)
+            let ada = try await onLargeStack { try FamilyPerson() }
+            m.server.waiting(ada, email: "ada@example.com", name: "Ada Lindqvist")
+            let adaRow = try #require(try await m.phone.sync.waitingToJoin(m.family.groupId).first { $0.userId == ada.userId.lowercased() })
+            try await Self.letInAndCheck(m, adaRow, email: "ada@example.com")
+            m.server.lock.withLock { m.server.manage.memberAnswers = Array(repeating: Self.noAnswer, count: 3) }
+            guard case .pending = try await Self.quickly({ try await m.phone.sync.changeRole(m.summary, userId: m.grace.userId, first: "Grace", change: .grant) }) else {
+                Issue.record("Grace's grant wasn't kept"); return
+            }
+            let kept = try m.kept
+            m.server.lock.withLock { m.server.manage.failSettingsReads = true }
+            let end = try await Self.quickly { try await m.phone.sync.changeRole(m.summary, userId: ada.userId, first: "Ada", change: .grant) }
+            #expect(end == .waiting(ManageWords.earlierWaiting("Lindqvist family")), "Grace's kept grant was said as Ada's")
+            #expect(try m.kept.map(\.entry) == kept.map(\.entry))
         }
 
         /*

@@ -118,6 +118,13 @@ extension DriveStore {
     private func handed(_ to: String, _ end: RoleEnd, summary: GroupSummary, session: Session) async {
         guard current(session) else { return }
         let who = memberNames(summary.id)[to.lowercased()] ?? "They"
+        if end == .checkFirst {
+            // Their pin was no longer verified when it went on (removed on another device): the same check a fresh
+            // Make them the organizer asks for, then they can be asked again.
+            let member = familyDetails[summary.id]?.members.first { $0.userId.lowercased() == to.lowercased() }
+            let ref = FamilyMemberRef(userId: to, email: member?.email ?? "", name: member?.name ?? who)
+            checkFirstAsk = RoleAsk(groupId: summary.id, member: ref, kind: .organizer)
+        }
         sayRole(end, kind: .organizer, who: who)
         await refreshFamily(summary, session: session)
     }

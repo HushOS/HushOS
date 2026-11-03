@@ -294,6 +294,12 @@ extension FamilySync {
                 // The session ended: the app's lost session. Any other failure sends nothing; the call stays kept.
                 if case DriveAPIError.notAuthenticated = error { throw error }
                 if case AuthError.sessionEnded = error { throw error }
+                // Pending only for the caller's own call: whose it is read from the entry (the settings as last read), and
+                // one of anyone else, or that doesn't open, is left alone (Codex #285 round 5), never said as kept for them.
+                if let only {
+                    guard let opened = try? ledger.outboxOpen(groupId: groupId, outboxId: outboxId, userId: userId, entry: entry),
+                          Self.route(of: opened) == only else { return .other }
+                }
                 return .pending(Self.transient(error) ? FamilyWords.noAnswer : FamilyWords.error(error))
             }
             let opened: OutboxCall
