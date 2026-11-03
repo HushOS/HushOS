@@ -523,14 +523,16 @@ extension OnFakeDrive {
             server.objects[try #require(family.photo.currentVersion).id] = family.photoObject
             let manager = TestFamilyDomains()
             let records = FamilyDomainRecords(folder: FileManager.default.temporaryDirectory.appendingPathComponent("family-domains-\(UUID().uuidString)"), activity: .expired)
-            let domains = FamilyFilesDomains(records: records, manager: manager)
+            // Every process reads the one shared keychain: the lifecycle and the source alike.
+            let shared = Shared(nil)
+            let domains = FamilyFilesDomains(records: records, manager: manager, sharedSession: { shared.session })
             let phone = try await family.phone(server, account: account, filesDomains: domains)
+            shared.session = await phone.vault.session
             let owner = AccountOwner(userId: family.member.userId, origin: "https://family.test")
             await domains.accepted(family.groupId, name: "Lindqvist family", workspaces: [family.workspaceId], owner: owner, observed: records.generation(family.groupId),
                                    session: phone.vault.copySession).value
             let clock = Clock()
             let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("family-src-\(UUID().uuidString)", isDirectory: true)
-            let shared = Shared(await phone.vault.session)
             let source = FamilyFilesSource(groupId: family.groupId, vault: phone.vault, sync: phone.sync, records: records, temporary: temporary, now: { clock.now },
                                            sharedSession: { shared.session })
             return Source(family: family, server: server, phone: phone, domains: domains, manager: manager, records: records, clock: clock, source: source,
@@ -706,6 +708,60 @@ extension OnFakeDrive {
             await s.domains.settled()
             #expect(s.records.admission(s.family.groupId, owner: s.owner) == .admitted, "an ended session's sync took the new session's location")
             #expect(s.manager.removals.isEmpty)
+        }
+
+        /*
+         * The same account signs in again in the app (a new token in the shared keychain) while the
+         * extension's sync of the old session still runs: its late definite refusal, written at once
+         * or left pending and written later, lets nothing of the new session's location go. Fails if
+         * a let-go asks only its own process whether its session still stands.
+         */
+        @Test func aLateRefusalAfterASignInElsewhereKeepsTheNewSessionsLocation() async throws {
+            for pendingFirst in [false, true] {
+                let s = try await Self.source()
+                defer { s.phone.done() }
+                let group = s.family.groupId
+                let old = try #require(s.shared.session)
+                let held = pendingFirst ? open(s.records.lockPath, O_RDWR | O_CREAT | O_CLOEXEC, 0o600) : -1
+                if pendingFirst {
+                    #expect(flock(held, LOCK_EX | LOCK_NB) == 0)
+                    s.phone.sync.releases.post(group, FamilySync.Revised(state: .wiped, revision: FamilySync.newestLook()))
+                    await s.domains.settled()
+                    #expect(s.domains.revocationPending(group), "the store took the let-go after all")
+                }
+                s.shared.session = SharedKeychain.Session(origin: old.origin, token: "signed-in-again-\(UUID().uuidString)", userId: old.userId)
+                if pendingFirst {
+                    flock(held, LOCK_UN)
+                    close(held)
+                    #expect(!s.domains.revocationPending(group), "a pending let-go of the old session was kept")
+                } else {
+                    s.phone.sync.releases.post(group, FamilySync.Revised(state: .wiped, revision: FamilySync.newestLook()))
+                }
+                await s.domains.settled()
+                #expect(s.records.admission(group, owner: s.owner) == .admitted, "the old session's refusal took the new session's record (pending first: \(pendingFirst))")
+                if !pendingFirst { #expect(s.manager.removals.isEmpty, "the old session's refusal removed the location") }
+            }
+        }
+
+        /*
+         * The family's folder is re-keyed while Files lists it: the read asks again (never a corrupt
+         * file), and the next one checks the family first, without waiting out the minute, and
+         * answers. Every read shares `serving`'s classifier, so this pins the look-ups too. Fails if
+         * a key change on an ordinary read escapes raw or leaves the cached check standing.
+         */
+        @Test func aKeyChangeOnAnOrdinaryReadIsAskedAgainAndCheckedAtOnce() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            _ = try await s.source.folders()
+            let root = NodeRef(workspaceId: s.family.workspaceId, nodeId: s.family.rootId)
+            try s.server.replaceKeys()
+            do {
+                let children = try await s.source.children(of: root)
+                Issue.record("a listing under keys this device hasn't followed answered \(children.count) items")
+            } catch {
+                #expect(error as? FamilyFilesError == .keyChange, "a key change escaped as \(error)")
+            }
+            #expect(try await s.source.children(of: root).contains { $0.ref == s.family.photo.ref })
         }
 
         /*

@@ -189,14 +189,19 @@ public final class FamilyFilesDomains: @unchecked Sendable {
      * with whose record they take: written again before anything else is decided about the family, and
      * until then its acceptances add nothing and this process's extension calls refuse.
      */
-    private var pending: [String: (owner: AccountOwner?, session: CopySession?)] = [:]
+    private var pending: [String: (owner: AccountOwner?, session: CopySession?, signedIn: SharedKeychain.Session?)] = [:]
     /* The generation each family's pending let-go moved it to once written: what the removal it queued is tagged with. */
     private var landed: [String: UInt64] = [:]
 
-    public init(records: FamilyDomainRecords, manager: any FamilyDomainManaging, temporary: URL = FileManager.default.temporaryDirectory) {
+    /* The session stored for every process now (the shared keychain's), as `FamilyFilesSource` reads it. */
+    let sharedSession: @Sendable () -> SharedKeychain.Session?
+
+    public init(records: FamilyDomainRecords, manager: any FamilyDomainManaging, temporary: URL = FileManager.default.temporaryDirectory,
+                sharedSession: @escaping @Sendable () -> SharedKeychain.Session? = { SharedKeychain.session }) {
         self.records = records
         self.manager = manager
         self.temporary = temporary
+        self.sharedSession = sharedSession
     }
 
     @discardableResult
@@ -275,21 +280,29 @@ public final class FamilyFilesDomains: @unchecked Sendable {
      * what Files kept of it. Only `owner`'s record (nil: whoever's); the generation moves regardless.
      */
     @discardableResult
-    public func letGo(_ groupId: String, owner: AccountOwner?, session: CopySession? = nil) -> Task<Void, Never> {
+    public func letGo(_ groupId: String, owner: AccountOwner?, session: CopySession? = nil, signedIn: SharedKeychain.Session? = nil) -> Task<Void, Never> {
         let groupId = groupId.lowercased()
         // A late let-go of a session that ended (the account signed in again since) touches nothing of the session now.
         if let session, !session.stands { return enqueue {} }
-        let wrote = lock.withLock { () -> UInt64? in
+        enum Outcome { case at(UInt64), stale, pending }
+        let outcome = lock.withLock { () -> Outcome in
             for _ in 0 ..< 3 {
-                switch write(groupId, owner: owner, session: session) {
-                case .at(let generation): return generation
-                case .stale: return nil
+                switch write(groupId, owner: owner, session: session, signedIn: signedIn) {
+                case .at(let generation): return .at(generation)
+                case .stale: return .stale
                 case .refused: continue
                 }
             }
-            pending[groupId] = (owner, session)
+            pending[groupId] = (owner, session, signedIn)
             landed[groupId] = nil
-            return nil
+            return .pending
+        }
+        let wrote: UInt64?
+        switch outcome {
+        // Its session isn't the one signed in now (here or in another process): nothing of the session now is touched.
+        case .stale: return enqueue {}
+        case .at(let generation): wrote = generation
+        case .pending: wrote = nil
         }
         // The location goes whether or not the store took the let-go (Files drops what it holds of it), unless by then the
         // family's record is someone else's (another account, or a session after this one, added the family since) or was
@@ -329,13 +342,22 @@ public final class FamilyFilesDomains: @unchecked Sendable {
         case at(UInt64)
     }
 
-    /* One let-go written: the generation moved and `owner`'s record (nil: whoever's) gone, its copies here with it. */
-    private func write(_ groupId: String, owner: AccountOwner?, session: CopySession?) -> Written {
+    /*
+     * One let-go written: the generation moved and `owner`'s record (nil: whoever's) gone, its copies
+     * here with it. Stale, and nothing written, once its session ended in this process, or once the
+     * session stored for every process isn't `signedIn` (the same account signed in again elsewhere):
+     * both asked under the store's lock, so no acceptance of the session now slips in between.
+     */
+    private func write(_ groupId: String, owner: AccountOwner?, session: CopySession?, signedIn: SharedKeychain.Session?) -> Written {
         var workspaces: [String] = []
         var stale = false
         var generation: UInt64 = 0
         let wrote = records.update { stored in
             if let session, !session.stands {
+                stale = true
+                return
+            }
+            if let signedIn, sharedSession() != signedIn {
                 stale = true
                 return
             }
@@ -360,7 +382,7 @@ public final class FamilyFilesDomains: @unchecked Sendable {
         return lock.withLock {
             guard let held = pending[groupId] else { return false }
             // Written as the session it came from: one that ended since is dropped, never written over the next session's.
-            switch write(groupId, owner: held.owner, session: held.session) {
+            switch write(groupId, owner: held.owner, session: held.session, signedIn: held.signedIn) {
             case .at(let generation):
                 pending[groupId] = nil
                 landed[groupId] = generation
@@ -638,7 +660,7 @@ public actor FamilyFilesSource {
             value = try await body()
         } catch {
             try admit()
-            throw error
+            throw keyChangeChecked(error)
         }
         #if DEBUG
         // Tests: what lands during the body's last await (a revocation from another process).
@@ -652,6 +674,18 @@ public actor FamilyFilesSource {
             throw error
         }
         return value
+    }
+
+    /*
+     * Every read's one classifier for a key change met mid-way (the ledger's, a folder's key or epoch,
+     * `rotating`, `stale`, a folder that doesn't open here yet): no verdict about the item, so Files
+     * asks again (`.keyChange`, never a corrupt file or a deletion), and the family is checked again
+     * on the next call rather than served from a view the key change made stale.
+     */
+    private func keyChangeChecked(_ error: Error) -> Error {
+        guard error as? FamilyFilesError == .keyChange || FamilyFilesError.keyChanging(error) else { return error }
+        checkedAt = nil
+        return FamilyFilesError.keyChange
     }
 
     #if DEBUG
@@ -748,10 +782,7 @@ public actor FamilyFilesSource {
      */
     private func area(_ ref: NodeRef, in view: FamilyView) throws -> FamilyArea {
         guard let area = view.areas.first(where: { $0.workspaceId.lowercased() == ref.workspaceId }) else { throw FamilyFilesError.notInFamily }
-        guard area.openable else {
-            checkedAt = nil
-            throw FamilyFilesError.keyChange
-        }
+        guard area.openable else { throw FamilyFilesError.keyChange }
         return area
     }
 
@@ -865,10 +896,7 @@ public actor FamilyFilesSource {
         for (workspace, folder) in anchor.folders where !open.contains(workspace) {
             // Still listed but not open here yet (a key change between the member list and the folders): nothing of the
             // batch is answered, so the folder keeps its place and its cursor, and the next call checks the family first.
-            if listed.contains(workspace) {
-                checkedAt = nil
-                throw FamilyFilesError.keyChange
-            }
+            if listed.contains(workspace) { throw FamilyFilesError.keyChange }
             // No longer the family's: it leaves the location.
             deleted.append(FamilyFileIds.item(NodeRef(workspaceId: workspace, nodeId: folder.root)))
         }
@@ -882,15 +910,8 @@ public actor FamilyFilesSource {
                 next.folders[workspace] = .init(root: root.id.lowercased(), cursor: snapshotHeads[workspace] ?? 0)
                 continue
             }
-            let feed: Vault.Changes?
-            do {
-                feed = try await vault.familyChanges(in: workspace, since: held.cursor)
-            } catch FamilyFilesError.keyChange {
-                // Nothing of this batch is answered: the anchor stays, and the next call checks the family first.
-                checkedAt = nil
-                throw FamilyFilesError.keyChange
-            }
-            guard let feed else { return nil }
+            // A key change met here answers nothing of the batch: the anchor stays, and the next call checks the family first (`serving`).
+            guard let feed = try await vault.familyChanges(in: workspace, since: held.cursor) else { return nil }
             updated += feed.updated
             deleted += feed.deleted.map { FamilyFileIds.item(NodeRef(workspaceId: workspace, nodeId: $0)) }
             more = more || feed.hasMore

@@ -239,8 +239,11 @@ public actor FamilySync: FamilyJudge {
         self.filesDomains = domains
         if let domains {
             // Bound to the session this sync belongs to: a late refusal of an ended session lets nothing of the next one go.
+            // Asked under the store's lock against the shared keychain too: another process's sign-in (the same account
+            // again, a new token) ends this session for every process before this one learns of it.
             let born = vault.copySession
-            let lettingGo: @Sendable (String, UInt64) -> Void = { groupId, _ in domains.letGo(groupId, owner: owner, session: born) }
+            let signedIn = vault.session
+            let lettingGo: @Sendable (String, UInt64) -> Void = { groupId, _ in domains.letGo(groupId, owner: owner, session: born, signedIn: signedIn) }
             releases = FamilyReleases(lettingGo: lettingGo)
         } else {
             releases = FamilyReleases()
