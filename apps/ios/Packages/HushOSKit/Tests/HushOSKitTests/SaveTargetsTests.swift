@@ -75,6 +75,48 @@ extension OnFakeDrive {
         }
 
         /*
+         * Codex #283, 1: Maya's family is no longer listed by the time a fresh process seals her shared file into it, so the
+         * queue's family seal refuses it and removes its folder. The sheet still holds the file, and saving it into Files
+         * then works. Fails if a refused family seal takes the sheet's only copy with it.
+         */
+        @Test func aFamilySealRefusedMidwayLeavesTheFileToSaveInFiles() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let first = try await family.phone(server)
+            let folder = try #require(try await sheet(first, family).listFamilies().first?.folders.first)
+            first.done()
+            let later = try await family.phone(server, records: first.records)
+            defer { later.done() }
+            let targets = sheet(later, family)
+            let staging = Unbacked.folder(Unbacked.transfers).appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+            let copy = staging.appendingPathComponent("receipt.txt")
+            let bytes = Data("receipt, shared".utf8)
+            try bytes.write(to: copy)
+            server.listed = false
+            let refused = Unbacked.folder(Unbacked.transfers).appendingPathComponent(UUID().uuidString, isDirectory: true)
+            do {
+                _ = try await StagedSave.seal(copy, in: refused, keep: true) { _ in
+                    var upload = FamilyUpload(family: try #require(folder.family), folderId: folder.id, name: "receipt.txt", mime: "text/plain",
+                                              replacingId: nil, replacingVersionId: nil)
+                    try await targets.sealFamily(&upload, in: refused, thumbnail: nil)
+                    return upload
+                }
+                Issue.record("sealed into a family that no longer lists Maya")
+            } catch {
+                #expect(SaveTargets.notInFamily(error))
+            }
+            #expect(try Data(contentsOf: copy) == bytes, "the sheet's file is still there to save elsewhere")
+            let root = try await later.vault.rootId()
+            let into = Unbacked.folder(Unbacked.transfers).appendingPathComponent(UUID().uuidString, isDirectory: true)
+            let sealed = try await StagedSave.seal(copy, in: into) { content in
+                try await later.vault.sealUpload(fileURL: content, name: "receipt.txt", mime: "text/plain", in: root, replacing: nil, thumbnail: nil, into: into)
+            }
+            #expect(sealed.family != true)
+            #expect(sealed.workspaceId.lowercased() != family.workspaceId.lowercased())
+        }
+
+        /*
          * Route 2 stops listing the family after the sheet listed it (its removal reached the list first): the folder isn't
          * opened to save into. Fails if a family the server no longer lists is still saved into.
          */
