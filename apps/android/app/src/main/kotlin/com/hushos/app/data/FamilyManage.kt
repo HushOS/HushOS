@@ -1030,8 +1030,17 @@ fun FamilySync.handOver(summary: GroupSummary, to: String, first: String, names:
         }
         // Confirmed again for the same person: the record stays as it is (`staged` once billing's call is kept), so a kept
         // call later refused or overtaken is never taken for one never staged, and billing signed afresh at the next open.
-        if (outbox.handover(userId, summary.id)?.to?.equals(to, ignoreCase = true) != true) outbox.markHandover(userId, summary.id, to)
-        giveThenStepDown(summary, to, first, names)
+        val created = outbox.handover(userId, summary.id)?.to?.equals(to, ignoreCase = true) != true
+        if (created) outbox.markHandover(userId, summary.id, to)
+        try {
+            giveThenStepDown(summary, to, first, names)
+        } catch (failed: Exception) {
+            // A read before billing was staged threw (the screen says it couldn't change that): a record this attempt made and
+            // never staged goes with it, so the next open never hands the organizer role over unasked. One that was there
+            // already (a resumed or re-confirmed handover) stays as it was.
+            if (created && outbox.handover(userId, summary.id)?.staged == false) outbox.clearHandover(userId, summary.id)
+            throw failed
+        }
     }
 }
 

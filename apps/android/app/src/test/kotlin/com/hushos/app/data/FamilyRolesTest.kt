@@ -315,6 +315,41 @@ class FamilyRolesTest {
     }
 
     /*
+     * Make them the organizer whose settings read throws before billing is staged: the screen says it couldn't change that,
+     * and the record this attempt made goes with it, so the next open hands nothing over. A handover already kept (staged,
+     * billing's call unanswered) confirmed again over the same failure stays as it was. Fails if a failed attempt leaves an
+     * unstaged record that the next open then finishes, making someone the organizer nobody confirmed.
+     */
+    @Test
+    fun aHandoverThatFailsBeforeStagingLeavesNoRecord() {
+        val phone = phone(organizer = true)
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        // The sync's read of the identities answers; the staging's own read (route 6) then fails, before anything is signed.
+        family.identityReadsLeft = 1
+        try {
+            assertTrue("the handover didn't fail before staging", runCatching { phone.sync.handOver(summary, graceId, "Grace") }.isFailure)
+        } finally {
+            family.identityReadsLeft = -1
+        }
+        assertNull("a failed handover left its record", phone.sync.outbox.handover(family.member.id, family.groupId))
+        assertTrue(family.memberCalls.isEmpty())
+        phone.sync.resumeOutbox(summary, names = { "Grace" })
+        assertTrue("the next open handed over a handover nobody confirmed", family.memberCalls.isEmpty())
+        assertTrue("billing" !in rolesOf(phone, graceId))
+        // One already kept, confirmed again over the same failure: left as it was.
+        answer(3, 503)
+        assertTrue(phone.sync.handOver(summary, graceId, "Grace") is RoleEnd.Pending)
+        family.identityReadsLeft = 1
+        try {
+            phone.sync.handOver(summary, graceId, "Grace")
+        } catch (_: Exception) {
+        } finally {
+            family.identityReadsLeft = -1
+        }
+        assertEquals(FamilyOutbox.KeptHandover(graceId, staged = true), phone.sync.outbox.handover(family.member.id, family.groupId))
+    }
+
+    /*
      * The half-finished handover: billing given to Grace, then the app stops before Maya lets go of it (here, her
      * connection drops). On relaunch the family page's resume finishes it: one organizer, Grace, and the person told.
      * Fails if a handover stopped in the middle leaves two organizers for good.

@@ -175,6 +175,8 @@ class FamilyFixture(val server: FakeDrive) {
     /* The next this many route 5 reads answer 503, then it serves again: a connection that drops for a moment. */
     @Volatile var rosterFailures = 0
     @Volatile var rostersFail = false
+    /* Route 6 answers this many more reads, then fails every one with a 503 while it is 0; -1 never fails. */
+    @Volatile var identityReadsLeft = -1
     @Volatile var groupState = "active"
     /* Maya's roles as route 2 lists them (`members` once Sam makes her a manager). */
     @Volatile var listedRoles: List<String> = emptyList()
@@ -264,8 +266,12 @@ class FamilyFixture(val server: FakeDrive) {
                     .put("signerKeys", JSONObject(signerKeys)).put("head", JSONObject().put("version", served.size).put("digest", rosterDigest(served.last().statement)))
                     .put("next", JSONObject.NULL)
             }
-            method == "GET" && path == "groups/$groupId/identities" -> if (notMember) notMemberAnswer() else
+            method == "GET" && path == "groups/$groupId/identities" && identityReadsLeft == 0 ->
+                503 to JSONObject().put("message", "Drive is temporarily unavailable. Please try again.")
+            method == "GET" && path == "groups/$groupId/identities" -> if (notMember) notMemberAnswer() else {
+                if (identityReadsLeft > 0) identityReadsLeft--
                 200 to JSONObject().put("identities", JSONArray().put(identity(creator)).put(identity(member)).apply { joined.forEach { put(identity(it)) } }).put("next", JSONObject.NULL)
+            }
             method == "PUT" && path == "groups/$groupId/areas/$workspaceId/self-grant" -> { selfGrant = body.getJSONObject("grant"); 200 to JSONObject() }
             method == "GET" && path == "groups/$groupId/key-seal" -> keySeal?.let { 200 to it }
                 ?: (409 to JSONObject().put("code", "no-seal").put("message", "Nobody has sealed the current group key to you yet."))
