@@ -46,7 +46,7 @@ pub struct Family {
 pub fn area_key(index: usize, version: u64) -> Vec<u8> {
     pattern(32, (120 + index as u64 * 2 + version - 1) as u8)
 }
-fn root_key(index: usize, version: u64) -> Vec<u8> {
+pub fn root_key(index: usize, version: u64) -> Vec<u8> {
     pattern(32, (140 + index as u64 * 2 + version - 1) as u8)
 }
 
@@ -462,9 +462,16 @@ fn history_of(doc: &Value) -> Vec<SignedGroupStatement> {
     doc["family"]["rosters"].as_array().unwrap().iter().map(signed_of).collect()
 }
 
-/* A grant opened by its grantee to the key of the folder at its version, by `granter`; its verdict entry. */
-fn open_grant(doc: &Value, chain: &Arc<AcceptedRosters>, grant: &Value, granter: &Person) -> Value {
-    let f = family();
+/* The latest key version the family's history lists for A1, A2 and A3: a grant above it is a call's new key. */
+const LISTED: [u64; 3] = [1, 1, 2];
+
+/*
+ * A grant opened by its grantee, by `granter`: the folder's key at its
+ * version. One the family's history lists must be the family's fixed key; a
+ * call's new key (Core 5b) is checked by `area_grant_open` against the
+ * commitment the call's roster names, and the caller compares the grantees' keys.
+ */
+pub fn grant_key(doc: &Value, chain: &Arc<AcceptedRosters>, grant: &Value, granter: &Person) -> Vec<u8> {
     let grantee = person_of(grant["granteeUserId"].as_str().unwrap());
     let workspace_id = s(grant, "workspaceId");
     let version = grant["workspaceKeyVersion"].as_u64().unwrap();
@@ -495,9 +502,24 @@ fn open_grant(doc: &Value, chain: &Arc<AcceptedRosters>, grant: &Value, granter:
         grantee.keys.clone(),
     )
     .expect("the grant opens");
-    assert_eq!(key.to_vec(), area_key(index, version), "the grant is of that folder's key at that version");
-    let _ = f;
-    json!({ "userId": grantee.user_id, "workspaceId": workspace_id, "version": version })
+    if version <= LISTED[index] {
+        assert_eq!(
+            key.to_vec(),
+            area_key(index, version),
+            "the grant is of that folder's key at that version"
+        );
+    }
+    key.to_vec()
+}
+
+/* A grant opened by its grantee to the key of the folder at its version, by `granter`; its verdict entry. */
+fn open_grant(doc: &Value, chain: &Arc<AcceptedRosters>, grant: &Value, granter: &Person) -> Value {
+    grant_key(doc, chain, grant, granter);
+    json!({
+        "userId": s(grant, "granteeUserId"),
+        "workspaceId": s(grant, "workspaceId"),
+        "version": grant["workspaceKeyVersion"].as_u64().unwrap(),
+    })
 }
 
 /*
@@ -598,7 +620,12 @@ pub fn route_json(route: &ChainRoute) -> Value {
     match route {
         ChainRoute::Admit { user_id } => json!({ "kind": "admit", "userId": user_id }),
         ChainRoute::Member { user_id } => json!({ "kind": "member", "userId": user_id }),
-        ChainRoute::Remove { user_id } => json!({ "kind": "remove", "userId": user_id }),
+        ChainRoute::Remove { user_id, ends_lapsed } if ends_lapsed.is_empty() => {
+            json!({ "kind": "remove", "userId": user_id })
+        }
+        ChainRoute::Remove { user_id, ends_lapsed } => {
+            json!({ "kind": "remove", "userId": user_id, "endsLapsed": ends_lapsed })
+        }
         ChainRoute::Create => json!({ "kind": "create" }),
         ChainRoute::Rosters => json!({ "kind": "rosters" }),
         ChainRoute::Areas => json!({ "kind": "areas" }),

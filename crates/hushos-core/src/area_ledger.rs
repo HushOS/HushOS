@@ -1316,7 +1316,7 @@ enum Rotation<T> {
     Fresh { key_envelope: Vec<u8>, old: Zeroizing<Vec<u8>>, fresh: Zeroizing<Vec<u8>>, result: T },
 }
 
-fn area_write_version_of(chain: &AcceptedRosters, workspace_id: &str) -> Option<u64> {
+pub(crate) fn area_write_version_of(chain: &AcceptedRosters, workspace_id: &str) -> Option<u64> {
     if chain.retired_areas.iter().any(|retired| retired == workspace_id) {
         return None;
     }
@@ -2188,6 +2188,71 @@ impl AreaLedger {
     /* The family's committed chain, if any: none after a refusal or a fork (held_back). */
     pub(crate) fn committed_chain(&self, group_id: &str) -> Option<Arc<AcceptedRosters>> {
         self.lock().chains.get(group_id).cloned()
+    }
+
+    /*
+     * A family folder root's key as it is now, for its roster rotation (the
+     * worker's currentKeyOf): the key this device holds for it at its epoch,
+     * else its served envelope opened under the area key at the version it was
+     * wrapped under (which this device must hold).
+     */
+    pub(crate) fn rotation_root_key(
+        &self,
+        workspace_id: &str,
+        root: &crate::rotation_records::RotatingNode,
+    ) -> CoreResult<Zeroizing<Vec<u8>>> {
+        let state = self.lock();
+        if let Some(held) =
+            state.node_key(workspace_id, &root.node_id).filter(|held| held.epoch == root.key_epoch)
+        {
+            return Ok(held.key.clone());
+        }
+        let area_key = state
+            .workspace_keys
+            .get(workspace_id)
+            .and_then(|held| held.keys.get(&root.wrapped_parent_key_epoch))
+            .cloned()
+            .ok_or_else(|| input(crate::roster_calls::NOT_OPENED_FOLDERS))?;
+        drop(state);
+        let ctx = NodeKeyContext {
+            workspace_id: workspace_id.into(),
+            node_id: root.node_id.clone(),
+            parent_id: root.parent_id.clone(),
+            parent_key_epoch: root.wrapped_parent_key_epoch,
+            key_epoch: root.key_epoch,
+        };
+        Ok(Zeroizing::new(crate::drive::node_open(ctx, area_key.to_vec(), root.key_envelope.clone())?))
+    }
+
+    /* Tests only: a node's previous key held as this device's own (`own`) or as a served envelope gave it. */
+    #[cfg(test)]
+    pub(crate) fn hold_previous_node_key(
+        &self,
+        workspace_id: &str,
+        node_id: &str,
+        key: Vec<u8>,
+        epoch: u64,
+        own: bool,
+    ) {
+        self.lock().remember_prev_node_key(workspace_id, node_id, key, epoch, own);
+    }
+
+    /*
+     * A node's previous key as this device opened it itself (the worker's
+     * previousNodeKey): never one a served envelope gave, and only at `epoch`.
+     * What a previous-root repair may wrap again; none while the family is held back.
+     */
+    pub(crate) fn own_previous_node_key(
+        &self,
+        workspace_id: &str,
+        node_id: &str,
+        epoch: u64,
+    ) -> Option<Zeroizing<Vec<u8>>> {
+        let state = self.lock();
+        state
+            .prev_node_key(workspace_id, node_id)
+            .filter(|held| held.own && held.epoch == epoch)
+            .map(|held| held.key.clone())
     }
 
     /* The unlocked account's root, as open_account held it; none while locked. */

@@ -40,6 +40,7 @@ import {
 import { deriveId } from './ids';
 import { decode, encode } from './keys';
 import { outboxStep, readOutboxEntry } from './outbox';
+import { rekeyNode } from './rotation-records';
 import { keyCommitment } from './pins';
 import type { ContactPin } from './contacts';
 import { fingerprintOfKeys, keyDigest } from './fingerprint';
@@ -95,7 +96,10 @@ export type Family = {
 /* The key the family gives an area at a version (index 0 to 2: A1, A2, A3), as the core's area_key. */
 export const areaKey = (index: number, version: number) =>
     pattern(32, 120 + index * 2 + version - 1);
-const rootKey = (index: number, version: number) => pattern(32, 140 + index * 2 + version - 1);
+export const rootKey = (index: number, version: number) =>
+    pattern(32, 140 + index * 2 + version - 1);
+/* The latest key version the family's history lists for A1, A2 and A3: a grant above it is a call's new key. */
+const LISTED = [1, 1, 2];
 export const OTHER_FAMILY = '0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b';
 export const OTHER_ID = 'f0f0f0f0-0000-4000-8000-000000000001';
 
@@ -266,6 +270,25 @@ export async function session(
         granteeSecrets: () => who.secrets,
         ledger,
         workspaceKey: ledger.workspaceKey,
+        // A family folder's rotation (Core 5b), as session.ts gives the worker these.
+        currentKeyOf: ledger.currentKeyOf,
+        rekeyNode: (input: Omit<Parameters<typeof rekeyNode>[0], 'ownerKind' | 'signer'>) =>
+            rekeyNode({
+                ...input,
+                ownerKind: 'group',
+                signer: () => ({
+                    userId: who.userId,
+                    signingKey: who.signer.signingKey,
+                    hybridKeys: () => ({
+                        signingKey: who.signer.signingKey.slice(),
+                        mlDsaSecretKey: who.signer.mlDsaSecretKey.slice(),
+                    }),
+                }),
+            }),
+        previousNodeKey(workspaceId: string, nodeId: string, epoch: number) {
+            const held = ledger.prevNodeKey(workspaceId, nodeId);
+            return held && held.own && held.epoch === epoch ? held.key.slice() : undefined;
+        },
     } as unknown as GroupHost;
     const worker = createGroupSession(host);
     let id = 0;
@@ -574,8 +597,18 @@ function personOf(f: Family, userId: string) {
 const firstKeysOf = (doc: Json): GroupPublicKey => doc.family.firstKeys;
 const historyOf = (doc: Json) => (doc.family.rosters as SignedStatementWire[]).map(unwire);
 
-/* A grant opened by its grantee to the folder's key at its version, granted by `granter`: its verdict entry. */
-async function openGrant(doc: Json, chain: AcceptedRosters, grant: GrantWire, granter: Person) {
+/*
+ * A grant opened by its grantee, granted by `granter`: the folder's key at its
+ * version. One the family's history lists must be the family's fixed key; a
+ * call's new key (Core 5b) is checked by openAreaGrant against the commitment
+ * the call's roster names, and the caller compares the grantees' keys.
+ */
+export async function grantKey(
+    doc: Json,
+    chain: AcceptedRosters,
+    grant: GrantWire,
+    granter: Person,
+): Promise<Uint8Array> {
     const f = await family();
     const grantee = personOf(f, grant.granteeUserId);
     const index = (doc.family.areas as Json[]).findIndex(
@@ -602,8 +635,18 @@ async function openGrant(doc: Json, chain: AcceptedRosters, grant: GrantWire, gr
             grantee: grantee.secrets,
         },
     );
-    if (encode(key) !== encode(areaKey(index, grant.workspaceKeyVersion)))
+    if (
+        grant.workspaceKeyVersion <= LISTED[index]! &&
+        encode(key) !== encode(areaKey(index, grant.workspaceKeyVersion))
+    )
         throw new Error('the grant is not of that folder’s key at that version');
+    return key;
+}
+
+/* A grant opened by its grantee to the folder's key at its version: its verdict entry. */
+async function openGrant(doc: Json, chain: AcceptedRosters, grant: GrantWire, granter: Person) {
+    const grantee = personOf(await family(), grant.granteeUserId);
+    await grantKey(doc, chain, grant, granter);
     return {
         userId: grantee.userId,
         workspaceId: grant.workspaceId,

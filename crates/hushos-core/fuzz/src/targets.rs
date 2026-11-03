@@ -677,6 +677,8 @@ pub fn pins(value: &Value) -> Option<Value> {
         "member_join_code" => return member_join_code_kind(value),
         "roster_call" => return roster_call_kind(value),
         "roster_call_session" => return roster_call_session_kind(value),
+        "removal_call" => return removal_call_kind(value),
+        "previous_root" => return previous_root_kind(value),
         "settings" => return settings_kind(value),
         "area_open" => return area_open_kind(value),
         "pair_code" => return pair_code_kind(value),
@@ -1782,6 +1784,94 @@ fn roster_call_kind(value: &Value) -> Option<Value> {
             ok(verdict(&doc, &route, &body))
         }
     })
+}
+
+/*
+ * One removal, key replacement or folder deletion by person 1 of the core's
+ * roster-call family (Core 5b): `op` as the shared fixtures write it (`kind`
+ * remove with `who` 1 to 5, or markLeft with `who` one to three of them, each
+ * with an optional `rotate` of up to four folder indexes 0 to 2; rotate or
+ * retire with `area` 0 to 2; `noArea` to leave the folders unopened). The
+ * verdict is the body as every member reads it, what its folders open to and
+ * the documents carried on empty, or a refusal. Invariants (the verdict
+ * asserts them): each rotated folder's new key granted alike to all who stay
+ * and committed to by the roster, the root's new and old keys, the self-grant
+ * and every document opening under it.
+ */
+fn removal_call_kind(value: &Value) -> Option<Value> {
+    use crate::removal_calls::{removal_run, removal_verdict, replaced_json};
+    let op = value.get("op")?.as_object()?;
+    let kind = op.get("kind")?.as_str()?;
+    let person = |v: &Value| shape::unsigned(v).filter(|n| (1..=5).contains(n));
+    let area = |v: &Value| shape::unsigned(v).filter(|n| *n <= 2);
+    let mut clean = serde_json::Map::new();
+    clean.insert("kind".into(), json!(kind));
+    match kind {
+        "remove" => {
+            clean.insert("who".into(), json!(person(op.get("who")?)?));
+        }
+        "markLeft" => {
+            let who = op.get("who")?.as_array()?;
+            if who.is_empty() || who.len() > 3 {
+                return None;
+            }
+            let who: Option<Vec<u64>> = who.iter().map(person).collect();
+            clean.insert("who".into(), json!(who?));
+        }
+        "rotate" | "retire" => {
+            clean.insert("area".into(), json!(area(op.get("area")?)?));
+        }
+        _ => return None,
+    }
+    if let Some(rotate) = op.get("rotate").filter(|r| !r.is_null()) {
+        let rotate = rotate.as_array()?;
+        if !matches!(kind, "remove" | "markLeft") || rotate.len() > 4 {
+            return None;
+        }
+        let rotate: Option<Vec<u64>> = rotate.iter().map(area).collect();
+        clean.insert("rotate".into(), json!(rotate?));
+    }
+    match op.get("noArea") {
+        None | Some(Value::Null) => {}
+        Some(Value::Bool(no)) => {
+            clean.insert("noArea".into(), json!(no));
+        }
+        Some(_) => return None,
+    }
+    let op = Value::Object(clean);
+    Some(match removal_run(&op) {
+        Err(_) => refused(),
+        Ok(call) => {
+            let body: Value = serde_json::from_str(&call.body).unwrap();
+            let doc = json!({ "family": crate::roster_calls::family_json() });
+            let route = crate::roster_calls::route_json(&call.route);
+            ok(
+                json!({ "verdict": removal_verdict(&doc, &route, &body), "replaced": replaced_json(&call.replaced) }),
+            )
+        }
+    })
+}
+
+/*
+ * Route 25's previous envelope of a family folder's root, checked on person 1
+ * of the core's roster-call family (Core 5b, `previous_root_repair`): `area` 0
+ * to 2, the `envelope` each twin seals (none, the root's previous key, that
+ * key under the plain node label, or junk), and the version it claims to be
+ * under. The verdict is none, opens, cannot (or repair), or a refusal.
+ */
+fn previous_root_kind(value: &Value) -> Option<Value> {
+    use crate::removal_calls::{previous_envelope, previous_root_run};
+    let area = shape::unsigned(value.get("area")?).filter(|n| *n <= 2)?;
+    let envelope = value.get("envelope")?.as_str()?;
+    if !["none", "previous", "node", "junk"].contains(&envelope) {
+        return None;
+    }
+    let mut spec = json!({ "area": area, "envelope": envelope });
+    if let Some(at) = value.get("prevParentKeyEpoch").filter(|at| !at.is_null()) {
+        spec["prevParentKeyEpoch"] = json!(shape::unsigned(at).filter(|n| *n <= 1000)?);
+    }
+    let outcome = previous_root_run(&spec, previous_envelope(&spec));
+    Some(if outcome["status"] == json!("refused") { refused() } else { ok(outcome) })
 }
 
 /*

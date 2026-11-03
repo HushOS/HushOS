@@ -658,6 +658,83 @@ describe('the route policy and departures', () => {
         });
     });
 
+    test('a removal that leaves a live area unrotated is refused as every member refuses it, and lands with every area rotated', async () => {
+        const fam = await family();
+        const second = await areaCall(fam);
+        await groups.createArea(fam.organizer.userId, fam.groupId, second);
+        const secondId = second.area.workspaceId;
+        const plain = await member();
+        await accepted(fam, plain);
+        const admission = await nextRoster(fam, fam.organizer, [
+            ...entries(fam.h),
+            plain.who.entry([]),
+        ]);
+        await groups.admit(fam.organizer.userId, fam.groupId, plain.userId, {
+            ...admission.call,
+            grants: await Promise.all(
+                [fam.areaId, secondId].map((workspaceId) =>
+                    grantWire(
+                        fam.groupId,
+                        workspaceId,
+                        1,
+                        fam.organizer.who,
+                        plain.who,
+                        admission.at,
+                    ),
+                ),
+            ),
+        });
+        const before = entries(fam.h).find((entry) => entry.userId === plain.userId)!;
+        const leaving = withEntry(fam.h, { ...before, status: 'left' });
+        // The removal with the rotation and grants of `rotated` only, each new key its own.
+        const removal = async (rotated: string[]) => {
+            const signed = await nextRoster(fam, fam.organizer, leaving, {
+                areas: await Promise.all(
+                    [...rotated].sort().map(async (workspaceId) => ({
+                        workspaceId,
+                        workspaceKeyVersion: 2,
+                        commitment: await areaKeyCommitment(randomBytes(32)),
+                    })),
+                ),
+            });
+            return groups.removeMember(fam.organizer.userId, fam.groupId, plain.userId, {
+                ...signed.call,
+                rotations: await Promise.all(
+                    rotated.map((workspaceId) => rotationWire(workspaceId, fam.organizer.who, 1)),
+                ),
+                grants: await Promise.all(
+                    rotated.map((workspaceId) =>
+                        grantWire(
+                            fam.groupId,
+                            workspaceId,
+                            2,
+                            fam.organizer.who,
+                            fam.organizer.who,
+                            signed.at,
+                        ),
+                    ),
+                ),
+            });
+        };
+        const rostersBefore = await rosterCount(fam.groupId);
+        // The second area left under the key the removed member still holds: no member would
+        // take that roster, so the server stores none of it.
+        expect(await refusal(removal([fam.areaId]))).toMatchObject({
+            code: 'invalid',
+            data: { reason: 'roster-chain' },
+        });
+        fam.h.rosters.pop();
+        fam.h.statements.pop();
+        expect(await rosterCount(fam.groupId)).toBe(rostersBefore);
+        expect(await groups.getGroup(plain.userId, fam.groupId)).toBeTruthy();
+        expect(await removal([fam.areaId, secondId])).toMatchObject({
+            version: rostersBefore + 1,
+        });
+        expect(await refusal(groups.getGroup(plain.userId, fam.groupId))).toMatchObject({
+            code: 'not-member',
+        });
+    });
+
     test("a deleted account's departure is marked left with no identity left to serve", async () => {
         const fam = await family();
         const plain = await member();
