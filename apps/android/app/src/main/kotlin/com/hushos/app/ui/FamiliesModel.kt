@@ -5,6 +5,9 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.hushos.app.data.FamilyRemovedNow
+import com.hushos.app.data.deleteFolder
+import com.hushos.app.data.removeMember
+import com.hushos.app.data.runDue
 import com.hushos.app.data.FamilyState
 import com.hushos.app.data.FamilySync
 import com.hushos.app.data.FamilyVerdict
@@ -165,6 +168,24 @@ data class WaitingRow(val busy: String? = null, val error: String? = null, val k
  * way (a second press sends nothing), the lapsed plans the server named (confirmed by id on the next press), and the
  * refusal's words.
  */
+/*
+ * Remove from family on screen (the web's RemoveDialog): asked once, then a sheet that shows the removal going hold, finish
+ * (only when an earlier key change was running), remove; when someone paused this manager's changes it says so, and when
+ * that someone is the person being removed (they manage the family too), it offers to stop them managing first.
+ */
+data class RemovalSheet(val groupId: String, val member: com.hushos.app.data.FamilyMemberRef, val phase: RemovalPhase)
+sealed interface RemovalPhase {
+    data object Confirm : RemovalPhase
+    /* A lapsed plan they pay for ends with the removal: asked first, nothing changed yet. */
+    data class ConfirmPlan(val line: String, val ids: List<String>, val demote: Boolean) : RemovalPhase
+    data class Running(val step: com.hushos.app.data.RemovalStep, val demote: Boolean, val finished: Boolean) : RemovalPhase
+    data class Done(val end: com.hushos.app.data.RemovalEnd, val demoted: Boolean, val finished: Boolean) : RemovalPhase
+    data class Error(val words: String) : RemovalPhase
+}
+
+/* Delete family folder's confirmation on screen: which folder, and the request under way or what it was refused with. */
+data class FolderAsk(val groupId: String, val workspaceId: String, val name: String, val busy: Boolean = false, val error: String? = null)
+
 data class LeaveAsk(val groupId: String, val busy: Boolean = false, val plans: List<com.hushos.app.data.FamilyLapsedPlan> = emptyList(), val error: String? = null)
 
 /* A family folder's key change as its family's page shows it: how many items this phone re-keyed, and why it stopped. */
@@ -284,7 +305,36 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
         }
         if (ends.values.any { it == com.hushos.app.data.CallEnd.Wiped }) return
         if (handedOver || ends.values.any { it == com.hushos.app.data.CallEnd.Landed || it == com.hushos.app.data.CallEnd.Stale }) refreshFamily(summary, session = s)
+        runDue(summary, names, s)
         reloadManaged(groupId, s)
+    }
+
+    /* Families whose due work (the departed marked left, folders given new keys) runs on this phone now. */
+    val dueRunning = mutableStateMapOf<String, Boolean>()
+
+    /*
+     * What route 3 says is due, done by this manager's phone after the outbox (the web's runDue): the departed marked left,
+     * folders owed new keys given them, a previous top-folder key repaired. Refusals are said; the family and its members
+     * are read again once anything landed, so the page's left-due notice goes.
+     */
+    private suspend fun runDue(summary: GroupSummary, names: (String) -> String?, s: FamilySession) {
+        if (dueRunning[summary.id] == true) return
+        dueRunning[summary.id] = true
+        val done = try {
+            gate.run(s) { s.owner.families.runDue(summary, names) } ?: return
+        } finally {
+            dueRunning.remove(summary.id)
+        }
+        if (!gate.current(s)) return
+        val did = done.getOrElse { error ->
+            error.rethrowIfCancelled()
+            if (error is NotAuthenticated) { model.lostSession(); return }
+            if (!FamilySync.unanswered(error)) model.notice(FamilyWords.error(error), untilRead = false)
+            return
+        }
+        did.said.distinct().forEach { model.notice(it, untilRead = true) }
+        if (did.markedLeft || did.rotated > 0) refreshFamily(summary, session = s)
+        loadMembers(summary.id, s)
     }
 
     /*
@@ -448,6 +498,105 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                 is com.hushos.app.data.RoleEnd.Refused -> model.notice("Couldn’t change that. ${outcome.words}", untilRead = false)
                 com.hushos.app.data.RoleEnd.CheckFirst -> checkFirst = ask
                 com.hushos.app.data.RoleEnd.Wiped -> refreshFamilies(force = true, session = s)
+            }
+        }
+    }
+
+    /* Remove from family's sheet, if one is open, and Delete family folder's confirmation. */
+    var removal by mutableStateOf<RemovalSheet?>(null)
+        private set
+    var deletingFolder by mutableStateOf<FolderAsk?>(null)
+        private set
+
+    /* Remove from family from a member's row: asked once first. */
+    fun askRemove(groupId: String, member: com.hushos.app.data.FamilyMemberRef) {
+        if (removal?.phase is RemovalPhase.Running) return
+        removal = RemovalSheet(groupId, member, RemovalPhase.Confirm)
+    }
+
+    /* Closed, never while the removal runs (it goes on in the families' scope regardless). */
+    fun dismissRemove() { if (removal?.phase !is RemovalPhase.Running) removal = null }
+
+    /*
+     * The removal, in the families' scope: each step shown as it starts; a lapsed plan it would end is asked about first;
+     * whatever it came to stays on the sheet. `demote` stops them managing the family first (the way out of their hold).
+     */
+    fun runRemove(demote: Boolean, endsLapsed: List<String> = emptyList()) {
+        val sheet = removal ?: return
+        if (sheet.phase is RemovalPhase.Running) return
+        val summary = list?.firstOrNull { it.id == sheet.groupId } ?: return
+        val s = begin() ?: return
+        val who = com.hushos.app.data.firstNameOf(sheet.member.name)
+        var finished = false
+        fun shown(phase: RemovalPhase) { if (removal?.groupId == sheet.groupId && removal?.member?.userId == sheet.member.userId) removal = sheet.copy(phase = phase) }
+        shown(RemovalPhase.Running(if (demote) com.hushos.app.data.RemovalStep.DEMOTE else com.hushos.app.data.RemovalStep.HOLD, demote, false))
+        supersedeLoads(sheet.groupId)
+        model.familyScope.launch {
+            val result = gate.run(s) {
+                s.owner.families.removeMember(summary, sheet.member.userId, who, demote, endsLapsed, ::memberName) { step ->
+                    if (step == com.hushos.app.data.RemovalStep.FINISH) finished = true
+                    // Only while it still runs: a step that arrives after the outcome never covers it.
+                    val now = finished
+                    model.familyScope.launch { if (gate.current(s) && removal?.phase is RemovalPhase.Running) shown(RemovalPhase.Running(step, demote, now)) }
+                }
+            } ?: return@launch
+            if (!gate.current(s)) return@launch
+            val end = result.getOrElse { error ->
+                error.rethrowIfCancelled()
+                if (error is NotAuthenticated) { removal = null; model.lostSession(); return@launch }
+                shown(RemovalPhase.Error(FamilyWords.error(error)))
+                refreshFamily(summary, session = s)
+                return@launch
+            }
+            when (end) {
+                is com.hushos.app.data.RemovalEnd.EndsLapsed ->
+                    shown(RemovalPhase.ConfirmPlan(com.hushos.app.data.FamilyLapsedPlan.endsWhenRemoved(summary.name, end.plans, who), end.plans.map { it.id }, demote))
+                else -> {
+                    shown(RemovalPhase.Done(end, demote, finished))
+                    if (end is com.hushos.app.data.RemovalEnd.Removed) end.cleared.distinct().forEach { model.notice(it, untilRead = true) }
+                }
+            }
+            if (end == com.hushos.app.data.RemovalEnd.Wiped) refreshFamilies(force = true, session = s)
+            else {
+                refreshFamily(summary, session = s)
+                loadMembers(summary.id, s)
+            }
+        }
+    }
+
+    /* Delete family folder from a folder's row: asked once first. */
+    fun askDeleteFolder(groupId: String, workspaceId: String, name: String) {
+        if (deletingFolder?.busy == true) return
+        deletingFolder = FolderAsk(groupId, workspaceId, name)
+    }
+
+    fun dismissDeleteFolder() { if (deletingFolder?.busy != true) deletingFolder = null }
+
+    /* The deletion, in the families' scope: said once it lands, its refusal kept on the dialog, kept here when no answer came. */
+    fun confirmDeleteFolder() {
+        val ask = deletingFolder ?: return
+        if (ask.busy) return
+        val summary = list?.firstOrNull { it.id == ask.groupId } ?: return
+        val s = begin() ?: return
+        deletingFolder = ask.copy(busy = true, error = null)
+        model.familyScope.launch {
+            val result = gate.run(s) { s.owner.families.deleteFolder(summary, ask.workspaceId) } ?: return@launch
+            if (!gate.current(s)) return@launch
+            val end = result.getOrElse { error ->
+                error.rethrowIfCancelled()
+                if (error is NotAuthenticated) { deletingFolder = null; model.lostSession(); return@launch }
+                deletingFolder = ask.copy(busy = false, error = FamilyWords.error(error))
+                return@launch
+            }
+            when (end) {
+                com.hushos.app.data.FolderEnd.Landed -> {
+                    deletingFolder = null
+                    model.notice("“${ask.name}” is deleted", untilRead = false)
+                    refreshFamily(summary, session = s)
+                }
+                is com.hushos.app.data.FolderEnd.Pending -> { deletingFolder = null; model.notice("Saved on this device. ${end.words}", untilRead = false) }
+                is com.hushos.app.data.FolderEnd.Refused -> deletingFolder = ask.copy(busy = false, error = end.words)
+                com.hushos.app.data.FolderEnd.Wiped -> { deletingFolder = null; refreshFamilies(force = true, session = s) }
             }
         }
     }

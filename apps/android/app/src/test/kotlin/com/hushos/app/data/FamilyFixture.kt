@@ -186,6 +186,22 @@ class FamilyFixture(val server: FakeDrive) {
     @Volatile var onRosters: (() -> Unit)? = null
     val asked = java.util.Collections.synchronizedList(ArrayList<String>())
 
+    // Core 5b: removals, marking the departed left, key replacements and folder deletions.
+    /* Route 3's due for a manager: the departed to mark left, folders owed new keys, and who holds whom. */
+    @Volatile var dueMarkLeft: List<String> = emptyList()
+    @Volatile var dueRotations: List<String> = emptyList()
+    val holdRows = java.util.Collections.synchronizedList(ArrayList<JSONObject>())
+    /* Route 27: each hold asked, by whom it holds, and how it is answered while set (else placed). */
+    val holdsAsked = java.util.Collections.synchronizedList(ArrayList<String>())
+    @Volatile var holdAnswer: Pair<Int, JSONObject>? = null
+    /* The removal preview's plans (route 19, asked first). */
+    @Volatile var previewPlans: JSONArray = JSONArray()
+    /* The family folder's workspace documents by kind: (version, envelope). */
+    val documents = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, String>>()
+    /* Routes 19, 7, 24 and the deletion: each call (its route's last segment, its body) in order, and scripted answers in turn. */
+    val rotatingCalls = java.util.Collections.synchronizedList(ArrayList<Pair<String, String>>())
+    val rotatingAnswers = java.util.concurrent.ConcurrentLinkedQueue<(String, JSONObject) -> Pair<Int, JSONObject>?>()
+
     val summary get() = GroupSummary(groupId, "family", "Lindqvist family", emptyList(), groupState, chain.size.toLong(), 1L)
 
     /* Maya's pin over `rosters`, as joining on the web left it. */
@@ -219,6 +235,8 @@ class FamilyFixture(val server: FakeDrive) {
                     .put("roles", JSONArray(listedRoles)).put("state", groupState).put("rosterVersion", chain.size).put("groupKeyVersion", 1)))
             }
             method == "GET" && path == "groups/$groupId" -> if (notMember) notMemberAnswer() else 200 to JSONObject()
+                .put("due", JSONObject().put("grants", JSONArray()).put("markLeft", JSONArray(dueMarkLeft)).put("rotations", JSONArray(dueRotations))
+                    .put("holds", JSONArray(holdRows.toList())))
                 .put("head", JSONObject().put("version", chain.size).put("revision", chain.size)).put("members", JSONArray()
                 .put(JSONObject().put("userId", creator.id).put("name", "Sam Lindqvist").put("email", "sam@example.org").put("state", "active").put("roles", JSONArray().put("billing").put("members")))
                 .put(JSONObject().put("userId", member.id.lowercase()).put("name", "Maya").put("email", "me@example.org").put("state", "active").put("roles", JSONArray()))
@@ -274,6 +292,23 @@ class FamilyFixture(val server: FakeDrive) {
                 listed = false
                 200 to JSONObject().put("state", "left")
             }
+            method == "POST" && segments.size == 5 && path.startsWith("groups/$groupId/members/") && segments[4] == "hold" -> {
+                if (notMember) return notMemberAnswer()
+                holdsAsked.add(segments[3].lowercase())
+                holdAnswer ?: (200 to JSONObject())
+            }
+            method == "POST" && segments.size == 5 && path.startsWith("groups/$groupId/members/") && segments[4] == "remove-preview" ->
+                if (notMember) notMemberAnswer() else 200 to JSONObject().put("plans", previewPlans)
+            method == "POST" && segments.size == 5 && path.startsWith("groups/$groupId/members/") && segments[4] == "remove" -> applyRotating("remove", body)
+            method == "POST" && path == "groups/$groupId/rosters" -> applyRotating("rosters", body)
+            method == "POST" && path == "groups/$groupId/areas/$workspaceId/rotations" -> applyRotating("rotations", body)
+            method == "POST" && path == "groups/$groupId/areas/$workspaceId/delete" -> applyRotating("delete", body)
+            method == "GET" && path == "groups/$groupId/areas/$workspaceId/root" -> if (notMember) notMemberAnswer() else
+                200 to server.node(servedRootId ?: rootId).json().put("depth", 0).put("versions", JSONArray()).put("shares", JSONArray()).put("links", JSONArray())
+            method == "GET" && segments.size == 5 && path.startsWith("drive/workspaces/$workspaceId/documents/") ->
+                200 to JSONObject().put("document", documents[segments[4]]?.let { (version, envelope) ->
+                    JSONObject().put("kind", segments[4]).put("version", version).put("envelope", envelope).put("envelopeSuite", 1)
+                } ?: JSONObject.NULL)
             method == "GET" && path == "drive/spaces" -> 200 to JSONObject().put("spaces", JSONArray()
                 .put(JSONObject().put("space", JSONObject().put("kind", "personal")).put("areas", JSONArray()))
                 .apply {
@@ -359,6 +394,88 @@ class FamilyFixture(val server: FakeDrive) {
         if (userId == null) return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", chain.size))
         (listOf(server.grace) + server.others.values.map { it.first }).firstOrNull { it.id.equals(userId, ignoreCase = true) }?.let(joined::add)
         pendingRows.removeIf { it.optString("userId").equals(userId, ignoreCase = true) }
+        return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", chain.size))
+    }
+
+    /*
+     * A Core 5b call applied as the server applies it (writeChain with its rotations, applyRotation): a scripted answer
+     * first; a resend answered as a replay; `stale` unless built at the head; each rotation's top folder, epoch and
+     * documents checked against what is stored (`root-moved`, `epoch-stale`, `document-stale`), the roster checked as every
+     * member checks it; then the roster appended, people it marks left gone, each rotated folder at its new version (its
+     * top folder re-keyed at the target with its old key kept as the previous one, its documents at their next version,
+     * Maya's grant and self-grant of the new key served), and a deleted folder no longer listed.
+     */
+    private fun applyRotating(kind: String, body: JSONObject): Pair<Int, JSONObject> {
+        if (notMember) return notMemberAnswer()
+        rotatingCalls.add(kind to body.toString())
+        rotatingAnswers.poll()?.invoke(kind, body)?.let { return it }
+        val next = signedOf(body.getJSONObject("roster"))
+        val head = 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", chain.size))
+        if (chain.any { it.statement.contentEquals(next.statement) }) return head
+        if (body.optLong("expectedRevision", -1) != chain.size.toLong())
+            return 409 to JSONObject().put("code", "stale").put("message", "Another change to the family landed first.")
+        val wires = (body.optJSONArray("rotations")?.let { list -> (0 until list.length()).map(list::getJSONObject) }.orEmpty()) +
+            listOfNotNull(body.optJSONObject("rotation"))
+        val root = server.node(servedRootId ?: rootId)
+        for (wire in wires) {
+            if (wire.getString("workspaceId") != workspaceId || wire.getJSONObject("root").getString("id") != root.id)
+                return 400 to JSONObject().put("code", "invalid").put("message", "The change was refused.").put("data", JSONObject().put("reason", "rotation-root"))
+            if (wire.getJSONObject("root").getInt("changeSeq") != root.changeSeq)
+                return 409 to JSONObject().put("code", "root-moved").put("message", "The folder changed.")
+            if (wire.getLong("targetEpoch") <= root.keyEpoch)
+                return 409 to JSONObject().put("code", "epoch-stale").put("message", "Draw a new epoch.")
+            val sent = wire.getJSONArray("documents").let { list -> (0 until list.length()).map(list::getJSONObject) }.associate { it.getString("kind") to it.getInt("version") }
+            val stale = documents.filter { (kind, stored) -> sent[kind] != stored.first }.keys.sorted()
+            if (stale.isNotEmpty() || sent.keys.any { !documents.containsKey(it) })
+                return 409 to JSONObject().put("code", "document-stale").put("message", "A document changed.").put("data", JSONObject()
+                    .put("workspaceId", workspaceId).put("kind", stale.firstOrNull() ?: sent.keys.first())
+                    .put("stale", JSONArray((stale.ifEmpty { sent.keys.filter { !documents.containsKey(it) } }).map { JSONObject().put("workspaceId", workspaceId).put("kind", it) })))
+        }
+        val succession = body.optJSONObject("succession")?.let(::signedOf)
+        val after = runCatching { creatorChain(chain + next, successions.toList() + listOfNotNull(succession)) }.getOrNull()
+            ?: return 400 to JSONObject().put("code", "invalid").put("message", "The change was refused.").put("data", JSONObject().put("reason", "roster-chain"))
+        chain = chain + next
+        succession?.let(successions::add)
+        body.optJSONArray("seals")?.let { seals ->
+            (0 until seals.length()).map(seals::getJSONObject).firstOrNull { it.optString("holderUserId").equals(member.id, ignoreCase = true) }?.let { seal ->
+                keySeal = JSONObject(seal.toString()).put("sealerUserId", member.id.lowercase()).apply { remove("holderUserId") }
+            }
+        }
+        // Whoever the roster marks left is out: route 3 and 6 no longer name them, and nothing is due for them.
+        val gone = after.roster().members.filter { it.status == MemberStatus.LEFT }.map { it.userId.lowercase() }.toSet()
+        joined.removeIf { it.id.lowercase() in gone }
+        dueMarkLeft = dueMarkLeft.filter { it.lowercase() !in gone }
+        for (wire in wires) {
+            val to = wire.getLong("toVersion")
+            val target = wire.getLong("targetEpoch")
+            val sent = wire.getJSONObject("root")
+            val rotated = sent.getJSONObject("rotated")
+            root.previous = Triple(wire.getString("previousRootKeyEnvelope"), root.keyEpoch, to)
+            root.keyEnvelope = sent.getString("keyEnvelope")
+            root.keyEpoch = target
+            root.parentKeyEpoch = to
+            val rekey = rotated.optJSONObject("metadataRekey")
+            root.metadataRekey = rekey?.let {
+                JSONObject().put("origin", JSONObject(root.metadataRekey?.getJSONObject("origin")?.toString() ?: JSONObject().put("envelope", root.metadataEnvelope)
+                    .put("signer", JSONObject().put("id", root.signer)).put("signature", root.signature).toString()).put("keyEnvelope", it.getString("originKeyEnvelope")))
+                    .put("signature", it.getString("signature"))
+            }
+            root.metadataEnvelope = rotated.getString("metadataEnvelope")
+            root.signature = if (rotated.isNull("metadataSignature")) "" else rotated.getString("metadataSignature")
+            root.signer = member.id.lowercase()
+            server.touch(root.id)
+            val docs = wire.getJSONArray("documents")
+            for (i in 0 until docs.length()) docs.getJSONObject(i).let { documents[it.getString("kind")] = (it.getInt("version") + 1) to it.getString("envelope") }
+            areaVersion = to
+            selfGrant = wire.getJSONObject("selfGrant")
+            val grants = body.optJSONArray("grants")?.let { list -> (0 until list.length()).map(list::getJSONObject) }.orEmpty()
+            grants.firstOrNull { it.getString("granteeUserId").equals(member.id, ignoreCase = true) && it.getLong("workspaceKeyVersion") == to }?.let { mine ->
+                grantRow = JSONObject().put("workspaceKeyVersion", to).put("granteeKeyVersion", mine.getLong("granteeKeyVersion")).put("granterUserId", member.id.lowercase())
+                    .put("rosterVersion", mine.getLong("rosterVersion")).put("rosterDigest", mine.getString("rosterDigest")).put("envelope", mine.getString("envelope"))
+            }
+        }
+        if (kind == "delete") areaListed = false
+        dueRotations = dueRotations.filter { ws -> wires.none { it.getString("workspaceId") == ws } }
         return 200 to JSONObject().put("head", JSONObject().put("version", chain.size).put("revision", chain.size))
     }
 

@@ -177,6 +177,13 @@ class FamilySync(
     internal val ledger get() = vault.areaLedger
     internal val userId get() = vault.familyUserId
 
+    /*
+     * The family folders the chain this process last committed lists as live (every listed area less its tombstones): what
+     * a removal or marking someone left must rotate, as the worker reads them. None before a commit.
+     */
+    internal fun liveAreas(groupId: String): List<String>? =
+        chains[groupId]?.let { chain -> (chain.areaKeys().keys - chain.retiredAreas().toSet()).map { it.lowercase() }.sorted() }
+
     /* Route 2: the families whose ids are ids (a server's other strings never reach a path or a file name). */
     fun list(): List<GroupSummary> = api.listGroups().filter { FamilyRecords.valid(it.id) }.onEach { names[it.id] = it.name }
 

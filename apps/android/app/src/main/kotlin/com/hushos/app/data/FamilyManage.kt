@@ -149,8 +149,11 @@ sealed interface CallEnd {
     data object Landed : CallEnd
     /* No definite answer yet: kept on this phone, sent again at the next open. */
     data class Pending(val reason: String) : CallEnd
-    /* Refused, in the families' words; the entry is gone. */
-    data class Refused(val words: String) : CallEnd
+    /*
+     * Refused, in the families' words; the entry is gone. `code` and `data` are the server's, for a caller that acts on one
+     * (a removal meeting `left-due`, `members-changed` or `ends-lapsed`); none for a refusal made here.
+     */
+    data class Refused(val words: String, val code: String? = null, val data: JSONObject? = null) : CallEnd
     /* Another roster won at that version: dropped; build it again over the winner. */
     data object Stale : CallEnd
     /* Kept, never sent: an admission sealed to other keys than this account's pin of the person holds now. */
@@ -239,9 +242,11 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
     var resends = 0
     var fixes = 0
     var on: ChainRoute? = null
+    // A rotating call rebuilt (its folders gathered again) is kept over the old entry, under the same outbox id.
+    var current = kept
     fun finish(end: CallEnd): CallEnd {
         told(on, end)
-        outbox.delete(userId, groupId, kept.outboxId)
+        outbox.delete(userId, groupId, current.outboxId)
         return end
     }
     while (true) {
@@ -255,7 +260,7 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
             return CallEnd.Pending(GroupsApiError.NO_ANSWER)
         }
         val read = try {
-            ledger.outboxOpen(groupId, kept.outboxId, userId, kept.entry)
+            ledger.outboxOpen(groupId, current.outboxId, userId, current.entry)
         } catch (sealed: CoreException.Sealed) {
             // Not an entry of this account's any more (sealed before a master-key change): never sent, deleted, said lost.
             return finish(CallEnd.Refused("A change to ${summary.name} hadn’t reached the server and couldn’t be opened on this device. Make it again."))
@@ -278,10 +283,20 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
                 syncRevised(summary)
                 return CallEnd.Landed
             }
-            OutboxStep.RESEND, OutboxStep.REBUILD -> {
+            OutboxStep.RESEND -> {
                 // The same bytes again, a few times now, then at the next open.
                 if (++resends >= RESENDS) return CallEnd.Pending(callWords(answer, first, summary.name))
                 Thread.sleep(RESEND_DELAY_MS * resends)
+            }
+            OutboxStep.REBUILD -> {
+                // A folder the call rotates moved (a walk running, an epoch overtaken, its top folder or a document changed):
+                // gathered again and the call's rotations made again under the same keys and roster, kept, then sent.
+                if (++fixes > 3) return CallEnd.Pending(callWords(answer, first, summary.name))
+                when (val rebuilt = rebuildKept(summary, current, route, body, answer)) {
+                    is Rebuilt.Kept -> current = rebuilt.kept
+                    is Rebuilt.Unsent -> return CallEnd.Pending(rebuilt.words)
+                    Rebuilt.Wiped -> return CallEnd.Wiped
+                }
             }
             OutboxStep.SEND_GRANTS -> {
                 if (++fixes > 3) return CallEnd.Pending(GRANTS_DUE)
@@ -297,12 +312,12 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
                 return CallEnd.Stale
             }
             OutboxStep.MEMBERSHIP_MOVED -> {
-                val end = finish(CallEnd.Refused(callWords(answer, first, summary.name)))
+                val end = finish(CallEnd.Refused(callWords(answer, first, summary.name), answer.code, answer.data))
                 syncRevised(summary)
                 return end
             }
             OutboxStep.REFUSED -> {
-                val end = finish(CallEnd.Refused(callWords(answer, first, summary.name)))
+                val end = finish(CallEnd.Refused(callWords(answer, first, summary.name), answer.code, answer.data))
                 if (answer.code == "forbidden") syncRevised(summary)
                 return end
             }
@@ -319,21 +334,29 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
 private fun settingsUnavailable(error: Exception): Boolean = FamilySync.transient(error) ||
     (error is AuthFailure && (error.status == 408 || error.status == 429 || error.status >= 500))
 
-/* Whom a call is about: the person let in, or whose roles change. */
+/* Whom a call is about: the person let in, whose roles change, or who is removed. */
 internal fun personOf(route: ChainRoute?): String? = when (route) {
     is ChainRoute.Admit -> route.userId
     is ChainRoute.Member -> route.userId
+    is ChainRoute.Remove -> route.userId
     else -> null
 }
 
-/* The same call's route: an admission of the same person, or a change of the same person's roles. */
+/*
+ * The same call's route: an admission, a role change or a removal of the same person, a key replacement or deletion of the
+ * same folder, or marking the departed left.
+ */
 private fun sameRoute(a: ChainRoute, b: ChainRoute): Boolean = when {
     a is ChainRoute.Admit && b is ChainRoute.Admit -> a.userId.equals(b.userId, ignoreCase = true)
     a is ChainRoute.Member && b is ChainRoute.Member -> a.userId.equals(b.userId, ignoreCase = true)
+    a is ChainRoute.Remove && b is ChainRoute.Remove -> a.userId.equals(b.userId, ignoreCase = true)
+    a is ChainRoute.Rotation && b is ChainRoute.Rotation -> a.workspaceId.equals(b.workspaceId, ignoreCase = true)
+    a is ChainRoute.Delete && b is ChainRoute.Delete -> a.workspaceId.equals(b.workspaceId, ignoreCase = true)
+    a is ChainRoute.Rosters && b is ChainRoute.Rosters -> true
     else -> false
 }
 
-private fun OutboxCall.route(): ChainRoute = when (this) {
+internal fun OutboxCall.route(): ChainRoute = when (this) {
     is OutboxCall.Send -> route
     is OutboxCall.Hold -> route
     is OutboxCall.Landed -> route
@@ -447,7 +470,7 @@ private fun FamilySync.finishHandover(summary: GroupSummary, names: (String) -> 
  * `body`, with a not-member answer from any of its reads (route 3, 6, 8 or 16) let go of as every removal is
  * (removedNow: two-phase, published to the screens), then `wiped`.
  */
-private fun <T> FamilySync.notMemberLetsGo(groupId: String, wiped: () -> T, body: () -> T): T = try {
+internal fun <T> FamilySync.notMemberLetsGo(groupId: String, wiped: () -> T, body: () -> T): T = try {
     body()
 } catch (error: GroupsApiError) {
     if (!error.isNotMember) throw error
@@ -538,8 +561,9 @@ private fun FamilySync.admittedNow(summary: GroupSummary, userId: String): Admit
 private fun FamilySync.waiting(groupId: String, userId: String): Boolean =
     api.pending(groupId).any { it.userId.equals(userId, ignoreCase = true) }
 
-private sealed interface Staged {
-    class Call(val kept: FamilyOutbox.Kept) : Staged
+internal sealed interface Staged {
+    /* `replaced`: workspace documents a rotation couldn't open and carried on empty (the core says which). */
+    class Call(val kept: FamilyOutbox.Kept, val replaced: List<com.hushos.core.ReplacedDocument> = emptyList()) : Staged
     class Refused(val words: String) : Staged
     /* The manager rule: their words first (the core's CHECK_MANAGER_FIRST). */
     data object CheckFirst : Staged
@@ -553,7 +577,7 @@ internal const val CHECK_MANAGER_FIRST = "Check it’s them first. Managers are 
 internal const val UNCHANGED = "That doesn’t change their roles."
 
 /* A refusal staging met before anything was signed, in its words. */
-private class StageRefused(val words: String) : Exception(words)
+internal class StageRefused(val words: String) : Exception(words)
 
 /* A promotion whose person isn't verified on this phone now (guard included): their words first. */
 private class CheckFirstNeeded : Exception()
@@ -564,7 +588,7 @@ private class CheckFirstNeeded : Exception()
  * since: synced and staged again). Then every member's ML-KEM key (route 6), the group key's seal opened when the core
  * asks (route 8), and `build` given the head's revision. Kept in the outbox before anything is sent.
  */
-private fun FamilySync.stageCall(summary: GroupSummary, build: (view: FamilyView, revision: ULong, kems: Map<String, String>) -> RosterCall): Staged {
+internal fun FamilySync.stageCall(summary: GroupSummary, build: (view: FamilyView, revision: ULong, kems: Map<String, String>) -> RosterCall): Staged {
     val groupId = summary.id
     var keyOpened = false
     repeat(4) {
@@ -599,7 +623,7 @@ private fun FamilySync.stageCall(summary: GroupSummary, build: (view: FamilyView
         when (call) {
             is RosterCall.Staged -> {
                 outbox.put(this.userId, groupId, call.call.outboxId, call.call.entry)
-                return Staged.Call(FamilyOutbox.Kept(call.call.outboxId, call.call.entry))
+                return Staged.Call(FamilyOutbox.Kept(call.call.outboxId, call.call.entry), call.call.replaced)
             }
             // Synced at the top of the next round.
             RosterCall.SyncFirst, RosterCall.OpenFoldersFirst -> {}
@@ -752,7 +776,7 @@ private const val ORGANIZER_FIRST = "Make someone else the organizer first."
  * stays the only one), then the core's call is staged and sent, and signed again over another manager's win (`stale`).
  * A change that no longer changes anything after a landing or a win is done; `unchangedIsDone` says so from the start.
  */
-private fun FamilySync.callFor(summary: GroupSummary, person: String, first: String, unchangedIsDone: Boolean,
+internal fun FamilySync.callFor(summary: GroupSummary, person: String, first: String, unchangedIsDone: Boolean,
     check: String? = null, before: (FamilyView) -> Unit = {}, onStaged: () -> Unit = {}, build: (ULong, Map<String, String>) -> RosterCall): RoleEnd {
     val route = ChainRoute.Member(person.lowercase())
     var moved = unchangedIsDone

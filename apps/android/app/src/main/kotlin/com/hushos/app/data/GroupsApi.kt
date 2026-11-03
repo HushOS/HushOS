@@ -84,6 +84,18 @@ data class FamilyLapsedPlan(val id: String, val name: String, val paused: Boolea
             return "The $names for $family, which you pay for and $how, ${if (several) "end" else "ends"} at once when you leave. $after"
         }
 
+        /*
+         * What ends when the person removed pays for these plans, every plan named (the web's lapsedEndsWords, a removal's
+         * case): `who` is their first name.
+         */
+        fun endsWhenRemoved(family: String, plans: List<FamilyLapsedPlan>, who: String): String {
+            val several = plans.size > 1
+            val names = plans.joinToString(" and ") { word(it.name) } + if (several) " plans" else " plan"
+            val how = if (several) "which give nothing now" else if (plans.firstOrNull()?.paused == true) "which is paused" else "whose payment didn’t go through"
+            val after = if (several) "Nothing of them is refunded: no part of them is in use." else "Nothing of it is refunded: no part of it is in use."
+            return "$who pays for the $names for $family, $how. ${if (several) "They end" else "It ends"} at once when they’re removed. $after"
+        }
+
         /* "Family Pro (monthly)" is "Family Pro"; "Family plan" is "Family", as "…’s Family plan". */
         private fun word(productName: String) =
             productName.replace(Regex("\\s*\\((monthly|yearly|annual)\\)\\s*$", RegexOption.IGNORE_CASE), "").replace(Regex("\\s+plan$", RegexOption.IGNORE_CASE), "")
@@ -123,14 +135,31 @@ data class GroupSummary(val id: String, val kind: String, val name: String, val 
  * Route 3: the family's members as the server names them (rosters carry no names), and the head's revision a roster call
  * is built against (0 when the server sent none).
  */
-data class GroupDetail(val members: List<Member>, val revision: Long? = null, val headVersion: Long? = null) {
+data class GroupDetail(val members: List<Member>, val revision: Long? = null, val headVersion: Long? = null, val due: Due? = null) {
     data class Member(val userId: String, val name: String, val email: String?, val state: String, val roles: List<String>)
+
+    /*
+     * What route 3 says is due, as a manager's device does it (the web's runDue): the departed to mark left, the family
+     * folders owed new keys, and who holds whom (route 27). A member's due lists none of them.
+     */
+    data class Due(val markLeft: List<String>, val rotations: List<String>, val holds: List<Hold>) {
+        data class Hold(val userId: String, val heldBy: String?)
+    }
 
     companion object {
         fun from(json: JSONObject) = GroupDetail(json.getJSONArray("members").objects().map {
             Member(it.getString("userId"), it.optString("name"), if (it.isNull("email")) null else it.optString("email").ifEmpty { null },
                 it.getString("state"), it.optJSONArray("roles").strings())
-        }, json.optJSONObject("head")?.takeIf { it.has("revision") }?.getLong("revision"), json.optJSONObject("head")?.takeIf { it.has("version") }?.getLong("version"))
+        }, json.optJSONObject("head")?.takeIf { it.has("revision") }?.getLong("revision"), json.optJSONObject("head")?.takeIf { it.has("version") }?.getLong("version"),
+            // Ids as the core takes them (lowercase), and only ids: a row that isn't one is no work to do.
+            json.optJSONObject("due")?.let { due ->
+                Due(due.optJSONArray("markLeft").strings().map { it.lowercase() }.filter(FamilyRecords::valid),
+                    due.optJSONArray("rotations").strings().map { it.lowercase() }.filter(FamilyRecords::valid),
+                    due.optJSONArray("holds").objects().mapNotNull { hold ->
+                        val user = hold.optString("userId").lowercase().takeIf(FamilyRecords::valid) ?: return@mapNotNull null
+                        Due.Hold(user, if (hold.isNull("heldBy")) null else hold.optString("heldBy").lowercase().takeIf(FamilyRecords::valid))
+                    })
+            })
     }
 }
 
@@ -348,19 +377,52 @@ class GroupsApi(private val session: Shared.Session) {
     fun pending(groupId: String): List<PendingPerson> =
         call("/groups/${id(groupId)}/pending").getJSONArray("pending").whole().map(PendingPerson::from).filter { FamilyRecords.valid(it.userId.lowercase()) }
 
+    /* 19, asked first: the plans the person pays for that give nothing, which removing them ends (none: nothing to confirm). */
+    fun removalPreview(groupId: String, userId: String): List<FamilyLapsedPlan> =
+        FamilyLapsedPlan.listIn(call("/groups/${id(groupId)}/members/${id(userId.lowercase())}/remove-preview", "POST", JSONObject()))
+
+    /*
+     * 27: the removal's hold on the person (placed again, it is extended): their Drive writes, epoch draws and walks in the
+     * family's folders stop until the removal lands or the hold lapses. A refusal throws with its code (`held`: someone holds
+     * this manager; `members-changed`: they aren't an active member now).
+     */
+    fun hold(groupId: String, userId: String) {
+        call("/groups/${id(groupId)}/members/${id(userId.lowercase())}/hold", "POST", JSONObject())
+    }
+
+    /* 28: a family folder's previous top-folder key that opens with its current key, for the walk that runs in it. */
+    fun putPreviousRoot(groupId: String, workspaceId: String, rotationId: String, envelope: String) {
+        if (!FamilyRecords.valid(workspaceId.lowercase()) || !FamilyRecords.valid(rotationId.lowercase())) throw GroupsApiError(400, "invalid", "Please try again.")
+        call("/groups/${id(groupId)}/areas/${workspaceId.lowercase()}/previous-root", "PUT",
+            JSONObject().put("rotationId", rotationId).put("previousRootKeyEnvelope", envelope))
+    }
+
+    /* 29: a family folder's top folder as a roster rotation re-keys it, with everything sealed under its key. */
+    fun areaRoot(groupId: String, workspaceId: String): RotationWorkNode {
+        if (!FamilyRecords.valid(workspaceId.lowercase())) throw GroupsApiError(400, "invalid", "Please try again.")
+        val root = call("/groups/${id(groupId)}/areas/${workspaceId.lowercase()}/root")
+        return RotationWorkNode(NodeView.from(root), root.optJSONArray("versions").objects(), root.optJSONArray("shares").objects(), root.optJSONArray("links").objects())
+    }
+
     /* 26: Not now on someone waiting. */
     fun decline(groupId: String, userId: String) {
         call("/groups/${id(groupId)}/members/${id(userId.lowercase())}/decline", "POST", JSONObject())
     }
 
     /*
-     * A roster call sent as it was signed, byte for byte (17, admit; 18, member), answered for the outbox: never thrown
+     * A roster call sent as it was signed, byte for byte (17, admit; 18, member; 19, remove; 7, rosters: the departed
+     * marked left; 24, a folder's key replacement; the deletion of a family folder), answered for the outbox: never thrown
      * for a refusal or no answer (the outbox decides), only for a lost session.
      */
     fun sendCall(groupId: String, route: com.hushos.core.ChainRoute, body: String): CallAnswer {
+        fun area(workspaceId: String) = workspaceId.lowercase().takeIf(FamilyRecords::valid)
         val path = when (route) {
             is com.hushos.core.ChainRoute.Admit -> "/groups/${id(groupId)}/members/${id(route.userId.lowercase())}/admit" to "POST"
             is com.hushos.core.ChainRoute.Member -> "/groups/${id(groupId)}/members/${id(route.userId.lowercase())}" to "PATCH"
+            is com.hushos.core.ChainRoute.Remove -> "/groups/${id(groupId)}/members/${id(route.userId.lowercase())}/remove" to "POST"
+            com.hushos.core.ChainRoute.Rosters -> "/groups/${id(groupId)}/rosters" to "POST"
+            is com.hushos.core.ChainRoute.Rotation -> "/groups/${id(groupId)}/areas/${area(route.workspaceId) ?: return CallAnswer(400, "invalid", null, "Please try again.")}/rotations" to "POST"
+            is com.hushos.core.ChainRoute.Delete -> "/groups/${id(groupId)}/areas/${area(route.workspaceId) ?: return CallAnswer(400, "invalid", null, "Please try again.")}/delete" to "POST"
             else -> return CallAnswer(400, "unsupported", null, "Update HushOS to do this.")
         }
         return raw(path.first, path.second, body)
