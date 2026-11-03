@@ -248,13 +248,35 @@ extension FamilyRecords {
         }
     }
 
-    /* Lets go of an entry that landed, was superseded or refused; one that stays is an error. */
+    /* Lets go of an entry that landed, was superseded or refused (and of its operation); one that stays is an error. */
     func outboxDelete(userId: String, groupId: String, outboxId: String) throws {
         guard let url = outboxFile(userId, groupId, outboxId) else { return }
         try underLock {
             try? FileManager.default.removeItem(at: url)
             if FileManager.default.fileExists(atPath: url.path) { throw GuardError.unsaved }
+            try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension("op"))
         }
+    }
+
+    /*
+     * What a kept role call does (Codex #285 round 3): the core's entry names only its route, and every role change
+     * of a person and both handover steps share `member` (grant or take managing, billing to them, a step down), so
+     * the operation is noted beside the entry, written before it. An entry with no note (an earlier build's) is nil.
+     */
+    func outboxNoteOperation(userId: String, groupId: String, outboxId: String, _ operation: String) throws {
+        guard let url = outboxFile(userId, groupId, outboxId)?.deletingPathExtension().appendingPathExtension("op") else { throw GuardError.unsaved }
+        Unbacked.folder(folder)
+        try underLock {
+            try FileManager.default.createDirectory(at: outboxFolder, withIntermediateDirectories: true)
+            do { try Data(operation.utf8).write(to: url, options: .atomic) } catch { throw GuardError.unsaved }
+        }
+    }
+
+    func outboxOperation(userId: String, groupId: String, outboxId: String) throws -> String? {
+        guard let url = outboxFile(userId, groupId, outboxId)?.deletingPathExtension().appendingPathExtension("op") else { return nil }
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard let data = try? Data(contentsOf: url), let operation = String(data: data, encoding: .utf8) else { throw GuardError.unreadable }
+        return operation
     }
 
     /* Every entry of the family kept for this account, oldest first. A folder or entry that can't be read throws. */

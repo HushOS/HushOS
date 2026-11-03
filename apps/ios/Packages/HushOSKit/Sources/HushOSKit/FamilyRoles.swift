@@ -20,6 +20,14 @@ import HushOSCore
  *   removal path.
  */
 
+/* Which change a kept role call makes: every one of them is on the person's `member` route. */
+enum RoleOperation: String, Sendable {
+    case grant
+    case take
+    case billingTo = "billing-to"
+    case stepDown = "step-down"
+}
+
 /* What a role change or the organizer handover came to. */
 public enum RoleEnd: Sendable, Equatable {
     case landed
@@ -60,7 +68,8 @@ extension FamilySync {
 
     private func changeRoleInTurn(_ summary: GroupSummary, person: String, first: String, change: MembersRole) async throws -> RoleEnd {
         try await removalLetsGo(summary.id) {
-            try await self.callFor(summary, person: person, first: first, unchangedIsDone: false, check: change == .grant ? person : nil) { revision, kems in
+            try await self.callFor(summary, person: person, first: first, operation: change == .grant ? .grant : .take, unchangedIsDone: false,
+                                   check: change == .grant ? person : nil) { revision, kems in
                 try self.ledger.rolesBody(me: try await self.vault.ownIdentities(), identity: try await self.vault.currentIdentityEnvelope(), groupId: summary.id,
                                           expectedRevision: revision, userId: person.lowercased(), change: change, kems: kems)
             }
@@ -154,7 +163,7 @@ extension FamilySync {
     private func giveThenStepDown(_ summary: GroupSummary, to: String, first: String, names: [String: String]) async throws -> RoleEnd {
         let me = userId.lowercased()
         let groupId = summary.id
-        let given = try await callFor(summary, person: to, first: first, unchangedIsDone: true, check: to, before: { view in
+        let given = try await callFor(summary, person: to, first: first, operation: .billingTo, unchangedIsDone: true, check: to, before: { view in
             // Not the organizer any more (another device finished a handover, or this one's earlier step down landed):
             // billing is not this account's to give.
             if !self.bills(view, me) {
@@ -190,7 +199,7 @@ extension FamilySync {
         let me = userId.lowercased()
         let groupId = summary.id
         let moved = Moved()
-        let end = try await callFor(summary, person: me, first: first, unchangedIsDone: true, before: { view in
+        let end = try await callFor(summary, person: me, first: first, operation: .stepDown, unchangedIsDone: true, before: { view in
             if !self.bills(view, to) {
                 let now = view.members.first { $0.userId.lowercased() != me && $0.roles.contains("billing") }?.userId.lowercased()
                 let words = now.map { "\(names[$0] ?? "Someone else") is the organizer now." } ?? ManageWords.organizerFirst
@@ -215,21 +224,22 @@ extension FamilySync {
     }
 
     /*
-     * One role change of `person` through the outbox: an earlier one for them kept here goes first
-     * (an unanswered one stays the only one), then the core's call is staged through the gate and
+     * One role change of `person` through the outbox: an earlier one of the same `operation` for them
+     * kept here goes first (an unanswered one stays the only one; another operation kept for them is
+     * the gate's, which sends it and waits while it is unresolved: never said as this one's), then the core's call is staged through the gate and
      * sent, and signed again over another manager's win (`stale`). `before` judges each freshly
      * synced member list (throw StageRefused to stop); `check`: a promotion's person, who must be
      * verified on this phone now. A change that no longer changes anything after a landing or a win
      * is done; `unchangedIsDone` says so from the start.
      */
-    func callFor(_ summary: GroupSummary, person: String, first: String, unchangedIsDone: Bool, check: String? = nil,
+    func callFor(_ summary: GroupSummary, person: String, first: String, operation: RoleOperation, unchangedIsDone: Bool, check: String? = nil,
                  before: ((FamilyView) throws -> Void)? = nil, kept: (() throws -> Void)? = nil,
                  build: (UInt64, [String: String]) async throws -> RosterCall) async throws -> RoleEnd {
         let groupId = summary.id
         let route = ChainRoute.member(userId: person.lowercased())
         var moved = unchangedIsDone
         for call in try records.outboxList(userId: userId, groupId: groupId) {
-            switch try await sendKept(groupId, outboxId: call.outboxId, entry: call.entry, only: route) {
+            switch try await sendKept(groupId, outboxId: call.outboxId, entry: call.entry, only: route, operation: operation) {
             case .other: continue
             case .landed, .stale: moved = true
             case .pending(let words): return .pending(words)
@@ -239,7 +249,7 @@ extension FamilySync {
             }
         }
         for _ in 0 ..< 3 {
-            let staged = try await stageCall(summary, kept: kept) { view, revision, kems in
+            let staged = try await stageCall(summary, operation: operation, kept: kept) { view, revision, kems in
                 try before?(view)
                 // Where they stand on this phone now, from the settings and the guard read together over the member list
                 // just synced (the row's label may be old). A guard that can't be read throws: nothing is signed.

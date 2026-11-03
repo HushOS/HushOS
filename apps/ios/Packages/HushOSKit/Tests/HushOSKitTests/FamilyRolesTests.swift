@@ -143,6 +143,35 @@ extension OnFakeDrive {
         }
 
         /*
+         * Codex #285 round 3: an unanswered Stop them managing for Maya is kept, then Make them the
+         * organizer is asked for her. Both are on her `member` route, but they are different changes:
+         * the kept one is sent first and still unanswered, so the new one waits, said so, and nothing
+         * new is kept; asking the same change again is the kept one's, still saved on this device.
+         * Fails if a different kept change is said as this one's (Saved on this device, nothing kept
+         * for it), or the same change pressed again is refused as another's.
+         */
+        @Test func aDifferentKeptChangeForThemMakesThisOneWait() async throws {
+            let m = try await Self.organizer()
+            defer { m.phone.done() }
+            try await Self.checkMaya(m)
+            let maya = m.family.creator.userId
+            m.server.lock.withLock { m.server.manage.memberAnswers = Array(repeating: Self.noAnswer, count: 12) }
+            guard case .pending = try await Self.quickly({ try await m.phone.sync.changeRole(m.summary, userId: maya, first: "Maya", change: .take) }) else {
+                Issue.record("the stop wasn't kept"); return
+            }
+            let kept = try m.kept
+            #expect(kept.count == 1)
+            let end = try await Self.quickly { try await m.phone.sync.handOver(m.summary, to: maya, first: "Maya") }
+            #expect(end == .waiting(ManageWords.earlierWaiting("Lindqvist family")), "another kept change for Maya was said as the handover's")
+            #expect(try m.kept.map(\.entry) == kept.map(\.entry), "something new was kept over the stop")
+            #expect(try Self.handover(m) == nil, "a handover that waited was kept")
+            guard case .pending = try await Self.quickly({ try await m.phone.sync.changeRole(m.summary, userId: maya, first: "Maya", change: .take) }) else {
+                Issue.record("the same change pressed again wasn't the kept one's"); return
+            }
+            #expect(try m.kept.map(\.entry) == kept.map(\.entry))
+        }
+
+        /*
          * Billing moved to someone else meanwhile (another device): this account no longer holds it,
          * so it isn't this account's to give. Nothing is signed or sent. Fails if a former organizer
          * hands billing over.

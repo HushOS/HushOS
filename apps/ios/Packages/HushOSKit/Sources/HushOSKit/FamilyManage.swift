@@ -275,7 +275,8 @@ extension FamilySync {
      * call on that route (a person's admission, a change of their roles) looks only at its own;
      * anyone else's is `other`, untouched.
      */
-    func sendKept(_ groupId: String, outboxId: String, entry: String, only: ChainRoute?, saysLater: Bool = false) async throws -> CallEnd {
+    func sendKept(_ groupId: String, outboxId: String, entry: String, only: ChainRoute?, operation: RoleOperation? = nil,
+                  saysLater: Bool = false) async throws -> CallEnd {
         var sends = 0
         var fixes = 0
         // `saysLater`: a call nobody waits on for its own answer (the resume, the gate) keeps what it came to to be said,
@@ -310,6 +311,8 @@ extension FamilySync {
             case .send(_, let r, _), .hold(_, let r, _), .landed(_, let r), .superseded(_, let r): route = r
             }
             if let only, route != only { return .other }
+            // `operation`: on that route, only the same change is its own; another (or one kept with no note) is the gate's.
+            if let operation, try records.outboxOperation(userId: userId, groupId: groupId, outboxId: outboxId) != operation.rawValue { return .other }
             switch opened {
             case .hold(_, _, let reason):
                 return reason == .otherKeys ? .otherKeys : .pending(ManageWords.keptOnDevice)
@@ -505,7 +508,7 @@ extension FamilySync {
      * call is kept before anything is sent (`kept` hears it, after the put). A sync that fails is a
      * refusal or the lost session, never a landing or an absence.
      */
-    func stageCall(_ summary: GroupSummary, kept: (() throws -> Void)? = nil,
+    func stageCall(_ summary: GroupSummary, operation: RoleOperation? = nil, kept: (() throws -> Void)? = nil,
                    build: (FamilyView, UInt64, [String: String]) async throws -> RosterCall) async throws -> Staged {
         let groupId = summary.id
         summaries[groupId] = summary
@@ -553,6 +556,8 @@ extension FamilySync {
             }
             switch staged {
             case .staged(let call):
+                // What it does first, so no entry is ever kept without it.
+                if let operation { try records.outboxNoteOperation(userId: userId, groupId: groupId, outboxId: call.outboxId, operation.rawValue) }
                 try records.outboxPut(userId: userId, groupId: groupId, outboxId: call.outboxId, entry: call.entry)
                 try kept?()
                 return .call(call)
