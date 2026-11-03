@@ -1,0 +1,25 @@
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_3faa394f47c725 184-185
+apps/ios/App/FamilyManaging.swift
+  s_566b8e0c4467a4::t_d9cbb54c6a0f94 34-41,67,77-86,165,455,457-458
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyManage.swift
+  s_566b8e0c4467a4::t_0b0aee72e3cb6b 73-85,169-177,202,226,230-231,250,262,266,273,284,289,294,502-506,517-522
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyManageTests.swift
+  s_566b8e0c4467a4::t_1fb3edbcbd3107 380-381,395-446,712-713
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "afae321a5d00bb82cc9a9d85f92741aaba7d08d9",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
