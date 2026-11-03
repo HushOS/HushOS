@@ -63,6 +63,12 @@ object WriteBacks {
     /* The save a generation file (a job's or a failed row's `file`) holds: its id. */
     fun idOf(file: String?): String? = file?.let { File(it).name }?.takeIf { it.endsWith(BIN) }?.removeSuffix(BIN)
 
+    /*
+     * The save number a generation's id carries (`n<number>-<random>`, as `stage` names it), so a failed row naming its file
+     * and a ledger key naming its id (`<slot>#<id>`) say which save they are once its description is gone. Null otherwise.
+     */
+    fun numberOfId(id: String?): Long? = id?.takeIf { it.startsWith("n") }?.drop(1)?.substringBefore('-')?.toLongOrNull()
+
     private val locks = ConcurrentHashMap<String, ReentrantLock>()
     private fun lockOf(slot: String) = locks.getOrPut(slot) { ReentrantLock() }
 
@@ -185,7 +191,7 @@ object WriteBacks {
             }
             val numbers = readNumbers(context, slot)
             if (number <= maxOf(current(dir, slot)?.generation ?: 0L, numbers.landed, numbers.cancelled)) throw Superseded()
-            val id = java.util.UUID.randomUUID().toString()
+            val id = "n$number-" + java.util.UUID.randomUUID()
             val contents = File(dir, "$id$BIN.incoming")
             fault?.invoke("copy")
             java.io.FileOutputStream(contents).use { out ->
@@ -409,17 +415,8 @@ object WriteBacks {
             sending.renameTo(readCopy) || runCatching { sending.copyTo(readCopy, overwrite = true); true }.getOrDefault(false)
         } else false
         fault?.invoke("landed-copy")
-        // 2. The landing marker and the newest number landed, in one write (one rename): from here a read refreshes or serves
-        //    the landed bytes, and a save numbered at or below it (a staging retry) is never kept again. Refused, nothing
-        //    below runs (the caller's job tries again).
-        readNumbers(context, slot).let { held ->
-            writeNumbers(context, slot, held.copy(landed = maxOf(held.landed, generation), landing = Landing(java.util.UUID.randomUUID().toString(), if (kept) version else null)))
-        }
-        fault?.invoke("landed-mark")
-        // 3. Every save at or below it that never made it into the slot goes now, found on disk (a closed edit no row names
-        //    too); a death before this is finished by the next reconcile (retireSettled).
-        if (generation > 0L) retireStagedThrough(context, slot, generation)
-        fault?.invoke("landed-retire")
+        // 2-3. The landing recorded (recordLanding, as every landing is). Refused, nothing below runs (the caller's job tries again).
+        if (generation > 0L) recordLanding(context, slot, generation, if (kept) version else null)
         // 4. The slot cleared of it.
         val held = current(dir, slot)
         if (held == null || held.id == id) { dir.deleteRecursively(); null } else {
@@ -442,6 +439,43 @@ object WriteBacks {
      * never the version before.
      */
     data class Landing(val id: String, val version: String?)
+
+    /*
+     * Save `number` of `slot` landed (`version` the version it became, when known), however that was learnt: its own job's
+     * completion, or a reservation settled as completed later (a superseded save's included, recoveredLanding). Under the
+     * slot's lock: (2) the landing marker and the landed bound in one write (one rename), from which a read refreshes or
+     * serves the landed bytes and no save at or below it is kept again; then (3) every save at or below it that never made
+     * it into the slot goes, found on disk (a death before that is finished by the next reconcile: retireSettled). A number
+     * below the bound, or the bound's own without a version, is already recorded: nothing is written. Throws when the
+     * write is refused (nothing is recorded then).
+     */
+    fun recordLanding(context: Context, slot: String, number: Long, version: String?) = lockOf(slot).withLock {
+        val held = readNumbers(context, slot)
+        if (number < held.landed || (number == held.landed && version == null)) return@withLock
+        writeNumbers(context, slot, held.copy(landed = number, landing = Landing(java.util.UUID.randomUUID().toString(), version)))
+        fault?.invoke("landed-mark")
+        retireStagedThrough(context, slot, number)
+        fault?.invoke("landed-retire")
+    }
+
+    /*
+     * A reservation found completed (Reservations.completed: its answer lost, settled later) whose ledger key is a slot's
+     * save: recorded as that save's landing (its version unknown: a read asks the server, or fails), unless that save is
+     * still the slot's pending one, whose own job lands it with its version (as it finds the landed row). Inside the
+     * account's lock (the ledger's), the slot's taken after it, as everywhere.
+     */
+    fun recoveredLanding(context: Context, job: String) {
+        val slot = job.substringBefore('#').takeIf { isSlot(it) && job.contains('#') } ?: return
+        val id = job.substringAfter('#')
+        val number = numberOfId(id) ?: return
+        lockOf(slot).withLock {
+            if (current(dir(context, slot), slot)?.id == id) return
+            recordLanding(context, slot, number, null)
+        }
+    }
+
+    /* The newest save number of `slot` landed (0 when none). */
+    fun landedThrough(context: Context, slot: String): Long = readNumbers(context, slot).landed
 
     /* Where an earlier build kept landings apart from the numbers: nothing reads it now; a sign-out still wipes it. */
     const val LANDINGS = "writeback-landings"

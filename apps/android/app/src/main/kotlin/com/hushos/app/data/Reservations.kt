@@ -163,6 +163,9 @@ object Reservations {
         if (record == null || record.job.isEmpty()) { settled(context, uploadId); return true }
         unwritten.remove(uploadId)
         try { write(context, all(context).filter { it.uploadId != uploadId } + record.copy(landed = true)) } catch (_: Exception) { unwritten[uploadId] = record; return false }
+        // A file's save another app made (a write-back slot's key): its landing recorded where reads look, under the slot's
+        // lock, whether or not a newer save replaced it since. Refused, the landed row stays, and the next reconcile does it.
+        runCatching { WriteBacks.recoveredLanding(context, record.job) }
         true
     }
 
