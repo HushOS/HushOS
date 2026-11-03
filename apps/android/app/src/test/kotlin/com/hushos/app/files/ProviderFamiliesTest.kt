@@ -479,7 +479,7 @@ class ProviderFamiliesTest {
         val doc = FamilyDoc.of(file) as FamilyDoc.Node
         val edit = families.editFor(doc, "w").apply { writeText("written while offline") }
         val job = writeBack(families, doc, edit)
-        server.beforeAnswer = { method, path -> if (method == "POST" && path == "drive/uploads") throw IllegalStateException("dropped") }
+        server.beforeAnswer = { method, path -> if (method == "POST" && path == "drive/uploads") throw java.io.IOException("dropped") }
         assertEquals(ListenableWorker.Result.retry(), runJob(job))
         assertEquals("marker-family", families.readCopy(doc).readText())
         server.beforeAnswer = null
@@ -619,7 +619,7 @@ class ProviderFamiliesTest {
         val top = FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId)
         assertTrue(families.load().single().folders.single().writable)
         // Route 5 drops every request: no answer.
-        server.beforeAnswer = { _, path -> if (path.startsWith("groups/") && path.endsWith("/rosters")) throw IllegalStateException("dropped") }
+        server.beforeAnswer = { _, path -> if (path.startsWith("groups/") && path.endsWith("/rosters")) throw java.io.IOException("dropped") }
         now += 6 * 60_000L
         val kept = families.load().single()
         assertFalse(kept.folders.single().writable)
@@ -672,7 +672,7 @@ class ProviderFamiliesTest {
         val doc = FamilyDoc.Node(family.groupId, family.workspaceId, family.fileId)
         families.children(top)
         val edit = families.editFor(doc, "w").apply { writeText("saved while offline") }
-        server.beforeAnswer = { _, path -> if (path.startsWith("groups/") && path.endsWith("/rosters")) throw IllegalStateException("dropped") }
+        server.beforeAnswer = { _, path -> if (path.startsWith("groups/") && path.endsWith("/rosters")) throw java.io.IOException("dropped") }
         now += 6 * 60_000L
         families.load()
         assertTrue(families.roots.single().unanswered)
@@ -727,7 +727,7 @@ class ProviderFamiliesTest {
         val families = ProviderFamilies(vault, FamilySync(vault, sweeps = false, tellsFiles = false)) { now }
         families.load()
         val top = FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId)
-        server.beforeAnswer = { _, path -> if (path.startsWith("groups/") && path.endsWith("/rosters")) throw IllegalStateException("dropped") }
+        server.beforeAnswer = { _, path -> if (path.startsWith("groups/") && path.endsWith("/rosters")) throw java.io.IOException("dropped") }
         now += 6 * 60_000L
         families.load()
         assertThrows(FileNotFoundException::class.java) { families.create(top, Document.MIME_TYPE_DIR, "Trips") }
@@ -799,7 +799,7 @@ class ProviderFamiliesTest {
         val families = ProviderFamilies(vault, FamilySync(vault, sweeps = false, tellsFiles = false)) { now }
         families.load()
         var told = rootsTold()
-        server.beforeAnswer = { _, path -> if (path.startsWith("groups/") && path.endsWith("/rosters")) throw IllegalStateException("dropped") }
+        server.beforeAnswer = { _, path -> if (path.startsWith("groups/") && path.endsWith("/rosters")) throw java.io.IOException("dropped") }
         now += 6 * 60_000L
         assertFalse(families.load().single().folders.single().writable)
         assertEquals(told + 1, rootsTold())
@@ -823,7 +823,7 @@ class ProviderFamiliesTest {
         val doc = FamilyDoc.of(file) as FamilyDoc.Node
         writeBack(families, doc, families.editFor(doc, "w").apply { writeText("first save") })
         val slot = writeBack(families, doc, families.editFor(doc, "w").apply { writeText("second save") })
-        server.beforeAnswer = { method, path -> if (method == "POST" && path == "drive/uploads") throw IllegalStateException("dropped") }
+        server.beforeAnswer = { method, path -> if (method == "POST" && path == "drive/uploads") throw java.io.IOException("dropped") }
         assertEquals(ListenableWorker.Result.retry(), runJob(slot))
         server.beforeAnswer = null
         val sent = begins()
@@ -919,7 +919,7 @@ class ProviderFamiliesTest {
         val again = provider.openDocument(file, "w", null)
         families.vault.forget(family.workspaceId, family.fileId)
         families.vault.parents.remove(family.fileId)
-        server.beforeAnswer = { _, path -> if (path.endsWith("/children") || path.endsWith("/changes")) throw IllegalStateException("dropped") }
+        server.beforeAnswer = { _, path -> if (path.endsWith("/children") || path.endsWith("/changes")) throw java.io.IOException("dropped") }
         ParcelFileDescriptor.AutoCloseOutputStream(again).use { it.write("saved offline".toByteArray()) }
         org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
         server.beforeAnswer = null
@@ -1453,7 +1453,7 @@ class ProviderFamiliesTest {
         assertEquals("marker-family", families.readCopy(doc).readText())
         writeBack(families, doc, families.editFor(doc, "w").apply { writeText("landed save") })
         assertEquals(ListenableWorker.Result.success(), runJob(slot))
-        server.beforeAnswer = { _, path -> if (path.endsWith("/children") || path.endsWith("/changes")) throw IllegalStateException("dropped") }
+        server.beforeAnswer = { _, path -> if (path.endsWith("/children") || path.endsWith("/changes")) throw java.io.IOException("dropped") }
         assertTrue("a read served the version before the landing", runCatching { families.readCopy(doc) }.isFailure)
         server.beforeAnswer = null
         assertEquals("landed save", families.readCopy(doc).readText())
@@ -1479,7 +1479,7 @@ class ProviderFamiliesTest {
         // Before any load, from the roots held: refused at once.
         assertFalse(families.due())
         assertTrue("a root revoked since it was accepted was used", runCatching { families.pendingRead(doc) }.isFailure)
-        server.beforeAnswer = { _, path -> if (path.startsWith("groups")) throw IllegalStateException("dropped") }
+        server.beforeAnswer = { _, path -> if (path.startsWith("groups")) throw java.io.IOException("dropped") }
         now += 6 * 60_000L
         assertEquals("a revoked root was kept", emptyList<FamilyRoot>(), families.load())
         assertTrue(runCatching { families.pendingRead(doc) }.isFailure)
