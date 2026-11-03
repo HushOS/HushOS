@@ -478,14 +478,25 @@ class ProviderFamilies internal constructor(
 
     /*
      * The file's pending save for an app reading it (`r`): a copy of its own under the family folder's copies (which every
-     * forget of the folder deletes), made only while the family still holds the folder. Null when it has none.
+     * forget of the folder deletes), made only while the family still holds the folder: the folder's invalidation count
+     * read before its access is checked, and checked again, with the session, under the copies lock before anything is
+     * copied, so a removal or refusal another vault lands in between writes no plaintext back. Null when it has none.
      */
     fun pendingRead(doc: FamilyDoc.Node): File? {
+        val epoch = vault.familyEpoch(doc.workspaceId)
         val (_, folder) = folderOf(doc)
         val copies = FamilyCopies.folder(vault.context.cacheDir, folder.workspaceId) ?: throw FileNotFoundException(FamilyWords.COULDNT_CHECK_KEYS)
         val file = File(copies, "pending/${doc.nodeId.lowercase()}/${java.util.UUID.randomUUID()}")
-        return synchronized(FamilyCopies.LOCK) { file.takeIf { WriteBacks.copyTo(vault.context, slotOf(doc), it) } }
+        beforePendingCopy?.invoke()
+        return synchronized(FamilyCopies.LOCK) {
+            if (vault.closed) throw SessionEnded()
+            vault.familyWordsSince(folder.workspaceId, epoch)?.let { throw FileNotFoundException(it) }
+            file.takeIf { WriteBacks.copyTo(vault.context, slotOf(doc), it) }
+        }
     }
+
+    /* Tests: runs after a pending read checked the folder's access, before it takes the copies lock. */
+    @Volatile internal var beforePendingCopy: (() -> Unit)? = null
 
     /*
      * What another app wrote, once it closed the file (in the close callback itself, so saves keep the order the app

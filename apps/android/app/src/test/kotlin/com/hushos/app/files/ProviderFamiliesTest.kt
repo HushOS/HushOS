@@ -126,10 +126,12 @@ class ProviderFamiliesTest {
         val session = TransferQueue.accountTag(Shared.session(app)!!)
         val queued = jobs(slot)
         assertTrue("no job was queued for the slot", queued.isNotEmpty())
-        val expected = TransferQueue.slotRequest(queued.last().id, slot, WriteBacks.contentOf(app, slot), family.groupId.lowercase(), session).tags
-        assertTrue(queued.any { it.tags == expected })
-        val id = queued.firstOrNull { it.state == androidx.work.WorkInfo.State.ENQUEUED }?.id ?: UUID.randomUUID()
-        val request = TransferQueue.slotRequest(id, slot, WriteBacks.contentOf(app, slot), family.groupId.lowercase(), session)
+        // The job as it was queued: naming the save the slot held then, however many replaced it since.
+        val job = queued.firstOrNull { it.state == androidx.work.WorkInfo.State.ENQUEUED } ?: queued.last()
+        val file = File(job.tags.first { it.startsWith("file:") }.removePrefix("file:"))
+        assertEquals(TransferQueue.slotRequest(job.id, slot, file, family.groupId.lowercase(), session).tags, job.tags)
+        val id = if (job.state == androidx.work.WorkInfo.State.ENQUEUED) job.id else UUID.randomUUID()
+        val request = TransferQueue.slotRequest(id, slot, file, family.groupId.lowercase(), session)
         val worker = TestListenableWorkerBuilder<UploadWorker>(app).setId(id).setInputData(request.workSpec.input).setTags(request.tags.toList()).build()
         return runBlocking { worker.doWork() }
     }
@@ -835,7 +837,7 @@ class ProviderFamiliesTest {
         val families = familiesOf(provider)
         val doc = FamilyDoc.of(file) as FamilyDoc.Node
         val slot = writeBack(families, doc, families.editFor(doc, "w").apply { writeText("cancelled save") })
-        TransferQueue.cancel(app, jobs(slot).single().id, WriteBacks.contentOf(app, slot).path)
+        TransferQueue.cancel(app, jobs(slot).single().id, WriteBacks.contentOf(app, slot).path).get()
         assertNull(WriteBacks.pending(app, slot))
         writeBack(families, doc, families.editFor(doc, "w").apply { writeText("failed save") })
         val inner = server.extraRoutes!!
@@ -1112,6 +1114,94 @@ class ProviderFamiliesTest {
         server.dropReply = null
         assertEquals(ListenableWorker.Result.success(), runJob(slot))
         assertEquals("second save", serverText())
+    }
+
+    /* Every answer from a family save's completion on lost (its upload landed on the server, nothing here heard). */
+    private fun dropFromTheCompletion() {
+        var dropping = false
+        server.dropReply = { method, path -> (dropping || (method == "POST" && path.endsWith("/complete"))).also { if (it) dropping = true } }
+    }
+
+    /*
+     * The account was removed from the family while an earlier save's reservation is still unsettled (its completion
+     * answer lost), and the abort is answered as the server answers once the account can't reach the folder (403: settled
+     * only after its expiry). The save's job asks about the family before waiting on that reservation: it ends the
+     * family's uploads now, its plaintext and Retry with them, rather than retrying for a day. Fails if a removed family's
+     * pending save waits out an unsettled reservation.
+     */
+    @Test
+    fun aRemovedFamilysSaveEndsEvenWhileAnEarlierReservationIsUnsettled() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("first save") })
+        dropFromTheCompletion()
+        assertEquals(ListenableWorker.Result.retry(), runJob(slot))
+        server.dropReply = null
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("second save") })
+        family.notMember = true
+        family.listed = false
+        val inner = server.extraRoutes!!
+        server.extraRoutes = { method, segments, query, body ->
+            if (method == "POST" && segments.size == 4 && segments[1] == "uploads" && segments[3] == "abort") 403 to org.json.JSONObject().put("message", "Not a member.")
+            else inner(method, segments, query, body)
+        }
+        assertEquals(ListenableWorker.Result.failure()::class, runJob(slot)::class)
+        server.extraRoutes = inner
+        assertFalse("a removed family's save outlived it", WriteBacks.dir(app, slot).exists())
+        assertTrue(com.hushos.app.data.FailedTransfers.of(app).all().all { it.reason == com.hushos.app.data.FamilyWords.NOT_IN_FAMILY && it.sourceGone() })
+    }
+
+    /*
+     * A family save's completion landed with its answer lost (its reservation still on the ledger under the save's own
+     * key), then the provider confirms the family's removal: the cleanup settles that key, finds the save landed, and
+     * says it uploaded, with no reservation left. Fails if the cleanup settles the job's id instead of the slot's keys
+     * (the reservation stays, and a landed save reads as not sent).
+     */
+    @Test
+    fun aRemovalSettlesTheSlotsOwnReservations() {
+        var now = 0L
+        val vault = Vault(app, DriveApi(Shared.session(app)!!))
+        val families = ProviderFamilies(vault, FamilySync(vault, sweeps = false, tellsFiles = false)) { now }
+        families.load()
+        val doc = FamilyDoc.Node(family.groupId, family.workspaceId, family.fileId)
+        families.children(FamilyDoc.Node(family.groupId, family.workspaceId, family.rootId))
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("landed save") })
+        dropFromTheCompletion()
+        assertEquals(ListenableWorker.Result.retry(), runJob(slot))
+        server.dropReply = null
+        assertTrue(Reservations.all(app).any { WriteBacks.ledgerOf(slot, it.job) && !it.landed })
+        family.notMember = true
+        family.listed = false
+        now += 6 * 60_000L
+        assertEquals(emptyList<FamilyRoot>(), families.load())
+        assertTrue("the slot's reservation was left", Reservations.all(app).none { WriteBacks.ledgerOf(slot, it.job) })
+        assertTrue("a landed save reads as not sent", com.hushos.app.data.FailedTransfers.of(app).all().isEmpty())
+        assertFalse(WriteBacks.dir(app, slot).exists())
+    }
+
+    /*
+     * A read of a family file with a pending save: another vault lets the family go after the read checked the folder and
+     * before it copies the save. The read gets nothing and no plaintext copy is made. Fails if the copy is made on the
+     * strength of the check before (the cleanup has already run, and the copy would outlive the family).
+     */
+    @Test
+    fun aPendingReadTheFamilyLetGoOfMeanwhileCopiesNothing() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        val doc = FamilyDoc.of(file) as FamilyDoc.Node
+        writeBack(families, doc, families.editFor(doc, "w").apply { writeText("pending save") })
+        val phone = family.phone()
+        assertTrue(phone.sync.sync(family.summary) is FamilyState.Accepted)
+        families.beforePendingCopy = {
+            families.beforePendingCopy = null
+            assertTrue(phone.sync.leave(family.groupId) is FamilySync.Leaving.Left)
+        }
+        assertThrows(FileNotFoundException::class.java) { read(provider, file) }
+        val copies = FamilyCopies.folder(app.cacheDir, family.workspaceId)
+        assertTrue("a pending read's plaintext was copied after the family let go", copies == null || !File(copies, "pending").walkTopDown().any { it.isFile })
     }
 
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =
