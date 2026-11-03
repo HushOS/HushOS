@@ -3255,8 +3255,7 @@ export function createGroupSession(host: GroupHost) {
                 // 3.2; newRosterEntry refuses anything else, a family's word included), and always
                 // as a plain member: the roles an invitation carries are the server's word, so none
                 // is ever signed in on admission. A role is a role change afterwards, by a manager
-                // who chose it, under the manager rule (3.6). The core's admit_body follows with the
-                // phones' release (PR 5).
+                // who chose it, under the manager rule (3.6). The core's admit_body does the same.
                 if (op.roles.length > 0) throw new CryptoError(ADMIT_AS_MEMBER);
                 const entry = await newRosterEntry(pin, op.served, {
                     roles: op.roles,

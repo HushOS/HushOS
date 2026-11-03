@@ -239,6 +239,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     override fun walkSoon() = com.hushos.app.data.FamilyWalkWork.soon(context)
     override fun notice(text: String, untilRead: Boolean) = if (untilRead) notifyUntilRead(text) else notify(text)
     override fun accountChanged() { refreshAccount(); refreshStorage() }
+    override fun accountChangedFor(change: com.hushos.app.data.AccountChange) { contactStep = ContactStep.Changed(change) }
     private val thumbnailTasks = HashSet<String>()
     /* Who can open what (`access`): one request at a time, and one more after it for anything asked meanwhile. */
     private val sharingLoads = SharingRefresh(viewModelScope) { loadAccess() }
@@ -338,6 +339,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         vault?.close()
         vault?.areaLedger?.clear()
         families.reset()
+        notices.clear()
         vault = Vault.fromShared(context)
         filesAppChanged()
         refreshOffline()
@@ -511,6 +513,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         vault?.areaLedger?.clear()
         vault = null
         families.reset()
+        notices.clear()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin)
         viewModelScope.launch {
             withContext(Dispatchers.IO) { Auth.signOut(context) }
@@ -528,6 +531,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         vault?.areaLedger?.clear()
         vault = null
         families.reset()
+        notices.clear()
         link = null
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin, signedOutNotice = true)
         // Ended because this phone was removed from the account: everything of the account goes too,
@@ -1435,6 +1439,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         vault?.areaLedger?.clear()
         vault = null
         viewModelScope.launch { families.reset() }
+        notices.clear()
         filesAppChanged()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin, accountDeleted = true)
         null
@@ -1653,19 +1658,22 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         runCatching { context.startActivity(shareChooser(context, send, name).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }
 
+    /* One notice on screen at a time, until-read ones never lost to the next (NoticeQueue). */
+    private val notices = NoticeQueue { notice -> _state.update { it.copy(notice = notice) } }
+
     fun notify(text: String, action: String = "Undo", undo: (() -> Unit)? = null) {
         val notice = Notice(System.nanoTime(), text, undo, action)
-        _state.update { it.copy(notice = notice) }
+        notices.passing(notice)
         viewModelScope.launch {
             kotlinx.coroutines.delay(6000)
-            _state.update { if (it.notice?.id == notice.id) it.copy(notice = null) else it }
+            notices.expire(notice.id)
         }
     }
 
-    /* A notice that stays until it is read: something left the phone without being asked to. OK closes it. */
-    fun notifyUntilRead(text: String) = _state.update { it.copy(notice = Notice(System.nanoTime(), text, {}, "OK")) }
+    /* A notice that stays until it is read: something left the phone without being asked to. OK closes it; the next waits. */
+    fun notifyUntilRead(text: String) = notices.untilRead(Notice(System.nanoTime(), text, {}, "OK"))
 
-    fun dismissNotice() = _state.update { it.copy(notice = null) }
+    fun dismissNotice() = notices.dismiss()
 
     /*
      * Move to…: within a drive the item's key is wrapped again under its new folder.
