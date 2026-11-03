@@ -67,6 +67,7 @@ class FilesSaveOrderTest {
     @After
     fun close() {
         WriteBacks.afterContent = null
+        TransferQueue.beforeSlotFails = null
         server.close()
         assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
     }
@@ -114,7 +115,7 @@ class FilesSaveOrderTest {
     private fun Vault.buildCatalogueQuietly() = runCatching { listChildren(server.root) }
 
     /* The slot's jobs, as WorkManager holds them. */
-    private fun jobs(slot: String): List<WorkInfo> = WorkManager.getInstance(app).getWorkInfosForUniqueWork(slot).get()
+    private fun jobs(slot: String): List<WorkInfo> = WorkManager.getInstance(app).getWorkInfosByTag(WriteBacks.SLOT + slot).get()
 
     /*
      * The slot's job run as WorkManager starts it: a run of it (each with its own id, as a rerun or the next job behind it
@@ -177,7 +178,7 @@ class FilesSaveOrderTest {
         val slot = slotOf(provider, notes)
         save(provider, notes, "first save")
         val first = jobs(slot).single()
-        TransferQueue.cancel(app, first.id, WriteBacks.contentOf(app, slot).path)
+        TransferQueue.cancel(app, first.id, WriteBacks.contentOf(app, slot).path).get()
         assertNull(WriteBacks.pending(app, slot))
         save(provider, notes, "second save")
         assertEquals(WorkInfo.State.ENQUEUED, jobs(slot).single { it.id != first.id }.state)
@@ -199,7 +200,7 @@ class FilesSaveOrderTest {
         dropFromTheCompletion()
         assertEquals(ListenableWorker.Result.retry(), runSlot(slot))
         server.dropReply = null
-        TransferQueue.cancel(app, jobs(slot).last().id, WriteBacks.contentOf(app, slot).path)
+        TransferQueue.cancel(app, jobs(slot).last().id, WriteBacks.contentOf(app, slot).path).get()
         assertNull(WriteBacks.pending(app, slot))
         save(provider, notes, "second save")
         assertEquals(ListenableWorker.Result.success(), runSlot(slot))
@@ -725,6 +726,124 @@ class FilesSaveOrderTest {
         assertEquals(ListenableWorker.Result.success(), runSlot(slot))
         assertEquals("newer save", serverText(notes))
         assertTrue(FailedTransfers.of(app).all().isEmpty())
+    }
+
+    /*
+     * An earlier save finished on the server after the run's vault read its catalogue and before the run settled it (its
+     * answer lost): the newer save goes out from a vault opened after the settling, so it replaces the version that landed.
+     * Fails if the newer save is sent from the catalogue read before the settling (the server refuses it for good).
+     */
+    @Test
+    fun aSaveAfterAnEarlierOneSettledReplacesTheVersionThatLanded() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "first save")
+        dropFromTheCompletion()
+        assertEquals(ListenableWorker.Result.retry(), runSlot(slot))
+        server.dropReply = null
+        save(provider, notes, "second save")
+        // The first save's landing reaches the feed only once the run settles it, after its vault read the catalogue.
+        server.missedByFeed.add(notes)
+        server.beforeAnswer = { _, path -> if (path.endsWith("/abort")) { server.beforeAnswer = null; server.missedByFeed.remove(notes) } }
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        assertEquals("second save", serverText(notes))
+    }
+
+    /*
+     * A file read after its save landed: the read checks the version with the server, and another save lands as that
+     * check is answered (the answer predates it). The read after that gets the newer save, not the copy the check found.
+     * Fails if a read takes a landing that came during its check for one it saw.
+     */
+    @Test
+    fun aLandingDuringARefreshIsNeverTakenForSeen() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "first save")
+        assertEquals(ListenableWorker.Result.success(), runSlot(slot))
+        // The next save lands as the read's check is answered: the answer (already made) predates it.
+        var landing = true
+        server.dropReply = { _, path ->
+            if (landing && path.endsWith("/changes")) {
+                landing = false
+                WriteBacks.noteLanded(slot)
+            }
+            false
+        }
+        assertEquals("first save", opened(provider, notes, "r"))
+        assertFalse("no save landed during the read", landing)
+        server.dropReply = null
+        server.newVersion(notes, "second save".toByteArray())
+        assertEquals("second save", opened(provider, notes, "r"))
+    }
+
+    /*
+     * Cancelling a file's save from the panel while another save of it holds its slot (a large file's copy): the cancel
+     * returns at once, and its cleanup drops the slot once the save is done. Fails if a cancel waits on the slot's lock
+     * on the caller's thread (the panel's button, the main thread).
+     */
+    @Test
+    fun aCancelNeverWaitsOnASaveInProgress() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "first save")
+        val job = jobs(slot).single()
+        val target = WriteBacks.pending(app, slot)!!.target
+        val holding = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        WriteBacks.afterContent = { WriteBacks.afterContent = null; holding.countDown(); release.await(2, TimeUnit.SECONDS) }
+        val saving = Thread { WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "large").apply { writeText("large save") }) }.apply { start() }
+        assertTrue(holding.await(5, TimeUnit.SECONDS))
+        val began = System.nanoTime()
+        val cleanup = TransferQueue.cancel(app, job.id, job.tags.first { it.startsWith("file:") }.removePrefix("file:"))
+        val tookMs = (System.nanoTime() - began) / 1_000_000
+        release.countDown()
+        saving.join(5_000)
+        cleanup.get(5, TimeUnit.SECONDS)
+        assertTrue("the cancel waited ${tookMs}ms on the slot", tookMs < 1_000)
+        assertNull(WriteBacks.pending(app, slot))
+    }
+
+    /*
+     * A save kept while its file's running job is about to fail for good, after the job's last look at the slot: the
+     * save's own job is untouched by that failure (WorkManager runs both here, on a thread of its own) and lands it, with
+     * no transfers panel and no sweep. Fails if a newer save's job is chained behind a running one, which WorkManager
+     * fails with it.
+     */
+    @Test
+    fun aNewerSaveKeptAsItsPredecessorFailsIsStillSentWithoutThePanel() {
+        WorkManagerTestInitHelper.initializeTestWorkManager(app, Configuration.Builder().setExecutor(java.util.concurrent.Executors.newSingleThreadExecutor()).build())
+        val driver = WorkManagerTestInitHelper.getTestDriver(app)!!
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        save(provider, notes, "refused save")
+        val failing = jobs(slot).single()
+        val target = WriteBacks.pending(app, slot)!!.target
+        refuseBegins(true)
+        TransferQueue.beforeSlotFails = {
+            TransferQueue.beforeSlotFails = null
+            refuseBegins(false)
+            WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "behind").apply { writeText("newer save") })
+            TransferQueue.enqueueSlot(app, slot, "Notes.txt")
+        }
+        fun finished(id: java.util.UUID): WorkInfo {
+            val until = System.currentTimeMillis() + 30_000
+            while (true) {
+                val info = WorkManager.getInstance(app).getWorkInfoById(id).get()!!
+                if (info.state.isFinished || System.currentTimeMillis() > until) return info
+                Thread.sleep(50)
+            }
+        }
+        driver.setAllConstraintsMet(failing.id)
+        assertEquals(WorkInfo.State.FAILED, finished(failing.id).state)
+        val next = jobs(slot).single { it.id != failing.id }
+        assertEquals("the newer save's job went down with its predecessor", WorkInfo.State.ENQUEUED, next.state)
+        driver.setAllConstraintsMet(next.id)
+        assertEquals(WorkInfo.State.SUCCEEDED, finished(next.id).state)
+        assertEquals("newer save", serverText(notes))
     }
 
     /*

@@ -187,13 +187,17 @@ object WriteBacks {
      * Slots a job landed while this process ran: the provider's own vault, which didn't send it, may still hold the
      * version before, so its next read of the file checks the version with the server first (then `caughtUp`).
      */
-    private val landedHere: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private val landedHere = ConcurrentHashMap<String, Long>()
+    private val landings = java.util.concurrent.atomic.AtomicLong()
 
-    fun noteLanded(slot: String) { landedHere.add(slot) }
+    /* A slot's save landed: a landing count of its own, so a read refreshed before it never takes it for seen. */
+    fun noteLanded(slot: String) { landedHere[slot] = landings.incrementAndGet() }
 
-    fun landedSince(slot: String) = slot in landedHere
+    /* The slot's latest landing not caught up with, if any: what a read refreshes for, and then says it saw. */
+    fun landedSince(slot: String): Long? = landedHere[slot]
 
-    fun caughtUp(slot: String) { landedHere.remove(slot) }
+    /* A read refreshed after landing `seen`: only that landing is caught up with, never one that came during the refresh. */
+    fun caughtUp(slot: String, seen: Long) { landedHere.remove(slot, seen) }
 
     /* The slot's saves dropped (cancelled): under its lock, so a save landing in it meanwhile is either kept whole or gone. */
     fun drop(context: Context, slot: String) = lockOf(slot).withLock { dir(context, slot).deleteRecursively() }
