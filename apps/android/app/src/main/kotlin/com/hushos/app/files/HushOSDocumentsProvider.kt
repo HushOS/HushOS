@@ -586,10 +586,11 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             // Within one family folder only: never into or out of the drive, another folder or another family.
             if (source !is FamilyDoc.Node || target !is FamilyDoc.Node) throw FileNotFoundException(com.hushos.app.data.FamilyWords.UNAVAILABLE)
             familiesOf(vault).move(source, target)
-            return@guarded null
+            return@guarded sourceDocumentId
         }
         vault.move(nodeId(sourceDocumentId, vault), nodeId(targetParentDocumentId, vault))
-        null
+        // The moved document's id (unchanged: ids are node ids): DocumentsContract.moveDocument reads null as a failure.
+        sourceDocumentId
     }
 
     override fun deleteDocument(documentId: String) = guarded {

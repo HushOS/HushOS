@@ -1700,6 +1700,20 @@ class ProviderFamiliesTest {
         landing!!.join(10_000)
     }
 
+    /*
+     * #266 P2: a file moved by Files into another folder of the same family folder: the provider answers with the moved
+     * document's id, as DocumentsContract.moveDocument needs to report the move done, and the server holds it there.
+     * Fails if the family move answers null (Files then says the move failed, though the file moved).
+     */
+    @Test
+    fun aFamilyMoveAnswersWithTheMovedDocument() {
+        val provider = provider()
+        val made = provider.createDocument(folder, Document.MIME_TYPE_DIR, "Trips")
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        assertEquals(file, provider.moveDocument(file, folder, made))
+        assertEquals((FamilyDoc.of(made) as FamilyDoc.Node).nodeId, server.node(family.fileId).parentId)
+    }
+
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =
         HushOSDocumentsProvider::class.java.getDeclaredField("families").apply { isAccessible = true }.get(provider) as ProviderFamilies
 }
