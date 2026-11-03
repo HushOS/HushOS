@@ -566,7 +566,7 @@ class ProviderFamilies internal constructor(
                 WriteBacks.save(vault.context, vault.ledgerGeneration, target, edit)
             } catch (failure: Exception) {
                 // Not kept (a full disk, say): the edit stays with a row whose Retry keeps it; a removal's cleanup deletes it.
-                if (TransferQueue.stagingFailed(vault.context, target, edit, failure, vault.ledgerGeneration)) throw EditKept(failure)
+                if (TransferQueue.stagingFailed(vault.context, target, edit, failure, vault.ledgerGeneration, epoch)) throw EditKept(failure)
                 throw failure
             }
         } ?: return false

@@ -314,8 +314,29 @@ object TransferQueue {
             // A save that couldn't be kept in its slot: kept now (its edit as it was left), then sent. Not kept again: the row stays.
             UPLOAD -> if (failed.stage != null) {
                 val target = failed.stage.let(WriteBacks::decodeTarget) ?: return false
-                val edit = failed.file?.let(::File)?.takeIf { it.isFile } ?: return false
-                val kept = runCatching { WriteBacks.save(context, Reservations.generation, target, edit) }.getOrNull() ?: return false
+                val edit = failed.file?.let(::File) ?: return false
+                val kept = if (target.familyWorkspace != null) {
+                    // A family's edit: kept only under the copies lock a revocation's cleanup takes, while the folder hasn't
+                    // been let go of since the row was made (its revocation count, as a family save checks it; a count lower
+                    // than the row's is a later process's, where a revocation would have deleted the edit) and the edit is
+                    // still there. Let go of: nothing is kept, the edit goes, and the row says why.
+                    val session = Shared.session(context) ?: return false
+                    val state = FamilySessions.of(session)
+                    var revoked = false
+                    val saved = synchronized(FamilyCopies.LOCK) {
+                        val now = state.epochs[target.familyWorkspace.lowercase()]?.first ?: 0L
+                        revoked = state.closed || !edit.isFile || now > (WriteBacks.stagedEpoch(failed.stage) ?: 0L)
+                        if (revoked) { edit.delete(); null }
+                        else runCatching { WriteBacks.save(context, Reservations.generation, target, edit) }.getOrNull()
+                    }
+                    if (revoked) {
+                        records.record(failed.copy(reason = FamilyWords.NOT_IN_FAMILY, stage = null))
+                        FailedTransfers.changed()
+                        return false
+                    }
+                    saved
+                } else edit.takeIf { it.isFile }?.let { runCatching { WriteBacks.save(context, Reservations.generation, target, it) }.getOrNull() }
+                kept ?: return false
                 enqueueSlot(context, kept.slot, target.name, target.family)
                 WriteBacks.notifyFolder(context, target)
             // A file's slot: its job again, sending whatever the slot holds now (the newest save), never an older one.
@@ -519,13 +540,13 @@ object TransferQueue {
      * is, the only copy of what the app believes it saved, and a row says so, whose Retry keeps it in the slot and sends it.
      * Only while the account it was made under is still here. Whether the row was made (else the edit can go).
      */
-    fun stagingFailed(context: Context, target: WriteBacks.Target, edit: File, error: Exception, accountGeneration: Long): Boolean =
+    fun stagingFailed(context: Context, target: WriteBacks.Target, edit: File, error: Exception, accountGeneration: Long, familyEpoch: Long? = null): Boolean =
         Reservations.whileAccount(accountGeneration) {
             if (!edit.isFile) return@whileAccount false
             FailedTransfers.of(context).record(FailedTransfer(UUID.randomUUID().toString(), UPLOAD, target.name, Problems.say(error, "The transfer failed."),
                 System.currentTimeMillis(), file = edit.path, mime = target.mime, folder = target.folder, replacing = target.nodeId,
                 family = target.family, familyWorkspace = target.familyWorkspace, slot = WriteBacks.slotOf(target.workspaceId, target.nodeId),
-                stage = WriteBacks.encodeTarget(target)))
+                stage = WriteBacks.encodeTarget(target, familyEpoch)))
             FailedTransfers.changed()
             true
         } == true

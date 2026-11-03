@@ -123,9 +123,13 @@ object WriteBacks {
     @Volatile internal var beforeSlotId: (() -> Unit)? = null
 
     /* A save's file as a failed row keeps it (FailedTransfer.stage), and back. */
-    fun encodeTarget(t: Target): String = JSONObject().put("workspaceId", t.workspaceId).put("nodeId", t.nodeId).put("name", t.name)
+    fun encodeTarget(t: Target, familyEpoch: Long? = null): String = JSONObject().put("workspaceId", t.workspaceId).put("nodeId", t.nodeId).put("name", t.name)
         .put("mime", t.mime ?: JSONObject.NULL).put("folder", t.folder).put("family", t.family ?: JSONObject.NULL)
-        .put("familyWorkspace", t.familyWorkspace ?: JSONObject.NULL).put("root", t.root ?: JSONObject.NULL).toString()
+        .put("familyWorkspace", t.familyWorkspace ?: JSONObject.NULL).put("root", t.root ?: JSONObject.NULL)
+        .put("familyEpoch", familyEpoch ?: JSONObject.NULL).toString()
+
+    /* The family folder's revocation count a staging row was made under (null for this account's own drive). */
+    fun stagedEpoch(json: String): Long? = runCatching { JSONObject(json).opt("familyEpoch") as? Number }.getOrNull()?.toLong()
 
     fun decodeTarget(json: String): Target? = runCatching {
         val o = JSONObject(json)

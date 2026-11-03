@@ -1505,6 +1505,53 @@ class ProviderFamiliesTest {
         assertEquals("save the disk refused", serverText())
     }
 
+    /*
+     * A family save that couldn't be kept left its edit and a retry row; then another vault lets the family's folder go (a
+     * refusal or a removal the app found). The row's Retry keeps nothing in the queue: the edit goes and the row says the
+     * account isn't in the family any more. Fails if a Retry moves a revoked family's edit into the queue, or leaves its
+     * row offering a Retry.
+     */
+    @Test
+    fun aRetryOfAFamilySaveAfterItsFolderWasLetGoOfKeepsNothing() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        WriteBacks.beforeSlotId = { WriteBacks.beforeSlotId = null; throw java.io.IOException("No space left on device") }
+        ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("save the disk refused".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
+        val row = com.hushos.app.data.FailedTransfers.of(app).all().single()
+        Vault(app, DriveApi(Shared.session(app)!!)).forgetFamilyCopies(listOf(family.workspaceId))
+        // The cleanup deleted the edit; as if this one had outlived it, so only the revocation count stands in the way.
+        File(row.file!!).apply { parentFile!!.mkdirs(); writeText("save the disk refused") }
+        assertFalse(TransferQueue.retry(app, row))
+        assertNull("a revoked family's edit reached the queue", WriteBacks.pending(app, slot))
+        assertFalse(File(row.file!!).exists())
+        val after = com.hushos.app.data.FailedTransfers.of(app).all().single()
+        assertEquals(com.hushos.app.data.FamilyWords.NOT_IN_FAMILY, after.reason)
+        assertTrue("the row still offers a Retry", after.sourceGone())
+    }
+
+    /*
+     * The family's folder was let go of once and accepted again before a save of its file couldn't be kept: that save's
+     * Retry keeps it and sends it (the folder hasn't been let go of since the row was made). Fails if a Retry measures a
+     * revocation from before its row was made.
+     */
+    @Test
+    fun aRetryOfAFamilySaveMadeAfterAnEarlierRevocationKeepsIt() {
+        val provider = provider()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        val families = familiesOf(provider)
+        Vault(app, DriveApi(Shared.session(app)!!)).forgetFamilyCopies(listOf(family.workspaceId))
+        families.reload()
+        rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
+        WriteBacks.beforeSlotId = { WriteBacks.beforeSlotId = null; throw java.io.IOException("No space left on device") }
+        ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("save after a revocation".toByteArray()) }
+        org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
+        val row = com.hushos.app.data.FailedTransfers.of(app).all().single()
+        assertTrue(TransferQueue.retry(app, row))
+        assertEquals(ListenableWorker.Result.success(), runJob(slot))
+        assertEquals("save after a revocation", serverText())
+    }
+
     private fun familiesOf(provider: HushOSDocumentsProvider): ProviderFamilies =
         HushOSDocumentsProvider::class.java.getDeclaredField("families").apply { isAccessible = true }.get(provider) as ProviderFamilies
 }
