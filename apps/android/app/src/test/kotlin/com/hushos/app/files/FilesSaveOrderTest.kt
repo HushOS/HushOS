@@ -12,11 +12,13 @@ import androidx.work.testing.TestListenableWorkerBuilder
 import androidx.work.testing.WorkManagerTestInitHelper
 import com.hushos.app.data.AccountStore
 import com.hushos.app.data.DriveApi
+import com.hushos.app.data.FailedTransfer
 import com.hushos.app.data.FailedTransfers
 import com.hushos.app.data.FakeDrive
 import com.hushos.app.data.FamilyFixture
 import com.hushos.app.data.Mirror
 import com.hushos.app.data.Reservations
+import com.hushos.app.data.JobNames
 import com.hushos.app.data.Shared
 import com.hushos.app.data.TransferQueue
 import com.hushos.app.data.UploadWorker
@@ -72,10 +74,12 @@ class FilesSaveOrderTest {
         WriteBacks.afterContent = null
         WriteBacks.beforeSlotId = null
         WriteBacks.fault = null
+        WriteBacks.afterNewestChosen = null
         FailedTransfers.beforeWrite = null
         TransferQueue.beforeSlotFails = null
         TransferQueue.afterCancelCleans = null
         TransferQueue.beforeSweepRemoves = null
+        TransferQueue.beforeSlotEnqueued = null
         server.close()
         assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
     }
@@ -929,7 +933,7 @@ class FilesSaveOrderTest {
         TransferQueue.afterCancelCleans = {
             TransferQueue.afterCancelCleans = null
             WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "meanwhile").apply { writeText("save during the cancel") })
-            assertEquals(job.id, TransferQueue.enqueueSlot(app, slot, "Notes.txt"))
+            assertEquals(job.id, TransferQueue.enqueueSlot(app, slot, "Notes.txt", accountGeneration = Reservations.generation))
         }
         TransferQueue.cancel(app, job.id, job.tags.first { it.startsWith("file:") }.removePrefix("file:")).get(5, TimeUnit.SECONDS)
         assertEquals(WorkInfo.State.ENQUEUED, jobs(slot).single { it.id != job.id }.state)
@@ -1614,7 +1618,7 @@ class FilesSaveOrderTest {
             TransferQueue.beforeSlotFails = null
             refuseBegins(false)
             WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "behind").apply { writeText("newer save") })
-            TransferQueue.enqueueSlot(app, slot, "Notes.txt")
+            TransferQueue.enqueueSlot(app, slot, "Notes.txt", accountGeneration = Reservations.generation)
         }
         fun finished(id: java.util.UUID): WorkInfo {
             val until = System.currentTimeMillis() + 30_000
@@ -1651,5 +1655,102 @@ class FilesSaveOrderTest {
         provider.onEditClosed(null, vault, late, opened)
         assertFalse("a save racing the sign-out wrote a slot back", WriteBacks.dir(app, slot).exists())
         assertFalse(late.exists())
+    }
+
+    /*
+     * #266 P1 (account): a save kept under one account, its job queued only after that account signed out and another
+     * signed in (a close callback delayed across it, or WorkManager's lookup blocking): nothing of it is published, no
+     * job and no name the new account would see. Fails if the enqueue tags a job with the account signed in now, or writes
+     * the old file's name, instead of the account the save was kept under.
+     */
+    @Test
+    fun aJobQueuedAfterItsAccountLeftPublishesNothing() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        val vault = vaultOf(provider)
+        val opened = vault.resolve(notes)
+        val target = WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime, opened.node.parentId ?: vault.rootId, root = vault.rootId)
+        val generation = vault.ledgerGeneration
+        assertNotNull(WriteBacks.save(app, generation, target, File(app.cacheDir, "kept").apply { writeText("kept before the sign-out") }))
+        Shared.clearSession(app)
+        AccountStore.of(app).wipe()
+        Shared.writeSession(app, Shared.Session(server.origin, "another-token", java.util.UUID.randomUUID().toString(), "sam@example.org"))
+        assertNull(TransferQueue.enqueueSlot(app, slot, "Notes.txt", accountGeneration = generation))
+        assertEquals("a job was queued for the account signed in now", emptyList<WorkInfo>(), jobs(slot))
+        assertEquals("the old account's file name was published", emptyMap<String, String>(), JobNames.of(app).all())
+    }
+
+    /*
+     * #266/#274 P2: an open choosing which kept contents to start from (a closed edit a failed save left, or the slot's
+     * newer pending save) while that pending save lands: the landing waits for the choice, and the open reads the newest
+     * save. Fails if the choice is made outside the slot's lock, where the landing deletes the chosen edit (and the slot)
+     * before it is copied and the open fails.
+     */
+    @Test
+    fun anOpenChoosingKeptContentsDuringALandingReadsTheNewest() {
+        val provider = provider()
+        val notes = notes(provider)
+        val slot = slotOf(provider, notes)
+        WriteBacks.fault = { if (it == "copy") throw java.io.IOException("No space left on device") }
+        save(provider, notes, "never kept")
+        WriteBacks.fault = null
+        assertEquals(1, FailedTransfers.of(app).all().count { it.slot == slot && it.stage != null })
+        save(provider, notes, "newest")
+        val pending = WriteBacks.pending(app, slot)!!
+        var landing: Thread? = null
+        WriteBacks.afterNewestChosen = {
+            WriteBacks.afterNewestChosen = null
+            landing = Thread { WriteBacks.landed(app, slot, pending.id, null, null, pending.generation) }.apply { start(); join(500) }
+        }
+        val dest = File(app.cacheDir, "chosen")
+        assertTrue(WriteBacks.copyNewestTo(app, slot, dest))
+        landing!!.join(10_000)
+        assertEquals("newest", dest.readText())
+    }
+
+    /*
+     * #274 P1 (landing order): a landing dies after each of its steps (the landed bytes moved to the read copy; the landing
+     * marker and the landed bound, one write; the retirement of what the landing made moot, here an older save never kept
+     * in the slot). After every one, an offline read never serves the version before the save (an editor reading it then
+     * saving would overwrite the upload), and the next start and the job's next run settle it: the older save's row and
+     * edit go. Fails if the bound (which retires the pending save) is written before the marker, so a death between them
+     * leaves neither, or if a death after the bound leaves the older save's row for good.
+     */
+    @Test
+    fun aLandingThatDiesAfterAnyStepNeverServesTheVersionBefore() {
+        val provider = provider()
+        val steps = listOf("landed-copy", "landed-mark", "landed-retire")
+        val files = steps.associateWith { server.file(server.root, "Notes-$it.txt", "original".toByteArray()) }
+        provider.queryChildDocuments("root", null, null as String?).close()
+        for (step in steps) {
+            val notes = files.getValue(step)
+            val slot = slotOf(provider, notes)
+            assertEquals("original", opened(provider, notes, "r"))
+            WriteBacks.fault = { if (it == "copy") throw java.io.IOException("No space left on device") }
+            save(provider, notes, "older, never kept")
+            WriteBacks.fault = null
+            save(provider, notes, "landed save")
+            WriteBacks.fault = { if (it == step) throw IllegalStateException("died at $step") }
+            assertEquals(step, ListenableWorker.Result.retry(), runSlot(slot))
+            WriteBacks.fault = null
+            assertEquals(step, "landed save", serverText(notes))
+            // As the next start finds it: nothing in memory, the phone offline, the edits reconciled.
+            WriteBacks.forgetReservedHere()
+            server.dropReply = { _, path -> path.endsWith("/changes") }
+            TransferQueue.reconcileEdits(app, startup = true)
+            val read = runCatching { opened(provider, notes, "r") }.getOrNull()
+            assertTrue("$step: the read served the version before the save", read == null || read == "landed save")
+            assertTrue("$step: neither the pending save nor a landing is left", WriteBacks.pending(app, slot) != null || WriteBacks.landing(app, slot) != null)
+            server.dropReply = null
+            val sent = begins()
+            if (WriteBacks.pending(app, slot) != null) assertEquals(step, ListenableWorker.Result.success(), runSlot(slot))
+            assertEquals("$step: the landed save was sent again", sent, begins())
+            assertNull(step, WriteBacks.pending(app, slot))
+            assertEquals("$step: the older save outlived the landing", emptyList<FailedTransfer>(), FailedTransfers.of(app).all().filter { it.slot == slot })
+            assertEquals("$step: the older save's edit outlived the landing", emptyList<File>(), closedEdits())
+            assertEquals(step, "landed save", opened(provider, notes, "r"))
+            assertEquals(step, "landed save", serverText(notes))
+        }
     }
 }

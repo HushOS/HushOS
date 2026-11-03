@@ -404,7 +404,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         }
         // The account left meanwhile: nothing of it is kept.
         if (kept == null) { WriteBacks.discardEdit(closed); return }
-        com.hushos.app.data.TransferQueue.enqueueSlot(ctx, slot, opened.name)
+        com.hushos.app.data.TransferQueue.enqueueSlot(ctx, slot, opened.name, accountGeneration = vault.ledgerGeneration)
         // Its listing shows the save's size and date now: Files reads the folder again.
         WriteBacks.notifyFolder(ctx, target)
     }

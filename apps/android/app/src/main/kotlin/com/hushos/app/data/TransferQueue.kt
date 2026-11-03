@@ -79,6 +79,9 @@ object TransferQueue {
         return enqueueUpload(context, id, file, name, mime, folderId, replacingId, family)
     }
 
+    /* Tests: runs once a slot's enqueue has looked for a waiting job, before it publishes anything. */
+    @Volatile internal var beforeSlotEnqueued: (() -> Unit)? = null
+
     /*
      * A file's slot of saves another app made (WriteBacks) gets a job for the save just kept, unless one of its jobs is
      * still waiting to start: that one sends whatever the slot holds when it starts, this save included (it was kept
@@ -86,16 +89,23 @@ object TransferQueue {
      * save's job down with it: each save not yet sent has a job of its own, without the transfers panel. Jobs of one
      * slot run one at a time (JobLocks); one that finds the slot empty just ends. The job's id.
      */
-    fun enqueueSlot(context: Context, slot: String, name: String, family: String? = null): UUID {
+    fun enqueueSlot(context: Context, slot: String, name: String, family: String? = null, accountGeneration: Long): UUID? {
         val work = WorkManager.getInstance(context)
         val waiting = runCatching { work.getWorkInfosByTag(WriteBacks.SLOT + slot).get() }.getOrNull()
             ?.firstOrNull { it.state == WorkInfo.State.ENQUEUED && sessionCurrent(context, it.tags) }
-        if (waiting != null) return waiting.id
-        val id = UUID.randomUUID()
-        val request = slotRequest(id, slot, WriteBacks.contentOf(context, slot), family, Shared.session(context)?.let(::accountTag))
-        JobNames.of(context).put(id.toString(), name)
-        work.enqueue(request)
-        return id
+        beforeSlotEnqueued?.invoke()
+        // For the account the save was made under (`accountGeneration`), checked again under the wipe's lock: a sign-out since
+        // (another account's, or the lookup above blocking across it) took the slot, and nothing of it is published now: no
+        // name, no job, no tag of the account signed in now.
+        return Reservations.whileAccount(accountGeneration) {
+            if (waiting != null) return@whileAccount waiting.id
+            val session = Shared.session(context) ?: return@whileAccount null
+            val id = UUID.randomUUID()
+            val request = slotRequest(id, slot, WriteBacks.contentOf(context, slot), family, accountTag(session))
+            JobNames.of(context).put(id.toString(), name)
+            work.enqueue(request)
+            id
+        }
     }
 
     /*
@@ -309,6 +319,8 @@ object TransferQueue {
      * again. Nothing is moved, so a process dying anywhere in a Retry leaves nothing behind but the row to retry again.
      */
     fun retry(context: Context, failed: FailedTransfer): Boolean {
+        // The account it's pressed in: what it keeps and queues is that account's, or nothing (a sign-out since took the slot).
+        val generation = Reservations.generation
         val records = FailedTransfers.of(context)
         when (failed.kind) {
             // A save that couldn't be kept in its slot: kept now (its edit as it was left), then sent. Not kept again: the row stays.
@@ -320,7 +332,7 @@ object TransferQueue {
                 val number = WriteBacks.stagedNumber(failed.stage) ?: return false
                 var superseded = false
                 fun stage(): WriteBacks.Pending? = try {
-                    WriteBacks.stage(context, Reservations.generation, target, edit, number)
+                    WriteBacks.stage(context, generation, target, edit, number)
                 } catch (_: WriteBacks.Superseded) {
                     superseded = true
                     null
@@ -355,12 +367,12 @@ object TransferQueue {
                     return false
                 }
                 kept ?: return false
-                enqueueSlot(context, kept.slot, target.name, target.family)
+                enqueueSlot(context, kept.slot, target.name, target.family, generation)
                 WriteBacks.notifyFolder(context, target)
             // A file's slot: its job again, sending whatever the slot holds now (the newest save), never an older one.
             } else if (failed.slot != null) {
                 if (WriteBacks.pending(context, failed.slot) == null) return false
-                enqueueSlot(context, failed.slot, failed.name, failed.family)
+                enqueueSlot(context, failed.slot, failed.name, failed.family, generation)
             } else if (!retryUpload(failed) { id, ledger ->
                     enqueueUpload(context, id, File(failed.file!!), failed.name, failed.mime, failed.folder!!, failed.replacing,
                         failed.family?.let { group -> failed.familyWorkspace?.let { Family(group, it) } }, ledger)
@@ -381,17 +393,19 @@ object TransferQueue {
 
     /* Removed from the list: the record, and the copy an upload kept for its retry. */
     fun dismiss(context: Context, failed: FailedTransfer) {
-        FailedTransfers.of(context).forget(failed.id)
-        // A save that was never kept in its slot: its edit goes. A file's failed save: only that save goes (the slot with it
+        // What the row holds goes first, the row last: a death between them leaves a row whose save is gone (dismissed
+        // again, its Retry does nothing), never a save without its row that a start would queue or give a row again.
+        // A save that was never kept in its slot: whatever of it reached the slot (a generation whose record wasn't
+        // published), so no look recovers it, then its edit. A file's failed save: only that save goes (the slot with it
         // while it is still the pending one), never a newer one.
         if (failed.kind == UPLOAD && failed.stage != null) {
-            failed.file?.let { WriteBacks.discardEdit(File(it)) }
-            // And whatever of it reached the slot (a generation whose record wasn't published), so no look recovers it.
             val number = WriteBacks.stagedNumber(failed.stage)
             if (failed.slot != null && number != null) WriteBacks.dismissSave(context, failed.slot, number)
+            failed.file?.let { WriteBacks.discardEdit(File(it)) }
         }
         else if (failed.kind == UPLOAD && failed.slot != null) WriteBacks.discard(context, failed.slot, failed.file)
         else if (failed.kind == UPLOAD) discard(context, failed.file)
+        FailedTransfers.of(context).forget(failed.id)
     }
 
     /* Removes the copy a failed upload kept for a retry; a reservation it left stays on record (Reservations) until settled. */
@@ -470,6 +484,8 @@ object TransferQueue {
      * the only ones that own a slot (a finished job sends nothing more, so a slot whose job finished before its save gets one).
      */
     fun sweep(context: Context, inUse: Set<String>, known: Set<String> = emptySet(), running: Set<String> = inUse) {
+        // The account it looks for: a job it queues is that account's, or none (a sign-out since took the slots it read).
+        val generation = Reservations.generation
         // A landed job's mark stays while WorkManager still lists the job: its FAILED entry is never read as a failure again.
         LandedJobs.of(context).sweep(keep = known)
         val cutoff = System.currentTimeMillis() - 10 * 60 * 1000
@@ -483,7 +499,7 @@ object TransferQueue {
             if (WriteBacks.isSlot(dir.name)) {
                 WriteBacks.pending(context, dir.name)?.let { pending ->
                     val failedHere = rows.any { it.slot == dir.name && WriteBacks.idOf(it.file) == pending.id }
-                    if (dir.path !in running && !failedHere) enqueueSlot(context, dir.name, pending.target.name, pending.target.family)
+                    if (dir.path !in running && !failedHere) enqueueSlot(context, dir.name, pending.target.name, pending.target.family, generation)
                     return@forEach
                 }
                 // An old slot with nothing to send and no job: gone, but only as one locked step that looks again first,
@@ -559,6 +575,8 @@ object TransferQueue {
         // whole file's copy: first those saves go, under the lock, then the job is cancelled (until then it is unfinished,
         // so no sweep queues the slot again), then a save left gets a job of its own (the cancelled one would have sent it).
         val slot = dir.name
+        // The account it's pressed in: a job queued after it is that account's, or none (a sign-out since took the slot).
+        val generation = Reservations.generation
         val cancelled = WriteBacks.publishedSave(context, slot)
         return cleanups.submit {
             WriteBacks.cancelThrough(context, slot, cancelled)
@@ -566,7 +584,7 @@ object TransferQueue {
             WorkManager.getInstance(context).cancelWorkById(id).result.get()
             // Read again once the cancel is done: a save made meanwhile may have found the cancelled job still waiting and
             // counted on it; it gets a job of its own.
-            WriteBacks.pending(context, slot)?.let { enqueueSlot(context, slot, it.target.name, it.target.family) }
+            WriteBacks.pending(context, slot)?.let { enqueueSlot(context, slot, it.target.name, it.target.family, generation) }
         }
     }
 
@@ -597,6 +615,12 @@ object TransferQueue {
     fun reconcileEdits(context: Context, startup: Boolean) {
         val session = Shared.session(context) ?: return
         val generation = Reservations.generation
+        // First what a landing or a cancel that died after its bound left (staging rows and closed edits at or below it).
+        val rows = runCatching { FailedTransfers.of(context).all() }.getOrElse { return }
+        val edits = File(context.filesDir, WriteBacks.EDITS).walkTopDown().filter { it.isFile && it.name.endsWith(".closed") }.mapNotNull { closed ->
+            runCatching { WriteBacks.decodeTarget(WriteBacks.sidecarOf(closed).readText()) }.getOrNull()?.let { WriteBacks.slotOf(it.workspaceId, it.nodeId) }
+        }
+        (rows.filter { it.stage != null }.mapNotNull { it.slot } + edits).toSet().forEach { WriteBacks.retireSettled(context, it) }
         val named = runCatching { FailedTransfers.of(context).all().mapNotNull { it.file }.toSet() }.getOrElse { return }
         val dayAgo = System.currentTimeMillis() - 86_400_000L
         File(context.filesDir, WriteBacks.EDITS).walkTopDown().filter { it.isFile }.toList().forEach { file ->
@@ -866,14 +890,21 @@ class UploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker
                 val landedAnyway = end !is JobEnd.Done && runCatching { Reservations.landed(applicationContext, ledger) }.getOrDefault(false)
                 // A landing keeps it (as the read copy) or deletes it with the slot (WriteBacks.landed).
                 if (end !is JobEnd.Done && !landedAnyway && !(end is JobEnd.Failed && end.error is Reservations.Landed)) sending.delete()
-                if (landedAnyway) return@withContext if (!landed()) Result.success() else null
+                // A landing whose bookkeeping couldn't be written (its marker refused): the save stays pending, and the job's
+                // next run finds it landed by its ledger and writes it again.
+                fun settle(version: String? = null): Result? = try {
+                    if (!landed(version)) Result.success() else null
+                } catch (_: Exception) {
+                    Result.retry()
+                }
+                if (landedAnyway) return@withContext settle()
                 when (end) {
-                    is JobEnd.Done -> if (!landed(end.value.node.currentVersion?.id)) Result.success() else null
+                    is JobEnd.Done -> settle(end.value.node.currentVersion?.id)
                     // Its save cancelled while it went up: nothing landed; whatever the slot holds now is next.
                     JobEnd.Stopped -> if (!isStopped && WriteBacks.isCancelled(applicationContext, slot, pending.generation)) null else Result.retry()
                     is JobEnd.Failed -> when {
                         // Its completion landed after all (its answer lost, or a step after it failed): landed.
-                        end.error is Reservations.Landed -> if (!landed()) Result.success() else null
+                        end.error is Reservations.Landed -> settle()
                         // Not in the family any more: the family's uploads end, this slot with them.
                         familyOf != null && FamilyUploads.removed(end.error) -> removed()
                         // A newer save arrived meanwhile: this one's failure is moot (never sent now), and the newer gets its own try.
