@@ -172,6 +172,8 @@ class FamilyFixture(val server: FakeDrive) {
     /* Route 2 lists the family (false: it stopped listing it); `groupsFail` and `rostersFail` answer with a 503. */
     @Volatile var listed = true
     @Volatile var groupsFail = false
+    /* The next this many route 5 reads answer 503, then it serves again: a connection that drops for a moment. */
+    @Volatile var rosterFailures = 0
     @Volatile var rostersFail = false
     @Volatile var groupState = "active"
     /* Maya's roles as route 2 lists them (`members` once Sam makes her a manager). */
@@ -224,6 +226,7 @@ class FamilyFixture(val server: FakeDrive) {
             method == "GET" && path == "groups/$groupId/rosters" -> {
                 if (notMember) return notMemberAnswer()
                 if (rostersFail) return 503 to JSONObject().put("message", "Drive is temporarily unavailable. Please try again.")
+                if (rosterFailures > 0) { rosterFailures--; return 503 to JSONObject().put("message", "Drive is temporarily unavailable. Please try again.") }
                 onRosters?.invoke()
                 val after = if (ignoringAfter) 0 else query["after"]?.toInt() ?: 0
                 val served = chain

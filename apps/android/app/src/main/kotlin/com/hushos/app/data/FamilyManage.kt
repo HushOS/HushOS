@@ -655,6 +655,13 @@ fun FamilySync.handOver(summary: GroupSummary, to: String, first: String, names:
             if (outbox.handover(userId, summary.id) != null) return@notMemberLetsGo RoleEnd.Refused("Finish handing over to $them first.")
             if (settled == RoleEnd.Landed) return@notMemberLetsGo RoleEnd.Refused("$them is the organizer now.")
         }
+        // The member list, not only this device's record: a handover whose last step was refused left no record, but
+        // someone else holds billing beside this account. Billing goes to nobody else until that one is finished.
+        (syncRevised(summary).state as? FamilyState.Accepted)?.view?.let { view ->
+            handoverToFinish(view, userId)?.takeIf { !it.equals(to, ignoreCase = true) }?.let { other ->
+                return@notMemberLetsGo RoleEnd.Refused("Finish handing over to ${names(other) ?: "them"} first.")
+            }
+        }
         outbox.markHandover(userId, summary.id, to)
         giveThenStepDown(summary, to, first)
     }

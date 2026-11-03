@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -116,5 +117,45 @@ class FamilyRolesModelTest {
         val stop = RoleAsk(family.groupId, ref, RoleKind.STOP)
         model.askRole(stop, verified = false)
         assertEquals(stop, model.roleAsk)
+    }
+
+    private fun until(what: String, check: () -> Boolean) {
+        val end = System.currentTimeMillis() + 15_000
+        while (!check() && System.currentTimeMillis() < end) Thread.sleep(20)
+        assertTrue(what, check())
+    }
+
+    private fun handOverFromTheRow() {
+        runBlocking { model.refreshFamilies(force = true) }
+        val ref = com.hushos.app.data.FamilyMemberRef(server.grace.id, "grace@example.org", "Grace Hopper")
+        model.askRole(RoleAsk(family.groupId, ref, RoleKind.ORGANIZER), verified = true)
+        model.confirmRole()
+        until("the handover finished") { model.roleBusy == null && host.shown != null }
+    }
+
+    private fun halfDoneShown() = (model.states[family.groupId] as? FamilyState.Accepted)?.view
+        ?.let { com.hushos.app.data.handoverToFinish(it, family.member.id) }?.lowercase()
+
+    /*
+     * Make them the organizer: billing lands with Grace, Maya's last step is refused. The page reads the family again at
+     * once, so it shows both organizers and Finish handing over. Fails if the page keeps the member list from before.
+     */
+    @Test
+    fun aRefusedLastStepShowsFinishHandingOverAtOnce() {
+        family.memberAnswers.add { body -> family.apply(body, null) }
+        family.memberAnswers.add { _ -> 409 to JSONObject().put("code", "held").put("message", "Paused.") }
+        handOverFromTheRow()
+        until("the page read the family again") { halfDoneShown() == server.grace.id.lowercase() }
+    }
+
+    /*
+     * Billing lands with Grace, then the connection drops before Maya's last step: the error is said, and the page reads
+     * the family again, showing Finish handing over. Fails if a failure part way leaves the page as it was before.
+     */
+    @Test
+    fun aFailurePartWayStillShowsTheFamilyAsItIs() {
+        family.memberAnswers.add { body -> val landed = family.apply(body, null); family.rosterFailures = 2; landed }
+        handOverFromTheRow()
+        until("the page read the family again") { halfDoneShown() == server.grace.id.lowercase() }
     }
 }

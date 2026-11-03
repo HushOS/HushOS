@@ -364,4 +364,27 @@ class FamilyRolesTest {
         assertTrue("Ada's handover never staged", family.memberCalls.none { it.first.equals(ada.id, ignoreCase = true) })
         assertNull(phone.sync.outbox.handover(family.member.id, family.groupId))
     }
+
+    /*
+     * Billing to Grace lands, Maya's last step is refused (no record left), then Make them the organizer on Ada: refused
+     * until the handover to Grace is finished, read from the member list itself. Fails if billing reaches a third person
+     * while a handover is left half done.
+     */
+    @Test
+    fun aHalfDoneHandoverWithNoRecordStillStopsAnotherOne() {
+        val phone = phone(organizer = true)
+        val ada = server.another("ada@example.org", "Ada Lovelace")
+        family.waiting(ada, "ada@example.org", "Ada Lovelace")
+        assertEquals(LetIn.Landed, phone.sync.letIn(summary, family.pendingRows.map(PendingPerson::from).single()))
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        family.verifyPin(ada, "ada@example.org", "Ada Lovelace")
+        family.memberAnswers.add { body -> family.apply(body, null) }
+        family.memberAnswers.add { _ -> 409 to JSONObject().put("code", "held").put("message", "Paused.") }
+        assertTrue(phone.sync.handOver(summary, graceId, "Grace") is RoleEnd.Refused)
+        assertNull(phone.sync.outbox.handover(family.member.id, family.groupId))
+        val end = phone.sync.handOver(summary, ada.id, "Ada", names = { if (it.equals(graceId, ignoreCase = true)) "Grace" else null })
+        assertEquals(RoleEnd.Refused("Finish handing over to Grace first."), end)
+        assertEquals(setOf(family.member.id.lowercase(), graceId), organizers(phone))
+        assertTrue("nothing for Ada", family.memberCalls.none { it.first.equals(ada.id, ignoreCase = true) })
+    }
 }

@@ -424,8 +424,13 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                 error.rethrowIfCancelled()
                 if (error is NotAuthenticated) { model.lostSession(); return@launch }
                 model.notice("Couldn’t change that. ${FamilyWords.error(error)}", untilRead = false)
+                // Part of it may have landed (billing given before the step down failed): the page shows the family as it is.
+                refreshFamily(summary, session = s)
                 return@launch
             }
+            // Anything short of a landing may have changed the family part way (a handover's billing given, its last step
+            // refused or kept): read again, so Finish handing over shows at once.
+            if (outcome is com.hushos.app.data.RoleEnd.Refused || outcome is com.hushos.app.data.RoleEnd.Pending) refreshFamily(summary, session = s)
             when (outcome) {
                 com.hushos.app.data.RoleEnd.Landed -> {
                     model.notice(when (ask.kind) {

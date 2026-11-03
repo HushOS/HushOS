@@ -214,7 +214,9 @@ fun FamilyPage(model: DriveViewModel, groupId: String, openFolder: (com.hushos.a
                                 val verified = standing == MemberStanding.VERIFIED
                                 if ("members" in member.roles) add("Stop them managing the family" to { families.askRole(RoleAsk(groupId, ref, RoleKind.STOP), verified) })
                                 else add("Let them manage the family" to { families.askRole(RoleAsk(groupId, ref, RoleKind.MANAGE), verified) })
-                                if (iAmOrganizer && "billing" !in member.roles) add("Make them the organizer" to { families.askRole(RoleAsk(groupId, ref, RoleKind.ORGANIZER), verified) })
+                                // Not while a handover is left half done: Finish handing over is the way on from there.
+                                if (iAmOrganizer && "billing" !in member.roles && com.hushos.app.data.handoverToFinish(view, me) == null)
+                                    add("Make them the organizer" to { families.askRole(RoleAsk(groupId, ref, RoleKind.ORGANIZER), verified) })
                             }
                             MemberRow(who?.name ?: "Someone", who?.email, member.userId, FamilySync.rolesLine(member.roles), you, standing, roles,
                                 busy = families.roleBusy != null) { _ -> startCheck(ref, standing) }
