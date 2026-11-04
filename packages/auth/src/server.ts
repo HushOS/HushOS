@@ -1041,15 +1041,17 @@ export async function requireAdmin(sessionToken: string | null) {
 
 export async function getAdminOverview(sessionToken: string | null) {
     await requireAdmin(sessionToken);
-    const [overview, stuck, owed, unrefundable, doubled, unended, unlisted] = await Promise.all([
-        adminRepository.getOverview(),
-        billingRepository.listGivenUpReissues(),
-        billingRepository.listRefundsOwed(),
-        billingRepository.listUnrefundable(),
-        billingRepository.listDoubleCharging(),
-        billingRepository.listLapsedRevokeRefusals(),
-        billingRepository.listUnlistedFamilies(),
-    ]);
+    const [overview, stuck, owed, unrefundable, doubled, unended, unlisted, orphaned] =
+        await Promise.all([
+            adminRepository.getOverview(),
+            billingRepository.listGivenUpReissues(),
+            billingRepository.listRefundsOwed(),
+            billingRepository.listUnrefundable(),
+            billingRepository.listDoubleCharging(),
+            billingRepository.listLapsedRevokeRefusals(),
+            billingRepository.listUnlistedFamilies(),
+            billingRepository.listOrphanedPlans(),
+        ]);
     return {
         ...overview,
         /*
@@ -1117,6 +1119,22 @@ export async function getAdminOverview(sessionToken: string | null) {
         unlistedFamilies: unlisted.map((row) => ({
             groupId: row.groupId,
             since: row.since?.toISOString() ?? null,
+        })),
+        /*
+         * Plans of families HushOS has deleted that Polar billed again (reinstated or resumed
+         * after they ended): revoked by HushOS, and what they took after the family's plans had
+         * ended refunded whole by the plan-ending job. Listed while one still bills, while its
+         * refunds are being made, and for 30 days after. Ids and amounts only.
+         */
+        orphanedPlans: orphaned.map((row) => ({
+            groupId: row.groupId,
+            subscriptionId: row.subscriptionId,
+            status: row.status,
+            revoked: row.revokedAt !== null,
+            refunded: row.refunded,
+            toRefund: row.toRefund,
+            currency: row.currency ?? 'usd',
+            since: new Date(row.since).toISOString(),
         })),
         workspaces: { ...overview.workspaces, usedBytes: String(overview.workspaces.usedBytes) },
         objects: {
@@ -1861,7 +1879,7 @@ async function refuseWhileHoldingGroups(userId: string) {
     // The last member of a family with a plan still paid for: deleting would dissolve it.
     if (blockers.some((blocker) => blocker.reason === 'billed'))
         throw new AuthError(
-            'Your family has a plan that is still being paid for. Cancel it in Billing on the family’s page before deleting your account; the family keeps it until the end of the period.',
+            'Your family has a plan that is still being paid for. Cancel it under Billing on the family’s page at hushos.com before deleting your account; the family keeps it until the end of the period.',
             409,
         );
     // In DESIGN.md's words: an organizer can't leave, and nor can a family's last manager.
@@ -1920,6 +1938,18 @@ export async function finishAccountDeletion(
         );
     if (deleted === 'unavailable')
         throw new AuthError(`${stopped} account could not be deleted just now. Try again.`, 503);
+    // A change to the family plan they pay for was under way: the departure waits for it.
+    // They became the payer of a renewing family plan after billing was checked (a resume landed).
+    if (deleted === 'pays')
+        throw new AuthError(
+            `${stopped} account was not deleted: you pay for a family plan. Hand its billing to another member, or cancel the family plan under Billing on the family’s page at hushos.com, then delete your account.`,
+            409,
+        );
+    if (deleted === 'busy')
+        throw new AuthError(
+            `${stopped} account was not deleted: another change to your family’s plan is in progress. Try again in a moment.`,
+            409,
+        );
     if (!deleted) throw failure();
     return { success: true };
 }

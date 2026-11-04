@@ -20,6 +20,15 @@ export interface Role {
     dark: string;
     lightHigh: string;
     darkHigh: string;
+    /**
+     * Dark, inside an elevated layer: an iOS sheet, popover or menu, which UIKit marks
+     * `userInterfaceLevel == .elevated`. Only the roles a sheet paints with have one. On a
+     * black ground a sheet drawn in the ground would vanish into the screen behind it, so
+     * there the ground lifts to the surface and the surface a step above, as iOS's own
+     * grouped colours do. The web and Android draw dialogs and sheets in the surface
+     * already, so they have no use for it.
+     */
+    darkElevated?: string;
     /** One line for the generated files and the design board. */
     use: string;
 }
@@ -27,16 +36,18 @@ export interface Role {
 export const color = {
     surface: {
         light: '#FFFFFF',
-        dark: '#17181C',
+        dark: '#1C1C1E',
         lightHigh: '#FFFFFF',
         darkHigh: '#0A0A0B',
+        darkElevated: '#2C2C2E',
         use: 'Sheets, cards, list groups, inputs.',
     },
     ground: {
         light: '#F3F4F8',
-        dark: '#0F1013',
+        dark: '#000000',
         lightHigh: '#F2F4F9',
         darkHigh: '#000000',
+        darkElevated: '#1C1C1E',
         use: 'Screen background behind surfaces.',
     },
     ink: {
@@ -55,14 +66,14 @@ export const color = {
     },
     rule: {
         light: '#E2E5EE',
-        dark: '#2A2C33',
+        dark: '#38383A',
         lightHigh: '#5F6886',
         darkHigh: '#8F939D',
         use: 'Hairlines and dividers.',
     },
     field: {
         light: '#7A8299',
-        dark: '#70737D',
+        dark: '#777A84',
         lightHigh: '#1B2238',
         darkHigh: '#D6D8DE',
         use: 'Input and outline-button borders; 3:1 against the surface so edges stay visible.',
@@ -90,9 +101,10 @@ export const color = {
     },
     tint: {
         light: '#DCE3F7',
-        dark: '#232A44',
+        dark: '#262E4A',
         lightHigh: '#DCE2F5',
         darkHigh: '#1F2849',
+        darkElevated: '#2B3352',
         use: 'Selection, hover, active navigation background, soft chips. Never the only sign of a state: selected rows add a check; navigation and segmented controls use a solid fill or a bold label.',
     },
     onTint: {
@@ -282,7 +294,8 @@ export const type = {
 
 /*
  * Elevation, tinted with ink so shadows read as the same scene as the blue. Dark mode
- * leans on deeper black and a faint top highlight, because a shadow vanishes on near-black.
+ * leans on deeper black and a faint top highlight, because a shadow vanishes on black;
+ * there the lighter surface and the edge do the separating.
  * Native clients use their platform's elevation; these are for the web and the board.
  */
 export const shadow = {

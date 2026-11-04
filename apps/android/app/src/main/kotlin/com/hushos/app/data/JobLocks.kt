@@ -18,6 +18,9 @@ object JobLocks {
 
     private val entries = HashMap<String, Entry>()
 
+    /* Whether a job holds `id` now in this process (a slot's job sending its save, say). */
+    fun held(id: String): Boolean = synchronized(entries) { entries[id]?.mutex?.isLocked == true }
+
     suspend fun <T> run(id: String, block: suspend () -> T): T {
         val entry = synchronized(entries) { entries.getOrPut(id) { Entry() }.also { it.users++ } }
         try {

@@ -42,6 +42,7 @@ describe('applyCustomerState', () => {
         const { userId, workspaceId } = await createTestAccount();
         const sub = subscription();
         await billing.applyCustomerState({
+            readingFrom: await billing.readingStamp(),
             userId,
             provider: 'polar',
             customerId: 'cus_1',
@@ -65,6 +66,7 @@ describe('applyCustomerState', () => {
         const { userId, workspaceId } = await createTestAccount();
         const first = subscription();
         await billing.applyCustomerState({
+            readingFrom: await billing.readingStamp(),
             userId,
             provider: 'polar',
             customerId: 'cus_1',
@@ -75,6 +77,7 @@ describe('applyCustomerState', () => {
             currentPeriodEnd: new Date(first.currentPeriodEnd.getTime() + 30 * DAY),
         });
         await billing.applyCustomerState({
+            readingFrom: await billing.readingStamp(),
             userId,
             provider: 'polar',
             customerId: 'cus_1',
@@ -90,6 +93,7 @@ describe('applyCustomerState', () => {
     test('a subscription missing from the state is ended and its entitlement revoked', async () => {
         const { userId, workspaceId } = await createTestAccount();
         await billing.applyCustomerState({
+            readingFrom: await billing.readingStamp(),
             userId,
             provider: 'polar',
             customerId: 'cus_1',
@@ -97,6 +101,7 @@ describe('applyCustomerState', () => {
             graceMs: GRACE,
         });
         await billing.applyCustomerState({
+            readingFrom: await billing.readingStamp(),
             userId,
             provider: 'polar',
             customerId: 'cus_1',
@@ -116,6 +121,7 @@ describe('applyCustomerState', () => {
     test('cancel at period end keeps the allowance; an ended subscription loses it', async () => {
         const { userId, workspaceId } = await createTestAccount();
         await billing.applyCustomerState({
+            readingFrom: await billing.readingStamp(),
             userId,
             provider: 'polar',
             customerId: 'cus_1',
@@ -128,6 +134,7 @@ describe('applyCustomerState', () => {
         );
 
         await billing.applyCustomerState({
+            readingFrom: await billing.readingStamp(),
             userId,
             provider: 'polar',
             customerId: 'cus_1',
@@ -141,6 +148,7 @@ describe('applyCustomerState', () => {
     test('past due keeps the allowance through the retry window', async () => {
         const { userId, workspaceId } = await createTestAccount();
         await billing.applyCustomerState({
+            readingFrom: await billing.readingStamp(),
             userId,
             provider: 'polar',
             customerId: 'cus_1',
@@ -153,6 +161,7 @@ describe('applyCustomerState', () => {
     test('a plan change updates the quota on the same entitlement', async () => {
         const { userId, workspaceId } = await createTestAccount();
         await billing.applyCustomerState({
+            readingFrom: await billing.readingStamp(),
             userId,
             provider: 'polar',
             customerId: 'cus_1',
@@ -160,6 +169,7 @@ describe('applyCustomerState', () => {
             graceMs: GRACE,
         });
         await billing.applyCustomerState({
+            readingFrom: await billing.readingStamp(),
             userId,
             provider: 'polar',
             customerId: 'cus_1',
@@ -182,13 +192,14 @@ describe('applyCustomerState', () => {
         const { userId } = await createTestAccount();
         await db.execute(`delete from personal_workspaces where user_id = '${userId}'`);
         const applied = await billing.applyCustomerState({
+            readingFrom: await billing.readingStamp(),
             userId,
             provider: 'polar',
             customerId: 'cus_1',
             subscriptions: [subscription()],
             graceMs: GRACE,
         });
-        expect(applied).toBe(false);
+        expect(applied).toBe('gone');
         expect(await billing.getCustomer(userId)).toBeNull();
     });
 });
@@ -202,8 +213,9 @@ async function standing(userId: string) {
     };
 }
 
-function apply(userId: string, subscriptions: billing.SubscriptionSnapshot[]) {
+async function apply(userId: string, subscriptions: billing.SubscriptionSnapshot[]) {
     return billing.applyCustomerState({
+        readingFrom: await billing.readingStamp(),
         userId,
         provider: 'polar',
         customerId: 'cus_1',
@@ -380,6 +392,31 @@ describe('a personal plan Polar holds but that gives nothing', () => {
         expect((await billing.getPlanRefund('order_worked'))?.status).toBe('requested');
     });
 
+    test('a deleted family’s ending noting its orders as used never downgrades a refund an earlier ending owes', async () => {
+        const { userId } = await createTestAccount();
+        const at = new Date('2026-10-21T10:00:00Z');
+        await begin({ subscriptionId: 'sub_1', userId, at });
+        // Noted for a refund (paid after an earlier revoke), never asked for yet.
+        await billing.notePlanRefund({
+            orderId: 'order_owed',
+            subscriptionId: 'sub_1',
+            refundKey: 'key_owed',
+            amount: 0,
+            currency: 'usd',
+        });
+        await billing.notePaidBeforeRevoke(
+            [{ orderId: 'order_owed', subscriptionId: 'sub_1', refundKey: 'k', currency: 'usd' }],
+            { keepOwed: true },
+        );
+        expect((await billing.getPlanRefund('order_owed'))?.status).toBe('requested');
+        // An order not noted before is noted as used.
+        await billing.notePaidBeforeRevoke(
+            [{ orderId: 'order_used', subscriptionId: 'sub_1', refundKey: 'k3', currency: 'usd' }],
+            { keepOwed: true },
+        );
+        expect((await billing.getPlanRefund('order_used'))?.status).toBe('none');
+    });
+
     test('an ending isn’t settled while a refund noted on it was never asked for', async () => {
         const { userId } = await createTestAccount();
         const at = new Date('2026-10-21T10:00:00Z');
@@ -454,5 +491,42 @@ describe('signup intents', () => {
         expect((await billing.getPendingIntent(userId))?.planProductId).toBe('prod_pro');
         await billing.consumeIntent(userId);
         expect(await billing.getPendingIntent(userId)).toBeNull();
+    });
+});
+
+describe('readings of a person’s plans that overlap', () => {
+    const reconcile = (
+        userId: string,
+        subscriptions: billing.SubscriptionSnapshot[],
+        readingFrom: billing.ReadingStamp,
+        customerId: string | null = 'cus_1',
+    ) =>
+        billing.applyCustomerState({
+            userId,
+            provider: 'polar',
+            customerId,
+            subscriptions,
+            graceMs: GRACE,
+            readingFrom,
+        });
+
+    test('a reconcile that began before the newest written writes nothing', async () => {
+        const { userId } = await createTestAccount();
+        const older = await billing.readingStamp();
+        const sub = subscription();
+        expect(await reconcile(userId, [sub], await billing.readingStamp())).toBe('applied');
+        expect(await reconcile(userId, [], older)).toBe('stale');
+        expect(await billing.listLivePlanIds(userId)).toEqual([sub.id]);
+    });
+
+    test('a reconcile that found no customer at Polar still holds its reading on the row HushOS has', async () => {
+        const { userId } = await createTestAccount();
+        const sub = subscription();
+        expect(await reconcile(userId, [sub], await billing.readingStamp())).toBe('applied');
+        const older = await billing.readingStamp();
+        expect(await reconcile(userId, [], await billing.readingStamp(), null)).toBe('applied');
+        expect(await billing.listLivePlanIds(userId)).toEqual([]);
+        expect(await reconcile(userId, [sub], older)).toBe('stale');
+        expect(await billing.listLivePlanIds(userId)).toEqual([]);
     });
 });

@@ -136,10 +136,31 @@ fn main() {
         mime: Some("application/pdf".into()),
         size: Some(8_388_613),
         modified: Some("2026-09-22T10:00:00.000Z".into()),
+        attributes: Default::default(),
     };
     let metadata_ctx =
         MetadataContext { workspace_id: workspace_id.clone(), node_id: node_id.clone(), metadata_version: 3 };
     let metadata_envelope = metadata_seal(metadata_ctx.clone(), node_key.clone(), metadata.clone()).unwrap();
+    // The same node's record with attributes, as core-fixtures.ts writes one: a key no client knows
+    // yet, one named like a field, and escapes; `plaintext` is the JSON metadata_seal writes, unpadded.
+    let attributed = NodeMetadata {
+        name: "Plans".into(),
+        mime: None,
+        size: None,
+        modified: None,
+        attributes: [
+            ("colour", "blue"),
+            ("name", "not the name"),
+            ("zz-unknown_1", "Ünï \"quoted\" \\ back\nline\ttab \u{1} \u{7f} \u{2028} 😀"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect(),
+    };
+    let attributed_ctx =
+        MetadataContext { workspace_id: workspace_id.clone(), node_id: node_id.clone(), metadata_version: 4 };
+    let attributed_envelope =
+        metadata_seal(attributed_ctx.clone(), node_key.clone(), attributed.clone()).unwrap();
 
     let content_key = random_bytes(32).unwrap();
     let content_nonce = random_bytes(16).unwrap();
@@ -701,6 +722,12 @@ fn main() {
             "metadata": { "name": metadata.name, "mime": metadata.mime, "size": metadata.size, "modified": metadata.modified },
             "metadataCtx": { "workspaceId": metadata_ctx.workspace_id, "nodeId": metadata_ctx.node_id, "metadataVersion": metadata_ctx.metadata_version },
             "metadataEnvelope": e(&metadata_envelope),
+            "attributed": {
+                "metadata": { "name": attributed.name, "mime": attributed.mime, "size": attributed.size, "modified": attributed.modified, "attributes": attributed.attributes.iter().collect::<std::collections::BTreeMap<_, _>>() },
+                "metadataCtx": { "workspaceId": attributed_ctx.workspace_id, "nodeId": attributed_ctx.node_id, "metadataVersion": attributed_ctx.metadata_version },
+                "metadataEnvelope": e(&attributed_envelope),
+                "plaintext": serde_json::to_string(&attributed).unwrap(),
+            },
             // Suite 3 with and without a thumbnail, an empty file, and suite 2's last chunk of two.
             "version": version(3, 1000, Some(pattern(300, 5)), 0),
             "bareVersion": version(3, 5, None, 0),

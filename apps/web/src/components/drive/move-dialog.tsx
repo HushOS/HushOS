@@ -342,7 +342,7 @@ function MovePicker({
                     )}
                     <p>
                         {pooled
-                            ? `It uses no more of ${family!.name}’s storage.`
+                            ? 'It uses no more of the family’s storage.'
                             : `It needs free space in ${placeName(destination!)} for the copy; the original is deleted as it lands.`}
                     </p>
                 </div>

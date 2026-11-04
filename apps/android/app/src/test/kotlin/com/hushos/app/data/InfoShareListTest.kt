@@ -1,0 +1,191 @@
+package com.hushos.app.data
+
+import android.content.Context
+import com.hushos.app.ui.InfoLookup
+import com.hushos.app.ui.infoLookup
+import com.hushos.app.ui.missingFromShareList
+import com.hushos.core.deviceRemember
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
+import java.util.UUID
+
+/*
+ * A received share's feed is its owner's, so nothing on this device hears that the owner trashed a file in it, and
+ * Info kept that file open with Share and Tags live. Info now closes when the item is absent from the list its own
+ * parent shows after a refresh: a decision for Info alone. The cache is never changed by it (versions that evicted
+ * rows lost trashed ones from the Trash and brought concurrent removals back). The real Vault and DriveApi against
+ * FakeDrive on loopback; the list is what `listChildren` hands the screen.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
+class InfoShareListTest {
+    private val server = FakeDrive()
+    private lateinit var vault: Vault
+    private lateinit var s: String
+    private lateinit var t: String
+    private lateinit var w: String
+    private lateinit var u: String
+    private val theirs get() = server.graceWorkspace
+
+    @Before
+    fun signIn() {
+        val context = RuntimeEnvironment.getApplication()
+        Shared::class.java.getDeclaredField("opened").apply { isAccessible = true }
+            .set(null, context.getSharedPreferences("info-share-list-test", Context.MODE_PRIVATE))
+        Shared.writeSession(context, Shared.Session(server.origin, server.token, server.userId, "me@example.org"))
+        Shared.writeDevice(context, deviceRemember(server.userId, server.accountKey, 1uL, 1uL, UUID.randomUUID().toString()))
+        vault = Vault(context, DriveApi(Shared.session(context)!!))
+        vault.listChildren(server.root)
+        // Grace's S { t.txt, w.txt, U }, shared with this account.
+        s = server.folder(server.graceRoot, "S")
+        t = server.file(s, "t.txt", ByteArray(20) { it.toByte() })
+        w = server.file(s, "w.txt", ByteArray(10) { it.toByte() })
+        u = server.folder(s, "U")
+        server.shareWithMe(s)
+        server.pinGrace()
+        assertNull(vault.mountShares().single().error)
+        vault.listChildren(s)
+    }
+
+    @After
+    fun close() {
+        server.close()
+        assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
+    }
+
+    /* Info's verdict on a share item once its parent's list was refreshed to `listed`, read as Main reads it. */
+    private fun info(item: Opened, listed: List<Opened>) = infoLookup(
+        live = vault.liveItem(item.id, item.node.workspaceId) != null, held = vault.holds(item.id, item.node.workspaceId),
+        removed = vault.removed(item.node.workspaceId, item.id), outOfReach = false, seen = true,
+        missingFromList = missingFromShareList(item, vault.ownWorkspaceId, refreshed = true, listed = listed),
+    )
+
+    /*
+     * Round 17, item 1: Grace moves t.txt into U on her own device. A share has no feed here, so the cached row still
+     * names S; U's listing serves the moved row, which is the newer one and is kept: the file shows in U, and no longer
+     * in S. Fails if a listing trusts a stale cached row's parent over its own newer row.
+     */
+    @Test
+    fun aShareFileMovedOnAnotherDeviceShowsInItsNewFolder() {
+        server.moveAs(t, u)
+        assertEquals(listOf("t.txt"), vault.listChildren(u).map { it.name })
+        assertEquals(u, vault.liveItem(t, theirs)?.node?.parentId)
+        assertFalse(vault.listChildren(s).any { it.id == t })
+    }
+
+    /*
+     * #247 check, item 2: Grace restores an earlier version of t.txt. A share's row carries no change order here and a
+     * restore moves neither its key epoch nor its metadata version, so nothing says which row is newer: the one the
+     * listing returned is trusted, and t.txt opens as restored. Fails if the stale cached row wins a tie (the download
+     * would then answer "It changed meanwhile" for the listed version every time).
+     */
+    @Test
+    fun aShareFileRestoredToAnEarlierVersionOpensAsRestored() {
+        val cached = vault.liveItem(t, theirs)!!
+        server.newVersion(t, "restored content".toByteArray(), bumped = false)
+        val row = vault.listChildren(s).single { it.id == t }
+        assertNotEquals(cached.node.currentVersion?.id, row.node.currentVersion?.id)
+        val out = java.io.File(RuntimeEnvironment.getApplication().cacheDir, "opened/${t}/${row.node.currentVersion!!.id}/t.txt")
+        vault.download(t, out, expectedVersionId = row.node.currentVersion!!.id, workspaceId = theirs)
+        assertEquals("restored content", out.readText())
+    }
+
+    /*
+     * #247 check, round 2: Grace re-keys the nested shared folder U (a revoke-and-rotate) while its listing is cached here.
+     * One listing of U opens U afresh from the page first, then its file under U's new key, and the file downloads; S,
+     * unchanged, keeps the rows it held. Fails if a listing opens children under a cached parent's old key, or evicts
+     * what it can't reopen.
+     */
+    @Test
+    fun aNestedSharedFolderReKeyedByItsOwnerListsAndOpensAfterOneListing() {
+        val x = server.file(u, "x.txt", "inside U".toByteArray())
+        assertEquals(listOf("x.txt"), vault.listChildren(u).map { it.name })
+        val heldT = vault.liveItem(t, theirs)
+        server.rekeyFolderAs(u)
+        val listed = vault.listChildren(u)
+        assertEquals(listOf("x.txt"), listed.map { it.name })
+        // The rows kept are the re-keyed ones: U at its new key epoch, x wrapped under it.
+        assertEquals(server.node(u).keyEpoch, vault.liveItem(u, theirs)!!.node.keyEpoch.toLong())
+        assertEquals(server.node(u).keyEpoch, listed.single().node.parentKeyEpoch.toLong())
+        val out = java.io.File(RuntimeEnvironment.getApplication().cacheDir, "opened/$x/v/x.txt")
+        vault.download(x, out, workspaceId = theirs)
+        assertEquals("inside U", out.readText())
+        // S unchanged: its rows are the ones held, not opened again.
+        vault.listChildren(s)
+        assertTrue("an unchanged folder's row was replaced", vault.liveItem(t, theirs) === heldT)
+    }
+
+    @Test
+    fun aShareItemMissingFromItsParentsRefreshedListClosesInfoAndTheCacheIsUntouched() {
+        val shown = vault.liveItem(t, theirs)!!
+        // Grace trashes t.txt on her own device; the children route leaves it out of S's listing from then on.
+        server.drop(t)
+        val refreshed = vault.listChildren(s)
+        assertEquals(InfoLookup.CLOSE, info(shown, refreshed))
+        // Only Info decided: the row is still held, live, and not marked removed.
+        assertNotNull(vault.liveItem(t, theirs))
+        assertFalse(vault.removed(theirs, t))
+        // Before a refresh, the same stale list says nothing.
+        assertFalse(missingFromShareList(shown, vault.ownWorkspaceId, refreshed = false, listed = refreshed))
+        // Still listed after the refresh: Info stays.
+        val other = vault.liveItem(w, theirs)!!
+        assertEquals(InfoLookup.SHOW, info(other, refreshed))
+    }
+
+    @Test
+    fun aShareItemMovedIntoASiblingFolderKeepsInfoOpen() {
+        val shown = vault.liveItem(t, theirs)!!
+        val evidence = com.hushos.app.ui.ParentRefresh()
+        // Info open on t.txt in S, and S refreshed: t.txt is listed there.
+        evidence.observe(theirs, s, t, loading = true)
+        val listedInS = vault.listChildren(s)
+        assertEquals(true, evidence.observe(theirs, s, t, loading = false))
+        // U's list as the screen holds it, from before the move: without t.txt.
+        val staleU = vault.listChildren(u)
+        // Moved into U (here or by Grace): the row now says U, before U reloads.
+        val moved = shown.copy(node = shown.node.copy(parentId = u))
+        val refreshed = evidence.observe(theirs, u, t, loading = false)
+        val verdict = infoLookup(
+            live = true, held = true, removed = false, outOfReach = false, seen = true,
+            missingFromList = missingFromShareList(moved, vault.ownWorkspaceId, refreshed, staleU),
+        )
+        assertEquals(InfoLookup.SHOW, verdict)
+        assertEquals(true, listedInS.any { it.id == t })
+    }
+
+    @Test
+    fun aTrashedSiblingStillInTheCacheIsUnaffected() {
+        // U is in the trash as this device holds it: the listing leaves it out, and the Trash keeps reading this row.
+        val held = vault.nodes.row(theirs, u)!!
+        vault.nodes.put(held.copy(node = held.node.copy(trashedAt = "2026-10-29T10:00:00Z")), vault.nodes.key(held)!!)
+        server.drop(u)
+        val refreshed = vault.listChildren(s)
+        assertEquals(InfoLookup.SHOW, info(vault.liveItem(t, theirs)!!, refreshed))
+        val sibling = vault.nodes.row(theirs, u)
+        assertNotNull(sibling)
+        assertEquals("2026-10-29T10:00:00Z", sibling!!.node.trashedAt)
+        assertFalse(vault.removed(theirs, u))
+    }
+
+    @Test
+    fun thisAccountsOwnItemIsLeftToTheFeed() {
+        // An own item is never closed by a list: its trash reaches this device through the feed (removed, tombstoned).
+        val a = server.folder(server.root, "A")
+        val f = server.file(a, "f.txt", ByteArray(5) { it.toByte() })
+        vault.listChildren(server.root)
+        vault.listChildren(a)
+        val shown = vault.liveItem(f, server.workspace)!!
+        assertFalse(missingFromShareList(shown, vault.ownWorkspaceId, refreshed = true, listed = emptyList()))
+    }
+}

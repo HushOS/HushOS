@@ -6,6 +6,7 @@ import {
     foreignKey,
     index,
     integer,
+    pgSequence,
     pgTable,
     text,
     timestamp,
@@ -13,6 +14,14 @@ import {
 } from 'drizzle-orm/pg-core';
 import { users } from './auth';
 import { workspaces } from './workspaces';
+
+/*
+ * The order readings of Polar are taken in (readingStamp): one number per reading, drawn before
+ * its first Polar call, or as a change's answer arrives. No clock is involved, so a clock that
+ * steps, or two readings in the same instant, can't put them out of order. CACHE 1: every
+ * connection draws from the one counter, so numbers follow the order they were drawn in.
+ */
+export const billingReadingSeq = pgSequence('billing_reading_seq', { cache: 1 });
 
 // The provider's customer for a user. Polar finds it by external id (the user id);
 // the provider id is kept for deletion and support.
@@ -22,6 +31,11 @@ export const billingCustomers = pgTable('billing_customers', {
         .references(() => users.id, { onDelete: 'cascade' }),
     provider: text().notNull(),
     providerCustomerId: text('provider_customer_id').notNull().unique(),
+    /*
+     * The reading (billing_reading_seq, readingStamp) of the newest reconcile written here: one
+     * that began earlier and commits later writes nothing.
+     */
+    reconciledFrom: bigint('reconciled_from', { mode: 'bigint' }),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
 });
@@ -104,6 +118,17 @@ export const groupBillingCustomers = pgTable(
          * succeeds, listed for operators meanwhile, and the family isn't purged while it is set.
          */
         plansUnlistedSince: timestamp('plans_unlisted_since', { withTimezone: true }),
+        /*
+         * The reading (billing_reading_seq, readingStamp) of the newest reconcile written here:
+         * one that began earlier and commits later writes nothing.
+         */
+        reconciledFrom: bigint('reconciled_from', { mode: 'bigint' }),
+        /*
+         * The reading of the newest change written for any of this family's plans (one plan as a
+         * raise, cut or revoke answered it): a reconcile that began earlier writes nothing and
+         * reads Polar again.
+         */
+        changedFrom: bigint('changed_from', { mode: 'bigint' }),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
         updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
     },
@@ -248,6 +273,22 @@ export const groupBillingSubscriptions = pgTable(
          */
         productUnread: boolean('product_unread').notNull().default(false),
         /*
+         * The reading (readingStamp) of the newest change written for this plan: an older answer
+         * for it, committing later (two changes, or a change and the lapsed-plan lookup), writes
+         * nothing.
+         */
+        changedFrom: bigint('changed_from', { mode: 'bigint' }),
+        /*
+         * The end of the last period in which this was the family's plan while `active` or
+         * `trialing` (applyGroupState sets it when it picks the family's plan): what a payment on
+         * it bought. Null for a plan that never served the family (an incomplete checkout, one
+         * made beside the family's plan, one a deleted family's Polar customer was billed for),
+         * which bought nothing. A past-due or unpaid period never moves it, nor anything after the
+         * family is deleted: the cutoff a deleted family's plan, or a second plan, is refunded
+         * from (unwantedPlanCutoff).
+         */
+        servedUntil: timestamp('served_until', { withTimezone: true }),
+        /*
          * Orders HushOS refused to credit: a raise Polar billed on another product than the one
          * it was asked on. They never count as paying for a tier.
          */
@@ -302,6 +343,13 @@ export const personalPlanEndings = pgTable(
         admittedAt: timestamp('admitted_at', { withTimezone: true }).notNull(),
         pooledAt: timestamp('pooled_at', { withTimezone: true }).notNull(),
         revokedAt: timestamp('revoked_at', { withTimezone: true }),
+        /*
+         * A deleted family's plan that Polar billed again (endOrphanedFamilyPlan): every order of it
+         * paid at or after this is refunded whole. That plan's own first recorded end, or the epoch
+         * for a plan the mirror never held (HushOS gave nothing for it). Written once, with the
+         * ending, and never recomputed; null on every other ending.
+         */
+        paidAfter: timestamp('paid_after', { withTimezone: true }),
         periodStart: timestamp('period_start', { withTimezone: true }),
         periodEnd: timestamp('period_end', { withTimezone: true }),
         /*

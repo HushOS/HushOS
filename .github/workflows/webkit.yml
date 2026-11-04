@@ -1,0 +1,200 @@
+name: WebKit
+
+# The browser suite on WebKit on macOS, the build Safari ships. Linux has only WebKitGTK, which
+# crashed pages mid sign-up and differs in drag and drop, so its results said little about
+# Safari. Its own workflow, not a job in ci.yml: GitHub's macOS runners run short now and then,
+# and a job no runner picked up is cancelled, which failed `CI ok` and the whole run for a
+# commit no test had found wrong. It gates neither pull requests nor deploys. It runs:
+#   - every night, against main's head (a failure opens or updates an issue, webkit-report);
+#   - by hand (workflow_dispatch), against main or the ref given;
+#   - on a pull request that carries the `full-ci` label, from the moment it gets it and on
+#     every push after, for a change to what WebKit treats differently (on-device storage,
+#     device keys, the file viewer).
+on:
+    schedule:
+        # Nightly, at an hour nothing else runs (Fuzz is at 03:17).
+        - cron: '41 0 * * *'
+    workflow_dispatch:
+        inputs:
+            ref:
+                description: Branch, tag or commit to test (main when empty)
+                required: false
+                default: ''
+    pull_request:
+        types: [opened, synchronize, reopened, labeled]
+
+permissions:
+    contents: read
+
+env:
+    TURBO_TELEMETRY_DISABLED: 1
+
+# A pull request run that tests something shares one group per pull request, so a new push
+# cancels the run it supersedes. Every other run has a group of its own, so it cancels
+# nothing: a pull request event that tests nothing (no `full-ci`, or another label added)
+# would otherwise take the place of a run in progress and then skip, and a nightly or manual
+# run is never cut short by another.
+concurrency:
+    group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.state == 'open' && contains(github.event.pull_request.labels.*.name, 'full-ci') && (github.event.action != 'labeled' || github.event.label.name == 'full-ci') && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+    # The server output carries native modules for the platform it was built on (takumi's OG
+    # renderer among them): a Linux build cannot start on macOS. Built once here for the four
+    # shards. On a pull request only while it is open and carries `full-ci`, and on a `labeled`
+    # event only when that label is `full-ci`, so adding any other label restarts nothing.
+    build-macos:
+        name: Build (macOS, for WebKit)
+        if: >-
+            github.event_name != 'pull_request' ||
+            (github.event.pull_request.state == 'open' &&
+            contains(github.event.pull_request.labels.*.name, 'full-ci') &&
+            (github.event.action != 'labeled' || github.event.label.name == 'full-ci'))
+        runs-on: macos-15
+        outputs:
+            sha: ${{ steps.commit.outputs.sha }}
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  ref: ${{ inputs.ref }}
+            # The shards check out this commit, not the ref again: a branch that moves while
+            # the build runs would have them test code it never built.
+            - name: Commit under test
+              id: commit
+              run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.4.4
+            - run: bun install --frozen-lockfile
+              timeout-minutes: 5
+            - name: Build
+              run: bun run build
+            - name: Pack the server output
+              run: tar -cf web-output.tar -C apps/web .output
+            - uses: actions/upload-artifact@v7
+              with:
+                  name: web-output-macos
+                  path: web-output.tar
+                  retention-days: 1
+
+    # macOS runners have no Docker: the infrastructure runs natively. Families off, as in the
+    # chromium suite; the families flows run on chromium only.
+    e2e-webkit:
+        name: Browser tests (webkit ${{ matrix.shard }}/4, macOS)
+        needs: build-macos
+        runs-on: macos-15
+        timeout-minutes: 40
+        strategy:
+            fail-fast: false
+            matrix:
+                shard: [1, 2, 3, 4]
+        steps:
+            - uses: actions/checkout@v7
+              with:
+                  ref: ${{ needs.build-macos.outputs.sha }}
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.4.4
+            - run: bun install --frozen-lockfile
+              timeout-minutes: 5
+            - uses: actions/download-artifact@v8
+              with:
+                  name: web-output-macos
+            - name: Unpack the server output
+              run: tar -xf web-output.tar -C apps/web
+            - name: Local infrastructure (Postgres, Mailpit, Garage) without Docker, and environment, families off
+              run: |
+                  brew install postgresql@18 mailpit garage
+                  bun run setup
+                  echo 'GROUPS_ENABLED=false' >> .env
+                  scripts/infra-native.sh
+              env:
+                  HOMEBREW_NO_INSTALL_CLEANUP: 1
+                  HOMEBREW_NO_ENV_HINTS: 1
+            - name: Apply migrations
+              run: bun run db:migrate
+            - name: Playwright version
+              id: playwright
+              run: echo "version=$(bunx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+            - name: Cache WebKit
+              uses: actions/cache@v6
+              with:
+                  path: ~/Library/Caches/ms-playwright
+                  key: playwright-${{ runner.os }}-webkit-${{ steps.playwright.outputs.version }}
+            - name: Install WebKit for Playwright
+              run: bunx playwright install webkit
+            # Streamed, not grouped: Turborepo holds a task's output until it ends, and a
+            # server never ends. Playwright reuses whatever answers on 5173.
+            - name: Start the production server and the jobs worker
+              run: |
+                  mkdir -p scratchpad
+                  nohup bun run start >> scratchpad/e2e-server.log 2>&1 &
+                  for i in $(seq 1 30); do
+                      if curl -sf -o /dev/null http://localhost:5173/api/ready; then echo "ready after $((i * 2)) s"; exit 0; fi
+                      sleep 2
+                  done
+                  echo "the server never answered"
+                  tail -n 60 scratchpad/e2e-server.log
+                  exit 1
+              env:
+                  TRUSTED_PROXY_HEADER: x-forwarded-for
+                  TURBO_LOG_ORDER: stream
+            - name: Run the browser suite against the production build
+              run: bun run e2e -- --project=webkit $(scripts/e2e-shard.sh webkit ${{ matrix.shard }} 4)
+            - name: Show the end of the server and infrastructure logs
+              if: failure()
+              run: |
+                  tail -n 60 scratchpad/e2e-server.log || true
+                  for log in "$RUNNER_TEMP"/hushos-infra/*.log; do echo "== $log"; tail -n 20 "$log"; done
+            # A test that failed and then passed on retry still left its trace: keep it, so a
+            # flake shows what went wrong instead of disappearing with the green run.
+            - name: Keep traces of failures and the logs
+              if: failure() || hashFiles('test-results/**/trace.zip') != ''
+              uses: actions/upload-artifact@v7
+              with:
+                  name: playwright-traces-webkit-${{ matrix.shard }}-${{ github.run_attempt }}
+                  path: |
+                      test-results
+                      scratchpad/e2e-server.log
+                      ${{ runner.temp }}/hushos-infra/*.log
+                  retention-days: 7
+
+    # WebKit holds up nothing, so a failure on main must not go unseen: one open issue collects
+    # them, retitled to the latest commit, with a comment per failed run. Only a failure: a job
+    # cancelled because no macOS runner picked it up says nothing about the code, and its
+    # dependants are skipped, not failed. Main here is the nightly run, or a manual one on main
+    # with no other ref. Reports go one at a time; two at once would each open an issue.
+    webkit-report:
+        name: Report a WebKit failure on main
+        needs: [build-macos, e2e-webkit]
+        if: >-
+            always() &&
+            (needs.build-macos.result == 'failure' || needs.e2e-webkit.result == 'failure') &&
+            (github.event_name == 'schedule' ||
+            (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+            (inputs.ref == '' || inputs.ref == 'main' || inputs.ref == 'refs/heads/main')))
+        runs-on: ubuntu-latest
+        concurrency:
+            group: ${{ github.workflow }}-webkit-report
+            queue: max
+        permissions:
+            issues: write
+        steps:
+            - name: Open or update the issue
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GH_REPO: ${{ github.repository }}
+                  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+                  # The commit the build checked out; the run's own when the checkout failed.
+                  SHA: ${{ needs.build-macos.outputs.sha || github.sha }}
+              run: |
+                  title="WebKit failed on main ${SHA::7}"
+                  body="The WebKit suite failed on $SHA: $RUN_URL (traces are in the run's artifacts). Deploys do not wait for WebKit, so this commit may already be live."
+                  number=$(gh issue list --state open --author app/github-actions --search 'in:title "WebKit failed on main"' --json number,title \
+                      --jq '[.[] | select(.title | startswith("WebKit failed on main"))][0].number // empty')
+                  if [ -n "$number" ]; then
+                      gh issue edit "$number" --title "$title"
+                      gh issue comment "$number" --body "$body"
+                  else
+                      gh issue create --title "$title" --body "$body"
+                  fi

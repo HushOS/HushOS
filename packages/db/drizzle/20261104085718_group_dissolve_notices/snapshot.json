@@ -1,0 +1,505 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "3806496e-a473-41db-825b-c99fc09335ea",
+  "prevIds": [
+    "7f7e99b2-90c5-4308-896b-9dbf1557b6b1"
+  ],
+  "footprints": [
+    {
+      "statementType": "create_table",
+      "statementTarget": [
+        "table",
+        "public",
+        "group_dissolve_notices"
+      ],
+      "writes": [
+        "s|tbl|public.group_dissolve_notices",
+        "n|tbl|public.group_dissolve_notices",
+        "e|tbl|public.group_dissolve_notices",
+        "n|rel|public.group_dissolve_notices",
+        "n|type|public.group_dissolve_notices",
+        "n|rel|public.group_dissolve_notices_pkey"
+      ],
+      "reads": [
+        "n|sch|public"
+      ]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "group_dissolve_notices",
+        "group_dissolve_notices_user_idx"
+      ],
+      "writes": [
+        "s|idx|public.group_dissolve_notices_user_idx",
+        "n|idx|public.group_dissolve_notices_user_idx",
+        "e|idx|public.group_dissolve_notices_user_idx",
+        "n|rel|public.group_dissolve_notices_user_idx"
+      ],
+      "reads": [
+        "n|tbl|public.group_dissolve_notices",
+        "n|sch|public",
+        "n|col|public.group_dissolve_notices.user_id",
+        "n|col|public.group_dissolve_notices.group_id"
+      ]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "group_dissolve_notices",
+        "group_dissolve_notices_invitation_idx"
+      ],
+      "writes": [
+        "s|idx|public.group_dissolve_notices_invitation_idx",
+        "n|idx|public.group_dissolve_notices_invitation_idx",
+        "e|idx|public.group_dissolve_notices_invitation_idx",
+        "n|rel|public.group_dissolve_notices_invitation_idx"
+      ],
+      "reads": [
+        "n|tbl|public.group_dissolve_notices",
+        "n|sch|public",
+        "n|col|public.group_dissolve_notices.invitation_id"
+      ]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "group_dissolve_notices",
+        "group_dissolve_notices_due_idx"
+      ],
+      "writes": [
+        "s|idx|public.group_dissolve_notices_due_idx",
+        "n|idx|public.group_dissolve_notices_due_idx",
+        "e|idx|public.group_dissolve_notices_due_idx",
+        "n|rel|public.group_dissolve_notices_due_idx"
+      ],
+      "reads": [
+        "n|tbl|public.group_dissolve_notices",
+        "n|sch|public",
+        "n|col|public.group_dissolve_notices.created_at"
+      ]
+    },
+    {
+      "statementType": "create_index",
+      "statementTarget": [
+        "index",
+        "public",
+        "group_dissolve_notices",
+        "group_dissolve_notices_group_idx"
+      ],
+      "writes": [
+        "s|idx|public.group_dissolve_notices_group_idx",
+        "n|idx|public.group_dissolve_notices_group_idx",
+        "e|idx|public.group_dissolve_notices_group_idx",
+        "n|rel|public.group_dissolve_notices_group_idx"
+      ],
+      "reads": [
+        "n|tbl|public.group_dissolve_notices",
+        "n|sch|public",
+        "n|col|public.group_dissolve_notices.group_id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": [
+        "table",
+        "public",
+        "group_dissolve_notices"
+      ],
+      "writes": [
+        "s|fk|public.group_dissolve_notices.group_dissolve_notices_group_id_groups_id_fkey",
+        "n|fk|public.group_dissolve_notices.group_dissolve_notices_group_id_groups_id_fkey",
+        "e|fk|public.group_dissolve_notices.group_dissolve_notices_group_id_groups_id_fkey",
+        "n|con|public.group_dissolve_notices.group_dissolve_notices_group_id_groups_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.group_dissolve_notices",
+        "n|sch|public",
+        "n|tbl|public.groups",
+        "n|sch|public",
+        "n|col|public.group_dissolve_notices.group_id",
+        "n|col|public.groups.id",
+        "e|uniqueness|public.groups.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": [
+        "table",
+        "public",
+        "group_dissolve_notices"
+      ],
+      "writes": [
+        "s|fk|public.group_dissolve_notices.group_dissolve_notices_user_id_users_id_fkey",
+        "n|fk|public.group_dissolve_notices.group_dissolve_notices_user_id_users_id_fkey",
+        "e|fk|public.group_dissolve_notices.group_dissolve_notices_user_id_users_id_fkey",
+        "n|con|public.group_dissolve_notices.group_dissolve_notices_user_id_users_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.group_dissolve_notices",
+        "n|sch|public",
+        "n|tbl|public.users",
+        "n|sch|public",
+        "n|col|public.group_dissolve_notices.user_id",
+        "n|col|public.users.id",
+        "e|uniqueness|public.users.id"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": [
+        "table",
+        "public",
+        "group_dissolve_notices"
+      ],
+      "writes": [
+        "s|fk|public.group_dissolve_notices.group_dissolve_notices_invitation_id_group_invitations_id_fkey",
+        "n|fk|public.group_dissolve_notices.group_dissolve_notices_invitation_id_group_invitations_id_fkey",
+        "e|fk|public.group_dissolve_notices.group_dissolve_notices_invitation_id_group_invitations_id_fkey",
+        "n|con|public.group_dissolve_notices.group_dissolve_notices_invitation_id_group_invitations_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.group_dissolve_notices",
+        "n|sch|public",
+        "n|tbl|public.group_invitations",
+        "n|sch|public",
+        "n|col|public.group_dissolve_notices.invitation_id",
+        "n|col|public.group_invitations.id",
+        "e|uniqueness|public.group_invitations.id"
+      ]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "group_dissolve_notices",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "group_dissolve_notices",
+        "name": "id",
+        "type": "uuid",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "gen_random_uuid()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "group_dissolve_notices",
+        "name": "group_id",
+        "type": "uuid",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "group_dissolve_notices",
+        "name": "kind",
+        "type": "text",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "group_dissolve_notices",
+        "name": "user_id",
+        "type": "uuid",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "group_dissolve_notices",
+        "name": "invitation_id",
+        "type": "uuid",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "group_dissolve_notices",
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "group_dissolve_notices",
+        "name": "sent_at",
+        "type": "timestamp with time zone",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "group_dissolve_notices",
+        "name": "retry_after",
+        "type": "timestamp with time zone",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "group_dissolve_notices",
+        "name": "group_dissolve_notices_user_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "user_id",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          },
+          {
+            "value": "group_id",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": true,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "group_dissolve_notices",
+        "name": "group_dissolve_notices_invitation_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "invitation_id",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": true,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "group_dissolve_notices",
+        "name": "group_dissolve_notices_due_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "created_at",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": false,
+        "where": "\"sent_at\" is null",
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "group_dissolve_notices",
+        "name": "group_dissolve_notices_group_idx",
+        "nameExplicit": true,
+        "columns": [
+          {
+            "value": "group_id",
+            "isExpression": false,
+            "asc": true,
+            "nullsFirst": false,
+            "opclass": null
+          }
+        ],
+        "isUnique": false,
+        "where": null,
+        "with": "",
+        "method": "btree",
+        "concurrently": false,
+        "entityType": "indexes"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "group_dissolve_notices",
+        "name": "group_dissolve_notices_group_id_groups_id_fkey",
+        "nameExplicit": false,
+        "columns": [
+          "group_id"
+        ],
+        "schemaTo": "public",
+        "tableTo": "groups",
+        "columnsTo": [
+          "id"
+        ],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "group_dissolve_notices",
+        "name": "group_dissolve_notices_user_id_users_id_fkey",
+        "nameExplicit": false,
+        "columns": [
+          "user_id"
+        ],
+        "schemaTo": "public",
+        "tableTo": "users",
+        "columnsTo": [
+          "id"
+        ],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "group_dissolve_notices",
+        "name": "group_dissolve_notices_invitation_id_group_invitations_id_fkey",
+        "nameExplicit": false,
+        "columns": [
+          "invitation_id"
+        ],
+        "schemaTo": "public",
+        "tableTo": "group_invitations",
+        "columnsTo": [
+          "id"
+        ],
+        "onUpdate": "NO ACTION",
+        "onDelete": "CASCADE",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "group_dissolve_notices",
+        "name": "group_dissolve_notices_pkey",
+        "columns": [
+          "id"
+        ],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "group_dissolve_notices",
+        "name": "group_dissolve_notices_valid",
+        "value": "\"kind\" in ('dissolved', 'accepted', 'invited') and (\"user_id\" is null) = (\"invitation_id\" is not null) and (\"kind\" = 'invited') = (\"invitation_id\" is not null)",
+        "entityType": "checks"
+      }
+    }
+  ]
+}

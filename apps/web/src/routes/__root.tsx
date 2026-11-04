@@ -234,7 +234,7 @@ function Document({ children, release }: { children: ReactNode; release: string 
                  * computer's; ThemeColor then keeps them equal to what the page paints.
                  */}
                 {theme === 'light' || theme === 'dark' ? (
-                    <meta name="theme-color" content={theme === 'dark' ? '#0f1013' : '#f3f4f8'} />
+                    <meta name="theme-color" content={theme === 'dark' ? '#000000' : '#f3f4f8'} />
                 ) : (
                     <>
                         <meta
@@ -245,7 +245,7 @@ function Document({ children, release }: { children: ReactNode; release: string 
                         <meta
                             name="theme-color"
                             media="(prefers-color-scheme: dark)"
-                            content="#0f1013"
+                            content="#000000"
                         />
                     </>
                 )}

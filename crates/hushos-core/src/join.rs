@@ -39,18 +39,20 @@
 //! hold the twins to each other, and the fuzz kinds `join_check` and
 //! `join_preview` in `pins` compare them on any input.
 
-use crate::area_ledger::{AreaLedger, ServedAccount, NOT_THIS_ACCOUNT, NO_ACCOUNT};
+use crate::area_ledger::{AreaLedger, ServedAccount, NOT_THIS_ACCOUNT, NO_ACCOUNT, NO_CHAIN};
 use crate::canonical::uuid;
+use crate::contacts::{digest_hex, key_commitment, PinKeys};
 use crate::device_record::{
-    lost_race, open_bytes, overtaken, seal_bytes, ChainRecord, Marks, Reader, RecordCache, ServedAcceptance,
-    ServedChain, BAD_CACHE,
+    lost_race, open_bytes, overtaken, seal_bytes, ChainRecord, FamilyGuard, JoinWith, Marks, Reader,
+    RecordCache, ServedAcceptance, ServedChain, BAD_CACHE,
 };
 use crate::error::{input, CoreError, CoreResult};
+use crate::first_seen::GuardState;
 use crate::group_trust::{
-    accept_rosters, join_code, AcceptedRosters, ForkOf, GroupPin, JoinMark, MarkSide, OwnIdentities,
-    RosterChain,
+    accept_rosters_joining, check_time, join_code, pair_code_at, served_is_entry, AcceptedRosters, ForkOf,
+    GroupAnchor, GroupPin, JoinMark, MarkSide, OwnIdentities, RosterChain, NOT_LET_IN,
 };
-use crate::groups::{parse_roster, roster_digest, Roster, SignedGroupStatement};
+use crate::groups::{parse_roster, roster_digest, Roster, RosterMember, SignedGroupStatement};
 use crate::signatures::digest as sha256_base64url;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -217,9 +219,25 @@ pub struct JoinMatched {
     user_id: String,
     generation: u64,
     group_id: String,
-    mark: JoinMark,
+    mark: Joined,
     checked_at: String,
     record: String,
+}
+
+/* What a joins record holds: the join code compared, or the pin of the head a first use took. */
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Joined {
+    Code(JoinMark),
+    FirstUse(GroupPin),
+}
+
+impl Joined {
+    fn roster_version(&self) -> u64 {
+        match self {
+            Joined::Code(mark) => mark.roster_version,
+            Joined::FirstUse(pin) => pin.roster_version,
+        }
+    }
 }
 
 impl std::fmt::Debug for JoinMatched {
@@ -242,7 +260,7 @@ impl JoinMatched {
         self.group_id.clone()
     }
     pub fn roster_version(&self) -> u64 {
-        self.mark.roster_version
+        self.mark.roster_version()
     }
 }
 
@@ -297,14 +315,34 @@ pub enum JoinCheck {
     RecordUnreadable,
 }
 
+/// What [`AreaLedger::join_first_use`] found. Nothing of the family is kept.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum FirstUseJoin {
+    /// This account is let in at the head: keep `matched.record()` as the
+    /// joins record (version 4, the pin of the head at `roster_version`), then
+    /// [`AreaLedger::accept_joining`] with it; delete it once the record and
+    /// pin are written.
+    Ready { matched: Arc<JoinMatched>, roster_version: u64 },
+    /// No active entry for this account at the served head: keep waiting.
+    NotAdmitted,
+    /// The person's own marks disagree with what was served: the hard
+    /// warning. Nothing is set as a fork.
+    Fork { of: ForkOf, version: u64, sides: Vec<MarkSide> },
+    /// This device's chain record did not open: delete it and try again.
+    RecordUnreadable,
+}
+
 /// What [`AreaLedger::accept_joining`] found: [`ServedAcceptance`]'s shapes,
 /// and the join's own two.
+// Returned once per acceptance and handed across the FFI, which takes no Box: its size does not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum JoinAcceptance {
-    /// Committed: keep `record` and settle `pin` as for [`ServedAcceptance::Accepted`],
-    /// then delete the joins record.
-    Accepted { chain: Arc<AcceptedRosters>, record: String, pin: GroupPin },
+    /// Committed: store `guard` when some, then keep `record` and settle `pin`
+    /// as for [`ServedAcceptance::Accepted`], then delete the joins record.
+    Accepted { chain: Arc<AcceptedRosters>, record: String, pin: GroupPin, guard: Option<GroupPin> },
     /// This account was let in again at a later roster, and the chain still
     /// passes through the roster compared with its code: delete the joins
     /// record and compare this code. Nothing was kept. (Another code at the
@@ -333,6 +371,11 @@ pub(crate) fn admitted_at(
     served: &[SignedGroupStatement],
     user_id: &str,
 ) -> CoreResult<Option<u64>> {
+    run_start(&on_chain(roster_digests, served), roster_digests.len() as u64, user_id)
+}
+
+/* The served rosters whose digest is the chain's at their version, by version (the worker's onChain). */
+fn on_chain(roster_digests: &[String], served: &[SignedGroupStatement]) -> HashMap<u64, Roster> {
     let mut on_chain: HashMap<u64, Roster> = HashMap::new();
     for signed in served {
         // Not a roster of this chain: ignored, as acceptance ignores it.
@@ -346,6 +389,11 @@ pub(crate) fn admitted_at(
             on_chain.insert(at, roster);
         }
     }
+    on_chain
+}
+
+/* The earliest version of the run of `user_id`'s active entries that reaches `head` (the worker's runStart). */
+fn run_start(on_chain: &HashMap<u64, Roster>, head: u64, user_id: &str) -> CoreResult<Option<u64>> {
     let active = |version: u64| -> CoreResult<bool> {
         let roster = on_chain.get(&version).ok_or_else(|| input(LEFT_OUT))?;
         Ok(roster
@@ -354,7 +402,7 @@ pub(crate) fn admitted_at(
             .find(|member| member.user_id == user_id)
             .is_some_and(|m| m.active_with(None)))
     };
-    let mut version = roster_digests.len() as u64;
+    let mut version = head;
     if version == 0 || !active(version)? {
         return Ok(None);
     }
@@ -375,6 +423,160 @@ pub(crate) fn code_at(chain: &AcceptedRosters, version: u64) -> CoreResult<Vec<S
         1 + chain.cache().successions.iter().filter(|out| out.last_roster_version < version).count() as u64;
     let key = chain.group_keys()[(key_version - 1) as usize].clone();
     join_code(digests[(version - 1) as usize].clone(), key, key_version)
+}
+
+/// What [`pair_code`] found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PairCode {
+    /// The twelve words to compare, over the roster at `roster_version`.
+    Code { roster_version: u64, code: Vec<String> },
+    /// This account's own entry at `roster_version` names none of its own
+    /// identities, or acceptance found it wrong there: no words. Check that
+    /// member's personal twelve words instead.
+    OwnEntryWrong { roster_version: u64 },
+    /// One of the two has no active entry at the head.
+    NotAdmitted,
+}
+
+/// The pair code this account compares with `other_user_id` to check each
+/// other and the family (docs/optional-verification.md 3.4), the twin of the
+/// web's `pairCode`: over a chain this device accepted, the roster at which
+/// the later-admitted of the two last became active (from `rosters`, route 5
+/// from version 1; only those whose digest is the chain's at their version
+/// are read, one missing from a run refused), under the group key it is
+/// under. No words when this account's own entry there names none of
+/// `me.identities` (every identity it has had) or acceptance found it wrong
+/// there ([`PairCode::OwnEntryWrong`]): what such a device would compare is
+/// keys it does not hold. Both screens work it out alike, and it does not
+/// change when the family does.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn pair_code(
+    chain: Arc<AcceptedRosters>,
+    me: OwnIdentities,
+    other_user_id: String,
+    rosters: Vec<SignedGroupStatement>,
+) -> CoreResult<PairCode> {
+    let other = uuid(&other_user_id, "user id")?;
+    if other == me.user_id {
+        return Err(input("A pair code is between two members."));
+    }
+    let on_it = on_chain(&chain.roster_digests, &rosters);
+    let head = chain.roster_digests.len() as u64;
+    let (Some(mine), Some(theirs)) = (run_start(&on_it, head, &me.user_id)?, run_start(&on_it, head, other)?)
+    else {
+        return Ok(PairCode::NotAdmitted);
+    };
+    let version = mine.max(theirs);
+    let entry = on_it[&version].entry(&me.user_id);
+    let own = entry.is_some_and(|entry| me.identities.iter().any(|keys| served_is_entry(keys, entry)));
+    if !own || chain.own_entry_wrong_at.contains(&version) {
+        return Ok(PairCode::OwnEntryWrong { roster_version: version });
+    }
+    Ok(PairCode::Code { roster_version: version, code: pair_code_at(&chain, version, &me.user_id, other)? })
+}
+
+/* The check time of the floor's pin when it is only a mark (admission): acceptance reads none. */
+const FLOOR_CHECKED_AT: &str = "1970-01-01T00:00:00.000Z";
+
+/// A family check record, as the settings keep it (`familyChecks[groupId]`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct FamilyCheck {
+    pub roster_version: u64,
+    pub with: String,
+    pub code: Vec<String>,
+    pub checked_at: String,
+}
+
+/// What [`AreaLedger::pair_match`] found to save: the check record and the
+/// verified pin's key fields, each only when the rules allow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PairMatch {
+    pub check: Option<FamilyCheck>,
+    pub pin: Option<PinKeys>,
+}
+
+/* Whether two entries name the same four keys (the lattice ones by digest), key version aside. */
+fn same_entry_keys(a: &RosterMember, b: &RosterMember) -> bool {
+    a.encryption_public_key == b.encryption_public_key
+        && a.signing_public_key == b.signing_public_key
+        && a.ml_dsa_public_key_digest == b.ml_dsa_public_key_digest
+        && a.kem_public_key_digest == b.kem_public_key_digest
+}
+
+/*
+ * The web's pairMatch: the check record when `code` is the pair code this device works out at
+ * `roster_version`; a verified pin of the other member only when their head entry is active and
+ * names the compared entry's keys, and those are the guard's keys (an unreadable guard writes
+ * nothing) or else the settings pin's, or there is neither.
+ */
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn pair_match_of(
+    chain: Arc<AcceptedRosters>,
+    me: OwnIdentities,
+    other_user_id: &str,
+    rosters: Vec<SignedGroupStatement>,
+    roster_version: u64,
+    code: &[String],
+    guard: GuardState,
+    settings_pin: Option<PinKeys>,
+    checked_at: &str,
+) -> CoreResult<PairMatch> {
+    let nothing = PairMatch { check: None, pin: None };
+    let shown = pair_code(Arc::clone(&chain), me, other_user_id.into(), rosters.clone())?;
+    let PairCode::Code { roster_version: at, code: words } = shown else { return Ok(nothing) };
+    if at != roster_version || words != code {
+        return Ok(nothing);
+    }
+    let other = uuid(other_user_id, "user id")?;
+    let check = Some(FamilyCheck {
+        roster_version: at,
+        with: other.to_string(),
+        code: words,
+        checked_at: checked_at.to_string(),
+    });
+    let without_pin = PairMatch { check: check.clone(), pin: None };
+    let on_it = on_chain(&chain.roster_digests, &rosters);
+    let compared = on_it[&at].entry(other).expect("admitted there").clone();
+    let Some(head) = chain.roster.entry(other).filter(|entry| entry.active_with(None)) else {
+        return Ok(without_pin);
+    };
+    if !same_entry_keys(head, &compared) {
+        return Ok(without_pin);
+    }
+    let (Ok(ml_dsa), Ok(kem)) =
+        (digest_hex(head.ml_dsa_public_key_digest.clone()), digest_hex(head.kem_public_key_digest.clone()))
+    else {
+        return Ok(without_pin);
+    };
+    let mut keys = PinKeys {
+        key_version: Some(head.key_version),
+        encryption_public_key: head.encryption_public_key.clone(),
+        signing_public_key: head.signing_public_key.clone(),
+        ml_dsa_public_key_hash: Some(ml_dsa),
+        kem_public_key_hash: Some(kem),
+        fingerprint: String::new(),
+    };
+    let Some(commitment) = key_commitment(keys.clone()) else { return Ok(without_pin) };
+    let held = match guard {
+        GuardState::Unreadable => return Ok(without_pin),
+        GuardState::Held { entry } => Some(PinKeys {
+            key_version: entry.key_version,
+            encryption_public_key: entry.encryption_public_key,
+            signing_public_key: entry.signing_public_key,
+            ml_dsa_public_key_hash: Some(entry.ml_dsa_public_key_hash),
+            kem_public_key_hash: Some(entry.kem_public_key_hash),
+            fingerprint: String::new(),
+        }),
+        GuardState::Absent => settings_pin,
+    };
+    if held.is_some_and(|held| key_commitment(held).as_deref() != Some(commitment.as_str())) {
+        return Ok(without_pin);
+    }
+    keys.fingerprint = commitment;
+    Ok(PairMatch { check, pin: Some(keys) })
 }
 
 /* What the served chain says of this account's admission, verified as acceptance would and kept nowhere. */
@@ -490,25 +692,53 @@ pub enum JoinWords {
 }
 
 /*
- * The joins record's JSON, `{v:3, groupId, joinMark, checkedAt}`, which only
- * this core and the worker seal. Version 2 was sealed through the data layer
- * (the earlier join.ts) and is refused: a join in flight compares the code
- * once more.
+ * A joins record's value (docs/optional-verification.md 3.3), as the worker
+ * seals it: `{v:4, groupId, joinMark, checkedAt}` after a match, `{v:4,
+ * groupId, firstUse: <pin>}` for a first use (the pin of the head that first
+ * acceptance took, `pin_after`'s, read as a group pin is, and held as one
+ * more pin when the join commits); only this core and the worker seal one. Version 3 (`joinMark`, a join in
+ * flight on an earlier release) is read as before. Version 2 was sealed
+ * through the data layer (the earlier join.ts) and is refused: a join in
+ * flight compares the code once more.
  */
-fn joins_value(group_id: &str, mark: &JoinMark, checked_at: &str) -> Value {
-    json!({
-        "v": 3,
-        "groupId": group_id,
-        "joinMark": { "rosterVersion": mark.roster_version, "code": mark.code },
-        "checkedAt": checked_at,
-    })
+fn joins_value(group_id: &str, mark: &Joined, checked_at: &str) -> Value {
+    match mark {
+        Joined::Code(mark) => json!({
+            "v": 4,
+            "groupId": group_id,
+            "joinMark": { "rosterVersion": mark.roster_version, "code": mark.code },
+            "checkedAt": checked_at,
+        }),
+        Joined::FirstUse(pin) => json!({
+            "v": 4,
+            "groupId": group_id,
+            "firstUse": crate::device_record::pin_json(pin),
+        }),
+    }
 }
 
-/* A joins record's mark and check time, or none: not version 3, another family's, or a mark no join takes. */
-fn joins_read(group_id: &str, value: &Value) -> Option<(JoinMark, String)> {
+/* A JSON number as JavaScript's Number.isSafeInteger reads it, from 1. */
+fn roster_version_of(value: Option<&Value>) -> Option<u64> {
+    let n = value?.as_f64()?;
+    (n.fract() == 0.0 && (1.0..=crate::signatures::MAX_SAFE_INTEGER as f64).contains(&n)).then_some(n as u64)
+}
+
+/* A joins record's mark and check time, or none: not version 3 or 4, another family's, or a mark no join takes. */
+fn joins_read(group_id: &str, value: &Value) -> Option<(Joined, String)> {
     let record = value.as_object()?;
-    if record.get("v")?.as_u64()? != 3 || record.get("groupId")?.as_str()? != group_id {
+    let version = record.get("v")?.as_f64()?;
+    if (version != 3.0 && version != 4.0) || record.get("groupId")?.as_str()? != group_id {
         return None;
+    }
+    if version == 4.0 {
+        if let Some(first) = record.get("firstUse").filter(|first| first.is_object()) {
+            if record.contains_key("joinMark") {
+                return None;
+            }
+            let pin = crate::device_record::pin_of(group_id, first).ok()?;
+            let at = pin.checked_at.clone();
+            return Some((Joined::FirstUse(pin), at));
+        }
     }
     let mark = record.get("joinMark")?.as_object()?;
     let code: Vec<String> = mark
@@ -517,11 +747,11 @@ fn joins_read(group_id: &str, value: &Value) -> Option<(JoinMark, String)> {
         .iter()
         .map(|w| w.as_str().map(str::to_string))
         .collect::<Option<_>>()?;
-    let roster_version = mark.get("rosterVersion")?.as_u64()?;
-    if !code_shape(&code) || !(1..=crate::signatures::MAX_SAFE_INTEGER).contains(&roster_version) {
+    let roster_version = roster_version_of(mark.get("rosterVersion"))?;
+    if !code_shape(&code) {
         return None;
     }
-    Some((JoinMark { roster_version, code }, record.get("checkedAt")?.as_str()?.to_string()))
+    Some((Joined::Code(JoinMark { roster_version, code }), record.get("checkedAt")?.as_str()?.to_string()))
 }
 
 impl AreaLedger {
@@ -532,6 +762,7 @@ impl AreaLedger {
         group_id: &str,
         record: Option<String>,
         served: &ServedChain,
+        guard: Option<&GroupPin>,
     ) -> CoreResult<Admitted> {
         uuid(group_id, "group id")?;
         let Some(marks) = self.open_marks(me, group_id, record)? else {
@@ -549,25 +780,41 @@ impl AreaLedger {
             RecordCache::Held(cache) => Some(*cache),
             RecordCache::Refused { .. } => return Err(input(BAD_CACHE)),
         };
-        let pins: Vec<GroupPin> = settings_pin.into_iter().chain(record_pin).collect();
-        let marked = !pins.is_empty() || cache.is_some() || self.holds_family(group_id);
-        // With no mark, over the served first keys, for the code only: the person compares it with
-        // the admin's next, and only the acceptance that carries it vouches for anything.
-        let chain = match accept_rosters(
+        // The session's floor (the highest chain committed here, kept through a refusal that
+        // uncommitted it) is a mark too, its pin among the pins, as acceptance holds it.
+        let floor_pin = match self.floor(group_id) {
+            Some(floor) => Some(crate::group_trust::pin_after(vec![], floor, FLOOR_CHECKED_AT.into())?),
+            None => None,
+        };
+        let pins: Vec<GroupPin> =
+            settings_pin.into_iter().chain(record_pin).chain(guard.cloned()).chain(floor_pin).collect();
+        let (checked, pair_marks) = marks.check.clone()?;
+        let marked = !pins.is_empty() || cache.is_some() || checked || self.holds_family(group_id);
+        // With no mark, over the served first keys on first use: for the code only, or for the
+        // roster a first use's record keeps; only the acceptance that carries one commits.
+        let accepted = accept_rosters_joining(
             group_id.into(),
             served.first_keys.clone(),
-            !marked,
+            if marked { None } else { Some(GroupAnchor::FirstUse) },
             pins,
             served.rosters.clone(),
             served.successions.clone(),
             served.signer_keys.clone(),
             me.clone(),
             cache,
-        )? {
-            RosterChain::Fork { of, version, sides } => {
+            None,
+            pair_marks,
+        );
+        let chain = match accepted {
+            // First use takes a chain only when its head lets this account in: not let in yet.
+            Err(CoreError::Input(message)) if message == NOT_LET_IN => {
+                return Ok(Admitted { admission: Admission::NotAdmitted, marks: Some(marks) })
+            }
+            Err(error) => return Err(error),
+            Ok(RosterChain::Fork { of, version, sides }) => {
                 return Ok(Admitted { admission: Admission::Fork { of, version, sides }, marks: Some(marks) })
             }
-            RosterChain::Accepted { chain } => chain,
+            Ok(RosterChain::Accepted { chain }) => chain,
         };
         let admission = match admitted_at(&chain.roster_digests(), &served.rosters, &marks.account.user_id)? {
             None => Admission::NotAdmitted,
@@ -636,7 +883,10 @@ impl AreaLedger {
         }
     }
 
-    /* The join after a token's checks: the admission again, then the acceptance with the compared code. */
+    /*
+     * The join after a token's checks: the admission again, then the acceptance with the compared
+     * code, or for a first use through the roster its record holds (the worker's firstUseRun).
+     */
     fn accept_matched(
         &self,
         me: &OwnIdentities,
@@ -644,8 +894,11 @@ impl AreaLedger {
         record: Option<String>,
         served: &ServedChain,
         matched: &JoinMatched,
+        guard: Option<&GroupPin>,
     ) -> CoreResult<JoinAcceptance> {
-        let Admitted { admission, marks } = self.admission(me, group_id, record, served)?;
+        // The family as this join found it: a wipe before it commits keeps nothing (FAMILY_FORGOTTEN).
+        let epoch = self.family_epoch(group_id);
+        let Admitted { admission, marks } = self.admission(me, group_id, record, served, guard)?;
         match admission {
             Admission::RecordUnreadable => return Ok(JoinAcceptance::RecordUnreadable),
             Admission::NotAdmitted => return Ok(JoinAcceptance::NotAdmitted),
@@ -655,12 +908,14 @@ impl AreaLedger {
                 // compared with its code: a new code to compare. Anything else that differs (another
                 // code at that roster, a chain short of it) is the acceptance's to answer below,
                 // with the compared code as its mark: the fork, or a refusal.
-                let later = current.roster_version > matched.mark.roster_version
-                    && code_at(&chain, matched.mark.roster_version)? == matched.mark.code;
-                if later {
-                    let account = &marks.as_ref().expect("read for a code").account;
-                    let session = self.show(&account.user_id, group_id, current)?;
-                    return Ok(JoinAcceptance::Changed { session });
+                if let Joined::Code(mark) = &matched.mark {
+                    let later = current.roster_version > mark.roster_version
+                        && code_at(&chain, mark.roster_version)? == mark.code;
+                    if later {
+                        let account = &marks.as_ref().expect("read for a code").account;
+                        let session = self.show(&account.user_id, group_id, current)?;
+                        return Ok(JoinAcceptance::Changed { session });
+                    }
                 }
             }
         }
@@ -669,22 +924,27 @@ impl AreaLedger {
             None => (RecordCache::None, Ok(None)),
             Some(ChainRecord { cache, pin }) => (cache.clone(), pin.clone()),
         };
-        let reader = Reader { account: &marks.account, me, group_id, checked_at: &matched.checked_at };
-        let outcome = match self.accept_once(
-            &reader,
-            served,
-            &cache,
-            &marks.settings_pin,
-            &record_pin,
-            Some(&matched.mark),
-            false,
-        ) {
-            Err(error) if lost_race(&error) => overtaken(&error),
-            other => other?,
+        let reader = Reader {
+            account: &marks.account,
+            me,
+            group_id,
+            checked_at: &matched.checked_at,
+            guard,
+            check: &marks.check,
+            epoch,
         };
+        let join = match &matched.mark {
+            Joined::Code(mark) => JoinWith::Code(mark),
+            Joined::FirstUse(mark) => JoinWith::FirstUse(mark),
+        };
+        let outcome =
+            match self.accept_once(&reader, served, &cache, &marks.settings_pin, &record_pin, join, false) {
+                Err(error) if lost_race(&error) => overtaken(&error),
+                other => other?,
+            };
         Ok(match outcome {
-            ServedAcceptance::Accepted { chain, record, pin } => {
-                JoinAcceptance::Accepted { chain, record, pin }
+            ServedAcceptance::Accepted { chain, record, pin, guard } => {
+                JoinAcceptance::Accepted { chain, record, pin, guard }
             }
             ServedAcceptance::Fork { of, version, sides } => JoinAcceptance::Fork { of, version, sides },
             ServedAcceptance::RecordUnreadable => JoinAcceptance::RecordUnreadable,
@@ -780,7 +1040,7 @@ impl AreaLedger {
     ///     Err(CoreError::Sealed(_))
     /// ));
     /// // Nothing was kept: with no mark at all, acceptance is still refused.
-    /// assert!(ledger.accept_served(me, group, None, served, "2026-10-18T00:00:00.000Z".into()).is_err());
+    /// assert!(ledger.accept_served(me, group, None, served, FamilyGuard::Absent, "2026-10-18T00:00:00.000Z".into()).is_err());
     /// # Ok(())
     /// # }
     /// ```
@@ -795,7 +1055,7 @@ impl AreaLedger {
         uuid(&group_id, "group id")?;
         let account = self.served_account().ok_or_else(|| input(NO_ACCOUNT))?;
         self.restore_holds(&account, &group_id, holds)?;
-        let Admitted { admission, marks } = self.admission(&me, &group_id, record, &served)?;
+        let Admitted { admission, marks } = self.admission(&me, &group_id, record, &served, None)?;
         Ok(match admission {
             Admission::RecordUnreadable => JoinPreview::RecordUnreadable,
             Admission::NotAdmitted => JoinPreview::NotAdmitted,
@@ -924,7 +1184,7 @@ impl AreaLedger {
         if !typed_complete(&typed) {
             return Ok(JoinCheck::Incomplete);
         }
-        let Admitted { admission, marks } = self.admission(&me, &group_id, record, &served)?;
+        let Admitted { admission, marks } = self.admission(&me, &group_id, record, &served, None)?;
         let current = match admission {
             Admission::RecordUnreadable => return Ok(JoinCheck::RecordUnreadable),
             Admission::NotAdmitted => return Ok(JoinCheck::NotAdmitted),
@@ -975,19 +1235,124 @@ impl AreaLedger {
             .ok()
             .and_then(Option::as_ref)
             .map_or(now, |pin| pin.checked_at.clone());
-        let plaintext =
-            Zeroizing::new(joins_value(&group_id, &current, &checked_at).to_string().into_bytes());
+        let mark = Joined::Code(current);
+        let plaintext = Zeroizing::new(joins_value(&group_id, &mark, &checked_at).to_string().into_bytes());
         let record = seal_bytes(&account.store_key, &account.user_id, &group_id, JOINS, &plaintext)?;
         Ok(JoinCheck::Matched {
             matched: Arc::new(JoinMatched {
                 user_id: account.user_id,
                 generation: account.generation,
                 group_id,
-                mark: current,
+                mark,
                 checked_at,
                 record,
             }),
             holds,
+        })
+    }
+
+    /// "They match" in a family check with member `other_user_id`
+    /// (docs/optional-verification.md 3.4), the twin of the worker's
+    /// `groupPairMatch`: over the committed chain and the contact pin of them
+    /// in the settings this ledger last opened, what to save. The check record
+    /// only when `code` is the pair code [`pair_code`] gives this device at
+    /// `roster_version` (so never on a device whose own entry there was
+    /// wrong); a verified pin of the other member's keys (the key fields of a
+    /// version 3 pin, fingerprint over them, no `trustedVia`) only when their
+    /// entry at the head is active and names the very keys of their entry at
+    /// the compared roster (a member whose keys changed since is checked with
+    /// personal words instead), and those keys are the ones this device's
+    /// guard holds for them if it has a guard entry (an unreadable guard
+    /// writes nothing), else the settings pin's if there is one. On a mismatch
+    /// of keys the check record may still be given, never the pin. Nothing is
+    /// saved here: save both in one settings write, then move the guard.
+    #[allow(clippy::too_many_arguments)]
+    pub fn pair_match(
+        &self,
+        me: OwnIdentities,
+        group_id: String,
+        other_user_id: String,
+        rosters: Vec<SignedGroupStatement>,
+        roster_version: u64,
+        code: Vec<String>,
+        guard: GuardState,
+        checked_at: String,
+    ) -> CoreResult<PairMatch> {
+        let chain = self.committed_chain(&group_id).ok_or_else(|| input(NO_CHAIN))?;
+        let account = self.served_account().ok_or_else(|| input(NO_ACCOUNT))?;
+        if !me.user_id.eq_ignore_ascii_case(&account.user_id) {
+            return Err(input(NO_ACCOUNT));
+        }
+        check_time(&checked_at)?;
+        let other = uuid(&other_user_id, "user id")?.to_string();
+        let settings_pin = self.contact_pin(&other).map(|pin| PinKeys {
+            key_version: None,
+            encryption_public_key: pin.encryption_public_key.unwrap_or_default(),
+            signing_public_key: pin.signing_public_key.unwrap_or_default(),
+            ml_dsa_public_key_hash: pin.ml_dsa_public_key_hash,
+            kem_public_key_hash: pin.kem_public_key_hash,
+            fingerprint: pin.fingerprint.unwrap_or_default(),
+        });
+        pair_match_of(chain, me, &other, rosters, roster_version, &code, guard, settings_pin, &checked_at)
+    }
+
+    /// A newcomer's join on first use (docs/optional-verification.md 3.2 step
+    /// 4, 3.3), the default join, the twin of the worker's
+    /// `groupJoinFirstUse`: what route 5 served for `group_id` from version 1
+    /// verified as acceptance verifies it, against the person's marks (the
+    /// settings pin and family check, this device's chain record, a chain or
+    /// fork this session holds) and the family guard; with none, over the
+    /// served version 1 keys, only with settings this ledger opened and only
+    /// when this account's entry is active at the head
+    /// ([`FirstUseJoin::NotAdmitted`] otherwise). Nothing is committed: the
+    /// version 4 joins record of the head's pin is sealed (`pin_after`'s,
+    /// checked at the settings pin's time when the account has one, a rejoin
+    /// keeping its first acceptance, else `now`). Keep it, then
+    /// [`AreaLedger::accept_joining`] with it; that acceptance holds the pin as
+    /// one more mark (its version 1 keys, roster and group key), so a relaunch
+    /// before the pin is written never takes first use again over whatever is
+    /// served then. With marks (a rejoin) the marks decide.
+    /// A guard that could not be read is refused ([`crate::GUARD_UNREADABLE`]).
+    pub fn join_first_use(
+        &self,
+        me: OwnIdentities,
+        group_id: String,
+        record: Option<String>,
+        served: ServedChain,
+        guard: FamilyGuard,
+        now: String,
+    ) -> CoreResult<FirstUseJoin> {
+        uuid(&group_id, "group id")?;
+        let guard = guard.pin()?;
+        let Admitted { admission, marks } = self.admission(&me, &group_id, record, &served, guard)?;
+        let chain = match admission {
+            Admission::RecordUnreadable => return Ok(FirstUseJoin::RecordUnreadable),
+            Admission::NotAdmitted => return Ok(FirstUseJoin::NotAdmitted),
+            Admission::Fork { of, version, sides } => return Ok(FirstUseJoin::Fork { of, version, sides }),
+            Admission::Code(_, chain) => chain,
+        };
+        let marks = marks.expect("read for a code");
+        let checked_at = marks
+            .settings_pin
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .map_or(now, |pin| pin.checked_at.clone());
+        let mark =
+            Joined::FirstUse(crate::group_trust::pin_after(vec![], Arc::clone(&chain), checked_at.clone())?);
+        let account = marks.account;
+        let plaintext = Zeroizing::new(joins_value(&group_id, &mark, &checked_at).to_string().into_bytes());
+        let record = seal_bytes(&account.store_key, &account.user_id, &group_id, JOINS, &plaintext)?;
+        Ok(FirstUseJoin::Ready {
+            roster_version: chain.roster.roster_version,
+            matched: Arc::new(JoinMatched {
+                user_id: account.user_id,
+                generation: account.generation,
+                group_id,
+                mark,
+                checked_at,
+                record,
+            }),
         })
     }
 
@@ -1127,11 +1492,11 @@ impl AreaLedger {
     /// else {
     ///     panic!("a match")
     /// };
-    /// let joined = ledger.accept_joining(me.clone(), group.clone(), None, served.clone(), matched.clone())?;
+    /// let joined = ledger.accept_joining(me.clone(), group.clone(), None, served.clone(), matched.clone(), FamilyGuard::Absent)?;
     /// let JoinAcceptance::Accepted { pin, .. } = joined else { panic!("joined") };
     /// assert_eq!((pin.roster_version, pin.checked_at), (1, now));
     /// // A second submission in this unlock is refused.
-    /// assert!(ledger.accept_joining(me, group, None, served, matched).is_err());
+    /// assert!(ledger.accept_joining(me, group, None, served, matched, FamilyGuard::Absent).is_err());
     /// # Ok(())
     /// # }
     /// ```
@@ -1142,6 +1507,7 @@ impl AreaLedger {
         record: Option<String>,
         served: ServedChain,
         matched: Arc<JoinMatched>,
+        guard: FamilyGuard,
     ) -> CoreResult<JoinAcceptance> {
         uuid(&group_id, "group id")?;
         let account = self.served_account().ok_or_else(|| input(NO_ACCOUNT))?;
@@ -1163,7 +1529,9 @@ impl AreaLedger {
                 Err(input(USED))
             }
         })?;
-        let outcome = self.accept_matched(&me, &group_id, record, &served, &matched);
+        let outcome = guard
+            .pin()
+            .and_then(|guard| self.accept_matched(&me, &group_id, record, &served, &matched, guard));
         if !matches!(outcome, Ok(JoinAcceptance::Accepted { .. })) {
             self.join_book(|book, _| book.consumed.get_mut(&group_id).map(|taken| taken.remove(&used)));
         }
@@ -1253,11 +1621,15 @@ thread_local! {
 mod tests {
     use super::*;
     use crate::bytes::decode;
+    use crate::contacts::{pin_trust, PinTrust};
     use crate::device_record::ServedAcceptance;
     use crate::device_record::{chain_record_seal_value, store_key};
-    use crate::group_trust::{accept_rosters_joining, pin_after};
+    use crate::first_seen::pin_of_served;
+    use crate::group_trust::{accept_rosters, pair_code_of, pin_after};
     use crate::groups::tests::{ml_dsa_keys, reader, History, Person, GROUP};
-    use crate::groups::{group_public_key, group_sign, GroupPublicKey, GroupRole, MemberStatus};
+    use crate::groups::{
+        group_public_key, group_sign, GroupPublicKey, GroupRole, MemberStatus, RosterMember,
+    };
     use std::sync::Arc;
 
     const ROOT: [u8; 32] = [9; 32];
@@ -1311,7 +1683,7 @@ mod tests {
         let RosterChain::Accepted { chain } = accept_rosters(
             GROUP.into(),
             h.key(1),
-            true,
+            Some(GroupAnchor::Created),
             vec![],
             h.rosters[..version].to_vec(),
             vec![],
@@ -1357,7 +1729,9 @@ mod tests {
         }
 
         fn accept(&self, ledger: &AreaLedger, served: ServedChain) -> ServedAcceptance {
-            ledger.accept_served(self.me(), GROUP.into(), None, served, CHECKED.into()).unwrap()
+            ledger
+                .accept_served(self.me(), GROUP.into(), None, served, FamilyGuard::Absent, CHECKED.into())
+                .unwrap()
         }
 
         /* The record person 2's device keeps after accepting the first `through` rosters (pinned at 2). */
@@ -1403,7 +1777,7 @@ mod tests {
         accept_rosters_joining(
             GROUP.into(),
             first,
-            true,
+            Some(GroupAnchor::Join),
             vec![],
             rosters,
             h.successions.clone(),
@@ -1411,6 +1785,7 @@ mod tests {
             me,
             None,
             Some(mark),
+            vec![],
         )
         .unwrap()
     }
@@ -1532,7 +1907,9 @@ mod tests {
         assert!(matches!(j.preview(&ledger, None, j.served(3)).unwrap(), JoinPreview::Code { .. }));
         assert!(ledger.held_chain(GROUP).is_none() && !ledger.is_forked(GROUP));
         // Nothing vouches for the first keys after it: acceptance with no mark is still refused.
-        assert!(ledger.accept_served(j.me(), GROUP.into(), None, j.served(3), CHECKED.into()).is_err());
+        assert!(ledger
+            .accept_served(j.me(), GROUP.into(), None, j.served(3), FamilyGuard::Absent, CHECKED.into())
+            .is_err());
         // A rejoin whose settings pin is on another history: the warning, and no fork kept.
         let other = join_with(&j.p1, &j.p2, &[GroupRole::Billing]);
         let pinned = j.ledger(Some(pin_at(&j.h, &j.people(), 2)));
@@ -1546,11 +1923,16 @@ mod tests {
         let j = join();
         let pin = pin_at(&j.h, &j.people(), 2);
         // Committed through roster 2, then settings without the family's pin: the committed chain
-        // still counts, so nothing is taken over the served first keys alone.
+        // still counts, so nothing is taken over the served first keys alone; the session's floor
+        // is the mark that vouches for them (as acceptance holds it), so the code is shown, and
+        // over other first keys it is refused.
         let held = j.ledger(Some(pin.clone()));
         assert!(matches!(j.accept(&held, j.served(2)), ServedAcceptance::Accepted { .. }));
         settings(&held, &j.p2.user_id, None);
-        assert!(j.preview(&held, None, j.served(3)).is_err());
+        assert!(matches!(j.preview(&held, None, j.served(3)).unwrap(), JoinPreview::Code { .. }));
+        let mut made_up = j.served(3);
+        made_up.first_keys = crate::group_public_key(vec![9u8; 64]).unwrap();
+        assert!(j.preview(&held, None, made_up).is_err());
         // The same after a fork.
         let other = join_with(&j.p1, &j.p2, &[GroupRole::Billing]);
         let forked = j.ledger(Some(pin));
@@ -1681,7 +2063,14 @@ mod tests {
             served: ServedChain,
             matched: &Arc<JoinMatched>,
         ) -> CoreResult<JoinAcceptance> {
-            ledger.accept_joining(self.me(), GROUP.into(), None, served, Arc::clone(matched))
+            ledger.accept_joining(
+                self.me(),
+                GROUP.into(),
+                None,
+                served,
+                Arc::clone(matched),
+                FamilyGuard::Absent,
+            )
         }
     }
 
@@ -1866,8 +2255,9 @@ mod tests {
             seal_bytes(&key, user, group, JOINS, &Zeroizing::new(value.to_string().into_bytes())).unwrap()
         };
         let older = json!({ "v": 1, "groupId": GROUP, "joinMark": null, "checkedAt": NOW });
+        // A version this release does not know: 4 is the one it writes.
         let mut newer = value.clone();
-        newer["v"] = json!(4);
+        newer["v"] = json!(5);
         // Version 2, which the data layer sealed before only the core and the worker did.
         let mut sealed_by_the_data_layer = value.clone();
         sealed_by_the_data_layer["v"] = json!(2);
@@ -1926,7 +2316,7 @@ mod tests {
         let reopened = ledger.join_matched_open(GROUP.into(), matched.record()).unwrap().unwrap();
         assert_eq!(j.accept_joining(&ledger, j.served(3), &reopened).unwrap_err(), input(USED));
         // A family forgotten (a join committed but not kept) may run its join again.
-        ledger.forget_group(GROUP.into());
+        crate::area_ledger::forget_fully(&ledger, GROUP);
         assert!(matches!(
             j.accept_joining(&ledger, j.served(3), &reopened).unwrap(),
             JoinAcceptance::Accepted { .. }
@@ -1944,6 +2334,7 @@ mod tests {
             None,
             j.served(2),
             Arc::clone(&matched),
+            FamilyGuard::Absent,
         );
         assert_eq!(other_family.unwrap_err(), input(OTHER_FAMILY));
         // Another account's ledger: not this account's match.
@@ -1951,7 +2342,14 @@ mod tests {
         let signing = decode("k", &j.p1.keys.signing_public_key, None).unwrap();
         theirs.open_account(j.p1.user_id.clone(), signing, ROOT.to_vec()).unwrap();
         settings(&theirs, &j.p1.user_id, None);
-        let refused = theirs.accept_joining(j.me(), GROUP.into(), None, j.served(2), Arc::clone(&matched));
+        let refused = theirs.accept_joining(
+            j.me(),
+            GROUP.into(),
+            None,
+            j.served(2),
+            Arc::clone(&matched),
+            FamilyGuard::Absent,
+        );
         assert_eq!(refused.unwrap_err(), input(NOT_THIS_ACCOUNT));
     }
 
@@ -2245,6 +2643,320 @@ mod tests {
         long[0] = "abandoned".into();
         for code in [short, upper, long] {
             assert_eq!(join_words(code, vec![2, 3], typed()), Err(input(BAD_CODE)));
+        }
+    }
+
+    /* Pair codes and pair matches (docs/optional-verification.md 3.4) ------------------------ */
+
+    /*
+     * Roster 2 lets in persons 2 and 3 together, roster 3 person 4; `third` is person 3's entry
+     * on roster 3 when it moves (a handover, or keys put in without a chain).
+     */
+    struct Pairs {
+        p: Vec<Person>,
+        h: History,
+    }
+
+    fn pairs_with(third: Option<RosterMember>) -> Pairs {
+        let p: Vec<Person> = (1..=4).map(Person::new).collect();
+        let owner = p[0].entry(&[GroupRole::Billing, GroupRole::Members], 1, MemberStatus::Active);
+        let mut h = History::new();
+        h.roster(&p[0], vec![owner.clone()], None);
+        h.roster(&p[0], vec![owner.clone(), p[1].active(&[]), p[2].active(&[])], None);
+        let moved = third.unwrap_or_else(|| p[2].active(&[]));
+        h.roster(&p[0], vec![owner, p[1].active(&[]), moved, p[3].active(&[])], None);
+        Pairs { p, h }
+    }
+
+    fn me_of(p: &Person) -> OwnIdentities {
+        OwnIdentities { user_id: p.user_id.clone(), identities: vec![p.served_keys()] }
+    }
+
+    impl Pairs {
+        fn people(&self) -> Vec<&Person> {
+            self.p.iter().collect()
+        }
+
+        /* The chain as person `n` accepts it. */
+        fn chain_as(&self, n: usize) -> Arc<AcceptedRosters> {
+            let RosterChain::Accepted { chain } = accept_rosters(
+                GROUP.into(),
+                self.h.key(1),
+                Some(GroupAnchor::Created),
+                vec![],
+                self.h.rosters.clone(),
+                vec![],
+                ml_dsa_keys(&self.people()),
+                me_of(&self.p[n - 1]),
+                None,
+            )
+            .unwrap() else {
+                panic!("accepted")
+            };
+            chain
+        }
+
+        fn code(&self, me: usize, other: usize) -> PairCode {
+            pair_code(
+                self.chain_as(me),
+                me_of(&self.p[me - 1]),
+                self.p[other - 1].user_id.clone(),
+                self.h.rosters.clone(),
+            )
+            .unwrap()
+        }
+
+        fn words(&self, version: usize, a: usize, b: usize) -> Vec<String> {
+            pair_code_of(
+                &roster_digest(self.h.rosters[version - 1].statement.clone()),
+                &self.h.key(1),
+                1,
+                &self.p[a - 1].user_id,
+                &self.p[b - 1].user_id,
+            )
+            .unwrap()
+        }
+
+        /*
+         * Person 2's ledger with the chain committed, settings carrying the family's pin and, when
+         * given, person 3's contact pin of `contact`'s keys (a first-seen pin: no fingerprint).
+         */
+        fn ledger(&self, contact: Option<&Person>) -> Arc<AreaLedger> {
+            let ledger = AreaLedger::new();
+            let me = &self.p[1];
+            let signing = decode("k", &me.keys.signing_public_key, None).unwrap();
+            ledger.open_account(me.user_id.clone(), signing, ROOT.to_vec()).unwrap();
+            let pin = pin_after(vec![], self.chain_as(2), CHECKED.into()).unwrap();
+            let contacts = contact
+                .map(|keys| {
+                    let served = keys.served_keys();
+                    let pin = crate::first_seen::pin_of_served(served, false).unwrap();
+                    let filed = crate::group_trust::VerifiedPin {
+                        user_id: self.p[2].user_id.clone(),
+                        key_version: pin.key_version.unwrap(),
+                        encryption_public_key: pin.encryption_public_key,
+                        signing_public_key: pin.signing_public_key,
+                        ml_dsa_public_key_hash: pin.ml_dsa_public_key_hash.unwrap(),
+                        kem_public_key_hash: pin.kem_public_key_hash.unwrap(),
+                        fingerprint: pin.fingerprint,
+                        trusted_via: None,
+                    };
+                    [(self.p[2].user_id.clone(), filed)].into()
+                })
+                .unwrap_or_default();
+            ledger
+                .use_settings(me.user_id.clone(), Some([(GROUP.to_string(), pin)].into()), contacts)
+                .unwrap();
+            let served = served(&self.h, &self.people(), 3);
+            let ServedAcceptance::Accepted { .. } = ledger
+                .accept_served(me_of(me), GROUP.into(), None, served, FamilyGuard::Absent, CHECKED.into())
+                .unwrap()
+            else {
+                panic!("committed")
+            };
+            ledger
+        }
+
+        fn matched(
+            &self,
+            ledger: &AreaLedger,
+            version: u64,
+            code: Vec<String>,
+            guard: GuardState,
+        ) -> PairMatch {
+            ledger
+                .pair_match(
+                    me_of(&self.p[1]),
+                    GROUP.into(),
+                    self.p[2].user_id.clone(),
+                    self.h.rosters.clone(),
+                    version,
+                    code,
+                    guard,
+                    CHECKED.into(),
+                )
+                .unwrap()
+        }
+    }
+
+    fn guard_of(p: &Person) -> GuardState {
+        let pin = crate::first_seen::pin_of_served(p.served_keys(), false).unwrap();
+        GuardState::Held { entry: crate::first_seen::guard_entry_next(None, pin).unwrap() }
+    }
+
+    #[test]
+    fn a_family_check_that_lands_before_a_first_use_commits_is_a_mark_and_the_record_vouches_for_nothing() {
+        let j = join();
+        let first = |ledger: &AreaLedger| {
+            let FirstUseJoin::Ready { matched, roster_version } = ledger
+                .join_first_use(j.me(), GROUP.into(), None, j.served(2), FamilyGuard::Absent, CHECKED.into())
+                .unwrap()
+            else {
+                panic!("a first use")
+            };
+            assert_eq!(roster_version, 2);
+            matched
+        };
+        let join = |ledger: &AreaLedger, matched| {
+            ledger.accept_joining(j.me(), GROUP.into(), None, j.served(2), matched, FamilyGuard::Absent)
+        };
+        // With nothing else, the record commits.
+        let ledger = j.ledger(None);
+        assert!(matches!(join(&ledger, first(&ledger)), Ok(JoinAcceptance::Accepted { .. })));
+        // A family check (the migration's record, with no code) saved meanwhile: no mark fixes the
+        // first keys, but one exists, so first use vouches for nothing.
+        let ledger = j.ledger(None);
+        let matched = first(&ledger);
+        let check = serde_json::json!({ GROUP: { "how": "before", "rosterVersion": 2 } });
+        ledger.use_family_checks(j.p2.user_id.clone(), check.to_string()).unwrap();
+        assert!(join(&ledger, matched).is_err());
+    }
+
+    #[test]
+    fn a_pair_code_is_the_later_admission_s_the_same_from_either_side() {
+        let f = pairs_with(None);
+        // 2 and 3 came in together at 2; 4 at 3, so any pair with 4 is at 3; the creator's at 1.
+        assert_eq!(f.code(2, 3), PairCode::Code { roster_version: 2, code: f.words(2, 2, 3) });
+        assert_eq!(f.code(3, 2), f.code(2, 3));
+        assert_eq!(f.code(2, 4), PairCode::Code { roster_version: 3, code: f.words(3, 2, 4) });
+        assert_eq!(f.code(1, 2), PairCode::Code { roster_version: 2, code: f.words(2, 1, 2) });
+        // Someone with no entry at the head has none, and nobody pairs with themselves.
+        let outsider = Person::new(5);
+        assert_eq!(
+            pair_code(f.chain_as(2), me_of(&f.p[1]), outsider.user_id.clone(), f.h.rosters.clone()).unwrap(),
+            PairCode::NotAdmitted
+        );
+        assert!(
+            pair_code(f.chain_as(2), me_of(&f.p[1]), f.p[1].user_id.clone(), f.h.rosters.clone()).is_err()
+        );
+        // A roster of the run the server left out: refused, never an earlier admission.
+        let without = vec![f.h.rosters[0].clone(), f.h.rosters[2].clone()];
+        assert!(pair_code(f.chain_as(2), me_of(&f.p[1]), f.p[2].user_id.clone(), without).is_err());
+    }
+
+    #[test]
+    fn one_roster_gives_each_pair_its_own_words_so_a_relabelled_entry_gets_other_words() {
+        let f = pairs_with(None);
+        // Over roster 3, A↔B and A↔C: a server labelling person 4's entry as person 3 would have
+        // person 2's device work out 2↔4 while person 3's works out 2↔3.
+        assert_ne!(f.words(3, 2, 3), f.words(3, 2, 4));
+        assert_ne!(f.words(3, 1, 3), f.words(3, 1, 4));
+        assert_eq!(f.words(3, 2, 3), f.words(3, 3, 2), "the ids are sorted");
+        // Its own domain: never the roster's join code.
+        let join = join_code(roster_digest(f.h.rosters[1].statement.clone()), f.h.key(1), 1).unwrap();
+        assert_ne!(f.words(2, 2, 3), join);
+    }
+
+    #[test]
+    fn a_device_whose_own_entry_was_wrong_at_the_roster_shows_no_pair_code() {
+        let (p1, p2, p3, server) = (Person::new(1), Person::new(2), Person::new(3), Person::new(9));
+        let owner = p1.entry(&[GroupRole::Billing, GroupRole::Members], 1, MemberStatus::Active);
+        let mut planted = server.active(&[]);
+        planted.user_id = p2.user_id.clone();
+        // Person 2 let in at 2 under keys the server made, put right at 3; person 3 let in at 3.
+        let mut h = History::new();
+        h.roster(&p1, vec![owner.clone()], None);
+        h.roster(&p1, vec![owner.clone(), planted], None);
+        h.roster(&p1, vec![owner, p2.active(&[]), p3.active(&[])], None);
+        let people = [&p1, &p2, &p3, &server];
+        let as_ = |p: &Person| {
+            let RosterChain::Accepted { chain } = accept_rosters(
+                GROUP.into(),
+                h.key(1),
+                Some(GroupAnchor::Created),
+                vec![],
+                h.rosters.clone(),
+                vec![],
+                ml_dsa_keys(&people),
+                me_of(p),
+                None,
+            )
+            .unwrap() else {
+                panic!("accepted")
+            };
+            chain
+        };
+        let chain = as_(&p2);
+        assert_eq!(chain.own_entry_wrong_at(), vec![2]);
+        let code = |chain, me: &Person, other: &Person| {
+            pair_code(chain, me_of(me), other.user_id.clone(), h.rosters.clone()).unwrap()
+        };
+        assert_eq!(code(chain.clone(), &p2, &p1), PairCode::OwnEntryWrong { roster_version: 2 });
+        // Only where it was wrong: at 3 (with person 3) its entry is its own.
+        assert!(matches!(code(chain, &p2, &p3), PairCode::Code { roster_version: 3, .. }));
+        // The organizer's device works out a code with person 2 there: there is no one to match it.
+        assert!(matches!(code(as_(&p1), &p1, &p2), PairCode::Code { roster_version: 2, .. }));
+    }
+
+    #[test]
+    fn a_pair_match_writes_a_verified_pin_only_over_the_keys_both_sides_hold() {
+        let f = pairs_with(None);
+        let PairCode::Code { roster_version, code } = f.code(2, 3) else { panic!("a code") };
+        let ledger = f.ledger(None);
+        let matched = f.matched(&ledger, roster_version, code.clone(), GuardState::Absent);
+        let check = matched.check.clone().expect("a check record");
+        assert_eq!(
+            (check.roster_version, check.with.as_str(), check.code.clone()),
+            (2, f.p[2].user_id.as_str(), code.clone())
+        );
+        let pin = matched.pin.expect("a pin");
+        assert_eq!(pin_trust(pin.clone()), PinTrust::Verified);
+        assert_eq!(key_commitment(pin), key_commitment(pin_of_served(f.p[2].served_keys(), false).unwrap()));
+        // Words other than the code here, or the code of another roster: nothing at all.
+        let mut wrong = code.clone();
+        wrong[0] = if wrong[0] == "abandon" { "ability".into() } else { "abandon".into() };
+        assert_eq!(f.matched(&ledger, 2, wrong, GuardState::Absent), PairMatch { check: None, pin: None });
+        assert_eq!(
+            f.matched(&ledger, 3, code.clone(), GuardState::Absent),
+            PairMatch { check: None, pin: None }
+        );
+        // A guard of these keys keeps the pin; of other keys, or unreadable, no pin, the check kept.
+        assert!(f.matched(&ledger, 2, code.clone(), guard_of(&f.p[2])).pin.is_some());
+        for guard in [guard_of(&Person::new(9)), GuardState::Unreadable] {
+            let matched = f.matched(&ledger, 2, code.clone(), guard);
+            assert!(matched.check.is_some() && matched.pin.is_none());
+        }
+        // With no guard, the settings pin decides: of these keys, the pin; of others, none.
+        assert!(f.matched(&f.ledger(Some(&f.p[2])), 2, code.clone(), GuardState::Absent).pin.is_some());
+        let stale = f.matched(&f.ledger(Some(&Person::new(9))), 2, code.clone(), GuardState::Absent);
+        assert!(stale.check.is_some() && stale.pin.is_none());
+        // A newer guard entry over a stale settings pin: the guard's keys are the ones held.
+        let held = f.matched(&f.ledger(Some(&Person::new(9))), 2, code, guard_of(&f.p[2]));
+        assert!(held.pin.is_some());
+        // No committed chain: nothing to match over.
+        assert!(AreaLedger::new()
+            .pair_match(
+                me_of(&f.p[1]),
+                GROUP.into(),
+                f.p[2].user_id.clone(),
+                vec![],
+                2,
+                vec![],
+                GuardState::Absent,
+                CHECKED.into()
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn a_member_whose_keys_moved_since_the_compared_roster_is_checked_with_personal_words() {
+        let p3 = Person::new(3);
+        let (next, _) = p3.succeed();
+        let mut put_in = Person::new(9).active(&[]);
+        put_in.user_id = p3.user_id.clone();
+        // A handover (a fold-in to their next identity), or keys put in without a chain (a Continue).
+        let planted = Person::new(9);
+        for (moved, keys) in [(next.active(&[]), &next), (put_in, &planted)] {
+            let f = pairs_with(Some(moved));
+            let PairCode::Code { roster_version, code } = f.code(2, 3) else { panic!("a code") };
+            assert_eq!(roster_version, 2, "the run of active entries starts where they came in");
+            // With the pin of their earlier keys, with no pin at all, and with a pin already moved
+            // to the new keys (a Continue on this device): the words compared vouch for none of it.
+            for contact in [Some(&f.p[2]), None, Some(keys)] {
+                let matched = f.matched(&f.ledger(contact), roster_version, code.clone(), GuardState::Absent);
+                assert!(matched.check.is_some(), "the family is checked");
+                assert_eq!(matched.pin, None, "no pin moves to keys nobody compared");
+            }
         }
     }
 }

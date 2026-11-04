@@ -1,6 +1,6 @@
-import { db } from '@hushos/db';
+import { endPools } from '@hushos/db';
 import { definePlugin } from 'nitro';
 
 export default definePlugin((nitroApp) => {
-    nitroApp.hooks.hook('close', () => db.$client.end());
+    nitroApp.hooks.hook('close', () => endPools());
 });

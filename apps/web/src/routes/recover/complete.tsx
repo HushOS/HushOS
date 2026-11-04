@@ -140,7 +140,7 @@ function RecoverForm({ enrollment }: { enrollment: { email: string } }) {
                                     if (file) void read(file);
                                 }}
                                 className={cn(
-                                    'flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed px-6 py-8 text-center transition-colors has-focus-visible:outline-2 has-focus-visible:outline-ring',
+                                    'flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed px-6 py-8 text-center transition-colors has-focus-visible:outline-2 has-focus-visible:outline-solid has-focus-visible:outline-ring',
                                     over
                                         ? 'border-primary bg-accent'
                                         : 'border-field hover:bg-muted',

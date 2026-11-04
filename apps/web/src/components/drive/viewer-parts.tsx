@@ -172,7 +172,7 @@ export function LargeFileBar({
                 ref={status}
                 tabIndex={-1}
                 className={cn(
-                    'rounded-xs outline-none focus-visible:outline-2 focus-visible:outline-ring',
+                    'rounded-xs outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring',
                     !chosen && 'sr-only',
                 )}
             >

@@ -1,7 +1,15 @@
 import { describe, expect, test } from 'vitest';
 import { fingerprint } from './fingerprint';
 import { CryptoError } from './errors';
-import { checkGroupPin, pinVerified, settingsRolledBack } from './pins';
+import {
+    checkGroupPin,
+    guardAfter,
+    keyCommitment,
+    pinKeysOfServed,
+    pinTrust,
+    pinVerified,
+    settingsRolledBack,
+} from './pins';
 
 /*
  * A pin counts only when it records a version 3 words check over every key it
@@ -91,6 +99,91 @@ describe('pins', () => {
     });
 });
 
+/* A first-seen pin over four keys: the same key fields, and "" for the fingerprint. */
+async function seen(x: number, ed: number, mlDsa: number, kem: number) {
+    return { ...(await v3(x, ed, mlDsa, kem)), fingerprint: '' };
+}
+
+describe('first-seen pins', () => {
+    test('a first-seen pin never passes pinVerified, nor when its "" is replaced by a fingerprint over other keys', async () => {
+        const pin = await seen(1, 2, 3, 4);
+        expect(await pinVerified(pin)).toBe(false);
+        expect(await pinTrust(pin)).toBe('seen');
+        // Someone writes a real fingerprint into it, but over keys the pin does not hold.
+        for (const other of [
+            await v3(9, 2, 3, 4),
+            await v3(1, 9, 3, 4),
+            await v3(1, 2, 9, 4),
+            await v3(1, 2, 3, 9),
+        ]) {
+            const forged = { ...pin, fingerprint: other.fingerprint };
+            expect(await pinVerified(forged)).toBe(false);
+            // Not verified, and not first-seen either: it can be pinned again, never trusted.
+            expect(await pinTrust(forged)).toBe('invalid');
+        }
+        // The fingerprint over its own keys is a words check: that one is verified.
+        expect(await pinTrust({ ...pin, fingerprint: (await v3(1, 2, 3, 4)).fingerprint })).toBe(
+            'verified',
+        );
+    });
+
+    test('first-seen needs "" exactly and every key field well formed; without an ML-DSA digest it is legacy', async () => {
+        const pin = await seen(1, 2, 3, 0xab);
+        const { fingerprint: _, ...unprinted } = pin;
+        expect(await pinTrust(unprinted as never)).toBe('invalid');
+        expect(await pinTrust({ ...pin, fingerprint: ' ' })).toBe('invalid');
+        expect(await pinTrust({ ...pin, kemPublicKeyHash: null })).toBe('invalid');
+        expect(
+            await pinTrust({ ...pin, kemPublicKeyHash: pin.kemPublicKeyHash.toUpperCase() }),
+        ).toBe('invalid');
+        expect(await pinTrust({ ...pin, signingPublicKey: `${pin.signingPublicKey}=` })).toBe(
+            'invalid',
+        );
+        expect(await pinTrust({ ...pin, encryptionPublicKey: encode(new Uint8Array(31)) })).toBe(
+            'invalid',
+        );
+        expect(await pinTrust({ ...pin, mlDsaPublicKeyHash: null })).toBe('legacy');
+        expect(await pinTrust({ ...pin, mlDsaPublicKeyHash: undefined })).toBe('legacy');
+    });
+
+    test('keys are told apart by their commitment, never by the fingerprint field', async () => {
+        const a = await seen(1, 2, 3, 4);
+        const b = await seen(1, 2, 3, 5);
+        // Two first-seen pins of other keys hold the same "" but not the same keys.
+        expect(a.fingerprint).toBe(b.fingerprint);
+        expect(await keyCommitment(a)).not.toBe(await keyCommitment(b));
+        // The commitment is the version 3 fingerprint over the four keys, verified or not.
+        expect(await keyCommitment(a)).toBe((await v3(1, 2, 3, 4)).fingerprint);
+        expect(await keyCommitment(await v3(1, 2, 3, 4))).toBe(await keyCommitment(a));
+        expect(await keyCommitment({ ...a, mlDsaPublicKeyHash: null })).toBeNull();
+        expect(await keyCommitment({ ...a, encryptionPublicKey: 'not a key' })).toBeNull();
+    });
+
+    test('a pin of served keys is first-seen or verified as asked, over the very keys served', async () => {
+        const served = {
+            keyVersion: 3,
+            encryptionPublicKey: encode(key(1)),
+            signingPublicKey: encode(key(2)),
+            mlDsaPublicKey: encode(new Uint8Array(1952).fill(3)),
+            kemPublicKey: encode(new Uint8Array(1184).fill(4)),
+        };
+        const first = await pinKeysOfServed(served, 'seen');
+        expect(first.fingerprint).toBe('');
+        expect(first.keyVersion).toBe(3);
+        expect(await pinTrust(first)).toBe('seen');
+        const checked = await pinKeysOfServed(served, 'verified');
+        expect(await pinTrust(checked)).toBe('verified');
+        expect(await keyCommitment(first)).toBe(checked.fingerprint);
+        // A key not in canonical form, or a lattice key of the wrong size, makes no pin at all.
+        await expect(
+            pinKeysOfServed({ ...served, signingPublicKey: `${served.signingPublicKey}=` }, 'seen'),
+        ).rejects.toThrow(CryptoError);
+        await expect(
+            pinKeysOfServed({ ...served, kemPublicKey: encode(new Uint8Array(1183)) }, 'seen'),
+        ).rejects.toThrow(CryptoError);
+    });
+});
+
 describe('settings served back', () => {
     test('an older version, or none after one was seen, is a rollback', () => {
         expect(settingsRolledBack(4, 5)).toBe(true);
@@ -143,5 +236,57 @@ describe('group pins', () => {
         ])
             expect(() => checkGroupPin(GROUP, broken)).toThrow(CryptoError);
         expect(() => checkGroupPin(GROUP.toUpperCase(), pin)).toThrow('Invalid group id.');
+    });
+});
+
+describe('the family guard (docs/optional-verification.md 2.8)', () => {
+    const GROUP = '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a';
+    const AREA = '0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c';
+    const at = (rosterVersion: number, keyVersion: number, areas: Record<string, number> = {}) => ({
+        firstEd25519PublicKey: encode(key(1)),
+        firstMlDsaPublicKeyDigest: encode(key(2)),
+        checkedAt: '2026-10-15T00:00:00.000Z',
+        keyVersion,
+        groupKeyDigest: encode(key(10 + keyVersion)),
+        rosterVersion,
+        rosterDigest: encode(key(20 + rosterVersion)),
+        areas,
+    });
+
+    test('moves on with each acceptance and the folders opened here, and never goes back', () => {
+        // None held: the accepted pin, with what this device opened.
+        expect(
+            guardAfter(GROUP, null, at(3, 1), [{ groupId: GROUP, workspaceId: AREA, version: 1 }]),
+        ).toEqual(at(3, 1, { [AREA]: 1 }));
+        // A later roster and key: the guard moves there, keeping its own floors.
+        expect(guardAfter(GROUP, at(3, 1, { [AREA]: 2 }), at(5, 2))).toEqual(
+            at(5, 2, { [AREA]: 2 }),
+        );
+        // The same chain, and a folder opened at a later version: only the floor rises.
+        expect(
+            guardAfter(GROUP, at(5, 2, { [AREA]: 1 }), at(5, 2), [
+                { groupId: GROUP, workspaceId: AREA, version: 2 },
+            ]),
+        ).toEqual(at(5, 2, { [AREA]: 2 }));
+        // Nothing new: nothing to write.
+        expect(guardAfter(GROUP, at(5, 2, { [AREA]: 2 }), at(5, 2))).toBeNull();
+        // An older pin never lowers it, and is not covered either: the guard holds no digest at
+        // the pin's versions, so it cannot show the pin is on its history.
+        expect(guardAfter(GROUP, at(5, 2), at(3, 1))).toBe('ahead');
+        expect(guardAfter(GROUP, at(5, 2), at(5, 1))).toBe('ahead');
+        // Crossed versions (a later roster under an earlier key, either way): two histories.
+        expect(guardAfter(GROUP, at(3, 1), at(2, 2))).toBe('conflict');
+        expect(guardAfter(GROUP, at(2, 2), at(3, 1))).toBe('conflict');
+        // One that disagrees never replaces it, and is no coverage either (a wipe drops nothing
+        // over it): another roster or group key at one version, or other first keys.
+        expect(guardAfter(GROUP, at(5, 2), { ...at(5, 2), rosterDigest: encode(key(99)) })).toBe(
+            'conflict',
+        );
+        expect(guardAfter(GROUP, at(5, 2), { ...at(5, 2), groupKeyDigest: encode(key(98)) })).toBe(
+            'conflict',
+        );
+        expect(
+            guardAfter(GROUP, at(5, 2), { ...at(6, 2), firstEd25519PublicKey: encode(key(9)) }),
+        ).toBe('conflict');
     });
 });

@@ -1,17 +1,24 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, Navigate, useNavigate } from '@tanstack/react-router';
 import { ChevronDownIcon, RotateCcwIcon } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { useDrive } from '@/components/drive/drive-shell';
 import { CheckingLine, ForkAlert, NoticeList } from '@/components/families/family-alerts';
 import { FamilyPlan, FamilyStorage, useFamilyPlanGate } from '@/components/families/family-billing';
 import { InviteDialog } from '@/components/families/invite-dialog';
+import { RenameFamilyDialog } from '@/components/families/rename-dialog';
 import { FolderKeys, KeyChangeNotice } from '@/components/families/key-changes';
-import { InvitationList, MemberList, PendingList } from '@/components/families/members';
+import {
+    ChangedMembers,
+    InvitationList,
+    MemberList,
+    PendingList,
+} from '@/components/families/members';
 import { ServerKnowsLine } from '@/components/families/server-knows';
 import { PendingLabel } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
+import { Setting, SettingsGroup } from '@/components/settings';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
     AlertDialog,
@@ -52,6 +59,8 @@ import {
 } from '@/lib/family-billing';
 import { formatQuota, formatSpace, storageQueryOptions } from '@/lib/queries';
 import { leaveBlocker } from '@/lib/family-leave';
+import { clearPendingRoles, pendingFamiliesGone } from '@/lib/family-pending';
+import { settingsQueryOptions } from '@/lib/contacts';
 import { useFamilyWork } from '@/lib/family-work';
 import { cue } from '@/lib/sounds';
 
@@ -69,6 +78,19 @@ export function withPageNotices(notices: readonly GroupNotice[]) {
         reset.add(notice.groupId);
         return true;
     });
+}
+
+/* The organizer's first name when it is someone else: who the hard warning says to tell. */
+function organizerOf(
+    detail:
+        | { members: { userId: string; name: string; state: string; roles: string[] }[] }
+        | undefined,
+    userId: string,
+) {
+    const organizer = detail?.members.find(
+        (member) => member.state === 'active' && member.roles.includes('billing'),
+    );
+    return organizer && organizer.userId !== userId ? firstName(organizer.name) : null;
 }
 
 /* While a key change walks one of the family's folders, the family is checked again this often. */
@@ -99,6 +121,20 @@ export function FamilyPage({
     const { userId } = useDrive();
     const families = useQuery(familiesQueryOptions(userId));
     const summary = families.data?.find((family) => family.id === groupId);
+    // Manager roles held back in a family this account is no longer in (it left, or the family
+    // ended) wait for nothing: they go from its settings.
+    const settings = useQuery(settingsQueryOptions(userId));
+    const gone = families.data
+        ? pendingFamiliesGone(
+              settings.data?.settings,
+              families.data.map((family) => family.id),
+          ).join()
+        : '';
+    const queryClient = useQueryClient();
+    useEffect(() => {
+        for (const id of gone ? gone.split(',') : [])
+            void clearPendingRoles(queryClient, userId, id, 'all').catch(() => false);
+    }, [gone, queryClient, userId]);
     const detail = useQuery({
         ...familyQueryOptions(userId, groupId),
         enabled: summary?.state === 'active',
@@ -127,6 +163,8 @@ export function FamilyPage({
     });
     const [inviting, setInviting] = useState(false);
     const [leaving, setLeaving] = useState(false);
+    const [technical, setTechnical] = useState(false);
+    const [renaming, setRenaming] = useState(false);
     // Inviting waits for a plan where plans are sold: nobody could be let in without one.
     const plan = useFamilyPlanGate(userId, groupId, summary?.state === 'active');
 
@@ -158,8 +196,7 @@ export function FamilyPage({
     const family = summary.name;
     const names = firstNames(detail.data);
     const result = sync.data?.result;
-    // Let in, but nothing on this device or account checked the family yet: the join code is
-    // compared on the join screen.
+    // Let in, but this device holds nothing of the family yet: the join screen joins it.
     if (result?.status === 'unchecked')
         return <Navigate to="/app/families/$groupId/join" params={{ groupId }} replace />;
     const view = result?.status === 'accepted' ? result.view : null;
@@ -173,12 +210,30 @@ export function FamilyPage({
     // offered and refused. The server still decides (an unsealed manager or the payer), and its
     // refusal shows in the dialog.
     const cantLeave = detail.data ? leaveBlocker(userId, detail.data.members) : null;
+    // One blue button on the page (6.1): Let them in, or a changed member's Continue, while either
+    // waits; Invite someone otherwise.
+    const waiting =
+        (pending.data ?? []).some((person) => !person.inFamily) ||
+        (manager &&
+            (detail.data?.members ?? []).some(
+                (member) =>
+                    member.state === 'active' &&
+                    member.userId !== userId &&
+                    work.needsCheck.includes(member.userId),
+            ));
 
     return (
         <div className="flex flex-1 flex-col">
             <PageHeader
                 back={<Link to="/app/account">Account</Link>}
                 title={family}
+                titleAction={
+                    manager && (
+                        <Button variant="ghost" onClick={() => setRenaming(true)}>
+                            Rename
+                        </Button>
+                    )
+                }
                 description={
                     // One source with Billing (placesOf); without a plan, "Choose a plan" says it.
                     seats && !plan.waiting
@@ -195,8 +250,9 @@ export function FamilyPage({
                 </Link>
                 {manager && !plan.waiting && (
                     <Button
-                        // Outline while you must fix a failed payment: Billing's button is the blue one.
-                        variant={paymentNeedsYou(plan.summary) ? 'outline' : 'default'}
+                        // Outline while you must fix a failed payment (Billing's button is the blue
+                        // one), or while someone waits to be let in or back in.
+                        variant={paymentNeedsYou(plan.summary) || waiting ? 'outline' : 'default'}
                         onClick={() => setInviting(true)}
                     >
                         Invite someone
@@ -204,79 +260,96 @@ export function FamilyPage({
                 )}
             </PageHeader>
 
-            <div className="flex flex-col gap-2 px-5 empty:hidden sm:px-8">
-                {sync.isPlaceholderData && result?.status === 'accepted' && (
-                    <CheckingLine family={family} />
-                )}
-                {result?.status === 'fork' && <ForkAlert family={family} fork={result.fork} />}
-                {sync.isError && (
-                    <Alert variant="warning">
-                        <AlertTitle>Couldn’t check {family}</AlertTitle>
-                        <AlertDescription>{errorCopy(sync.error, { family })}</AlertDescription>
-                    </Alert>
-                )}
-                {result?.status === 'wiped' && (
-                    <Alert variant="warning">
-                        <AlertTitle>You’re not in {family} any more</AlertTitle>
-                        <AlertDescription>
-                            What this device kept of the family has been cleared.
-                        </AlertDescription>
-                    </Alert>
-                )}
-                {ownWrong && (
-                    <Alert variant="destructive">
-                        <AlertTitle>
-                            Your entry in {family}’s member list isn’t your keys
-                        </AlertTitle>
-                        <AlertDescription>
-                            Ask someone who manages the family to check your words again.
-                        </AlertDescription>
-                    </Alert>
-                )}
-                {!ownWrong && ownBehind && (
-                    <Alert variant="info">
-                        <AlertDescription>
-                            {family}’s member list still has your previous keys. A manager’s device
-                            updates it the next time they open the family.
-                        </AlertDescription>
-                    </Alert>
-                )}
-                {markLeft.length > 0 && (
-                    <Alert variant="warning" data-left-due>
-                        <AlertTitle>{leftDueCopy({ userIds: markLeft }, { names })}</AlertTitle>
-                        <AlertDescription>
-                            {manager
-                                ? work.running
-                                    ? 'HushOS is finishing it on this device now.'
-                                    : 'HushOS finishes it on this device the next time it checks the family.'
-                                : 'A manager’s device finishes it the next time they open the family.'}
-                        </AlertDescription>
-                    </Alert>
-                )}
-                {result?.status === 'accepted' && (
-                    <KeyChangeNotice groupId={groupId} family={family} areas={areas} />
-                )}
-                {(sync.data || appNotices.length > 0) && (
-                    <NoticeList
-                        notices={withPageNotices([
-                            ...appNotices,
-                            ...(sync.data?.notices ?? []),
-                            ...(foreign.data ?? []),
-                        ])}
-                        nameOf={(id) =>
-                            id === groupId
-                                ? family
-                                : families.data?.find((at) => at.id === id)?.name
-                        }
-                        personOf={(id) => {
-                            const waiting = pending.data?.find((at) => at.userId === id);
-                            return waiting ? firstName(waiting.name) : names[id];
-                        }}
-                    />
-                )}
-            </div>
+            {/* One column, as Account's: every section a heading with its rule, then rows. */}
+            <div className="flex max-w-3xl flex-col gap-9 px-5 sm:px-8">
+                <div className="flex flex-col gap-2 empty:hidden">
+                    {sync.isPlaceholderData && result?.status === 'accepted' && (
+                        <CheckingLine family={family} />
+                    )}
+                    {result?.status === 'fork' && (
+                        <ForkAlert
+                            family={family}
+                            fork={result.fork}
+                            organizer={organizerOf(detail.data, userId)}
+                        />
+                    )}
+                    {sync.isError && (
+                        <Alert variant="warning">
+                            <AlertTitle>Couldn’t check {family}</AlertTitle>
+                            <AlertDescription>{errorCopy(sync.error, { family })}</AlertDescription>
+                        </Alert>
+                    )}
+                    {result?.status === 'wiped' && (
+                        <Alert variant="warning">
+                            <AlertTitle>You’re not in {family} any more</AlertTitle>
+                            <AlertDescription>
+                                What this device kept of the family has been cleared.
+                            </AlertDescription>
+                        </Alert>
+                    )}
+                    {ownWrong && (
+                        <Alert variant="warning" data-own-entry="wrong">
+                            <AlertTitle>{family} has your account wrong on this device</AlertTitle>
+                            <AlertDescription>
+                                Ask someone who manages the family to check it’s you, from the
+                                family’s page.
+                            </AlertDescription>
+                        </Alert>
+                    )}
+                    {!ownWrong && ownBehind && (
+                        <Alert variant="info" data-own-entry="behind">
+                            <AlertDescription>
+                                {family} still has your account as it was before you updated it. A
+                                manager’s device catches up the next time they open the family.
+                            </AlertDescription>
+                        </Alert>
+                    )}
+                    {manager && detail.data && (
+                        <ChangedMembers
+                            userId={userId}
+                            groupId={groupId}
+                            family={family}
+                            members={detail.data.members}
+                            view={view}
+                            needsCheck={work.needsCheck}
+                            names={names}
+                        />
+                    )}
+                    {markLeft.length > 0 && (
+                        <Alert variant="warning" data-left-due>
+                            <AlertTitle>{leftDueCopy({ userIds: markLeft }, { names })}</AlertTitle>
+                            <AlertDescription>
+                                {manager
+                                    ? work.running
+                                        ? 'HushOS is finishing it on this device now.'
+                                        : 'HushOS finishes it on this device the next time it checks the family.'
+                                    : 'A manager’s device finishes it the next time they open the family.'}
+                            </AlertDescription>
+                        </Alert>
+                    )}
+                    {result?.status === 'accepted' && (
+                        <KeyChangeNotice groupId={groupId} family={family} areas={areas} />
+                    )}
+                    {(sync.data || appNotices.length > 0) && (
+                        <NoticeList
+                            notices={withPageNotices([
+                                ...appNotices,
+                                ...(sync.data?.notices ?? []),
+                                ...(foreign.data ?? []),
+                            ])}
+                            nameOf={(id) =>
+                                id === groupId
+                                    ? family
+                                    : families.data?.find((at) => at.id === id)?.name
+                            }
+                            personOf={(id) => {
+                                const waiting = pending.data?.find((at) => at.userId === id);
+                                return waiting ? firstName(waiting.name) : names[id];
+                            }}
+                        />
+                    )}
+                </div>
 
-            <div className="flex flex-col pt-2 empty:hidden">
                 <FamilyPlan
                     place="top"
                     userId={userId}
@@ -288,132 +361,179 @@ export function FamilyPage({
                         void navigate({ to: '/app/family', search: {}, replace: true })
                     }
                 />
-            </div>
 
-            {detail.isPending && <SkeletonRows rows={2} />}
-            {detail.isError && (
-                <EmptyState
-                    title="This family couldn’t be opened"
-                    body={errorCopy(detail.error, { family })}
-                >
-                    <Button variant="outline" onClick={() => void detail.refetch()}>
-                        <RotateCcwIcon />
-                        Try again
-                    </Button>
-                </EmptyState>
-            )}
-            {manager && pending.data && (
-                <PendingList
+                {detail.isPending && (
+                    <div className="-mx-5 sm:-mx-8">
+                        <SkeletonRows rows={2} />
+                    </div>
+                )}
+                {detail.isError && (
+                    <EmptyState
+                        title="This family couldn’t be opened"
+                        body={errorCopy(detail.error, { family })}
+                    >
+                        <Button variant="outline" onClick={() => void detail.refetch()}>
+                            <RotateCcwIcon />
+                            Try again
+                        </Button>
+                    </EmptyState>
+                )}
+                {manager && pending.data && (
+                    <PendingList
+                        userId={userId}
+                        groupId={groupId}
+                        family={family}
+                        pending={pending.data}
+                        names={names}
+                        waitingForPlan={plan.waiting}
+                        blocked={
+                            markLeft.length > 0
+                                ? leftDueCopy({ userIds: markLeft }, { names })
+                                : null
+                        }
+                    />
+                )}
+                {detail.data && (
+                    <MemberList
+                        userId={userId}
+                        groupId={groupId}
+                        family={family}
+                        members={detail.data.members}
+                        view={view}
+                        manager={manager}
+                        names={names}
+                        needsCheck={work.needsCheck}
+                        checking={sync.isPlaceholderData}
+                    />
+                )}
+                {manager && invitations.data && (
+                    <InvitationList
+                        userId={userId}
+                        groupId={groupId}
+                        invitations={invitations.data}
+                        members={detail.data?.members ?? []}
+                    />
+                )}
+
+                <FamilyPlan
+                    place="bottom"
                     userId={userId}
                     groupId={groupId}
                     family={family}
-                    pending={pending.data}
-                    names={names}
-                    waitingForPlan={plan.waiting}
-                    blocked={
-                        markLeft.length > 0 ? leftDueCopy({ userIds: markLeft }, { names }) : null
+                    roles={summary.roles}
+                    onCheckoutSeen={() => undefined}
+                />
+                <FamilyStorage userId={userId} groupId={groupId} family={family} />
+
+                {/* Rarely needed, so folded away as Account's Advanced is. */}
+                <SettingsGroup
+                    title="Technical details and leaving"
+                    action={
+                        <button
+                            type="button"
+                            aria-expanded={technical}
+                            aria-controls="family-technical"
+                            aria-label={
+                                technical
+                                    ? 'Hide technical details and leaving'
+                                    : 'Show technical details and leaving'
+                            }
+                            onClick={() => setTechnical((value) => !value)}
+                            className="flex h-9 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-3 text-sm font-semibold text-primary outline-hidden hover:bg-muted focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring pointer-coarse:h-11"
+                        >
+                            {technical ? 'Hide' : 'Show'}
+                            <ChevronDownIcon
+                                aria-hidden="true"
+                                className={`size-4 transition-transform ${technical ? 'rotate-180' : ''}`}
+                            />
+                        </button>
                     }
-                />
-            )}
-            {detail.data && (
-                <MemberList
-                    userId={userId}
-                    groupId={groupId}
-                    family={family}
-                    members={detail.data.members}
-                    view={view}
-                    manager={manager}
-                    names={names}
-                    needsCheck={work.needsCheck}
-                    checking={sync.isPlaceholderData}
-                />
-            )}
-            {manager && invitations.data && (
-                <InvitationList
-                    userId={userId}
-                    groupId={groupId}
-                    invitations={invitations.data}
-                    members={detail.data?.members ?? []}
-                />
-            )}
-
-            <FamilyPlan
-                place="bottom"
-                userId={userId}
-                groupId={groupId}
-                family={family}
-                roles={summary.roles}
-                onCheckoutSeen={() => undefined}
-            />
-            <FamilyStorage userId={userId} groupId={groupId} family={family} />
-
-            <section className="flex flex-col gap-3 px-5 pt-8 sm:px-8">
-                <details className="group rounded-xl border border-rule px-4 py-3 text-[13px]">
-                    <summary className="flex cursor-pointer list-none items-center justify-between gap-2 font-semibold [&::-webkit-details-marker]:hidden">
-                        Technical details and leaving
-                        <ChevronDownIcon
-                            aria-hidden="true"
-                            className="size-4 text-muted-foreground transition-transform group-open:rotate-180"
-                        />
-                    </summary>
-                    {view ? (
-                        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5">
-                            <dt className="text-muted-foreground">Member list version</dt>
-                            <dd className="tabular-nums">{view.rosterVersion}</dd>
-                            <dt className="text-muted-foreground">Member list digest</dt>
-                            <dd className="font-mono break-all">{view.rosterDigest}</dd>
-                            <dt className="text-muted-foreground">Family key version</dt>
-                            <dd className="tabular-nums">{view.groupKeyVersion}</dd>
-                            <dt className="text-muted-foreground">Family folders</dt>
-                            <dd className="tabular-nums">{Object.keys(view.areas).length}</dd>
-                            <dd className="col-span-2">
-                                <FolderKeys
-                                    userId={userId}
-                                    groupId={groupId}
-                                    family={family}
-                                    areas={areas}
-                                    manager={manager}
-                                />
-                            </dd>
-                            {view.deadBranches.length > 0 && (
-                                <>
-                                    <dt className="text-muted-foreground">Dropped changes</dt>
-                                    <dd>
+                >
+                    <div id="family-technical" hidden={!technical} className="flex flex-col">
+                        {view ? (
+                            <>
+                                <Setting label="Member list version">
+                                    <span className="tabular-nums">{view.rosterVersion}</span>
+                                </Setting>
+                                <Setting label="Member list digest">
+                                    <span className="font-mono text-sm break-all">
+                                        {view.rosterDigest}
+                                    </span>
+                                </Setting>
+                                <Setting label="Family key version">
+                                    <span className="tabular-nums">{view.groupKeyVersion}</span>
+                                </Setting>
+                                <Setting
+                                    label="Family folders"
+                                    below={
+                                        <FolderKeys
+                                            userId={userId}
+                                            groupId={groupId}
+                                            family={family}
+                                            areas={areas}
+                                            manager={manager}
+                                        />
+                                    }
+                                >
+                                    <span className="tabular-nums">
+                                        {Object.keys(view.areas).length}
+                                    </span>
+                                </Setting>
+                                {view.deadBranches.length > 0 && (
+                                    <Setting label="Dropped changes">
                                         {view.deadBranches
                                             .map(
                                                 (branch) =>
                                                     `version ${branch.version} by ${names[branch.signerUserId] ?? 'a former manager'}`,
                                             )
                                             .join(', ')}
-                                    </dd>
-                                </>
-                            )}
-                        </dl>
-                    ) : (
-                        <p className="mt-2 text-muted-foreground">
-                            Not checked on this device yet.
-                        </p>
-                    )}
-                    <div className="mt-4 flex flex-col items-start gap-2 border-t border-rule pt-4">
-                        {/* Before the button, so it is read on the way to it: a disabled button can't take focus. */}
-                        {cantLeave && (
-                            <p id="leave-blocked" className="text-muted-foreground">
-                                {cantLeave}
-                            </p>
+                                    </Setting>
+                                )}
+                            </>
+                        ) : (
+                            <Setting label="Member list">
+                                <span className="text-muted-foreground">
+                                    Not checked on this device yet.
+                                </span>
+                            </Setting>
                         )}
-                        <Button
-                            variant="destructive-outline"
-                            disabled={!detail.data || cantLeave !== null}
-                            aria-describedby={cantLeave ? 'leave-blocked' : undefined}
-                            onClick={() => setLeaving(true)}
+                        <Setting
+                            label="Leaving"
+                            action={
+                                <Button
+                                    variant="destructive-ghost"
+                                    className="-mr-3.5 pointer-coarse:-mr-4"
+                                    disabled={!detail.data || cantLeave !== null}
+                                    aria-describedby={cantLeave ? 'leave-blocked' : 'leave-what'}
+                                    onClick={() => setLeaving(true)}
+                                >
+                                    Leave family
+                                </Button>
+                            }
                         >
-                            Leave family
-                        </Button>
+                            {/* Read on the way to the button: a disabled button can't take focus. */}
+                            <span
+                                id={cantLeave ? 'leave-blocked' : 'leave-what'}
+                                className="text-muted-foreground"
+                            >
+                                {cantLeave ??
+                                    'You’ll lose the family folders. Your own files stay yours.'}
+                            </span>
+                        </Setting>
                     </div>
-                </details>
-            </section>
-            <ServerKnowsLine className="mt-auto" />
+                </SettingsGroup>
+            </div>
+            <ServerKnowsLine className="mt-auto max-w-3xl" />
 
+            {manager && renaming && (
+                <RenameFamilyDialog
+                    userId={userId}
+                    groupId={groupId}
+                    family={family}
+                    open
+                    onOpenChange={setRenaming}
+                />
+            )}
             {manager && (
                 <InviteDialog
                     userId={userId}
@@ -486,7 +606,7 @@ function LeaveDialog({
                 .then(() => true)
                 .catch(() => false);
             familySynced(groupId, { status: 'wiped' });
-            cue('droplet');
+            cue('close');
             // The leave landed either way; a wipe that failed is said, not hidden behind it.
             if (wiped)
                 toast.add({
