@@ -161,15 +161,15 @@ class FamilyRolesModelTest {
     }
 
     /*
-     * A handover kept unstaged (its first call never made: the connection dropped), then the page opens: the resume gives
+     * A handover kept unstaged (its first call not made yet: blocked behind an earlier change for Grace), then the page opens: the resume gives
      * Grace billing, and Maya's last step is refused. Nothing was in the outbox, so only the handover's outcome says the
      * family changed; the page reads it again and shows Finish handing over. Fails if a resume that completes part way
      * leaves the page as it was.
      */
     @Test
     fun aResumedHandoverThatPartlyCompletesShowsTheFamilyAsItIs() {
-        family.rosterFailures = 1
-        assertTrue(runCatching { host.vault.families.handOver(family.summary, server.grace.id, "Grace") }.isFailure)
+        // Kept unstaged, as a handover blocked behind an earlier change for her is (a failed attempt keeps none).
+        host.vault.families.outbox.markHandover(family.member.id, family.groupId, server.grace.id)
         runBlocking { model.refreshFamilies(force = true) }
         assertEquals(null, halfDoneShown())
         family.memberAnswers.add { body -> family.apply(body, null) }
@@ -184,8 +184,8 @@ class FamilyRolesModelTest {
      */
     @Test
     fun aResumeThatFailsPartWayStillShowsTheFamilyAsItIs() {
-        family.rosterFailures = 1
-        assertTrue(runCatching { host.vault.families.handOver(family.summary, server.grace.id, "Grace") }.isFailure)
+        // Kept unstaged, as a handover blocked behind an earlier change for her is (a failed attempt keeps none).
+        host.vault.families.outbox.markHandover(family.member.id, family.groupId, server.grace.id)
         runBlocking { model.refreshFamilies(force = true) }
         family.memberAnswers.add { body -> val landed = family.apply(body, null); family.rosterFailures = 2; landed }
         runBlocking { model.loadManaged(family.groupId) }
@@ -235,8 +235,8 @@ class FamilyRolesModelTest {
      */
     @Test
     fun aResumedHandoverLeftPendingShowsTheFamilyAsItIs() {
-        family.rosterFailures = 1
-        assertTrue(runCatching { host.vault.families.handOver(family.summary, server.grace.id, "Grace") }.isFailure)
+        // Kept unstaged, as a handover blocked behind an earlier change for her is (a failed attempt keeps none).
+        host.vault.families.outbox.markHandover(family.member.id, family.groupId, server.grace.id)
         runBlocking { model.refreshFamilies(force = true) }
         assertEquals(null, halfDoneShown())
         family.memberAnswers.add { body -> family.apply(body, null) }

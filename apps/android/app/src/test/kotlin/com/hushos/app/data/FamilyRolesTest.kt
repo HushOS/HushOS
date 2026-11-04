@@ -291,6 +291,131 @@ class FamilyRolesTest {
     }
 
     /*
+     * Make them the organizer kept unanswered (its record staged), confirmed again for Grace while still unanswered: the
+     * record stays staged. Then the kept billing call is refused; the next open takes that as the handover's end and signs
+     * no fresh billing change. Fails if confirming again resets the record to unstaged, so a definite refusal is followed by
+     * a new billing call.
+     */
+    @Test
+    fun confirmingTheSameHandoverAgainKeepsItStaged() {
+        val phone = phone(organizer = true)
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        answer(6, 503)
+        assertTrue(phone.sync.handOver(summary, graceId, "Grace") is RoleEnd.Pending)
+        assertEquals(FamilyOutbox.KeptHandover(graceId, staged = true), phone.sync.outbox.handover(family.member.id, family.groupId))
+        assertTrue(phone.sync.handOver(summary, graceId, "Grace") is RoleEnd.Pending)
+        assertEquals("confirming again reset the handover to unstaged",
+            FamilyOutbox.KeptHandover(graceId, staged = true), phone.sync.outbox.handover(family.member.id, family.groupId))
+        val billing = bodies().toSet()
+        family.memberAnswers.add { _ -> 409 to JSONObject().put("code", "held").put("message", "Paused.") }
+        phone.sync.resumeOutbox(summary, names = { "Grace" })
+        assertEquals("a fresh billing change was signed after the kept one was refused", billing, bodies().toSet())
+        assertNull(phone.sync.outbox.handover(family.member.id, family.groupId))
+        assertTrue("billing" !in rolesOf(phone, graceId))
+    }
+
+    /*
+     * Make them the organizer whose settings read throws before billing is staged: the screen says it couldn't change that,
+     * and the record this attempt made goes with it, so the next open hands nothing over. A handover already kept (staged,
+     * billing's call unanswered) confirmed again over the same failure stays as it was. Fails if a failed attempt leaves an
+     * unstaged record that the next open then finishes, making someone the organizer nobody confirmed.
+     */
+    @Test
+    fun aHandoverThatFailsBeforeStagingLeavesNoRecord() {
+        val phone = phone(organizer = true)
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        // The sync's read of the identities answers; the staging's own read (route 6) then fails, before anything is signed.
+        family.identityReadsLeft = 1
+        try {
+            assertTrue("the handover didn't fail before staging", runCatching { phone.sync.handOver(summary, graceId, "Grace") }.isFailure)
+        } finally {
+            family.identityReadsLeft = -1
+        }
+        assertNull("a failed handover left its record", phone.sync.outbox.handover(family.member.id, family.groupId))
+        assertTrue(family.memberCalls.isEmpty())
+        phone.sync.resumeOutbox(summary, names = { "Grace" })
+        assertTrue("the next open handed over a handover nobody confirmed", family.memberCalls.isEmpty())
+        assertTrue("billing" !in rolesOf(phone, graceId))
+        // One already kept, confirmed again over the same failure: left as it was.
+        answer(3, 503)
+        assertTrue(phone.sync.handOver(summary, graceId, "Grace") is RoleEnd.Pending)
+        family.identityReadsLeft = 1
+        try {
+            phone.sync.handOver(summary, graceId, "Grace")
+        } catch (_: Exception) {
+        } finally {
+            family.identityReadsLeft = -1
+        }
+        assertEquals(FamilyOutbox.KeptHandover(graceId, staged = true), phone.sync.outbox.handover(family.member.id, family.groupId))
+    }
+
+    /* Make them the organizer whose staged marker can't be written (a full disk) once billing's call is kept: it fails. */
+    private fun handOverWithTheMarkerUnwritable(phone: FamilyFixture.Phone) {
+        FamilyOutbox.beforeMark = { staged -> if (staged) throw java.io.IOException("No space left on device") }
+        try {
+            assertTrue(runCatching { phone.sync.handOver(summary, graceId, "Grace") }.isFailure)
+        } finally {
+            FamilyOutbox.beforeMark = {}
+        }
+        assertEquals("billing's call wasn't kept", 1, kept(phone).size)
+        assertTrue("nothing was to be sent yet", family.memberCalls.isEmpty())
+    }
+
+    /*
+     * Billing's call is kept, then its staged marker can't be written: the handover isn't dropped, since its billing call
+     * is on the device. The next open sends it, it lands, and the handover finishes: one organizer. Fails if a failed marker
+     * drops the record while its billing call stays kept, leaving two organizers once that call lands.
+     */
+    @Test
+    fun aHandoverWhoseMarkerFailsAfterBillingWasKeptStillFinishes() {
+        val phone = phone(organizer = true)
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        handOverWithTheMarkerUnwritable(phone)
+        assertEquals(graceId, phone.sync.outbox.handover(family.member.id, family.groupId)?.to)
+        phone.sync.resumeOutbox(summary, names = { "Grace" })
+        assertEquals("two organizers", setOf(graceId), organizers(phone))
+        assertNull(phone.sync.outbox.handover(family.member.id, family.groupId))
+    }
+
+    /*
+     * The same, but the kept billing call is refused at the next open: its end marks the handover staged before the entry
+     * goes, so the handover ends there and no fresh billing change is signed. Fails if a handover whose marker failed is
+     * taken for one never staged, and billing signed again after a definite refusal.
+     */
+    @Test
+    fun aHandoverWhoseMarkerFailsIsNeverSignedAgainAfterARefusal() {
+        val phone = phone(organizer = true)
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        handOverWithTheMarkerUnwritable(phone)
+        family.memberAnswers.add { _ -> 409 to JSONObject().put("code", "held").put("message", "Paused.") }
+        phone.sync.resumeOutbox(summary, names = { "Grace" })
+        assertEquals("billing was signed again after the refusal", 1, family.memberCalls.size)
+        assertNull(phone.sync.outbox.handover(family.member.id, family.groupId))
+        assertEquals(setOf(family.member.id.lowercase()), organizers(phone))
+    }
+
+    /*
+     * Billing lands with Grace and Maya's step down gets no answer (kept). The next open sends it and it is refused for good:
+     * the handover ends there, both stay organizers, and nothing signs another step down; Finish handing over to Grace is
+     * Maya's to press. Fails if a resumed handover whose step down was refused is finished anyway, after the refusal is said.
+     */
+    @Test
+    fun aRefusedResumedStepDownEndsTheHandover() {
+        val phone = phone(organizer = true)
+        family.verifyPin(server.grace, "grace@example.org", "Grace Hopper")
+        family.memberAnswers.add { body -> family.apply(body, null) }
+        answer(3, 503)
+        assertTrue(phone.sync.handOver(summary, graceId, "Grace") is RoleEnd.Pending)
+        assertEquals(FamilyOutbox.KeptHandover(graceId, staged = true), phone.sync.outbox.handover(family.member.id, family.groupId))
+        val calls = family.memberCalls.size
+        family.memberAnswers.add { _ -> 409 to JSONObject().put("code", "held").put("message", "Paused.") }
+        phone.sync.resumeOutbox(summary, names = { "Grace" })
+        assertEquals("another step down was signed after the refusal", calls + 1, family.memberCalls.size)
+        assertNull(phone.sync.outbox.handover(family.member.id, family.groupId))
+        assertEquals(setOf(family.member.id.lowercase(), graceId), organizers(phone))
+    }
+
+    /*
      * The half-finished handover: billing given to Grace, then the app stops before Maya lets go of it (here, her
      * connection drops). On relaunch the family page's resume finishes it: one organizer, Grace, and the person told.
      * Fails if a handover stopped in the middle leaves two organizers for good.
