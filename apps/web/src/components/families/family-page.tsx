@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, Navigate, useNavigate } from '@tanstack/react-router';
+import { Link, Navigate, useNavigate, useRouteContext } from '@tanstack/react-router';
 import { ChevronDownIcon, RotateCcwIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
@@ -19,6 +19,7 @@ import { ServerKnowsLine } from '@/components/families/server-knows';
 import { PendingLabel } from '@/components/motion';
 import { PageHeader } from '@/components/page-header';
 import { Setting, SettingsGroup } from '@/components/settings';
+import { StoreLinks } from '@/components/store-links';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
     AlertDialog,
@@ -405,6 +406,7 @@ export function FamilyPage({
                         checking={sync.isPlaceholderData}
                     />
                 )}
+                {detail.data && <FamilyApps />}
                 {manager && invitations.data && (
                     <InvitationList
                         userId={userId}
@@ -677,5 +679,20 @@ function LeaveDialog({
                 </AlertDialogFooter>
             </AlertDialogContent>
         </AlertDialog>
+    );
+}
+
+/*
+ * Under Members, where it helps them: the family can use the Android app (StoreLinks), shown only
+ * where this server names the store listings. One quiet line, tucked under the list it follows.
+ */
+function FamilyApps() {
+    const { playStoreUrl } = useRouteContext({ from: '__root__' });
+    if (!playStoreUrl) return null;
+    return (
+        <div className="-mt-5 flex flex-col gap-3">
+            <p className="text-sm text-muted-foreground">Your family can use HushOS on Android.</p>
+            <StoreLinks />
+        </div>
     );
 }
