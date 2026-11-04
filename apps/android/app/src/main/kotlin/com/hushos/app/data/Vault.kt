@@ -1284,6 +1284,14 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     /* What a write answered with, kept only when it is the node written, in the workspace written to. */
+    /*
+     * A rename's, move's or restore's answer: the node's own columns, no current version joined (packages/db renameNode,
+     * moveNode, restoreNode), though none of them changes the version. The version the row held is kept, so the file
+     * opens straight after (before a listing or the feed brings the full row again).
+     */
+    private fun NodeView.keepingVersionOf(held: Opened): NodeView =
+        if (currentVersion != null || kind != "file") this else copy(currentVersion = held.node.currentVersion)
+
     private fun adoptWritten(node: NodeView, key: ByteArray, metadata: NodeMetadata, workspaceId: String, nodeId: String): Opened {
         checkWritten(node, workspaceId, nodeId)
         return adopt(node, key, metadata)
@@ -1569,7 +1577,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         sendingIntoFamily(item.node.workspaceId)
         val node = api.rename(id, item.node.workspaceId, item.node.metadataVersion, item.node.keyEpoch, base64urlEncode(sealed),
             signMetadata(item.node.workspaceId, id, if (item.isFolder) NodeKind.FOLDER else NodeKind.FILE, next, sealed, prior))
-        return adoptWritten(node, key, metadata, item.node.workspaceId, id).also { foldersChanged(listOf(item.node.parentId, it.node.parentId)) }
+        return adoptWritten(node.keepingVersionOf(item), key, metadata, item.node.workspaceId, id).also { foldersChanged(listOf(item.node.parentId, it.node.parentId)) }
     }
 
     /* A node's key wrapped under a new parent's; both in one workspace, or the envelope would name the wrong one. */
@@ -1602,7 +1610,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         sendingIntoFamily(item.node.workspaceId)
         val node = api.move(id, item.node.workspaceId, parent.id, parent.node.keyEpoch, wrapped)
         // Both listings change: the folder it left and the one it entered.
-        adoptWritten(node, key, item.metadata, item.node.workspaceId, id).also { foldersChanged(listOf(item.node.parentId, parent.id)) }
+        adoptWritten(node.keepingVersionOf(item), key, item.metadata, item.node.workspaceId, id).also { foldersChanged(listOf(item.node.parentId, parent.id)) }
     }
 
     /*
@@ -1779,7 +1787,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         val toRoot = if (entry.parentTrashed) resolve(rootId).let { root -> root.node.keyEpoch to rewrap(item, root) } else null
         sendingIntoFamily(item.node.workspaceId)
         val node = api.restore(item.id, item.node.workspaceId, toRoot)
-        adoptWritten(node, key, item.metadata, item.node.workspaceId, item.id).also { foldersChanged(listOf(it.node.parentId)) }
+        adoptWritten(node.keepingVersionOf(item), key, item.metadata, item.node.workspaceId, item.id).also { foldersChanged(listOf(it.node.parentId)) }
     }
 
     fun purge(id: String) {

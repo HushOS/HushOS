@@ -144,8 +144,12 @@ object WriteBacks {
         check(incoming.renameTo(File(dir, RECORD))) { "The save couldn't be kept." }
     }
 
-    /* Whether the slot in `dir` holds a save to send now (a failed row's Retry has something to send). */
-    fun hasPending(dir: File, slot: String): Boolean = lockOf(slot).withLock { current(dir, slot) != null }
+    /*
+     * Whether the slot in `dir` holds a save to send now (a failed row's Retry has something to send). Read without the
+     * slot's lock (the transfers panel asks for every row as it draws, and the lock may be held for a whole file's copy):
+     * the record and each generation change by one rename, so what it reads is whole.
+     */
+    fun hasPending(dir: File, slot: String): Boolean = current(dir, slot) != null
 
     /* The slot's pending save, if it has one. */
     fun pending(context: Context, slot: String): Pending? = lockOf(slot).withLock { current(dir(context, slot), slot) }
@@ -262,20 +266,22 @@ object WriteBacks {
     /* `edit`'s bytes and description written into a new generation of the slot (synced), named `staged` if so. Its id. */
     private fun write(context: Context, slot: String, target: Target, edit: File, number: Long, staged: Boolean, intoEmptyAbove: Pair<Long, Long>? = null): String {
         val dir = dir(context, slot).also { it.mkdirs() }
-        // The slot's own id for as long as it exists: what tells a cancel pressed on an earlier slot of the file from this one.
-        File(dir, INCARNATION).takeIf { !it.isFile }?.let { file ->
-            beforeSlotId?.invoke()
-            val incoming = File(dir, "$INCARNATION.incoming").apply { writeText(java.util.UUID.randomUUID().toString()) }
-            check(incoming.renameTo(file)) { "The save couldn't be kept." }
-        }
-        superseded(context, slot, dir, number, intoEmptyAbove)
         val suffix = if (staged) STAGED else ""
         val id = "n$number-" + java.util.UUID.randomUUID()
-        // A step failing leaves nothing of this generation (its contents are a whole plaintext copy): the edit stays.
+        // A step failing leaves nothing of this generation (its contents are a whole plaintext copy): the edit stays. And a
+        // slot holding nothing else of the file (made for this save) goes with it, so a failed save leaves no empty folder.
         try {
+            // The slot's own id for as long as it exists: what tells a cancel pressed on an earlier slot of the file from this one.
+            File(dir, INCARNATION).takeIf { !it.isFile }?.let { file ->
+                beforeSlotId?.invoke()
+                val incoming = File(dir, "$INCARNATION.incoming").apply { writeText(java.util.UUID.randomUUID().toString()) }
+                check(incoming.renameTo(file)) { "The save couldn't be kept." }
+            }
+            superseded(context, slot, dir, number, intoEmptyAbove)
             writeGeneration(dir, target, edit, number, id, suffix)
         } catch (failure: Exception) {
             for (name in listOf("$id$BIN.incoming", id + BIN + suffix, "$id$META.incoming", id + META + suffix)) File(dir, name).delete()
+            if (dir.listFiles().orEmpty().all { it.name == INCARNATION || it.name == "$INCARNATION.incoming" }) dir.deleteRecursively()
             throw failure
         }
         return id
@@ -958,14 +964,14 @@ object WriteBacks {
         val dir = dir(context, slot)
         val held = recovered(dir, slot) ?: return@withLock
         if (held.id == idOf(file)) {
+            // Its number kept as a cancel's bound first (past the slot): from here no look, no reconcile and no Retry brings
+            // back the dismissed save or anything older of the file, wherever a copy of it is left (its staging row and edit,
+            // a closed edit of its number), however the steps below end. Not kept: nothing is dismissed.
+            val numbers = repaired(context, slot) ?: return@withLock
+            if (held.generation > numbers.cancelled) writeNumbers(context, slot, numbers.copy(cancelled = held.generation))
+            fault?.invoke("dismiss-bound")
+            retireStagedThrough(context, slot, held.generation)
             clearThrough(dir, held.generation)
-            // The same save kept elsewhere too (its staging row and edit, a closed edit of its number) goes with it, so no
-            // Retry or reopen brings back what was dismissed.
-            val records = FailedTransfers.of(context)
-            val same = runCatching { records.all() }.getOrDefault(emptyList()).filter { it.slot == slot && it.stage != null && stagedNumber(it.stage) == held.generation }
-            same.forEach { row -> row.file?.let { discardEdit(File(it)) } }
-            if (same.isNotEmpty()) runCatching { records.forgetWhere { row -> same.any { it.id == row.id } } }
-            closedEditsOf(context, slot).filter { it.first == held.generation }.forEach { discardEdit(it.second) }
             notifyFolder(context, held.target)
         }
     }
