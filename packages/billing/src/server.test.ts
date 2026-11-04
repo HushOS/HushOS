@@ -2909,6 +2909,60 @@ describe('referrals', () => {
         expect((await growth.getReferralSummary(inviterB.userId)).paid).toMatchObject({ count: 0 });
     });
 
+    test('a family order that lands after its payer deleted their account: the commission is recorded unnamed, and nobody else is rewarded', async () => {
+        const affiliate = await growth.createAffiliate({
+            name: 'Late creator',
+            slug: 'late-creator',
+            code: 'late25',
+            percentOff: 25,
+            duration: 'forever',
+            commissionBps: 2000,
+        });
+        const [inviterA, inviterB] = [await createTestAccount(), await createTestAccount()];
+        const [a, b] = [await createTestAccount(), await createTestAccount()];
+        await growth.attributeNewAccount(
+            a.userId,
+            (await growth.getReferralSummary(inviterA.userId)).code,
+        );
+        await growth.attributeNewAccount(
+            b.userId,
+            (await growth.getReferralSummary(inviterB.userId)).code,
+        );
+        const { groupId } = await createTestFamily({
+            organizerId: a.userId,
+            members: [{ userId: b.userId, roles: ['billing'] }],
+            pooled: true,
+        });
+        await billing.startGroupCheckout(userOf(a, 'Ana'), groupId, { productId: PRO_FAMILY });
+        const bought = polar.checkouts.at(-1)!;
+        await billing.startGroupCheckout(userOf(b, 'Ben'), groupId, { productId: PRO_FAMILY });
+        // A leaves the family and deletes their account before A's order is delivered.
+        await rawSql(`delete from group_memberships where user_id = '${a.userId}'`);
+        await rawSql(`delete from users where id = '${a.userId}'`);
+        // Delivered without failing (a failure here is retried by Polar for ever).
+        await billing.handleWebhook(
+            await signedWebhook({
+                type: 'order.paid',
+                data: {
+                    id: 'order_fam_gone',
+                    discount_id: affiliate.providerDiscountId,
+                    net_amount: 2000,
+                    currency: 'usd',
+                    billing_reason: 'subscription_create',
+                    customer: { id: `cus_${groupId}`, external_id: `group:${groupId}` },
+                    metadata: bought.metadata,
+                },
+            }),
+        );
+        const [earning] = (
+            await rawSql(
+                `select user_id, commission_amount from affiliate_earnings where order_id = 'order_fam_gone'`,
+            )
+        ).rows as { user_id: string | null; commission_amount: number }[];
+        expect(earning).toEqual({ user_id: null, commission_amount: 400 });
+        expect((await growth.getReferralSummary(inviterB.userId)).paid).toMatchObject({ count: 0 });
+    });
+
     test('an invite gives both people storage, and a code that resolves to nobody gives nothing', async () => {
         const inviter = await createTestAccount();
         const summary = await growth.getReferralSummary(inviter.userId);

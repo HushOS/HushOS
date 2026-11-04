@@ -1,5 +1,6 @@
 import { and, count, desc, eq, isNull, or, sql, sum } from 'drizzle-orm';
 import { db } from './client';
+import { pgCode } from './readiness';
 import {
     accountIntents,
     affiliateEarnings,
@@ -455,19 +456,29 @@ export async function recordEarning(input: {
 }) {
     if (input.netAmount <= 0) return null;
     const commission = Math.floor((input.netAmount * input.commissionBps) / 10_000);
-    const [row] = await db
-        .insert(affiliateEarnings)
-        .values({
-            affiliateId: input.affiliateId,
-            orderId: input.orderId,
-            userId: input.userId,
-            currency: input.currency,
-            netAmount: input.netAmount,
-            commissionAmount: commission,
-        })
-        .onConflictDoNothing({ target: affiliateEarnings.orderId })
-        .returning();
-    return row ?? null;
+    const insert = async (userId: string | null) => {
+        const [row] = await db
+            .insert(affiliateEarnings)
+            .values({
+                affiliateId: input.affiliateId,
+                orderId: input.orderId,
+                userId,
+                currency: input.currency,
+                netAmount: input.netAmount,
+                commissionAmount: commission,
+            })
+            .onConflictDoNothing({ target: affiliateEarnings.orderId })
+            .returning();
+        return row ?? null;
+    };
+    try {
+        return await insert(input.userId);
+    } catch (error) {
+        // The customer deleted their account since paying (a late delivery): the commission is still the
+        // affiliate's, recorded with nobody named, as a deletion leaves an earning already recorded.
+        if (input.userId && pgCode(error) === '23503') return insert(null);
+        throw error;
+    }
 }
 
 export async function listEarnings(affiliateId: string, limit = 100) {
