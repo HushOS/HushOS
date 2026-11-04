@@ -178,6 +178,10 @@ const polar = {
     beforeProductChange: null as (() => Promise<void>) | null,
     /* Runs once as Polar takes the next raise: an upgrade landing mid-flight. */
     beforeRaise: null as (() => Promise<void>) | null,
+    /* Runs once as Polar takes the next new discount: a sign-up landing mid-enrolment. */
+    beforeDiscountCreate: null as (() => Promise<void>) | null,
+    /* Runs once as Polar takes the next discount deletion: an order landing mid-removal. */
+    beforeDiscountDelete: null as (() => Promise<void>) | null,
     /* Runs once just after the next subscription read: a change landing behind it. */
     afterGet: null as (() => void | Promise<void>) | null,
     /*
@@ -557,6 +561,9 @@ const fakeClient = {
     discounts: {
         async create(body: { code: string; basis_points: number; duration: string }) {
             polar.calls.push(`discounts.create:${body.code}`);
+            const hook = polar.beforeDiscountCreate;
+            polar.beforeDiscountCreate = null;
+            await hook?.();
             // The id is minted from the first code and never changes, however the code does.
             const id = `disc_${body.code.toLowerCase()}`;
             polar.discounts.push({ id, ...body });
@@ -574,6 +581,9 @@ const fakeClient = {
         },
         async delete(id: string) {
             polar.calls.push(`discounts.delete:${id}`);
+            const hook = polar.beforeDiscountDelete;
+            polar.beforeDiscountDelete = null;
+            await hook?.();
             const index = polar.discounts.findIndex((d) => d.id === id);
             if (index < 0) throw new PolarClientError(404, { error: 'ResourceNotFound' });
             polar.discounts.splice(index, 1);
@@ -1010,6 +1020,7 @@ const {
     createTestAccount,
     createTestFamily,
     deleteTestAccount,
+    lockObserver,
     resetDatabase,
     setTestMember,
     setTestUsedBytes,
@@ -1097,6 +1108,8 @@ beforeEach(async () => {
     polar.raiseLeavesOrder = false;
     polar.cutFailures = 0;
     polar.beforeCut = null;
+    polar.beforeDiscountCreate = null;
+    polar.beforeDiscountDelete = null;
     polar.ordersFail = false;
     polar.beforeProductChange = null;
     polar.ignoresMoves = false;
@@ -2182,6 +2195,504 @@ describe('affiliates', () => {
             /belongs to another/,
         );
         expect(polar.calls.filter((call) => call.startsWith('discounts.update'))).toEqual([]);
+    });
+
+    test('the form’s live check answers by the rule saving applies: slug and code are one handle', async () => {
+        const first = await creator();
+        await growth.createAffiliate({
+            name: 'Other',
+            slug: 'other',
+            code: 'OTHER10',
+            percentOff: 10,
+            duration: 'once',
+            commissionBps: 0,
+        });
+        // Taken as a slug or a code, in any case, whichever field it is typed into.
+        expect(await growth.isHandleFree('creator')).toBe(false);
+        expect(await growth.isHandleFree('CREATOR')).toBe(false);
+        expect(await growth.isHandleFree('creator25')).toBe(false);
+        expect(await growth.isHandleFree(' Creator25 ')).toBe(false);
+        expect(await growth.isHandleFree('other10')).toBe(false);
+        expect(await growth.isHandleFree('nobody')).toBe(true);
+        // Editing: the affiliate's own slug and code are free to it, nobody else's are.
+        expect(await growth.isHandleFree('creator', first.id)).toBe(true);
+        expect(await growth.isHandleFree('CREATOR25', first.id)).toBe(true);
+        expect(await growth.isHandleFree('other', first.id)).toBe(false);
+        expect(await growth.isHandleFree('OTHER10', first.id)).toBe(false);
+    });
+
+    test('a handle that is the edited affiliate’s own slug and another’s code is taken', async () => {
+        // Enrolment refuses this pair now; rows made before it checked can still hold it.
+        const ada = await growthRepository.createAffiliate({
+            name: 'Ada',
+            slug: 'ada',
+            code: 'ADA20',
+            percentOff: 20,
+            duration: 'forever',
+            durationMonths: null,
+            commissionBps: 0,
+            userId: null,
+            pendingEmail: null,
+            notes: null,
+            providerDiscountId: null,
+        });
+        await growthRepository.createAffiliate({
+            name: 'Not Ada',
+            slug: 'notada',
+            code: 'ADA',
+            percentOff: 20,
+            duration: 'forever',
+            durationMonths: null,
+            commissionBps: 0,
+            userId: null,
+            pendingEmail: null,
+            notes: null,
+            providerDiscountId: null,
+        });
+        // Ada's own row matches too; it must not hide the code that is someone else's.
+        expect(await growth.isHandleFree('ada', ada.id)).toBe(false);
+        await expect(growth.updateAffiliate(ada.id, { code: 'ada' })).rejects.toThrow(
+            'That code belongs to another affiliate.',
+        );
+    });
+
+    test('enrolling refuses a slug or code another affiliate holds, before Polar is asked', async () => {
+        await creator();
+        polar.calls = [];
+        await expect(
+            growth.createAffiliate({
+                name: 'Copycat',
+                slug: 'creator25',
+                code: 'COPY10',
+                percentOff: 10,
+                duration: 'once',
+                commissionBps: 0,
+            }),
+        ).rejects.toThrow('That slug belongs to another affiliate.');
+        await expect(
+            growth.createAffiliate({
+                name: 'Copycat',
+                slug: 'copycat',
+                code: 'creator',
+                percentOff: 10,
+                duration: 'once',
+                commissionBps: 0,
+            }),
+        ).rejects.toThrow('That code belongs to another affiliate.');
+        // No discount left behind at Polar for a creator who was never enrolled.
+        expect(polar.calls.filter((call) => call.startsWith('discounts.create'))).toEqual([]);
+        expect(polar.discounts).toHaveLength(1);
+        expect(await growth.listAffiliates()).toHaveLength(1);
+    });
+
+    const later = () =>
+        growth.createAffiliate({
+            name: 'Later',
+            slug: 'later',
+            code: 'LATER10',
+            percentOff: 10,
+            duration: 'forever',
+            commissionBps: 1000,
+            userEmail: ' Later@HushOS.test ',
+        });
+
+    test('an email with no account yet is kept as pending, and nobody else takes it', async () => {
+        const affiliate = await later();
+        expect(affiliate).toMatchObject({ userId: null, pendingEmail: 'later@hushos.test' });
+        // Someone else reading their own page, or the operator reading the list, links nothing.
+        const stranger = await createTestAccount();
+        expect((await growth.getReferralSummary(stranger.userId)).affiliates).toEqual([]);
+        expect((await growth.listAffiliates())[0]).toMatchObject({
+            userId: null,
+            pendingEmail: 'later@hushos.test',
+        });
+    });
+
+    test('an account that signs up while Polar creates the discount is still linked, when the list is read', async () => {
+        // The email is resolved before Polar is asked and the row written after it answers:
+        // an account committed in between finds nothing to link at sign-up.
+        let joined: { userId: string } | null = null;
+        polar.beforeDiscountCreate = async () => {
+            joined = await createTestAccount({ email: 'later@hushos.test' });
+        };
+        const affiliate = await later();
+        expect(affiliate).toMatchObject({ userId: null, pendingEmail: 'later@hushos.test' });
+        const account = joined!;
+        // The dialog refreshes the list after saving: that heals it.
+        expect((await growth.listAffiliates())[0]).toMatchObject({
+            userId: account.userId,
+            pendingEmail: null,
+        });
+        expect(
+            (await growth.getReferralSummary(account.userId)).affiliates.map((a) => a.id),
+        ).toEqual([affiliate.id]);
+    });
+
+    test('a pending email is linked when its account reads its own page, with no step at sign-up', async () => {
+        const affiliate = await later();
+        // The account arrives with nothing run for it: a link at sign-up that failed, or never ran.
+        const account = await createTestAccount({ email: 'later@hushos.test' });
+        expect(
+            (await growth.getReferralSummary(account.userId)).affiliates.map((a) => a.id),
+        ).toEqual([affiliate.id]);
+        expect((await growth.listAffiliates())[0]).toMatchObject({
+            userId: account.userId,
+            pendingEmail: null,
+        });
+    });
+
+    test('an account behind two creators sees both on its page, oldest first, each with its own earnings', async () => {
+        const first = await creator();
+        // The second is enrolled for an email whose account does not exist yet.
+        const second = await growth.createAffiliate({
+            name: 'Second channel',
+            slug: 'second',
+            code: 'SECOND10',
+            percentOff: 10,
+            duration: 'once',
+            commissionBps: 1000,
+            userEmail: 'fan@hushos.test',
+        });
+        const fan = await createTestAccount({ email: 'fan@hushos.test' });
+        await growth.updateAffiliate(first.id, { userEmail: 'fan@hushos.test' });
+        const buyer = await createTestAccount();
+        await growthRepository.recordEarning({
+            affiliateId: first.id,
+            orderId: 'order_first',
+            userId: buyer.userId,
+            currency: 'usd',
+            netAmount: 1000,
+            commissionBps: 2000,
+        });
+        await growthRepository.recordEarning({
+            affiliateId: second.id,
+            orderId: 'order_second',
+            userId: buyer.userId,
+            currency: 'eur',
+            netAmount: 500,
+            commissionBps: 1000,
+        });
+        // The second is still pending: reading the page links it, into the same list.
+        const read = await growth.getReferralSummary(fan.userId);
+        expect(read.affiliates.map((a) => [a.id, a.userId, a.pendingEmail])).toEqual([
+            [first.id, fan.userId, null],
+            [second.id, fan.userId, null],
+        ]);
+        // The operator edits the older one, so its row is now the newest in the table.
+        await growth.updateAffiliate(first.id, { notes: 'Paid monthly' });
+        const { affiliates } = await growth.getReferralSummary(fan.userId);
+        expect(affiliates.map((a) => a.id)).toEqual([first.id, second.id]);
+        expect(affiliates.map((a) => a.stats.earnings)).toEqual([
+            { usd: { unpaid: 200, paid: 0 } },
+            { eur: { unpaid: 50, paid: 0 } },
+        ]);
+        // Someone else's page lists neither.
+        expect((await growth.getReferralSummary(buyer.userId)).affiliates).toEqual([]);
+    });
+
+    /* Runs `between` once, right after the next read of an affiliate: a save landing mid-way. */
+    function landsBetween(between: () => Promise<unknown>) {
+        const read = growthRepository.getAffiliate;
+        return vi
+            .spyOn(growthRepository, 'getAffiliate')
+            .mockImplementationOnce(async (...args: Parameters<typeof read>) => {
+                const row = await read(...args);
+                await between();
+                return row;
+            });
+    }
+
+    test('unlinking never undoes a save that landed while it ran, here or at Polar', async () => {
+        await createTestAccount({ email: 'owner@hushos.test' });
+        const affiliate = await creator();
+        await growth.updateAffiliate(affiliate.id, { userEmail: 'owner@hushos.test' });
+        polar.calls = [];
+        const spy = landsBetween(() => growth.updateAffiliate(affiliate.id, { percentOff: 30 }));
+        try {
+            await growth.updateAffiliate(affiliate.id, { userEmail: null });
+        } finally {
+            spy.mockRestore();
+        }
+        expect((await growth.listAffiliates())[0]).toMatchObject({
+            percentOff: 30,
+            userId: null,
+            pendingEmail: null,
+        });
+        // One change at Polar, the save's; the row says what Polar applies.
+        expect(polar.calls.filter((call) => call.startsWith('discounts.'))).toEqual([
+            'discounts.update:disc_creator25',
+        ]);
+        expect(polar.discounts).toEqual([expect.objectContaining({ basis_points: 3000 })]);
+    });
+
+    /* How long a test waits for something it expects to happen; longer on a loaded CI runner. */
+    const DEADLINE = process.env.CI ? 20_000 : 5_000;
+    const BUSY = 'This affiliate is being changed. Try again in a moment.';
+
+    /* Takes every connection the app's pool has left, so any further query waits; returns the release. */
+    async function fillPool(holding: number) {
+        const max = db.$client.options.max ?? 10;
+        const clients = await Promise.all(
+            Array.from({ length: max - holding }, () => db.$client.connect()),
+        );
+        return () => clients.forEach((client) => client.release());
+    }
+
+    /* `work` finished before the deadline, or 'stalled'. */
+    const within = (work: Promise<unknown>) =>
+        Promise.race([
+            work.then(() => 'done'),
+            new Promise((resolve) => setTimeout(() => resolve('stalled'), DEADLINE)),
+        ]);
+
+    test('a second change of terms while the first holds the lock is refused at once, and the first one’s terms stand', async () => {
+        const affiliate = await creator();
+        let second: unknown = null;
+        // A has read 25%/forever under the lock; B asks while A still holds it.
+        const spy = landsBetween(async () => {
+            second = await growth.updateAffiliate(affiliate.id, { duration: 'once' }).then(
+                () => 'saved',
+                (error: unknown) => error,
+            );
+        });
+        try {
+            await growth.updateAffiliate(affiliate.id, { percentOff: 30 });
+        } finally {
+            spy.mockRestore();
+        }
+        expect(second).toBeInstanceOf(billing.BillingError);
+        expect(second).toMatchObject({ message: BUSY, status: 409 });
+        expect((await growth.listAffiliates())[0]).toMatchObject({
+            percentOff: 30,
+            duration: 'forever',
+        });
+        expect(polar.discounts).toEqual([
+            expect.objectContaining({ basis_points: 3000, duration: 'forever' }),
+        ]);
+    });
+
+    test('a change or a removal while another process holds the lock is refused with nothing asked of Polar', async () => {
+        const affiliate = await creator();
+        const observer = lockObserver();
+        const release = await observer.hold(growthRepository.AFFILIATE_LOCK_SPACE, affiliate.id);
+        polar.calls = [];
+        try {
+            await expect(
+                growth.updateAffiliate(affiliate.id, { percentOff: 30 }),
+            ).rejects.toMatchObject({ message: BUSY, status: 409 });
+            await expect(growth.deleteAffiliate(affiliate.id)).rejects.toMatchObject({
+                message: BUSY,
+                status: 409,
+            });
+        } finally {
+            await release();
+            await observer.end();
+        }
+        expect(polar.calls).toEqual([]);
+        expect((await growth.listAffiliates())[0]).toMatchObject({ percentOff: 25 });
+    });
+
+    test('a locked change that looks up a handle and an email finishes with the rest of the pool taken', async () => {
+        const owner = await createTestAccount({ email: 'owner@hushos.test' });
+        const affiliate = await creator();
+        let release = () => {};
+        // Under the lock, every other connection is taken: the change has its own, and only that.
+        const spy = landsBetween(async () => {
+            release = await fillPool(1);
+        });
+        const change = growth.updateAffiliate(affiliate.id, {
+            code: 'creator30',
+            userEmail: 'owner@hushos.test',
+        });
+        try {
+            expect(await within(change)).toBe('done');
+        } finally {
+            release();
+            spy.mockRestore();
+            // A stalled change resumes once the pool is free: settled here, not in the next test.
+            await change.catch(() => {});
+        }
+        expect((await growth.listAffiliates())[0]).toMatchObject({
+            code: 'CREATOR30',
+            userId: owner.userId,
+        });
+    }, 60_000);
+
+    test('a locked removal that checks what is owed finishes with the rest of the pool taken', async () => {
+        const affiliate = await creator();
+        let release = () => {};
+        const spy = landsBetween(async () => {
+            release = await fillPool(1);
+        });
+        const removal = growth.deleteAffiliate(affiliate.id);
+        try {
+            expect(await within(removal)).toBe('done');
+        } finally {
+            release();
+            spy.mockRestore();
+            // A stalled removal resumes once the pool is free: settled here, not in the next test.
+            await removal.catch(() => {});
+        }
+        expect(await growth.listAffiliates()).toEqual([]);
+    }, 60_000);
+
+    test('an order paid while a removal waits on Polar is never deleted with it: it is logged to pay by hand', async () => {
+        const affiliate = await creator();
+        const fan = await createTestAccount();
+        const observer = lockObserver();
+        const error = vi.spyOn(log, 'error').mockImplementation(() => {});
+        let delivered: Promise<unknown> = Promise.resolve();
+        // The removal has found nothing owed; Polar delivers an order.paid while it deletes the discount.
+        polar.beforeDiscountDelete = async () => {
+            const paid = await signedWebhook({
+                type: 'order.paid',
+                data: {
+                    id: 'order_late',
+                    discount_id: 'disc_creator25',
+                    net_amount: 1000,
+                    currency: 'usd',
+                    billing_reason: 'subscription_create',
+                    customer: { id: 'cus_fan', external_id: fan.userId },
+                },
+            });
+            delivered = billing.handleWebhook(paid).catch((error: unknown) => error);
+            // Its earning must wait for the removal: seen blocked on the affiliate's row.
+            const until = Date.now() + DEADLINE;
+            while (!(await observer.waitingOn('affiliate_earnings'))) {
+                if (Date.now() > until)
+                    throw new Error('The earning was never held back by the removal.');
+                await new Promise((resolve) => setTimeout(resolve, 20));
+            }
+        };
+        try {
+            await growth.deleteAffiliate(affiliate.id);
+            const response = await delivered;
+            // Nothing is recorded for an affiliate that is gone, and nothing loops: the
+            // delivery is taken, and what would have been owed is left for the operator.
+            expect(response).toBeInstanceOf(Response);
+            expect((response as Response).status).toBe(200);
+            expect(error).toHaveBeenCalledWith({
+                message:
+                    'Commission not recorded: its affiliate was removed while the order was paid. Pay it by hand if it is owed',
+                billing: {
+                    order: 'order_late',
+                    discount: 'disc_creator25',
+                    affiliate: affiliate.id,
+                    code: 'CREATOR25',
+                    amount: 200,
+                    currency: 'usd',
+                },
+            });
+        } finally {
+            error.mockRestore();
+            await observer.end();
+        }
+        const [earnings] = (await rawSql(`select count(*)::int as n from affiliate_earnings`))
+            .rows as { n: number }[];
+        expect(earnings!.n).toBe(0);
+    }, 60_000);
+
+    test('an order whose account is deleted while its earning waits is recorded with no account, for the live affiliate', async () => {
+        const affiliate = await creator();
+        const fan = await createTestAccount();
+        const observer = lockObserver();
+        const error = vi.spyOn(log, 'error').mockImplementation(() => {});
+        try {
+            // The account's deletion holds its row; the order.paid's earning waits on it.
+            await observer.query('begin');
+            await observer.query('select 1 from users where id = $1 for update', [fan.userId]);
+            const paid = await signedWebhook({
+                type: 'order.paid',
+                data: {
+                    id: 'order_orphan',
+                    discount_id: 'disc_creator25',
+                    net_amount: 1000,
+                    currency: 'usd',
+                    billing_reason: 'subscription_create',
+                    customer: { id: 'cus_fan', external_id: fan.userId },
+                },
+            });
+            const delivered = billing.handleWebhook(paid).catch((failure: unknown) => failure);
+            const until = Date.now() + DEADLINE;
+            while (!(await observer.waitingOn('affiliate_earnings'))) {
+                if (Date.now() > until) throw new Error('The earning never waited on the account.');
+                await new Promise((resolve) => setTimeout(resolve, 20));
+            }
+            await observer.query('delete from users where id = $1', [fan.userId]);
+            await observer.query('commit');
+            const response = await delivered;
+            expect(response).toBeInstanceOf(Response);
+            expect((response as Response).status).toBe(200);
+            // The affiliate is still there: nothing to pay by hand, nothing logged.
+            expect(error).not.toHaveBeenCalled();
+        } finally {
+            error.mockRestore();
+            await observer.end();
+        }
+        const [row] = await growth.listAffiliates();
+        expect(row!.id).toBe(affiliate.id);
+        expect(row!.stats).toMatchObject({
+            orders: 1,
+            earnings: { usd: { unpaid: 200, paid: 0 } },
+        });
+        const earnings = (await rawSql(`select order_id, user_id from affiliate_earnings`))
+            .rows as { order_id: string; user_id: string | null }[];
+        expect(earnings).toEqual([{ order_id: 'order_orphan', user_id: null }]);
+    }, 60_000);
+
+    test('pausing never undoes a save that landed while it ran, here or at Polar', async () => {
+        const affiliate = await creator();
+        polar.calls = [];
+        const spy = landsBetween(() => growth.updateAffiliate(affiliate.id, { percentOff: 30 }));
+        try {
+            await growth.updateAffiliate(affiliate.id, { active: false });
+        } finally {
+            spy.mockRestore();
+        }
+        expect((await growth.listAffiliates())[0]).toMatchObject({
+            percentOff: 30,
+            active: false,
+        });
+        expect(polar.calls.filter((call) => call.startsWith('discounts.'))).toEqual([
+            'discounts.update:disc_creator25',
+        ]);
+        expect(polar.discounts).toEqual([expect.objectContaining({ basis_points: 3000 })]);
+    });
+
+    test('unlinking clears the linked account and a pending email alike', async () => {
+        const owner = await createTestAccount({ email: 'owner@hushos.test' });
+        const affiliate = await creator();
+        await growth.updateAffiliate(affiliate.id, { userEmail: 'owner@hushos.test' });
+        expect(await growth.updateAffiliate(affiliate.id, { userEmail: null })).toMatchObject({
+            userId: null,
+            pendingEmail: null,
+        });
+        expect((await growth.getReferralSummary(owner.userId)).affiliates).toEqual([]);
+        await growth.updateAffiliate(affiliate.id, { userEmail: 'someone@hushos.test' });
+        expect(await growth.updateAffiliate(affiliate.id, { userEmail: null })).toMatchObject({
+            userId: null,
+            pendingEmail: null,
+        });
+        // A cancelled email is not linked later, when an account with it does sign up.
+        const someone = await createTestAccount({ email: 'someone@hushos.test' });
+        expect((await growth.getReferralSummary(someone.userId)).affiliates).toEqual([]);
+        expect((await growth.listAffiliates())[0]).toMatchObject({ userId: null });
+    });
+
+    test('editing the account: an existing email links at once, an unknown one replaces the link with a pending one, none keeps it', async () => {
+        const owner = await createTestAccount({ email: 'owner@hushos.test' });
+        const affiliate = await creator();
+        expect(
+            await growth.updateAffiliate(affiliate.id, { userEmail: 'OWNER@hushos.test' }),
+        ).toMatchObject({ userId: owner.userId, pendingEmail: null });
+        // A patch without the email (the form left empty) keeps the linked account.
+        expect(await growth.updateAffiliate(affiliate.id, { notes: 'Paid monthly' })).toMatchObject(
+            { userId: owner.userId, pendingEmail: null },
+        );
+        const moved = await growth.updateAffiliate(affiliate.id, { userEmail: 'new@hushos.test' });
+        expect(moved).toMatchObject({ userId: null, pendingEmail: 'new@hushos.test' });
+        // The old account no longer sees the creator's earnings.
+        expect((await growth.getReferralSummary(owner.userId)).affiliates).toEqual([]);
     });
 
     test('removing an affiliate deletes the discount at Polar, and waits while commission is owed', async () => {

@@ -218,8 +218,8 @@ export type ReferralSummary = {
     signup: RewardTotals;
     /* Storage earned when invited accounts first paid for a plan. */
     paid: RewardTotals;
-    /* For a creator with an affiliate record: their code, sign-ups and earnings. */
-    affiliate: AffiliateView | null;
+    /* Every creator this account runs, oldest first, each with its code, sign-ups and earnings; most run none. */
+    affiliates: AffiliateView[];
 };
 
 export type EarningTotals = Record<string, { unpaid: number; paid: number }>;
@@ -236,6 +236,8 @@ export type AffiliateView = {
     commissionBps: number;
     active: boolean;
     userId: string | null;
+    /* An email given before its account existed; linked, and cleared, when that account signs up. */
+    pendingEmail: string | null;
     notes: string | null;
     providerDiscountId: string | null;
     createdAt: string;
@@ -307,6 +309,12 @@ export interface GrowthApi {
     ): Promise<AffiliateView>;
     deleteAffiliate(id: string): Promise<{ deleted: true }>;
     markAffiliatePaid(id: string): Promise<{ paid: number }>;
+    /* Whether a slug or code is free, `except` an affiliate's own; saving checks again. */
+    affiliateHandle(
+        value: string,
+        except?: string,
+        signal?: AbortSignal,
+    ): Promise<{ free: boolean }>;
 }
 
 /* A family's plan (`/api/billing/groups/:id`); only its payer changes it. */

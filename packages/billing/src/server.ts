@@ -554,14 +554,33 @@ async function recordAffiliateEarning(order: {
             ? await growthRepository.findAffiliateByDiscount(order.discount_id)
             : null) ?? (userId ? await growthRepository.findAffiliateForCustomer(userId) : null);
     if (!affiliate || typeof order.net_amount !== 'number' || !order.currency) return;
-    await growthRepository.recordEarning({
-        affiliateId: affiliate.id,
-        orderId: order.id,
-        userId,
-        currency: order.currency,
-        netAmount: order.net_amount,
-        commissionBps: affiliate.commissionBps,
-    });
+    try {
+        await growthRepository.recordEarning({
+            affiliateId: affiliate.id,
+            orderId: order.id,
+            userId,
+            currency: order.currency,
+            netAmount: order.net_amount,
+            commissionBps: affiliate.commissionBps,
+        });
+    } catch (error) {
+        // The affiliate was removed while this order was on its way: its earning has nowhere
+        // to go, and no retry could rebuild it, since the removal takes the affiliate's terms
+        // and attributions with it. What was owed is logged for the operator to pay by hand.
+        if (!(error instanceof growthRepository.AffiliateGoneError)) throw error;
+        log.error({
+            message:
+                'Commission not recorded: its affiliate was removed while the order was paid. Pay it by hand if it is owed',
+            billing: {
+                order: order.id,
+                discount: order.discount_id ?? null,
+                affiliate: affiliate.id,
+                code: affiliate.code,
+                amount: growthRepository.commissionFor(order.net_amount, affiliate.commissionBps),
+                currency: order.currency,
+            },
+        });
+    }
 }
 
 function rejectsEmail(error: unknown) {
