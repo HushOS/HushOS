@@ -320,6 +320,7 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
         if (!open() || !FamilyRecords.valid(to.lowercase())) throw OutboxUnsaved()
         val target = handoverFile(userId, groupId) ?: throw OutboxUnsaved()
         try {
+            beforeMark(staged)
             folder.mkdirs()
             val next = File(target.path + ".next")
             next.writeText(to.lowercase() + if (staged) "\nstaged" else "")
@@ -369,6 +370,9 @@ class FamilyOutbox(private val folder: File, private val open: () -> Boolean = {
     companion object {
         /* Called before each entry file is moved into place (a test's crash between writes); the default does nothing. */
         @Volatile internal var beforeWrite: (outboxId: String, entry: String) -> Unit = { _, _ -> }
+
+        /* Called before a handover record is written (a test's full disk); the default does nothing. */
+        @Volatile internal var beforeMark: (staged: Boolean) -> Unit = {}
 
         fun of(context: android.content.Context, open: () -> Boolean = { true }) =
             FamilyOutbox(File(File(context.noBackupFilesDir, FamilyRecords.FOLDER), "outbox"), open)
@@ -494,6 +498,15 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
         // a moment) ends the call, never the removal: its intent stays for the continuation.
         val goesOn = end is CallEnd.Refused && removalGoesOn(end.code)
         if (on == null || (!goesOn && (on is ChainRoute.Remove || end is CallEnd.Refused))) outbox.dropRemovalOf(userId, groupId, current.outboxId)
+        // Billing's call of the handover kept here ends: the handover is staged from now on, whatever its marker said (one that
+        // couldn't be written after the entry was kept), before the entry goes, so finishHandover never signs billing again.
+        val handover = outbox.handover(userId, groupId)
+        val about = (on as? ChainRoute.Member)?.userId
+        if (handover != null && !handover.staged && kept.operation == RoleOperation.BILLING_TO.wire && about != null &&
+            handover.to.equals(about, ignoreCase = true)) outbox.markHandover(userId, groupId, handover.to, staged = true)
+        // Its step down refused for good: the handover ends here, both still organizers; Finish handing over to {first} is the
+        // person's to press (never signed again by the next look at the record).
+        if (handover != null && end is CallEnd.Refused && kept.operation == RoleOperation.STEP_DOWN.wire) outbox.clearHandover(userId, groupId)
         outbox.delete(userId, groupId, current.outboxId)
         return end
     }
@@ -1038,10 +1051,21 @@ fun FamilySync.handOver(summary: GroupSummary, to: String, first: String, names:
             // A read before billing was staged threw (the screen says it couldn't change that): a record this attempt made and
             // never staged goes with it, so the next open never hands the organizer role over unasked. One that was there
             // already (a resumed or re-confirmed handover) stays as it was.
-            if (created && outbox.handover(userId, summary.id)?.staged == false) outbox.clearHandover(userId, summary.id)
+            if (created && outbox.handover(userId, summary.id)?.staged == false) {
+                // Billing's call kept before its marker could be written (a full disk): staged in fact. Marked once more; if that
+                // fails too, the entry's end marks it (sendKept). Gone only when no billing call of it was kept (or unknown: kept).
+                if (runCatching { billingKept(summary.id, to) }.getOrDefault(true)) runCatching { outbox.markHandover(userId, summary.id, to, staged = true) }
+                else outbox.clearHandover(userId, summary.id)
+            }
             throw failed
         }
     }
+}
+
+/* Whether billing's call to `to` is kept here (an entry noted billing-to, about them): a handover with it is staged in fact. */
+private fun FamilySync.billingKept(groupId: String, to: String): Boolean = outbox.list(userId, groupId).any { kept ->
+    kept.operation == RoleOperation.BILLING_TO.wire &&
+        runCatching { personOf(ledger.outboxOpen(groupId, kept.outboxId, userId, kept.entry).route()) }.getOrNull().equals(to, ignoreCase = true)
 }
 
 /*
