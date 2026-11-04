@@ -1,6 +1,6 @@
 # Store listing copy
 
-Ready to paste. Every claim here was checked against the apps on branch `redesign/alpine` on 2026-10-05, and the Google Play section and Android screenshots again against `main` on 2026-10-19; the list of what was deliberately left out is at the end. Limits are the stores' own (Apple: https://developer.apple.com/help/app-store-connect/reference/app-information/platform-version-information; Google: https://support.google.com/googleplay/android-developer/answer/9859152; both checked 2026-10-05). Counts below are characters (Apple's keyword limit is bytes; the keywords are ASCII, so the same).
+Ready to paste. Every claim here was checked against the apps on branch `redesign/alpine` on 2026-10-05, the Google Play section and Android screenshots again against `main` on 2026-10-19, and the Android screenshots and the families proposal below against `main` (0.14.0) on 2026-11-05; the list of what was deliberately left out is at the end. Limits are the stores' own (Apple: https://developer.apple.com/help/app-store-connect/reference/app-information/platform-version-information; Google: https://support.google.com/googleplay/android-developer/answer/9859152; both checked 2026-10-05). Counts below are characters (Apple's keyword limit is bytes; the keywords are ASCII, so the same).
 
 ## Shared facts
 
@@ -85,7 +85,7 @@ The first release of HushOS for iPhone.
 
 ## Google Play
 
-Rewritten for the first release (0.9.0) on 2026-10-19, against `main` at that date: every line below is something the Android app does today. Families are not in the Android app yet (they are on the web only), so nothing here mentions them.
+Rewritten for the first release (0.9.0) on 2026-10-19, against `main` at that date: every line below is something the Android app does today. The Android app has had families since 0.14.0 (2026-11-04); the text in Play Console doesn't mention them yet, and **Proposed for families** below is the change, not yet uploaded.
 
 **How Play reads this** (Google's own pages, checked 2026-10-19): the title, short description and full description are all used in search, and Google asks for everyday language, not lists of keywords. Repeated or unrelated keywords can get an app suspended (https://support.google.com/googleplay/android-developer/answer/9898842). The title should say what the app does, without "Free", rankings or emoji, and the short description, which shows in search results, has no prices, promotions, "#1" or "Best". Google also says people may read only the first few sentences, so those carry the point (https://support.google.com/googleplay/android-developer/answer/13393723). Graphics and screenshots may not say "Free", "New", "Best", "#1", "Download now" and the like, and screenshots must show the real app (https://support.google.com/googleplay/android-developer/answer/9866151). Limits: https://support.google.com/googleplay/android-developer/answer/9859152.
 
@@ -146,6 +146,61 @@ You need a HushOS account to use the app. Make one at hushos.com.
 
 "Encrypted", "cloud storage", "share files securely", "private" and "open source" each appear once or twice, in sentences. "Free" appears nowhere: Google's best-practice page puts price and promotional words out of every listing field, and the payments section below keeps plans out of the app. "For free" was dropped from the last line for that reason.
 
+**Proposed for families** (2026-11-05, against 0.14.0; not uploaded to Play Console). Families came to the Android app in 0.14.0: joining from an invitation, the family's folders (open, upload, new folder, rename, move, Trash), the members with Verified or Not verified, checking each other with twelve words, inviting and letting people in, roles, removing someone and replacing keys (managers), the family as its own root in the system file picker, and saving into a family folder from the share menu. Making a family and making a new family folder are web only, so the text doesn't say the app does either. It never says how a family comes about: a family needs a plan, plans are bought on the web, and the payments rules below keep any hint of that out of the listing. "Family" here is the feature, never a plan's name ("Family Plus" and the like never appear).
+
+Short description (80 max), 70, if the owner wants families in the field that shows in search:
+
+```text
+End-to-end encrypted cloud storage, with folders for the whole family.
+```
+
+Otherwise keep the current one: the full description carries families either way.
+
+Full description (4000 max), 2824. The current text with a colour line under the first heading, a FOLDERS FOR YOUR FAMILY section after sharing, and the family in WHAT WE CAN SEE (the web's family page says the same: the family's name, who is in it and what each can do):
+
+```text
+HushOS is end-to-end encrypted cloud storage for your files, photos and documents. Everything you add is locked on your phone before it uploads, with a key made on your device. We store your files and hand them back, but we can't open them.
+
+A PRIVATE DRIVE THAT WORKS LIKE THE ONE YOU USE
+• Browse, search and tag your files and folders. Search runs on your phone, so nothing you type is sent to us.
+• Upload files, photos and whole folders, or take a photo straight into a folder.
+• Uploads keep going when you leave the app, with their progress in a notification.
+• Rename, move, copy, and move to Trash. Trash keeps things for 30 days.
+• Keep a file or a whole folder on your phone, to open without a connection.
+• Give a folder a colour. Everyone who can open it sees the same one.
+• Save to HushOS from the share menu in other apps.
+• HushOS appears in the system file picker and in Files by Google, so other apps can open and save your files.
+
+SHARE FILES SECURELY
+• Share a file or folder with another HushOS account, as someone who can view or someone who can edit.
+• Check it's really them first: you each read the same twelve words, in person or on a call.
+• Shares between accounts are sealed with post-quantum encryption (ML-KEM-768 alongside X25519).
+• Or make a link anyone can open in a browser, with a password or an end date if you like. Turn it off whenever you want.
+• Each item says who can open it when that's different from its folder.
+
+FOLDERS FOR YOUR FAMILY
+• In a family, everyone in it can open the family folders, and add to them, rename, move and tidy what's inside.
+• Invite someone by email and let them in from your phone.
+• Check each other with the same twelve words, whenever you like.
+• Family folders appear in the system file picker too, and you can save to them from the share menu.
+• Whoever manages the family can remove someone. The family folders then get new keys.
+
+YOUR ACCOUNT
+• Your password never leaves your phone, not even when you sign in.
+• See every device signed in to your account, and remove one you don't recognise.
+• If you forget your password, your recovery kit and a link we email you get you back in. Without the kit nobody can, including us.
+
+WHAT WE CAN SEE
+Your email, your name, the devices you sign in on, how much you store, the sizes of your files, when they changed, and how your folders nest. In a family, its name, who is in it and what each person can do. Not the names or contents of your files, and not your password.
+
+OPEN SOURCE
+All of HushOS is open source under the AGPL: the apps and the server. Anyone can read how it works, and anyone can run their own server. The app signs in to yours too.
+
+The service at hushos.com keeps its servers and your files in the European Union.
+
+You need a HushOS account to use the app. Make one at hushos.com.
+```
+
 **Release notes** for 0.9.0, the first internal, closed and production release (500 max per language), 386:
 
 ```text
@@ -165,37 +220,39 @@ The first release of HushOS for Android.
 
 ## Screenshots
 
-`scripts/store-screenshots.sh` captures these from the debug apps signed in to the local demo account (Maya Lindqvist; made-up names and generated photos, no real data), light mode, clean status bar. The spec that makes the account (`e2e/screenshots.spec.ts`) also makes Jonas Berg, shares Family with him and leaves Family with one link; the trip photos are CC0 from Wikimedia Commons (`e2e/fixtures/photos/README.md`). Times on screen are in a timezone where it is mid-morning when the shots are taken. Output: `docs/release/screenshots/{ios,android}/`. iOS taken 2026-10-06. Android retaken 2026-10-19 from `main`, against an isolated instance (`SCREENSHOTS_DOMAIN=example.org`, so addresses read `maya.lindqvist@example.org` in full), with the status-bar clock set to the time on the device so it is never earlier than the newest row.
+`scripts/store-screenshots.sh` captures these from the debug apps signed in to the local demo account (Maya Lindqvist; made-up names and generated photos, no real data), light mode, clean status bar. The spec that makes the account (`e2e/screenshots.spec.ts`) also makes Jonas Berg, shares Holidays with him and leaves Holidays with one link, colours Holidays (Orange), Finances (Mint) and Recipes (Coral) from the presets, and makes the two of them Lindqvist family (Maya the organizer, each verified by the other) with the folders Family and Household and a few files in each; until 2026-11-05 the shared folder was called Family, which now reads as the feature; the trip photos are CC0 from Wikimedia Commons (`e2e/fixtures/photos/README.md`). Times on screen are in a timezone where it is mid-morning when the shots are taken. Output: `docs/release/screenshots/{ios,android}/`. iOS taken 2026-10-06, from the demo before the rename and the colours. Android retaken 2026-11-05 from `main` (0.14.0), against an isolated instance with families on and billing off (`verify-hushos` `launch --groups`, `SCREENSHOTS_DOMAIN=example.org`, so addresses read `maya.lindqvist@example.org` in full; with no billing no plan shows anywhere), on the site's emulator at Play's 1080×1920 (`AVD=HushOS_Site`), with the status-bar clock set to the time on the device so it is never earlier than the newest row.
 
-| #   | File                        | iOS screen                                         | Android screen                                                                                     |
-| --- | --------------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| 1   | `01-home`                   | Home, after the keeps in shot 5                    | Same                                                                                               |
-| 2   | `02-folder`                 | Files > Family > Lisbon 2026 as a grid of photos   | Same                                                                                               |
-| 3   | `03-share`                  | Share sheet for Family: Jonas Berg and one link    | Same, opened from Family itself so the title matches the page behind it                            |
-| 4   | `04-preview` / `04-shared`  | A photo open in the HushOS viewer (QuickLook)      | Shared > By me (Android opens files in other apps, so a viewer shot would show someone else's app) |
-| 5   | `05-phone`                  | On this phone: Lisbon 2026, Finances, Q3 report.md | Same                                                                                               |
-| 6   | `06-account` / `06-devices` | Account, top                                       | Account > Devices: this phone and one browser (no plan or storage figures)                         |
-| 7   | `07-words`                  | Not taken                                          | Shared > People > Your twelve words (nothing about the plan behind it)                             |
-| 8   | `08-files`                  | Not taken                                          | Android's Files app in HushOS > Family > Lisbon 2026, with the photos' thumbnails                  |
+| #   | File                        | iOS screen (2026-10-06)                            | Android screen (2026-11-05)                                                                         |
+| --- | --------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| 1   | `01-home`                   | Home, after the keeps in shot 5                    | Same; Holidays, Finances and Recipes in their colours                                               |
+| 2   | `02-folder`                 | Files > Family > Lisbon 2026 as a grid of photos   | Files > Holidays > Lisbon 2026 as a grid of photos                                                  |
+| 3   | `03-share`                  | Share sheet for Family: Jonas Berg and one link    | Share sheet for Holidays, opened from Holidays itself so the title matches the page behind it       |
+| 4   | `04-preview` / `04-shared`  | A photo open in the HushOS viewer (QuickLook)      | Not taken since 2026-11-05 (was Shared > By me; Play's set has no room for it)                      |
+| 5   | `05-phone`                  | On this phone: Lisbon 2026, Finances, Q3 report.md | Same                                                                                                |
+| 6   | `06-account` / `06-devices` | Account, top                                       | Not taken since 2026-11-05 (was Account > Devices)                                                  |
+| 7   | `07-words`                  | Not taken                                          | Shared > Contacts > Your twelve words (nothing about the plan behind it)                            |
+| 8   | `08-files`                  | Not taken                                          | Android's Files app in HushOS > Holidays > Lisbon 2026, with the photos' thumbnails                 |
+| 9   | `09-colours`                | Not taken                                          | Files at the top, as a list: Finances, Holidays and Recipes in their colours, Work in the plain one |
+| 10  | `10-family`                 | Not taken                                          | Account > Lindqvist family: Family folders (Family, Household), Invite someone, the two members     |
 
-**Play's set, with captions.** `bun run --cwd apps/web store:graphics` draws each Android capture under one line of Geist on white, the capture rounded, ruled and cut off at the foot, into `docs/release/screenshots/android/play/`, numbered in the order Play shows them. Upload those, in that order. The first two carry the message; each line is something the app does today. Captions take about 8% of the image (Google's limit is 20%) and read at Play's thumbnail size.
+**Play's set, with captions.** `bun run --cwd apps/web store:graphics` draws each Android capture under one line of Geist on white, the capture rounded, ruled and cut off at the foot, into `docs/release/screenshots/android/play/`, numbered in the order Play shows them. Upload those, in that order. The first two carry the message; each line is something the app does today. Since 2026-11-05 the third and fourth show coloured folders and a family's folders; "See everything you share" (Shared > By me) and "See every device that's signed in" (Devices) made room for them, since Play shows eight. Neither new caption names a plan, a price or storage, and the family shot shows the family page, not Plan and storage above it. Captions take about 8% of the image (Google's limit is 20%) and read at Play's thumbnail size.
 
 | Play # | Capture      | Caption                                   |
 | ------ | ------------ | ----------------------------------------- |
 | 1      | `01-home`    | End-to-end encrypted cloud storage        |
 | 2      | `02-folder`  | We store your files. We can't open them.  |
-| 3      | `03-share`   | Share with the people you choose          |
-| 4      | `07-words`   | Check it's really them, with twelve words |
-| 5      | `04-shared`  | See everything you share                  |
-| 6      | `05-phone`   | Keep folders on your phone for offline    |
-| 7      | `08-files`   | Open and save from any app                |
-| 8      | `06-devices` | See every device that's signed in         |
+| 3      | `09-colours` | Give your folders a colour                |
+| 4      | `10-family`  | Folders for the whole family              |
+| 5      | `03-share`   | Share with the people you choose          |
+| 6      | `07-words`   | Check it's really them, with twelve words |
+| 7      | `05-phone`   | Keep folders on your phone for offline    |
+| 8      | `08-files`   | Open and save from any app                |
 
 The iOS captions, if added later: 1 Nobody else can look inside. 2 Locked on your phone before it uploads. 3 Share with the people you choose, or with a link. 4 Open files right in the app. 5 Keep folders on your phone for when you're offline. 6 Your password never leaves your phone.
 
 Sizes: iOS 1320×2868 (the 6.9-inch set; Apple scales it down for smaller iPhones). Android 1080×1920 (9:16; meets Play's 2:1 limit and the 1080-pixel minimum for promotion). If the app stays universal, iPad screenshots are also required (2064×2752); the script does not make them, because nothing is designed for iPad (see signing.md).
 
-Take iOS shot 6 from a build after 2026-10-05: an older screenshot showing "Manage on the web" is itself metadata pointing at an outside purchase. No Android shot shows the plan's name or storage figures (the rule below): the Account tab is replaced by Devices, and the twelve words open from People rather than over Account. The iOS Account shot still shows them; retake it the same way before iOS goes up.
+Take iOS shot 6 from a build after 2026-10-05: an older screenshot showing "Manage on the web" is itself metadata pointing at an outside purchase. No Android shot shows the plan's name or storage figures (the rule below): the family page is opened from Account but drawn without it, and the twelve words open from Contacts rather than over Account. The iOS Account shot still shows them; retake it the same way before iOS goes up.
 
 ## What the apps and the listings must and must not say about plans
 
@@ -223,7 +280,7 @@ What the apps did, and the change each needed. All of them were made on 2026-10-
 - **Photos backup or automatic camera upload.** Not built and not planned.
 - **Home Screen widgets.** The widget extension holds only the transfer Live Activity, and that was never checked on a real phone.
 - **Team plans, invites by email, desktop apps.** Not built.
-- **Families on Android.** Built on the web only; the Android app has no family folders yet. Nothing in the Google listing or its screenshots mentions them.
+- **Making a family, or a new family folder, on Android.** Both are web only; the Android app does everything else in a family since 0.14.0 (see **Proposed for families**). The screenshots show a family's folders and members as of 2026-11-05; the listing text in Play Console doesn't mention families until the proposal is uploaded. Neither ever says how a family is paid for.
 - **"Photo backup", "zero-knowledge", audits.** There is no automatic photo backup; "zero-knowledge" is a claim about a protocol nobody has reviewed independently, and no security audit has been done (privacy-answers.md says the same to Google).
 - **"Military-grade", "bank-grade", "unhackable".** DESIGN.md forbids assurance blurbs, and they aren't true claims.
 - **Offline editing, version restore, passkeys, Face ID lock.** Not verified in the apps.
