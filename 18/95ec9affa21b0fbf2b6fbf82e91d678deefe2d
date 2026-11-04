@@ -1,0 +1,25 @@
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_28a289b6ed962c 141
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyFiles.swift
+  s_566b8e0c4467a4::t_ca02a18a97aae0 250,256-259,262,269,351,359-364,367,372,379-386
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_566b8e0c4467a4::t_0407edc579f645 969-971,1024,1029,1055-1057
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyFilesTests.swift
+  s_566b8e0c4467a4::t_7ff61b6cf6745a 706-744,1200-1246
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1895ec9affa21b0fbf2b6fbf82e91d678deefe2d",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
