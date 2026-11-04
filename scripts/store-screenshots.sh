@@ -8,20 +8,23 @@
 #   scripts/store-screenshots.sh ios          # or: android, or both (the default)
 #
 # It uses its own simulator ("HushOS Store 6.9") and its own emulator ("HushOS_Store",
-# 1080x1920), never the ones you develop on. The emulator refuses to start while another one
-# is running, because a second device breaks plain `adb` commands elsewhere.
+# 1080x1920), never the ones you develop on. AVD names another emulator instead (say the site's
+# HushOS_Site): its screen is set to 1080x1920 at Pixel 2 density for the shots and put back
+# after. The emulator refuses to start while another one is running, because a second device
+# breaks plain `adb` commands elsewhere.
 # Output: docs/release/screenshots/{ios,android}/NN-name.png. The shot list and captions are
 # in docs/release/store-listing.md.
 #
-# Demo account (made by e2e/screenshots.spec.ts with Jonas Berg, Family shared with him, and one
-# link; the names are made up and the photos are CC0):
+# Demo account (made by e2e/screenshots.spec.ts with Jonas Berg, Holidays shared with him and one
+# link, and the two of them in Lindqvist family; the names are made up and the photos are CC0):
 #   DEMO_EMAIL     default the newest maya.lindqvist@ account in the local database
-#   LISBON_FOLDER  the "Family/Lisbon 2026" folder id (found in the local database if unset)
+#   LISBON_FOLDER  the "Holidays/Lisbon 2026" folder id (found in the local database if unset)
 #   PHOTO          a photo in it (likewise)
 # The password is e2e/helpers.ts's PASSWORD; the script puts it on the clipboard, never prints it.
 #   PORT           the web server the apps talk to (default 5173). Another port (an isolated
 #                  instance, say) rebuilds the Android debug app to talk to it.
 #   DB             its database (default hushos), in the hushos-db-1 container.
+#   SIGNED_IN      set when the Android app is already signed in as the demo account.
 # Times on screen are in a timezone where it is mid-morning now (e2e/morning-zone.ts), as on the web.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -121,7 +124,7 @@ ios() {
 }
 
 android() {
-    local avd="HushOS_Store" serial apk="apps/android/app/build/outputs/apk/debug/app-debug.apk"
+    local avd="${AVD:-HushOS_Store}" serial apk="apps/android/app/build/outputs/apk/debug/app-debug.apk"
     if adb devices | grep -q "device$"; then
         fail "Another Android device or emulator is connected (adb devices). Close it first, so this script's emulator doesn't disturb it."
     fi
@@ -138,6 +141,16 @@ android() {
     until [[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; do sleep 2; done
     serial=$(adb get-serialno)
     local a="adb -s $serial"
+    # Play's 1080x1920 on an emulator with another screen: Pixel 2's size and density, put back below.
+    local physical
+    physical=$($a shell wm size | sed -n 's/^Physical size: //p' | tr -d '\r')
+    if [[ "$physical" != 1080x1920 ]]; then
+        # Put the screen back however the run ends (a failed capture, Ctrl-C), or the next
+        # site-phone-shots.sh run on this emulator captures the overridden layout.
+        trap "$a shell wm size reset >/dev/null 2>&1 || true; $a shell wm density reset >/dev/null 2>&1 || true" EXIT
+        $a shell wm size 1080x1920
+        $a shell wm density 420
+    fi
     $a install -r "$apk" >/dev/null
     $a reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
     $a reverse tcp:9000 tcp:9000 >/dev/null
@@ -161,26 +174,33 @@ android() {
         $a exec-out screencap -p > "$OUT/android/$1-$2.png"
         check_size "$OUT/android/$1-$2.png" 1080 1920
     }
-    say "Android, on the $avd emulator. Sign in first."
-    printf '  Tap the Email field on the emulator, then press Enter here. '
-    read -r _
-    $a shell input text "$DEMO_EMAIL"
-    printf '  Tap the Password field, then press Enter here (the script types it). '
-    read -r _
-    $a shell input text "$(sed -n "s/^export const PASSWORD = '\(.*\)';$/\1/p" e2e/helpers.ts)"
-    wait_enter "Tap Sign in. Allow notifications if asked, and wait for Home."
+    # SIGNED_IN=1 when the emulator's app is already signed in as the demo account.
+    if [[ -z "${SIGNED_IN:-}" ]]; then
+        say "Android, on the $avd emulator. Sign in first."
+        printf '  Tap the Email field on the emulator, then press Enter here. '
+        read -r _
+        $a shell input text "$DEMO_EMAIL"
+        printf '  Tap the Password field, then press Enter here (the script types it). '
+        read -r _
+        $a shell input text "$(sed -n "s/^export const PASSWORD = '\(.*\)';$/\1/p" e2e/helpers.ts)"
+        wait_enter "Tap Sign in. Allow notifications if asked, and wait for Home."
+    fi
     say "First keep Lisbon 2026, Finances and Q3 report.md on this phone (each one's ⋮ > Keep on this phone)."
     shot 01 home "Home, scrolled to the top." "hushos://app"
     shot 02 folder "Lisbon 2026 as a grid: More (or the sort button on Android) > View > Grid." "hushos://app/drive?folder=$LISBON_FOLDER"
-    shot 03 share "Back up to Family, tap Manage on the banner, so the sheet is titled Family and shows Maya, Jonas and one link." ""
-    # Android opens files in their own apps, so a viewer shot would show another app; Shared instead.
-    shot 04 shared "Shared, By me: the folders and links Maya shares." "hushos://app/shared?view=by-me"
+    shot 03 share "Back up to Holidays, tap Manage on the banner, so the sheet is titled Holidays and shows Maya, Jonas and one link." ""
     shot 05 phone "Home > On this phone." "hushos://app"
-    # No plan or storage figures in Play's set (store-listing.md): Devices, not the Account tab.
-    shot 06 devices "Account > Devices, with one browser left (Remove the spec's other sessions)." ""
-    shot 07 words "Shared > People > Your twelve words, so no plan shows behind the sheet." ""
-    shot 08 files "Android's Files app: the menu > HushOS > Family > Lisbon 2026, as a grid." ""
+    shot 07 words "Shared > Contacts > Your twelve words, so no plan shows behind the sheet." ""
+    shot 08 files "Android's Files app: the menu > HushOS > Holidays > Lisbon 2026, as a grid." ""
+    shot 09 colours "Files, at the top, as a list: Holidays, Finances and Recipes in their colours." "hushos://app/drive"
+    # The family's folders, nothing about the plan behind them (store-listing.md).
+    shot 10 family "Account > Lindqvist family: its folders (Family, Household) and members, scrolled to the top." ""
     demo exit
+    if [[ "$physical" != 1080x1920 ]]; then
+        $a shell wm size reset
+        $a shell wm density reset
+        trap - EXIT
+    fi
     $a emu kill >/dev/null 2>&1 || true
     say "Android done: $OUT/android"
 }

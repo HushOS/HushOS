@@ -131,12 +131,12 @@ const feature = await render(
 const shots: [file: string, caption: string][] = [
     ['01-home', 'End-to-end encrypted\ncloud storage'],
     ['02-folder', 'We store your files.\nWe can’t open them.'],
+    ['09-colours', 'Give your folders\na colour'],
+    ['10-family', 'Folders for the\nwhole family'],
     ['03-share', 'Share with the people\nyou choose'],
     ['07-words', 'Check it’s really them,\nwith twelve words'],
-    ['04-shared', 'See everything\nyou share'],
     ['05-phone', 'Keep folders on your\nphone for offline'],
     ['08-files', 'Open and save\nfrom any app'],
-    ['06-devices', 'See every device\nthat’s signed in'],
 ];
 // The capture sits below the line at this width, rounded and ruled, cut off at the foot.
 const SHOT_WIDTH = 880;

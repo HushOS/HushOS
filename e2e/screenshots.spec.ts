@@ -19,6 +19,7 @@ import {
     PASSWORD,
     registerAccount,
     shareWith,
+    verificationLink,
 } from './helpers';
 import { ZONE } from './morning-zone';
 
@@ -53,6 +54,8 @@ const IN_MANIFEST = new Set([
 const row = (p: Page, name: string) =>
     p.locator('[data-node-id]').filter({ has: p.getByText(name, { exact: true }) });
 const dialog = (p: Page) => p.locator('[data-slot=dialog-content]');
+/* Maya and Jonas's family (makeFamily), with its own folders beside Maya's. */
+const FAMILY = 'Lindqvist family';
 
 /*
  * When each thing last changed, in hours before the run: a week of use rather than the one
@@ -65,7 +68,7 @@ const HISTORY: Record<string, number> = {
     'Q3 report.md': 0.1,
     'Lisbon 2026': 1.3,
     'Belém at sunset.jpg': 1.4,
-    Family: 2,
+    Holidays: 2,
     'Budget 2026.csv': 26,
     'Lease agreement.pdf': 28,
     'Tram 28.jpg': 30,
@@ -184,6 +187,32 @@ function fixtures() {
             'Figures.csv',
             'Region,Q2,Q3\nNorth,1200,1480\nSouth,3400,3910\nEast,900,1050\n',
         ),
+        // The family's folders: Family (every family starts with it) and Household.
+        birthdays: write(
+            'Birthdays.md',
+            '# Birthdays\n\n| Who | When |\n| --- | --- |\n| Jonas | 14 February |\n| Maya | 2 June |\n| Grandma Ingrid | 19 August |\n| Uncle Tomas | 30 November |\n',
+        ),
+        summer: write(
+            'Summer 2027 ideas.md',
+            '# Summer 2027\n\n- Two weeks by the lake, like last year\n- The Gotland ferry, if we book by March\n- Porto for a long weekend\n',
+        ),
+        insurance: write(
+            'Home insurance.pdf',
+            simplePdf('Home insurance', [
+                'Policy for Flat 3, 14 Rua das Flores, Lisbon',
+                'Cover: buildings and contents',
+                'Renews every year on 1 October',
+                'Claims: call the number on the back of the card',
+            ]),
+        ),
+        utilities: write(
+            'Utilities 2026.csv',
+            'Month,Electricity,Water,Internet\nJanuary,64,21,30\nFebruary,58,20,30\nMarch,51,22,30\nApril,43,21,30\nMay,38,23,30\nJune,35,24,30\n',
+        ),
+        meals: write(
+            'Meal plan.md',
+            "# This week\n\n- Monday: soup and bread\n- Tuesday: Grandma's lasagne\n- Wednesday: tacos\n- Thursday: leftovers\n- Friday: pizza night\n",
+        ),
     };
 }
 
@@ -205,7 +234,7 @@ async function signInAgain(p: Page) {
         await emailField.fill(email);
     await password.fill(PASSWORD);
     await password.press('Enter');
-    await expect(row(p, 'Family')).toBeVisible({ timeout: 60_000 });
+    await expect(row(p, 'Holidays')).toBeVisible({ timeout: 60_000 });
 }
 
 async function folderAt(p: Page, path: string) {
@@ -268,7 +297,7 @@ async function into(p: Page, name: string) {
 async function up(p: Page) {
     await p.locator('[data-crumb-id]').first().click();
     await expect(p).toHaveURL(/\/app\/drive\/?$/);
-    await expect(row(p, 'Family')).toBeVisible();
+    await expect(row(p, 'Holidays')).toBeVisible();
 }
 /* Tags a row by name from the tag dialog: existing names are checked, new ones made. */
 async function tag(p: Page, name: string, tags: string[]) {
@@ -294,9 +323,109 @@ async function tag(p: Page, name: string, tags: string[]) {
     // Past the double-click window, so the next row's click is a click of its own.
     await p.waitForTimeout(600);
 }
+/* Gives a folder one of the preset colours from its row's menu, as a person does. */
+async function colour(p: Page, name: string, swatch: string) {
+    await p.getByRole('button', { name: `More for ${name}`, exact: true }).click();
+    await p.getByRole('menuitem', { name: 'Colour', exact: true }).click();
+    const sheet = p.getByRole('dialog', { name: `Colour for “${name}”` });
+    await sheet.getByRole('radio', { name: swatch, exact: true }).check();
+    await sheet.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(sheet).toHaveCount(0, { timeout: 30_000 });
+    await expect(toasts(p)).toHaveCount(0, { timeout: 30_000 });
+}
+/* Opens one of the family's folders from Family folders under My files, drawn and writable. */
+async function familyFolder(p: Page, name: string) {
+    await p.goto('/app/drive', { waitUntil: 'networkidle' });
+    await p.getByRole('link', { name: 'Family folders', exact: true }).first().click();
+    await expect(p).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
+    const area = p.locator(`[data-area="${name}"]`);
+    await expect(area).toHaveAttribute('data-area-write', 'writable', { timeout: 90_000 });
+    await area.getByRole('link').click();
+    await expect(p.locator('nav[aria-label="Folder path"] h1')).toHaveText(name, {
+        timeout: 60_000,
+    });
+}
+/*
+ * Maya and Jonas as a family: she makes it, invites him by email, he accepts while signed in,
+ * she lets him in, and they check each other's words, so neither row reads Not verified. Then
+ * a second family folder, and a few files in each.
+ */
+async function makeFamily(maya: Page, jonas: Page, jonasEmail: string) {
+    await maya.goto('/app/family', { waitUntil: 'networkidle' });
+    await maya.locator('[data-no-family]').getByRole('button', { name: 'Create a family' }).click();
+    const create = maya.getByRole('dialog', { name: 'Create a family' });
+    await create.getByLabel('Name').fill(FAMILY);
+    await create.getByRole('button', { name: 'Create family' }).click();
+    await expect(maya.getByRole('heading', { level: 1, name: FAMILY })).toBeVisible({
+        timeout: 90_000,
+    });
+    await maya.getByRole('button', { name: 'Invite someone' }).click();
+    const invite = maya.getByRole('dialog', { name: 'Invite someone' });
+    await invite.getByLabel('Email').fill(jonasEmail);
+    await invite.getByRole('button', { name: 'Send invitation' }).click();
+    await expect(maya.locator(`[data-invitation="${jonasEmail}"]`)).toBeVisible();
+
+    const link = new URL(await verificationLink(jonasEmail, '/join'));
+    await jonas.goto(link.pathname + link.hash);
+    await expect(jonas.getByRole('heading', { name: `Join ${FAMILY}` })).toBeVisible({
+        timeout: 60_000,
+    });
+    await jonas.getByRole('button', { name: 'Join', exact: true }).click();
+    const pending = maya.locator(`[data-pending="${jonasEmail}"]`);
+    await expect(pending).toBeVisible({ timeout: 60_000 });
+    await pending.getByRole('button', { name: 'Let them in' }).click();
+    await expect(maya.getByText(`Jonas is in ${FAMILY}`)).toBeVisible({ timeout: 90_000 });
+    await expect(jonas.getByRole('heading', { level: 1, name: FAMILY })).toBeVisible({
+        timeout: 90_000,
+    });
+
+    // Check it's each other, the same twelve words on both screens.
+    const check = async (p: Page, other: string) => {
+        const first = other.split(' ')[0]!;
+        await p.getByRole('button', { name: `More for ${other}` }).click();
+        await p.getByRole('menuitem', { name: `Check it’s ${first}` }).click();
+        const sheet = p.getByRole('dialog', { name: `Check it’s ${first}` });
+        await expect(sheet.locator('[data-kind=pair-code]')).toBeVisible({ timeout: 90_000 });
+        return sheet;
+    };
+    const mayaSide = await check(maya, 'Jonas Berg');
+    const jonasSide = await check(jonas, 'Maya Lindqvist');
+    await jonasSide.getByRole('button', { name: 'They match' }).click();
+    await expect(jonas.getByText('You and Maya checked each other')).toBeVisible({
+        timeout: 60_000,
+    });
+    await mayaSide.getByRole('button', { name: 'They match' }).click();
+    await expect(maya.getByText('You and Jonas checked each other')).toBeVisible({
+        timeout: 60_000,
+    });
+    await expect(maya.locator(`[data-member="${jonasEmail}"] [data-checked]`)).toHaveText(
+        'Verified',
+        { timeout: 60_000 },
+    );
+    const done = maya.getByRole('button', { name: 'Done', exact: true });
+    if (await done.count()) await done.click();
+
+    await maya.getByRole('link', { name: 'Family folders', exact: true }).first().click();
+    await expect(maya).toHaveURL(/\/app\/s\/[0-9a-f-]+$/);
+    await maya.getByRole('button', { name: 'New family folder' }).click();
+    const folder = maya.getByRole('dialog', { name: 'New family folder' });
+    await folder.getByLabel('Name').fill('Household');
+    await folder.getByRole('button', { name: 'Create folder' }).click();
+    await expect(folder).toHaveCount(0, { timeout: 90_000 });
+    await expect(maya.locator('[data-area="Household"]')).toHaveAttribute(
+        'data-area-write',
+        'writable',
+        { timeout: 90_000 },
+    );
+    await familyFolder(maya, 'Household');
+    await upload(maya, [files.insurance, files.utilities, files.meals], 'Meal plan.md');
+    await familyFolder(maya, 'Family');
+    await upload(maya, [files.birthdays, files.summer], 'Summer 2027 ideas.md');
+    await settle(maya);
+}
 
 test.beforeAll(async ({ browser }) => {
-    test.setTimeout(600_000);
+    test.setTimeout(900_000);
     files = fixtures();
     console.log(`Times in the pictures are in ${ZONE}.`);
     page = await (
@@ -313,14 +442,13 @@ test.beforeAll(async ({ browser }) => {
         'Jonas Berg',
         `jonas.berg@${domain}`,
     );
-    await jonas.context().close();
     ({ email } = await registerAccount(page, 'Maya Lindqvist', `maya.lindqvist@${domain}`));
-    await folderAt(page, 'Family/Lisbon 2026');
+    await folderAt(page, 'Holidays/Lisbon 2026');
     await folderAt(page, 'Finances');
     await folderAt(page, 'Recipes');
     await folderAt(page, 'Work/Q3 planning');
     await upload(page, [files.readingList, files.lease, files.trip], 'Trip plan.md');
-    await into(page, 'Family');
+    await into(page, 'Holidays');
     await into(page, 'Lisbon 2026');
     await upload(
         page,
@@ -356,22 +484,30 @@ test.beforeAll(async ({ browser }) => {
     await tag(page, 'Finances', ['Tax']);
     await tag(page, 'Lease agreement.pdf', ['Tax', 'Home']);
     await tag(page, 'Trip plan.md', ['Travel']);
+    // A few folders in the presets' colours; Work keeps the plain one.
+    await colour(page, 'Holidays', 'Orange');
+    await colour(page, 'Finances', 'Mint');
+    await colour(page, 'Recipes', 'Coral');
     await page.goto('/app/contacts', { waitUntil: 'networkidle' });
     await addContact(page, jonasEmail);
     await page.goto('/app/drive', { waitUntil: 'networkidle' });
-    await expect(row(page, 'Family')).toBeVisible({ timeout: 60_000 });
-    await row(page, 'Family').locator('button').first().click(grip);
+    await expect(row(page, 'Holidays')).toBeVisible({ timeout: 60_000 });
+    await row(page, 'Holidays').locator('button').first().click(grip);
     await page.getByRole('button', { name: 'Share', exact: true }).click();
     await shareWith(page, /Jonas Berg/);
     await expect(dialog(page).getByText('Jonas Berg')).toBeVisible({ timeout: 60_000 });
-    // A link from the start, so every picture of Family says who can open it the same way.
+    // A link from the start, so every picture of Holidays says who can open it the same way.
     await newLink(page);
     await page.keyboard.press('Escape');
     await expect(dialog(page)).toHaveCount(0);
     // Opening the share dialog selected the row; the pictures start with nothing selected.
     await page.keyboard.press('Escape');
-    await expect(row(page, 'Family')).not.toHaveAttribute('aria-selected', 'true');
+    await expect(row(page, 'Holidays')).not.toHaveAttribute('aria-selected', 'true');
     await expect(toasts(page)).toHaveCount(0, { timeout: 30_000 });
+    await makeFamily(page, jonas, jonasEmail);
+    await jonas.context().close();
+    await page.goto('/app/drive', { waitUntil: 'networkidle' });
+    await expect(row(page, 'Holidays')).toBeVisible({ timeout: 60_000 });
     await backdate(page);
 });
 test.afterAll(async () => {
@@ -396,13 +532,37 @@ async function shoot(p: Page, name: string, scale: Scale) {
 }
 
 async function wideShots(p: Page, suffix: string, scale: Scale) {
+    // The unlock can land on Home, so every pass opens My files itself.
+    await p.getByRole('link', { name: 'My files', exact: true }).click();
+    await expect(p).toHaveURL(/\/app\/drive\/?$/);
+    await expect(row(p, 'Holidays')).toBeVisible({ timeout: 60_000 });
     await settle(p);
     await shoot(p, `drive-wide${suffix}`, scale);
+
+    // The family's page, from its name at the head of the sidebar: who is in it, checked.
+    await p.locator('[data-family-header]').click();
+    await expect(p).toHaveURL(/\/app\/family$/);
+    await expect(p.getByRole('heading', { level: 1, name: FAMILY })).toBeVisible({
+        timeout: 60_000,
+    });
+    await expect(p.locator('[data-member] [data-checked]')).toHaveText('Verified', {
+        timeout: 60_000,
+    });
+    await settle(p);
+    await shoot(p, `family${suffix}`, scale);
+    await p.getByRole('link', { name: 'Family folders', exact: true }).first().click();
+    await expect(p.locator('[data-area="Household"]')).toHaveAttribute(
+        'data-area-write',
+        'writable',
+        { timeout: 90_000 },
+    );
+    await settle(p);
+    await shoot(p, `family-folders${suffix}`, scale);
 
     // Home: Add on the title row, then Recent with its filters.
     await p.getByRole('link', { name: 'Home', exact: true }).click();
     await expect(p.getByRole('heading', { name: 'Recent' })).toBeVisible({ timeout: 30_000 });
-    await expect(row(p, 'Family')).toBeVisible({ timeout: 60_000 });
+    await expect(row(p, 'Holidays')).toBeVisible({ timeout: 60_000 });
     await settle(p);
     await shoot(p, `home-wide${suffix}`, scale);
     await p.getByRole('link', { name: 'My files', exact: true }).click();
@@ -421,7 +581,7 @@ async function wideShots(p: Page, suffix: string, scale: Scale) {
     await p.keyboard.press('Escape');
     await expect(palette).toHaveCount(0);
 
-    await into(p, 'Family');
+    await into(p, 'Holidays');
     await into(p, 'Lisbon 2026');
     const grid = p.getByRole('button', { name: /show as grid/i });
     if (await grid.count()) await grid.click();
@@ -442,11 +602,11 @@ async function wideShots(p: Page, suffix: string, scale: Scale) {
 
     // The share dialog with a fresh link and its QR code is taller than the drive frame.
     await p.setViewportSize({ width: 1280, height: 1040 });
-    await row(p, 'Family').locator('button').first().click(grip);
+    await row(p, 'Holidays').locator('button').first().click(grip);
     await p.getByRole('button', { name: 'Share', exact: true }).click();
-    // Each pass makes a link for its picture; the one before goes, so Family ends with one link.
+    // Each pass makes a link for its picture; the one before goes, so Holidays ends with one link.
     const links = dialog(p).locator('[data-link]');
-    // Setup gave Family a link, so wait for the list to load before counting it.
+    // Setup gave Holidays a link, so wait for the list to load before counting it.
     await expect(links.first()).toBeVisible({ timeout: 60_000 });
     while ((await links.count()) > 0) {
         const before = await links.count();
@@ -470,6 +630,8 @@ async function wideShots(p: Page, suffix: string, scale: Scale) {
                     'https://hushos.com',
                 );
     });
+    // The toasts for the links turned off go first, so the picture shows only the dialog's own.
+    await expect(toasts(p)).toHaveCount(0, { timeout: 30_000 });
     await p.waitForTimeout(400);
     await shoot(p, `share${suffix}`, scale);
     await p.keyboard.press('Escape');
@@ -481,7 +643,7 @@ async function phoneShots(p: Page, suffix: string, scale: Scale) {
     await signInAgain(p);
     await p.waitForTimeout(600);
     await shoot(p, `drive-narrow${suffix}`, scale);
-    await into(p, 'Family');
+    await into(p, 'Holidays');
     await into(p, 'Lisbon 2026');
     const grid = p.getByRole('button', { name: /show as grid/i });
     if (await grid.count()) await grid.click();
