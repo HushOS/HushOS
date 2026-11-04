@@ -1559,11 +1559,16 @@ export async function endUnwantedFamilyPlan(
         });
         // Every order noted, and the ending marked as noted, in one write: a run that stops before
         // it leaves the ending unfinished (no `orders_noted_at`), so the next run notes them.
-        await billingRepository.noteEndingOrders({
+        const written = await billingRepository.noteEndingOrders({
             subscriptionId,
+            attempt: ending.attempt,
+            owner,
             before: paid.filter((order) => !after(order)).map(noted),
             after: paid.filter(after).map(noted),
         });
+        // Another run restarted or took the ending over while this one read Polar: it notes,
+        // withdraws and revokes from its own, newer read.
+        if (!written) return false;
         // Refunded whole: they earn no commission. One a delivery already recorded is taken back
         // while unpaid; one already paid out is said, for an operator.
         for (const order of paid.filter(after))

@@ -2530,14 +2530,29 @@ async function notePaidOnLapsedIn(
  * A plan HushOS ends because nothing could be given for it (endUnwantedFamilyPlan): every paid
  * order of it noted on its ending in one transaction, those made before its cutoff as used
  * (notePaidBeforeRevoke, `keepOwed`) and those at or after it for a refund (notePaidOnLapsed),
- * with `orders_noted_at` set in the same write. Until then the ending is unfinished.
+ * with `orders_noted_at` set in the same write. Until then the ending is unfinished. Only for the
+ * run that read those orders: the ending still at its `attempt` and leased to its `owner`. One
+ * another run restarted or took over meanwhile (it may have seen a newer charge) is left to that
+ * run, and nothing is written: false.
  */
 export async function noteEndingOrders(input: {
     subscriptionId: string;
+    attempt: number;
+    owner: string;
     before: { orderId: string; refundKey: string; currency: string }[];
     after: { orderId: string; refundKey: string; currency: string }[];
 }) {
     return db.transaction(async (tx) => {
+        const [ending] = await tx
+            .select({
+                attempt: personalPlanEndings.attempt,
+                leaseOwner: personalPlanEndings.leaseOwner,
+            })
+            .from(personalPlanEndings)
+            .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId))
+            .for('update');
+        if (!ending || ending.attempt !== input.attempt || ending.leaseOwner !== input.owner)
+            return false;
         await notePaidBeforeRevoke(
             input.before.map((row) => ({ ...row, subscriptionId: input.subscriptionId })),
             { keepOwed: true },
@@ -2549,6 +2564,7 @@ export async function noteEndingOrders(input: {
             .update(personalPlanEndings)
             .set({ ordersNotedAt: sql`now()`, updatedAt: new Date() })
             .where(eq(personalPlanEndings.subscriptionId, input.subscriptionId));
+        return true;
     });
 }
 
