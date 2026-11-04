@@ -55,6 +55,7 @@ test('without billing a family member’s own files keep their own allowance, wh
         pooled: true,
     });
     await billing.applyGroupState({
+        readingFrom: await billing.readingStamp(),
         groupId,
         provider: 'polar',
         customerId: 'cus_team',
@@ -87,6 +88,7 @@ test('without billing a pooled group’s folders read their own allowance, not t
         organizerId: (await createTestAccount()).userId,
     });
     await billing.applyGroupState({
+        readingFrom: await billing.readingStamp(),
         groupId,
         provider: 'polar',
         customerId: 'cus_team',

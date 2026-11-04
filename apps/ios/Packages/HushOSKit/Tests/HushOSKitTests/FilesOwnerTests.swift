@@ -72,10 +72,12 @@ import Testing
         var session: SharedKeychain.Session?
         var made: [SharedKeychain.Session] = []
         var served: [AccountOwner?] = []
+        var foreign: [AccountOwner] = []
         lazy var gate = FilesGate<String>(
             owner: { [unowned self] in owner },
             session: { [unowned self] in session },
             changed: { [unowned self] in served.append($0) },
+            refusedForeign: { [unowned self] in foreign.append($0) },
             make: { [unowned self] in made.append($0); return "vault for \($0.userId)" }
         )
     }
@@ -88,6 +90,31 @@ import Testing
             return error.code == .notAuthenticated
         } catch {
             return false
+        }
+    }
+
+    /*
+     * The first download after the extension claims its folder for the account (a new session, a
+     * relaunch): opening the vault claims, and the download's own copy, kept to that vault's
+     * session, goes on. A sign-out after still stops it. Fails if the vault is made before the claim.
+     */
+    @Test func aDownloadThatClaimsTheFolderStillCompletes() async throws {
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("claim-\(UUID().uuidString)", isDirectory: true)
+        let account = CopyEpoch()
+        let (owner, signedIn) = (alice, session(alice))
+        let gate = FilesGate<Vault>(owner: { owner }, session: { signedIn },
+                                    changed: { TemporaryCopies.claim($0, in: temporary, account: account) },
+                                    make: { Vault(api: DriveAPI(session: $0), session: $0, account: account) })
+        let copies = try gate.open().copyGate(familyWorkspace: nil)
+        let copy = temporary.appendingPathComponent("downloads/node-a/version-1/content")
+        try await Resumable.download(to: copy, count: 1, chunkBytes: 4, gate: copies) { _ in Data("abcd".utf8) }
+        #expect(FileManager.default.fileExists(atPath: copy.path), "the claim refused the download that made it")
+
+        let later = try gate.open().copyGate(familyWorkspace: nil)
+        TemporaryCopies.endAccount(account)
+        let other = temporary.appendingPathComponent("downloads/node-b/version-1/content")
+        await #expect(throws: (any Error).self) {
+            try await Resumable.download(to: other, count: 1, chunkBytes: 4, gate: later) { _ in Data("abcd".utf8) }
         }
     }
 
@@ -118,6 +145,31 @@ import Testing
         #expect(harness.made.isEmpty)
     }
 
+    /*
+     * A location recorded for another account than the one signed in (a family location that
+     * outlived a switch) is refused alone: the account signed in keeps its copies and the sessions
+     * its other sources hold. Only nobody signed in clears the process. Fails if one foreign location
+     * ends the live account's session in the extension.
+     */
+    @Test func aForeignLocationLeavesTheSignedInAccountAlone() throws {
+        let account = CopyEpoch()
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("foreign-\(UUID().uuidString)", isDirectory: true)
+        TemporaryCopies.claim(alice, in: temporary, account: account)
+        let live = TemporaryCopies.session(account)
+        final class Signed: @unchecked Sendable { var session: SharedKeychain.Session?; init(_ s: SharedKeychain.Session?) { session = s } }
+        let signed = Signed(session(alice))
+        let bob = self.bob
+        let gate = FilesGate<String>(owner: { bob }, session: { signed.session }, account: account,
+                                     changed: { TemporaryCopies.claim($0, in: temporary, account: account) },
+                                     refusedForeign: { TemporaryCopies.claim($0, in: temporary, account: account) },
+                                     make: { _ in "a vault" })
+        #expect(throws: NSFileProviderError.self) { _ = try gate.open() }
+        #expect(live.stands, "another account's location ended the signed-in account's session here")
+        signed.session = nil
+        #expect(throws: NSFileProviderError.self) { _ = try gate.open() }
+        #expect(!live.stands, "nobody signed in left the last account's session standing")
+    }
+
     @Test func aVaultMadeForOneAccountIsNotHandedOutOnceAnotherSignsIn() throws {
         let harness = Harness()
         harness.owner = alice
@@ -132,8 +184,10 @@ import Testing
         harness.owner = bob
         #expect(try harness.gate.open() == "vault for \(bob.userId)")
         #expect(harness.made.map(\.userId) == [alice.userId, bob.userId])
-        // Every change of account told the extension, so it dropped what it decrypted for the last one.
-        #expect(harness.served == [alice, nil, bob])
+        // Every change of account told the extension, so it dropped what it decrypted for the last one: Bob's session over
+        // Alice's location claims for Bob (what isn't his goes) without the sign-out that would end his own sources too.
+        #expect(harness.served == [alice, bob])
+        #expect(harness.foreign == [bob])
     }
 
     // MARK: - The queue
@@ -171,20 +225,46 @@ import Testing
         let temporary = base.appendingPathComponent("tmp", isDirectory: true)
         let copy = temporary.appendingPathComponent("downloads/node-a/version-1/content")
         // Alice is served, then Files downloads one of her files.
-        TemporaryCopies.claim(alice, in: temporary)
+        TemporaryCopies.claim(alice, in: temporary, account: CopyEpoch())
         try FileManager.default.createDirectory(at: copy.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("decrypted".utf8).write(to: copy)
 
-        TemporaryCopies.claim(AccountOwner(userId: alice.userId, origin: "https://hushos.com/"), in: temporary)
+        TemporaryCopies.claim(AccountOwner(userId: alice.userId, origin: "https://hushos.com/"), in: temporary, account: CopyEpoch())
         #expect(FileManager.default.fileExists(atPath: copy.path), "the same account lost its copies")
 
-        TemporaryCopies.claim(aliceOnStaging, in: temporary)
+        TemporaryCopies.claim(aliceOnStaging, in: temporary, account: CopyEpoch())
         #expect(!FileManager.default.fileExists(atPath: copy.path), "Alice's copy survived the same user id on another server")
 
         try FileManager.default.createDirectory(at: copy.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("decrypted".utf8).write(to: copy)
-        TemporaryCopies.claim(nil, in: temporary)
+        TemporaryCopies.claim(nil, in: temporary, account: CopyEpoch())
         #expect(!FileManager.default.fileExists(atPath: copy.path), "a copy survived with nobody signed in")
+    }
+
+    /*
+     * Files serves another account while one of Alice's files comes down (the extension saw the
+     * change, not a sign-out): her download writes nothing into the folder emptied for the next,
+     * while the same account served again lets its own go on. Fails if a claim that empties the
+     * folder doesn't end what was begun before it.
+     */
+    @Test func aDownloadBegunForAnotherAccountWritesNothing() async throws {
+        let temporary = base.appendingPathComponent("tmp-switch", isDirectory: true)
+        let account = CopyEpoch()
+        TemporaryCopies.claim(alice, in: temporary, account: account)
+        let copy = temporary.appendingPathComponent("downloads/node-a/version-1/content")
+        let gate = TemporaryCopies.copyGate(familyWorkspace: nil, account: account)
+        TemporaryCopies.claim(alice, in: temporary, account: account)
+        try await Resumable.download(to: copy, count: 1, chunkBytes: 4, gate: gate) { _ in Data("abcd".utf8) }
+        #expect(FileManager.default.fileExists(atPath: copy.path), "the same account's download was stopped")
+
+        let other = temporary.appendingPathComponent("downloads/node-b/version-1/content")
+        let begun = TemporaryCopies.copyGate(familyWorkspace: nil, account: account)
+        TemporaryCopies.claim(aliceOnStaging, in: temporary, account: account)
+        await #expect(throws: (any Error).self) {
+            try await Resumable.download(to: other, count: 1, chunkBytes: 4, gate: begun) { _ in Data("abcd".utf8) }
+        }
+        #expect(!FileManager.default.fileExists(atPath: other.path))
+        #expect(!FileManager.default.fileExists(atPath: other.appendingPathExtension("part").path))
     }
 
     @Test func copiesUnderAnOlderVersionsMarkerAreNobodys() throws {
@@ -194,7 +274,7 @@ import Testing
         try FileManager.default.createDirectory(at: copy.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("decrypted".utf8).write(to: copy)
         try Data(alice.userId.utf8).write(to: temporary.appendingPathComponent("account-owner"))
-        TemporaryCopies.claim(alice, in: temporary)
+        TemporaryCopies.claim(alice, in: temporary, account: CopyEpoch())
         #expect(!FileManager.default.fileExists(atPath: copy.path))
     }
 }

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import type { GroupSubscriptionSnapshot } from './billing';
+import type { GroupSubscriptionSnapshot, ReadingStamp } from './billing';
 
 // Pools are billing's: with BILLING_PROVIDER=none Drive ignores them (drive.pool-none.test.ts).
 process.env.BILLING_PROVIDER = 'polar';
@@ -56,6 +56,7 @@ function plan(overrides: Partial<GroupSubscriptionSnapshot> = {}): GroupSubscrip
 
 async function apply(groupId: string, subscriptions: GroupSubscriptionSnapshot[]) {
     return billing.applyGroupState({
+        readingFrom: await billing.readingStamp(),
         groupId,
         provider: 'polar',
         customerId: 'cus_team',
@@ -434,6 +435,7 @@ describe('seats', () => {
         const { groupId } = await createTestFamily({ organizerId: userId, pooled: true });
         await apply(groupId, [plan({ id: 'sub_a', units: 7 })]);
         await billing.applyGroupState({
+            readingFrom: await billing.readingStamp(),
             groupId,
             provider: 'polar',
             customerId: null,
@@ -623,6 +625,7 @@ describe('lapsed family plans and double charges', () => {
         const listed = async () => billing.listDoubleCharging();
         await apply(groupId, [plan({ id: 'sub_a' })]);
         await billing.applyCustomerState({
+            readingFrom: await billing.readingStamp(),
             userId,
             provider: 'polar',
             customerId: 'cus_person',
@@ -633,6 +636,7 @@ describe('lapsed family plans and double charges', () => {
         // An unpaid plan Polar still holds beside a live one: it can charge again.
         await apply(groupId, [plan({ id: 'sub_a' }), plan({ id: 'sub_b', status: 'unpaid' })]);
         await billing.applyCustomerState({
+            readingFrom: await billing.readingStamp(),
             userId,
             provider: 'polar',
             customerId: 'cus_person',
@@ -669,6 +673,7 @@ describe('lapsed family plans and double charges', () => {
             plan({ id: 'sub_b', status: 'canceled', endedAt: new Date() }),
         ]);
         await billing.applyCustomerState({
+            readingFrom: await billing.readingStamp(),
             userId,
             provider: 'polar',
             customerId: 'cus_person',
@@ -816,5 +821,152 @@ describe('a deleted family’s plans', () => {
         expect((await billing.listOrphanedPlans()).map((row) => row.subscriptionId)).toEqual([
             'sub_orphan',
         ]);
+    });
+});
+
+describe('readings of Polar that overlap', () => {
+    async function family() {
+        const { userId } = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: userId, pooled: true });
+        return groupId;
+    }
+    /* One plan as a change returned it, answered at `readingFrom`. */
+    const change = (
+        groupId: string,
+        subscription: GroupSubscriptionSnapshot,
+        readingFrom: ReadingStamp,
+    ) =>
+        billing.applyGroupState({
+            groupId,
+            provider: 'polar',
+            customerId: null,
+            subscriptions: [subscription],
+            graceMs: GRACE,
+            complete: false,
+            readingFrom,
+        });
+    const reconcile = (
+        groupId: string,
+        subscriptions: GroupSubscriptionSnapshot[],
+        readingFrom: ReadingStamp,
+    ) =>
+        billing.applyGroupState({
+            groupId,
+            provider: 'polar',
+            customerId: 'cus_team',
+            subscriptions,
+            graceMs: GRACE,
+            readingFrom,
+        });
+
+    test('a change answered before the newest reconcile began writes nothing; one answered after it does', async () => {
+        const groupId = await family();
+        const answered = await billing.readingStamp();
+        expect(await reconcile(groupId, [plan()], await billing.readingStamp())).toBe('applied');
+        expect(await change(groupId, plan({ units: 9 }), answered)).toBe('stale');
+        expect(await seatLimit(groupId)).toBe(6);
+        expect(await change(groupId, plan({ units: 9 }), await billing.readingStamp())).toBe(
+            'applied',
+        );
+        expect(await seatLimit(groupId)).toBe(9);
+    });
+
+    test('a reconcile that began before the newest change is answered again (rerun); one that began after it is written', async () => {
+        const groupId = await family();
+        expect(await reconcile(groupId, [plan()], await billing.readingStamp())).toBe('applied');
+        const began = await billing.readingStamp();
+        expect(await change(groupId, plan({ units: 9 }), await billing.readingStamp())).toBe(
+            'applied',
+        );
+        expect(await reconcile(groupId, [plan()], began)).toBe('rerun');
+        expect(await seatLimit(groupId)).toBe(9);
+        expect(await reconcile(groupId, [plan({ units: 9 })], await billing.readingStamp())).toBe(
+            'applied',
+        );
+        // And a reconcile behind that one writes nothing.
+        expect(await reconcile(groupId, [plan({ units: 4 })], began)).toBe('stale');
+        expect(await seatLimit(groupId)).toBe(9);
+    });
+
+    test('two answers for one plan: the older, committing last, writes nothing', async () => {
+        const groupId = await family();
+        expect(await reconcile(groupId, [plan()], await billing.readingStamp())).toBe('applied');
+        const older = await billing.readingStamp();
+        expect(await change(groupId, plan({ units: 9 }), await billing.readingStamp())).toBe(
+            'applied',
+        );
+        expect(await change(groupId, plan({ units: 7 }), older)).toBe('stale');
+        expect(await seatLimit(groupId)).toBe(9);
+    });
+
+    test('readings drawn at once, on several connections, are each numbered once, in the order drawn', async () => {
+        const drawn = await Promise.all(Array.from({ length: 20 }, () => billing.readingStamp()));
+        const numbers = drawn.map((stamp) => BigInt(stamp));
+        expect(new Set(numbers).size).toBe(20);
+        // Each later draw on one connection is numbered after the earlier ones, however close.
+        const first = await billing.readingStamp();
+        const second = await billing.readingStamp();
+        expect(BigInt(second)).toBeGreaterThan(BigInt(first));
+        for (const number of numbers) expect(BigInt(first)).toBeGreaterThan(number);
+        // So whichever commits last, the newest reading is kept.
+        const groupId = await family();
+        expect(await reconcile(groupId, [plan({ units: 9 })], second)).toBe('applied');
+        expect(await reconcile(groupId, [plan()], first)).toBe('stale');
+        expect(await seatLimit(groupId)).toBe(9);
+    });
+
+    test('a change never gives way to another change, which may be of another plan', async () => {
+        const groupId = await family();
+        expect(await reconcile(groupId, [plan()], await billing.readingStamp())).toBe('applied');
+        const older = await billing.readingStamp();
+        expect(await change(groupId, plan({ units: 9 }), await billing.readingStamp())).toBe(
+            'applied',
+        );
+        expect(await change(groupId, plan({ id: 'sub_other', status: 'unpaid' }), older)).toBe(
+            'applied',
+        );
+        expect((await billing.getGroupSubscription('sub_other'))?.status).toBe('unpaid');
+        expect(await seatLimit(groupId)).toBe(9);
+    });
+
+    test('a first reconcile’s customer row holds its reading', async () => {
+        const groupId = await family();
+        const older = await billing.readingStamp();
+        expect(await reconcile(groupId, [plan()], await billing.readingStamp())).toBe('applied');
+        expect(await reconcile(groupId, [plan({ status: 'unpaid' })], older)).toBe('stale');
+        expect(await seatLimit(groupId)).toBe(6);
+    });
+
+    test('an unread plan read before the newest reconcile began is not written', async () => {
+        const groupId = await family();
+        const answered = await billing.readingStamp();
+        expect(await reconcile(groupId, [plan()], await billing.readingStamp())).toBe('applied');
+        const unread = {
+            id: 'sub_unread_late',
+            productId: 'prod_archived',
+            status: 'active',
+            recurringInterval: 'month',
+            amount: 1500,
+            currency: 'usd',
+            units: 6,
+            currentPeriodStart: new Date(Date.now() - DAY),
+            currentPeriodEnd: new Date(Date.now() + 29 * DAY),
+            cancelAtPeriodEnd: false,
+            endedAt: null,
+        };
+        expect(await billing.recordUnreadGroupSubscription(groupId, unread, answered)).toBe(
+            'stale',
+        );
+        expect(await billing.getGroupSubscription(unread.id)).toBeNull();
+        expect(
+            await billing.recordUnreadGroupSubscription(
+                groupId,
+                unread,
+                await billing.readingStamp(),
+            ),
+        ).toBe('applied');
+        expect(await billing.getGroupSubscription(unread.id)).toMatchObject({
+            productUnread: true,
+        });
     });
 });

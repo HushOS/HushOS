@@ -3,6 +3,9 @@ import HushOSCore
 import Testing
 @testable import HushOSKit
 
+/* The core exports a type of the same name (first_seen.rs); the tests mean the kit's. */
+typealias ServedContactKeys = HushOSKit.ServedContactKeys
+
 /* An identity as the web mints one (version 2), opened: what signs, seals and opens below. */
 func makeIdentity(_ userId: String, root: Data? = nil, version: UInt64 = 1) throws -> (envelope: IdentityEnvelope, keys: IdentityKeys, root: Data) {
     let root = try root ?? randomBytes(length: 32)
@@ -11,14 +14,14 @@ func makeIdentity(_ userId: String, root: Data? = nil, version: UInt64 = 1) thro
 }
 
 /* The keys the server serves for an identity: its four public keys and version. */
-func servedOf(_ envelope: IdentityEnvelope, mlDsa: Bool = true, kem: Bool = true) -> ServedContactKeys {
-    ServedContactKeys(keyVersion: envelope.keyVersion, encryptionPublicKey: envelope.encryptionPublicKey, signingPublicKey: envelope.signingPublicKey,
+func servedOf(_ envelope: IdentityEnvelope, mlDsa: Bool = true, kem: Bool = true) -> HushOSKit.ServedContactKeys {
+    HushOSKit.ServedContactKeys(keyVersion: envelope.keyVersion, encryptionPublicKey: envelope.encryptionPublicKey, signingPublicKey: envelope.signingPublicKey,
                       mlDsaPublicKey: mlDsa ? envelope.mlDsa?.publicKey : nil, kemPublicKey: kem ? envelope.kem?.publicKey : nil)
 }
 
 /* A version 3 pin made after a words check over these keys. */
 func pinned(_ userId: String, _ keys: IdentityKeys, name: String = "Maya", keyVersion: UInt64? = 1) throws -> ContactPin {
-    let served = ServedContactKeys(keyVersion: keyVersion, encryptionPublicKey: keys.encryptionPublicKey, signingPublicKey: keys.signingPublicKey,
+    let served = HushOSKit.ServedContactKeys(keyVersion: keyVersion, encryptionPublicKey: keys.encryptionPublicKey, signingPublicKey: keys.signingPublicKey,
                                    mlDsaPublicKey: keys.mlDsaPublicKey, kemPublicKey: keys.kemPublicKey)
     return try ContactPin.of(served, userId: userId, email: "\(name.lowercased())@example.com", name: name, pinnedAt: "2026-10-01T00:00:00Z")
 }
@@ -165,12 +168,16 @@ struct IntegrityDecisionTests {
     @Test func aStrippedSignatureReadsLikeAnyOtherUnconfirmedRecord() {
         // A server stripping a signature must not get a milder warning than a stranger's signature.
         let unsigned = Provenance.unsigned.explanation
-        #expect(unsigned == "HushOS can’t confirm who wrote this.")
-        #expect(Provenance.unknownSigner(signerId: maya).explanation.hasPrefix(unsigned.dropLast()))
+        // The calm words of docs/optional-verification.md 6.12, the same for both.
+        #expect(unsigned == "HushOS can’t tell who wrote this.")
+        #expect(Provenance.unknownSigner(signerId: maya).explanation == unsigned)
         #expect(!Provenance.unknownSigner(signerId: maya).explanation.contains(maya))
         #expect(Provenance.resealed(.you).explanation == "Re-locked by you; HushOS couldn’t confirm who wrote it before.")
         #expect(Provenance.retiredKey(.contact("Maya")).explanation == "Signed with keys Maya has since replaced.")
-        #expect(Provenance.unchecked.explanation == "HushOS couldn’t check who wrote this. Try again later.")
+        #expect(Provenance.unchecked.explanation == "HushOS couldn’t check this right now.")
+        // Never an accusation: no "Don't trust this item" for a signature that doesn't hold, and a key conflict is said calmly.
+        #expect(Provenance.badSignature(.contact("Maya Lind")).explanation == "HushOS couldn’t confirm this was written by Maya.")
+        #expect(Provenance.keyConflict(.contact("Maya Lind")).explanation == "Maya’s account looks different here than in your contacts.")
     }
 }
 
@@ -363,7 +370,7 @@ struct SuccessionFollowTests {
 
         // A valid chain that ends somewhere other than the served keys, or at them with another ML-KEM key.
         #expect(pin.follow(servedOf(stranger.envelope), links: [good]) == .changed)
-        let otherKem = ServedContactKeys(keyVersion: 2, encryptionPublicKey: second.identity.encryptionPublicKey, signingPublicKey: second.identity.signingPublicKey,
+        let otherKem = HushOSKit.ServedContactKeys(keyVersion: 2, encryptionPublicKey: second.identity.encryptionPublicKey, signingPublicKey: second.identity.signingPublicKey,
                                          mlDsaPublicKey: second.identity.mlDsa!.publicKey, kemPublicKey: stranger.envelope.kem!.publicKey)
         #expect(pin.follow(otherKem, links: [good]) == .changed)
         // New keys served without an ML-DSA key: never a succession, whatever the chain says.

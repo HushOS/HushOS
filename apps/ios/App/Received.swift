@@ -19,9 +19,13 @@ struct SharedView: View {
     @State private var mineError: String?
     @State private var linkText = ""
     @State private var openingLink: String?
+    /* Shared has finished appearing: a link may push onto its stack. */
+    @State private var onScreen = false
     @State private var showingPeople = false
-    /* A granter whose keys changed since they were pinned: checked again from a fresh lookup, which can follow their succession. */
-    @State private var checkingAgain: CheckTarget?
+    /* Review on a row whose granter's account changed (6.7), in a sheet of its own. */
+    @State private var step: ContactStep?
+    /* The row whose Open is running. */
+    @State private var opening: String?
     @State private var action: NodeAction?
     @State private var viewing: Opened?
     @State private var stopping: SharedByMe?
@@ -30,12 +34,36 @@ struct SharedView: View {
 
     init(visible: Bool = true) { self.visible = visible }
 
-    private var loadKey: Int { visible ? (byMe ? store.sharingVersion : -1) : -2 }
+    /* What the load is for, and the session it runs in: a load a new session's adoption dropped starts again. */
+    private var loadKey: String { "\(visible ? (byMe ? store.sharingVersion : -1) : -2)-\(store.sessionKey.hashValue)" }
+
+    private func handle(_ link: AppLink?) {
+        guard onScreen else { return }
+        switch link {
+        case .shared(let mine):
+            store.route = nil
+            openingLink = nil
+            byMe = mine
+        case .share(let url):
+            store.route = nil
+            byMe = false
+            show(link: url)
+        case .incompleteShare:
+            store.route = nil
+            byMe = false
+            // No key to open it with: the browser says the link is incomplete and asks for the whole one.
+            show(link: "incomplete")
+        default:
+            break
+        }
+    }
 
     var body: some View {
         NavigationStack {
             List {
-                Section {} header: { header }
+                // The picker and the paste field as the list's first rows, so they start at the list's own first-section
+                // margin, the same gap under the title as the other tabs' first card.
+                Section { header.bareRow(top: 0, bottom: 0) }
                 if byMe { sharedByMe } else { sharedWithMe }
             }
             .listStyle(.insetGrouped)
@@ -43,18 +71,9 @@ struct SharedView: View {
             .environment(\.defaultMinListRowHeight, 1)
             .listSectionSpacing(Alpine.Space.s4)
             .navigationTitle("Shared")
-            .screenChrome(title: "Shared") { peopleButton }
+            .screenChrome(title: "Shared", root: true) { peopleButton }
             .sheet(isPresented: $showingPeople) { PeopleView().environment(store) }
-            .sheet(item: $checkingAgain) { target in
-                NavigationStack {
-                    CheckContactView(email: target.email, intro: "Check it’s them again before you open what they share.") { _ in
-                        checkingAgain = nil
-                        Task { await store.refreshMounts() }
-                    }
-                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { checkingAgain = nil } } }
-                }
-                .environment(store)
-            }
+            .contactSheet($step, store: store) { Task { await store.refreshMounts() } }
             .navigationDestination(for: Opened.self) { folder in FolderView(folderId: folder.id, title: folder.name) }
             .navigationDestination(item: $openingLink) { url in LinkBrowserView(url: url) }
             .nodeActionSheets(action: $action, store: store)
@@ -65,25 +84,10 @@ struct SharedView: View {
             } message: {
                 Text(stopMessage)
             }
-            .onChange(of: store.route, initial: true) { _, link in
-                switch link {
-                case .shared(let mine):
-                    store.route = nil
-                    openingLink = nil
-                    byMe = mine
-                case .share(let url):
-                    store.route = nil
-                    byMe = false
-                    show(link: url)
-                case .incompleteShare:
-                    store.route = nil
-                    byMe = false
-                    // No key to open it with: the browser says the link is incomplete and asks for the whole one.
-                    show(link: "incomplete")
-                default:
-                    break
-                }
-            }
+            // A link pushes its page once Shared has finished appearing, as a tap would (Appeared.swift).
+            .onFinishedAppearing { onScreen = true }
+            .onChange(of: onScreen) { _, _ in handle(store.route) }
+            .onChange(of: store.route, initial: true) { _, link in handle(link) }
             .refreshable { await load() }
             // One load at a time, the last one asked: switching sides, and By me again whenever what this
             // account shares changed (a restore, a change from another device, a share stopped), cancel the
@@ -107,16 +111,13 @@ struct SharedView: View {
 
     private var peopleButton: some View {
         Button { showingPeople = true } label: {
-            HStack(spacing: 6) { Image(systemName: "person.2"); Text("People") }
-                .font(.body.weight(.semibold)).padding(.horizontal, 14).frame(minHeight: Theme.control).contentShape(Rectangle())
+            Label("People", systemImage: "person.2").labelStyle(.titleAndIcon)
         }
-        .buttonStyle(.plain)
         .accessibilityLabel("Contacts")
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: Alpine.Space.s3) {
-            ScreenHeader(title: "Shared") { peopleButton }
             if store.offline { OfflineCapsule() }
             Picker("Which", selection: $byMe) {
                 Text("With me").tag(false)
@@ -125,8 +126,6 @@ struct SharedView: View {
             .pickerStyle(.segmented)
             if !byMe { pasteField }
         }
-        .textCase(nil)
-        .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
     }
 
     /* The app's field (as the tag sheet's "Find or add a tag"), with Open beside it at the same height, not inside it. */
@@ -217,30 +216,30 @@ struct SharedView: View {
                 Divider()
                 Button("Report", systemImage: "flag") { action = .report(root) }
             }
-            .itemRow()
+            .itemRow(item: root)
         } else if let trust = mount.trust {
-            // Shut until the granter is checked in Contacts (the server's word for their key is not enough),
-            // checked again after their keys changed, or, signed with keys they replaced, sealed again by them.
-            let unverified = trust.unverified
-            Button {
-                switch trust {
-                case .changed: checkingAgain = CheckTarget(id: mount.share.granter.id, email: mount.share.granter.email)
-                case .reseal: break
-                default: showingPeople = true
-                }
-            } label: {
-                HStack(spacing: Alpine.Space.s3) {
-                    Image(systemName: unverified ? "person.badge.shield.checkmark" : "exclamationmark.triangle")
-                        .foregroundStyle(unverified ? Alpine.inkMuted : Alpine.danger)
-                        .frame(width: Theme.mark, height: Theme.mark).background(unverified ? Alpine.ink.opacity(0.07) : Alpine.dangerSoft, in: Circle())
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Shared by \(granter(mount))").foregroundStyle(Alpine.ink)
-                        Text(trust.errorDescription ?? "").font(Theme.Text.footnote).foregroundStyle(unverified ? Alpine.inkMuted : Alpine.danger)
+            // Waiting on the person, said calmly (docs/optional-verification.md 6.4): Open (which adds or follows them),
+            // Review (an account that changed), Try again (a check that couldn't run), or nothing they can do yet.
+            HStack(spacing: Alpine.Space.s3) {
+                Image(systemName: mount.share.node.kind == "folder" ? "folder" : "doc").foregroundStyle(Alpine.inkMuted)
+                    .frame(width: Theme.mark, height: Theme.mark).background(Alpine.ink.opacity(0.07), in: Circle())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Shared by \(granter(mount))").foregroundStyle(Alpine.ink)
+                    Text(trust.errorDescription ?? "").font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).fixedSize(horizontal: false, vertical: true)
+                    switch trust {
+                    case .waiting:
+                        Button(opening == mount.id ? "Opening…" : "Open") { open(mount) }.disabled(opening != nil)
+                            .font(Theme.Text.footnote.weight(.semibold)).buttonStyle(.borderless)
+                    case .changed(let change):
+                        Button("Review") { step = .changed(change) }.font(Theme.Text.footnote.weight(.semibold)).buttonStyle(.borderless)
+                    case .unchecked:
+                        Button("Try again") { Task { await store.refreshMounts() } }.font(Theme.Text.footnote.weight(.semibold)).buttonStyle(.borderless)
+                    case .unverified, .reseal:
+                        EmptyView()
                     }
                 }
-                .frame(minHeight: Theme.row).contentShape(Rectangle())
             }
-            .buttonStyle(.plain).disabled(!trust.actionable).itemRow()
+            .frame(minHeight: Theme.row).itemRow()
         } else {
             HStack(spacing: Alpine.Space.s3) {
                 Image(systemName: "exclamationmark.triangle").foregroundStyle(Alpine.danger)
@@ -252,6 +251,22 @@ struct SharedView: View {
                 }
             }
             .frame(minHeight: Theme.row).itemRow()
+        }
+    }
+
+    /* Open on a row that waits: the person's own act, which adds them back or follows them, then everything they shared opens. */
+    private func open(_ mount: ShareMount) {
+        opening = mount.id
+        Task {
+            do {
+                try await store.vault.openWaiting(mount.share.granter)
+            } catch GranterTrust.changed(let change) {
+                step = .changed(change)
+            } catch {
+                if let words = ErrorWords.say(error, otherwise: "Try again.") { store.notify("Couldn’t open this. " + words) }
+            }
+            await store.refreshMounts()
+            opening = nil
         }
     }
 
@@ -438,20 +453,6 @@ struct LinkBrowserView: View {
 
     var body: some View {
         List {
-            Section {} header: {
-                ScreenHeader(title: current?.name ?? "Shared link", back: { dismiss() }) {
-                    if current != nil {
-                        Menu {
-                            Button("Save a copy to my files", systemImage: "plus.square.on.square") { save() }
-                            Divider()
-                            Button("Report", systemImage: "flag") { reporting = true }
-                        } label: { HeaderIcon(symbol: "ellipsis") }
-                        .accessibilityLabel("More")
-                    }
-                }
-                .textCase(nil)
-                .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
-            }
             if let problem {
                 problemView(problem).bareRow(top: Alpine.Space.s8)
             } else if needsPassword {
@@ -493,7 +494,16 @@ struct LinkBrowserView: View {
         .alpineGrouped()
         .environment(\.defaultMinListRowHeight, 1)
         .navigationTitle(current?.name ?? "Shared link")
-        .screenChrome(title: current?.name ?? "Shared link", back: { dismiss() })
+        .screenChrome(title: current?.name ?? "Shared link") {
+            if current != nil {
+                Menu {
+                    Button("Save a copy to my files", systemImage: "plus.square.on.square") { save() }
+                    Divider()
+                    Button("Report", systemImage: "flag") { reporting = true }
+                } label: { HeaderIcon(symbol: "ellipsis") }
+                .accessibilityLabel("More")
+            }
+        }
         .navigationDestination(for: LinkTarget.self) { target in
             LinkBrowserView(url: target.url, folder: target.folder, vault: linkVault)
         }
@@ -565,9 +575,9 @@ struct LinkBrowserView: View {
     private func linkRow(_ item: Opened) -> some View {
         HStack(spacing: Alpine.Space.s3) {
             if item.isFolder {
-                FolderGlyph().frame(width: Theme.mark * 0.9, height: Theme.mark * 0.9 * 46 / 56).frame(width: Theme.mark, height: Theme.mark)
+                FolderGlyph(folder: item).frame(width: Theme.mark * 0.9, height: Theme.mark * 0.9 * 46 / 56).frame(width: Theme.mark, height: Theme.mark)
             } else {
-                PageGlyph(label: FileMark.label(for: item)).frame(width: Theme.mark * 0.66, height: Theme.mark * 0.66 * 54 / 44).frame(width: Theme.mark, height: Theme.mark)
+                PageGlyph(label: FileMark.label(for: item), name: item.name).frame(width: Theme.mark * 0.66, height: Theme.mark * 0.66 * 54 / 44).frame(width: Theme.mark, height: Theme.mark)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name).foregroundStyle(Alpine.ink).lineLimit(1)

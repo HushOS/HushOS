@@ -97,9 +97,16 @@
     );
 }
 
-/* Markdown at reading width: headings in the text face, hairlines of ink, code alone in mono. */
+/*
+ * Markdown at reading width: headings in the text face, hairlines of ink, code alone in mono.
+ * The width is said outright: in the viewer the article sits in a flex column, where auto side
+ * margins turn stretching off, so it took the width of its widest line (a code block's) up to
+ * the 44rem cap and ran past both edges of a phone's screen.
+ */
 .rt-markdown {
+    width: 100%;
     max-width: 44rem;
+    min-width: 0;
     margin: 0 auto;
     padding: 2.5rem 1.5rem 4rem;
     font-family: var(--font-sans);
@@ -237,7 +244,9 @@
     padding: 0.1em 0.35em;
     border-radius: var(--radius-xs);
 }
+/* A block too wide for the page (code, a table) scrolls sideways inside itself, never the page. */
 .rt-markdown pre {
+    max-width: 100%;
     margin: 0;
     padding: 1rem 1.25rem;
     border-radius: var(--radius-md);
@@ -246,19 +255,33 @@
     font-size: 0.8125rem;
     line-height: 1.6;
 }
-.rt-markdown table {
-    display: block;
-    width: 100%;
+.rt-table {
+    max-width: 100%;
     overflow-x: auto;
+    border-radius: var(--radius-xs);
+    outline: none;
+}
+.rt-table:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
+}
+/* A table stays a table (not display: block), so screen readers still read rows and columns. */
+.rt-markdown table {
     border-collapse: collapse;
     font-size: 0.875rem;
 }
+/*
+ * Cells break between words: breaking anywhere (the article's rule) let a table squeeze to any
+ * width, a letter a line. A column keeps room for a few words; past the screen, the table scrolls.
+ */
 .rt-markdown th,
 .rt-markdown td {
+    min-width: 7rem;
     border-bottom: 1px solid var(--rule);
     padding: 0.5rem 0.75rem;
     text-align: left;
     vertical-align: top;
+    overflow-wrap: break-word;
 }
 .rt-markdown th {
     font-size: 0.75rem;
@@ -269,8 +292,14 @@
 .rt-markdown del {
     color: var(--muted-foreground);
 }
+.rt-markdown img,
+.rt-markdown video {
+    max-width: 100%;
+    height: auto;
+}
 .rt-image {
     display: inline-flex;
+    max-width: 100%;
     align-items: center;
     gap: 0.4rem;
     padding: 0.35rem 0.6rem;
@@ -280,8 +309,12 @@
     font-size: 0.75rem;
 }
 .rt-image svg {
+    flex-shrink: 0;
     width: 0.9rem;
     height: 0.9rem;
+}
+.rt-image > span {
+    min-width: 0;
 }
 .rt-image-host {
     font-family: var(--font-mono);

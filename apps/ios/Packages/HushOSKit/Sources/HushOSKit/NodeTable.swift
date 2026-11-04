@@ -27,6 +27,11 @@ extension Opened {
     public var ref: NodeRef { node.ref }
 }
 
+/* A family row whose id another workspace's row holds here: refused, and the id answered by nothing alone (Vault.admitId). */
+public struct IdCollision: WordedError {
+    public var errorDescription: String? { "Couldn’t check this folder’s keys" }
+}
+
 /*
  * Node keys and opened nodes by workspace and node. Keyed by node id alone, a share
  * (whose ids the server picks) could land on the id of one of the account's own
@@ -43,6 +48,19 @@ struct NodeTable<Value> {
     private var entries: [NodeRef: Value] = [:]
     /* Every workspace an id has an entry in. */
     private var workspaces: [String: Set<String>] = [:]
+    /*
+     * Ids a family row shared with a row of another workspace this session (Vault.admitId): by id
+     * alone nothing answers for them again, whichever rows are held now, since a caller holding a
+     * bare id can't say which one it means. Kept across forgetting, for the session.
+     */
+    private var ambiguous: Set<String> = []
+
+    /* The id can no longer be answered by id alone this session. */
+    mutating func markAmbiguous(_ id: String) { ambiguous.insert(id.lowercased()) }
+    func isAmbiguous(_ id: String) -> Bool { ambiguous.contains(id.lowercased()) }
+
+    /* The workspaces holding an entry under `id` now. */
+    func workspaces(holding id: String) -> Set<String> { workspaces[id.lowercased()] ?? [] }
 
     subscript(ref: NodeRef) -> Value? {
         get { entries[ref] }
@@ -65,7 +83,7 @@ struct NodeTable<Value> {
 
     func ref(for id: String) -> NodeRef? {
         let nodeId = id.lowercased()
-        guard let found = workspaces[nodeId], !found.isEmpty else { return nil }
+        guard !ambiguous.contains(nodeId), let found = workspaces[nodeId], !found.isEmpty else { return nil }
         if let own, found.contains(own) { return NodeRef(workspaceId: own, nodeId: nodeId) }
         return found.min().map { NodeRef(workspaceId: $0, nodeId: nodeId) }
     }

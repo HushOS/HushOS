@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import androidx.compose.runtime.retain.retain
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -75,12 +76,12 @@ fun addInto(model: DriveViewModel, state: DriveState, folderId: String?, folderN
     // Same-name uploads, picked files and picked folders alike: asked one file at a time, each by
     // its own uri (two picks can share a name); Keep both then names them all in one dialog.
     // Cancel adds none of those; the files with free names have gone already.
-    var clashes by remember { mutableStateOf<List<DriveViewModel.Clash>>(emptyList()) }
-    var answers by remember { mutableStateOf<Map<Uri, Pair<DriveViewModel.Conflict, String>>>(emptyMap()) }
+    var clashes by retain { mutableStateOf<List<DriveViewModel.Clash>>(emptyList()) }
+    var answers by retain { mutableStateOf<Map<Uri, Pair<DriveViewModel.Conflict, String>>>(emptyMap()) }
     // Names in each destination before any answer, and the same with the kept-both names suggested so far.
-    var namesThere by remember { mutableStateOf<Map<String, Set<String>>>(emptyMap()) }
-    var claimed by remember { mutableStateOf<Map<String, Set<String>>>(emptyMap()) }
-    var renames by remember { mutableStateOf<Map<Uri, String>>(emptyMap()) }
+    var namesThere by retain { mutableStateOf<Map<String, Set<String>>>(emptyMap()) }
+    var claimed by retain { mutableStateOf<Map<String, Set<String>>>(emptyMap()) }
+    var renames by retain { mutableStateOf<Map<Uri, String>>(emptyMap()) }
     fun ask(found: List<DriveViewModel.Clash>, names: Map<String, Set<String>>) {
         if (found.isEmpty()) return
         clashes = found; answers = emptyMap(); namesThere = names; claimed = names; renames = emptyMap()
@@ -273,8 +274,9 @@ private fun KeepBothDialog(entries: List<KeepEntry>, names: Map<Uri, String>, ta
 /* One name clash: Replace, Keep both or Skip, each saying what it does, and whether to do the same for the rest. */
 @Composable
 private fun ClashDialog(clash: DriveViewModel.Clash, others: List<DriveViewModel.Clash>, folderName: String, freeName: String, cancel: () -> Unit, decide: (DriveViewModel.Conflict, Boolean) -> Unit) {
-    var choice by remember(clash.uri) { mutableStateOf(DriveViewModel.Conflict.REPLACE) }
-    var same by remember(clash.uri) { mutableStateOf(true) }
+    // Saved, so a fold or a rotation keeps the answer being given (the choice and the box, no names).
+    var choice by rememberSaveable(clash.uri) { mutableStateOf(DriveViewModel.Conflict.REPLACE) }
+    var same by rememberSaveable(clash.uri) { mutableStateOf(true) }
     val options = listOf(
         Triple(DriveViewModel.Conflict.REPLACE, "Replace", "Keeps the old one as an earlier version"),
         Triple(DriveViewModel.Conflict.KEEP_BOTH, "Keep both", "Adds this one as “$freeName”"),

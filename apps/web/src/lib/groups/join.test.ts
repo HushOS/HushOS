@@ -1,23 +1,27 @@
 // @vitest-environment node
-import type { CryptoResults } from '@hushos/crypto';
+import 'fake-indexeddb/auto';
+import type { CryptoResults, GroupPin } from '@hushos/crypto';
+import { GUARD_NOT_KEPT } from '@hushos/crypto/protocol';
 import { digest } from '@hushos/crypto/signatures';
-import { describe, expect, test, vi } from 'vitest';
-import type { GroupsApi } from './api';
-import type { GroupContext } from './context';
-import { confirmJoin, joinStatus } from './join';
+import { describe, expect, test } from 'vitest';
+import { createIndexedDbFamilyGuard, GUARD_UNSAVED, type GuardSealer } from '@/lib/contact-guard';
+import { GroupApiError, type GroupsApi } from './api';
+import { familyGuardOf, type FamilyGuard, type GroupContext } from './context';
+import { joinStatus } from './join';
 import { createMemoryGroupStore, type GroupStore } from './store';
-import { syncGroup, wipeGroup } from './sync';
+import { fetchServed, syncGroup, wipeGroup } from './sync';
 import { account, bytes, pinOf } from './worker-testkit';
 
 /*
- * The newcomer's join (join.ts) against the real crypto worker: Alice
- * creates a family and admits Bob in her own session, as the admin's dialog
- * does; Bob's side runs only through join.ts, with a server that serves what
- * the roster routes stored. Bob waits, is let in, compares the join code his
- * device works out with the one Alice's screen shows, and joins. Nothing is
- * kept until "They match", and then only if the served chain still gives the
- * code he compared; another code resets to it. A device that holds a mark,
- * the settings pin, decides the history with it even when rejoining.
+ * The newcomer's join (join.ts, docs/optional-verification.md 3.2, 3.3) and
+ * the family guard it keeps (2.8), against the real crypto worker: Alice
+ * creates a family and admits Bob in her own session over a first-seen pin
+ * of him, as Let them in does; Bob's side runs only through join.ts and
+ * sync.ts, with a server that serves what the roster routes stored, and a
+ * family guard sealed in IndexedDB under his settings key, as the app keeps
+ * it. Bob waits, is let in, and joins on first use with no words; from then on
+ * his guard is a mark that no `not-member` answer clears, written before the
+ * device record and never lowered.
  */
 
 const ALICE = 'a1a1a1a1-0000-4000-8000-000000000001';
@@ -26,7 +30,8 @@ const BOB = 'b2b2b2b2-0000-4000-8000-000000000002';
 /*
  * Alice's family, created and committed in her session; Bob accepted the
  * invitation (route 2 says `accepted`) and is not admitted yet. `admit()`
- * signs his admitting roster and returns its join code; `land()` stores it.
+ * signs his admitting roster over a first-seen pin of him; `land()` stores
+ * it; `later()` has Alice sign and land one more roster (a new family folder).
  */
 async function invitedFamily() {
     const alice = await account(ALICE);
@@ -82,9 +87,16 @@ async function invitedFamily() {
     });
 
     let state: 'accepted' | 'active' = 'accepted';
+    // The server's answer that Bob is not in the family (404 not-member) on every group route.
+    let gone = false;
+    const notMember = () => {
+        if (gone) throw Object.assign(new GroupApiError('not-member', 404, 'not-member', null));
+    };
     // The first keys route 5 serves: another family's (or a server's own) once switched.
     let firstKeys = created.body.groupKey;
     let admitted: CryptoResults['groupStage'] | null = null;
+    // A server rolling the member list back: only the first `servedUpTo` rosters served.
+    let servedUpTo: number | null = null;
     const signed: CryptoResults['groupStage'][] = [];
     const bobGrant = () => {
         const grant = admitted?.outboxId
@@ -93,21 +105,24 @@ async function invitedFamily() {
         return grant ? { ...grant, granterUserId: ALICE } : null;
     };
     const api = {
-        rosters: async (_groupId: string, after: number) => ({
-            rosters: rosters
-                .slice(after)
-                .map((roster, at) => ({ version: after + at + 1, ...roster })),
-            successions: [],
-            firstKeys,
-            signerKeys: { ...signerKeys },
-            head: {
-                version: rosters.length,
-                digest: '',
-                revision: rosters.length,
-                groupKeyVersion: 1,
-            },
-            next: null,
-        }),
+        rosters: async (_groupId: string, after: number) => {
+            notMember();
+            return {
+                rosters: (servedUpTo === null ? rosters : rosters.slice(0, servedUpTo))
+                    .slice(after)
+                    .map((roster, at) => ({ version: after + at + 1, ...roster })),
+                successions: [],
+                firstKeys,
+                signerKeys: { ...signerKeys },
+                head: {
+                    version: rosters.length,
+                    digest: '',
+                    revision: rosters.length,
+                    groupKeyVersion: 1,
+                },
+                next: null,
+            };
+        },
         listGroups: async () => ({ groups: [{ id: groupId, state }] }),
         identities: async () => ({
             identities: [{ userId: ALICE, identity: alice.served, links: [] }],
@@ -146,15 +161,38 @@ async function invitedFamily() {
         putSelfGrant: async () => ({ ok: true }),
     } as unknown as GroupsApi;
 
-    /* Bob's device: the real worker behind join.ts. */
-    const bobDevice = async (store: GroupStore = createMemoryGroupStore()) => {
+    /* Bob's browser: one family guard in IndexedDB, under his settings key, for all his tabs. */
+    const guardName = `family-guard-${crypto.randomUUID()}`;
+    /*
+     * Bob's device: the real worker behind join.ts, a fresh session each time (a reload), with
+     * the device store it is given and this browser's guard store (wrapped by `guard` when a
+     * test stands in for its writes).
+     */
+    const bobDevice = async (
+        store: GroupStore = createMemoryGroupStore(),
+        guard?: (inner: FamilyGuard) => FamilyGuard,
+    ) => {
         const device = await bob.device();
+        const sealer: GuardSealer = {
+            ready: async () => {},
+            ids: async (userId, contactIds) =>
+                (await device.call('contactGuardIds', { userId, contactIds })).ids,
+            seal: async (userId, rows) =>
+                (await device.call('contactGuardSeal', { userId, rows })).rows,
+            open: async (userId, kind, rows) =>
+                (await device.call('contactGuardOpen', { userId, kind, rows })).rows,
+        };
+        const guardStore = createIndexedDbFamilyGuard(sealer, guardName);
+        const inner = familyGuardOf(() => guardStore, BOB);
+        let session = 0;
         const ctx: GroupContext = {
             userId: BOB,
             api,
             rpc: device.call as GroupContext['rpc'],
             store,
             settings: device.settings,
+            guard: guard ? guard(inner) : inner,
+            session: () => session,
             lock: (_groupId, work) => work(),
             sleep: async () => {},
             now: () => new Date('2026-10-16T12:00:00.000Z'),
@@ -162,54 +200,69 @@ async function invitedFamily() {
             deleteMirrors: async () => {},
             rotations: null,
         };
-        return { ctx, store, device };
+        return {
+            ctx,
+            store,
+            device,
+            /* What this browser's guard holds for the family, read through the store itself. */
+            held: () => guardStore.family(BOB, groupId),
+            /* A lock and an unlock: the worker forgets everything, and the session moves on. */
+            lock: async () => {
+                session++;
+                await device.lock();
+            },
+        };
+    };
+
+    /* Alice's committed chain, brought up to what is served. */
+    let aliceRecord = first.record;
+    const aliceSync = async () => {
+        await aliceDevice.settings.read();
+        const synced = await aliceDevice.call('groupAccept', {
+            userId: ALICE,
+            groupId,
+            served: served(),
+            record: aliceRecord,
+            checkedAt: '2026-10-16T00:00:00.000Z',
+        });
+        if (synced.status !== 'accepted') throw new Error(synced.status);
+        aliceRecord = synced.record ?? aliceRecord;
+        return synced;
     };
 
     return {
         groupId,
         area,
         bob,
+        alice,
         bobDevice,
-        /* The code Alice's dialog shows once Bob is in: from her committed chain, after a sync. */
-        codeAsAliceSees: async () => {
-            await aliceDevice.settings.read();
-            const synced = await aliceDevice.call('groupAccept', {
-                userId: ALICE,
-                groupId,
-                served: served(),
-                record: first.record,
-                checkedAt: '2026-10-16T00:00:00.000Z',
-            });
-            if (synced.status !== 'accepted') throw new Error(synced.status);
-            return aliceDevice.call('groupJoinCode', {
-                groupId,
-                userId: BOB,
-                rosters: [...rosters],
-            });
-        },
+        rosters,
         /* Alice signs Bob's admission ("Let them in", before it reaches the server). */
-        admit: async (roles: ('billing' | 'guardian' | 'members')[] = []) => {
-            // Alice checked Bob's words: his pin saved in her settings, which her worker opens again.
+        admit: async ({
+            verified = false,
+            keys = bob,
+        }: { verified?: boolean; keys?: Awaited<ReturnType<typeof account>> } = {}) => {
+            // Let them in pins Bob first seen (no words), unless Alice checked him first; `keys`
+            // are whose the server served as his (another history's admission names other keys).
+            const pin = { ...(await pinOf(keys)), userId: BOB };
             const { settings, version } = await aliceDevice.settings.read();
             await aliceDevice.settings.write(version, {
                 ...settings,
-                contacts: { ...settings.contacts, [BOB]: await pinOf(bob) },
+                contacts: {
+                    ...settings.contacts,
+                    [BOB]: verified ? pin : { ...pin, fingerprint: '', firstSeen: 'family' },
+                },
             });
             await aliceDevice.settings.read();
             admitted = await aliceDevice.call('groupStage', {
                 groupId,
                 expectedRevision: 1,
-                op: {
-                    kind: 'admit',
-                    userId: BOB,
-                    served: bob.served,
-                    roles,
-                },
-                kems: { [BOB]: bob.served.kemPublicKey },
+                op: { kind: 'admit', userId: BOB, served: keys.served, roles: [] },
+                kems: { [BOB]: keys.served.kemPublicKey },
             });
             if (admitted.outboxId === null) throw new Error('nothing staged');
             signed.push(admitted);
-            return admitted.joinCode!;
+            return admitted;
         },
         /* "Let them in" landed: the roster is stored and Bob is active. */
         land: async () => {
@@ -218,17 +271,38 @@ async function invitedFamily() {
             rosters.push(admitted.body.roster);
             state = 'active';
         },
+        /* Alice signs one more roster on her committed chain (a new family folder), and it lands. */
+        later: async () => {
+            await aliceSync();
+            const staged = await aliceDevice.call('groupStage', {
+                groupId,
+                expectedRevision: rosters.length,
+                op: { kind: 'area', name: 'Photos' },
+                kems: { [BOB]: bob.served.kemPublicKey },
+            });
+            if (staged.outboxId === null) throw new Error('nothing staged');
+            await aliceDevice.call('groupDrop', { outboxId: staged.outboxId });
+            rosters.push(staged.body.roster);
+            return rosters.length;
+        },
+        /* Another admission Alice signed at the same version is the one served. */
+        serveInstead: (index: number) => {
+            admitted = signed[index]!;
+            if (admitted.outboxId === null) throw new Error('nothing staged');
+            if (rosters.length > 1) rosters[1] = admitted.body.roster;
+        },
         /* Route 5 serves other first keys from now on. */
         serveFirstKeys: (keys: typeof firstKeys) => {
             firstKeys = keys;
         },
         firstKeys: created.body.groupKey,
-        /* Another admission Alice signed at the same version is the one served. */
-        serveInstead: (index: number) => {
-            admitted = signed[index]!;
-            if (admitted.outboxId === null) throw new Error('nothing staged');
-            // Before it landed, this is the one that lands; after, it replaces the stored one.
-            if (rosters.length > 1) rosters[1] = admitted.body.roster;
+        /* The server says Bob is not in the family (404 not-member), or lets him back. */
+        notMember: (on: boolean) => {
+            gone = on;
+        },
+        /* The server serves only the first `n` rosters (a rollback), or all of them again. */
+        serveUpTo: (n: number | null) => {
+            servedUpTo = n;
         },
     };
 }
@@ -242,452 +316,429 @@ async function nothingKept(ctx: GroupContext, store: GroupStore, groupId: string
     expect(await store.chain(BOB, groupId)).toBeNull();
     expect(await store.join(BOB, groupId)).toBeNull();
     expect(await settingsPinOf(ctx, groupId)).toBeUndefined();
-    // And a sync has no mark to go on: only the join flow can start the family here.
-    expect((await syncGroup(ctx, groupId)).status).toBe('unchecked');
 }
 
-const asMark = (code: { rosterVersion: number; code: string[] }) => ({
-    rosterVersion: code.rosterVersion,
-    code: code.code,
-});
-
-/* The two hidden words (at `hidden`) as Alice reads `read` out. */
-const wordsAt = (read: { code: string[] }, hidden: readonly number[]) =>
-    hidden.map((at) => read.code[at]!);
-
-/* Bob's page shows the code, and he types its two hidden words as Alice reads `read` out. */
-async function confirmAsRead(ctx: GroupContext, groupId: string, read: { code: string[] }) {
-    const shown = await joinStatus(ctx, groupId);
-    if (shown.status !== 'compare') throw new Error(shown.status);
-    return confirmJoin(ctx, groupId, shown, wordsAt(read, shown.hidden));
+/* A guard store whose writes are watched, failed (`fail` of them) or held until `release`. */
+function watched(inner: FamilyGuard, options: { fail?: number; hold?: boolean } = {}) {
+    let fail = options.fail ?? 0;
+    const kept: GroupPin[] = [];
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    let reached: () => void = () => {};
+    const waiting = new Promise<void>((resolve) => {
+        reached = resolve;
+    });
+    const guard: FamilyGuard = {
+        read: (groupId) => inner.read(groupId),
+        keep: async (groupId, pin) => {
+            kept.push(structuredClone(pin));
+            if (fail > 0) {
+                fail--;
+                throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+            }
+            if (options.hold) {
+                reached();
+                await held;
+            }
+            return inner.keep(groupId, pin);
+        },
+    };
+    return { guard, kept, release, waiting, failMore: (n: number) => (fail = n) };
 }
 
-describe('joining a family', () => {
-    test('waiting, then the code both screens show, then joined: the record, the folder and the pin come only after “They match”', async () => {
+describe('joining a family on first use', () => {
+    test('waiting, then let in and joined with no words: the guard, then the record, the folder and the pin', async () => {
         const f = await invitedFamily();
-        const { ctx, store } = await f.bobDevice();
-        expect(await joinStatus(ctx, f.groupId)).toEqual({ status: 'waiting' });
-        const staged = await f.admit();
-        // Signed but not stored yet: still waiting.
-        expect(await joinStatus(ctx, f.groupId)).toEqual({ status: 'waiting' });
+        const order: string[] = [];
+        const base = createMemoryGroupStore();
+        const store: GroupStore = {
+            ...base,
+            putChain: async (row) => {
+                order.push('record');
+                return base.putChain(row);
+            },
+        };
+        const bob = await f.bobDevice(store, (inner) => ({
+            read: (groupId) => inner.read(groupId),
+            keep: async (groupId, pin) => {
+                order.push('guard');
+                return inner.keep(groupId, pin);
+            },
+        }));
+        expect(await joinStatus(bob.ctx, f.groupId)).toEqual({ status: 'waiting' });
+        await f.admit();
+        // Signed but not stored yet: still waiting, and nothing kept.
+        expect(await joinStatus(bob.ctx, f.groupId)).toEqual({ status: 'waiting' });
+        await nothingKept(bob.ctx, store, f.groupId);
+        expect(await bob.held()).toBeNull();
         await f.land();
-        const shown = await joinStatus(ctx, f.groupId);
-        expect(shown).toMatchObject({
-            status: 'compare',
-            mark: asMark(staged),
-        });
-        // Alice's screen shows the same code, worked out from her own committed chain.
-        expect(await f.codeAsAliceSees()).toMatchObject(asMark(staged));
-        // Shown, not kept.
-        await nothingKept(ctx, store, f.groupId);
-        if (shown.status !== 'compare') throw new Error(shown.status);
-        const joined = await confirmJoin(ctx, f.groupId, shown, wordsAt(shown.mark, shown.hidden));
+        const joined = await joinStatus(bob.ctx, f.groupId);
         if (joined.status !== 'joined') throw new Error(joined.status);
         expect(joined.sync.view.rosterVersion).toBe(2);
         expect(joined.sync.areas).toMatchObject([
             { workspaceId: f.area.workspaceId, error: null, rootListed: true },
         ]);
+        // The guard before the record: a crash between them leaves the guard above, never below.
+        expect(order.slice(0, 2)).toEqual(['guard', 'record']);
+        expect(await bob.held()).toMatchObject({ rosterVersion: 2 });
         expect((await store.chain(BOB, f.groupId))?.rosterVersion).toBe(2);
-        expect(await settingsPinOf(ctx, f.groupId)).toMatchObject({
+        const { settings } = await bob.ctx.settings.read();
+        expect(settings.groups?.[f.groupId]).toMatchObject({
             rosterVersion: 2,
-            checkedAt: '2026-10-16T12:00:00.000Z',
             areas: { [f.area.workspaceId]: 1 },
         });
+        // A first use: the marker is there, and nothing says this family was checked.
+        expect(settings.familyChecksSince).toEqual(expect.any(String));
+        expect(settings.familyChecks?.[f.groupId]).toBeUndefined();
         expect(await store.join(BOB, f.groupId)).toBeNull();
-        // From here the device holds the family: nothing more to join.
-        expect(await joinStatus(ctx, f.groupId)).toEqual({ status: 'member' });
+        expect(await joinStatus(bob.ctx, f.groupId)).toEqual({ status: 'member' });
     });
 
-    test('“They match” without the two hidden words as Alice reads them keeps nothing', async () => {
-        const f = await invitedFamily();
-        const { ctx, store } = await f.bobDevice();
-        const code = await f.admit();
-        await f.land();
-        const shown = await joinStatus(ctx, f.groupId);
-        if (shown.status !== 'compare') throw new Error(shown.status);
-        // Both hidden words wrong, or either one: nothing kept, and the same answer whichever
-        // word it was, so a guesser never learns which was right. The first wrong pair for this
-        // code is said calmly; every later one is the alarm, since a second miss on the same two
-        // positions is no longer a typo to retry.
-        const right = wordsAt(code, shown.hidden);
-        const other = (word: string) => (word === 'abandon' ? 'ability' : 'abandon');
-        const answers = [];
-        for (const words of [
-            [right[0]!, other(right[1]!)],
-            right.map(other),
-            [other(right[0]!), right[1]!],
-        ]) {
-            answers.push(await confirmJoin(ctx, f.groupId, shown, words));
-            await nothingKept(ctx, store, f.groupId);
-        }
-        expect(answers).toEqual([
-            { status: 'wrong-words' },
-            { status: 'mismatch' },
-            { status: 'mismatch' },
-        ]);
-        // After a wrong word the positions stay for that code: no showing offers easier ones.
-        for (let showing = 0; showing < 4; showing++)
-            expect(await joinStatus(ctx, f.groupId)).toMatchObject({ hidden: shown.hidden });
-        // No two words at all: refused before anything is asked of the server.
-        for (const typed of [[right[0]!], [right[0]!, ' '], [...right, right[0]!]])
-            await expect(confirmJoin(ctx, f.groupId, shown, typed)).rejects.toThrow(
-                /Type the two hidden words/,
-            );
-        await nothingKept(ctx, store, f.groupId);
-        // As read out, any case and spacing: joined.
-        expect(
-            await confirmJoin(
-                ctx,
-                f.groupId,
-                shown,
-                right.map((word) => ` ${word.toUpperCase()} `),
-            ),
-        ).toMatchObject({ status: 'joined' });
-    });
-
-    test('a code this page never showed is never confirmed: the positions are the ones it issued, not the caller’s', async () => {
-        const f = await invitedFamily();
-        const { ctx, store } = await f.bobDevice();
-        const code = await f.admit();
-        await f.land();
-        // The right code, its words at any two positions, but never shown here: nothing is
-        // checked or kept, and the code is shown to compare again.
-        const unshown = { mark: asMark(code), hidden: [0, 1], session: 0 };
-        await expect(
-            confirmJoin(ctx, f.groupId, unshown, wordsAt(code, [0, 1])),
-        ).resolves.toMatchObject({ status: 'compare', mark: asMark(code) });
-        await nothingKept(ctx, store, f.groupId);
-        // Shown: only the words at the issued positions pass. Others, the code's own, do not.
-        const shown = await joinStatus(ctx, f.groupId);
-        if (shown.status !== 'compare') throw new Error(shown.status);
-        const elsewhere = [0, 1, 2, 3, 4].filter((at) => !shown.hidden.includes(at)).slice(0, 2);
-        const wrong = wordsAt(code, elsewhere);
-        if (wrong.join(' ') !== wordsAt(code, shown.hidden).join(' '))
-            expect(await confirmJoin(ctx, f.groupId, shown, wrong)).toEqual({
-                status: 'wrong-words',
-            });
-        await nothingKept(ctx, store, f.groupId);
-    });
-
-    test('a code’s hidden positions stay with it until a match, and another code has its own', async () => {
-        const f = await invitedFamily();
-        const { ctx } = await f.bobDevice();
-        const first = await f.admit();
-        const second = await f.admit(['guardian']);
-        f.serveInstead(0);
-        await f.land();
-        const shown = await joinStatus(ctx, f.groupId);
-        if (shown.status !== 'compare') throw new Error(shown.status);
-        const [low, high] = shown.hidden;
-        expect(0 <= low && low < high && high <= 11).toBe(true);
-        // Shown again: the same two words hidden, never a fresh pair to fish with.
-        for (let showing = 0; showing < 4; showing++)
-            expect(await joinStatus(ctx, f.groupId)).toMatchObject({ hidden: shown.hidden });
-        // The server shows another admission: its own positions, also fixed.
-        f.serveInstead(1);
-        const other = await joinStatus(ctx, f.groupId);
-        if (other.status !== 'compare') throw new Error(other.status);
-        expect(other.mark).toEqual(asMark(second));
-        for (let showing = 0; showing < 3; showing++)
-            expect(await joinStatus(ctx, f.groupId)).toMatchObject({ hidden: other.hidden });
-        // And back: the first code still hides what it hid.
-        f.serveInstead(0);
-        expect(await joinStatus(ctx, f.groupId)).toMatchObject({
-            mark: asMark(first),
-            hidden: shown.hidden,
-        });
-    });
-
-    test('a code the server chose cannot be confirmed without the two words only Alice’s screen shows', async () => {
-        const f = await invitedFamily();
-        const { ctx, store } = await f.bobDevice();
-        // Alice's screen shows one admission; the server stores and serves another.
-        const alices = await f.admit();
-        await f.admit(['guardian']);
-        f.serveInstead(1);
-        await f.land();
-        const shown = await joinStatus(ctx, f.groupId);
-        if (shown.status !== 'compare') throw new Error(shown.status);
-        // Ten words compared by a person in a hurry, the two typed as Alice reads her own code.
-        expect(await confirmJoin(ctx, f.groupId, shown, wordsAt(alices, shown.hidden))).toEqual({
-            status: 'wrong-words',
-        });
-        await nothingKept(ctx, store, f.groupId);
-        // Read out again, still not the served code's: the alarm, not another calm retry.
-        expect(await confirmJoin(ctx, f.groupId, shown, wordsAt(alices, shown.hidden))).toEqual({
-            status: 'mismatch',
-        });
-        await nothingKept(ctx, store, f.groupId);
-    });
-
-    test('a reload asks the same two words after a wrong pair, and the next wrong pair is the alarm', async () => {
-        const f = await invitedFamily();
-        const { ctx, store } = await f.bobDevice();
-        const alices = await f.admit();
-        await f.admit(['guardian']);
-        f.serveInstead(1);
-        await f.land();
-        const shown = await joinStatus(ctx, f.groupId);
-        if (shown.status !== 'compare') throw new Error(shown.status);
-        expect(await confirmJoin(ctx, f.groupId, shown, wordsAt(alices, shown.hidden))).toEqual({
-            status: 'wrong-words',
-        });
-        // The escalation is kept beside the joins record, sealed by the worker.
-        expect(await store.holds(BOB, f.groupId)).not.toBeNull();
-        // A reload: the module and the worker (and their memory) start again; the device's storage
-        // stays, and the worker folds in what it kept there.
-        vi.resetModules();
-        const reloaded = await import('./join');
-        const after = (await f.bobDevice(store)).ctx;
-        for (let showing = 0; showing < 4; showing++)
-            expect(await reloaded.joinStatus(after, f.groupId)).toMatchObject({
-                status: 'compare',
-                hidden: shown.hidden,
-            });
-        expect(
-            await reloaded.confirmJoin(after, f.groupId, shown, wordsAt(alices, shown.hidden)),
-        ).toEqual({ status: 'mismatch' });
-        await nothingKept(ctx, store, f.groupId);
-    });
-
-    test('a lock and an unlock in the same page ask the same two words after a wrong pair, and the next wrong pair is the alarm', async () => {
-        const f = await invitedFamily();
-        const { ctx, store, device } = await f.bobDevice();
-        const alices = await f.admit();
-        await f.admit(['guardian']);
-        f.serveInstead(1);
-        await f.land();
-        const shown = await joinStatus(ctx, f.groupId);
-        if (shown.status !== 'compare') throw new Error(shown.status);
-        expect(await confirmJoin(ctx, f.groupId, shown, wordsAt(alices, shown.hidden))).toEqual({
-            status: 'wrong-words',
-        });
-        // The worker forgets the family; the page (and join.ts) stays, so the kept escalation goes
-        // back in on the first showing after the unlock.
-        await device.lock();
-        const again = await joinStatus(ctx, f.groupId);
-        expect(again).toMatchObject({ status: 'compare', hidden: shown.hidden });
-        if (again.status !== 'compare') throw new Error(again.status);
-        // The showing from before the lock is not this unlock's: shown again, nothing checked.
-        expect(
-            await confirmJoin(ctx, f.groupId, shown, wordsAt(alices, shown.hidden)),
-        ).toMatchObject({ status: 'compare', hidden: shown.hidden, session: again.session });
-        expect(await confirmJoin(ctx, f.groupId, again, wordsAt(alices, again.hidden))).toEqual({
-            status: 'mismatch',
-        });
-        await nothingKept(ctx, store, f.groupId);
-    });
-
-    test('storage that refuses the escalation leaves it held for the page: the second wrong pair is still the alarm', async () => {
-        const f = await invitedFamily();
-        const refusing: GroupStore = {
-            ...createMemoryGroupStore(),
-            putHolds: async () => {
-                throw new Error('blocked');
-            },
-        };
-        const { ctx, store } = await f.bobDevice(refusing);
-        const code = await f.admit();
-        await f.land();
-        const shown = await joinStatus(ctx, f.groupId);
-        if (shown.status !== 'compare') throw new Error(shown.status);
-        const wrong = wordsAt(code, shown.hidden).map((word) =>
-            word === 'abandon' ? 'ability' : 'abandon',
-        );
-        expect(await confirmJoin(ctx, f.groupId, shown, wrong)).toEqual({
-            status: 'wrong-words',
-        });
-        expect(await joinStatus(ctx, f.groupId)).toMatchObject({ hidden: shown.hidden });
-        expect(await confirmJoin(ctx, f.groupId, shown, wrong)).toEqual({
-            status: 'mismatch',
-        });
-        await nothingKept(ctx, store, f.groupId);
-        // Right after all, as read out: joined.
-        expect(await confirmJoin(ctx, f.groupId, shown, wordsAt(code, shown.hidden))).toMatchObject(
-            { status: 'joined' },
-        );
-    });
-
-    test('a server showing another admission than Alice’s gives another code; “They match” on the code Alice read keeps no mark', async () => {
-        const f = await invitedFamily();
-        const { ctx, store } = await f.bobDevice();
-        // Alice's screen shows the code of one admission; the server stores another.
-        const readOut = await f.admit();
-        const stored = await f.admit(['guardian']);
-        f.serveInstead(1);
-        await f.land();
-        expect(stored.code).not.toEqual(readOut.code);
-        const shown = await joinStatus(ctx, f.groupId);
-        expect(shown).toMatchObject({
-            status: 'compare',
-            mark: asMark(stored),
-        });
-        // "They don't match": the page keeps nothing, and the same code comes back on a reload.
-        await nothingKept(ctx, store, f.groupId);
-        expect(await joinStatus((await f.bobDevice(store)).ctx, f.groupId)).toMatchObject({
-            status: 'compare',
-            mark: asMark(stored),
-        });
-        // The match gate: a code the served chain does not give, handed to confirmJoin directly,
-        // was never shown here, so nothing is checked or kept and the served one is shown.
-        const unshown = { mark: asMark(readOut), hidden: [0, 1], session: 0 };
-        await expect(
-            confirmJoin(ctx, f.groupId, unshown, wordsAt(readOut, [0, 1])),
-        ).resolves.toMatchObject({ status: 'compare', mark: asMark(stored) });
-        await nothingKept(ctx, store, f.groupId);
-    });
-
-    test('the member list changing between showing the code and “They match” resets to the new code, keeping nothing', async () => {
-        const f = await invitedFamily();
-        const { ctx, store } = await f.bobDevice();
-        const first = await f.admit();
-        const second = await f.admit(['guardian']);
-        f.serveInstead(0);
-        await f.land();
-        const shown = await joinStatus(ctx, f.groupId);
-        expect(shown).toMatchObject({
-            status: 'compare',
-            mark: asMark(first),
-        });
-        // The server serves another admission from now on.
-        f.serveInstead(1);
-        if (shown.status !== 'compare') throw new Error(shown.status);
-        const reset = await confirmJoin(ctx, f.groupId, shown, wordsAt(first, shown.hidden));
-        expect(reset).toMatchObject({
-            status: 'compare',
-            mark: asMark(second),
-            changed: true,
-        });
-        await nothingKept(ctx, store, f.groupId);
-        // Compared again, the new code joins.
-        if (reset.status !== 'compare') throw new Error(reset.status);
-        expect(
-            await confirmJoin(ctx, f.groupId, reset, wordsAt(second, reset.hidden)),
-        ).toMatchObject({ status: 'joined' });
-    });
-
-    test('one calm try per family: after a wrong pair, a switch to another code still gives the alarm', async () => {
-        const f = await invitedFamily();
-        const { ctx, store } = await f.bobDevice();
-        const first = await f.admit();
-        const second = await f.admit(['guardian']);
-        f.serveInstead(0);
-        await f.land();
-        const shown = await joinStatus(ctx, f.groupId);
-        if (shown.status !== 'compare') throw new Error(shown.status);
-        const wrong = (read: { code: string[] }, hidden: readonly number[]) =>
-            wordsAt(read, hidden).map((word) => (word === 'abandon' ? 'ability' : 'abandon'));
-        expect(await confirmJoin(ctx, f.groupId, shown, wrong(first, shown.hidden))).toEqual({
-            status: 'wrong-words',
-        });
-        // The server now shows another code: fresh positions for it, but no fresh calm try.
-        f.serveInstead(1);
-        const switched = await confirmJoin(ctx, f.groupId, shown, wordsAt(first, shown.hidden));
-        expect(switched).toMatchObject({ status: 'compare', mark: asMark(second), changed: true });
-        if (switched.status !== 'compare') throw new Error(switched.status);
-        expect(await confirmJoin(ctx, f.groupId, switched, wrong(second, switched.hidden))).toEqual(
-            { status: 'mismatch' },
-        );
-        await nothingKept(ctx, store, f.groupId);
-        // After a reload too: the try is the tab's, not the page's or the worker's.
-        vi.resetModules();
-        const reloaded = await import('./join');
-        const after = (await f.bobDevice(store)).ctx;
-        const again = await reloaded.joinStatus(after, f.groupId);
-        if (again.status !== 'compare') throw new Error(again.status);
-        expect(
-            await reloaded.confirmJoin(after, f.groupId, again, wrong(second, again.hidden)),
-        ).toEqual({ status: 'mismatch' });
-        // The right words join, and the family's try goes with the join.
-        expect(
-            await reloaded.confirmJoin(after, f.groupId, again, wordsAt(second, again.hidden)),
-        ).toMatchObject({ status: 'joined' });
-        // What stays kept is the family's sealed escalation: the first code's held positions, a code
-        // no longer served; the family's wrong pair went with the join.
-        expect(await store.holds(BOB, f.groupId)).not.toBeNull();
-    });
-
-    test('first keys that sign nothing served give no code to compare, and nothing is kept', async () => {
-        const f = await invitedFamily();
-        const { ctx, store } = await f.bobDevice();
-        const code = await f.admit();
-        await f.land();
-        f.serveFirstKeys({ ...f.firstKeys, ed25519PublicKey: 'A'.repeat(43) });
-        await expect(joinStatus(ctx, f.groupId)).rejects.toThrow(/not signed by the group key/);
-        // Never shown, so never confirmed: showing it again meets the same unsigned roster.
-        const unshown = { mark: asMark(code), hidden: [0, 1], session: 0 };
-        await expect(confirmJoin(ctx, f.groupId, unshown, wordsAt(code, [0, 1]))).rejects.toThrow(
-            /not signed by the group key/,
-        );
-        await nothingKept(ctx, store, f.groupId);
-    });
-
-    test('a “They match” cut short is finished after a reload while the served chain gives the code compared, and another code at its roster is the warning', async () => {
+    test('a crash between the guard write and the record write: the next run accepts from version 1, and a chain short of the guard is refused', async () => {
         const f = await invitedFamily();
         const store = createMemoryGroupStore();
-        const { ctx } = await f.bobDevice(store);
-        const first = await f.admit();
-        await f.admit(['guardian']);
-        f.serveInstead(0);
+        await f.admit();
         await f.land();
-        // The tab dies between keeping the compared code and writing the record.
-        const failing: GroupStore = {
+        // The tab dies right after the guard was stored, before the record.
+        const crashing: GroupStore = {
             ...store,
             putChain: async () => {
                 throw new Error('tab closed');
             },
         };
-        const cut = await f.bobDevice(failing);
-        await expect(confirmAsRead(cut.ctx, f.groupId, first)).rejects.toThrow('tab closed');
-        expect(await store.join(BOB, f.groupId)).not.toBeNull();
+        const cut = await f.bobDevice(crashing);
+        await expect(joinStatus(cut.ctx, f.groupId)).rejects.toThrow('tab closed');
+        expect(await cut.held()).toMatchObject({ rosterVersion: 2 });
         expect(await store.chain(BOB, f.groupId)).toBeNull();
-        // The server serves another admission at the same roster by the time the page comes back:
-        // the code the person compared does not hold there, the hard warning, never a fresh code.
+        // The next run: no record, and the guard a mark. It accepts from version 1 again.
+        const next = await f.bobDevice(store);
+        expect(await joinStatus(next.ctx, f.groupId)).toMatchObject({ status: 'joined' });
+        expect((await store.chain(BOB, f.groupId))?.rosterVersion).toBe(2);
+        // The family moves on, and the guard with it.
+        await f.later();
+        expect((await syncGroup(next.ctx, f.groupId)).status).toBe('accepted');
+        expect(await next.held()).toMatchObject({ rosterVersion: 3 });
+        // A fresh device whose record and settings pin are gone (cleared, or served older):
+        // the guard alone refuses the member list rolled back below it.
+        const { settings, version } = await next.ctx.settings.read();
+        const { [f.groupId]: _dropped, ...groups } = settings.groups ?? {};
+        await next.ctx.settings.write(version, { ...settings, groups });
+        const bare = createMemoryGroupStore();
+        const fresh = await f.bobDevice(bare);
+        f.serveUpTo(2);
+        await expect(joinStatus(fresh.ctx, f.groupId)).rejects.toThrow(
+            /older member list than this device has seen/,
+        );
+        await nothingKept(fresh.ctx, bare, f.groupId);
+        f.serveUpTo(null);
+        expect(await joinStatus(fresh.ctx, f.groupId)).toMatchObject({ status: 'joined' });
+        expect(await fresh.held()).toMatchObject({ rosterVersion: 3 });
+    });
+
+    test('a guard above the record, left by a crash before the record was written, refuses a rollback the record alone would take', async () => {
+        const f = await invitedFamily();
+        const store = createMemoryGroupStore();
+        await f.admit();
+        await f.land();
+        const bob = await f.bobDevice(store);
+        expect(await joinStatus(bob.ctx, f.groupId)).toMatchObject({ status: 'joined' });
+        await f.later();
+        // The sync takes roster 3: the guard is stored, then the tab dies before the record.
+        const crashing = await f.bobDevice({
+            ...store,
+            putChain: async () => {
+                throw new Error('tab closed');
+            },
+        });
+        await expect(syncGroup(crashing.ctx, f.groupId)).rejects.toThrow('tab closed');
+        expect(await crashing.held()).toMatchObject({ rosterVersion: 3 });
+        expect((await store.chain(BOB, f.groupId))?.rosterVersion).toBe(2);
+        expect(await settingsPinOf(crashing.ctx, f.groupId)).toMatchObject({ rosterVersion: 2 });
+        // The server rolls the family back to 2, where the record and the settings pin agree:
+        // the guard alone says this device took more, and the sync refuses it.
+        f.serveUpTo(2);
+        const next = await f.bobDevice(store);
+        await expect(syncGroup(next.ctx, f.groupId)).rejects.toThrow(
+            /older member list than this device has seen/,
+        );
+        expect((await store.chain(BOB, f.groupId))?.rosterVersion).toBe(2);
+        f.serveUpTo(null);
+        expect((await syncGroup(next.ctx, f.groupId)).status).toBe('accepted');
+        expect((await store.chain(BOB, f.groupId))?.rosterVersion).toBe(3);
+    });
+
+    test('a kept first-use joins record finishes only above the guard: a replay at its roster after the family moved on is refused', async () => {
+        const f = await invitedFamily();
+        await f.admit();
+        await f.land();
+        // A tab sealed the joins record at roster 2 and closed before committing it.
+        const early = await f.bobDevice();
+        await early.ctx.settings.read();
+        const { served } = await fetchServed(early.ctx, f.groupId, 0);
+        const sealed = await early.device.call('groupJoinFirstUse', {
+            userId: BOB,
+            groupId: f.groupId,
+            served,
+            record: null,
+            guard: null,
+            now: '2026-10-16T12:00:00.000Z',
+        });
+        if (sealed.status !== 'first-use') throw new Error(sealed.status);
+        // Another tab joined meanwhile, and took roster 3 too.
+        const other = await f.bobDevice();
+        expect(await joinStatus(other.ctx, f.groupId)).toMatchObject({ status: 'joined' });
+        await f.later();
+        expect((await syncGroup(other.ctx, f.groupId)).status).toBe('accepted');
+        expect(await other.held()).toMatchObject({ rosterVersion: 3 });
+        // The kept record comes back on a device with no record, settings without the family's
+        // pin, and the family served as it was at 2: the guard refuses it.
+        const { settings, version } = await other.ctx.settings.read();
+        const { [f.groupId]: _dropped, ...groups } = settings.groups ?? {};
+        await other.ctx.settings.write(version, { ...settings, groups });
+        const store = createMemoryGroupStore();
+        await store.putJoin({ userId: BOB, groupId: f.groupId, envelope: sealed.joinsRecord });
+        f.serveUpTo(2);
+        const back = await f.bobDevice(store);
+        await expect(joinStatus(back.ctx, f.groupId)).rejects.toThrow(
+            /older member list than this device has seen/,
+        );
+        expect(await store.chain(BOB, f.groupId)).toBeNull();
+    });
+
+    test('a failed guard write writes no record, the sync says so, and the next acceptance stores the same guard', async () => {
+        const f = await invitedFamily();
+        const store = createMemoryGroupStore();
+        await f.admit();
+        await f.land();
+        const bob = await f.bobDevice(store);
+        expect(await joinStatus(bob.ctx, f.groupId)).toMatchObject({ status: 'joined' });
+        await f.later();
+        let guard!: ReturnType<typeof watched>;
+        const failing = await f.bobDevice(store, (inner) => {
+            guard = watched(inner, { fail: 1 });
+            return guard.guard;
+        });
+        await expect(syncGroup(failing.ctx, f.groupId)).rejects.toThrow(GUARD_UNSAVED);
+        // Nothing under that acceptance was written: the record and the pin stay at 2.
+        expect((await store.chain(BOB, f.groupId))?.rosterVersion).toBe(2);
+        expect(await settingsPinOf(failing.ctx, f.groupId)).toMatchObject({ rosterVersion: 2 });
+        expect(await failing.held()).toMatchObject({ rosterVersion: 2 });
+        const handed = guard.kept[0]!;
+        expect(handed).toMatchObject({ rosterVersion: 3 });
+        // The next acceptance hands the same guard back, and it is stored before the record.
+        expect((await syncGroup(failing.ctx, f.groupId)).status).toBe('accepted');
+        expect(guard.kept[1]).toEqual(handed);
+        expect(await failing.held()).toEqual(handed);
+        expect((await store.chain(BOB, f.groupId))?.rosterVersion).toBe(3);
+    });
+
+    test('a join whose guard, and the guard letting go of it, both failed to store joins on the retry once storage is back, with no reload', async () => {
+        const f = await invitedFamily();
+        const store = createMemoryGroupStore();
+        await f.admit();
+        await f.land();
+        let guard!: ReturnType<typeof watched>;
+        const bob = await f.bobDevice(store, (inner) => {
+            guard = watched(inner, { fail: 2 });
+            return guard.guard;
+        });
+        // The acceptance's guard fails, and so does the one the cleanup is handed back.
+        await expect(joinStatus(bob.ctx, f.groupId)).rejects.toThrow(GUARD_UNSAVED);
+        expect(guard.kept).toHaveLength(2);
+        expect(await store.chain(BOB, f.groupId)).toBeNull();
+        expect(await store.join(BOB, f.groupId)).not.toBeNull();
+        expect(await bob.held()).toBeNull();
+        // Storage is back. The retry, in the same session, lets go of the kept chain (storing
+        // its guard first), then joins.
+        const joined = await joinStatus(bob.ctx, f.groupId);
+        expect(joined.status).toBe('joined');
+        expect((await store.chain(BOB, f.groupId))?.rosterVersion).toBe(2);
+        expect(await bob.held()).toMatchObject({ rosterVersion: 2 });
+        expect(await store.join(BOB, f.groupId)).toBeNull();
+        expect(await settingsPinOf(bob.ctx, f.groupId)).toMatchObject({ rosterVersion: 2 });
+    });
+
+    test('while the guard still can’t be stored, the retry says so and the join waits', async () => {
+        const f = await invitedFamily();
+        const store = createMemoryGroupStore();
+        await f.admit();
+        await f.land();
+        let guard!: ReturnType<typeof watched>;
+        const bob = await f.bobDevice(store, (inner) => {
+            guard = watched(inner, { fail: 3 });
+            return guard.guard;
+        });
+        await expect(joinStatus(bob.ctx, f.groupId)).rejects.toThrow(GUARD_UNSAVED);
+        // The retry stores nothing and joins nothing: storage is still failing.
+        await expect(joinStatus(bob.ctx, f.groupId)).rejects.toThrow(GUARD_UNSAVED);
+        expect(await store.chain(BOB, f.groupId)).toBeNull();
+        expect(await store.join(BOB, f.groupId)).not.toBeNull();
+        // And once it's back, the join goes through.
+        expect((await joinStatus(bob.ctx, f.groupId)).status).toBe('joined');
+    });
+
+    test('while an accepted chain’s guard isn’t stored, nothing is written under it: no seal, grant or roster, and the floor stays', async () => {
+        const f = await invitedFamily();
+        const store = createMemoryGroupStore();
+        await f.admit();
+        await f.land();
+        let guard!: ReturnType<typeof watched>;
+        const bob = await f.bobDevice(store, (inner) => {
+            guard = watched(inner);
+            return guard.guard;
+        });
+        expect(await joinStatus(bob.ctx, f.groupId)).toMatchObject({ status: 'joined' });
+        const workspaceId = f.area.workspaceId;
+        const seal = () =>
+            bob.device.call(
+                'driveSealDocument' as never,
+                {
+                    workspaceId,
+                    kind: 'tags',
+                    version: 1,
+                    document: { version: 2, tags: [], items: {} },
+                } as never,
+            );
+        // Writable while the guard is stored.
+        await expect(seal()).resolves.toBeDefined();
+        // The family moves on; this background sync commits roster 3, and its guard isn't stored.
+        await f.later();
+        guard.failMore(1);
+        await expect(syncGroup(bob.ctx, f.groupId)).rejects.toThrow(GUARD_UNSAVED);
+        expect(await bob.held()).toMatchObject({ rosterVersion: 2 });
+        // Nothing is written under the accepted chain meanwhile: a document sealed in a family
+        // folder, a grant, a roster.
+        await expect(seal()).rejects.toThrow(GUARD_NOT_KEPT);
+        await expect(
+            bob.ctx.rpc('groupGrants', {
+                groupId: f.groupId,
+                missing: [
+                    { workspaceId, userId: ALICE, kemPublicKey: f.alice.served.kemPublicKey },
+                ],
+            }),
+        ).rejects.toThrow(GUARD_NOT_KEPT);
+        await expect(
+            bob.ctx.rpc('groupStage', {
+                groupId: f.groupId,
+                expectedRevision: 3,
+                op: { kind: 'area', name: 'Taxes' },
+                kems: {},
+            }),
+        ).rejects.toThrow(GUARD_NOT_KEPT);
+        // The chain stays committed: it is still the floor, so a replay below it is refused.
+        f.serveUpTo(2);
+        await expect(syncGroup(bob.ctx, f.groupId)).rejects.toThrow(/older member list/);
+        await expect(seal()).rejects.toThrow(GUARD_NOT_KEPT);
+        // Stored on the next acceptance: writes go on.
+        f.serveUpTo(null);
+        expect((await syncGroup(bob.ctx, f.groupId)).status).toBe('accepted');
+        expect(await bob.held()).toMatchObject({ rosterVersion: 3 });
+        await expect(seal()).resolves.toBeDefined();
+    });
+
+    test('a not-member answer after a failed guard write waits to wipe until the guard is stored, and a replay below the head after the wipe is refused', async () => {
+        const f = await invitedFamily();
+        const store = createMemoryGroupStore();
+        await f.admit();
+        await f.land();
+        let guard!: ReturnType<typeof watched>;
+        const bob = await f.bobDevice(store, (inner) => {
+            guard = watched(inner);
+            return guard.guard;
+        });
+        expect(await joinStatus(bob.ctx, f.groupId)).toMatchObject({ status: 'joined' });
+        await f.later();
+        // Roster 3 accepted in this session, its guard not stored.
+        guard.failMore(1);
+        await expect(syncGroup(bob.ctx, f.groupId)).rejects.toThrow(GUARD_UNSAVED);
+        expect(await bob.held()).toMatchObject({ rosterVersion: 2 });
+        // The server says not-member. The wipe stores the session's guard first, and while that
+        // fails, nothing of the family goes.
+        f.notMember(true);
+        guard.failMore(1);
+        await expect(syncGroup(bob.ctx, f.groupId)).rejects.toThrow(GUARD_UNSAVED);
+        expect(await store.chain(BOB, f.groupId)).not.toBeNull();
+        expect(await bob.held()).toMatchObject({ rosterVersion: 2 });
+        // Once it is stored, the wipe goes through: the device forgets, the guard stays at 3.
+        expect(await syncGroup(bob.ctx, f.groupId)).toEqual({ status: 'wiped' });
+        expect(await store.chain(BOB, f.groupId)).toBeNull();
+        expect(await bob.held()).toMatchObject({ rosterVersion: 3 });
+        // Let back in, the server replays the family as it was at 2, below the head this device
+        // took: refused, as a join and as a sync, and nothing is written.
+        f.notMember(false);
+        f.serveUpTo(2);
+        const back = await f.bobDevice(store);
+        await expect(joinStatus(back.ctx, f.groupId)).rejects.toThrow(
+            /older member list than this device has seen/,
+        );
+        expect(await store.chain(BOB, f.groupId)).toBeNull();
+        f.serveUpTo(null);
+        expect(await joinStatus(back.ctx, f.groupId)).toMatchObject({ status: 'joined' });
+    });
+
+    test('a not-member answer, then settings without the family and a fresh invitation: first use is refused, since the guard outlives the wipe', async () => {
+        const f = await invitedFamily();
+        const store = createMemoryGroupStore();
+        await f.admit();
+        // A second admission Alice signed at the same version: the server's other history, over
+        // keys it served as Bob's (an admission names no role, so that is all another can differ in).
+        await f.admit({ keys: await account(BOB) });
+        f.serveInstead(0);
+        await f.land();
+        const bob = await f.bobDevice(store);
+        expect(await joinStatus(bob.ctx, f.groupId)).toMatchObject({ status: 'joined' });
+        f.notMember(true);
+        expect(await syncGroup(bob.ctx, f.groupId)).toEqual({ status: 'wiped' });
+        expect(await store.chain(BOB, f.groupId)).toBeNull();
+        // The guard is still there after the wipe.
+        const kept = await bob.held();
+        expect(kept).toMatchObject({ rosterVersion: 2 });
+        // The settings come back without the family's pin (an older copy, or withheld), and the
+        // server invites Bob again, onto the other history at the version the guard holds.
+        const { settings, version } = await bob.ctx.settings.read();
+        const { [f.groupId]: _dropped, ...groups } = settings.groups ?? {};
+        await bob.ctx.settings.write(version, { ...settings, groups });
+        f.notMember(false);
         f.serveInstead(1);
-        expect(await joinStatus((await f.bobDevice(store)).ctx, f.groupId)).toMatchObject({
+        const back = await f.bobDevice(store);
+        expect(await joinStatus(back.ctx, f.groupId)).toMatchObject({
             status: 'fork',
             fork: { of: 'roster', version: 2 },
         });
-        expect(await store.chain(BOB, f.groupId)).toBeNull();
-        // Served as compared again: the reload finishes the join without asking again.
-        f.serveInstead(0);
-        expect(await joinStatus(ctx, f.groupId)).toMatchObject({ status: 'joined' });
-        expect(await store.join(BOB, f.groupId)).toBeNull();
-        expect((await store.chain(BOB, f.groupId))?.rosterVersion).toBe(2);
+        await nothingKept(back.ctx, store, f.groupId);
+        expect(await back.held()).toEqual(kept);
     });
 
-    test('a joins record only the worker could have sealed: the data layer cannot write one, and one that does not open goes', async () => {
+    test('a lock before the guard is stored leaves nothing written on that chain', async () => {
         const f = await invitedFamily();
-        const { ctx, store, device } = await f.bobDevice();
-        const code = await f.admit();
+        const store = createMemoryGroupStore();
+        await f.admit();
         await f.land();
-        // The joins store is the worker's: a record of the data layer's own making would be a
-        // family committed with no code compared (an earlier version's, the family's words
-        // compared, is refused by the worker too: the join fixtures hold both twins to it).
-        await expect(
-            device.call('groupStoreSeal', {
-                userId: BOB,
-                groupId: f.groupId,
-                store: 'joins' as never,
-                value: { v: 2, groupId: f.groupId, joinMark: asMark(code), checkedAt: 'x' },
-            }),
-        ).rejects.toThrow(/not a family record this device keeps/);
-        await store.putJoin({ userId: BOB, groupId: f.groupId, envelope: 'AAAA' });
-        expect(await joinStatus(ctx, f.groupId)).toMatchObject({
-            status: 'compare',
-            mark: asMark(code),
+        let guard!: ReturnType<typeof watched>;
+        const bob = await f.bobDevice(store, (inner) => {
+            guard = watched(inner, { hold: true });
+            return guard.guard;
         });
-        expect(await store.join(BOB, f.groupId)).toBeNull();
+        const joining = joinStatus(bob.ctx, f.groupId);
+        await guard.waiting;
+        // The person locks while the guard is being written.
+        await bob.lock();
+        guard.release();
+        await expect(joining).rejects.toThrow(/Unlock your account first/);
+        expect(await store.chain(BOB, f.groupId)).toBeNull();
+        expect(await settingsPinOf(bob.ctx, f.groupId)).toBeUndefined();
     });
 
     test('a finish whose pin save failed is completed by the next one, and the joins record goes', async () => {
         const f = await invitedFamily();
-        const { ctx, store } = await f.bobDevice();
-        const code = await f.admit();
+        await f.admit();
         await f.land();
-        const settings = ctx.settings;
+        const bob = await f.bobDevice();
+        const settings = bob.ctx.settings;
         let failed = false;
-        ctx.settings = {
+        bob.ctx.settings = {
             read: () => settings.read(),
             write: async (version, doc) => {
                 if (!failed && doc.groups?.[f.groupId]) {
@@ -697,74 +748,41 @@ describe('joining a family', () => {
                 return settings.write(version, doc);
             },
         };
-        await expect(confirmAsRead(ctx, f.groupId, code)).rejects.toThrow('offline');
-        expect(await store.chain(BOB, f.groupId)).not.toBeNull();
-        expect(await store.join(BOB, f.groupId)).not.toBeNull();
-        expect(await joinStatus(ctx, f.groupId)).toMatchObject({ status: 'joined' });
-        expect(await settingsPinOf(ctx, f.groupId)).toMatchObject({ rosterVersion: 2 });
-        expect(await store.join(BOB, f.groupId)).toBeNull();
+        await expect(joinStatus(bob.ctx, f.groupId)).rejects.toThrow('offline');
+        expect(await bob.store.chain(BOB, f.groupId)).not.toBeNull();
+        expect(await bob.store.join(BOB, f.groupId)).not.toBeNull();
+        expect(await joinStatus(bob.ctx, f.groupId)).toMatchObject({ status: 'joined' });
+        expect(await settingsPinOf(bob.ctx, f.groupId)).toMatchObject({ rosterVersion: 2 });
+        expect(await bob.store.join(BOB, f.groupId)).toBeNull();
     });
 
-    test('after a not-member wipe the settings pin is still a mark: a rejoin compares the code on top of it, and made-up first keys get no code', async () => {
+    test('a joins record that does not open goes, and the join is a first use', async () => {
+        const f = await invitedFamily();
+        await f.admit();
+        await f.land();
+        const bob = await f.bobDevice();
+        await bob.store.putJoin({ userId: BOB, groupId: f.groupId, envelope: 'AAAA' });
+        expect(await joinStatus(bob.ctx, f.groupId)).toMatchObject({ status: 'joined' });
+        expect(await bob.store.join(BOB, f.groupId)).toBeNull();
+    });
+
+    test('a rejoin after a wipe keeps the pin a mark: made-up first keys are refused, the same history passes', async () => {
         const f = await invitedFamily();
         const store = createMemoryGroupStore();
-        const { ctx } = await f.bobDevice(store);
-        const code = await f.admit();
+        await f.admit();
         await f.land();
-        expect(await confirmAsRead(ctx, f.groupId, code)).toMatchObject({
-            status: 'joined',
-        });
-        // The server said not-member: the device forgets the family; the pin stays.
-        await wipeGroup(ctx, f.groupId);
+        const bob = await f.bobDevice(store);
+        expect(await joinStatus(bob.ctx, f.groupId)).toMatchObject({ status: 'joined' });
+        await wipeGroup(bob.ctx, f.groupId);
         expect(await store.chain(BOB, f.groupId)).toBeNull();
-        expect(await settingsPinOf(ctx, f.groupId)).toMatchObject({ rosterVersion: 2 });
         const back = await f.bobDevice(store);
-        // Made-up first keys: a device with no mark would be shown a code over them; the pin refuses.
         const real = f.firstKeys;
         f.serveFirstKeys({ ...real, ed25519PublicKey: 'A'.repeat(43) });
         await expect(joinStatus(back.ctx, f.groupId)).rejects.toThrow(
             /not the group keys this person checked/,
         );
-        f.serveFirstKeys(real);
-        const shown = await joinStatus(back.ctx, f.groupId);
-        expect(shown).toMatchObject({
-            status: 'compare',
-            mark: asMark(code),
-        });
-        if (shown.status !== 'compare') throw new Error(shown.status);
-        expect(
-            await confirmJoin(back.ctx, f.groupId, shown, wordsAt(shown.mark, shown.hidden)),
-        ).toMatchObject({
-            status: 'joined',
-        });
-        // The rejoin keeps the date the family was first checked on this account.
-        expect(await settingsPinOf(back.ctx, f.groupId)).toMatchObject({
-            checkedAt: '2026-10-16T12:00:00.000Z',
-        });
-        expect((await syncGroup(back.ctx, f.groupId)).status).toBe('accepted');
-    });
-
-    test('a rejoin onto another history than the pin fixes is the hard warning, before any code is shown', async () => {
-        const f = await invitedFamily();
-        const store = createMemoryGroupStore();
-        const { ctx } = await f.bobDevice(store);
-        await f.admit();
-        await f.admit(['guardian']);
-        f.serveInstead(0);
-        await f.land();
-        const shown = await joinStatus(ctx, f.groupId);
-        if (shown.status !== 'compare') throw new Error(shown.status);
-        expect(
-            await confirmJoin(ctx, f.groupId, shown, wordsAt(shown.mark, shown.hidden)),
-        ).toMatchObject({ status: 'joined' });
-        // not-member, then the family again, under the other admission at the same version.
-        await wipeGroup(ctx, f.groupId);
-        f.serveInstead(1);
-        const back = await f.bobDevice(store);
-        expect(await joinStatus(back.ctx, f.groupId)).toMatchObject({
-            status: 'fork',
-            fork: { of: 'roster', version: 2 },
-        });
         expect(await store.chain(BOB, f.groupId)).toBeNull();
+        f.serveFirstKeys(real);
+        expect(await joinStatus(back.ctx, f.groupId)).toMatchObject({ status: 'joined' });
     });
 });

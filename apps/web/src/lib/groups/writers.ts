@@ -1,5 +1,5 @@
 import type { GroupWriter } from '@hushos/crypto';
-import { pinVerified } from '@hushos/crypto/pins';
+import { pinTrust } from '@hushos/crypto/pins';
 import { signersFromPins, type Pin } from '@hushos/drive/trust';
 import type { GroupContext } from './context';
 import { pinsById } from '@/lib/family-pin';
@@ -38,15 +38,22 @@ export async function groupWriters(
     const out = new Map<string, GroupWriter>();
     const pinOf = async (userId: string): Promise<GroupWriter['pinned']> => {
         const pin = pins.get(userId.toLowerCase());
-        if (!pin || !pin.mlDsaPublicKeyHash || !(await pinVerified(pin))) return null;
+        if (!pin || !pin.mlDsaPublicKeyHash) return null;
+        const trust = await pinTrust(pin);
+        if (trust !== 'verified' && trust !== 'seen') return null;
         return {
             keyVersion: pin.keyVersion ?? null,
             encryptionPublicKey: pin.encryptionPublicKey,
             signingPublicKey: pin.signingPublicKey,
             mlDsaPublicKeyHash: pin.mlDsaPublicKeyHash,
             // Explicitly null for a pin from this person's own words check: the worker reads a
-            // missing origin as no verdict at all (a caller must not drop it).
-            trustedVia: pin.trustedVia ?? null,
+            // missing origin as no verdict at all (a caller must not drop it). A first-seen pin
+            // (let in without words, 3.2) is no check of this person's own: it goes as the
+            // family's word, so keys the member list puts in its place are a key conflict, and
+            // what agrees with it reads as the family's word does (verified by a family this
+            // person checked or made, `seen` in one taken on first use, asFirstUse), never as
+            // this person's own check.
+            trustedVia: trust === 'seen' ? groupId : (pin.trustedVia ?? null),
         };
     };
     for (const [userId, member] of identities)

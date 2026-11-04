@@ -141,6 +141,20 @@ describe('family folder writers', () => {
         expect(sam!.pinned!.trustedVia).toBe(GROUP);
     });
 
+    test('a first-seen pin (let in without words) reaches the worker as the family’s word, so other keys in their entry are a key conflict', async () => {
+        const seen = { ...(await v3Pin(SAM)), fingerprint: '' };
+        const [sam] = await groupWriters(context([{ userId: SAM, identity: true }]), GROUP, {
+            [SAM]: seen,
+        });
+        expect(sam!.pinned).toEqual({
+            keyVersion: seen.keyVersion,
+            encryptionPublicKey: seen.encryptionPublicKey,
+            signingPublicKey: seen.signingPublicKey,
+            mlDsaPublicKeyHash: seen.mlDsaPublicKeyHash,
+            trustedVia: GROUP,
+        });
+    });
+
     test('a pin older than version 3, or one whose fingerprint does not hold, is never passed', async () => {
         const v3 = await v3Pin(SAM);
         const older: Pin = {

@@ -16,6 +16,7 @@ import {
     decryptThumbnail,
     openDocument,
     openMetadata,
+    sealMetadata,
     openNodeKey,
     openVersion,
 } from './drive';
@@ -130,6 +131,34 @@ describe('records sealed by the Rust core', () => {
             node.metadataCtx,
         );
         expect(metadata).toEqual(node.metadata);
+        expect(metadata).not.toHaveProperty('attributes');
+    });
+
+    it('opens a record with attributes, and writes the core’s exact bytes for it', async () => {
+        const node = core.node;
+        const { attributed } = node;
+        const nodeKey = decode(node.nodeKey, 32);
+        const opened = await openMetadata(
+            decode(attributed.metadataEnvelope),
+            nodeKey,
+            attributed.metadataCtx,
+        );
+        expect(Object.keys(opened.attributes ?? {})).toHaveLength(3);
+        expect(opened).toEqual(attributed.metadata);
+        expect(opened.name).toBe('Plans');
+        // Sealed again here, as a rename would after opening it: the core's plaintext, byte for byte.
+        const again = await sealMetadata(opened, nodeKey, attributed.metadataCtx);
+        expect(
+            new TextDecoder()
+                .decode(
+                    await openEnvelopeBytes(
+                        again,
+                        nodeKey,
+                        metadataContext(attributed.metadataCtx),
+                    ),
+                )
+                .trimEnd(),
+        ).toBe(attributed.plaintext);
     });
 
     it('opens suite 3 versions with and without a thumbnail, and a suite 2 one, to the file', async () => {

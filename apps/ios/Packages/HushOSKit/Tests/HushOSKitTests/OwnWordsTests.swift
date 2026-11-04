@@ -44,7 +44,10 @@ extension OnFakeDrive {
             let device = await vault(server)
             #expect(try await device.currentOwnFingerprint() == words(v2))
             server.sessionGone = true
-            await #expect(throws: AuthError.sessionEnded) { _ = try await Auth.identity() }
+            await #expect { _ = try await Auth.identity() } throws: { error in
+                if case AuthError.sessionEnded = error { return true }
+                return false
+            }
             do {
                 _ = try await device.currentOwnFingerprint()
                 Issue.record("words were shown without a session")

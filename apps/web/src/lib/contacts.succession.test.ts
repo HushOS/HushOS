@@ -38,8 +38,22 @@ describe('replacing this account’s identity', () => {
         });
         auth.saveSettings.mockResolvedValue({ settingsVersion: 1 });
         auth.succeedIdentity.mockResolvedValue({ keyVersion: 2 });
-        auth.rpc.mockImplementation(async (operation: string) => {
+        auth.rpc.mockImplementation(async (operation: string, input: { marks?: object }) => {
             if (operation === 'settingsSeal') return { envelope: { nonce: 'n', ciphertext: 'c' } };
+            // The worker keeps this device's rollback marks as the settings are saved.
+            if (operation === 'rollbackMarksUpdate')
+                return {
+                    refused: false,
+                    marks: {
+                        settings: 0,
+                        settingsDocument: false,
+                        identity: 0,
+                        identityVersion: 0,
+                        ...input.marks,
+                    },
+                    envelope: 'sealed-marks',
+                    changed: true,
+                };
             if (operation === 'identitySucceed')
                 return { identity: { keyVersion: 2 }, signature: 'link', consent: 'both-halves' };
             return {};

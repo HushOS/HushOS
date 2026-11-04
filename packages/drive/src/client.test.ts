@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import type { DriveApi, NodeView, ServedIdentity } from './api';
 import { createDriveClient, type Rpc, type SharingLedger } from './client';
 import type { TreeMirror } from './mirror';
-import { integrityIssues } from './trust';
+import { GranteeRefusedError, integrityIssues } from './trust';
 
 /*
  * What gets sealed again is the owner's to say, not the server's. The server
@@ -280,6 +280,38 @@ describe('sealing again', () => {
         await client.rotate(node(A, ROOT) as never);
         // l2 is in the ledger, but for another node: a server cannot move a link onto this one.
         expect(h.rotated).toEqual([{ shares: ['share-g1'], links: ['l1'] }]);
+    });
+
+    test('a rotation whose check of a grantee fails for no verdict on them sends nothing', async () => {
+        const h = harness();
+        // Left out, a share is revoked by the server: a guard that can't be read, settings refused or a dropped
+        // connection says nothing about the person, so the rotation stops before any batch, and its retry takes over.
+        const client = createDriveClient(h.rpc, h.api, {
+            trustGrantee: async (grantee, served) => {
+                if (grantee === 'g2') throw new Error('HushOS couldn’t check this right now.');
+                return h.trustGrantee(grantee, served);
+            },
+            ledger: ledgerOf({ shares: { [A]: ['g1', 'g2'] }, links: {} }),
+            signers: async () => ({}),
+        });
+        await client.open('owner');
+        await expect(client.rotate(node(A, ROOT) as never)).rejects.toThrow(/couldn’t check/);
+        expect(h.rotated).toEqual([]);
+    });
+
+    test('a verdict on one grantee leaves exactly their share out', async () => {
+        const h = harness();
+        const client = createDriveClient(h.rpc, h.api, {
+            trustGrantee: async (grantee, served) => {
+                if (grantee === 'g2') throw new GranteeRefusedError('Maya’s account changed.');
+                return h.trustGrantee(grantee, served);
+            },
+            ledger: ledgerOf({ shares: { [A]: ['g1', 'g2'] }, links: {} }),
+            signers: async () => ({}),
+        });
+        await client.open('owner');
+        await client.rotate(node(A, ROOT) as never);
+        expect(h.rotated).toEqual([{ shares: ['share-g1'], links: [] }]);
     });
 
     test('without a ledger nothing is sealed again, and without a pin check no share is', async () => {

@@ -88,7 +88,7 @@ export function faqFor(
         },
         {
             q: 'What happens when a family plan is cancelled?',
-            a: 'The member who pays cancels it in the billing portal, from the family’s page. The plan stays until the end of the time paid for. Then everyone’s own files go back to their own storage, as when someone leaves. Nobody can upload to the family folders, and nobody new can join, until someone chooses a plan again. Nothing is deleted.',
+            a: 'The member who pays cancels it under Billing, on the family’s page. The plan stays until the end of the time paid for. Then everyone’s own files go back to their own storage, as when someone leaves. Nobody can upload to the family folders, and nobody new can join, until someone chooses a plan again. Nothing is deleted.',
         },
         selfHosting,
     ];

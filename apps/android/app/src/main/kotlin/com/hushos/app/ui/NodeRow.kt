@@ -1,5 +1,7 @@
 package com.hushos.app.ui
 
+import com.hushos.core.folderShades
+import com.hushos.core.sheetShades
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -119,7 +121,8 @@ fun whenText(millis: Long?): String? {
 /*
  * One node in a list, as the board draws it: 56dp, a 36dp mark, the name, and a
  * line saying who can open it and when it changed. Selecting tints the row and
- * puts a check where the mark was; ⋮ opens the item sheet.
+ * puts a check where the mark was; the row whose Info is open beside the list is
+ * tinted too, without the check. ⋮ opens the item sheet.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -142,16 +145,17 @@ fun NodeRow(
     recent: Boolean = false,
 ) {
     val alpine = Alpine.colors
-    LaunchedEffect(item.id) { model.thumbnail(item) }
-    val thumbnail = state.thumbnails[item.id]
+    LaunchedEffect(thumbnailKey(item)) { model.thumbnail(item) }
+    val thumbnail = state.thumbnails[thumbnailKey(item)]
     val bitmap = remember(thumbnail) { thumbnail?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }
     // Who can open it only when that differs from its folder: an item shared on its own. Otherwise the date, and a file's size.
     val who = shownWho(model, state, item, note)
-    val time = if (away) "Not on this phone" else note ?: listOfNotNull(whenText(if (recent) item.changedMillis else item.modifiedMillis), item.size?.let { formatBytes(it) }).joinToString(" · ").ifEmpty { null }
+    val time = if (away) "Not on this phone" else note ?: listOfNotNull(whenText(if (recent) item.recentMillis ?: item.changedMillis else item.modifiedMillis), item.size?.let { formatBytes(it) }).joinToString(" · ").ifEmpty { null }
     val keepProblem = keepProblemOf(state, item, note)
+    val showingInfo = LocalInfoShown.current == (item.node.workspaceId to item.id)
     Row(
         Modifier.fillMaxWidth().heightIn(min = 56.dp)
-            .background(if (selected) alpine.tint else Color.Transparent)
+            .background(if (selected || showingInfo) alpine.tint else Color.Transparent)
             .semantics { this.selected = selected }
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(start = AlpineSpace.S4, end = if (onMore != null && !selecting) AlpineSpace.S1 else AlpineSpace.S4),
@@ -210,7 +214,7 @@ fun ItemLine(model: DriveViewModel, state: DriveState, item: Opened, who: WhoCan
     val linked = who == WhoCanOpen.AnyoneWithLink && !opening
     // Up to three of its tags as dots after the line, as iOS and the web mark them.
     val tags = state.tags.tagsOf(item.id)
-    val unverified = !opening && model.unverified(item, state) != null
+    val unverified = !opening && model.marked(item, state)
     if (line.isEmpty() && !kept && keepProblem == null && tags.isEmpty() && !unverified) return
     val text = androidx.compose.ui.text.buildAnnotatedString {
         val whole = { part: String -> part.replace(' ', '\u00A0').replace('\u202F', '\u00A0') }
@@ -265,13 +269,22 @@ fun Mark(item: Opened, bitmap: ImageBitmap?, box: Dp = 36.dp) {
         return
     }
     if (item.isFolder) {
+        // Its own colour: the shades the Rust core works out from its `colour` attribute,
+        // or the plain folder colour when it has none (the web's FolderMark draws the same).
+        val shades = remember(item.metadata.attributes) { folderShades(item.metadata.attributes) }
+        val front = shades?.let {
+            Color((if (alpine.dark) { if (alpine.high) it.darkHighFront else it.darkFront } else { if (alpine.high) it.lightHighFront else it.lightFront }).toInt())
+        } ?: alpine.folderFront
+        val back = shades?.let {
+            Color((if (alpine.dark) { if (alpine.high) it.darkHighBack else it.darkBack } else { if (alpine.high) it.lightHighBack else it.lightBack }).toInt())
+        } ?: alpine.folderBack
         Canvas(Modifier.size(box)) {
             val w = size.width * 0.86f
             val s = w / 56f
             translate((size.width - w) / 2, (size.height - 46f * s) / 2) {
                 scale(s, s, pivot = Offset.Zero) {
-                    drawPath(folderBack, alpine.folderBack)
-                    drawPath(folderFront, alpine.folderFront)
+                    drawPath(folderBack, back)
+                    drawPath(folderFront, front)
                 }
             }
         }
@@ -290,20 +303,30 @@ fun PlayBadge(box: Dp) {
     }
 }
 
-/* A plain page with its type on a label, for a file that is not an item yet (Save to HushOS's list). */
+/*
+ * A page with its type on a label, in the type's colour: the shades the Rust core works out from the name
+ * (sheet_shades), the label in every scheme and the sheet faintly tinted, which high contrast leaves plain. A type
+ * with no colour of its own keeps ink and the plain sheet, as the web's SheetMark does. Also for a file that is
+ * not an item yet (Save to HushOS's list).
+ */
 @Composable
 fun PageMark(name: String, box: Dp = 36.dp) {
     val alpine = Alpine.colors
     val label = name.substringAfterLast('.', "").uppercase().takeIf { it.isNotEmpty() && it.length <= 4 && it != name.uppercase() }
+    val shades = remember(name) { sheetShades(name) }
+    val ink = shades?.let { Color((if (alpine.dark) { if (alpine.high) it.darkHighLabel else it.darkLabel } else { if (alpine.high) it.lightHighLabel else it.lightLabel }).toInt()) } ?: alpine.ink
+    val tinted = shades?.takeIf { !alpine.high }
+    val edge = tinted?.let { Color((if (alpine.dark) it.darkEdge else it.lightEdge).toInt()) } ?: alpine.field
+    val fill = tinted?.let { Color((if (alpine.dark) it.darkFill else it.lightFill).toInt()) } ?: alpine.surface
     val measurer = rememberTextMeasurer()
     Canvas(Modifier.size(box)) {
         val w = size.width * 0.66f
         val s = w / 44f
         translate((size.width - w) / 2, (size.height - 54f * s) / 2) {
             scale(s, s, pivot = Offset.Zero) {
-                drawPath(sheetOutline, alpine.surface)
-                drawPath(sheetOutline, alpine.field, style = Stroke(2f))
-                drawPath(sheetCorner, alpine.field, style = Stroke(2f))
+                drawPath(sheetOutline, fill)
+                drawPath(sheetOutline, edge, style = Stroke(2f))
+                drawPath(sheetCorner, edge, style = Stroke(2f))
                 if (label == null) {
                     drawRoundRect(alpine.rule, Offset(8f, 22f), Size(22f, 3f), CornerRadius(1.5f))
                     drawRoundRect(alpine.rule, Offset(8f, 29f), Size(27f, 3f), CornerRadius(1.5f))
@@ -314,7 +337,7 @@ fun PageMark(name: String, box: Dp = 36.dp) {
                 // The label is drawn at the screen's scale, so its letters stay crisp.
                 val top = 34f * s
                 val labelWidth = 27f * s
-                drawRoundRect(alpine.ink, Offset(6f * s, top), Size(labelWidth, 13f * s), CornerRadius(3f * s))
+                drawRoundRect(ink, Offset(6f * s, top), Size(labelWidth, 13f * s), CornerRadius(3f * s))
                 val text = measurer.measure(label, TextStyle(color = alpine.surface, fontSize = (8.5f * s).toSp(), fontWeight = FontWeight.Bold))
                 drawText(text, topLeft = Offset(6f * s + (labelWidth - text.size.width) / 2, top + (13f * s - text.size.height) / 2))
             }

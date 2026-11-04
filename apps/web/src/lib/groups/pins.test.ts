@@ -188,6 +188,8 @@ describe('areas in the pin', () => {
             view: { rosterVersion: 6, areas: { [AREA]: 1, [AREA_2]: 1 } } as never,
             record: 'record-6',
             pin: pinAt(6),
+            guard: null,
+            checked: null,
             dropped: [],
         });
         if (result.status !== 'accepted') throw new Error(result.status);

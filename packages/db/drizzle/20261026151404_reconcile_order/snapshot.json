@@ -1,0 +1,140 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "7f7e99b2-90c5-4308-896b-9dbf1557b6b1",
+    "prevIds": ["e840cd67-44e5-45b9-bb9a-e30d06f11ee7"],
+    "footprints": [
+        {
+            "statementType": "create_sequence",
+            "statementTarget": ["sequence", "public", "billing_reading_seq"],
+            "writes": [
+                "s|seq|public.billing_reading_seq",
+                "n|seq|public.billing_reading_seq",
+                "e|seq|public.billing_reading_seq",
+                "n|rel|public.billing_reading_seq"
+            ],
+            "reads": ["n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "billing_customers", "reconciled_from"],
+            "writes": [
+                "s|col|public.billing_customers.reconciled_from",
+                "n|col|public.billing_customers.reconciled_from",
+                "e|col|public.billing_customers.reconciled_from"
+            ],
+            "reads": ["n|tbl|public.billing_customers", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "group_billing_customers", "reconciled_from"],
+            "writes": [
+                "s|col|public.group_billing_customers.reconciled_from",
+                "n|col|public.group_billing_customers.reconciled_from",
+                "e|col|public.group_billing_customers.reconciled_from"
+            ],
+            "reads": ["n|tbl|public.group_billing_customers", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "group_billing_customers", "changed_from"],
+            "writes": [
+                "s|col|public.group_billing_customers.changed_from",
+                "n|col|public.group_billing_customers.changed_from",
+                "e|col|public.group_billing_customers.changed_from"
+            ],
+            "reads": ["n|tbl|public.group_billing_customers", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "group_billing_subscriptions", "changed_from"],
+            "writes": [
+                "s|col|public.group_billing_subscriptions.changed_from",
+                "n|col|public.group_billing_subscriptions.changed_from",
+                "e|col|public.group_billing_subscriptions.changed_from"
+            ],
+            "reads": ["n|tbl|public.group_billing_subscriptions", "n|sch|public"]
+        }
+    ],
+    "deltas": [
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "billing_customers",
+                "name": "reconciled_from",
+                "type": "bigint",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_billing_customers",
+                "name": "reconciled_from",
+                "type": "bigint",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_billing_customers",
+                "name": "changed_from",
+                "type": "bigint",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_billing_subscriptions",
+                "name": "changed_from",
+                "type": "bigint",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "name": "billing_reading_seq",
+                "incrementBy": "1",
+                "minValue": "1",
+                "maxValue": "9223372036854775807",
+                "startWith": "1",
+                "cacheSize": 1,
+                "cycle": false,
+                "entityType": "sequences"
+            }
+        }
+    ]
+}

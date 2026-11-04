@@ -139,7 +139,7 @@ pub fn chains() -> &'static HashMap<&'static str, Arc<AcceptedRosters>> {
         let Ok(RosterChain::Accepted { chain }) = accept_rosters(
             OTHER_GROUP.into(),
             other.key(1),
-            true,
+            Some(GroupAnchor::Created),
             vec![],
             other.rosters.clone(),
             vec![],
@@ -156,7 +156,7 @@ pub fn chains() -> &'static HashMap<&'static str, Arc<AcceptedRosters>> {
         let Ok(RosterChain::Accepted { chain }) = accept_rosters(
             OTHER_GROUP.into(),
             hostile.key(1),
-            true,
+            Some(GroupAnchor::Created),
             vec![],
             hostile.rosters.clone(),
             vec![],
@@ -610,7 +610,17 @@ impl Runner {
                 json!({})
             }
             Step::Forget(group) => {
-                ledger.forget_group(group.clone());
+                {
+                    // As an app with a working guard store: store each guard handed back, then ask again.
+                    let mut held = hushos_core::FamilyGuard::Absent;
+                    while let Some(pin) = ledger
+                        .forget_group(group.clone(), held, "2026-10-15T00:00:00.000Z".into())
+                        .unwrap()
+                        .guard
+                    {
+                        held = hushos_core::FamilyGuard::Held { pin };
+                    }
+                }
                 if self.opened_by.remove(group) {
                     for node in NODES {
                         self.forget_pending(node);

@@ -8,6 +8,12 @@ import { z } from 'zod';
 import { AuthInput } from '@/components/auth-input';
 import { AuthActions, AuthFields, AuthLayout, AuthNote, authLink } from '@/components/auth-layout';
 import { ConsentField } from '@/components/consent-field';
+import {
+    Accordion,
+    AccordionContent,
+    AccordionItem,
+    AccordionTrigger,
+} from '@/components/ui/accordion';
 import { Button } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
 import { agreeValue, authError, emailValue } from '@/lib/form';
@@ -20,32 +26,17 @@ import {
     formatQuota,
     localeHintQueryOptions,
 } from '@/lib/queries';
+import { readSent, rememberSent, subscribeSent } from '@/lib/link-sent';
 import { cue } from '@/lib/sounds';
 
 /*
  * The first step of signing up and of resetting a password: an email, and a
  * link sent to it. The address is kept for this tab only, so "Check your
- * inbox" can name it and send another link; it never goes in the URL.
+ * inbox" can name it and send another link; it never goes in the URL, and it
+ * goes once the link is used or someone signs out (lib/link-sent.ts).
  */
 
 type Sent = { email: string; purpose: 'register' | 'recover'; intent?: SignupIntent };
-const SENT_KEY = 'hushos-link-sent';
-
-function rememberSent(sent: Sent) {
-    try {
-        sessionStorage.setItem(SENT_KEY, JSON.stringify(sent));
-    } catch {
-        /* Without storage the inbox page just says "your inbox". */
-    }
-}
-function readSent(): string | null {
-    try {
-        return sessionStorage.getItem(SENT_KEY);
-    } catch {
-        return null;
-    }
-}
-const noSubscription = () => () => {};
 
 export function EmailStep({
     purpose,
@@ -57,6 +48,9 @@ export function EmailStep({
     const router = useRouter();
     const [error, setError] = useState('');
     const [pending, setPending] = useState(false);
+    // The code sits behind "Have a code?", so it never reads as a password or a sign-in code; it
+    // is open when a link filled one in, and opens whenever the code is what stops the form.
+    const [codeOpen, setCodeOpen] = useState(Boolean(intent?.referral));
     const codeValue = z
         .string()
         .trim()
@@ -70,6 +64,9 @@ export function EmailStep({
                 purpose === 'register'
                     ? z.object({ email: emailValue, agree: agreeValue, code: codeValue })
                     : z.object({ email: emailValue, agree: z.boolean(), code: codeValue }),
+        },
+        onSubmitInvalid: ({ formApi }) => {
+            if (formApi.getFieldMeta('code')?.errors.length) setCodeOpen(true);
         },
         onSubmit: async ({ value }) => {
             setError('');
@@ -85,6 +82,7 @@ export function EmailStep({
                         getOfferLandingServerFn({ data: { slug: code } }),
                     ]);
                     if (!referral && !offer) {
+                        setCodeOpen(true);
                         form.setFieldMeta('code', (meta) => ({
                             ...meta,
                             errorMap: {
@@ -172,31 +170,45 @@ export function EmailStep({
                         )}
                     </form.Field>
                     {register && (
-                        <form.Field name="code">
-                            {(field) => (
-                                <AuthInput
-                                    label="Code"
-                                    optional
-                                    hint="From a friend or an offer. A friend’s code gives you both more space."
-                                    id="code"
-                                    name={field.name}
-                                    type="text"
-                                    autoComplete="off"
-                                    autoCapitalize="none"
-                                    spellCheck={false}
-                                    placeholder="k7m2p4qz"
-                                    className="font-mono"
-                                    value={field.state.value}
-                                    onChange={(event) => field.handleChange(event.target.value)}
-                                    onBlur={field.handleBlur}
-                                    errors={field.state.meta.errors}
-                                    disabled={pending}
-                                    maxLength={64}
-                                    data-1p-ignore
-                                    data-lpignore="true"
-                                />
-                            )}
-                        </form.Field>
+                        <Accordion
+                            value={codeOpen ? ['code'] : []}
+                            onValueChange={(open) => setCodeOpen(open.includes('code'))}
+                        >
+                            <AccordionItem value="code">
+                                <AccordionTrigger className="justify-start gap-1.5 py-1 font-normal text-foreground **:data-[slot=accordion-trigger-icon]:ml-0">
+                                    Have a code?
+                                </AccordionTrigger>
+                                <AccordionContent keepMounted className="pt-2 pb-0">
+                                    <form.Field name="code">
+                                        {(field) => (
+                                            <AuthInput
+                                                label="Code"
+                                                optional
+                                                hint="From a friend or an offer. A friend’s code gives you both more space."
+                                                id="code"
+                                                name={field.name}
+                                                type="text"
+                                                autoComplete="off"
+                                                autoCapitalize="none"
+                                                spellCheck={false}
+                                                placeholder="k7m2p4qz"
+                                                className="font-mono"
+                                                value={field.state.value}
+                                                onChange={(event) =>
+                                                    field.handleChange(event.target.value)
+                                                }
+                                                onBlur={field.handleBlur}
+                                                errors={field.state.meta.errors}
+                                                disabled={pending}
+                                                maxLength={64}
+                                                data-1p-ignore
+                                                data-lpignore="true"
+                                            />
+                                        )}
+                                    </form.Field>
+                                </AccordionContent>
+                            </AccordionItem>
+                        </Accordion>
                     )}
                     {register && (
                         <form.Field name="agree">
@@ -226,7 +238,7 @@ export function EmailStep({
 
 export function CheckEmailStep({ purpose }: { purpose: 'register' | 'recover' }) {
     // Rendered on the server without storage; the address arrives once the page hydrates.
-    const raw = useSyncExternalStore(noSubscription, readSent, () => null);
+    const raw = useSyncExternalStore(subscribeSent, readSent, () => null);
     let sent: Sent | null = null;
     try {
         const parsed = raw ? (JSON.parse(raw) as Sent) : null;

@@ -5,6 +5,7 @@ import {
 } from '@hushos/auth/device-storage';
 import { createAuthClient } from '@hushos/auth/client';
 import { authApi } from '@/lib/auth-api';
+import { watchSignOutElsewhere } from '@/lib/device-data';
 import { afterSignOut } from '@/lib/sign-in-gate';
 import { describeBrowser } from '@/lib/device-name';
 
@@ -26,3 +27,6 @@ export const authClient = afterSignOut(
         },
     ),
 );
+
+// A sign-out in another tab: this tab's own sessionStorage of the account goes too.
+watchSignOutElsewhere();

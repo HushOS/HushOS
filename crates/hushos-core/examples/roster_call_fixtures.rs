@@ -2,7 +2,9 @@
 //! to read (`packages/crypto/src/roster-call-fixtures.test.ts`) and for the
 //! server to store (`packages/groups/src/server.test.ts`): the family's
 //! history, every call's body (or its refusal), the admin's join codes and
-//! the outbox entries this core sealed. Every case is checked against its
+//! the outbox entries this core sealed, and (Core 5b) its removals, key
+//! replacements, folder deletions and previous-root checks
+//! (`tests/common/removal_calls.rs`). Every case is checked against its
 //! declaration before anything is written (`tests/common/roster_calls.rs`).
 //! The mirror of `packages/crypto/scripts/roster-call-fixtures.ts`; writes
 //! `packages/crypto/src/__fixtures__/core-roster-calls.json`. Regenerate with
@@ -12,6 +14,8 @@
 mod device_records;
 #[path = "../tests/common/groups.rs"]
 mod groups;
+#[path = "../tests/common/removal_calls.rs"]
+mod removal_calls;
 #[path = "../tests/common/roster_calls.rs"]
 mod roster_calls;
 #[path = "../tests/common/settings_areas.rs"]
@@ -24,6 +28,10 @@ use std::path::PathBuf;
 fn main() {
     let mut document = json!({ "generatedBy": "crates/hushos-core/examples/roster_call_fixtures.rs" });
     for (key, value) in roster_calls::fixture().as_object().unwrap() {
+        document[key] = value.clone();
+    }
+    // Core 5b: removals, key replacements and deletions (removalCalls), previous roots (previousRoots).
+    for (key, value) in removal_calls::fixture(&document).as_object().unwrap() {
         document[key] = value.clone();
     }
     // Core 6: the settings this core sealed and the family folders it opened (settingsReadings, areaOpens).

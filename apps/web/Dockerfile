@@ -1,8 +1,10 @@
-FROM oven/bun:1.4.2 AS manifests
+FROM oven/bun:1.4.4 AS manifests
 WORKDIR /app
 COPY package.json bun.lock ./
 # Dependency patches bun install applies (package.json's patchedDependencies).
 COPY patches ./patches
+# Tarballs the lockfile installs from the repository rather than a CDN (CONTRIBUTING.md, Vendored packages).
+COPY vendor ./vendor
 COPY apps/web/package.json ./apps/web/package.json
 COPY packages/crypto/package.json ./packages/crypto/package.json
 COPY packages/env/package.json ./packages/env/package.json
@@ -22,14 +24,14 @@ COPY packages/utils/package.json ./packages/utils/package.json
 FROM manifests AS migration-deps
 RUN bun install --frozen-lockfile --filter @hushos/db
 
-FROM oven/bun:1.4.2 AS build
+FROM oven/bun:1.4.4 AS build
 WORKDIR /app
 COPY --from=manifests /app ./
 RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run build --filter=@hushos/web
 
-FROM oven/bun:1.4.2-slim AS runtime
+FROM oven/bun:1.4.4-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0

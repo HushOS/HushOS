@@ -303,6 +303,8 @@ public actor LinkVault {
     }
 
     public func download(_ item: Opened, to destination: URL, progress: @Sendable (Double) -> Void = { _ in }) async throws {
+        // Taken before the address is awaited: a session that ends meanwhile writes nothing (TemporaryCopies.copyGate).
+        let gate = TemporaryCopies.copyGate(familyWorkspace: nil)
         let opened = try openVersion(item)
         let url = try await api.linkVersionURL(token: token, versionId: opened.versionId)
         guard var objectURL = URL(string: url.url) else { throw DriveAPIError.server(500, "Bad object URL") }
@@ -312,7 +314,7 @@ public actor LinkVault {
         try await Resumable.download(
             to: destination, count: layout.chunkCount, chunkBytes: layout.chunkBytes, size: opened.content.plaintextSize,
             onExpired: { if let fresh = URL(string: (try await api.linkVersionURL(token: token, versionId: opened.versionId)).url) { objectURL = fresh } },
-            progress: progress
+            progress: progress, gate: gate
         ) { index in
             let ciphertext = try await api.range(objectURL, try opened.range(index))
             return try chunkDecrypt(content: opened.content, index: index, ciphertext: ciphertext)

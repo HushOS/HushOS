@@ -58,6 +58,7 @@ export {
 } from './endings';
 export {
     cancelDissolvedPlan,
+    cancelGroupPlan,
     changeGroupPlan,
     createGroupPortalSession,
     DissolveCancelBusyError,
@@ -78,6 +79,7 @@ export {
     quoteUnitsChange,
     reconcileGroup,
     reissueCut,
+    resumeGroupPlan,
     seatError,
     setCutRetryQueue,
     setDissolveCancelQueue,
@@ -162,7 +164,7 @@ async function refuseWhilePooled(user: BillingUser) {
     const family = await billingRepository.getPooledFamily(user.id);
     if (family)
         throw new BillingError(
-            `Your storage comes from ${family.name}’s plan. Leave the family to choose a plan of your own.`,
+            `Your storage comes from the plan for ${family.name}. Leave the family to choose a plan of your own.`,
             409,
             { code: 'in-family' },
         );
@@ -681,10 +683,14 @@ function snapshot(
  * Webhooks only say that something changed; the provider's customer state says
  * what is true now. Subscriptions that left the state (past due, unpaid, incomplete,
  * paused, ended) are read individually so a retry window is honoured, a lapsed plan
- * is kept with its status, and an ending is recorded as such.
+ * is kept with its status, and an ending is recorded as such. A reconcile that began
+ * before the newest one written writes nothing and stops: two overlap (a burst of
+ * webhooks, the daily run), and the newer read Polar later and does what follows.
  */
 export async function reconcileCustomer(userId: string) {
     if (!billingEnabled() || !USER_ID_PATTERN.test(userId)) return;
+    // Before the first Polar read: any reconcile that began later read Polar later.
+    const readingFrom = await billingRepository.readingStamp();
     let state: models.CustomerState | null;
     try {
         state = await polar().customers.getStateExternal(userId);
@@ -695,7 +701,11 @@ export async function reconcileCustomer(userId: string) {
     const products = await getCatalogue();
     const subscriptions: billingRepository.SubscriptionSnapshot[] = [];
     for (const subscription of state?.active_subscriptions ?? []) {
-        const entry = snapshot(subscription, products);
+        // @polar-sh/sdk 1.0.2 types this `status` with the license keys' `Status` ("granted" |
+        // "disabled"), a generator name clash fixed upstream but unreleased; the API sends
+        // "active" | "trialing", and the SDK passes the value through without parsing it.
+        const status = subscription.status as unknown as models.Subscription['status'];
+        const entry = snapshot({ ...subscription, status }, products);
         if (entry) subscriptions.push(entry);
     }
     const seen = new Set(subscriptions.map((subscription) => subscription.id));
@@ -708,13 +718,15 @@ export async function reconcileCustomer(userId: string) {
             if (statusOf(error) !== 404) throw unavailable(error);
         }
     }
-    await billingRepository.applyCustomerState({
+    const outcome = await billingRepository.applyCustomerState({
         userId,
         provider: PROVIDER,
         customerId: state?.id ?? null,
         subscriptions,
         graceMs: billingEnv.BILLING_GRACE_DAYS * 24 * 60 * 60 * 1000,
+        readingFrom,
     });
+    if (outcome === 'stale') return;
     // A live personal plan of someone whose files draw from a family's pool is ended (5.1).
     if (subscriptions.some((subscription) => livePlan(subscription) || lapsedPlan(subscription)))
         await queuePlanEnding(userId);
@@ -730,7 +742,7 @@ export async function revokeForDeletion(userId: string) {
     if (!billingEnabled()) return;
     if ((await billingRepository.listGroupsPaidBy(userId)).length)
         throw new BillingError(
-            'You pay for a family plan. Hand its billing to another member, or cancel the family plan in its billing portal, then delete your account.',
+            'You pay for a family plan. Hand its billing to another member, or cancel the family plan under Billing on the family’s page at hushos.com, then delete your account.',
             409,
         );
     // A family plan they pay for that gives nothing (unpaid, incomplete, paused) is still on their

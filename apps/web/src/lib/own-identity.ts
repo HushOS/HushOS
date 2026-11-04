@@ -49,8 +49,8 @@ export type OwnIdentitySteps = {
     /* POST /api/auth/identity/upgrade, answering the identity stored. */
     store(identity: IdentityEnvelope): Promise<IdentityEnvelope>;
     /* This device's marks for the account, and raising them. */
-    seen(): { keyVersion: number; identityVersion: number };
-    remember(keyVersion: number, identityVersion: number): void;
+    seen(): Promise<{ keyVersion: number; identityVersion: number }>;
+    remember(keyVersion: number, identityVersion: number): Promise<void>;
 };
 
 /* Whether an error from storing the upgrade means another device stored one first. */
@@ -58,7 +58,7 @@ function lostTheRace(error: unknown) {
     return (error as { status?: number } | null)?.status === 409;
 }
 
-function refuseRollback(
+async function refuseRollback(
     served: { keyVersion: number; identityVersion: number },
     steps: OwnIdentitySteps,
 ) {
@@ -66,7 +66,7 @@ function refuseRollback(
     // back keys this account replaced, and records they signed. Once this device has seen
     // version 2, the version 1 form is a rollback too, and upgrading it again would mint a
     // second ML-DSA key.
-    if (identityRolledBack(served, steps.seen())) throw new Error(IDENTITY_ROLLED_BACK);
+    if (identityRolledBack(served, await steps.seen())) throw new Error(IDENTITY_ROLLED_BACK);
 }
 
 /*
@@ -84,9 +84,9 @@ export async function openOwnIdentity(
     refresh = false,
 ): Promise<OwnIdentity> {
     let { identity, history } = await steps.fetch();
-    refuseRollback(servedForm(identity), steps);
+    await refuseRollback(servedForm(identity), steps);
     let opened = await steps.open(identity, history, refresh);
-    refuseRollback(opened, steps);
+    await refuseRollback(opened, steps);
     if (opened.identityVersion === 1) {
         const upgraded = await steps.upgrade(identity);
         try {
@@ -95,14 +95,14 @@ export async function openOwnIdentity(
             if (!lostTheRace(error)) throw error;
             ({ identity, history } = await steps.fetch());
         }
-        refuseRollback(servedForm(identity), steps);
+        await refuseRollback(servedForm(identity), steps);
         opened = await steps.open(identity, history, true);
         // The identity adopted after a race, or answered by the server, is checked as any other.
-        refuseRollback(opened, steps);
+        await refuseRollback(opened, steps);
     }
     if (opened.identityVersion !== 2 || !opened.mlDsaPublicKey || !opened.kemPublicKey)
         throw new Error('Your keys could not be upgraded. Try again.');
-    steps.remember(opened.keyVersion, 2);
+    await steps.remember(opened.keyVersion, 2);
     return {
         keyVersion: opened.keyVersion,
         identityVersion: 2,

@@ -45,6 +45,9 @@ export type NodeKind = 'folder' | 'file';
  * What a reader can say about who wrote a record:
  * - verified: the signer is someone this person trusts, and the signature
  *   holds under their current signing key over the ordinary statement;
+ * - seen: the same, under keys this person's devices first saw for the
+ *   signer and nobody checked (a first-seen pin,
+ *   docs/optional-verification.md 2.6): no mark, and never `verified`;
  * - saved-from-link: it holds under their current key over the saved
  *   statement ("I saved this from a link", where nobody's signature could
  *   be checked): shown without a mark, with a neutral line in Info;
@@ -58,10 +61,11 @@ export type NodeKind = 'folder' | 'file';
  * - unsigned: there is no signature (written before signatures, or stripped);
  * - unchecked: the check could not run (what the reader trusts did not load,
  *   or the check threw). Never shown as clean.
- * Only `verified` is clean and `saved-from-link` unmarked; everything else is an issue.
+ * Only `verified` is clean, and `seen` and `saved-from-link` unmarked; everything else is an issue.
  */
 export type Integrity =
     | 'verified'
+    | 'seen'
     | 'saved-from-link'
     | 'resealed'
     | 'retired-key'
@@ -80,9 +84,15 @@ export type SignatureForm = 'ordinary' | 'saved' | 'resealed';
 /*
  * The signing keys a reader trusts for one account: the current one, which
  * alone can make a record `verified` (or `saved-from-link`, `resealed`), and the ones it held
- * before, which can only make it `retired-key`.
+ * before, which can only make it `retired-key`. `seen`: the keys are a
+ * first-seen pin's, which nobody checked, so a record that would verify under
+ * them reads `seen` instead.
  */
-export type TrustedSigner = { current: Uint8Array; retired: readonly Uint8Array[] };
+export type TrustedSigner = {
+    current: Uint8Array;
+    retired: readonly Uint8Array[];
+    seen?: boolean;
+};
 
 export type MetadataStatement = {
     workspaceId: string;
@@ -287,7 +297,7 @@ export function resealForm(prior: Integrity): SignatureForm {
         throw new CryptoError(
             'HushOS couldn’t check who wrote this, so it was not locked again. Try again.',
         );
-    if (prior === 'verified') return 'ordinary';
+    if (prior === 'verified' || prior === 'seen') return 'ordinary';
     if (prior === 'saved-from-link') return 'saved';
     return 'resealed';
 }
@@ -598,7 +608,8 @@ export async function integrityOf(
         return 'unchecked';
     }
     try {
-        if (await verifyStatement(forms.ordinary, signature, trusted.current)) return 'verified';
+        if (await verifyStatement(forms.ordinary, signature, trusted.current))
+            return trusted.seen ? 'seen' : 'verified';
         if (await verifyStatement(forms.saved, signature, trusted.current))
             return 'saved-from-link';
         if (await verifyStatement(forms.resealed, signature, trusted.current)) return 'resealed';
@@ -845,7 +856,8 @@ async function rekeyerIntegrityOf(
         return 'unchecked';
     }
     try {
-        if (await verifyStatement(bytes, signature, trusted.current)) return 'verified';
+        if (await verifyStatement(bytes, signature, trusted.current))
+            return trusted.seen ? 'seen' : 'verified';
         for (const key of trusted.retired)
             if (await verifyStatement(bytes, signature, key)) return 'retired-key';
         return 'bad-signature';
@@ -875,7 +887,8 @@ export async function rekeyedIntegrityOf(
     try {
         const checks = await rekeyedChecks(record, nodeKey);
         const rekeyer = await checks.rekeyer(trust.rekeyer);
-        const bound = checks.bound(rekeyer === 'verified');
+        // Attested: the re-key signature holds under the current key the reader holds for them.
+        const bound = checks.bound(rekeyer === 'verified' || rekeyer === 'seen');
         const origin =
             bound === true
                 ? await checks.origin(trust.origin)
