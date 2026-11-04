@@ -47,6 +47,7 @@ import { followsGroupWrites, groupWriteMinimums } from '@/lib/group-write-floor'
 import { boundTrashBatch } from '@/lib/trash-batch-request';
 import { storageEnv } from '@hushos/env/storage';
 import { CANCELLATION_REASONS } from '@hushos/billing/protocol';
+import { intentSchema } from '@/lib/signup-intent';
 import { appEnv } from '@hushos/env/app';
 import { chargeableCurrency } from '@/lib/currency';
 
@@ -402,13 +403,6 @@ const uploadNodeSchema = t.Union([
 const partSchema = t.Object({
     partNumber: t.Integer({ minimum: 1, maximum: 10_000 }),
     etag: t.String({ minLength: 1, maxLength: 256 }),
-});
-
-const intentValue = t.String({ minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9_-]+$' });
-const intentSchema = t.Object({
-    plan: t.Optional(intentValue),
-    referral: t.Optional(intentValue),
-    source: t.Optional(intentValue),
 });
 
 const cancellationSchema = t.Object({
