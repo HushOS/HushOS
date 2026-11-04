@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.14.0](https://github.com/HushOS/HushOS/compare/v0.13.0...v0.14.0) (2026-11-04)
+
+
+### Features
+
+* **android:** families in the Files app, the plan read only, and managers' removal and keys ([#266](https://github.com/HushOS/HushOS/issues/266)) ([ff1689a](https://github.com/HushOS/HushOS/commit/ff1689ad7d4d630e9ad894f0bab3bc53f5a6df80))
+* **android:** remove members, replace keys and delete family folders ([#281](https://github.com/HushOS/HushOS/issues/281)) ([2c07e99](https://github.com/HushOS/HushOS/commit/2c07e99d406ec1254dfeba2139788333700dcf8a))
+* **crypto:** give the native core family removals, key changes and folder deletion ([#279](https://github.com/HushOS/HushOS/issues/279)) ([c4dc0a6](https://github.com/HushOS/HushOS/commit/c4dc0a644a98b17909bfe0fd93a97f4f225d0bfb))
+* save to HushOS into a family folder on Android and iOS ([#283](https://github.com/HushOS/HushOS/issues/283)) ([01cd0a8](https://github.com/HushOS/HushOS/commit/01cd0a884988ff9b938f0586b51d1592456a144a))
+
+
+### Bug fixes
+
+* **android:** files follow-ups ([#288](https://github.com/HushOS/HushOS/issues/288)) ([dc0a6b1](https://github.com/HushOS/HushOS/commit/dc0a6b1dd8d4c2f13f21fde2d41fc7b8f59248b5))
+* **android:** keep a handover's staged mark when it's confirmed again ([#287](https://github.com/HushOS/HushOS/issues/287)) ([da09f7c](https://github.com/HushOS/HushOS/commit/da09f7c60a6a78515938b118b4ced574e851561a))
+* **android:** land another app's saves of a file newest last ([#274](https://github.com/HushOS/HushOS/issues/274)) ([ce1a460](https://github.com/HushOS/HushOS/commit/ce1a460f7cf16cd3492e38702b3f0ffad747164c))
+* **android:** tell a kept role change apart from another for the same person ([#286](https://github.com/HushOS/HushOS/issues/286)) ([0f1fb3a](https://github.com/HushOS/HushOS/commit/0f1fb3a6ff0d6bb52c8830e5b75a35163807bcce))
+* **web:** say a removal met a changed family when the person is still in it ([#284](https://github.com/HushOS/HushOS/issues/284)) ([2799207](https://github.com/HushOS/HushOS/commit/2799207d9f8c811c259354f853b8bd9e8218e322))
+
 ## [0.13.0](https://github.com/HushOS/HushOS/compare/v0.12.0...v0.13.0) (2026-11-03)
 
 
