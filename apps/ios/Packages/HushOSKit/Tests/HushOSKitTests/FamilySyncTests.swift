@@ -1120,7 +1120,8 @@ struct FamilyFixture {
 
     /* The member's phone: a vault with their keys and drive, its own ledger, and FamilySync over the stub. */
     /* `account`: the session epoch its vault and sync are kept to (a test's own, so ending it touches no other test). */
-    func phone(_ server: FamilyServer, records: FamilyRecords? = nil, guards: FamilyGuardStore? = nil, account: CopyEpoch = CopyEpoch()) async throws -> Phone {
+    func phone(_ server: FamilyServer, records: FamilyRecords? = nil, guards: FamilyGuardStore? = nil, account: CopyEpoch = CopyEpoch(),
+               filesDomains: FamilyFilesDomains = TestFamilyDomains.throwaway()) async throws -> Phone {
         let session = SharedKeychain.Session(origin: "https://family.test", token: "t", userId: member.userId)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [FamilyServerProtocol.self]
@@ -1144,7 +1145,7 @@ struct FamilyFixture {
         held.key = server.guardKey
         // Opened copies in a folder of the test's own, beside the guard: a relaunch passing the same guard finds them.
         let temporary = guards.folder.deletingLastPathComponent().appendingPathComponent(guards.folder.lastPathComponent + "-tmp", isDirectory: true)
-        return Phone(vault: vault, sync: FamilySync(vault: vault, api: GroupsAPI(drive: api), records: store, temporary: temporary),
+        return Phone(vault: vault, sync: FamilySync(vault: vault, api: GroupsAPI(drive: api), records: store, temporary: temporary, filesDomains: filesDomains),
                      records: store, guards: guards, held: held, temporary: temporary)
     }
 
@@ -1196,6 +1197,8 @@ final class FamilyServer: @unchecked Sendable {
     var groupsFail = false
     /* Route 5 answers with a 503 (a server in trouble, never a refusal). */
     var rostersFail = false
+    /* What a failing member list answers: a server error, or too many requests. */
+    var rostersFailStatus = 503
     /* Route 3 answers not-member while route 5 still serves: removed between the two. */
     var detailNotMember = false
     /* Route 25 lists the family's folder (false: it was deleted, and the family's space lists no folder). */
@@ -1237,6 +1240,8 @@ final class FamilyServer: @unchecked Sendable {
     var malformedGrant = false
     /* The family folder's key version and the member's grant at it, as route 25 serves them. */
     var areaVersion: UInt64 = 1
+    /* Route 25's change sequence for the family folder (its feed's head). */
+    var areaChangeSeq = 2
     var areaGrant: (rosterVersion: UInt64, rosterDigest: String, envelope: Data)
     /* Every node either drive holds, by id: listings, route 25's top folder and every write go through it. */
     var tree: [String: NodeView] = [:]
@@ -1458,7 +1463,7 @@ final class FamilyServer: @unchecked Sendable {
             }
         case ("GET", "/api/groups/\(f.groupId)/rosters"):
             if notMember { return (404, ["code": "not-member", "message": "You are not in this group."]) }
-            if lock.withLock({ rostersFail }) { return (503, ["message": "Drive is temporarily unavailable. Please try again."]) }
+            if lock.withLock({ rostersFail }) { return (lock.withLock { rostersFailStatus }, ["message": "Drive is temporarily unavailable. Please try again."]) }
             let after = Int(query.first { $0.name == "after" }?.value ?? "0") ?? 0
             if after == 0, lock.withLock({ notMemberFromStart }) { return (404, ["code": "not-member", "message": "You are not in this group."]) }
             onRosters?()
@@ -1507,7 +1512,7 @@ final class FamilyServer: @unchecked Sendable {
                 (200, ["spaces": [
                     ["space": ["kind": "personal"], "areas": [["workspaceId": f.personal, "workspaceKeyVersion": 1, "changeSeq": 0, "root": NSNull(), "rotation": NSNull()]]],
                     ["space": ["kind": "group", "groupId": f.groupId, "name": "Lindqvist family"], "areas": !areaListed ? [] : [[
-                        "workspaceId": f.workspaceId, "idSeed": f.workspaceSeed, "workspaceKeyVersion": areaVersion, "changeSeq": 2,
+                        "workspaceId": f.workspaceId, "idSeed": f.workspaceSeed, "workspaceKeyVersion": areaVersion, "changeSeq": areaChangeSeq,
                         "root": tree[servedRootId ?? f.rootId].map(json) ?? NSNull(), "rotation": rotationJSON(),
                         "grant": ["workspaceKeyVersion": areaVersion, "granteeKeyVersion": f.member.keys.keyVersion, "granterUserId": f.creator.userId,
                                   "rosterVersion": areaGrant.rosterVersion, "rosterDigest": areaGrant.rosterDigest,

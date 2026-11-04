@@ -209,6 +209,7 @@ Remove (Core 5b's removal body, then the walks), "Replace keys" on a folder, "De
 
 - **Tests:** `FilesGate` refuses a family domain whose recorded owner differs; a domain for a family the account left is removed with `.removeAll`.
 - **Proof:** simulator: Files shows "Lindqvist family" under Locations; open a file the web wrote; after leaving, the location is gone.
+- **Built, read only (branch feat/ios-family-files):** one domain per family as above, read only; no writes from Files (Android 6f's write-back queue is not ported). `FamilyFiles.swift` (ids, records, the lifecycle, the extension's source), `Files/FamilyFileProvider.swift`, a let-go hook on `FamilyReleases`. Proved live (run `20261103-232320-d910`): the location appears once the family is accepted, lists its folder and files with thumbnails, a file the web wrote opens byte for byte, a removal on the web is found by the extension itself with the app closed and the location goes with no plaintext left, sign-out removes it, and a location left without its record goes at the next launch. Not driven live: the change feed (`enumerateChanges`), an account switch, a fork or refusal.
 
 ### iOS 7: billing, read only
 

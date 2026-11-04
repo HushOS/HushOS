@@ -1034,7 +1034,7 @@ final class DriveStore {
         do {
             try await work()
             if let folder { await refresh(folder: folder) }
-            FilesDomain.signal(folderId: folder)
+            signalFiles(folder: folder)
             return true
         } catch {
             if ErrorWords.isCancellation(error) || staleRefusal(error) { return false }
@@ -1086,7 +1086,7 @@ final class DriveStore {
         // Where it is now: an Undo hands back the item as it was before the move, whose parent is the destination.
         let from = await vault.item(item.id)?.node.parentId ?? item.node.parentId
         let ok = await perform(in: from) { _ = try await vault.move(item.id, to: folder) }
-        if ok { await refresh(folder: folder); FilesDomain.signal(folderId: folder); await caughtUp() }
+        if ok { await refresh(folder: folder); signalFiles(folder: folder); await caughtUp() }
     }
 
     /*
@@ -1180,7 +1180,7 @@ final class DriveStore {
         Offline.rememberFolder(folder)
         offlineVersion += 1
         await fetchKeptFolder(folder.id, name: folder.name)
-        FilesDomain.signal(folderId: folder.id)
+        signalFiles(folder: folder.id)
     }
 
     /* Remove from this phone, for a folder: every file kept with it goes; files kept on their own stay. */
@@ -1188,7 +1188,7 @@ final class DriveStore {
         BackgroundTransfers.shared.cancelFolder(id)
         Offline.forgetFolder(id)
         offlineVersion += 1
-        FilesDomain.signal(folderId: id)
+        signalFiles(folder: id)
     }
 
     /* Brings a kept folder's files in line with the folder: what is missing or replaced comes down, what left it goes. */
@@ -1347,7 +1347,7 @@ final class DriveStore {
             Offline.forget(item.id)
         }
         offlineVersion += 1
-        FilesDomain.signal(folderId: item.node.parentId)
+        signalFiles(folder: item.node.parentId)
     }
 
     /*
@@ -1519,7 +1519,7 @@ final class DriveStore {
             // A family folder goes through refresh(folder:), under every family listing guard (session, clears, order, verdicts).
             if isFamilyFolder(id) {
                 await refresh(folder: id, session: session)
-                FilesDomain.signal(folderId: id)
+                signalFiles(folder: id)
                 continue
             }
             let mark = familyListings.mark(familyGroup(ofFolder: id))
@@ -1531,7 +1531,7 @@ final class DriveStore {
                 for child in children { names[child.id] = child.name }
                 await judgeFamilyItems(children, session: session)
             }
-            FilesDomain.signal(folderId: id)
+            signalFiles(folder: id)
         }
     }
 
@@ -1634,7 +1634,7 @@ final class DriveStore {
         await refresh(folder: folder)
         guard !moved.isEmpty else { return }
         // The Files app lists both folders too: the one they left was signalled with each move, this one now.
-        FilesDomain.signal(folderId: folder)
+        signalFiles(folder: folder)
         await caughtUp()
         let text = moved.count == 1 ? "Moved “\(moved[0].name)” to “\(folderName)”" : "Moved \(moved.count) items to “\(folderName)”"
         if across {

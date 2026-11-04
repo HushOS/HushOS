@@ -394,11 +394,11 @@ extension Vault {
      */
     func familyPrior(_ record: ServedRecord, in workspaceId: String, copying: Bool) async throws -> Integrity {
         // A refusal (no family judgement, a record the member list can't vouch for) is final, not a busy server to retry;
-        // only no answer at all is the network's.
+        // only no answer, or a busy or failing server (`FamilySync.transient`), is the network's.
         let refused = DriveAPIError.server(409, "HushOS couldn’t check who wrote this, so it wasn’t \(copying ? "copied" : "changed"). Try again later.")
         guard let judge = familyJudge else { throw refused }
         do { return try await judge.prior(of: record, in: workspaceId) } catch {
-            if FamilySync.unanswered(error) { throw DriveAPI.noAnswer(error) }
+            if FamilySync.transient(error) { throw DriveAPI.noAnswer(error) }
             throw refused
         }
     }

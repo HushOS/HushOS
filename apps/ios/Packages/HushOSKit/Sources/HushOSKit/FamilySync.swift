@@ -231,8 +231,23 @@ public actor FamilySync: FamilyJudge {
     private var acceptedFamilies: Set<String> = []
 
     public init(vault: Vault, api: GroupsAPI? = nil, records: FamilyRecords = .shared, now: @escaping @Sendable () -> Date = { Date() },
-                temporary: URL = FileManager.default.temporaryDirectory) {
+                temporary: URL = FileManager.default.temporaryDirectory, filesDomains: FamilyFilesDomains? = nil) {
         self.vault = vault
+        // Whoever finds a family let go of (this process's sync, its reconcile, a leave), its Files location goes with it.
+        let owner = AccountOwner(vault.session)
+        let domains = filesDomains ?? Self.defaultFilesDomains
+        self.filesDomains = domains
+        if let domains {
+            // Bound to the session this sync belongs to: a late refusal of an ended session lets nothing of the next one go.
+            // Asked under the store's lock against the shared keychain too: another process's sign-in (the same account
+            // again, a new token) ends this session for every process before this one learns of it.
+            let born = vault.copySession
+            let signedIn = vault.session
+            let lettingGo: @Sendable (String, UInt64) -> Void = { groupId, _ in domains.letGo(groupId, owner: owner, session: born, signedIn: signedIn) }
+            releases = FamilyReleases(lettingGo: lettingGo)
+        } else {
+            releases = FamilyReleases()
+        }
         self.api = api ?? GroupsAPI(drive: vault.api)
         // Kept to its vault's session, never the one open as it is made: a sync made late for a replaced vault
         // deletes and writes no record or copy, its first sweep included, since those there now are the next session's.
@@ -255,7 +270,9 @@ public actor FamilySync: FamilyJudge {
      * whoever found it: a sync, route 2's reconcile, a leave or member check, a join, the background
      * pass. The screens take them from here, so none is shown only to whoever asked.
      */
-    public nonisolated let releases = FamilyReleases()
+    public nonisolated let releases: FamilyReleases
+    /* The families' Files locations this sync's let-gos take, and whose revocation generations its checks carry. */
+    nonisolated let filesDomains: FamilyFilesDomains?
     /* Whether this session's families need the background check (FamilyWalkWork), as a join or route 2 finds. */
     public nonisolated let familyWork = FamilyWorkHook()
 
@@ -354,7 +371,7 @@ public actor FamilySync: FamilyJudge {
         let summary: GroupSummary
         if let known = summaries[groupId] { summary = known } else {
             let listed: [GroupSummary]
-            do { listed = try await list() } catch where Self.unanswered(error) {
+            do { listed = try await list() } catch where Self.transient(error) {
                 // No answer is the network's: the queue waits for one, it doesn't fail the upload.
                 throw DriveAPI.noAnswer(error)
             }
@@ -484,6 +501,51 @@ public actor FamilySync: FamilyJudge {
     public struct Revised: Sendable {
         public let state: FamilyState
         public let revision: UInt64
+        /* The family's Files revocation generation as the check began (FamilyFilesDomains); nil when none was taken. */
+        public var filesGeneration: UInt64? = nil
+        /* Why a `.failed` sync failed; nil for any other state, and for a failure that is a definite refusal of the family. */
+        public var cause: FailureCause? = nil
+
+        public init(state: FamilyState, revision: UInt64, filesGeneration: UInt64? = nil, cause: FailureCause? = nil) {
+            self.state = state
+            self.revision = revision
+            self.filesGeneration = filesGeneration
+            self.cause = cause
+        }
+
+        /* Whether it lets the family's Files location go: a definite removal, refusal, fork, or a family not in; never no answer or a lost session. */
+        public var letsFilesGo: Bool {
+            guard FamilyReleases.letsGo(state) else { return false }
+            if case .failed = state, cause == .noAnswer || cause == .session { return false }
+            return true
+        }
+    }
+
+    /* `run` in the family's turn, with its revision and, for a failure, its cause. */
+    func revisedRun(_ summary: GroupSummary, observed: UInt64? = nil) async -> Revised {
+        failureCause[summary.id] = nil
+        let state = await run(summary)
+        let cause: FailureCause? = if case .failed = state { failureCause.removeValue(forKey: summary.id) } else { nil }
+        return Revised(state: state, revision: Self.revise(), filesGeneration: observed, cause: cause)
+    }
+
+    /* Why a sync failed, as far as the Files locations care. */
+    public enum FailureCause: Sendable, Equatable {
+        /* No answer, a timeout, the server busy or failing: nothing is decided about the family. */
+        case noAnswer
+        /* The session ended (401): the person signs in again. */
+        case session
+        /* A definite refusal (the chain didn't check, a rollback, keys that didn't verify). */
+        case refusal
+    }
+
+    /* The cause of the sync that just failed in the family's turn, for its `Revised` (set and read in that turn). */
+    private var failureCause: [String: FailureCause] = [:]
+
+    static func cause(of error: Error) -> FailureCause {
+        if FamilyFilesSource.endsSession(error) { return .session }
+        if transient(error) { return .noAnswer }
+        return .refusal
     }
 
     /*
@@ -493,6 +555,16 @@ public actor FamilySync: FamilyJudge {
      */
     private static let revisions = OSAllocatedUnfairLock(initialState: UInt64(0))
     static func revise() -> UInt64 { revisions.withLock { $0 += 1; return $0 } }
+
+    /* A look at the families now, later than every one taken before (a join's acceptance shown without one). */
+    public static func newestLook() -> UInt64 { revise() }
+
+    /* The process's family locations (none where Files isn't). */
+    #if canImport(FileProvider)
+    static var defaultFilesDomains: FamilyFilesDomains? { .shared }
+    #else
+    static var defaultFilesDomains: FamilyFilesDomains? { nil }
+    #endif
     /* The last revision given out: an answer taken at or before it is no later than now. */
     public static func latestRevision() -> UInt64 { revisions.withLock { $0 } }
 
@@ -504,7 +576,11 @@ public actor FamilySync: FamilyJudge {
         await vault.useFamilyJudge(self)
         running[summary.id, default: 0] += 1
         defer { running[summary.id, default: 1] -= 1 }
-        let revised = await exclusive(summary.id) { Revised(state: await self.run(summary), revision: Self.revise()) }
+        let revised = await exclusive(summary.id) {
+            // The Files location's revocation generation before the check begins: an acceptance a let-go overtook adds nothing.
+            let observed = self.filesDomains?.generation(summary.id)
+            return await self.revisedRun(summary, observed: observed)
+        }
         if FamilyReleases.letsGo(revised.state) { releases.post(summary.id, revised) }
         return revised
     }
@@ -568,10 +644,13 @@ public actor FamilySync: FamilyJudge {
             return .wiped
         } catch {
             // Refused (a rollback, a race that kept losing, keys that didn't check): the ledger kept nothing of this run, and
-            // nothing of the family stays open here. No answer at all leaves what was opened before as it was.
-            if !Self.unanswered(error) { await refuse(groupId) }
+            // nothing of the family stays open here. No answer, a busy or failing server (`transient`) or a lost session
+            // leaves what was opened before as it was: the same classification that decides whether Files lets it go.
+            if Self.cause(of: error) == .refusal { await refuse(groupId) }
             // A 401: kept for the app (takeEnded), which asks whether the session ended.
             if endsSession(error) { endedBy = error }
+            // Why, for the Files locations: only a definite refusal lets the family's location go (`Revised.letsFilesGo`).
+            failureCause[groupId] = Self.cause(of: error)
             return .failed(FamilyWords.error(error))
         }
     }
@@ -926,7 +1005,7 @@ public actor FamilySync: FamilyJudge {
                     var holder: IdentityEnvelope?
                     do {
                         holder = try await vault.identityEnvelope(atKeyVersion: row.granteeKeyVersion)
-                    } catch where Self.unanswered(error) {
+                    } catch where Self.transient(error) {
                         throw error
                     } catch {
                         holder = nil
@@ -974,8 +1053,8 @@ public actor FamilySync: FamilyJudge {
                 folder.area.write = Self.write(reason: opened.opened.reason, rootListed: folder.area.rootListed, root: folder.area.root != nil)
             } catch let error as GroupsAPIError where error.isNotMember {
                 throw error
-            } catch where Self.unanswered(error) {
-                // No answer (the identity history): nothing was refused, so the sync leaves things as they were.
+            } catch where Self.transient(error) {
+                // No answer, or a busy or failing server (the identity history): nothing was refused, so the sync leaves things as they were.
                 throw error
             } catch {
                 // The row says "Couldn't check this folder's keys", as the web's does; nothing of it opens.

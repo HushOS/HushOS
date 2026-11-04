@@ -172,6 +172,12 @@ public actor Vault {
     /* Raised by `forgetSigners` (and so by `forgetIdentity`): a set built from what was forgotten meanwhile is not kept. */
     var signersGeneration: UInt64 = 0
     var parents: [String: String]
+    /*
+     * Family feed rows whose named folder couldn't be listed (gone or trashed) and that were asked
+     * again once, by the row they were (its change sequence and folder): the same row failing again
+     * is a verdict, a newer one (moved meanwhile) is read afresh. This process only; a cold one asks once more.
+     */
+    var feedSuspects: [NodeRef: String] = [:]
     private let indexURL: URL?
     /* The tree mirror on disk and the catalogue built from it (see Vault+Catalogue); a test sets its own. */
     var mirror: Mirror?
@@ -270,6 +276,9 @@ public actor Vault {
     public static func forgetCurrent() { current.forget() }
 
     static let current = Current()
+
+    /* The vault of `session` in this process (`fromKeychain`'s), for a caller that already admitted the session. */
+    public static func shared(for session: SharedKeychain.Session) -> Vault { current.vault(for: session) }
 
     final class Current: @unchecked Sendable {
         private let lock = NSLock()
@@ -817,6 +826,25 @@ public actor Vault {
     }
 
     /* A node this process has not opened yet: listing the folder it was last seen in opens it and everything above. */
+    /*
+     * For the own drive's feed: a node as the folder it was last seen in lists it now. `listed` is false
+     * when that listing doesn't name it (moved or trashed since), which is no verdict on the node.
+     */
+    func listedNow(_ nodeId: String) async throws -> (row: Opened?, listed: Bool) {
+        if let done = opened[nodeId] { return (done, true) }
+        let workspace = try await loadWorkspace()
+        let listing: Listing
+        if let root = workspace.root, root.id == nodeId {
+            listing = try await listChildren(of: root.id)
+        } else if let parent = parents[nodeId] {
+            listing = try await listChildren(of: parent)
+        } else {
+            throw DriveAPIError.server(500, "This item has not been seen yet; open its folder first.")
+        }
+        let listed = ([listing.folder] + listing.ancestors + listing.children).contains { $0.id == nodeId }
+        return (opened[nodeId], listed)
+    }
+
     public func resolve(_ nodeId: String) async throws -> Opened {
         if let done = opened[nodeId] { return done }
         let workspace = try await loadWorkspace()

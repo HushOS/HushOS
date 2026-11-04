@@ -685,8 +685,8 @@ final class BackgroundTransfers {
         if let record = record(id) {
             ended(record, reason: nil)
             // Files reads the feed itself once told: told here, so an upload finished in a background launch, before any
-            // screen (and its sync) exists, still reaches the folder Files has open.
-            if record.kind == .upload { FilesDomain.signal(folderId: record.folderId) }
+            // screen (and its sync) exists, still reaches the folder Files has open (a family folder's, in its family's location).
+            if record.kind == .upload { FilesDomain.signalFor(folderId: record.folderId, familyGroup: record.family?.groupId) }
         }
         try? FileManager.default.removeItem(at: folder(id))
         onLanded?()

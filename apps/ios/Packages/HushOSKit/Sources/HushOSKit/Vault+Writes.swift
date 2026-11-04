@@ -929,7 +929,12 @@ extension Vault {
                 }
                 if let parent = node.parentId { rememberParent(node.id, parent: parent) }
                 do {
-                    updated.append(try await resolve(node.id))
+                    let found = try await listedNow(node.id)
+                    // Not in the folder the feed names (moved or trashed since the feed was read): no verdict, and the batch
+                    // fails so Files asks again from the same cursor, where the node's newer row names where it is now.
+                    guard found.listed else { throw DriveAPIError.transport("HushOS is catching up with a change. Try again.") }
+                    guard let row = found.row else { throw DriveAPIError.notFound("This item no longer exists.") }
+                    updated.append(row)
                 } catch DriveAPIError.notFound, DriveAPIError.trashed, is CoreError {
                     // Gone, under a trashed folder, or no longer openable here: it leaves the Files location.
                     deleted.append(node.id)
@@ -947,6 +952,122 @@ extension Vault {
         }
         return Changes(updated: updated, deleted: deleted, nextCursor: feed.nextCursor, hasMore: feed.hasMore)
     }
+
+    /*
+     * A family folder's change feed since `cursor`, as `changes(since:)` reads the own drive's: every
+     * row opened in `workspaceId` (by listing the folder it is in now, through the family's ledger),
+     * never looked up by id alone. Nil means start over.
+     */
+    func familyChanges(in workspaceId: String, since cursor: Int) async throws -> Changes? {
+        let feed = try await api.changes(workspaceId: workspaceId, since: cursor)
+        if feed.resync { return nil }
+        var updated: [Opened] = []
+        var deleted: [String] = []
+        // Each folder listed once per batch, its rows or its error kept: siblings changed together (a bulk upload, a
+        // re-key) are read from the one listing rather than each listing their folder again.
+        var listings: [String: Result<FolderRows, Error>] = [:]
+        // A row met for the first time under a folder that couldn't be listed: the rest of the batch is still read (every such
+        // row is noted at once), and then the batch fails, so a retry decides them all together.
+        var unsettled = false
+        // Folders this batch itself says are gone (trashed rows, tombstones): what's in them goes with them, at once.
+        let goneHere = Set(feed.changes.compactMap { change -> String? in
+            if change.kind == "tombstone" { return change.nodeId?.lowercased() }
+            return change.node?.trashedAt != nil ? change.node?.id.lowercased() : nil
+        })
+        for change in feed.changes {
+            switch change.kind {
+            case "node":
+                guard let node = change.node, node.ref.workspaceId == workspaceId.lowercased() else { continue }
+                if node.trashedAt != nil {
+                    opened[node.ref] = nil
+                    deleted.append(node.id)
+                    continue
+                }
+                if let parent = node.parentId { rememberParent(node.id, parent: parent) }
+                let folder = node.parentId ?? node.id
+                if listings[folder] == nil {
+                    do {
+                        let listing = try await listChildren(of: folder, in: workspaceId)
+                        var rows = FolderRows()
+                        for row in [listing.folder] + listing.ancestors + listing.children {
+                            rows.listed.insert(row.ref)
+                            if let held = opened[row.ref] { rows.opened[row.ref] = held }
+                        }
+                        listings[folder] = .success(rows)
+                    } catch {
+                        listings[folder] = .failure(error)
+                    }
+                }
+                do {
+                    guard let rows = try listings[folder]?.get(), rows.listed.contains(node.ref) else {
+                        // Not in the folder the feed names (moved or trashed since the feed was read): no verdict. The batch
+                        // fails with its cursor where it was, and the node's newer row says where it is now.
+                        throw FamilyFilesError.unavailable
+                    }
+                    if let listed = rows.opened[node.ref] {
+                        // The newer of the listing's row and the row held now: a later listing of the batch (the folder it moved
+                        // to) may have opened a newer one since this listing was kept, which a replay never takes back.
+                        let row = opened[node.ref].map { listed.node.isOlder(than: $0.node) ? $0 : listed } ?? listed
+                        opened[node.ref] = row
+                        updated.append(row)
+                    } else {
+                        // Listed and not opened here (a row sealed in a suite this app doesn't read): it leaves the location.
+                        deleted.append(node.id)
+                    }
+                } catch let error where FamilyFilesError.keyChanging(error) {
+                    // A key change this device hasn't followed yet: no verdict on the node. The batch fails with its cursor
+                    // where it was, and the family is checked again before Files asks again.
+                    throw FamilyFilesError.keyChange
+                } catch DriveAPIError.notFound, DriveAPIError.trashed {
+                    // The folder its own live row names couldn't be listed. A verdict only when the folder's own row says it went
+                    // (in this batch), or when the same row fails again on the retry (nothing moved it since): never for a row
+                    // that moved out between the feed and the listing, which the retried feed reads from its new folder.
+                    let row = "\(node.changeSeq ?? -1):\(folder.lowercased())"
+                    // Noted until a batch succeeds: a later row failing this batch never makes an earlier one start over.
+                    if goneHere.contains(folder.lowercased()) || feedSuspects[node.ref] == row {
+                        deleted.append(node.id)
+                    } else {
+                        feedSuspects[node.ref] = row
+                        unsettled = true
+                    }
+                } catch is CoreError {
+                    // A row of the listing didn't open, maybe a sibling's: the node's own envelope decides, never another's.
+                    let parentOpen = node.parentId.map { ledgerOpened.contains(NodeRef(workspaceId: workspaceId, nodeId: $0)) } ?? true
+                    do {
+                        updated.append(try open(node, replacing: true))
+                    } catch let error where FamilyFilesError.keyChanging(error) {
+                        throw FamilyFilesError.keyChange
+                    } catch is CoreError where parentOpen {
+                        // Its folder opened and it didn't: no longer openable here, it leaves the location.
+                        deleted.append(node.id)
+                    } catch {
+                        // Not to be pinned on the node: nothing of the batch is answered, and Files asks again.
+                        throw FamilyFilesError.unavailable
+                    }
+                }
+            case "tombstone":
+                if let id = change.nodeId {
+                    deleted.append(id)
+                    remove(NodeRef(workspaceId: workspaceId, nodeId: id))
+                }
+            default:
+                break
+            }
+        }
+        if unsettled { throw FamilyFilesError.unavailable }
+        // The batch answered and its cursor moves on: what it noted is decided or moved, and is forgotten.
+        feedSuspects = feedSuspects.filter { $0.key.workspaceId != workspaceId.lowercased() }
+        return Changes(updated: updated, deleted: deleted, nextCursor: feed.nextCursor, hasMore: feed.hasMore)
+    }
+
+    /* A folder's listing as a change batch keeps it: every row it names, and those that opened here. */
+    struct FolderRows {
+        var listed: Set<NodeRef> = []
+        var opened: [NodeRef: Opened] = [:]
+    }
+
+    /* The folder a node was last seen in (the index a cold process lists from); nil when none is known. */
+    func knownParent(_ nodeId: String) -> String? { opened[nodeId]?.node.parentId ?? parents[nodeId] }
 }
 
 /* The workspace a write lands in: the parent's, which is the granter's inside a share. */

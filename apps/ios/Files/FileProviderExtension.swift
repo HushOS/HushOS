@@ -26,12 +26,69 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
             // Someone is signed in again (from the Files sheet or the app): the next refusal may ask again.
             if owner != nil { SignInPrompt.reset() }
         },
+        // The drive's location is another account's (before the app replaces it): copies not of the account signed in go.
+        refusedForeign: { owner in TemporaryCopies.claim(owner) },
         make: { Vault(api: DriveAPI(session: $0), session: $0) }
     )
 
+    /* The family this location is for (FamilyFileIds); nil for the drive's. */
+    let family: String?
+
+    /*
+     * A family location's way to its family: the session must be the account its record names
+     * (another's, or nobody: `.notAuthenticated`), and the family is that session's vault's own sync
+     * in this process (one vault per session, so the ledger and the syncs take turns per family).
+     */
+    private lazy var familyGate: FilesGate<FamilyFilesSource>? = family.map { groupId in
+        FilesGate<FamilyFilesSource>(
+            owner: { (try? FamilyDomainRecords.shared.read())?[groupId]?.owner },
+            session: { SharedKeychain.session },
+            changed: { owner in
+                TemporaryCopies.claim(owner)
+                if owner != nil { SignInPrompt.reset() }
+            },
+            // Another account's family location (it outlived a switch): refused alone and taken away; the account signed
+            // in keeps its copies and its other families' sources.
+            refusedForeign: { owner in
+                TemporaryCopies.claim(owner)
+                FamilyFilesDomains.shared.dropForeign(groupId, current: owner)
+            },
+            make: { session in
+                let vault = Vault.shared(for: session)
+                guard let sync = FamilySync.shared(for: vault) else { return nil }
+                return FamilyFilesSource(groupId: groupId, vault: vault, sync: sync)
+            }
+        )
+    }
+
+    /*
+     * Every call of a family location: its record first. A family let go of (no record) is gone
+     * from this location whoever is signed in, without asking the server; then the gate.
+     */
+    func requireFamily() throws -> FamilyFilesSource {
+        guard let family, let familyGate else { throw NSFileProviderError(.noSuchItem) }
+        switch FamilyDomainRecords.shared.admission(family, owner: SharedKeychain.session.map(AccountOwner.init)) {
+        case .letGo:
+            // Let go of (by a process that couldn't reach this one's copies): what this process decrypted of it goes first.
+            FamilyFilesDomains.shared.sweepUnrecorded()
+            throw FamilyFilesError.letGo
+        case .unreadable: throw GuardError.unreadable
+        case .admitted, .otherAccount: break
+        }
+        return try familyGate.open()
+    }
+
+    /* The family location's name, as its record keeps it. */
+    private var familyName: String {
+        family.flatMap { (try? FamilyDomainRecords.shared.read())?[$0]?.name } ?? domain.displayName
+    }
+
     required init(domain: NSFileProviderDomain) {
         self.domain = domain
+        family = FamilyFileIds.group(ofDomain: domain.identifier.rawValue)
         Unbacked.apply()
+        // Copies of family folders no record names any more (let go of while this process was away) go before anything is answered.
+        FamilyFilesDomains.shared.sweepUnrecorded()
         // Decrypted downloads (and partials) Files never took, older than a day.
         TemporaryCopies.sweep()
         super.init()
@@ -45,21 +102,23 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
      */
     func invalidate() {
         if SharedKeychain.session == nil { TemporaryCopies.claim(nil) }
+        // A family location removed (or any let go of meanwhile): its copies in this process go with it.
+        FamilyFilesDomains.shared.sweepUnrecorded()
     }
 
-    static func translate(_ error: Error) -> Error {
+    static func translate(_ error: Error, domain: NSFileProviderDomainIdentifier = FilesDomain.identifier) -> Error {
         // An error's text can carry decrypted names and paths: only its type is public.
         log.error("\(String(describing: type(of: error)), privacy: .public) \(String(describing: error), privacy: .private)")
         switch error {
         case let refused as NSFileProviderError:
             // The gate's refusal (signed out, or another account's location) reaches Files as it is.
-            if refused.code == .notAuthenticated { SignInPrompt.ask() }
+            if refused.code == .notAuthenticated { SignInPrompt.ask(domain) }
             return refused
         case DriveAPIError.notAuthenticated where !endsSession(error, current: SharedKeychain.session):
             // A late 401 of a session no longer stored (signed in again meanwhile): nothing to sign in to; Files tries again.
             return NSFileProviderError(.cannotSynchronize)
         case DriveAPIError.notAuthenticated:
-            SignInPrompt.ask()
+            SignInPrompt.ask(domain)
             return NSFileProviderError(.notAuthenticated)
         case DriveAPIError.transport:
             return NSFileProviderError(.serverUnreachable)
@@ -109,6 +168,17 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
             progress.completedUnitCount = 1
             return progress
         }
+        if family != nil {
+            Task {
+                do {
+                    completionHandler(try await familyItem(identifier, source: try requireFamily(), name: familyName), nil)
+                } catch {
+                    completionHandler(nil, FamilyErrors.translate(error, domain: self.domain.identifier))
+                }
+                progress.completedUnitCount = 1
+            }
+            return progress
+        }
         Task {
             do {
                 let vault = try requireVault()
@@ -134,6 +204,18 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                        request: NSFileProviderRequest,
                        completionHandler: @escaping (URL?, NSFileProviderItem?, Error?) -> Void) -> Progress {
         let progress = Progress(totalUnitCount: 100)
+        if family != nil {
+            let task = Task {
+                do {
+                    let (file, item) = try await familyContents(itemIdentifier, source: try requireFamily(), progress: progress)
+                    completionHandler(file, item, nil)
+                } catch {
+                    completionHandler(nil, nil, FamilyErrors.translate(error, domain: self.domain.identifier))
+                }
+            }
+            progress.cancellationHandler = { task.cancel() }
+            return progress
+        }
         let task = Task {
             do {
                 // The vault first (opening may claim this folder for the account), then the copy's gate, kept to that
@@ -170,6 +252,11 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                     options: NSFileProviderCreateItemOptions = [], request: NSFileProviderRequest,
                     completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
         let progress = Progress(totalUnitCount: 100)
+        if family != nil {
+            // A family location is read only: nothing is made in it from Files.
+            completionHandler(nil, [], false, CocoaError(.fileWriteNoPermission))
+            return progress
+        }
         let task = Task {
             do {
                 let vault = try requireVault()
@@ -201,6 +288,25 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                     options: NSFileProviderModifyItemOptions = [], request: NSFileProviderRequest,
                     completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
         let progress = Progress(totalUnitCount: 100)
+        if family != nil {
+            // Read only: contents, a name or a place are refused, and nothing is sent. What Files changes on its own when a
+            // file is opened (last used, tags, ranks, attributes) is acknowledged without being stored, as the drive does,
+            // or every opened file would wait to sync for ever.
+            guard changedFields.isDisjoint(with: [.contents, .filename, .parentItemIdentifier]) else {
+                completionHandler(nil, [], false, CocoaError(.fileWriteNoPermission))
+                return progress
+            }
+            Task {
+                do {
+                    let current = try await familyItem(item.itemIdentifier, source: try requireFamily(), name: familyName)
+                    completionHandler(current, [], false, nil)
+                } catch {
+                    completionHandler(nil, [], false, FamilyErrors.translate(error, domain: self.domain.identifier))
+                }
+                progress.completedUnitCount = 100
+            }
+            return progress
+        }
         let task = Task {
             do {
                 let vault = try requireVault()
@@ -256,6 +362,11 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                     options: NSFileProviderDeleteItemOptions = [], request: NSFileProviderRequest,
                     completionHandler: @escaping (Error?) -> Void) -> Progress {
         let progress = Progress(totalUnitCount: 1)
+        if family != nil {
+            completionHandler(NSFileProviderError(.deletionRejected))
+            progress.completedUnitCount = 1
+            return progress
+        }
         Task {
             do {
                 let vault = try requireVault()
@@ -273,6 +384,26 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
                          perThumbnailCompletionHandler: @escaping (NSFileProviderItemIdentifier, Data?, Error?) -> Void,
                          completionHandler: @escaping (Error?) -> Void) -> Progress {
         let progress = Progress(totalUnitCount: Int64(itemIdentifiers.count))
+        if family != nil {
+            Task {
+                do {
+                    let source = try requireFamily()
+                    for identifier in itemIdentifiers {
+                        do {
+                            guard let ref = FamilyFileIds.ref(identifier.rawValue) else { throw FamilyFilesError.notInFamily }
+                            perThumbnailCompletionHandler(identifier, try await source.thumbnail(ref), nil)
+                        } catch {
+                            perThumbnailCompletionHandler(identifier, nil, FamilyErrors.translate(error, domain: self.domain.identifier))
+                        }
+                        progress.completedUnitCount += 1
+                    }
+                    completionHandler(nil)
+                } catch {
+                    completionHandler(FamilyErrors.translate(error, domain: self.domain.identifier))
+                }
+            }
+            return progress
+        }
         Task {
             do {
                 let vault = try requireVault()
@@ -295,6 +426,13 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
 
     func enumerator(for containerItemIdentifier: NSFileProviderItemIdentifier,
                     request: NSFileProviderRequest) throws -> NSFileProviderEnumerator {
+        if family != nil {
+            do { _ = try requireFamily() } catch { throw FamilyErrors.translate(error, domain: self.domain.identifier) }
+            return FamilyEnumerator(container: containerItemIdentifier, domain: domain.identifier) { [weak self] in
+                guard let self else { throw NSFileProviderError(.noSuchItem) }
+                return try self.requireFamily()
+            }
+        }
         _ = try requireVault()
         return FileProviderEnumerator(container: containerItemIdentifier, gate: gate)
     }
@@ -308,18 +446,12 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
  * into its signed-out state, where Files offers the sheet; once is enough until someone signs in.
  */
 enum SignInPrompt {
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var asked = false
-
-    static func ask() {
-        let first = lock.withLock { () -> Bool in
-            defer { asked = true }
-            return !asked
-        }
-        guard first, let manager = NSFileProviderManager(for: NSFileProviderDomain(identifier: FilesDomain.identifier, displayName: "HushOS"))
-        else { return }
+    /* The location `domain` (the drive's, or a family's) asks, once until someone signs in. */
+    static func ask(_ domain: NSFileProviderDomainIdentifier = FilesDomain.identifier) {
+        guard SignInAsks.shared.first(domain.rawValue),
+              let manager = NSFileProviderManager(for: NSFileProviderDomain(identifier: domain, displayName: "HushOS")) else { return }
         manager.signalEnumerator(for: .workingSet) { _ in }
     }
 
-    static func reset() { lock.withLock { asked = false } }
+    static func reset() { SignInAsks.shared.reset() }
 }

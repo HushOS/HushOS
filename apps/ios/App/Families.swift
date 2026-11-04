@@ -257,7 +257,7 @@ extension DriveStore {
             guard case .success(let found) = result else { return }
             // A 401 the sync met is any request's: the app asks whether the session ended.
             if let ended = found.1 { self.report(ended) }
-            await self.show(found.0.state, of: summary, previous: previous, revision: found.0.revision, session: session)
+            await self.show(found.0.state, of: summary, previous: previous, revision: found.0.revision, filesGeneration: found.0.filesGeneration, session: session)
         })
     }
 
@@ -311,7 +311,8 @@ extension DriveStore {
      * goes on only while its publication is still the latest (`stillShown`), so an older result
      * never clears, deletes or redraws over a newer one.
      */
-    private func show(_ state: FamilyState, of summary: GroupSummary, previous: FamilyState?, revision: UInt64? = nil, session: Session) async {
+    private func show(_ state: FamilyState, of summary: GroupSummary, previous: FamilyState?, revision: UInt64? = nil, filesGeneration: UInt64? = nil,
+                      session: Session) async {
         guard current(session), publishFamily(state, of: summary.id, revision: revision) else { return }
         let shownAs = familyGenerations.current(summary.id)
         func stillShown() -> Bool { current(session) && familyGenerations.current(summary.id) == shownAs }
@@ -334,6 +335,13 @@ extension DriveStore {
         for (area, groupId) in areas { familyAreaGroups[area] = groupId }
         guard stillShown() else { return }
         if case .accepted(let view) = state {
+            // In the Files app too: its location added (or kept) for this account, unless it was let go of, in any process,
+            // since the check began. Only a sync carries that (a join's or a member check's acceptance adds nothing; the next
+            // sync does).
+            let vault = session.owner
+            FamilyFilesDomains.shared.accepted(summary.id, name: summary.name, workspaces: view.areas.map(\.workspaceId),
+                                               owner: AccountOwner(vault.api.session), observed: filesGeneration, session: vault.copySession,
+                                               signedIn: vault.api.session)
             familyShown[summary.id] = view
             for root in view.areas.compactMap({ $0.root?.id.lowercased() }) { familyRoots[root] = summary.id }
             let groupId = summary.id
@@ -440,6 +448,11 @@ extension DriveStore {
     }
 
     /* Which family a folder on screen belongs to: a top folder by route 25, anything else by its workspace. */
+    /* Files is told `folder` changed: its family's location for a family folder, the drive's otherwise (`FilesDomain.signalFor`). */
+    func signalFiles(folder: String?) {
+        FilesDomain.signalFor(folderId: folder, familyGroup: folder.flatMap { familyGroup(ofFolder: $0) })
+    }
+
     func familyGroup(ofFolder id: String) -> String? {
         if let group = familyRoots[id.lowercased()] ?? familyFolders[id.lowercased()] { return group }
         return known(id).flatMap { familyAreaGroups[$0.node.workspaceId.lowercased()] }
