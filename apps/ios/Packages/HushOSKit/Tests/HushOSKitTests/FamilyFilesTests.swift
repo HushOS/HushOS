@@ -1320,6 +1320,41 @@ extension OnFakeDrive {
         }
 
         /*
+         * A family folder made on the web while the app was closed is found and accepted first by the
+         * extension (the record still names the app's older list of folders): the extension records it
+         * before serving it, so another extension instance's start-up sweep leaves its download. Fails
+         * if only the app's acceptances write the folders a sweep keeps.
+         */
+        @Test func aFolderTheExtensionAcceptsFirstKeepsItsCopiesThroughAnotherInstancesSweep() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            let (group, workspace) = (s.family.groupId, s.family.workspaceId.lowercased())
+            // The app recorded the family before this folder existed.
+            s.records.update { stored in stored.records[group]?.workspaces = [] }
+            _ = try await s.source.children(of: NodeRef(workspaceId: s.family.workspaceId, nodeId: s.family.rootId))
+            let (file, _) = try await s.source.download(s.family.photo.ref)
+            #expect(try s.records.read()[group]?.workspaces == [workspace], "the extension served a folder it didn't record")
+            let other = FamilyFilesDomains(records: s.records, manager: s.manager, temporary: s.temporary)
+            #expect(other.sweepUnrecorded())
+            #expect(FileManager.default.fileExists(atPath: file.path), "another instance's sweep deleted a download of a folder the extension accepted")
+
+            // Signed in again elsewhere while the next check waits on the server: that check records nothing.
+            s.records.update { stored in stored.records[group]?.workspaces = [] }
+            let (server, shared) = (s.server, s.shared)
+            let next = SharedKeychain.Session(origin: "https://family.test", token: "signed-in-again", userId: s.family.member.userId)
+            server.lock.withLock {
+                server.manage.beforeAnswer = { method, path in
+                    guard method == "GET", path == "/api/groups" else { return }
+                    server.lock.withLock { server.manage.beforeAnswer = nil }
+                    shared.session = next
+                }
+            }
+            s.clock.now = s.clock.now.addingTimeInterval(120)
+            _ = try? await s.source.folders()
+            #expect(try s.records.read()[group]?.workspaces == [], "a check whose session ended meanwhile wrote the record")
+        }
+
+        /*
          * The same account signs in again in the app (a new token in the shared keychain) while the
          * extension's sync of the old session still runs: its late definite refusal, written at once
          * or left pending and written later, lets nothing of the new session's location go. Fails if

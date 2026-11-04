@@ -866,6 +866,9 @@ public actor FamilyFilesSource {
         let revised = await sync.syncRevised(summary)
         switch revised.state {
         case .accepted(let accepted):
+            // Its folders recorded before any is served: another process's sweep keeps their copies (a folder made while the
+            // app was closed is found here first).
+            recordFolders(accepted.areas)
             view = accepted
             snapshotHeads = heads ?? [:]
             known.formUnion(accepted.areas.map { $0.workspaceId.lowercased() })
@@ -883,6 +886,26 @@ public actor FamilyFilesSource {
             view = nil
             dropCopies()
             throw FamilyFilesError.letGo
+        }
+    }
+
+    /*
+     * The folders an accepted view names, merged into the location's record (never taken out of it:
+     * a stale view here must not shrink what another process's sweep keeps), under the store's lock:
+     * only while this session stands (here and in the shared keychain), no let-go is pending, and
+     * the record is still this account's, written at the family's generation now (no let-go or
+     * account change since). Nothing else of the record changes, and no generation moves.
+     */
+    private func recordFolders(_ areas: [FamilyArea]) {
+        let found = Set(areas.map { $0.workspaceId.lowercased() })
+        guard !found.isEmpty, domains?.revocationPending(groupId) != true else { return }
+        records.update { [self] stored in
+            guard vault.copySession.stands, sharedSession() == session, var record = stored.records[groupId], record.owner == owner,
+                  (record.generation ?? 0) == stored.generation(groupId) else { return }
+            let held = Set(record.workspaces ?? [])
+            guard !found.isSubset(of: held) else { return }
+            record.workspaces = held.union(found).sorted()
+            stored.records[groupId] = record
         }
     }
 
