@@ -89,21 +89,38 @@ object Resumable {
         onExpired: () -> Unit = {},
         progress: (Float) -> Unit = {},
         fileSize: Long? = null,
+        // With a lock, every step that touches the disk runs under it after `check` (a family file whose folder may be let go of).
+        lock: Any? = null,
+        check: () -> Unit = {},
+        // With a guard, every step that touches the disk runs inside it too, after `lock` (the account's own lock, say, so a
+        // step either comes before an account's wipe, which deletes what it wrote, or not at all: the guard throws).
+        guard: ((() -> Any) -> Any)? = null,
         fetch: (ULong) -> ByteArray,
     ) {
-        destination.parentFile?.mkdirs()
+        fun <T : Any> disk(step: () -> T): T {
+            @Suppress("UNCHECKED_CAST")
+            val guarded: () -> T = if (guard == null) step else ({ guard(step) as T })
+            return if (lock == null) guarded() else synchronized(lock) { check(); guarded() }
+        }
         val partial = File(destination.path + ".part")
-        val kept = if (partial.exists()) (partial.length() / chunkBytes).toULong().coerceAtMost(count) else 0uL
-        RandomAccessFile(partial, "rw").use { file ->
+        val opened = disk {
+            destination.parentFile?.mkdirs()
+            val kept = if (partial.exists()) (partial.length() / chunkBytes).toULong().coerceAtMost(count) else 0uL
+            kept to RandomAccessFile(partial, "rw")
+        }
+        val kept = opened.first
+        opened.second.use { file ->
             // Whatever came after the last whole chunk may be cut short: drop it and fetch that chunk again.
-            file.setLength(kept.toLong() * chunkBytes)
-            file.seek(file.length())
+            disk { file.setLength(kept.toLong() * chunkBytes); file.seek(file.length()) }
             for (index in kept until count) {
-                file.write(run(online, sleep, onExpired) { fetch(index) })
+                val chunk = run(online, sleep, onExpired) { fetch(index) }
+                disk { file.write(chunk) }
                 progress(fraction(index + 1uL, count, chunkBytes, fileSize))
             }
         }
-        if (destination.exists()) destination.delete()
-        if (!partial.renameTo(destination)) throw IOException("Could not keep ${destination.name}")
+        disk {
+            if (destination.exists()) destination.delete()
+            if (!partial.renameTo(destination)) throw IOException("Could not keep ${destination.name}")
+        }
     }
 }

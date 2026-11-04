@@ -85,12 +85,20 @@
     }
 }
 
+/*
+ * Which side of a button its icon is on, for the optical balance in button.tsx (DESIGN.md, Layout).
+ * Arrows and chevrons point onward and trail the words; any other icon leads them.
+ */
+@custom-variant icon-start (&:has(> svg:first-child:not(.lucide-arrow-right, .lucide-arrow-up-right, .lucide-chevron-down, .lucide-chevron-right, .lucide-external-link, .lucide-square-arrow-out-up-right)));
+@custom-variant icon-end (&:has(> svg:last-child:is(.lucide-arrow-right, .lucide-arrow-up-right, .lucide-chevron-down, .lucide-chevron-right, .lucide-external-link, .lucide-square-arrow-out-up-right)));
+
 @theme inline {
     --font-sans: 'Geist Variable', 'Geist Fallback', sans-serif;
     --font-mono: 'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, monospace;
     --color-background: var(--background);
     --color-foreground: var(--foreground);
     --color-card: var(--card);
+    --color-panel: var(--panel);
     --color-card-foreground: var(--card-foreground);
     --color-popover: var(--popover);
     --color-popover-foreground: var(--popover-foreground);
@@ -159,6 +167,8 @@
     --foreground: var(--ink);
 
     --card: var(--surface);
+    /* The app's page panel, which the list and its header sit on: the surface in the light, the ground in the dark. */
+    --panel: var(--surface);
     --card-foreground: var(--ink);
     --popover: var(--surface);
     --popover-foreground: var(--ink);
@@ -202,7 +212,10 @@
  * `open` (links no longer have a colour), so `open` can be renamed or removed
  * without touching the web. The warning values are the ones `open` had, already
  * checked for contrast; the yellow tag carries ink that reads on it at AA, or AAA
- * in high contrast. Same four schemes, selectors and order as @hushos/tokens.
+ * in high contrast. The folder steps are the lightness and vividness a folder in
+ * its own colour is drawn at (FolderMark), and the sheet steps those of a file's
+ * type label, edge and fill (SheetMark); the phones' twin of both is in the Rust
+ * core's colour.rs. Same four schemes, selectors and order as @hushos/tokens.
  */
 :root,
 .light {
@@ -210,6 +223,16 @@
     --warning-soft: #f7eddc;
     --tag-yellow: #b8860b;
     --on-tag-yellow: #17203a;
+    --folder-front-l: 0.8;
+    --folder-front-c: 0.11;
+    --folder-back-l: 0.66;
+    --folder-back-c: 0.132;
+    --sheet-label-l: 0.5;
+    --sheet-label-c: 0.15;
+    --sheet-edge-l: 0.86;
+    --sheet-edge-c: 0.05;
+    --sheet-fill-l: 0.992;
+    --sheet-fill-c: 0.012;
 }
 @media (prefers-color-scheme: dark) {
     :root:not(.light) {
@@ -217,6 +240,16 @@
         --warning-soft: #33281a;
         --tag-yellow: #e3b341;
         --on-tag-yellow: #121833;
+        --folder-front-l: 0.68;
+        --folder-front-c: 0.121;
+        --folder-back-l: 0.54;
+        --folder-back-c: 0.121;
+        --sheet-label-l: 0.74;
+        --sheet-label-c: 0.136;
+        --sheet-edge-l: 0.44;
+        --sheet-edge-c: 0.04;
+        --sheet-fill-l: 0.27;
+        --sheet-fill-c: 0.015;
     }
 }
 .dark {
@@ -224,6 +257,16 @@
     --warning-soft: #33281a;
     --tag-yellow: #e3b341;
     --on-tag-yellow: #121833;
+    --folder-front-l: 0.68;
+    --folder-front-c: 0.121;
+    --folder-back-l: 0.54;
+    --folder-back-c: 0.121;
+    --sheet-label-l: 0.74;
+    --sheet-label-c: 0.136;
+    --sheet-edge-l: 0.44;
+    --sheet-edge-c: 0.04;
+    --sheet-fill-l: 0.27;
+    --sheet-fill-c: 0.015;
 }
 @media (prefers-contrast: more) {
     :root:not(.dark) {
@@ -231,6 +274,12 @@
         --warning-soft: #f7eddc;
         --tag-yellow: #6b4d00;
         --on-tag-yellow: #ffffff;
+        --folder-front-l: 0.58;
+        --folder-front-c: 0.15;
+        --folder-back-l: 0.46;
+        --folder-back-c: 0.15;
+        --sheet-label-l: 0.42;
+        --sheet-label-c: 0.15;
     }
 }
 @media (prefers-contrast: more) and (prefers-color-scheme: dark) {
@@ -239,6 +288,12 @@
         --warning-soft: #2b1f0b;
         --tag-yellow: #ffd966;
         --on-tag-yellow: #000000;
+        --folder-front-l: 0.82;
+        --folder-front-c: 0.1;
+        --folder-back-l: 0.7;
+        --folder-back-c: 0.11;
+        --sheet-label-l: 0.84;
+        --sheet-label-c: 0.11;
     }
 }
 .hc:not(.dark) {
@@ -246,6 +301,12 @@
     --warning-soft: #f7eddc;
     --tag-yellow: #6b4d00;
     --on-tag-yellow: #ffffff;
+    --folder-front-l: 0.58;
+    --folder-front-c: 0.15;
+    --folder-back-l: 0.46;
+    --folder-back-c: 0.15;
+    --sheet-label-l: 0.42;
+    --sheet-label-c: 0.15;
 }
 @media (prefers-color-scheme: dark) {
     .hc:not(.light) {
@@ -253,6 +314,12 @@
         --warning-soft: #2b1f0b;
         --tag-yellow: #ffd966;
         --on-tag-yellow: #000000;
+        --folder-front-l: 0.82;
+        --folder-front-c: 0.1;
+        --folder-back-l: 0.7;
+        --folder-back-c: 0.11;
+        --sheet-label-l: 0.84;
+        --sheet-label-c: 0.11;
     }
 }
 .dark.hc {
@@ -260,18 +327,58 @@
     --warning-soft: #2b1f0b;
     --tag-yellow: #ffd966;
     --on-tag-yellow: #000000;
+    --folder-front-l: 0.82;
+    --folder-front-c: 0.1;
+    --folder-back-l: 0.7;
+    --folder-back-c: 0.11;
+    --sheet-label-l: 0.84;
+    --sheet-label-c: 0.11;
 }
 
 /*
- * In the dark, the ground is darker than the panel, so a hover or a quiet fill
- * drawn in it reads as pressed in. There, muted is a lift from the panel instead.
+ * A folder in its own colour (@hushos/drive colour.ts): its hue and vividness
+ * (--fh, --fs on the mark), at this scheme's folder steps above.
+ */
+[data-folder-colour] {
+    --folder-front: oklch(var(--folder-front-l) calc(var(--folder-front-c) * var(--fs)) var(--fh));
+    --folder-back: oklch(var(--folder-back-l) calc(var(--folder-back-c) * var(--fs)) var(--fh));
+}
+
+/*
+ * A file in its type's colour (@hushos/drive colour.ts fileTypeHue): the label at
+ * this scheme's sheet steps, and the sheet faintly tinted. High contrast keeps the
+ * plain sheet and edge (the marks fall back to their tokens), so only the label tells.
+ */
+[data-file-hue] {
+    --sheet-label: oklch(var(--sheet-label-l) var(--sheet-label-c) var(--th));
+    --sheet-edge: oklch(var(--sheet-edge-l) var(--sheet-edge-c) var(--th));
+    --sheet-fill: oklch(var(--sheet-fill-l) var(--sheet-fill-c) var(--th));
+}
+@media (prefers-contrast: more) {
+    [data-file-hue] {
+        --sheet-edge: initial;
+        --sheet-fill: initial;
+    }
+}
+.hc [data-file-hue] {
+    --sheet-edge: initial;
+    --sheet-fill: initial;
+}
+
+/*
+ * In the dark the app's panel is the black ground, as Apple's Files app is, and only its
+ * hairline edge marks it on a desk; cards, menus and dialogs stay the surface above it.
+ * A hover or a quiet fill drawn in the ground would vanish there, so muted is a lift
+ * from the surface instead, which reads as raised on the black and on a card alike.
  */
 @media (prefers-color-scheme: dark) {
     :root:not(.light) {
+        --panel: var(--ground);
         --muted: color-mix(in oklab, var(--ink) 7%, var(--surface));
     }
 }
 :root.dark {
+    --panel: var(--ground);
     --muted: color-mix(in oklab, var(--ink) 7%, var(--surface));
 }
 
@@ -309,6 +416,9 @@
     }
     * {
         @apply border-border outline-ring;
+        /* Thin scrollbars everywhere (dialogs, menus, lists), with the field edge as the thumb, no track. */
+        scrollbar-width: thin;
+        scrollbar-color: var(--input) transparent;
     }
     html {
         text-rendering: optimizeLegibility;
@@ -326,7 +436,7 @@
     button,
     summary,
     [role='menuitem'] {
-        @apply focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring;
+        @apply focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring;
     }
     strong {
         @apply font-bold text-foreground;
@@ -352,6 +462,30 @@
     @apply font-sans text-xs leading-none font-semibold tracking-normal normal-case;
 }
 
+/*
+ * Align the text, not the box (DESIGN.md, Layout). A quiet button that ends a row hangs its
+ * padding past the column's edge, so its words line up with the edge above it; its hover tint
+ * hangs too. On the container whose last child it is.
+ */
+@utility hang-end {
+    /* Its end padding and its 1px border (transparent on a quiet button). */
+    & > :is([data-variant='ghost'], [data-variant='destructive-ghost']):last-child {
+        margin-inline-end: calc((var(--btn-px, 0px) + var(--icon-shift, 0px) + 1px) * -1);
+    }
+}
+
+/*
+ * A button's side padding (button.tsx sets --btn-px per size), nudged toward its icon. Its end is
+ * what hang-end takes back. In the components layer, so any padding utility a call site passes
+ * replaces it.
+ */
+@layer components {
+    .btn-pad {
+        padding-inline-start: calc(var(--btn-px) - var(--icon-shift, 0px));
+        padding-inline-end: calc(var(--btn-px) + var(--icon-shift, 0px));
+    }
+}
+
 /* The surface that holds a page's content, raised from the ground. */
 @utility sheet {
     @apply rounded-xs bg-card shadow-sheet;
@@ -359,4 +493,111 @@
 
 @utility text-link {
     @apply text-primary underline decoration-1 underline-offset-4 transition-colors hover:text-primary-hover;
+}
+
+/*
+ * Drive's motion (the Marks direction): rows and tiles enter by fading in, rising
+ * 6px and sharpening from a 2px blur over 0.3s, 22ms apart and no later than the
+ * fourteenth (--i from reveal() in file-list.tsx); a row's mark presses to 92% and a
+ * row's hover fades in. Buttons press to 96% (components/ui/button.tsx). None of it
+ * runs under reduced motion.
+ */
+@media (prefers-reduced-motion: no-preference) {
+    [data-reveal] {
+        animation: row-in 0.3s cubic-bezier(0.2, 0, 0, 1) both;
+        animation-delay: calc(min(var(--i, 0), 14) * 22ms);
+    }
+
+    [data-node-id] {
+        transition:
+            background-color 150ms ease-out,
+            box-shadow 150ms ease-out;
+    }
+
+    [data-node-id] [data-row-thumb] > * {
+        transition: scale 150ms ease-out;
+    }
+
+    [data-node-id]:active [data-row-thumb] > * {
+        scale: 0.92;
+    }
+}
+
+@keyframes row-in {
+    from {
+        opacity: 0;
+        translate: 0 6px;
+        filter: blur(2px);
+    }
+}
+
+/*
+ * Dragging rows (FolderView's DragCard): the rows being dragged fade back, and the
+ * folder they are over takes its own colour (folderTint; the plain folder colour when
+ * it has none) in place of the accent. The card lifts in, its marks fanned with a
+ * soft edge so white sheets stay apart, and on a drop it shrinks into the folder's
+ * mark. Reduced motion keeps the fade and the colour and drops the movement.
+ */
+[data-node-id][data-dragging] {
+    opacity: 0.4;
+}
+
+[data-node-id][data-drop-over] {
+    background-color: color-mix(in oklab, var(--folder-front) 28%, var(--surface));
+    --tw-ring-color: var(--folder-back);
+}
+
+[data-drag-mark] {
+    filter: drop-shadow(0 1px 1.5px rgb(23 32 58 / 0.28));
+}
+
+[data-drag-mark] + [data-drag-mark] {
+    filter: drop-shadow(0 1px 1.5px rgb(23 32 58 / 0.28)) brightness(0.93);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not(.light) [data-drag-mark] {
+        filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.6));
+    }
+
+    :root:not(.light) [data-drag-mark] + [data-drag-mark] {
+        filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.6)) brightness(0.85);
+    }
+}
+
+.dark [data-drag-mark] {
+    filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.6));
+}
+
+.dark [data-drag-mark] + [data-drag-mark] {
+    filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.6)) brightness(0.85);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    [data-drag-card] {
+        transform-origin: 26px 26px;
+        animation: card-lift 160ms cubic-bezier(0.2, 0, 0, 1) both;
+    }
+
+    [data-drag-card][data-landing] {
+        scale: 0.35;
+        opacity: 0;
+        transition:
+            left 220ms cubic-bezier(0.4, 0, 0.2, 1),
+            top 220ms cubic-bezier(0.4, 0, 0.2, 1),
+            scale 220ms cubic-bezier(0.4, 0, 0.2, 1),
+            opacity 160ms ease-in 60ms;
+    }
+
+    [data-drag-mark] {
+        transition: transform 160ms cubic-bezier(0.2, 0, 0, 1);
+    }
+}
+
+@keyframes card-lift {
+    from {
+        opacity: 0;
+        scale: 0.92;
+        translate: 0 4px;
+    }
 }

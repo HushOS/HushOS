@@ -16,6 +16,7 @@ struct HushOSApp: App {
         TemporaryCopies.sweep()
         // Before launch finishes, or iOS will not run it.
         BackgroundTransfers.registerTask()
+        FamilyWalkTasks.register()
         // Before launch finishes, so a tap on a transfers notification that launched the app arrives.
         TransferNotices.shared.start()
         Theme.configureAppearance()
@@ -69,12 +70,16 @@ struct RootView: View {
         .fullScreenCover(isPresented: Binding(get: { model.recovering }, set: { if !$0 { model.recoveryDone() } })) { RecoveryView() }
         // hushos:// links, and https links when the system hands them over as a URL.
         .onOpenURL { url in model.open(url) }
-        // Universal links: https://<server>/s/…, /app, /app/drive…, /app/shared…, /app/trash….
+        // Universal links: https://<server>/s/…, /join, /recover/complete, /app, /app/drive…, /app/shared…, /app/trash….
         .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
             if let url = activity.webpageURL { model.open(url) }
         }
         // Notices go in their own window, above any sheet that is open.
         .onAppear { NoticeWindow.install() }
+        #if DEBUG
+        // -HushOSForceRegular: iPhone Duo's inner display size and traits on any simulator (InnerDisplayHarness).
+        .background { if InnerDisplayHarness.enabled { InnerDisplayHarnessHook() } }
+        #endif
     }
 }
 

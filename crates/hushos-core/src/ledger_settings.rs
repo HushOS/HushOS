@@ -80,6 +80,28 @@ fn open_document(user_id: &str, key: &[u8], envelope: &SettingsEnvelope) -> Core
 pub(crate) struct SettingsReading {
     pub(crate) pins: HashMap<String, Value>,
     pub(crate) contacts: Vec<(String, Value)>,
+    /* `{ ...settings.familyChecks }`: each family's check record as filed, read when acceptance takes its marks. */
+    pub(crate) checks: HashMap<String, Value>,
+}
+
+/*
+ * The family's check record among `checks` (the worker's familyCheckOf): whether there is one (any
+ * value but none or a JSON null) and the pair mark acceptance holds it as. A record without a
+ * `code` (the migration's `before` record) is a mark but no pair mark; anything else is a pair
+ * mark, refused for this family alone when it is not one.
+ */
+pub(crate) fn family_check_of(
+    checks: &HashMap<String, Value>,
+    group_id: &str,
+) -> CoreResult<(bool, Vec<crate::group_trust::PairMark>)> {
+    let record = match checks.get(group_id) {
+        None | Some(Value::Null) => return Ok((false, vec![])),
+        Some(record) => record,
+    };
+    if record.as_object().is_some_and(|object| !object.contains_key("code")) {
+        return Ok((true, vec![]));
+    }
+    crate::group_trust::pair_mark_of(record).map(|mark| (true, vec![mark]))
 }
 
 /* The `contacts` member as JavaScript holds it: an object's members in order (a key again keeps its place, takes the last value), or what kind it was. */
@@ -216,7 +238,11 @@ pub(crate) fn read_document(plaintext: &[u8]) -> CoreResult<SettingsReading> {
         Some(Value::Object(groups)) => groups.iter().map(|(id, pin)| (id.clone(), pin.clone())).collect(),
         _ => HashMap::new(),
     };
-    Ok(SettingsReading { pins, contacts })
+    let checks = match members.get("familyChecks") {
+        Some(Value::Object(checks)) => checks.iter().map(|(id, at)| (id.clone(), at.clone())).collect(),
+        _ => HashMap::new(),
+    };
+    Ok(SettingsReading { pins, contacts, checks })
 }
 
 /*
@@ -430,7 +456,13 @@ impl AreaLedger {
         };
         let Some(envelope) = settings_envelope else {
             let (_, generation, root) = unlocked()?;
-            return self.set_settings(&user_id, false, 0, HashMap::new(), vec![], Some((generation, &root)));
+            return self.set_settings(
+                &user_id,
+                false,
+                0,
+                (HashMap::new(), vec![], HashMap::new()),
+                Some((generation, &root)),
+            );
         };
         if !(1..=2).contains(&envelope.version)
             || !(1..=MAX_SAFE_INTEGER).contains(&envelope.settings_version)
@@ -457,8 +489,7 @@ impl AreaLedger {
             &user_id,
             true,
             envelope.settings_version,
-            pins,
-            reading.contacts,
+            (pins, reading.contacts, reading.checks),
             Some((generation, &root)),
         )
     }
@@ -467,7 +498,8 @@ impl AreaLedger {
 /// A settings document's plaintext read as the ledger reads it, with what
 /// each probe finds: for each of `user_ids` the contact pin (its key parts
 /// and fingerprint where they are strings, whether an admission takes it as
-/// a words check), for each of `group_ids` the group pin's verdict. For the
+/// a words check), for each of `group_ids` the group pin's verdict and the
+/// family check record as acceptance holds it (`checks`). For the
 /// shared fixtures and the fuzz kind `settings` only (`readSettingsDocument`
 /// and the worker's marks in the web twin).
 #[cfg(feature = "fixtures")]
@@ -510,7 +542,19 @@ pub fn settings_document_verdict(plaintext: &[u8], user_ids: &[String], group_id
         };
         groups.insert(group_id.clone(), verdict);
     }
-    json!({ "status": "read", "contacts": contacts, "groups": groups })
+    // Each family's check record as acceptance would hold it: none, a mark, a pair mark, or refused.
+    let mut checks = Map::new();
+    for group_id in group_ids {
+        let verdict = match family_check_of(&reading.checks, group_id) {
+            Ok((false, _)) => Value::Null,
+            Ok((true, marks)) => json!({ "pairMark": marks.first().map(|mark| json!({
+                "rosterVersion": mark.roster_version, "with": mark.with, "code": mark.code,
+            })) }),
+            Err(_) => json!({ "refused": true }),
+        };
+        checks.insert(group_id.clone(), verdict);
+    }
+    json!({ "status": "read", "contacts": contacts, "groups": groups, "checks": checks })
 }
 
 #[cfg(test)]

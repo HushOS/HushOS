@@ -36,7 +36,7 @@ class RestoredVersionTest {
     fun aRestoredVersionShowsItsOwnSizeAndTheRestoreAsItsDate() {
         val key = randomBytes(32u)
         // The metadata still says 156 KB, uploaded at 01:36; the version now current is 3.9 KB.
-        val row = openedRow(node(key, 4_000), NodeMetadata("notes.txt", "text/plain", 160_000uL, uploaded), key)
+        val row = openedRow(node(key, 4_000), NodeMetadata("notes.txt", "text/plain", 160_000uL, uploaded, emptyMap()), key)
         assertEquals(4_000L, row.size)
         assertEquals(Instant.parse(restored).toEpochMilli(), row.modifiedMillis)
     }
@@ -44,7 +44,7 @@ class RestoredVersionTest {
     @Test
     fun aFileThatWasNeverRestoredKeepsItsOwnDate() {
         val key = randomBytes(32u)
-        val row = openedRow(node(key, 4_000), NodeMetadata("notes.txt", "text/plain", 4_000uL, uploaded), key)
+        val row = openedRow(node(key, 4_000), NodeMetadata("notes.txt", "text/plain", 4_000uL, uploaded, emptyMap()), key)
         assertEquals(4_000L, row.size)
         // The node changed later (a rename, a move), but the file itself is from its upload.
         assertEquals(Instant.parse(uploaded).toEpochMilli(), row.modifiedMillis)

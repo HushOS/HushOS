@@ -25,7 +25,7 @@ struct NodeCacheTests {
     func sealed(_ id: String, workspace: String, parent: String?, parentKey: Data, key: Data, suite: Int? = nil) throws -> NodeView {
         let ctx = NodeKeyContext(workspaceId: workspace, nodeId: id, parentId: parent ?? workspace, parentKeyEpoch: 1, keyEpoch: 1)
         let metadata = try metadataSeal(ctx: MetadataContext(workspaceId: workspace, nodeId: id, metadataVersion: 1), nodeKey: key,
-                                        metadata: NodeMetadata(name: id, mime: nil, size: nil, modified: nil))
+                                        metadata: NodeMetadata(name: id, mime: nil, size: nil, modified: nil, attributes: [:]))
         return NodeView(id: id, workspaceId: workspace, parentId: parent, kind: "folder", keyEpoch: 1, parentKeyEpoch: 1,
                         keyEnvelope: base64urlEncode(bytes: try nodeWrap(ctx: ctx, parentKey: parentKey, nodeKey: key)),
                         metadataVersion: 1, metadataEnvelope: base64urlEncode(bytes: metadata), currentVersion: nil,
@@ -54,7 +54,7 @@ struct NodeCacheTests {
         let serverKey = try randomBytes(length: 32)
         // The server's share: same id as the own top folder, in a workspace it controls.
         let fake = try sealed(rootId, workspace: foreign, parent: nil, parentKey: serverKey, key: serverKey)
-        _ = try await vault.adopt(fake, nodeKey: serverKey, metadata: NodeMetadata(name: "Drive", mime: nil, size: nil, modified: nil), in: foreign)
+        _ = try await vault.adopt(fake, nodeKey: serverKey, metadata: NodeMetadata(name: "Drive", mime: nil, size: nil, modified: nil, attributes: [:]), in: foreign)
 
         #expect(await vault.nodeKey(rootId) == rootKey)
         #expect(await vault.item(rootId)?.node.workspaceId == own)
@@ -72,7 +72,7 @@ struct NodeCacheTests {
         // A reply claiming the own drive for a write made into a received folder: refused, own key kept.
         let reply = try sealed(rootId, workspace: own, parent: nil, parentKey: serverKey, key: serverKey)
         await #expect(throws: DriveAPIError.self) {
-            _ = try await vault.adopt(reply, nodeKey: serverKey, metadata: NodeMetadata(name: "x", mime: nil, size: nil, modified: nil), in: foreign)
+            _ = try await vault.adopt(reply, nodeKey: serverKey, metadata: NodeMetadata(name: "x", mime: nil, size: nil, modified: nil, attributes: [:]), in: foreign)
         }
         #expect(await vault.nodeKey(rootId) == rootKey)
     }

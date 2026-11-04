@@ -6,7 +6,8 @@ import java.io.File
 /*
  * Everything this phone holds for one account: decrypted files kept on the phone,
  * files opened or fetched for the Files app, decrypted thumbnails, the parents index,
- * the transfer queue's copies, the tree mirror, recent searches. It belongs to the
+ * the transfer queue's copies, the tree mirror, recent searches, the contact and family guards, the families' device
+ * records. It belongs to the
  * account that signed in, recorded by user id, and goes on sign-out, on account
  * deletion, and before a different account signs in, so nothing of one account ever
  * shows to the next (Home, On this phone, search, the Files app).
@@ -14,7 +15,7 @@ import java.io.File
  * The files are plain directories so a JVM test can hold the rule to them; what lives
  * in preferences and SQLite goes through `forgetStores`.
  */
-class AccountStore(private val files: File, private val cache: File, private val forgetStores: () -> Unit = {}) {
+class AccountStore(private val files: File, private val cache: File, private val noBackup: File, private val forgetStores: () -> Unit = {}) {
     private val ownerFile = File(files, "account-owner")
 
     /* The account whose data is on the phone, or null when none is recorded. */
@@ -41,23 +42,42 @@ class AccountStore(private val files: File, private val cache: File, private val
 
     /* Sign-out and account deletion: every account file, decrypted or not, and the owner. */
     fun wipe(keepRecoveryFor: String? = null) {
+        // The upload ledger under its own lock first: an upload still on its way adds nothing back after this.
+        Reservations.wipe(files)
         for (name in ACCOUNT_FILES) File(files, name).deleteRecursively()
+        // What this process held of the account's saves (numbers given, bounds last read) goes with them.
+        WriteBacks.forgetHere()
+        // The rollback marks, sealed, and the plaintext file earlier versions kept across sign-outs: a phone signed back
+        // in trusts the server as a new device does, the cost the web accepted too (docs/integrity-design.md).
+        SettingsMark.deleteAll(noBackup)
+        // The contact guard too, under its own lock, so an act's write that waited through the sign-out writes nothing back:
+        // signed back in, this phone trusts the settings' contacts as a new device does (docs/optional-verification.md 2.8).
+        ContactGuard.deleteAll(noBackup)
         // Sign-out and removal: no recovery waits any more. Another account signing in keeps only its own (claim).
         RecoveryWords.keepOnlyFor(keepRecoveryFor)
         // The cache is all account data (opened files, links, the Files app's copies and
         // thumbnails, staged uploads, photos, the recovery kit) except JNA's native library.
         cache.listFiles()?.filterNot { it.name.startsWith("jna") }?.forEach { it.deleteRecursively() }
+        // The families' device records and joins records after the copies they tie to their families: a stop in between
+        // never leaves family copies with nothing that names them. The family guard went with the contact guard's folder.
+        FamilyRecords.deleteAll(noBackup)
         forgetStores()
         ownerFile.delete()
     }
 
     companion object {
-        /* Under filesDir: kept files, the upload queue's copies, the node-to-parent index, failed transfers and the ones awaiting a notification. */
-        private val ACCOUNT_FILES = listOf("offline", "queue", "files-parents.json", FailedTransfers.FILE, TransferNotices.OUTCOMES, ShareSeals.FILE, PendingRotations.FILE, LandedJobs.DIR)
+        /*
+         * Under filesDir: kept files, the upload queue's copies, the node-to-parent index, failed transfers and the ones
+         * awaiting a notification, and the upload reservations ledger: another account's session can't settle them (a
+         * workspace's 404 would read as released), so they go with the account, and the server's expiry releases them.
+         */
+        private val ACCOUNT_FILES = listOf("offline", "queue", "files-parents.json", FailedTransfers.FILE, TransferNotices.OUTCOMES, ShareSeals.FILE, PendingRotations.FILE, LandedJobs.DIR, WriteBacks.LANDINGS, WriteBacks.NUMBERS, WriteBacks.EDITS, JobNames.FILE, JobNames.STAGED, Reservations.FILE, Reservations.NEXT)
 
-        fun of(context: Context): AccountStore = AccountStore(context.filesDir, context.cacheDir) {
+        fun of(context: Context): AccountStore = AccountStore(context.filesDir, context.cacheDir, context.noBackupFilesDir) {
             // Jobs queued for that account would run under the next one's session.
             androidx.work.WorkManager.getInstance(context).cancelAllWorkByTag(TransferQueue.TAG)
+            // The family walks too: the next account's session would run them.
+            androidx.work.WorkManager.getInstance(context).cancelAllWorkByTag(FamilyWalkWork.TAG)
             // Finished jobs keep their names in WorkManager's records; failed ones stay on the panel until dealt with,
             // so they go here too, or the next account would see them.
             androidx.work.WorkManager.getInstance(context).pruneWork()

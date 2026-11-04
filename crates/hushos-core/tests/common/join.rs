@@ -18,8 +18,8 @@
 
 use super::device_records::{ledger_of, root, rotated_root};
 use super::groups::{
-    e, n, pattern, person, pin_from, pin_json, pin_of, s, served_keys, served_ml_dsa, signed_json, signed_of,
-    History, Person, GROUP,
+    e, group_seed, n, pattern, person, pin_from, pin_json, pin_of, s, served_keys, served_ml_dsa,
+    signed_json, signed_of, History, Person, GROUP,
 };
 use hushos_core::*;
 use serde_json::{json, Map, Value};
@@ -40,6 +40,15 @@ pub struct Family {
     pub succ: History,
     /* Another roster 2 that leaves person 2 out: served beside main's, a dead branch. */
     pub dead: History,
+    /*
+     * Person 3, a holder, at 2; person 2 let in at 3 (on first use), billing at 4; person 3
+     * removed at 5 with every folder rotated and a succession tied to it.
+     */
+    pub removal: History,
+    /* The same to 3, then another 4 and 5 (person 2 with members): another history above 3. */
+    pub removal_fork: History,
+    /* succ's rosters 1 and 2, then a succession to another key 2 (seed 7) and roster 3 under it. */
+    pub succ_other: (Vec<SignedGroupStatement>, Vec<SignedGroupStatement>),
 }
 
 fn join_with(p1: &Person, p2: &Person, roles: &[GroupRole]) -> History {
@@ -75,8 +84,45 @@ pub fn family() -> &'static Family {
         );
         let mut dead = History::format_2();
         dead.roster(&p1, vec![owner.clone()], None);
-        dead.roster(&p1, vec![owner], None);
-        Family { p1, p2, p3, main, other, succ, dead }
+        dead.roster(&p1, vec![owner.clone()], None);
+        let removal_of = |later: &[GroupRole]| {
+            let mut h = History::format_2();
+            let holder = p3.entry(&[GroupRole::Members], 1, MemberStatus::Active);
+            h.roster(&p1, vec![owner.clone()], None);
+            h.roster(&p1, vec![owner.clone(), holder.clone()], None);
+            h.roster(&p1, vec![owner.clone(), holder.clone(), p2.entry(&[], 1, MemberStatus::Active)], None);
+            h.roster(&p1, vec![owner.clone(), holder, p2.entry(later, 1, MemberStatus::Active)], None);
+            h.roster(
+                &p1,
+                vec![
+                    owner.clone(),
+                    p3.entry(&[GroupRole::Members], 1, MemberStatus::Left),
+                    p2.entry(later, 1, MemberStatus::Active),
+                ],
+                None,
+            );
+            h.succession(&p1);
+            h
+        };
+        let removal = removal_of(&[GroupRole::Billing]);
+        let removal_fork = removal_of(&[GroupRole::Members]);
+        let (key1, other7) = (succ.key(1), group_public_key(group_seed(7)).unwrap());
+        let away = GroupKeySuccession {
+            group_id: GROUP.into(),
+            old_version: 1,
+            new_version: 2,
+            old_ed25519_public_key: key1.ed25519_public_key,
+            old_ml_dsa_public_key: key1.ml_dsa_public_key,
+            new_ed25519_public_key: other7.ed25519_public_key,
+            new_ml_dsa_public_key: other7.ml_dsa_public_key,
+            last_roster_version: 2,
+            last_roster_digest: roster_digest(succ.rosters[1].statement.clone()),
+            signer_user_id: p1.user_id.clone(),
+        };
+        let away = group_succession_sign(away, group_seed(1), p1.keys.clone()).unwrap();
+        let third = roster_sign(succ.statements[2].clone(), group_seed(7), p1.keys.clone()).unwrap();
+        let succ_other = (vec![succ.rosters[0].clone(), succ.rosters[1].clone(), third], vec![away]);
+        Family { p1, p2, p3, main, other, succ, dead, removal, removal_fork, succ_other }
     })
 }
 
@@ -213,7 +259,8 @@ fn specs() -> Vec<Spec> {
         },
         Spec {
             held: Some(Held::Chain),
-            ..spec("a-chain-this-session-holds-is-a-mark", "main", 3, refused(Some(UNCHECKED)))
+            // The chain held here is a mark that vouches, as acceptance holds its floor: the code.
+            ..spec("a-chain-this-session-holds-is-a-mark", "main", 3, code(2, honest.clone()))
         },
         Spec {
             held: Some(Held::Fork),
@@ -262,7 +309,10 @@ fn record_through(through: usize) -> String {
         successions: vec![],
         signer_keys: served_ml_dsa(&[&f.p1, &f.p2, &f.p3]),
     };
-    match ledger.accept_served(me(), GROUP.into(), None, served, super::groups::CHECKED.into()).unwrap() {
+    match ledger
+        .accept_served(me(), GROUP.into(), None, served, FamilyGuard::Absent, super::groups::CHECKED.into())
+        .unwrap()
+    {
         ServedAcceptance::Accepted { record, .. } => record,
         _ => panic!("the record was not sealed"),
     }
@@ -290,6 +340,11 @@ pub fn preview_doc() -> Value {
         "succ": history_json(&f.succ.key(1), &f.succ.rosters, &f.succ.successions),
         "madeUp": history_json(&group_public_key(made_up).unwrap(), &remade, &[]),
         "dead": history_json(&f.dead.key(1), &f.dead.rosters, &f.dead.successions),
+        "removal": history_json(&f.removal.key(1), &f.removal.rosters, &f.removal.successions),
+        "removalFork": history_json(&f.removal_fork.key(1), &f.removal_fork.rosters, &f.removal_fork.successions),
+        // removal's rosters with its succession (tied at roster 5) not served: the same roster 5 under key 1.
+        "removalBare": history_json(&f.removal.key(1), &f.removal.rosters, &[]),
+        "succOther": history_json(&f.succ.key(1), &f.succ_other.0, &f.succ_other.1),
     });
     let rotated = {
         let record = record_through(2);
@@ -367,12 +422,20 @@ fn signer_keys(doc: &Value) -> HashMap<String, String> {
 fn settings_of(ledger: &AreaLedger, doc: &Value, which: &str) {
     let user = family().p2.user_id.clone();
     let pins: HashMap<String, GroupPin> = match which {
-        "none" => HashMap::new(),
+        "none" | "checked-before" | "checked-malformed" => HashMap::new(),
         "pin-main-2" => [(GROUP.to_string(), pin_from(&doc["pinMain2"]))].into(),
         "not-open" => return,
         other => panic!("settings {other}"),
     };
-    ledger.use_settings(user, Some(pins), Default::default()).unwrap();
+    ledger.use_settings(user.clone(), Some(pins), Default::default()).unwrap();
+    // A family check record with no code (the migration's `before`, a mark but no pair mark), or
+    // one that is no pair mark at all.
+    let checks = match which {
+        "checked-before" => json!({ GROUP: { "how": "before", "rosterVersion": 2 } }),
+        "checked-malformed" => json!({ GROUP: { "rosterVersion": 2, "with": "someone", "code": "words" } }),
+        _ => return,
+    };
+    ledger.use_family_checks(user, checks.to_string()).unwrap();
 }
 
 pub fn fork_json(of: ForkOf, version: u64, sides: &[MarkSide]) -> Value {
@@ -386,6 +449,7 @@ pub fn fork_json(of: ForkOf, version: u64, sides: &[MarkSide]) -> Value {
                 MarkSource::Pin => "pin",
                 MarkSource::Cache => "cache",
                 MarkSource::Join => "join",
+                MarkSource::Pair => "pair",
                 MarkSource::Served => "served",
             }).collect::<Vec<_>>(),
             "signerUserId": side.signer_user_id,
@@ -445,8 +509,16 @@ pub fn run_preview(doc: &Value, c: &Value) -> Value {
         settings_of(&ledger, doc, "pin-main-2");
         let history = if held == "chain" { "main" } else { "other" };
         let served = served_of(doc, &json!({ "history": history, "after": 0, "through": 2 }));
-        let outcome =
-            ledger.accept_served(me(), GROUP.into(), None, served, super::groups::CHECKED.into()).unwrap();
+        let outcome = ledger
+            .accept_served(
+                me(),
+                GROUP.into(),
+                None,
+                served,
+                FamilyGuard::Absent,
+                super::groups::CHECKED.into(),
+            )
+            .unwrap();
         let fits = matches!(
             (held, outcome),
             ("chain", ServedAcceptance::Accepted { .. }) | ("fork", ServedAcceptance::Fork { .. })
@@ -857,9 +929,17 @@ fn typed_for(code: &[String], hidden: &[u32], words: &str) -> Vec<String> {
     }
 }
 
-/* A joins record no match of this account's sealed: an app's (the outbox store), another family's, the data layer's version 2, a newer version's. */
-pub fn forged_record(_doc: &Value, kind: &str) -> String {
+/*
+ * A joins record no match of this account's sealed (the web's forgedRecord): an app's (the
+ * outbox store), another family's, the data layer's version 2, a version this release does not
+ * know (5); or `value`, any JSON sealed as this account's joins record of the family (the fuzz
+ * kind joins_record).
+ */
+pub fn forged_record(_doc: &Value, kind: &str, value: &Value) -> String {
     let f = family();
+    if kind == "value" {
+        return device_store_seal_value(&root(), &f.p2.user_id, GROUP, "joins", value).unwrap();
+    }
     let mark = json!({ "rosterVersion": 2, "code": admin_code(&f.main, 2, 1) });
     let record =
         |group: &str, v: u64| json!({ "v": v, "groupId": group, "joinMark": mark, "checkedAt": SESSION_NOW });
@@ -867,7 +947,7 @@ pub fn forged_record(_doc: &Value, kind: &str) -> String {
         "outbox" => ("outbox", GROUP, record(GROUP, 3)),
         "other-family" => ("joins", super::groups::OTHER_GROUP, record(super::groups::OTHER_GROUP, 3)),
         "earlier-version" => ("joins", GROUP, record(GROUP, 2)),
-        "newer-version" => ("joins", GROUP, record(GROUP, 4)),
+        "newer-version" => ("joins", GROUP, record(GROUP, 5)),
         other => panic!("record {other}"),
     };
     device_store_seal_value(&root(), &f.p2.user_id, group, store, &value).unwrap()
@@ -894,9 +974,13 @@ pub fn check_json(check: CoreResult<JoinCheck>) -> Value {
 
 pub fn acceptance_json(acceptance: CoreResult<JoinAcceptance>) -> Value {
     match acceptance {
-        Ok(JoinAcceptance::Accepted { chain, pin, .. }) => {
-            json!({ "status": "accepted", "rosterVersion": chain.roster().roster_version, "checkedAt": pin.checked_at })
-        }
+        Ok(JoinAcceptance::Accepted { chain, pin, guard, .. }) => json!({
+            "status": "accepted",
+            "rosterVersion": chain.roster().roster_version,
+            "checkedAt": pin.checked_at,
+            "checked": checked_json(chain.checked()),
+            "guard": guard_json(&guard),
+        }),
         Ok(JoinAcceptance::Changed { session }) => json!({
             "status": "changed", "rosterVersion": session.roster_version(), "code": session.code(), "hidden": session.hidden(),
         }),
@@ -904,6 +988,57 @@ pub fn acceptance_json(acceptance: CoreResult<JoinAcceptance>) -> Value {
         Ok(JoinAcceptance::Fork { of, version, sides }) => fork_json(of, version, &sides),
         Ok(JoinAcceptance::RecordUnreadable) => json!({ "status": "record-unreadable" }),
         Ok(JoinAcceptance::Overtaken { split }) => json!({ "status": "overtaken", "split": split }),
+        Err(error) => json!({ "status": "refused", "message": error.to_string() }),
+    }
+}
+
+/*
+ * The family guard a step names (docs/optional-verification.md 2.8): none, the pin at main's
+ * roster 2, unreadable, or the one this device holds (`held`: the latest an acceptance returned,
+ * as the app stores it right after the record).
+ */
+fn guard_of(doc: &Value, which: &Value, held: &Option<GroupPin>) -> FamilyGuard {
+    match which.as_str() {
+        None | Some("none") => FamilyGuard::Absent,
+        Some("pin-main-2") => FamilyGuard::Held { pin: pin_from(&doc["pinMain2"]) },
+        Some("unreadable") => FamilyGuard::Unreadable,
+        Some("held") => held.clone().map_or(FamilyGuard::Absent, |pin| FamilyGuard::Held { pin }),
+        Some(other) => panic!("a guard {other}"),
+    }
+}
+
+/* A guard as both twins write it in an outcome: where it stands, or null when none was returned. */
+fn guard_json(guard: &Option<GroupPin>) -> Value {
+    match guard {
+        None => Value::Null,
+        Some(pin) => {
+            json!({ "rosterVersion": pin.roster_version, "keyVersion": pin.key_version, "areas": pin.areas })
+        }
+    }
+}
+
+fn checked_json(checked: Option<FamilyChecked>) -> Value {
+    match checked {
+        None => Value::Null,
+        Some(checked) => json!({
+            "how": match checked.how { CheckedHow::Created => "created", CheckedHow::Join => "join", CheckedHow::Compared => "compared" },
+            "rosterVersion": checked.roster_version,
+        }),
+    }
+}
+
+/* A first use's outcome as both twins write it, with its record's check time. */
+fn first_use_json(result: CoreResult<FirstUseJoin>) -> Value {
+    match result {
+        Ok(FirstUseJoin::Ready { matched, roster_version }) => {
+            let value =
+                device_store_open_value(&root(), &family().p2.user_id, GROUP, "joins", &matched.record())
+                    .unwrap();
+            json!({ "status": "first-use", "rosterVersion": roster_version, "checkedAt": value["firstUse"]["checkedAt"] })
+        }
+        Ok(FirstUseJoin::NotAdmitted) => json!({ "status": "not-admitted" }),
+        Ok(FirstUseJoin::Fork { of, version, sides }) => fork_json(of, version, &sides),
+        Ok(FirstUseJoin::RecordUnreadable) => json!({ "status": "record-unreadable" }),
         Err(error) => json!({ "status": "refused", "message": error.to_string() }),
     }
 }
@@ -948,8 +1083,12 @@ pub fn run_session(doc: &Value, scenario: &Value) -> SessionRun {
     let mut kept: Option<String> = None;
     let mut kept_after: Vec<Option<String>> = vec![];
     let mut pending: Option<String> = None;
+    // The family guard this device holds: the latest an acceptance returned, never cleared.
+    let mut guard: Option<GroupPin> = None;
     for (at, step) in scenario["steps"].as_array().unwrap().iter().enumerate() {
         let index = |key: &str| step[key].as_u64().map(|i| i as usize);
+        // A step with `stored: false` is one whose guard write failed: the guard handed back is not kept.
+        let storing = step["stored"] != false;
         let outcome = match step["op"].as_str().unwrap() {
             "show" => {
                 let preview = ledger.group_join_preview(
@@ -1020,6 +1159,21 @@ pub fn run_session(doc: &Value, scenario: &Value) -> SessionRun {
                     }
                 }
             }
+            "first-use" => {
+                let result = ledger.join_first_use(
+                    me(),
+                    GROUP.into(),
+                    None,
+                    session_served(doc, &step["served"]),
+                    guard_of(doc, &step["guard"], &guard),
+                    SESSION_NOW.into(),
+                );
+                if let Ok(FirstUseJoin::Ready { matched: m, .. }) = &result {
+                    records.insert(at, m.record());
+                    matched.insert(at, (unlock, std::sync::Arc::clone(m)));
+                }
+                first_use_json(result)
+            }
             "accept" => {
                 let served = session_served(doc, &step["served"]);
                 let reopen = |i: usize| {
@@ -1035,7 +1189,7 @@ pub fn run_session(doc: &Value, scenario: &Value) -> SessionRun {
                     (None, Some(record)) => {
                         let sealed = match record.strip_prefix("own:") {
                             Some(i) => records.get(&i.parse::<usize>().unwrap()).cloned(),
-                            None => Some(forged_record(doc, record)),
+                            None => Some(forged_record(doc, record, &step["value"])),
                         };
                         sealed.map(|sealed| ledger.join_matched_open(GROUP.into(), sealed).unwrap())
                     }
@@ -1045,9 +1199,21 @@ pub fn run_session(doc: &Value, scenario: &Value) -> SessionRun {
                     None => json!({ "status": SKIPPED }),
                     Some(None) => json!({ "status": "join-unreadable" }),
                     Some(Some(token)) => {
-                        let acceptance = ledger.accept_joining(me(), GROUP.into(), None, served, token);
+                        let acceptance = ledger.accept_joining(
+                            me(),
+                            GROUP.into(),
+                            None,
+                            served,
+                            token,
+                            guard_of(doc, &step["guard"], &guard),
+                        );
                         if let Ok(JoinAcceptance::Changed { session }) = &acceptance {
                             showings.insert(at, std::sync::Arc::clone(session));
+                        }
+                        if let (true, Ok(JoinAcceptance::Accepted { guard: Some(next), .. })) =
+                            (storing, &acceptance)
+                        {
+                            guard = Some(next.clone());
                         }
                         acceptance_json(acceptance)
                     }
@@ -1055,15 +1221,45 @@ pub fn run_session(doc: &Value, scenario: &Value) -> SessionRun {
             }
             "sync" => {
                 let served = session_served(doc, &step["served"]);
-                match ledger.accept_served(me(), GROUP.into(), None, served, SESSION_NOW.into()) {
-                    Ok(ServedAcceptance::Accepted { chain, .. }) => {
-                        json!({ "status": "accepted", "rosterVersion": chain.roster().roster_version })
+                match ledger.accept_served(
+                    me(),
+                    GROUP.into(),
+                    None,
+                    served,
+                    guard_of(doc, &step["guard"], &guard),
+                    SESSION_NOW.into(),
+                ) {
+                    Ok(ServedAcceptance::Accepted { chain, guard: next, .. }) => {
+                        let outcome = json!({
+                            "status": "accepted",
+                            "rosterVersion": chain.roster().roster_version,
+                            "guard": guard_json(&next),
+                        });
+                        if storing && next.is_some() {
+                            guard = next;
+                        }
+                        outcome
+                    }
+                    Ok(ServedAcceptance::Fork { of, version, .. }) => json!({
+                        "status": "fork",
+                        "of": match of { ForkOf::Roster => "roster", ForkOf::GroupKey => "group-key" },
+                        "version": version,
+                    }),
+                    // Short of the session's floor: a run that lost a race (the web's lost race, thrown).
+                    Ok(ServedAcceptance::Overtaken { split }) => {
+                        json!({ "status": "overtaken", "split": split })
                     }
                     Ok(_) => json!({ "status": "not-accepted" }),
                     Err(error) => json!({ "status": "refused", "message": error.to_string() }),
                 }
             }
             "holds" => json!({ "status": if kept.is_some() { "kept" } else { "none" } }),
+            "guard" => match &guard {
+                None => json!({ "status": "none" }),
+                Some(pin) => {
+                    json!({ "status": "held", "rosterVersion": pin.roster_version, "keyVersion": pin.key_version, "areas": pin.areas })
+                }
+            },
             "relaunch" | "lock" => {
                 unlock += 1;
                 if step["op"] == "relaunch" {
@@ -1086,8 +1282,25 @@ pub fn run_session(doc: &Value, scenario: &Value) -> SessionRun {
                 }
             },
             "forget" => {
-                ledger.forget_group(GROUP.into());
-                json!({ "status": "forgotten" })
+                // The not-member wipe: the held guard in, the guard to store first out (2.8).
+                // The not-member wipe: the held guard in (or an unreadable one), and either
+                // forgotten or, with nothing dropped, the guard to store before asking again (2.8).
+                let held = match (&guard, step["guard"].as_str()) {
+                    (_, Some("unreadable")) => FamilyGuard::Unreadable,
+                    (Some(pin), _) => FamilyGuard::Held { pin: pin.clone() },
+                    (None, _) => FamilyGuard::Absent,
+                };
+                match ledger.forget_group(GROUP.into(), held, SESSION_NOW.into()) {
+                    Ok(forget) => {
+                        let status = if forget.guard.is_some() { "store-first" } else { "forgotten" };
+                        let outcome = json!({ "status": status, "guard": guard_json(&forget.guard), "unreadable": forget.unreadable });
+                        if storing && forget.guard.is_some() {
+                            guard = forget.guard;
+                        }
+                        outcome
+                    }
+                    Err(error) => json!({ "status": "refused", "message": error.to_string() }),
+                }
             }
             other => panic!("an op {other}"),
         };
@@ -1125,6 +1338,9 @@ pub fn session_fixture(doc: &Value) -> Value {
         if scenario["name"] == "a-match-joins-once" {
             cross["joinsRecord"] = json!(run.records[&1]);
         }
+        if scenario["name"] == "a-first-use-joins-once" {
+            cross["firstUseRecord"] = json!(run.records[&0]);
+        }
         if scenario["name"] == "the-escalation-kept-across-a-relaunch" {
             cross["holds"] = json!(run.holds);
             cross["heldHidden"] = run.outcomes[0]["hidden"].clone();
@@ -1138,14 +1354,24 @@ pub fn session_fixture(doc: &Value) -> Value {
  * The other twin's sealed records opened here: its joins record joins a fresh
  * ledger of person 2's, and its kept escalation holds the positions it held.
  */
-pub fn open_cross(doc: &Value, cross: &Value) -> (Value, Value) {
+pub fn open_cross(doc: &Value, cross: &Value) -> (Value, Value, Value) {
     let ledger = session_ledger(doc, "none");
     let token = ledger
         .join_matched_open(GROUP.into(), s(cross, "joinsRecord"))
         .unwrap()
         .expect("the joins record opens");
     let served = session_served(doc, &json!({ "history": "main", "through": 3 }));
-    let joined = acceptance_json(ledger.accept_joining(me(), GROUP.into(), None, served, token));
+    let joined =
+        acceptance_json(ledger.accept_joining(me(), GROUP.into(), None, served, token, FamilyGuard::Absent));
+    // The other twin's first use: its record finishes the join here, against the roster it took.
+    let first = session_ledger(doc, "none");
+    let token = first
+        .join_matched_open(GROUP.into(), s(cross, "firstUseRecord"))
+        .unwrap()
+        .expect("the first use's record opens");
+    let served = session_served(doc, &json!({ "history": "main", "through": 2 }));
+    let first_joined =
+        acceptance_json(first.accept_joining(me(), GROUP.into(), None, served, token, FamilyGuard::Absent));
     let relaunched = session_ledger(doc, "none");
     let shown = preview_json(relaunched.group_join_preview(
         me(),
@@ -1154,7 +1380,7 @@ pub fn open_cross(doc: &Value, cross: &Value) -> (Value, Value) {
         session_served(doc, &json!({ "history": "main", "through": 2 })),
         Some(s(cross, "holds")),
     ));
-    (joined, shown["hidden"].clone())
+    (joined, first_joined, shown["hidden"].clone())
 }
 
 /*
@@ -1186,7 +1412,14 @@ pub fn run_preview_flow(doc: &Value, c: &Value) -> Value {
     );
     out["check"] = check_json(check.clone());
     if let (true, Ok(JoinCheck::Matched { matched, .. })) = (c["join"] == json!(true), check) {
-        out["join"] = acceptance_json(ledger.accept_joining(me(), GROUP.into(), None, served, matched));
+        out["join"] = acceptance_json(ledger.accept_joining(
+            me(),
+            GROUP.into(),
+            None,
+            served,
+            matched,
+            FamilyGuard::Absent,
+        ));
     }
     out
 }

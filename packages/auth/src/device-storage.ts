@@ -121,10 +121,49 @@ function openDeviceDatabase(name: string, store: string, version: number): Promi
     });
 }
 
+/*
+ * Deletes a device database outright, rather than emptying it: a browser
+ * signed out of keeps no trace of one (apps/web lib/device-data.ts). Every
+ * connection here closes after its step and on `versionchange`, so a `blocked`
+ * is waited out, never longer than STORAGE_TIMEOUT_MS.
+ */
+function deleteDeviceDatabase(name: string): Promise<void> {
+    let request: IDBOpenDBRequest;
+    try {
+        const factory = typeof indexedDB === 'undefined' ? undefined : indexedDB;
+        if (!factory) return Promise.resolve();
+        request = factory.deleteDatabase(name);
+    } catch (error) {
+        // SecurityError where site storage is refused: there is nothing to delete.
+        if (error instanceof DOMException && error.name === 'SecurityError')
+            return Promise.resolve();
+        return Promise.reject(new DeviceStorageUnavailable({ cause: error }));
+    }
+    let blocked = false;
+    return new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+            () => reject(blocked ? new DeviceStorageBlocked() : new DeviceStorageTimeout()),
+            STORAGE_TIMEOUT_MS,
+        );
+        request.onsuccess = () => {
+            clearTimeout(timer);
+            resolve();
+        };
+        request.onerror = () => {
+            clearTimeout(timer);
+            reject(new DeviceStorageUnavailable({ cause: request.error }));
+        };
+        request.onblocked = () => {
+            blocked = true;
+        };
+    });
+}
+
 // Storage is an adapter; crypto owns the portable, versioned device envelope.
 export type DeviceKeyStore = {
     create: () => Promise<{ id: string; key: CryptoKey }>;
     load: (id: string) => Promise<CryptoKey | null>;
+    /* Forgets every key; the browser's store deletes its database. */
     clear: () => Promise<void>;
 };
 /* The device databases' version; bumped only with an upgrade that keeps what they hold. */
@@ -178,10 +217,7 @@ export function createBrowserDeviceKeyStore(): DeviceKeyStore {
                 db.close();
             }
         },
-        clear: () =>
-            write((store) => {
-                store.clear();
-            }),
+        clear: () => deleteDeviceDatabase('hushos-device-keys'),
     };
 }
 
@@ -203,6 +239,7 @@ export type StoredDeviceIdentity = {
 export type DeviceIdentityStore = {
     load: () => Promise<StoredDeviceIdentity | null>;
     save: (identity: StoredDeviceIdentity) => Promise<void>;
+    /* Forgets the key; the browser's store deletes its database. */
     clear: () => Promise<void>;
 };
 const IDENTITY_KEY = 'current';
@@ -272,9 +309,6 @@ export function createBrowserDeviceIdentityStore({
             write((store) => {
                 store.put(identity, IDENTITY_KEY);
             }),
-        clear: () =>
-            write((store) => {
-                store.clear();
-            }),
+        clear: () => deleteDeviceDatabase('hushos-device-identity'),
     };
 }

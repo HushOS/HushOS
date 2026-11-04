@@ -664,7 +664,7 @@ fn root_of(v: &Value) -> Option<RootProbe> {
 #[derive(Clone)]
 pub struct CaseInput {
     pub first_keys: GroupPublicKey,
-    pub first_keys_checked: bool,
+    pub anchor: Option<GroupAnchor>,
     pub pins: Vec<GroupPin>,
     pub rosters: Vec<SignedGroupStatement>,
     pub successions: Vec<SignedGroupStatement>,
@@ -679,11 +679,18 @@ pub struct CaseInput {
     pub root: Option<RootProbe>,
     /* The newcomer's join mark, when the case has one. */
     pub join_mark: Option<JoinMark>,
+    /* The family checks the reader made (docs/optional-verification.md 3.4), each a mark. */
+    pub pair_marks: Vec<PairMark>,
     /*
      * A cache the core cannot even hold (a field of the wrong shape), written as given: the
      * bindings refuse it at the boundary, so the case is refused (r11).
      */
     pub raw_cache: Option<Value>,
+    /*
+     * An anchor or pair mark the core cannot hold (no anchor's name, a mark of the wrong
+     * shape), written as given: the bindings refuse it at the boundary, so the case is refused.
+     */
+    pub raw_marks: Option<Value>,
 }
 
 fn key_set_json(set: &KeySet) -> Value {
@@ -827,6 +834,7 @@ fn side_json(side: &MarkSide) -> Value {
             MarkSource::Pin => "pin",
             MarkSource::Cache => "cache",
             MarkSource::Join => "join",
+            MarkSource::Pair => "pair",
             MarkSource::Served => "served",
         }).collect::<Vec<_>>(),
         "signerUserId": side.signer_user_id,
@@ -842,13 +850,13 @@ fn side_json(side: &MarkSide) -> Value {
  * verdict and the next statement's), a fork with every side, or refused.
  */
 pub fn judge(input: &CaseInput) -> Value {
-    if input.raw_cache.is_some() {
+    if input.raw_cache.is_some() || input.raw_marks.is_some() {
         return json!({ "status": "refused" });
     }
     match accept_rosters_joining(
         GROUP.into(),
         input.first_keys.clone(),
-        input.first_keys_checked,
+        input.anchor,
         input.pins.clone(),
         input.rosters.clone(),
         input.successions.clone(),
@@ -856,6 +864,7 @@ pub fn judge(input: &CaseInput) -> Value {
         input.me.clone(),
         input.cache.clone(),
         input.join_mark.clone(),
+        input.pair_marks.clone(),
     ) {
         Ok(RosterChain::Accepted { chain }) => {
             let mut verdict = json!({
@@ -870,6 +879,14 @@ pub fn judge(input: &CaseInput) -> Value {
                 "keyHistory": key_history_json(&chain.key_history()),
                 "deadBranches": chain.dead_branches().iter().map(|d| json!({ "version": d.version, "signerUserId": d.signer_user_id })).collect::<Vec<_>>(),
                 "cache": cache_json(&chain.cache()),
+                "checked": chain.checked().map(|checked| json!({
+                    "how": match checked.how {
+                        CheckedHow::Created => "created",
+                        CheckedHow::Join => "join",
+                        CheckedHow::Compared => "compared",
+                    },
+                    "rosterVersion": checked.roster_version,
+                })),
             });
             if let Some(probe) = &input.record {
                 verdict["record"] = record_verdict(chain.clone(), probe);
@@ -916,7 +933,7 @@ pub fn accepted_to(h: &History, version: u64, people: &[&Person]) -> Arc<Accepte
     let Ok(RosterChain::Accepted { chain }) = accept_rosters(
         GROUP.into(),
         h.key(1),
-        true,
+        Some(GroupAnchor::Created),
         vec![],
         h.rosters[..version as usize].to_vec(),
         successions,
@@ -934,7 +951,7 @@ pub fn accepted_of(h: &History, people: &[&Person]) -> Arc<AcceptedRosters> {
     let Ok(RosterChain::Accepted { chain }) = accept_rosters(
         GROUP.into(),
         h.key(1),
-        true,
+        Some(GroupAnchor::Created),
         vec![],
         h.rosters.clone(),
         h.successions.clone(),
@@ -997,7 +1014,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
     let active = |p: &Person, roles: &[GroupRole]| p.entry(roles, 1, MemberStatus::Active);
     let from_with = |h: &History, people: &[&Person]| CaseInput {
         first_keys: h.key(1),
-        first_keys_checked: true,
+        anchor: Some(GroupAnchor::Created),
         pins: vec![],
         rosters: h.rosters.clone(),
         successions: h.successions.clone(),
@@ -1008,7 +1025,9 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
         next: None,
         root: None,
         join_mark: None,
+        pair_marks: vec![],
         raw_cache: None,
+        raw_marks: None,
     };
     let from_one = |h: &History| from_with(h, &everyone);
     let fork = |of: &str, version: u64| json!({ "status": "fork", "of": of, "version": version, "sides": 2 });
@@ -1065,11 +1084,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
             },
             refused.clone(),
         ));
-        cases.push((
-            "unchecked-first-keys",
-            CaseInput { first_keys_checked: false, ..from_one(&h) },
-            refused.clone(),
-        ));
+        cases.push(("unchecked-first-keys", CaseInput { anchor: None, ..from_one(&h) }, refused.clone()));
         // The person's marks: a pin naming another roster 2; two pins at 2 that disagree; a group
         // key mark that is not the chain's; a pin the chain does not reach; first keys not the pin's.
         let pin2 = pin_of(&h, 2, &everyone);
@@ -1844,12 +1859,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
         let pin2 = pin_of(&h, 2, &everyone);
         cases.push((
             "unsigned-chain-vs-pin",
-            CaseInput {
-                pins: vec![pin2.clone()],
-                first_keys_checked: false,
-                rosters: fabricated,
-                ..from_one(&h)
-            },
+            CaseInput { pins: vec![pin2.clone()], anchor: None, rosters: fabricated, ..from_one(&h) },
             refused.clone(),
         ));
         let two = accepted_to(&h, 2, &everyone);
@@ -1863,7 +1873,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
             "cache-junk-extension",
             CaseInput {
                 cache: Some(two.cache()),
-                first_keys_checked: false,
+                anchor: None,
                 rosters: vec![unsigned(off)],
                 ..from_one(&h)
             },
@@ -1910,7 +1920,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
             "rival-succession-waits",
             CaseInput {
                 pins: vec![pin_of(&h, 3, &everyone)],
-                first_keys_checked: false,
+                anchor: None,
                 successions: both,
                 ..from_one(&h)
             },
@@ -1919,7 +1929,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
         let RosterChain::Accepted { chain: at_two } = accept_rosters(
             GROUP.into(),
             h.key(1),
-            true,
+            Some(GroupAnchor::Created),
             vec![],
             h.rosters[..2].to_vec(),
             h.successions.clone(),
@@ -1935,7 +1945,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
             "rival-succession-mark-unmet",
             CaseInput {
                 pins: vec![at_two],
-                first_keys_checked: false,
+                anchor: None,
                 rosters: h.rosters[..2].to_vec(),
                 successions: vec![early.clone()],
                 ..from_one(&h)
@@ -1947,7 +1957,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
             "rival-succession-real-withheld",
             CaseInput {
                 pins: vec![pin_of(&h, 3, &everyone)],
-                first_keys_checked: false,
+                anchor: None,
                 successions: vec![early.clone()],
                 ..from_one(&h)
             },
@@ -1960,7 +1970,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
             "rival-key-signed-roster",
             CaseInput {
                 pins: vec![pin_of(&h, 3, &everyone)],
-                first_keys_checked: false,
+                anchor: None,
                 rosters: rivalled,
                 successions: vec![early.clone()],
                 ..from_one(&h)
@@ -1981,7 +1991,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
             "rival-key-roster-by-removed-holder",
             CaseInput {
                 pins: vec![pin_of(&h, 3, &everyone)],
-                first_keys_checked: false,
+                anchor: None,
                 rosters: by_removed,
                 successions: vec![early.clone()],
                 ..from_one(&h)
@@ -2004,7 +2014,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
             "rival-key-roster-signer-leaves",
             CaseInput {
                 pins: vec![pin_of(&h, 3, &everyone)],
-                first_keys_checked: false,
+                anchor: None,
                 rosters: leaving,
                 successions: vec![early.clone()],
                 ..from_one(&h)
@@ -2049,7 +2059,11 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
         );
         let at_two = roster_digest(h.rosters[1].statement.clone());
         let mark = JoinMark { roster_version: 2, code: join_code(at_two.clone(), h.key(1), 1).unwrap() };
-        let joining = |mark: JoinMark| CaseInput { join_mark: Some(mark), ..from_one(&h) };
+        let joining = |mark: JoinMark| CaseInput {
+            anchor: Some(GroupAnchor::Join),
+            join_mark: Some(mark),
+            ..from_one(&h)
+        };
         cases.push(("join-mark-holds", joining(mark.clone()), accepted(2)));
         cases.push((
             "join-mark-other-roster",
@@ -2102,6 +2116,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
         cases.push((
             "join-mark-after-succession",
             CaseInput {
+                anchor: Some(GroupAnchor::Join),
                 join_mark: Some(JoinMark {
                     roster_version: 3,
                     code: join_code(at_three.clone(), after.key(2), 2).unwrap(),
@@ -2113,6 +2128,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
         cases.push((
             "join-mark-after-succession-first-key",
             CaseInput {
+                anchor: Some(GroupAnchor::Join),
                 join_mark: Some(JoinMark {
                     roster_version: 3,
                     code: join_code(at_three, after.key(1), 1).unwrap(),
@@ -2125,6 +2141,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
         cases.push((
             "join-mark-at-succession-tie",
             CaseInput {
+                anchor: Some(GroupAnchor::Join),
                 join_mark: Some(JoinMark {
                     roster_version: 2,
                     code: join_code(roster_digest(after.rosters[1].statement.clone()), after.key(1), 1)
@@ -2149,6 +2166,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
             CaseInput {
                 first_keys: made_key.clone(),
                 rosters: h.rosters.iter().map(remade).collect(),
+                anchor: Some(GroupAnchor::Join),
                 join_mark: Some(JoinMark {
                     roster_version: 2,
                     code: join_code(roster_digest(h.rosters[1].statement.clone()), h.key(1), 1).unwrap(),
@@ -2169,6 +2187,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
                 first_keys: made_key,
                 rosters: vec![remade(&after.rosters[0]), remade(&after.rosters[1]), after.rosters[2].clone()],
                 successions: vec![signed_by(group_succession_statement(forged).unwrap(), made.clone(), None)],
+                anchor: Some(GroupAnchor::Join),
                 join_mark: Some(JoinMark {
                     roster_version: 3,
                     code: join_code(roster_digest(after.rosters[2].statement.clone()), after.key(2), 2)
@@ -2705,7 +2724,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
             "server-made-first-keys",
             CaseInput {
                 pins: vec![pin2.clone()],
-                first_keys_checked: false,
+                anchor: None,
                 first_keys: server_key.clone(),
                 rosters: vec![made_up],
                 successions: vec![],
@@ -2834,7 +2853,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
         let RosterChain::Accepted { chain: at_two } = accept_rosters(
             GROUP.into(),
             h.key(1),
-            true,
+            Some(GroupAnchor::Created),
             vec![],
             h.rosters[..2].to_vec(),
             h.successions.clone(),
@@ -2850,7 +2869,7 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
             "group-key-rollback",
             CaseInput {
                 pins: vec![held],
-                first_keys_checked: false,
+                anchor: None,
                 rosters: h.rosters[..2].to_vec(),
                 successions: vec![],
                 ..from_one(&h)
@@ -3521,6 +3540,233 @@ pub fn group_cases() -> Vec<(&'static str, CaseInput, Value)> {
             refused.clone(),
         ));
     }
+    // docs/optional-verification.md 3.3 and 3.4: what each anchor vouches for, first use, and the
+    // pair marks a family check leaves. Roster 2 admits the adult and the child together, roster
+    // 3 the holder; the adult reads.
+    {
+        let mut h = History::new();
+        h.roster(&organizer, vec![owner.clone()], None);
+        h.roster(&organizer, vec![owner.clone(), active(&adult, &[]), active(&child, &[])], None);
+        h.roster(
+            &organizer,
+            vec![owner.clone(), active(&adult, &[]), active(&child, &[]), active(&holder, &[])],
+            None,
+        );
+        let as_adult =
+            OwnIdentities { user_id: adult.user_id.clone(), identities: vec![served_keys(&adult)] };
+        let as_holder =
+            OwnIdentities { user_id: holder.user_id.clone(), identities: vec![served_keys(&holder)] };
+        let key1 = h.key(1);
+        let at = |version: usize| roster_digest(h.rosters[version - 1].statement.clone());
+        let pair_at = |version: usize, a: &Person, b: &Person| {
+            pair_code_of(&at(version), &key1, 1, &a.user_id, &b.user_id).unwrap()
+        };
+        let join_at = |version: usize| join_code(at(version), key1.clone(), 1).unwrap();
+        let checked = |how: &str, version: u64| json!({ "how": how, "rosterVersion": version });
+        let with_checked = |mut verdict: Value, value: Value| {
+            verdict["checked"] = value;
+            verdict
+        };
+        // The same roster bytes and signers' signatures, group-signed again by a key the server made.
+        let made = group_seed(7);
+        let made_key = group_public_key(made.clone()).unwrap();
+        let made_up: Vec<SignedGroupStatement> = h
+            .rosters
+            .iter()
+            .map(|at| SignedGroupStatement {
+                signature: group_sign(made.clone(), at.statement.clone()).unwrap(),
+                ..at.clone()
+            })
+            .collect();
+        let pin2 = pin_of(&h, 2, &everyone);
+        let pin3 = pin_of(&h, 3, &everyone);
+        let first_use = |over: CaseInput| CaseInput { anchor: Some(GroupAnchor::FirstUse), ..over };
+        let base = || CaseInput { me: as_adult.clone(), ..from_one(&h) };
+        let pair = |version: u64, with: &Person, code: Vec<String>| PairMark {
+            roster_version: version,
+            with: with.user_id.clone(),
+            code,
+        };
+        cases.push((
+            "anchor-created-is-checked",
+            from_one(&h),
+            with_checked(accepted(3), checked("created", 1)),
+        ));
+        cases.push((
+            "anchor-join-is-checked-through-its-roster",
+            CaseInput {
+                anchor: Some(GroupAnchor::Join),
+                join_mark: Some(JoinMark { roster_version: 2, code: join_at(2) }),
+                ..from_one(&h)
+            },
+            with_checked(accepted(3), checked("join", 2)),
+        ));
+        cases.push((
+            "anchor-first-use-takes-the-served-keys-unchecked",
+            first_use(base()),
+            with_checked(accepted(3), Value::Null),
+        ));
+        cases.push(("anchor-first-use-for-a-reader-not-let-in", first_use(from_one(&h)), refused.clone()));
+        cases.push((
+            "anchor-first-use-before-the-head-lets-them-in",
+            first_use(CaseInput { me: as_holder.clone(), rosters: h.rosters[..2].to_vec(), ..from_one(&h) }),
+            refused.clone(),
+        ));
+        cases.push((
+            "anchor-first-use-made-up-keys-taken",
+            first_use(CaseInput { first_keys: made_key.clone(), rosters: made_up.clone(), ..base() }),
+            with_checked(accepted(3), Value::Null),
+        ));
+        cases.push((
+            "anchor-first-use-beside-a-pin-vouches-for-nothing",
+            first_use(CaseInput {
+                pins: vec![pin2.clone()],
+                first_keys: made_key.clone(),
+                rosters: made_up.clone(),
+                ..base()
+            }),
+            refused.clone(),
+        ));
+        cases.push((
+            "anchor-first-use-beside-a-pin-the-pin-decides",
+            first_use(CaseInput { pins: vec![pin2.clone()], ..base() }),
+            with_checked(accepted(3), Value::Null),
+        ));
+        cases.push((
+            "anchor-first-use-beside-a-cache-vouches-for-nothing",
+            first_use(CaseInput {
+                cache: Some(accepted_to(&h, 2, &everyone).cache()),
+                first_keys: made_key.clone(),
+                rosters: made_up.clone(),
+                ..base()
+            }),
+            refused.clone(),
+        ));
+        cases.push((
+            "anchor-first-use-beside-a-family-check-vouches-for-nothing",
+            first_use(CaseInput { pair_marks: vec![pair(2, &child, pair_at(2, &adult, &child))], ..base() }),
+            refused.clone(),
+        ));
+        cases.push((
+            "anchor-join-without-its-code",
+            CaseInput { anchor: Some(GroupAnchor::Join), ..from_one(&h) },
+            refused.clone(),
+        ));
+        cases.push((
+            "join-mark-under-another-anchor",
+            first_use(CaseInput {
+                join_mark: Some(JoinMark { roster_version: 2, code: join_at(2) }),
+                ..base()
+            }),
+            refused.clone(),
+        ));
+        cases.push((
+            "join-mark-beside-a-pin-is-checked",
+            CaseInput {
+                anchor: None,
+                pins: vec![pin3.clone()],
+                join_mark: Some(JoinMark { roster_version: 2, code: join_at(2) }),
+                ..from_one(&h)
+            },
+            with_checked(accepted(3), checked("join", 2)),
+        ));
+        let compared = |over: CaseInput| CaseInput { anchor: None, ..over };
+        let marked = || CaseInput { pins: vec![pin3.clone()], ..base() };
+        cases.push((
+            "pair-mark-holds-and-checks",
+            compared(CaseInput { pair_marks: vec![pair(2, &child, pair_at(2, &adult, &child))], ..marked() }),
+            with_checked(accepted(3), checked("compared", 2)),
+        ));
+        cases.push((
+            "pair-mark-over-another-roster",
+            compared(CaseInput { pair_marks: vec![pair(2, &child, pair_at(3, &adult, &child))], ..marked() }),
+            fork("roster", 2),
+        ));
+        // A↔B and A↔C over one roster: the server labelling the child as the holder gets other words.
+        cases.push((
+            "pair-mark-of-another-pair-at-one-roster",
+            compared(CaseInput {
+                pair_marks: vec![pair(3, &child, pair_at(3, &adult, &holder))],
+                ..marked()
+            }),
+            fork("roster", 3),
+        ));
+        cases.push((
+            "pair-mark-beyond-the-chain",
+            compared(CaseInput {
+                rosters: h.rosters[..2].to_vec(),
+                pins: vec![pin2.clone()],
+                pair_marks: vec![pair(3, &child, pair_at(3, &adult, &child))],
+                ..base()
+            }),
+            refused.clone(),
+        ));
+        cases.push((
+            "pair-code-passed-as-a-join-mark",
+            CaseInput {
+                anchor: Some(GroupAnchor::Join),
+                join_mark: Some(JoinMark { roster_version: 2, code: pair_at(2, &adult, &child) }),
+                ..from_one(&h)
+            },
+            fork("roster", 2),
+        ));
+        cases.push((
+            "join-code-passed-as-a-pair-mark",
+            compared(CaseInput { pair_marks: vec![pair(2, &child, join_at(2))], ..marked() }),
+            fork("roster", 2),
+        ));
+        cases.push((
+            "pair-mark-with-oneself",
+            compared(CaseInput { pair_marks: vec![pair(2, &adult, pair_at(2, &adult, &child))], ..marked() }),
+            refused.clone(),
+        ));
+        // After a first use the pin is a mark like any: another roster at its version is the hard
+        // warning, and a chain short of it is refused (pins from a first-use start).
+        let first = first_use(base());
+        let Ok(RosterChain::Accepted { chain: first_at_3 }) = accept_rosters(
+            GROUP.into(),
+            first.first_keys.clone(),
+            first.anchor,
+            vec![],
+            first.rosters.clone(),
+            first.successions.clone(),
+            first.ml_dsa_keys.clone(),
+            first.me.clone(),
+            None,
+        ) else {
+            panic!("first use at 3");
+        };
+        let first_pin = pin_after(vec![], first_at_3, CHECKED.into()).unwrap();
+        // Another roster 3, admitting the outsider beside the holder.
+        let mut rival = h.statements[2].clone();
+        let mut members = rival.members.clone();
+        members.push(outsider.entry(&[], 3, MemberStatus::Active));
+        rival.members = sorted(members);
+        let rival3 = roster_sign(rival, group_seed(1), organizer.keys.clone()).unwrap();
+        cases.push((
+            "first-use-pin-against-another-roster-at-its-version",
+            first_use(CaseInput {
+                pins: vec![first_pin.clone()],
+                rosters: vec![h.rosters[0].clone(), h.rosters[1].clone(), rival3],
+                ..base()
+            }),
+            fork("roster", 3),
+        ));
+        cases.push((
+            "first-use-pin-against-a-shorter-chain",
+            first_use(CaseInput {
+                pins: vec![first_pin.clone()],
+                rosters: h.rosters[..2].to_vec(),
+                ..base()
+            }),
+            refused.clone(),
+        ));
+        cases.push((
+            "first-use-pin-against-other-first-keys",
+            first_use(CaseInput { pins: vec![first_pin], first_keys: made_key, rosters: made_up, ..base() }),
+            refused.clone(),
+        ));
+    }
     cases
 }
 
@@ -3955,7 +4201,7 @@ pub fn case_json(name: &str, input: &CaseInput, expected: &Value) -> Value {
         "name": name,
         "input": {
             "firstKeys": { "ed25519PublicKey": input.first_keys.ed25519_public_key, "mlDsaPublicKey": input.first_keys.ml_dsa_public_key },
-            "firstKeysChecked": input.first_keys_checked,
+            "anchor": anchor_json(input.anchor),
             "pins": input.pins.iter().map(pin_json).collect::<Vec<_>>(),
             "rosters": input.rosters.iter().map(signed_json).collect::<Vec<_>>(),
             "successions": input.successions.iter().map(signed_json).collect::<Vec<_>>(),
@@ -3972,9 +4218,56 @@ pub fn case_json(name: &str, input: &CaseInput, expected: &Value) -> Value {
                 "rosterVersion": m.roster_version,
                 "code": m.code,
             })),
+            "pairMarks": input.pair_marks.iter().map(|m| json!({
+                "rosterVersion": m.roster_version,
+                "with": m.with,
+                "code": m.code,
+            })).collect::<Vec<_>>(),
         },
         "expected": expected,
     })
+}
+
+/* An anchor as the cases carry it: "created", "join", "first-use", or null. */
+pub fn anchor_json(anchor: Option<GroupAnchor>) -> Value {
+    match anchor {
+        None => Value::Null,
+        Some(GroupAnchor::Created) => json!("created"),
+        Some(GroupAnchor::Join) => json!("join"),
+        Some(GroupAnchor::FirstUse) => json!("first-use"),
+    }
+}
+
+/* The pair marks as a case carries them (none when absent), or what it carries when they are not marks (refused). */
+pub fn pair_marks_of(value: &Value) -> Result<Vec<PairMark>, Value> {
+    let Some(marks) = value.as_array() else {
+        return if value.is_null() { Ok(vec![]) } else { Err(value.clone()) };
+    };
+    marks
+        .iter()
+        .map(|mark| {
+            let code = mark["code"].as_array().and_then(|code| {
+                code.iter().map(|word| word.as_str().map(str::to_string)).collect::<Option<Vec<_>>>()
+            });
+            match (mark["rosterVersion"].as_u64(), mark["with"].as_str(), code) {
+                (Some(roster_version), Some(with), Some(code)) => {
+                    Ok(PairMark { roster_version, with: with.to_string(), code })
+                }
+                _ => Err(value.clone()),
+            }
+        })
+        .collect()
+}
+
+/* An anchor as a case carries it, or what it carries when that is no anchor (refused). */
+pub fn anchor_of(value: &Value) -> Result<Option<GroupAnchor>, Value> {
+    match value {
+        Value::Null => Ok(None),
+        Value::String(name) if name == "created" => Ok(Some(GroupAnchor::Created)),
+        Value::String(name) if name == "join" => Ok(Some(GroupAnchor::Join)),
+        Value::String(name) if name == "first-use" => Ok(Some(GroupAnchor::FirstUse)),
+        other => Err(other.clone()),
+    }
 }
 
 pub fn case_from(value: &Value) -> (String, CaseInput, Value) {
@@ -3988,7 +4281,8 @@ pub fn case_from(value: &Value) -> (String, CaseInput, Value) {
                 ed25519_public_key: s(first, "ed25519PublicKey"),
                 ml_dsa_public_key: s(first, "mlDsaPublicKey"),
             },
-            first_keys_checked: input["firstKeysChecked"].as_bool().unwrap(),
+            anchor: anchor_of(&input["anchor"]).unwrap_or_default(),
+            raw_marks: anchor_of(&input["anchor"]).err().or_else(|| pair_marks_of(&input["pairMarks"]).err()),
             pins: input["pins"].as_array().unwrap().iter().map(pin_from).collect(),
             rosters: input["rosters"].as_array().unwrap().iter().map(signed_of).collect(),
             successions: input["successions"].as_array().unwrap().iter().map(signed_of).collect(),
@@ -4016,6 +4310,7 @@ pub fn case_from(value: &Value) -> (String, CaseInput, Value) {
                     .map(|word| word.as_str().expect("join mark word").to_string())
                     .collect(),
             }),
+            pair_marks: pair_marks_of(&input["pairMarks"]).unwrap_or_default(),
         },
         value["expected"].clone(),
     )
@@ -5171,7 +5466,7 @@ pub fn sealer_verdict(c: &SealerCase) -> String {
     let Ok(RosterChain::Accepted { chain }) = accept_rosters(
         GROUP.into(),
         group_public_key(group_seed(1)).unwrap(),
-        true,
+        Some(GroupAnchor::Created),
         vec![],
         c.rosters.clone(),
         vec![],
@@ -5262,7 +5557,7 @@ pub fn seal_verdict(c: &SealCase) -> String {
     let Ok(RosterChain::Accepted { chain }) = accept_rosters(
         GROUP.into(),
         group_public_key(group_seed(1)).unwrap(),
-        true,
+        Some(GroupAnchor::Created),
         vec![],
         c.rosters.clone(),
         vec![],

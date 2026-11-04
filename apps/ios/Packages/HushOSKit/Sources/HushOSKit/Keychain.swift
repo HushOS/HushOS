@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Security
 @_exported import HushOSCore
 
@@ -9,7 +10,12 @@ import Security
  * the sign-in sheet inside Files writes it too.
  */
 public enum SharedKeychain {
-    public static let accessGroup = "group.com.hushos.app"
+    /*
+     * The app group, which is also the keychain's access group (an app group serves as one on iOS, so
+     * the keychain-access-groups entitlement isn't what the items are kept under): `AppGroup.current`,
+     * the build's APP_GROUP_ID unless a sideloading tool's profile granted the team's own group.
+     */
+    public static var accessGroup: String { AppGroup.current }
     public static let service = "com.hushos.files"
     public static let sessionAccount = "session"
     public static let deviceAccount = "device"
@@ -25,6 +31,14 @@ public enum SharedKeychain {
             self.origin = origin
             self.token = token
             self.userId = userId
+        }
+
+        /*
+         * This session, named without its secret: what a refusal (a 401) carries of the session it
+         * was sent under, so the app can tell the session in use ending from an old one's late answer.
+         */
+        public var tag: String {
+            SHA256.hash(data: Data((origin + "\n" + userId + "\n" + token).utf8)).prefix(12).map { String(format: "%02x", $0) }.joined()
         }
     }
 

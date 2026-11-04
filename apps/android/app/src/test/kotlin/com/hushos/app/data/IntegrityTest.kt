@@ -48,7 +48,7 @@ class IntegrityTest {
     private fun pin(userId: String, signing: String, encryption: String = writerEncryption, fingerprint: String? = null, previous: List<String> = emptyList(), name: String = "Maya Lindqvist") =
         TestPins.verified(userId, "x@example.org", name, encryption, signing, previous = previous).let { if (fingerprint != null) it.copy(fingerprint = fingerprint) else it }
 
-    private fun trust(vararg pins: ContactPin) = Trust.of(me, ByteArray(32) { 9 }, emptyList(), pins.associateBy { it.userId })
+    private fun trust(vararg pins: ContactPin) = Trust.of(me, ByteArray(32) { 9 }, emptyList(), pins.toList())
 
     @Test
     fun aRecordSignedByAContactWhoseWordsWereCheckedShowsNothing() {
@@ -58,12 +58,12 @@ class IntegrityTest {
     @Test
     fun ownRecordsVerifyOnlyUnderTheCurrentKeyAndAnEarlierOneIsARetiredKey() {
         val mine = node(Signer(me), versionSigner = Signer(me))
-        assertNull(unverifiedOf(mine, Trust.of(me, base64urlDecode(writerKey), emptyList(), emptyMap())))
+        assertNull(unverifiedOf(mine, Trust.of(me, base64urlDecode(writerKey), emptyList(), emptyList())))
         // Replaced since: what the old key signed vouches for nothing any more.
-        val retired = unverifiedOf(mine, Trust.of(me, ByteArray(32) { 9 }, listOf(base64urlDecode(writerKey)), emptyMap()))!!
+        val retired = unverifiedOf(mine, Trust.of(me, ByteArray(32) { 9 }, listOf(base64urlDecode(writerKey)), emptyList()))!!
         assertEquals(Integrity.RETIRED_KEY, retired.integrity)
         assertEquals("Signed with keys you have since replaced.", retired.explanation())
-        assertEquals(Integrity.BAD_SIGNATURE, unverifiedOf(mine, Trust.of(me, ByteArray(32) { 9 }, emptyList(), emptyMap()))?.integrity)
+        assertEquals(Integrity.BAD_SIGNATURE, unverifiedOf(mine, Trust.of(me, ByteArray(32) { 9 }, emptyList(), emptyList()))?.integrity)
     }
 
     @Test
@@ -82,7 +82,7 @@ class IntegrityTest {
         assertEquals(Integrity.RESEALED, byMaya.integrity)
         assertEquals("Re-locked by Maya Lindqvist; HushOS couldn’t confirm who wrote it before.", byMaya.explanation())
         val mine = node(Signer(me), metadata.getString("resealed"), Signer(me), version.getString("resealed"))
-        assertEquals("Re-locked by you; HushOS couldn’t confirm who wrote it before.", unverifiedOf(mine, Trust.of(me, base64urlDecode(writerKey), emptyList(), emptyMap()))!!.explanation())
+        assertEquals("Re-locked by you; HushOS couldn’t confirm who wrote it before.", unverifiedOf(mine, Trust.of(me, base64urlDecode(writerKey), emptyList(), emptyList()))!!.explanation())
     }
 
     @Test
@@ -90,15 +90,13 @@ class IntegrityTest {
         val unknown = unverifiedOf(node(), trust())!!
         assertEquals(Integrity.UNKNOWN_SIGNER, unknown.integrity)
         assertEquals(Writer.Unknown(null), unknown.writer)
-        assertEquals("HushOS can’t confirm who wrote this. It was added or last changed by someone you haven’t checked.", unknown.explanation())
+        assertEquals("HushOS can’t tell who wrote this.", unknown.explanation())
         // A server that strips the signature gets no milder wording to hide behind.
         val stripped = unverifiedOf(node(metadataSignature = null, versionSigner = null, versionSignature = null), trust(pin(maya.id, writerKey)))!!
         assertEquals(Integrity.UNSIGNED, stripped.integrity)
-        assertTrue(unknown.explanation().startsWith(stripped.explanation().removeSuffix(".")))
-        // No way to check someone without an address to look up; with an unchecked pin there is one.
-        assertNull(unknown.checkEmail)
-        val unchecked = pin(maya.id, writerKey, fingerprint = "")
-        assertEquals("x@example.org", unverifiedOf(node(), trust(unchecked))!!.checkEmail)
+        assertEquals(unknown.explanation(), stripped.explanation())
+        // Nobody pinned: found by their email first (Check who wrote this), and only the writer's account is taken.
+        assertEquals(CheckTarget(maya.id, "", "", pinned = false), unknown.checkTarget)
     }
 
     @Test
@@ -110,8 +108,23 @@ class IntegrityTest {
         // Pinned before the release (words over two keys): their records read as from someone not yet checked.
         val preRelease = TestPins.preRelease(pin(maya.id, writerKey))
         assertEquals(Integrity.UNKNOWN_SIGNER, unverifiedOf(node(), trust(preRelease))?.integrity)
-        assertEquals("x@example.org", unverifiedOf(node(), trust(preRelease))?.checkEmail)
+        assertEquals(CheckTarget(maya.id, "x@example.org", "Maya Lindqvist", pinned = true), unverifiedOf(node(), trust(preRelease))?.checkTarget)
         assertEquals(Integrity.UNKNOWN_SIGNER, unverifiedOf(node(), trust(stale.copy(signingPublicKey = "", fingerprint = "")))?.integrity)
+    }
+
+    @Test
+    fun aFirstSeenWritersRecordsCarryNoMarkButInfoSaysWhoAddedItAndThatNobodyChecked() {
+        val seen = pin(maya.id, writerKey, fingerprint = "")
+        assertEquals(com.hushos.core.PinTrust.SEEN, seen.trust)
+        assertNull(unverifiedOf(node(), trust(seen)))
+        assertEquals(Integrity.SEEN, metadataVerdict(node(), trust(seen)))
+        assertEquals(SeenBy("Maya Lindqvist", maya.id, "x@example.org"), seenByOf(node(), trust(seen)))
+        // A first-seen pin vouches only for its own keys: under other keys it is the mark, never "Added by".
+        val other = pin(maya.id, otherKey, fingerprint = "")
+        assertEquals(Integrity.BAD_SIGNATURE, unverifiedOf(node(), trust(other))?.integrity)
+        assertNull(seenByOf(node(), trust(other)))
+        // A writer this person checked has no "Added by … Not verified" line at all.
+        assertNull(seenByOf(node(), trust(pin(maya.id, writerKey))))
     }
 
     @Test
@@ -120,7 +133,7 @@ class IntegrityTest {
         val relabelled = node(metadataSigner = sam, versionSigner = sam)
         val result = unverifiedOf(relabelled, trust(pin(sam.id, otherKey, name = "Sam")))!!
         assertEquals(Integrity.BAD_SIGNATURE, result.integrity)
-        assertEquals("The signature doesn’t match Sam’s keys. Don’t trust this item.", result.explanation())
+        assertEquals("HushOS couldn’t confirm this was written by Sam.", result.explanation())
     }
 
     @Test
@@ -151,7 +164,7 @@ class IntegrityTest {
         // Whom this person trusts did not load: a record that would verify is still marked.
         assertEquals(Integrity.UNCHECKED, unverifiedOf(node(), null)?.integrity)
         assertEquals(Integrity.UNCHECKED, markOf(node(), TrustState.Failed)?.integrity)
-        assertEquals("HushOS couldn’t check who wrote this. Try again later.", markOf(node(), TrustState.Failed)!!.explanation())
+        assertEquals("HushOS couldn’t check this right now.", markOf(node(), TrustState.Failed)!!.explanation())
         // An envelope that can't even be decoded makes the check throw: that is unchecked, not "no mark".
         assertEquals(Integrity.UNCHECKED, markOf(node(metadataEnvelope = "%%%"), TrustState.Ready(trust(pin(maya.id, writerKey))))?.integrity)
         // Still loading is the one state without a mark.

@@ -1,5 +1,8 @@
 package com.hushos.app.ui
 
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.runtime.retain.retain
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.heightIn
@@ -139,10 +142,10 @@ fun openWith(context: android.content.Context, uri: android.net.Uri, mime: Strin
 fun TagManagerSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit) {
     val alpine = Alpine.colors
     var newName by rememberSaveable { mutableStateOf("") }
-    var renaming by remember { mutableStateOf<com.hushos.app.data.Tag?>(null) }
+    var renaming by retain { mutableStateOf<com.hushos.app.data.Tag?>(null) }
     var renameDraft by rememberSaveable { mutableStateOf("") }
-    var deleting by remember { mutableStateOf<com.hushos.app.data.Tag?>(null) }
-    var colouring by remember { mutableStateOf<com.hushos.app.data.Tag?>(null) }
+    var deleting by retain { mutableStateOf<com.hushos.app.data.Tag?>(null) }
+    var colouring by retain { mutableStateOf<com.hushos.app.data.Tag?>(null) }
     LaunchedEffect(Unit) { model.refreshTags() }
     Sheet(onDismissRequest = dismiss) {
         Text("Tags", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
@@ -197,20 +200,25 @@ fun TagManagerSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Uni
     }
 }
 
-/* The presets the web offers, as round swatches with a check, or a custom colour typed as a hex. */
+/* The swatches the web offers, as round swatches with a check, or a custom colour typed as a hex. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ColourDialog(name: String, current: String, onPick: (String) -> Unit, onDismiss: () -> Unit) {
     val alpine = Alpine.colors
     var choice by rememberSaveable { mutableStateOf(current) }
-    var hex by rememberSaveable { mutableStateOf(if (current.startsWith("#")) current else "") }
-    val valid = choice in OFFERED_TAG_COLOURS || Regex("^#[0-9a-fA-F]{6}$").matches(choice)
+    // The field holds a colour of the tag's own; a swatch's hex is shown by its tick, not typed out.
+    var hex by rememberSaveable { mutableStateOf(if (current.startsWith("#") && current !in OFFERED_TAG_COLOURS) current else "") }
+    val hexColour = Regex("^#[0-9a-fA-F]{6}$")
+    // A custom colour half typed is not saved as the last one that was whole.
+    val typedWrong = hex.isNotEmpty() && !hexColour.matches(hex)
+    val valid = !typedWrong && (choice in OFFERED_TAG_COLOURS || hexColour.matches(choice))
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Tag colour") },
         text = {
             Column {
                 Text("For “$name”", modifier = Modifier.padding(bottom = 16.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     for (colour in OFFERED_TAG_COLOURS) {
                         val on = colour == choice
                         Box(
@@ -218,15 +226,16 @@ fun ColourDialog(name: String, current: String, onPick: (String) -> Unit, onDism
                                 .then(if (on) Modifier.border(2.dp, alpine.ink, CircleShape) else Modifier)
                                 .padding(4.dp).background(tagColour(colour), CircleShape).clip(CircleShape)
                                 .selectable(selected = on, role = androidx.compose.ui.semantics.Role.RadioButton) { choice = colour; hex = "" }
-                                .semantics { contentDescription = colour.replaceFirstChar { it.uppercase() } },
+                                .semantics { contentDescription = com.hushos.app.data.TagRegistry.colourName(colour) },
                             contentAlignment = Alignment.Center,
                         ) { if (on) Icon(Icons.Outlined.Check, null, tint = onTagColour(colour), modifier = Modifier.size(20.dp)) }
                     }
                 }
                 OutlinedTextField(
-                    value = hex, onValueChange = { hex = it.trim(); if (Regex("^#[0-9a-fA-F]{6}$").matches(hex)) choice = hex.lowercase() },
+                    value = hex, onValueChange = { hex = it.trim(); if (hexColour.matches(hex)) choice = hex.lowercase() },
                     singleLine = true, label = { Text("Custom colour") }, placeholder = { Text("#7c5cbf") },
-                    leadingIcon = { if (choice.startsWith("#")) TagDot(choice, 18.dp) },
+                    isError = typedWrong, supportingText = if (typedWrong) ({ Text("Enter a colour like #7c5cbf.") }) else null,
+                    leadingIcon = if (choice.startsWith("#") && choice !in OFFERED_TAG_COLOURS) ({ TagDot(choice, 18.dp) }) else null,
                     modifier = Modifier.padding(top = 16.dp).fillMaxWidth(),
                 )
             }
@@ -247,10 +256,10 @@ fun ColourDialog(name: String, current: String, onPick: (String) -> Unit, onDism
 fun TrashScreen(model: DriveViewModel, state: DriveState, onBack: (() -> Unit)? = null) {
     val alpine = Alpine.colors
     var confirmEmpty by rememberSaveable { mutableStateOf(false) }
-    var selected by remember { mutableStateOf<com.hushos.app.data.TrashItem?>(null) }
-    var deleting by remember { mutableStateOf<com.hushos.app.data.TrashItem?>(null) }
+    var selected by retain { mutableStateOf<com.hushos.app.data.TrashItem?>(null) }
+    var deleting by retain { mutableStateOf<com.hushos.app.data.TrashItem?>(null) }
     // Rows picked to restore or delete together; a long press starts it, as in Files.
-    var picked by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var picked by retain { mutableStateOf<Set<String>>(emptySet()) }
     var confirmMany by rememberSaveable { mutableStateOf(false) }
     val ids = state.trash.map { it.item.id }.toSet()
     // Rows restored or deleted, here or elsewhere, leave the selection.

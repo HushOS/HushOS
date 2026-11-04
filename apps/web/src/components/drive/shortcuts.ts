@@ -38,3 +38,16 @@ export function keyLabel(key: string) {
             return key;
     }
 }
+
+/*
+ * Whether a key press lands in a field the person types into. The row Enter hotkeys
+ * register with `ignoreInputs: false`, because since @tanstack/hotkeys 0.18 the default
+ * also skips Enter on a focused button or link, and a selected row's name is a button
+ * whose Enter they handle themselves; this keeps them out of text fields as before.
+ */
+export function isTyping(target: EventTarget | null) {
+    if (target instanceof HTMLInputElement)
+        return !['button', 'submit', 'reset'].includes(target.type.toLowerCase());
+    if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
+    return target instanceof HTMLElement && target.isContentEditable;
+}

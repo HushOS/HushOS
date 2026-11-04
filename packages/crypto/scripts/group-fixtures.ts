@@ -164,7 +164,7 @@ for (const [k, kind] of (['group', 'workspace'] as GroupIdKind[]).entries())
 // records read through the chain.
 const inputJson = (input: AcceptInput) => ({
     firstKeys: input.firstKeys,
-    firstKeysChecked: input.firstKeysChecked,
+    anchor: input.anchor,
     pins: input.pins,
     rosters: input.rosters.map(signed),
     successions: input.successions.map(signed),
@@ -172,6 +172,7 @@ const inputJson = (input: AcceptInput) => ({
     me: input.me,
     cache: input.cache,
     joinMark: input.joinMark ?? null,
+    pairMarks: input.pairMarks ?? [],
 });
 const cases = [];
 for (const { name, input, record, next, root, expected } of await groupCases()) {

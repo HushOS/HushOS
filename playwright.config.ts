@@ -27,7 +27,8 @@ export default defineConfig({
     },
     // WebKit is the engine behind Safari (module worker, IndexedDB key storage, download
     // paths, and drag and drop, where it differs most). Locally it runs on demand with
-    // `--project=webkit`; CI runs it on a macOS runner, the build Safari ships.
+    // `--project=webkit`; the WebKit workflow runs it on a macOS runner, the build Safari
+    // ships, nightly, by hand, or on a pull request labelled `full-ci`.
     projects: [
         { name: 'chromium', use: { ...devices['Desktop Chrome'] }, testIgnore: /mobile\.spec\.ts/ },
         // A phone-sized Chromium for the layout checks in mobile.spec.ts.
