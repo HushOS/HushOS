@@ -143,7 +143,9 @@ extension FamilySync {
 
     /*
      * Whether a failure is worth trying again by itself: no answer, a timeout, too many requests or a
-     * server error, from either the groups or the drive routes. Anything else waits for a change.
+     * server error, from either the groups or the drive routes. Anything else waits for a change. The
+     * one classifier for "no verdict": nothing a family sync, join, walk or Files read meets here
+     * cleans anything up. (`unanswered`, no answer at all, is only its first half.)
      */
     public static func transient(_ error: Error) -> Bool {
         if unanswered(error) { return true }
@@ -282,7 +284,7 @@ extension Vault {
             return
         } catch {
             if case DriveAPIError.notAuthenticated = error { throw error }
-            if FamilySync.unanswered(error) { throw error }
+            if FamilySync.transient(error) { throw error }
         }
         var rows: [String: NodeView] = [:]
         func line() -> [NodeView]? {
@@ -306,7 +308,7 @@ extension Vault {
                 page = try await api.changes(workspaceId: workspaceId, since: cursor)
             } catch {
                 if case DriveAPIError.notAuthenticated = error { throw error }
-                if FamilySync.unanswered(error) { throw error }
+                if FamilySync.transient(error) { throw error }
                 return
             }
             for change in page.changes {

@@ -101,7 +101,7 @@ extension DriveStore {
         case .failure(let error):
             if endsSession(error) {
                 report(error)
-            } else if !FamilySync.unanswered(error) {
+            } else if !FamilySync.transient(error) {
                 notify(FamilyWords.error(error))
             }
         }

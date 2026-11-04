@@ -860,6 +860,27 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         }
     }
 
+    /*
+     * The extension recorded a folder made while the app was closed, and then the app's acceptance,
+     * whose view predates that folder, lands at the same generation: the folder stays recorded. Fails
+     * if an acceptance replaces the recorded folders, so a sweep takes the other folder's downloads.
+     */
+    @Test func anAcceptanceKeepsTheFoldersAlreadyRecordedAtItsGeneration() async throws {
+        let session = TemporaryCopies.session(CopyEpoch())
+        let (group, a, b) = (UUID().uuidString.lowercased(), UUID().uuidString.lowercased(), UUID().uuidString.lowercased())
+        let observed = records.generation(group)
+        await domains.accepted(group, name: "Lindqvist family", workspaces: [a], owner: Self.maya, observed: observed, session: session).value
+        // The extension found B and recorded it.
+        records.update { $0.records[group]?.workspaces = [a, b].sorted() }
+        // The app's acceptance from before B existed lands now.
+        await domains.accepted(group, name: "Lindqvist family", workspaces: [a], owner: Self.maya, observed: observed, session: session).value
+        #expect(try records.read()[group]?.workspaces == [a, b].sorted(), "an acceptance took out a folder another process recorded")
+        // An account change since (its record left, its location not removed) starts the list afresh.
+        records.update { $0.accounts = ($0.accounts ?? 0) + 1 }
+        await domains.accepted(group, name: "Lindqvist family", workspaces: [a], owner: Self.maya, observed: records.generation(group), session: session).value
+        #expect(try records.read()[group]?.workspaces == [a], "an acceptance kept folders recorded before an account change")
+    }
+
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
     @Test func aRenamedFamilysLocationTakesTheNewName() async throws {
         let domains = self.domains
@@ -1699,6 +1720,32 @@ extension OnFakeDrive {
             #expect(s.records.admission(s.family.groupId, owner: s.owner) == .admitted, "a 401 mid-sync took the record")
             await s.domains.settled()
             #expect(s.manager.removals.isEmpty)
+        }
+
+        /*
+         * The member list answers a server error or too many requests while the extension checks the
+         * family again: the cached view is served, and reads still work, since the ledger and the copies
+         * made before are left as they were. Fails if a busy server is treated as a refusal (the ledger
+         * uncommitted, the copies deleted) while the location keeps answering.
+         */
+        @Test func aBusyServerMidSyncLeavesReadsWorking() async throws {
+            for status in [503, 429] {
+                let s = try await Self.source()
+                defer { s.phone.done() }
+                let root = NodeRef(workspaceId: s.family.workspaceId, nodeId: s.family.rootId)
+                _ = try await s.source.children(of: root)
+                let (copy, _) = try await s.source.download(s.family.photo.ref)
+                s.server.lock.withLock {
+                    s.server.rostersFail = true
+                    s.server.rostersFailStatus = status
+                }
+                s.clock.now = s.clock.now.addingTimeInterval(120)
+                #expect(try await s.source.folders().count == 1, "a \(status) mid-sync didn't keep the folders")
+                #expect(FileManager.default.fileExists(atPath: copy.path), "a \(status) mid-sync deleted a copy")
+                #expect(try await s.source.children(of: root).contains { $0.ref == s.family.photo.ref }, "a \(status) mid-sync broke listings")
+                let (again, _) = try await s.source.download(s.family.photo.ref)
+                #expect(try Data(contentsOf: again) == s.family.photoBytes, "a \(status) mid-sync broke downloads")
+            }
         }
 
         /*

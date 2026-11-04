@@ -260,8 +260,14 @@ public final class FamilyFilesDomains: @unchecked Sendable {
                 // Signed out or in again elsewhere since this sync's session began: nothing of it is written.
                 if let signedIn, sharedSession() != signedIn { return }
                 if let record = stored.records[groupId], record.owner != owner { return }
-                let record = FamilyDomainRecord(owner: owner, name: name, workspaces: workspaces.map { $0.lowercased() }.sorted(),
-                                                generation: stored.generation(groupId), revision: UUID().uuidString.lowercased())
+                // Merged with the folders already recorded at this generation (the extension may have recorded one this sync's
+                // view predates): a view never takes a folder out, since a stale extra only delays a sweep while a missing one
+                // loses another process's downloads. A let-go or account change starts the list afresh.
+                let generation = stored.generation(groupId)
+                var folders = Set(workspaces.map { $0.lowercased() })
+                if let held = stored.records[groupId], held.generation == generation { folders.formUnion(held.workspaces ?? []) }
+                let record = FamilyDomainRecord(owner: owner, name: name, workspaces: folders.sorted(),
+                                                generation: generation, revision: UUID().uuidString.lowercased())
                 stored.records[groupId] = record
                 written = record
                 ours = true

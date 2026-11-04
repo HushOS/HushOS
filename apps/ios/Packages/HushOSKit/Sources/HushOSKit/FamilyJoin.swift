@@ -309,8 +309,8 @@ extension FamilySync {
                     throw error
                 } catch {
                     // Refused after the acceptance (keys that didn't check, a settings save refused): nothing of it stays open.
-                    // No answer leaves it as it was.
-                    if !Self.unanswered(error) { await refuse(groupId) }
+                    // No answer, a busy or failing server or a lost session leaves it as it was (`cause(of:)`).
+                    if Self.cause(of: error) == .refusal { await refuse(groupId) }
                     throw error
                 }
                 if case .fork(let fork) = state { return .fork(fork) }

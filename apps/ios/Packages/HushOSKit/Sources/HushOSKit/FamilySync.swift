@@ -371,7 +371,7 @@ public actor FamilySync: FamilyJudge {
         let summary: GroupSummary
         if let known = summaries[groupId] { summary = known } else {
             let listed: [GroupSummary]
-            do { listed = try await list() } catch where Self.unanswered(error) {
+            do { listed = try await list() } catch where Self.transient(error) {
                 // No answer is the network's: the queue waits for one, it doesn't fail the upload.
                 throw DriveAPI.noAnswer(error)
             }
@@ -644,8 +644,9 @@ public actor FamilySync: FamilyJudge {
             return .wiped
         } catch {
             // Refused (a rollback, a race that kept losing, keys that didn't check): the ledger kept nothing of this run, and
-            // nothing of the family stays open here. No answer at all leaves what was opened before as it was.
-            if !Self.unanswered(error) { await refuse(groupId) }
+            // nothing of the family stays open here. No answer, a busy or failing server (`transient`) or a lost session
+            // leaves what was opened before as it was: the same classification that decides whether Files lets it go.
+            if Self.cause(of: error) == .refusal { await refuse(groupId) }
             // A 401: kept for the app (takeEnded), which asks whether the session ended.
             if endsSession(error) { endedBy = error }
             // Why, for the Files locations: only a definite refusal lets the family's location go (`Revised.letsFilesGo`).
@@ -1004,7 +1005,7 @@ public actor FamilySync: FamilyJudge {
                     var holder: IdentityEnvelope?
                     do {
                         holder = try await vault.identityEnvelope(atKeyVersion: row.granteeKeyVersion)
-                    } catch where Self.unanswered(error) {
+                    } catch where Self.transient(error) {
                         throw error
                     } catch {
                         holder = nil
@@ -1052,8 +1053,8 @@ public actor FamilySync: FamilyJudge {
                 folder.area.write = Self.write(reason: opened.opened.reason, rootListed: folder.area.rootListed, root: folder.area.root != nil)
             } catch let error as GroupsAPIError where error.isNotMember {
                 throw error
-            } catch where Self.unanswered(error) {
-                // No answer (the identity history): nothing was refused, so the sync leaves things as they were.
+            } catch where Self.transient(error) {
+                // No answer, or a busy or failing server (the identity history): nothing was refused, so the sync leaves things as they were.
                 throw error
             } catch {
                 // The row says "Couldn't check this folder's keys", as the web's does; nothing of it opens.

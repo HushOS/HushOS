@@ -1197,6 +1197,8 @@ final class FamilyServer: @unchecked Sendable {
     var groupsFail = false
     /* Route 5 answers with a 503 (a server in trouble, never a refusal). */
     var rostersFail = false
+    /* What a failing member list answers: a server error, or too many requests. */
+    var rostersFailStatus = 503
     /* Route 3 answers not-member while route 5 still serves: removed between the two. */
     var detailNotMember = false
     /* Route 25 lists the family's folder (false: it was deleted, and the family's space lists no folder). */
@@ -1461,7 +1463,7 @@ final class FamilyServer: @unchecked Sendable {
             }
         case ("GET", "/api/groups/\(f.groupId)/rosters"):
             if notMember { return (404, ["code": "not-member", "message": "You are not in this group."]) }
-            if lock.withLock({ rostersFail }) { return (503, ["message": "Drive is temporarily unavailable. Please try again."]) }
+            if lock.withLock({ rostersFail }) { return (lock.withLock { rostersFailStatus }, ["message": "Drive is temporarily unavailable. Please try again."]) }
             let after = Int(query.first { $0.name == "after" }?.value ?? "0") ?? 0
             if after == 0, lock.withLock({ notMemberFromStart }) { return (404, ["code": "not-member", "message": "You are not in this group."]) }
             onRosters?()
