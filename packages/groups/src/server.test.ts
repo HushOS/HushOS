@@ -902,22 +902,22 @@ describe('invitations', () => {
     });
 });
 
-describe('one family per account (families-shared-pool 3.2)', () => {
-    /* An invitation to `fam` for `m` whose token the test holds. */
-    async function invitation(fam: Family, m: Member) {
-        const token = randomBytes(32).toString('base64url');
-        await groupsRepository.createInvitation({
-            groupId: fam.groupId,
-            email: m.email,
-            normalizedEmail: m.email,
-            tokenHash: createHash('sha256').update(token).digest(),
-            roles: [],
-            invitedBy: fam.organizer.userId,
-            expiresAt: new Date(Date.now() + 86_400_000),
-        });
-        return token;
-    }
+/* An invitation to `fam` for `m` whose token the test holds. */
+async function invitation(fam: Family, m: Member) {
+    const token = randomBytes(32).toString('base64url');
+    await groupsRepository.createInvitation({
+        groupId: fam.groupId,
+        email: m.email,
+        normalizedEmail: m.email,
+        tokenHash: createHash('sha256').update(token).digest(),
+        roles: [],
+        invitedBy: fam.organizer.userId,
+        expiresAt: new Date(Date.now() + 86_400_000),
+    });
+    return token;
+}
 
+describe('one family per account (families-shared-pool 3.2)', () => {
     test('a second family is refused before its statements are read, naming the first to its member', async () => {
         const maya = await member();
         const first = await family(maya);
@@ -1058,103 +1058,64 @@ describe('one family per account (families-shared-pool 3.2)', () => {
     });
 });
 
-describe('one family per account under races', () => {
-    test('a family made while its creator is let in elsewhere: the index refuses it, and the answer names the family that won', async () => {
-        const ortega = await family();
-        await groupsRepository.renameGroup(ortega.groupId, 'Ortega family');
-        const sam = await member();
-        const built = await familyBody(sam);
-        /*
-         * Sam's creation passes every check, its one-family checks included, then waits on its
-         * area commitment, which this session has written and not committed. Meanwhile Sam
-         * accepts Ortega family's invitation and is let in; then the commitment is let go, and
-         * the creation's membership meets the index. (Waiting to join before creating is
-         * refused up front: see 'one family per account'.)
-         */
-        const blocker = new Client({ connectionString: process.env.DATABASE_URL });
-        await blocker.connect();
-        let creating: Promise<unknown> | undefined;
-        try {
-            await blocker.query('begin');
-            await blocker.query(
-                'insert into group_area_commitments (commitment, group_id, roster_version) values ($1, $2, 1)',
-                [
-                    Buffer.from(await areaKeyCommitment(kitAreaKey(built.areaId, 1)), 'base64url'),
-                    randomUUID(),
-                ],
-            );
-            creating = refusal(groups.createGroup(sam.userId, built.body));
-            expect(await lockWaiters(blocker, 1)).toBeGreaterThanOrEqual(1);
-            await accepted(ortega, sam);
-            const { at, call } = await nextRoster(ortega, ortega.organizer, [
-                ...entries(ortega.h),
-                sam.who.entry([]),
-            ]);
-            await groups.admit(ortega.organizer.userId, ortega.groupId, sam.userId, {
-                ...call,
-                grants: [
-                    await grantWire(
-                        ortega.groupId,
-                        ortega.areaId,
-                        1,
-                        ortega.organizer.who,
-                        sam.who,
-                        at,
-                    ),
-                ],
-            });
-        } finally {
-            await blocker.query('rollback');
-            await blocker.end();
-        }
-        expect(await creating).toEqual({
-            code: 'in-family',
-            status: 409,
-            data: { reason: 'self', family: { groupId: ortega.groupId, name: 'Ortega family' } },
-        });
-        expect(await groupsRepository.getGroupRow(built.groupId)).toBeNull();
-        expect((await groupsRepository.familyOf(sam.userId))?.groupId).toBe(ortega.groupId);
-    });
-});
-
 describe('waiting to join, under races', () => {
-    test('a family made as its creator accepts an invitation: the repository, under their lock, refuses it', async () => {
+    test('a family made as its creator accepts an invitation: exactly one goes through, and the other is refused', async () => {
         const ortega = await family();
         await groupsRepository.renameGroup(ortega.groupId, 'Ortega family');
         const sam = await member();
+        const token = await invitation(ortega, sam);
         const built = await familyBody(sam);
         /*
-         * The route's early check finds Sam waiting for nothing; the creation then queues on
-         * Sam's own row, which this session holds while it writes Sam's acceptance of Ortega
-         * family (as accepting does) and commits. The repository's check, under that lock, is
-         * the one left to see it.
+         * The creation is paused past its checks (holding Sam's own row): another session holds
+         * the new family's id, whose insert the creation then waits on. Meanwhile Sam's acceptance
+         * of Ortega family runs for real. Neither is scripted from here on: whichever the locks
+         * let through first wins, and the other has to see it.
          */
         const blocker = new Client({ connectionString: process.env.DATABASE_URL });
         await blocker.connect();
         let creating: Promise<unknown> | undefined;
+        let accepting: Promise<unknown> | undefined;
         try {
             await blocker.query('begin');
-            await blocker.query('select id from users where id = $1 for update', [sam.userId]);
-            creating = groups.createGroup(sam.userId, built.body).then(
-                () => null,
-                (error: unknown) => error,
-            );
-            expect(await lockWaiters(blocker, 1)).toBeGreaterThanOrEqual(1);
             await blocker.query(
-                `insert into group_memberships (group_id, group_kind, user_id, state, roles, accepted_at)
-                 values ($1, 'family', $2, 'accepted', '{}', now())`,
-                [ortega.groupId, sam.userId],
+                `insert into groups (id, id_seed, kind, name, creator_user_id, first_ed25519_public_key,
+                    first_ml_dsa_public_key, roster_version, roster_digest, group_key_version)
+                 values ($1, $3, 'family', 'Held', $2, decode(repeat('00', 32), 'hex'),
+                    decode(repeat('00', 1952), 'hex'), 1, decode(repeat('00', 32), 'hex'), 1)`,
+                [built.groupId, sam.userId, randomBytes(16).toString('base64url')],
             );
-            await blocker.query('commit');
+            const settled = (promise: Promise<unknown>) =>
+                promise.then(
+                    (value) => ({ ok: value }),
+                    (error: unknown) => ({ refused: error }),
+                );
+            creating = settled(groups.createGroup(sam.userId, built.body));
+            expect(await lockWaiters(blocker, 1)).toBeGreaterThanOrEqual(1);
+            accepting = settled(groups.acceptInvitation(sam.userId, token, ADDRESS));
+            // The acceptance gets as far as the locks let it: past them it would commit here.
+            await new Promise((resolve) => setTimeout(resolve, 300));
+            await blocker.query('rollback');
         } finally {
             await blocker.end();
         }
-        expect(await creating).toMatchObject({
-            code: 'in-family',
-            status: 409,
-            data: { reason: 'waiting', family: { groupId: ortega.groupId, name: 'Ortega family' } },
+        const [created, accepted] = (await Promise.all([creating, accepting])) as {
+            ok?: unknown;
+            refused?: unknown;
+        }[];
+        expect([created, accepted].filter((outcome) => 'ok' in outcome!)).toHaveLength(1);
+        // The creation held Sam's row first: it went through, and the acceptance is refused as
+        // someone already in a family, never left waiting while owning one.
+        expect(created).toMatchObject({ ok: { group: { id: built.groupId } } });
+        expect(accepted).toMatchObject({
+            refused: {
+                code: 'in-family',
+                status: 409,
+                data: { reason: 'self', family: { groupId: built.groupId } },
+            },
         });
-        expect(await groupsRepository.getGroupRow(built.groupId)).toBeNull();
+        expect((await groups.listPending(ortega.organizer.userId, ortega.groupId)).pending).toEqual(
+            [],
+        );
     });
 });
 

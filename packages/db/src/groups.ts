@@ -1248,6 +1248,22 @@ export type CreateResult =
     | { status: 'invalid'; reason: string };
 
 /*
+ * The person's own row, which every way into a family takes (creating one, accepting an
+ * invitation, being let in), so each sees the others' writes: someone never ends up waiting to
+ * join one family while owning another, or let in to one while accepting another. Always taken
+ * after any group's row (and, letting in, after its areas and pool), never before, so two of
+ * these never wait on each other in opposite orders.
+ */
+async function lockPerson(tx: Tx, userId: string) {
+    const [row] = await tx
+        .select({ id: users.id, normalizedEmail: users.normalizedEmail })
+        .from(users)
+        .where(eq(users.id, userId))
+        .for('no key update');
+    return row ?? null;
+}
+
+/*
  * A new group: its row with the version 1 keys, roster version 1, the
  * creator's membership (active, with the roles their entry names, which must
  * include `billing` and `members`), the seal of the seed to the creator, and
@@ -1312,12 +1328,8 @@ export async function createGroup(input: {
         () =>
             db.transaction(async (tx) => {
                 // The creator's row serialises their creations, so two at once cannot both slip
-                // under the limit, or both find them in no family.
-                await tx
-                    .select({ id: users.id })
-                    .from(users)
-                    .where(eq(users.id, input.creatorUserId))
-                    .for('no key update');
+                // under the limit, and with their acceptances and admissions (`lockPerson`).
+                await lockPerson(tx, input.creatorUserId);
                 // A resend of a creation that committed while this one waited is a replay, not a
                 // second family: answered before the one-family check, which would count it.
                 const [landed] = await tx
@@ -1336,8 +1348,8 @@ export async function createGroup(input: {
                         as traced
                 `);
                 if (traced.rows[0]?.traced) return refuse({ status: 'taken' });
-                // Admissions elsewhere don't take that lock: group_memberships_one_family_idx
-                // refuses the loser of such a race, and `answering` reads it as in-family.
+                // Acceptances and admissions take that lock too, so these reads see them; the
+                // index (group_memberships_one_family_idx) stays the backstop, read as in-family.
                 const family =
                     input.kind === 'family' ? await activeFamily(tx, input.creatorUserId) : null;
                 if (family) refuse({ status: 'in-family', family });
@@ -1515,6 +1527,9 @@ export async function appendChain(input: {
                 // 3. Seats, under the lock that every admission and departure takes.
                 let target: typeof groupMemberships.$inferSelect | undefined;
                 if (route.kind === 'admit') {
+                    // The person's own row, after the group's, areas and pool: as creating a family
+                    // and accepting an invitation take it, so the family check below sees them.
+                    if (group.kind === 'family') await lockPerson(tx, route.userId);
                     [target] = await tx
                         .select()
                         .from(groupMemberships)
@@ -2554,10 +2569,9 @@ async function acceptUnder(
             invitation.expiresAt <= new Date()
         )
             return { status: 'gone' as const };
-        const [user] = await tx
-            .select({ normalizedEmail: users.normalizedEmail })
-            .from(users)
-            .where(eq(users.id, input.userId));
+        // After the group's row and the invitation's: the person's, which creating a family and
+        // being let in take too, so the family check below sees what either wrote.
+        const user = await lockPerson(tx, input.userId);
         if (!user || user.normalizedEmail !== invitation.normalizedEmail)
             return { status: 'email-mismatch' as const };
         const [membership] = await tx
@@ -2573,9 +2587,8 @@ async function acceptUnder(
         if (membership?.state === 'active') return { status: 'already-member' as const };
         /*
          * Refused here, not only at admission: an accepted row would sit in this family's
-         * waiting list, and its managers would learn the person is in some family. Read
-         * under the group lock only; an admission elsewhere that commits after this read is
-         * the same as one after the accept, which admission then refuses.
+         * waiting list, and its managers would learn the person is in some family. Read under
+         * the person's lock, which a creation or an admission elsewhere holds until it commits.
          */
         if (group.kind === 'family') {
             const family = await activeFamily(tx, input.userId, group.id);
