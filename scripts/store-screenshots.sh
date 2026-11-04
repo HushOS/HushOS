@@ -145,6 +145,9 @@ android() {
     local physical
     physical=$($a shell wm size | sed -n 's/^Physical size: //p' | tr -d '\r')
     if [[ "$physical" != 1080x1920 ]]; then
+        # Put the screen back however the run ends (a failed capture, Ctrl-C), or the next
+        # site-phone-shots.sh run on this emulator captures the overridden layout.
+        trap "$a shell wm size reset >/dev/null 2>&1 || true; $a shell wm density reset >/dev/null 2>&1 || true" EXIT
         $a shell wm size 1080x1920
         $a shell wm density 420
     fi
@@ -196,6 +199,7 @@ android() {
     if [[ "$physical" != 1080x1920 ]]; then
         $a shell wm size reset
         $a shell wm density reset
+        trap - EXIT
     fi
     $a emu kill >/dev/null 2>&1 || true
     say "Android done: $OUT/android"
