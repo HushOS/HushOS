@@ -48,7 +48,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-10-28';
+export const updated = '2026-11-05';
 
 export const sections: RoadmapSection[] = [
     {
@@ -56,6 +56,16 @@ export const sections: RoadmapSection[] = [
         title: 'Shipped',
         summary: 'Live at hushos.com, and in a self-hosted copy that runs the latest code.',
         items: [
+            {
+                id: 'families',
+                status: 'shipped',
+                // The month families are switched on at hushos.com, set when this is merged.
+                month: 'November 2026',
+                area: 'Families',
+                title: 'Family plans',
+                body: 'One plan’s storage for up to 20 people, covering everyone’s own files and the family folders. Someone who manages the family lets each newcomer in, and anyone in it can check the others with twelve words. On the web and in the Android app.',
+                links: [{ kind: 'blog', slug: 'family-plans', label: 'Read the announcement' }],
+            },
             {
                 id: 'android-app',
                 status: 'shipped',
@@ -160,13 +170,6 @@ export const sections: RoadmapSection[] = [
         summary: 'Being built, or built and being finished.',
         items: [
             {
-                id: 'families',
-                status: 'now',
-                area: 'Families',
-                title: 'Family plans',
-                body: 'One storage pool for the whole family, covering everyone’s own files and the family folders, for up to 20 people, with anyone in the family able to check the others with twelve words. Built on the web, shared pool included; it switches on at hushos.com once the last billing checks are done.',
-            },
-            {
                 id: 'phone-apps',
                 status: 'now',
                 area: 'Apps',
@@ -177,8 +180,8 @@ export const sections: RoadmapSection[] = [
                 id: 'families-on-phones',
                 status: 'now',
                 area: 'Apps',
-                title: 'Families on iPhone and Android',
-                body: 'Family folders in the apps, checked by the same rules as on the web.',
+                title: 'Families on iPhone',
+                body: 'Family folders in the iPhone app, with joining, inviting and letting people in, as in the Android app. It comes with the app’s App Store release.',
             },
             {
                 id: 'releases',
