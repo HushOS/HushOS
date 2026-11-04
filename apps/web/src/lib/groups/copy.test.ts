@@ -1,6 +1,14 @@
 import { describe, expect, test } from 'vitest';
 import { GroupApiError } from './api';
-import { errorCopy } from './copy';
+import { errorCopy, refusalCopy } from './copy';
+
+describe('a place an admission could not have', () => {
+    test('while the bank holds an upgrade, says the plan change comes first, not another place', () => {
+        const line = refusalCopy('seats', { reason: 'upgrade-waiting' }, { family: 'Lindqvist' });
+        expect(line).toBe('Confirm the plan change with your bank first, then let them in.');
+        expect(line).not.toMatch(/another place/);
+    });
+});
 
 describe('a request the client gave up on', () => {
     test('is said in the app’s words, never the browser’s', () => {
