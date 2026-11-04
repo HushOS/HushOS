@@ -1,0 +1,23 @@
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_d63c0436476dd6 77
+packages/db/drizzle/20261104085718_group_dissolve_notices/snapshot.json
+  s_566b8e0c4467a4::t_46910cc2d3c853 2-471
+packages/db/src/groups.dissolve-notices.test.ts
+  s_566b8e0c4467a4::t_5f5e811252013a 299
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f39901d7c31a28dc520827d0b6017a2cce2ef26b",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
