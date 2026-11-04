@@ -742,6 +742,30 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         }
     }
 
+    /*
+     * Two locations without Maya's record, and her sync accepts the second while the system removes
+     * the first: her reconcile reads that record again before deciding and keeps the second. Fails if
+     * reconcile decides every location on the records it read before its first wait.
+     */
+    @Test func aFamilyAcceptedDuringAnEarlierRemovalOfTheReconcileStays() async throws {
+        signIn(Self.maya)
+        let lifecycle = domains
+        let app = domains
+        let session = TemporaryCopies.session(CopyEpoch())
+        let tail = String(UUID().uuidString.lowercased().suffix(12))
+        let (first, second) = ("00000000-0000-4000-8000-\(tail)", "ffffffff-ffff-4fff-8fff-\(tail)")
+        let (records, maya) = (self.records, Self.maya)
+        manager.put(FamilyFileIds.domain(first), name: "Holm family")
+        manager.put(FamilyFileIds.domain(second), name: "Lindqvist family")
+        manager.duringRemove = {
+            await app.accepted(second, name: "Lindqvist family", owner: maya, observed: records.generation(second), session: session).value
+        }
+        await lifecycle.reconcile(owner: maya).value
+        #expect(manager.names[FamilyFileIds.domain(first)] == nil)
+        #expect(records.admission(second, owner: maya) == .admitted)
+        #expect(manager.names[FamilyFileIds.domain(second)] != nil, "reconcile removed a family accepted while its earlier removal waited")
+    }
+
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
     @Test func aRenamedFamilysLocationTakesTheNewName() async throws {
         let domains = self.domains

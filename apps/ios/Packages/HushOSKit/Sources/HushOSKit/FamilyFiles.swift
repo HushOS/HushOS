@@ -480,16 +480,23 @@ public final class FamilyFilesDomains: @unchecked Sendable {
                 guard let accounts, sharedSession().map(AccountOwner.init) == owner else { return false }
                 return (stored.map { $0.accounts ?? 0 } ?? records.accounts()) == accounts
             }
-            guard let identifiers = (try? await manager.domains()).map({ Array($0.keys).sorted() }), let held = try? records.read() else { return }
+            guard let identifiers = (try? await manager.domains()).map({ Array($0.keys).sorted() }) else { return }
             var present = Set(identifiers)
             var kept: [String] = []
             for identifier in identifiers {
                 let groupId = FamilyFileIds.group(ofDomain: identifier)
-                if let groupId, held[groupId]?.owner == owner {
+                // Its record as it is now, with who is signed in, under the lock right before deciding: a family accepted while
+                // an earlier removal waited on the system is this account's, and stays.
+                var ours = false
+                var still = false
+                guard records.update({ stored in
+                    still = current(stored)
+                    ours = groupId.map { stored.records[$0]?.owner == owner } ?? false
+                }), still else { return }
+                if ours {
                     kept.append(identifier)
                     continue
                 }
-                guard current() else { return }
                 // Whoever's acceptance landed while the location was removed keeps it, if they are signed in (`removeVerified`).
                 let gone = if let groupId { await removeVerified(groupId) } else { (try? await manager.remove(identifier)) != nil }
                 if gone { present.remove(identifier) }
