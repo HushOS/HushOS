@@ -1,6 +1,7 @@
 import { createAreaLedger } from './area-ledger';
 import { areaKeyCommitment, areaRootCommitment } from './area-keys';
 import { ROOT } from './device-record-testkit';
+import { CryptoError } from './errors';
 import {
     CHECKED,
     groupKeyAt,
@@ -8,6 +9,7 @@ import {
     mlDsaKeysOf,
     pattern,
     person,
+    servedKeysOf,
     type History,
     type Person,
 } from './group-testkit';
@@ -15,6 +17,7 @@ import {
     acceptRosters,
     checkNextRoster,
     joinCode,
+    pairCodeOf,
     nextRoster,
     pinAfter,
     type AcceptedRosters,
@@ -37,12 +40,14 @@ import {
 import { deriveId } from './ids';
 import { decode, encode } from './keys';
 import { outboxStep, readOutboxEntry } from './outbox';
+import { rekeyNode } from './rotation-records';
 import { keyCommitment } from './pins';
 import type { ContactPin } from './contacts';
 import { fingerprintOfKeys, keyDigest } from './fingerprint';
 import {
     createGroupSession,
     openDeviceRecord,
+    pairCode,
     sealDeviceRecord,
     type GrantWire,
     type GroupHost,
@@ -91,7 +96,10 @@ export type Family = {
 /* The key the family gives an area at a version (index 0 to 2: A1, A2, A3), as the core's area_key. */
 export const areaKey = (index: number, version: number) =>
     pattern(32, 120 + index * 2 + version - 1);
-const rootKey = (index: number, version: number) => pattern(32, 140 + index * 2 + version - 1);
+export const rootKey = (index: number, version: number) =>
+    pattern(32, 140 + index * 2 + version - 1);
+/* The latest key version the family's history lists for A1, A2 and A3: a grant above it is a call's new key. */
+const LISTED = [1, 1, 2];
 export const OTHER_FAMILY = '0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b';
 export const OTHER_ID = 'f0f0f0f0-0000-4000-8000-000000000001';
 
@@ -180,7 +188,7 @@ export async function chainOf(
     const accepted = await acceptRosters({
         groupId,
         firstKeys,
-        firstKeysChecked: true,
+        anchor: 'created',
         pins: [],
         rosters,
         successions,
@@ -246,6 +254,8 @@ export async function session(
         rosters?: SignedGroupStatement[];
         seed?: boolean;
         area?: boolean;
+        /* The account key's version (a master-key rotation moves it apart from the identity's). */
+        accountKeyVersion?: number;
     } = {},
 ): Promise<Call> {
     const f = await family();
@@ -253,7 +263,11 @@ export async function session(
     const p1 = f.p[0]!;
     const ledger = createAreaLedger();
     const host = {
-        unlocked: () => ({ userId: who.userId, root: ROOT.slice(), keyVersion: 1 }),
+        unlocked: () => ({
+            userId: who.userId,
+            root: ROOT.slice(),
+            keyVersion: options.accountKeyVersion ?? 1,
+        }),
         identity: () => ({ userId: who.userId, served: who.served, history: [] }),
         hybridKeys: () => ({
             signingKey: who.signer.signingKey.slice(),
@@ -262,6 +276,25 @@ export async function session(
         granteeSecrets: () => who.secrets,
         ledger,
         workspaceKey: ledger.workspaceKey,
+        // A family folder's rotation (Core 5b), as session.ts gives the worker these.
+        currentKeyOf: ledger.currentKeyOf,
+        rekeyNode: (input: Omit<Parameters<typeof rekeyNode>[0], 'ownerKind' | 'signer'>) =>
+            rekeyNode({
+                ...input,
+                ownerKind: 'group',
+                signer: () => ({
+                    userId: who.userId,
+                    signingKey: who.signer.signingKey,
+                    hybridKeys: () => ({
+                        signingKey: who.signer.signingKey.slice(),
+                        mlDsaSecretKey: who.signer.mlDsaSecretKey.slice(),
+                    }),
+                }),
+            }),
+        previousNodeKey(workspaceId: string, nodeId: string, epoch: number) {
+            const held = ledger.prevNodeKey(workspaceId, nodeId);
+            return held && held.own && held.epoch === epoch ? held.key.slice() : undefined;
+        },
     } as unknown as GroupHost;
     const worker = createGroupSession(host);
     let id = 0;
@@ -384,12 +417,10 @@ export async function callSpecs(): Promise<Json[]> {
             }),
         },
         {
+            // Never with a role: the invitation's roles are the server's word (3.6), in both twins.
             name: 'admit-manager',
             op: { kind: 'admit', who: 5, roles: ['members'] },
-            expected: built({ kind: 'admit', userId: u(5) }, 1, changed(5, ['members']), {
-                keySeal: u(5),
-                grants: grants(5),
-            }),
+            refused: 'Let them in first. Roles are given afterwards.',
         },
         {
             name: 'grant-members',
@@ -572,8 +603,18 @@ function personOf(f: Family, userId: string) {
 const firstKeysOf = (doc: Json): GroupPublicKey => doc.family.firstKeys;
 const historyOf = (doc: Json) => (doc.family.rosters as SignedStatementWire[]).map(unwire);
 
-/* A grant opened by its grantee to the folder's key at its version, granted by `granter`: its verdict entry. */
-async function openGrant(doc: Json, chain: AcceptedRosters, grant: GrantWire, granter: Person) {
+/*
+ * A grant opened by its grantee, granted by `granter`: the folder's key at its
+ * version. One the family's history lists must be the family's fixed key; a
+ * call's new key (Core 5b) is checked by openAreaGrant against the commitment
+ * the call's roster names, and the caller compares the grantees' keys.
+ */
+export async function grantKey(
+    doc: Json,
+    chain: AcceptedRosters,
+    grant: GrantWire,
+    granter: Person,
+): Promise<Uint8Array> {
     const f = await family();
     const grantee = personOf(f, grant.granteeUserId);
     const index = (doc.family.areas as Json[]).findIndex(
@@ -600,8 +641,18 @@ async function openGrant(doc: Json, chain: AcceptedRosters, grant: GrantWire, gr
             grantee: grantee.secrets,
         },
     );
-    if (encode(key) !== encode(areaKey(index, grant.workspaceKeyVersion)))
+    if (
+        grant.workspaceKeyVersion <= LISTED[index]! &&
+        encode(key) !== encode(areaKey(index, grant.workspaceKeyVersion))
+    )
         throw new Error('the grant is not of that folder’s key at that version');
+    return key;
+}
+
+/* A grant opened by its grantee to the folder's key at its version: its verdict entry. */
+async function openGrant(doc: Json, chain: AcceptedRosters, grant: GrantWire, granter: Person) {
+    const grantee = personOf(await family(), grant.granteeUserId);
+    await grantKey(doc, chain, grant, granter);
     return {
         userId: grantee.userId,
         workspaceId: grant.workspaceId,
@@ -893,6 +944,71 @@ export async function joinCodeWith(
 const filedFor = (spec: Json): [number, number][] =>
     spec.keys !== null && spec.who <= 5 ? [[spec.who, spec.keys]] : [];
 
+/*
+ * The pair codes of every two people of the family, each worked out by
+ * `me` over the doc's own chain as `me` accepts it (docs/optional-verification.md
+ * 3.4): at the later admission of the two (1 and 2 at roster 2; 1 and 3, 2 and
+ * 3 at roster 3), the same words from either side, and over that roster's
+ * digest, group key 1 and the two ids; someone not let in has none. What the
+ * other twin must work out alike from this doc's bytes.
+ */
+export async function pairSpecs(doc: Json): Promise<Json[]> {
+    const f = await family();
+    const rosters = historyOf(doc);
+    const words = async (version: number, a: number, b: number) =>
+        pairCodeOf(
+            await rosterDigest(rosters[version - 1]!.statement),
+            firstKeysOf(doc),
+            1,
+            f.p[a - 1]!.userId,
+            f.p[b - 1]!.userId,
+        );
+    const specs: Json[] = [];
+    for (const [a, b, version] of [
+        [1, 2, 2],
+        [1, 3, 3],
+        [2, 3, 3],
+    ] as const) {
+        const code = await words(version, a, b);
+        specs.push({ me: a, other: b, expected: { status: 'code', rosterVersion: version, code } });
+        specs.push({ me: b, other: a, expected: { status: 'code', rosterVersion: version, code } });
+    }
+    specs.push({ me: 1, other: 4, expected: { status: 'not-admitted' } });
+    return specs;
+}
+
+/*
+ * A pair code as `spec.me` works it out over the doc's chain, accepted as their own: holding the
+ * keys of person `spec.as` (their own when absent; the fuzz kind pair_code holds another's).
+ * `not-accepted` when the chain is not, `refused` when either call refuses.
+ */
+export async function pairRunOver(doc: Json, spec: Json): Promise<Json> {
+    const f = await family();
+    const reader = f.p[spec.me - 1]!;
+    const me = {
+        userId: reader.userId,
+        identities: [servedKeysOf(f.p[(spec.as ?? spec.me) - 1]!)],
+    };
+    try {
+        const accepted = await acceptRosters({
+            groupId: doc.family.groupId,
+            firstKeys: firstKeysOf(doc),
+            anchor: 'created',
+            pins: [],
+            rosters: historyOf(doc),
+            successions: [],
+            mlDsaKeys: await mlDsaKeys(),
+            me,
+            cache: null,
+        });
+        if (accepted.status !== 'accepted') return { status: 'not-accepted' };
+        return await pairCode(accepted, me, f.p[spec.other - 1]!.userId, doc.family.rosters);
+    } catch (error) {
+        if (!(error instanceof CryptoError)) throw error;
+        return { status: 'refused' };
+    }
+}
+
 export async function joinRunOver(doc: Json, spec: Json) {
     let rosters = [...(doc.family.rosters as SignedStatementWire[])];
     if (spec.rosters === 'without-2') rosters = rosters.filter((_, index) => index !== 1);
@@ -1127,6 +1243,14 @@ export async function fixture() {
         joins.push({ ...spec, outcome });
     }
     doc.joinCodes = joins;
+    const pairs: Json[] = [];
+    for (const spec of await pairSpecs(doc)) {
+        const outcome = await pairRunOver(doc, spec);
+        if (canonical(outcome) !== canonical(spec.expected))
+            throw new Error(`pair ${spec.me}-${spec.other}: ${JSON.stringify(outcome)}`);
+        pairs.push({ ...spec, outcome });
+    }
+    doc.pairCodes = pairs;
     const sealed: Json[] = [];
     for (const spec of entrySpecs(doc)) {
         const { value, otherFamily } = entryValue(entries.get(spec.call)!, spec.change);
@@ -1181,6 +1305,22 @@ export async function check(doc: Json) {
         const outcome = await joinRunOver(doc, spec);
         if (canonical(outcome) !== canonical(spec.outcome))
             throw new Error(`${spec.name}: ${JSON.stringify(outcome)}`);
+    }
+    // Every pair code the other twin worked out over its own chain, worked out here alike, and as
+    // this twin's own specs declare it over those bytes.
+    const pairsHere = await pairSpecs(doc);
+    if (
+        canonical(doc.pairCodes.map((at: Json) => [at.me, at.other])) !==
+        canonical(pairsHere.map((at) => [at.me, at.other]))
+    )
+        throw new Error('the same pairs in the same order');
+    for (const [index, theirs] of (doc.pairCodes as Json[]).entries()) {
+        const outcome = await pairRunOver(doc, theirs);
+        if (
+            canonical(outcome) !== canonical(theirs.outcome) ||
+            canonical(outcome) !== canonical(pairsHere[index]!.expected)
+        )
+            throw new Error(`pair ${theirs.me}-${theirs.other}: ${JSON.stringify(outcome)}`);
     }
     for (const spec of doc.outboxEntries) {
         const read = await entryRead(doc, spec, spec.id, spec.envelope);

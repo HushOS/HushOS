@@ -103,8 +103,16 @@ export type SignedStatementInput = {
     signerSignature: Buffer;
 };
 
-/* A roster entry the roster changed (`sinceVersion` is its version), as parsed. */
-export type EntryChange = { userId: string; status: 'active' | 'left'; roles: GroupRole[] };
+/*
+ * A roster entry the roster changed (`sinceVersion` is its version), as parsed;
+ * `rekeyed` when the roster before listed them with other keys.
+ */
+export type EntryChange = {
+    userId: string;
+    status: 'active' | 'left';
+    roles: GroupRole[];
+    rekeyed?: boolean;
+};
 
 /*
  * Brands only @hushos/groups mints: after the crypto core accepted the
@@ -314,7 +322,14 @@ export type ChainResult =
                * The area root still carries a previous envelope: a key change is under way that
                * no running Drive rotation accounts for. Re-read the area; an operator clears it.
                */
-              | 'root-mid-rotation';
+              | 'root-mid-rotation'
+              /*
+               * The member being removed pays for the family's plan, and a change to that plan
+               * holds its claim right now (payerHold): try again in a moment.
+               */
+              | 'busy'
+              /* The member being removed pays for the family's plan, which renews (payerHold). */
+              | 'pays';
       }
     /*
      * Membership moved under the call (someone left, was declined or deleted
@@ -1541,6 +1556,13 @@ export async function appendChain(input: {
                         return refuse({ status: 'seats', used, limit });
                 }
 
+                // Removing the family's payer waits for a change to its plan under way (a resume
+                // that read them as the payer would otherwise bill someone removed).
+                if (group.kind === 'family' && route.kind === 'remove') {
+                    const held = await payerHold(tx, groupId, route.userId);
+                    if (held) return refuse({ status: held });
+                }
+
                 // 4. The chain the caller checked against must still be the chain.
                 if (group.chainRevision !== input.expectedRevision)
                     return refuse(await staleResult(tx, groupId, roster, succession));
@@ -1820,7 +1842,22 @@ async function applyRoster(
         } else if (change.status === 'active') {
             if (member?.state !== 'active') membersChanged('entry-not-member');
             if (!sameRoles(member!.roles, change.roles)) {
-                if (route.kind !== 'member' || change.userId !== target) invalid('role-change');
+                /*
+                 * Roles change on the member route, for its target, with one exception: a
+                 * Continue on account changes (docs/optional-verification.md 6.9) lets several
+                 * members back in on one roster, with new keys, and a manager among them loses
+                 * `members` until checked (3.6). So an entry re-keyed on this roster may lose
+                 * `members`, and only that, on POST rosters.
+                 */
+                const continued =
+                    route.kind === 'roster' &&
+                    change.rekeyed === true &&
+                    sameRoles(
+                        member!.roles.filter((role) => role !== 'members'),
+                        change.roles,
+                    );
+                if (!continued && (route.kind !== 'member' || change.userId !== target))
+                    invalid('role-change');
                 await tx
                     .update(groupMemberships)
                     .set({ roles: change.roles, updatedAt: now })
@@ -1918,6 +1955,11 @@ export async function storeGrants(input: {
 export type LeaveResult =
     | { status: 'left' | 'dissolved' }
     | { status: 'not-member' | 'organizer' | 'last-holder' | 'billed' | 'unavailable' }
+    /*
+     * The leaver pays for the family's plan (payerHold): a change to it is under way, `busy`, or
+     * it renews, `pays`.
+     */
+    | { status: 'busy' | 'pays' }
     /* `mustDissolve`, and the leave would not dissolve the family: nothing was written. */
     | { status: 'not-last' };
 
@@ -1945,6 +1987,41 @@ async function billedPlan(tx: Tx | typeof db, groupId: string) {
 }
 
 /*
+ * What keeps the family's payer from departing, decided under the plan's lock: a change to the
+ * plan holding its claim (claimPlanChange: a raise, an upgrade, a cancel or resume, the dissolve
+ * job), `busy`; or a plan they pay for that renews (live, not set to end, readable), `pays`, the
+ * route's own pays-for-the-plan precheck asked again here so it can't go stale. The plan's rows
+ * are locked FOR UPDATE, and a change writes its result before it lets go of the claim, so a
+ * resume either lands before this (the plan renews: `pays`), holds the claim now (`busy`), or
+ * claims after the departure commits (and sees them gone). A plain read would let the two cross.
+ * Only with billing on.
+ */
+async function payerHold(tx: Tx, groupId: string, userId: string) {
+    if (billingEnv.BILLING_PROVIDER === 'none') return null;
+    const [customer] = await tx
+        .select({ payerUserId: groupBillingCustomers.payerUserId })
+        .from(groupBillingCustomers)
+        .where(eq(groupBillingCustomers.groupId, groupId));
+    if (customer?.payerUserId !== userId) return null;
+    const plans = await tx
+        .select({
+            claimed: sql<boolean>`coalesce(${groupBillingSubscriptions.changeClaimUntil} > now(), false)`,
+            renews: sql<boolean>`(${groupBillingSubscriptions.status} in ('active', 'trialing', 'past_due') and not ${groupBillingSubscriptions.cancelAtPeriodEnd} and not ${groupBillingSubscriptions.productUnread})`,
+        })
+        .from(groupBillingSubscriptions)
+        .where(
+            and(
+                eq(groupBillingSubscriptions.groupId, groupId),
+                isNull(groupBillingSubscriptions.endedAt),
+            ),
+        )
+        .for('update');
+    if (plans.some((plan) => plan.claimed)) return 'busy' as const;
+    if (plans.some((plan) => plan.renews)) return 'pays' as const;
+    return null;
+}
+
+/*
  * A member's departure, under the group's lock (taken by the caller, with the
  * areas): the `billing` holder or the last `members` holder may not go while
  * others remain; the last active member dissolves the group; anyone else loses
@@ -1969,6 +2046,8 @@ async function depart(tx: Tx, groupId: string, userId: string): Promise<LeaveRes
         await leave();
         return { status: 'left' };
     }
+    const held = await payerHold(tx, groupId, userId);
+    if (held) return { status: held };
     const others = await othersOf(tx, groupId, userId);
     if (others.length === 0) {
         if (await billedPlan(tx, groupId)) return { status: 'billed' };
@@ -2139,7 +2218,10 @@ export async function previewLeave(groupId: string, userId: string): Promise<Lea
 export async function departAllForDeletion(
     tx: Tx,
     userId: string,
-): Promise<{ status: 'ok' } | { status: 'organizer' | 'last-holder' | 'billed'; groupId: string }> {
+): Promise<
+    | { status: 'ok' }
+    | { status: 'organizer' | 'last-holder' | 'billed' | 'busy' | 'pays'; groupId: string }
+> {
     const memberships = await tx
         .select({ groupId: groupMemberships.groupId })
         .from(groupMemberships)
@@ -2163,7 +2245,9 @@ export async function departAllForDeletion(
         if (
             result.status === 'organizer' ||
             result.status === 'last-holder' ||
-            result.status === 'billed'
+            result.status === 'billed' ||
+            result.status === 'busy' ||
+            result.status === 'pays'
         )
             return { status: result.status, groupId };
     }

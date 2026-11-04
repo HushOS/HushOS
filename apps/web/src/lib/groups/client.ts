@@ -1,7 +1,7 @@
 import { authClient } from '@/lib/auth-client';
-import { compareAndSetSettings, readSettingsForFamilies } from '@/lib/contacts';
+import { compareAndSetSettings, familyGuardStore, readSettingsForFamilies } from '@/lib/contacts';
 import { groupsApi } from './api';
-import { groupWriteLock, type GroupContext, type RotationSource } from './context';
+import { familyGuardOf, groupWriteLock, type GroupContext, type RotationSource } from './context';
 import {
     createIndexedDbGroupStore,
     createUnavailableGroupStore,
@@ -26,6 +26,12 @@ function deviceStore() {
 }
 
 let rotations: RotationSource | null = null;
+
+/* Every lock and unlock moves this on (GroupContext.session). */
+let unlocks = 0;
+authClient.store.subscribe((state, previous) => {
+    if (state.unlockedUserId !== previous.unlockedUserId) unlocks++;
+});
 export function provideRotations(source: RotationSource | null) {
     rotations = source;
 }
@@ -47,6 +53,8 @@ export function groupContext(userId: string): GroupContext {
             read: () => readSettingsForFamilies(userId),
             write: (version, settings) => compareAndSetSettings(userId, version, settings),
         },
+        guard: familyGuardOf(familyGuardStore, userId),
+        session: () => unlocks,
         lock: groupWriteLock,
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
         now: () => new Date(),

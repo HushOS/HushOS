@@ -53,7 +53,7 @@ export function DeclineInvitation({
             const ctx = familyContext(userId);
             await ctx.lock(groupId, () => wipeGroup(ctx, groupId)).catch(() => {});
             familySynced(groupId, { status: 'wiped' });
-            cue('droplet');
+            cue('close');
             toast.add({ type: 'success', title: `You declined the invitation to ${family}` });
             setOpen(false);
             await afterFamilyChange(queryClient, userId);

@@ -199,8 +199,8 @@ function AppLayout() {
              * of ground on three sides, and the page scrolls inside it; on a phone it is
              * full-bleed and the window scrolls as usual.
              */}
-            <SidebarInset className="min-w-0 bg-card md:my-2.5 md:mr-2.5 md:h-[calc(100svh-1.25rem)] md:overflow-hidden md:rounded-xl md:border md:border-rule">
-                <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-3 bg-card px-3 sm:px-5 md:px-8">
+            <SidebarInset className="min-w-0 bg-panel md:my-2.5 md:mr-2.5 md:h-[calc(100svh-1.25rem)] md:overflow-hidden md:rounded-xl md:border md:border-rule">
+                <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-3 bg-panel px-3 sm:px-5 md:px-8">
                     {/* The sheet on a phone; on a tablet it opens or folds the rail. A desk has the rail's edge and Mod+B. */}
                     <SidebarTrigger
                         aria-label="Menu"
@@ -213,7 +213,7 @@ function AppLayout() {
                         onClick={() => setPaletteOpen(true)}
                         aria-label="Search"
                         aria-keyshortcuts="/ Meta+K Control+K"
-                        className="flex h-10 min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-md bg-muted px-3.5 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-ring md:max-w-110"
+                        className="flex h-10 min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-md bg-muted px-3.5 text-left text-sm text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-accent-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring md:max-w-110"
                     >
                         <SearchIcon aria-hidden="true" className="size-4 shrink-0" />
                         <span className="flex-1 truncate">

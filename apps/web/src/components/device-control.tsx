@@ -36,7 +36,7 @@ export function openDeviceDialog() {
 export async function lockDevice() {
     try {
         await authClient.lock();
-        cue('droplet');
+        cue('close');
         toast.add({ title: 'HushOS is locked on this browser' });
     } catch {
         cue('error');

@@ -1,7 +1,7 @@
 import { CryptoError } from './errors';
 import { decryptKey, encryptKey } from './aead';
 import { decode, encode } from './keys';
-import type { GroupPin } from './pins';
+import { SETTINGS_MAX_BYTES, type GroupPin } from './pins';
 
 /*
  * Contacts and the settings they are pinned in.
@@ -18,7 +18,16 @@ import type { GroupPin } from './pins';
  * and a version 1 document reads as no settings at all.
  */
 
-export const SETTINGS_MAX_BYTES = 64 * 1024;
+// Pure, so the web's main thread uses them without libsodium; re-exported here as before.
+export {
+    CONTACTS_FULL,
+    contactRemoved,
+    SETTINGS_MAX_BYTES,
+    settingsThatFit,
+    settingsWithoutContact,
+    settingsWithPin,
+    withoutRemoval,
+} from './pins';
 export const SETTINGS_PAD_STEP = 1024;
 
 export { fingerprint } from './fingerprint';
@@ -98,26 +107,53 @@ export type Settings = {
      * malformed one. Only a version 2 document holds it.
      */
     groups?: Record<string, GroupPin>;
+    /*
+     * Per group, the family check this person made (docs/optional-verification.md
+     * 3.4): the pair code compared with member `with` over the roster at
+     * `rosterVersion`, which acceptance holds as a pair mark (settings-marks.ts
+     * familyCheckOf); or, with no code, an anchor this person vouched for
+     * otherwise (7.2: `before`, a family accepted before first use; `created`;
+     * `join`, a join code compared), which is a mark but no pair mark. Every
+     * shipped client keeps it when it saves.
+     */
+    familyChecks?: Record<
+        string,
+        | { rosterVersion: number; with: string; code: string[]; checkedAt: string }
+        | { rosterVersion: number; how: 'before' | 'created' | 'join'; checkedAt: string }
+    >;
+    /*
+     * When this account's first client able to take a family on first use
+     * began recording family checks (7.2): a group pin without a check record
+     * is first-use only once this is set. Saved with, or before, the first
+     * first-use pin, never after.
+     */
+    familyChecksSince?: string;
+    /*
+     * Per group, then per invitation id: the manager role this account asked
+     * for when it sent Invite someone (docs/optional-verification.md 3.6,
+     * 6.8), with the address it typed and when, and the member's account id
+     * once one with that address was let in. Only this account's devices
+     * read it, never the server's invitation roles: once that member reads
+     * Verified here, this account is asked whether to give the role. Cleared
+     * when given, declined, or the invitation, the person or the family is
+     * gone.
+     */
+    pendingRoles?: Record<
+        string,
+        Record<string, { email: string; roles: 'members'[]; since: string; userId?: string }>
+    >;
+    /*
+     * People this account removed from its contacts and has not added back,
+     * by lowercased account id, with when (docs/optional-verification.md
+     * 2.8): a share from them is never added on its own, it waits until the
+     * person opens it. Writing their pin again forgets the entry; the oldest
+     * go first when the document runs out of room (settingsThatFit in
+     * pins.ts). Every shipped client keeps it when it saves.
+     */
+    removedContacts?: Record<string, string>;
 };
 
 export const EMPTY_SETTINGS: Settings = { version: 2, contacts: {} };
-
-/* What adding someone says when the settings have no room for one more pin (docs/optional-verification.md 2.7). */
-export const CONTACTS_FULL = 'Your contacts are full. Remove someone you no longer share with.';
-
-/*
- * The settings with `pin` written for its person, as a new document: the one
- * given is never changed, so a pin that does not fit leaves nothing behind.
- * Refused, with CONTACTS_FULL, when the document would no longer seal
- * (SETTINGS_MAX_BYTES, as sealSettings measures it). A first-seen pin is
- * about 500 bytes, so a document holds roughly a hundred people.
- */
-export function settingsWithPin<S extends Settings>(settings: S, pin: S['contacts'][string]): S {
-    const next = { ...settings, contacts: { ...settings.contacts, [pin.userId]: pin } };
-    const json = new TextEncoder().encode(JSON.stringify({ ...next, version: 2 }));
-    if (json.length > SETTINGS_MAX_BYTES) throw new CryptoError(CONTACTS_FULL);
-    return next;
-}
 
 /*
  * The settings key, apart from the identity: 32 random bytes wrapped under a

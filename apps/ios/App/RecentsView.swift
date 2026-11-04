@@ -1,35 +1,15 @@
 import HushOSKit
 import QuickLook
 import SwiftUI
-import UniformTypeIdentifiers
-
-/* What a row can be filtered to, as the drives do it: a type, not a folder. */
-enum HomeFilter: String, CaseIterable, Identifiable {
-    case all = "All", folders = "Folders", images = "Images", videos = "Videos", documents = "Documents"
-    var id: String { rawValue }
-
-    func matches(_ item: Opened) -> Bool {
-        switch self {
-        case .all: return true
-        case .folders: return item.isFolder
-        case .images: return !item.isFolder && NodeRow.type(for: item).conforms(to: .image)
-        case .videos: return !item.isFolder && NodeRow.type(for: item).conforms(to: .movie)
-        case .documents:
-            let type = NodeRow.type(for: item)
-            return !item.isFolder && (type.conforms(to: .pdf) || type.conforms(to: .text) || type.conforms(to: .presentation) || type.conforms(to: .spreadsheet))
-        }
-    }
-}
 
 /*
  * Home: the title with Add (into the top folder), what is on this phone, then
- * Recent with its type chips and, once a tag exists, the tags row. A folder in
- * Recent opens on top of Home. Search and Account have their own tabs.
+ * Recent with, once a tag exists, the tags row. A folder in Recent opens on top
+ * of Home. Search (which finds things by kind: "photos") and Account have their own tabs.
  */
 struct HomeView: View {
     @Environment(DriveStore.self) private var store
     @State private var loaded = false
-    @State private var filter: HomeFilter = .all
     @State private var tagFilter: String?
     @State private var tagged: [Opened] = []
     @State private var managingTags = false
@@ -42,12 +22,12 @@ struct HomeView: View {
     @State private var showingCamera = false
 
     private var rows: [Opened] {
-        (tagFilter != nil ? tagged : store.recents).filter(filter.matches)
+        tagFilter != nil ? tagged : store.recents
     }
 
     private var heading: String {
         if let tagFilter, let tag = store.tags.tags.first(where: { $0.id == tagFilter }) { return tag.name }
-        return filter == .all ? "Recent" : "Recent \(filter.rawValue.lowercased())"
+        return "Recent"
     }
 
     private var kept: [Offline.Entry] {
@@ -77,13 +57,17 @@ struct HomeView: View {
                         }
                         .bareRow(top: Alpine.Space.s8)
                     } header: {
-                        top
+                        // Only with something in it: an empty header would push the first card down past the
+                        // list's own first-section margin, which Files, Shared and Account start at.
+                        if store.offline { top }
                     }
                 } else {
                     Section {
                         NavigationLink { OnThisPhoneView() } label: { onThisPhone }.itemRow()
                     } header: {
-                        top
+                        // Only with something in it: an empty header would push the first card down past the
+                        // list's own first-section margin, which Files, Shared and Account start at.
+                        if store.offline { top }
                     }
                     Section {
                         ForEach(rows) { item in row(item) }
@@ -97,7 +81,7 @@ struct HomeView: View {
             .alpineGrouped()
             .environment(\.defaultMinListRowHeight, 1) // Item rows set their own 56pt; furniture rows keep their own height.
             .listSectionSpacing(Alpine.Space.s4)
-            .screenChrome(title: "Home") { addMenu }
+            .screenChrome(title: "Home", root: true) { addMenu }
             .navigationDestination(for: Opened.self) { folder in
                 FolderView(folderId: folder.id, title: folder.name)
             }
@@ -117,7 +101,7 @@ struct HomeView: View {
             .fileViewer($viewing, among: rows, store: store)
             .uploadFlow(into: store.rootId, importer: $showingImporter, folder: $showingFolder, photos: $showingPhotos, camera: $showingCamera)
             .sheet(isPresented: $managingTags) { TagManagerSheet().environment(store) }
-            .task {
+            .task(id: store.sessionKey) {
                 if let root = await store.loadRoot(), store.folders[root] == nil { await store.refresh(folder: root) }
                 await store.refreshRecents()
                 await store.refreshTags()
@@ -129,7 +113,6 @@ struct HomeView: View {
     /* The title with Add, then the offline line: the furniture above On this phone. */
     private var top: some View {
         VStack(alignment: .leading, spacing: Alpine.Space.s3) {
-            ScreenHeader(title: "Home") { addMenu }
             if store.offline { OfflineCapsule() }
         }
         .textCase(nil)
@@ -148,13 +131,12 @@ struct HomeView: View {
         }
     }
 
-    /* "Recent" (or "Recent images", or the tag) as a section title, with its own filters under it. */
+    /* "Recent" (or the tag) as a section title, with the tags under it. */
     private var recentHeader: some View {
         VStack(alignment: .leading, spacing: Alpine.Space.s3) {
             Text(heading).font(Theme.Text.title).foregroundStyle(Alpine.ink)
                 .padding(.horizontal, Alpine.Space.s1)
                 .accessibilityAddTraits(.isHeader)
-            TypeChips(value: $filter)
             if !store.tags.tags.isEmpty { tagsRow }
         }
         .textCase(nil)
@@ -178,7 +160,7 @@ struct HomeView: View {
                 }
                 .padding(.vertical, 1)
             }
-            .scrollClipDisabled()
+            .chipRowClip()
             Button("Manage") { managingTags = true }.font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.primary)
                 .buttonStyle(.borderless)
         }
@@ -201,11 +183,9 @@ struct HomeView: View {
 
     @ViewBuilder private var emptyRecent: some View {
         if let tagFilter, let tag = store.tags.tags.first(where: { $0.id == tagFilter }) {
-            EmptyStateView(title: "Nothing tagged \(tag.name)", message: filter == .all ? "Nothing carries this tag yet." : "No \(filter.rawValue.lowercased()) carry this tag.")
-        } else if filter == .all {
-            EmptyStateView(title: "No recent files yet", message: "Files you add or change show up here.")
+            EmptyStateView(title: "Nothing tagged \(tag.name)", message: "Nothing carries this tag yet.")
         } else {
-            EmptyStateView(title: "No \(filter.rawValue.lowercased()) yet", message: "\(filter.rawValue) you add or change show up here.")
+            EmptyStateView(title: "No recent files yet", message: "Files you add or change show up here.")
         }
     }
 
@@ -215,49 +195,17 @@ struct HomeView: View {
         if item.isFolder {
             NavigationLink(value: item) { NodeRow(item: item, recent: true) }
                 .nodeActions(item, action: $action, store: store)
-                .itemRow()
+                .itemRow(item: item)
         } else {
             Button { Opener.open(item, store: store) { viewing = $0 } } label: {
                 NodeRow(item: item, note: away ? "Not on this phone" : nil, recent: true).opacity(away ? 0.5 : 1)
             }
             .buttonStyle(.plain)
             .nodeActions(item, action: $action, store: store)
-            .itemRow()
+            .itemRow(item: item)
         }
     }
 }
-
-/* All, Folders, Images, Videos, Documents. The chosen one fills with ink and carries a check. */
-struct TypeChips: View {
-    @Binding var value: HomeFilter
-    @Environment(\.colorSchemeContrast) private var contrast
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: Alpine.Space.s2) {
-                ForEach(HomeFilter.allCases) { option in
-                    let on = value == option
-                    Button { value = option } label: {
-                        HStack(spacing: 6) {
-                            if on && option != .all { Image(systemName: "checkmark").font(.caption.weight(.bold)) }
-                            Text(option.rawValue)
-                        }
-                        .font(Theme.Text.callout.weight(.semibold))
-                        .foregroundStyle(on ? Alpine.surface : Alpine.ink)
-                        .padding(.horizontal, Alpine.Space.s4).frame(height: 36)
-                        .background(on ? Alpine.ink : Alpine.surface, in: Capsule())
-                        .overlay { if contrast == .increased && !on { Capsule().strokeBorder(Alpine.rule, lineWidth: 1) } }
-                        .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(on ? .isSelected : [])
-                }
-            }
-        }
-        .scrollClipDisabled()
-    }
-}
-
 
 struct TrashView: View {
     @Environment(DriveStore.self) private var store
@@ -280,16 +228,12 @@ struct TrashView: View {
         if selecting {
             let all = !store.trash.isEmpty && selection.count == store.trash.count
             Button { selection = all ? [] : Set(store.trash.map(\.item.id)) } label: { HeaderWord(text: all ? "Deselect all" : "Select all") }
-                .buttonStyle(.plain)
             Button { selecting = false; selection = [] } label: { HeaderWord(text: "Done") }
-                .buttonStyle(.plain)
         } else if store.emptyingTrash {
             EmptyView()
         } else if !store.trash.isEmpty {
             Button { selecting = true } label: { HeaderWord(text: "Select") }
-                .buttonStyle(.plain)
             Button(role: .destructive) { confirmEmpty = true } label: { HeaderWord(text: "Empty Trash").foregroundStyle(Alpine.danger) }
-                .buttonStyle(.plain)
         }
     }
     private var picked: [(item: Opened, parentTrashed: Bool)] { store.trash.filter { selection.contains($0.item.id) } }
@@ -349,7 +293,6 @@ struct TrashView: View {
         }
         .alpineRow() } header: {
             VStack(alignment: .leading, spacing: Alpine.Space.s3) {
-                ScreenHeader(title: "Trash", back: selecting ? nil : { dismissView() }) { trashActions }
                 if store.offline { OfflineCapsule() }
                 if let emptying = store.emptying {
                     // The count and a bar while the rows go one by one.
@@ -382,7 +325,9 @@ struct TrashView: View {
         .alpineGrouped()
         .listStyle(.insetGrouped)
         .navigationTitle("Trash")
-        .screenChrome(title: "Trash", back: selecting ? nil : { dismissView() }) { trashActions }
+        .screenChrome(title: "Trash") { trashActions }
+        // While picking, Done ends it; Back would leave with a selection made.
+        .navigationBarBackButtonHidden(selecting)
         .refreshable {
             // A pull asks the server: the catalogue alone may not know yet.
             await store.sync()
@@ -449,7 +394,7 @@ struct TrashView: View {
             .environment(store)
         }
         .onDisappear { store.restoreProblem = nil }
-        .task {
+        .task(id: store.sessionKey) {
             await store.refreshTrash()
             loaded = true
         }
@@ -458,7 +403,7 @@ struct TrashView: View {
 
 /* Every tag in the workspace: rename, recolour, delete, and how many items each names. */
 /*
- * Manage tags: every tag in the list. Tap a dot for the five presets or a custom colour,
+ * Manage tags: every tag in the list. Tap a dot for the eight swatches or a custom colour,
  * tap a name or swipe to rename, swipe to remove. Removing says how many items lose the
  * tag and asks once; the items themselves are never touched.
  */
@@ -486,7 +431,7 @@ struct TagManagerSheet: View {
                         HStack(spacing: Alpine.Space.s3) {
                             Menu {
                                 Section("Colour for \(tag.name)") {
-                                    ForEach(TagRegistry.presets, id: \.self) { preset in
+                                    ForEach(TagRegistry.offered, id: \.self) { preset in
                                         Button { Task { await store.editTags { registry in registry.recolour(tag.id, to: preset) } } } label: {
                                             if tag.colour == preset { Label(TagColour.label(preset), systemImage: "checkmark") } else { Text(TagColour.label(preset)) }
                                         }
@@ -643,10 +588,6 @@ struct OnThisPhoneView: View {
 
     var body: some View {
         List {
-            Section {} header: {
-                ScreenHeader(title: "On this phone", back: { dismissView() })
-                    .listRowInsets(EdgeInsets(top: Alpine.Space.s2, leading: 0, bottom: 0, trailing: 0))
-            }
             if entries.isEmpty && keptFolders.isEmpty {
                 EmptyStateView(title: "Nothing on this phone yet",
                                message: "Choose Keep on this phone on any file or folder to open it without a connection.")
@@ -716,7 +657,7 @@ struct OnThisPhoneView: View {
         .environment(\.defaultMinListRowHeight, 1) // Item rows set their own 56pt; furniture rows keep their own height.
         .listSectionSpacing(Alpine.Space.s3)
         .navigationTitle("On this phone")
-        .screenChrome(title: "On this phone", back: { dismissView() })
+        .screenChrome(title: "On this phone")
         .navigationDestination(item: $showing) { folder in
             FolderView(folderId: folder.id, title: folder.id == store.rootId ? "Files" : folder.name, isRoot: folder.id == store.rootId)
         }
@@ -741,7 +682,7 @@ struct OnThisPhoneView: View {
             } else {
                 // Kept from a share this session hasn't opened: the name and size are all the phone knows.
                 HStack(spacing: Alpine.Space.s3) {
-                    PageGlyph(label: (entry.name as NSString).pathExtension.uppercased().nilIfEmpty)
+                    PageGlyph(label: (entry.name as NSString).pathExtension.uppercased().nilIfEmpty, name: entry.name)
                         .frame(width: Theme.mark * 0.66, height: Theme.mark * 0.66 * 54 / 44).frame(width: Theme.mark, height: Theme.mark)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(entry.name).font(Theme.Text.body).foregroundStyle(Alpine.ink).lineLimit(1)

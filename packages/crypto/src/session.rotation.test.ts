@@ -732,6 +732,104 @@ describe('rotation', () => {
         expect(read).not.toHaveProperty('metadataRekey');
     }, 60_000);
 
+    test('a rotation re-seals a record with every attribute it had, keys it does not know included', async () => {
+        const root = crypto.getRandomValues(new Uint8Array(32));
+        const grant = await createWorkspaceGrant(root, USER, WS, 1);
+        const identity = await createIdentity(root, USER);
+        const owner = await device(USER, root, 'owner');
+        await owner('driveOpenWorkspace', { userId: USER, grant });
+        await owner('identityOpen', { userId: USER, identity });
+        const attributes = { colour: 'green', 'zz-later': 'from a newer client' };
+        const created = (await owner('driveCreateNodes', {
+            workspaceId: WS,
+            nodes: [
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'folder',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: { ...meta('Coloured'), attributes },
+                },
+            ],
+        })) as {
+            nodes: { keyEnvelope: string; metadataEnvelope: string; metadataSignature: string }[];
+        };
+        const [a, b] = created.nodes as [
+            (typeof created.nodes)[number],
+            (typeof created.nodes)[number],
+        ];
+        const { nodes: rotated } = (await owner('driveRotateNodes', {
+            workspaceId: WS,
+            targetEpoch: 7,
+            granterUserId: USER,
+            signers: {},
+            nodes: [
+                {
+                    id: B,
+                    kind: 'folder',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    wrappedParentKeyEpoch: 1,
+                    keyEnvelope: b.keyEnvelope,
+                    metadataVersion: 1,
+                    metadataEnvelope: b.metadataEnvelope,
+                    metadataSigner: USER,
+                    metadataSignature: b.metadataSignature,
+                    versions: [],
+                    shares: [],
+                    links: [],
+                },
+            ],
+        })) as {
+            nodes: { id: string; keyEnvelope: string; metadataEnvelope: string; error?: string }[];
+        };
+        expect(rotated[0]!.error).toBeUndefined();
+        // Re-sealed under the fresh key, not the old bytes passed through.
+        expect(rotated[0]!.metadataEnvelope).not.toBe(b.metadataEnvelope);
+        await owner('driveRotateCommit', { workspaceId: WS, nodeIds: [B] });
+        // Another device of the account reads the rotated record from its envelopes alone.
+        const reader = await device(USER, root, 'reader');
+        await reader('driveOpenWorkspace', { userId: USER, grant });
+        const { nodes } = (await reader('driveOpenNodes', {
+            workspaceId: WS,
+            nodes: [
+                {
+                    id: A,
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    keyEnvelope: a.keyEnvelope,
+                    metadataVersion: 1,
+                    metadataEnvelope: a.metadataEnvelope,
+                },
+                {
+                    id: B,
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 7,
+                    keyEnvelope: rotated[0]!.keyEnvelope,
+                    metadataVersion: 1,
+                    metadataEnvelope: rotated[0]!.metadataEnvelope,
+                },
+            ],
+        })) as { nodes: { id: string; metadata?: unknown; error?: string }[] };
+        expect(nodes[1]).toEqual({
+            id: B,
+            metadata: { ...meta('Coloured'), attributes },
+            content: null,
+        });
+    }, 60_000);
+
     test('a rotation keeps a copy saved from a link saved only when it verified as saved', async () => {
         const root = crypto.getRandomValues(new Uint8Array(32));
         const grant = await createWorkspaceGrant(root, USER, WS, 1);

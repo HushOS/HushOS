@@ -283,7 +283,13 @@ fn make_node(o: NodeSpec) -> RotatingNode {
     let envelope = metadata_seal(
         MetadataContext { workspace_id: AREA.into(), node_id: o.id.into(), metadata_version: 1 },
         o.node_key.clone(),
-        NodeMetadata { name: name.into(), mime: None, size: None, modified: None },
+        NodeMetadata {
+            name: name.into(),
+            mime: None,
+            size: None,
+            modified: None,
+            attributes: Default::default(),
+        },
     )
     .unwrap();
     RotatingNode {
@@ -351,7 +357,13 @@ fn with_metadata_rekeyed(
     let origin = metadata_seal(
         ctx.clone(),
         first.to_vec(),
-        NodeMetadata { name: "plan.txt".into(), mime: None, size: None, modified: None },
+        NodeMetadata {
+            name: "plan.txt".into(),
+            mime: None,
+            size: None,
+            modified: None,
+            attributes: Default::default(),
+        },
     )
     .unwrap();
     let signature =

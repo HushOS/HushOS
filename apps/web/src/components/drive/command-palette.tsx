@@ -67,6 +67,7 @@ import { driveClient, driveError, useCatalogueState } from '@/lib/drive';
 import { downloadNodes } from '@/lib/downloads';
 import { useOpenNode } from '@/lib/open-node';
 import { setPaletteOpen, setPaletteQuery, usePaletteState } from '@/lib/palette';
+import { nodeKind } from '@/lib/previews';
 import { useBillingEnabled } from '@/lib/queries';
 import { cue } from '@/lib/sounds';
 import { emptyTrashAll } from '@/lib/trash';
@@ -106,7 +107,7 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
     // Read alongside the catalogue state, so results refresh as rows open.
     const hits =
         typed && !chosen && catalogue.phase !== 'idle'
-            ? driveClient.search(typed, SEARCH_HITS)
+            ? driveClient.search(typed, SEARCH_HITS, nodeKind)
             : [];
     const indexing = catalogue.phase === 'pulling' || catalogue.phase === 'opening';
     // The highlighted row is ours to steer: the best match as typing refines it,
@@ -155,7 +156,7 @@ export function CommandCenter({ user }: { user: { id: string; role: string } }) 
         setBusy(true);
         try {
             await emptyTrashAll(queryClient, user.id);
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: 'Trash emptied',

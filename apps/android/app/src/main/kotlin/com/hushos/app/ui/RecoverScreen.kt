@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import androidx.compose.runtime.retain.retain
 import android.Manifest
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -176,13 +177,13 @@ private fun KitStep(model: DriveViewModel, flow: DriveViewModel.RecoveryFlow, in
     val context = LocalContext.current
     // The words stay in memory, never in saved state: a rotation keeps them, a restart doesn't.
     SecureWindow()
-    var mode by remember { mutableStateOf(KitMode.CHOOSE) }
-    var kit by remember { mutableStateOf<Pair<String, List<String>>?>(null) }
-    var notKit by remember { mutableStateOf(false) }
-    var field by remember { mutableStateOf(TextFieldValue("")) }
+    var mode by retain { mutableStateOf(KitMode.CHOOSE) }
+    var kit by retain { mutableStateOf<Pair<String, List<String>>?>(null) }
+    var notKit by retain { mutableStateOf(false) }
+    var field by retain { mutableStateOf(TextFieldValue("")) }
     val typed = field.text
-    var password by remember { mutableStateOf("") }
-    var confirm by remember { mutableStateOf("") }
+    var password by retain { mutableStateOf("") }
+    var confirm by retain { mutableStateOf("") }
     var tried by remember { mutableStateOf(false) }
     val wordlist = remember { context.resources.openRawResource(com.hushos.app.R.raw.bip39_english).bufferedReader().readLines().filter { it.isNotBlank() } }
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->

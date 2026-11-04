@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import androidx.compose.runtime.retain.retain
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -43,9 +44,9 @@ fun DevicesScreen(model: DriveViewModel, onBack: () -> Unit) {
     val alpine = Alpine.colors
     var devices by remember { mutableStateOf<List<AccountDevice>?>(null) }
     var problem by remember { mutableStateOf<String?>(null) }
-    var renaming by remember { mutableStateOf<AccountDevice?>(null) }
-    var removing by remember { mutableStateOf<AccountDevice?>(null) }
-    var removingOthers by remember { mutableStateOf(false) }
+    var renaming by retain { mutableStateOf<AccountDevice?>(null) }
+    var removing by retain { mutableStateOf<AccountDevice?>(null) }
+    var removingOthers by retain { mutableStateOf(false) }
     var loads by remember { mutableIntStateOf(0) }
     LaunchedEffect(loads) { model.loadDevices { list, failure -> devices = list ?: devices; problem = failure } }
     val reload: () -> Unit = { loads++ }
@@ -133,7 +134,7 @@ fun DevicesScreen(model: DriveViewModel, onBack: () -> Unit) {
 @Composable
 private fun RemoveDialog(title: String, text: String, verb: String, onDismiss: () -> Unit, onRemove: (String, (String) -> Unit) -> Unit) {
     val alpine = Alpine.colors
-    var password by remember { mutableStateOf("") }
+    var password by retain { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var pending by remember { mutableStateOf(false) }
     AlertDialog(

@@ -21,9 +21,12 @@ object UploadFinish {
     fun unknown(error: Throwable): Boolean = error is Unreachable || error is IOException ||
         (error is ApiError && (error.status == 0 || error.status == 408 || error.status == 429 || error.status >= 500))
 
-    /* The server answered, and the answer says the complete didn't land: every ApiError but a timeout, 429 or 5xx. */
-    fun definite(error: Throwable): Boolean =
-        error is ApiError && error.status in 400..499 && error.status != 408 && error.status != 429
+    /* A complete refused on this device before anything was sent (the family gate): it didn't land, for certain. */
+    class RefusedHere(cause: Exception) : Exception(cause.message, cause)
+
+    /* The server answered, and the answer says the complete didn't land (every ApiError but a timeout, 429 or 5xx), or the complete was never sent. */
+    fun definite(error: Throwable): Boolean = error is RefusedHere ||
+        (error is ApiError && error.status in 400..499 && error.status != 408 && error.status != 429)
 
     fun <T> complete(complete: () -> T, abort: () -> Unit, sleep: (Long) -> Unit = Thread::sleep): T {
         var attempt = 0

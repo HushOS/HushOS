@@ -69,8 +69,8 @@ export function NoFamily({
                 title="Family"
                 description={
                     billing
-                        ? 'A family shares one plan’s storage, for everyone’s own files and the family folders, and everyone in it is checked before they join. You can be in one family.'
-                        : 'A family shares folders, and everyone in it is checked before they join. You can be in one family.'
+                        ? 'A family shares one plan’s storage, for everyone’s own files and the family folders. You can be in one family.'
+                        : 'A family shares folders. You can be in one family.'
                 }
             >
                 {/* Not while waiting to join one: once let in it is theirs, and a second is refused. */}
@@ -99,7 +99,8 @@ export function NoFamily({
                             >
                                 <span className="flex flex-col items-start gap-1">
                                     <span className="text-muted-foreground">
-                                        You accepted. Check each other’s words to finish.
+                                        You accepted. You’re in once someone who manages it lets you
+                                        in.
                                     </span>
                                     {/* Quiet, under the words: Continue is the row's way on. */}
                                     <DeclineInvitation

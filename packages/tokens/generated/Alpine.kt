@@ -42,16 +42,16 @@ object AlpineLight {
 }
 
 object AlpineDark {
-    val Surface = Color(0xFF17181C)
-    val Ground = Color(0xFF0F1013)
+    val Surface = Color(0xFF1C1C1E)
+    val Ground = Color(0xFF000000)
     val Ink = Color(0xFFECEDF1)
     val InkMuted = Color(0xFF9A9EA9)
-    val Rule = Color(0xFF2A2C33)
-    val Field = Color(0xFF70737D)
+    val Rule = Color(0xFF38383A)
+    val Field = Color(0xFF777A84)
     val Primary = Color(0xFFAAB8F4)
     val PrimaryPressed = Color(0xFFBCC7F8)
     val OnPrimary = Color(0xFF121833)
-    val Tint = Color(0xFF232A44)
+    val Tint = Color(0xFF262E4A)
     val OnTint = Color(0xFFC0CBF8)
     val FolderBack = Color(0xFF3D4C80)
     val FolderFront = Color(0xFF52629A)

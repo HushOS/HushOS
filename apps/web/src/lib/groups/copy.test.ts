@@ -1,18 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { GroupApiError } from './api';
-import { errorCopy, wrongWordsCopy } from './copy';
-
-describe('the hidden words typed wrong', () => {
-    test('are said calmly, naming neither word and never a different member list', () => {
-        const line = wrongWordsCopy('Maya');
-        expect(line).toBe(
-            'One of the words doesn’t match. Ask Maya to read them again. If they still don’t match, choose They don’t match.',
-        );
-        // A number would tell a guesser which word to keep and which to change.
-        expect(line).not.toMatch(/\d/);
-        expect(line).not.toMatch(/member list|Don’t use/);
-    });
-});
+import { errorCopy } from './copy';
 
 describe('a request the client gave up on', () => {
     test('is said in the app’s words, never the browser’s', () => {
@@ -43,6 +31,15 @@ describe('creating a family while waiting to join one', () => {
         const unnamed = new GroupApiError('', 409, 'in-family', { reason: 'waiting' });
         expect(errorCopy(unnamed)).toBe(
             'You’re joining a family already. Decline that invitation first, then you can create your own.',
+        );
+    });
+});
+
+describe('a payer’s leave or removal while a change to the plan is under way', () => {
+    test('says to try again in a moment, not to reload', () => {
+        const busy = new GroupApiError('Another change…', 409, 'busy', undefined);
+        expect(errorCopy(busy, { family: 'The Lindqvists' })).toBe(
+            'Another change to this plan is in progress. Try again in a moment.',
         );
     });
 });

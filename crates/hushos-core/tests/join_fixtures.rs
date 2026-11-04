@@ -60,8 +60,13 @@ fn every_join_session_the_web_ran_gives_here_step_by_step_what_it_gave_there() {
 fn the_web_s_joins_record_joins_here_and_its_kept_escalation_holds_here() {
     let web = web();
     let cross = &web["joinSessions"]["cross"];
-    let (joined, hidden) = open_cross(&web["joinPreviews"], cross);
+    let (joined, first_joined, hidden) = open_cross(&web["joinPreviews"], cross);
     assert_eq!((joined["status"].as_str(), joined["rosterVersion"].as_u64()), (Some("accepted"), Some(3)));
+    // The web's first use (version 4, the roster it took) finishes the join here.
+    assert_eq!(
+        (first_joined["status"].as_str(), first_joined["rosterVersion"].as_u64()),
+        (Some("accepted"), Some(2))
+    );
     assert_eq!(hidden, cross["heldHidden"]);
 }
 

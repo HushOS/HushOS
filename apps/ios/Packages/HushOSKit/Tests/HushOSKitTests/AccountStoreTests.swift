@@ -40,6 +40,12 @@ extension OfflineStore {
             root.appendingPathComponent("share-staging/sheet-1/Scan.pdf"),
             root.appendingPathComponent("state/offline-entries.json"),
             root.appendingPathComponent("local/files-parents.json"),
+            // The rollback marks, sealed, and the plaintext ones an earlier version kept across sign-outs.
+            root.appendingPathComponent("local/marks/dm3BIs9g8rvG3OeM5lsOQA.json"),
+            // A family's join check, named by account and family.
+            root.appendingPathComponent("local/groups/alice_family.holds"),
+            root.appendingPathComponent("local/settings-marks.json"),
+            root.appendingPathComponent("local/identity-marks.json.lock"),
             temporary.appendingPathComponent("opened/node-a/version-1/Tax return.pdf"),
             temporary.appendingPathComponent("links/node-d/version-3/Shared.pdf"),
             temporary.appendingPathComponent("kit-1/hushos-recovery-kit.txt"),
@@ -95,6 +101,15 @@ extension OfflineStore {
         #expect(store.owner() == nil)
     }
 
+    @Test func aRemovedDeviceKeepsNothingOfTheAccountEither() throws {
+        store.claim(alice)
+        try leaveAlicesData()
+        store.wipeAfterRemoval()
+        for file in alicesFiles { #expect(!exists(file), "\(file.lastPathComponent) survived the removal") }
+        #expect(counter.count == 1)
+        #expect(store.owner() == nil)
+    }
+
     @Test func aSessionFromBeforeTheStoreKeepsItsOwnData() throws {
         // Already signed in when this version first runs: nothing is wiped, and it is recorded.
         try leaveAlicesData()
@@ -109,7 +124,7 @@ extension OfflineStore {
     @Test func whatIsNotAccountDataInTheGroupStays() throws {
         // The group's own preferences (the server address lives beside them) are not the account's:
         // a wipe that emptied the whole container would take them too.
-        let preferences = root.appendingPathComponent("Library/Preferences/group.com.hushos.app.plist")
+        let preferences = root.appendingPathComponent("Library/Preferences/\(SharedKeychain.accessGroup).plist")
         try FileManager.default.createDirectory(at: preferences.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("settings".utf8).write(to: preferences)
         store.claim(alice)
@@ -158,7 +173,7 @@ extension OfflineStore {
         let node = NodeView(id: id, workspaceId: "w", parentId: "p", kind: folder ? "folder" : "file", keyEpoch: 1, parentKeyEpoch: 1,
                             keyEnvelope: "", metadataVersion: 1, metadataEnvelope: "", currentVersion: nil, trashedAt: nil,
                             changeSeq: 1, createdAt: nil, updatedAt: nil)
-        return Opened(node: node, metadata: NodeMetadata(name: name, mime: nil, size: 3, modified: nil), nodeKey: nil)
+        return Opened(node: node, metadata: NodeMetadata(name: name, mime: nil, size: 3, modified: nil, attributes: [:]), nodeKey: nil)
     }
 
     @Test func keptFoldersAndTheirFilesGoWithTheAccount() {

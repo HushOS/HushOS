@@ -7,8 +7,9 @@ import UniformTypeIdentifiers
  * Save to HushOS: what another app shared, copied into the app group as it arrives
  * (files are copied on disk, never held in memory, so a long video stays inside the
  * extension's memory limit), then sealed into the queue's folder and handed to a
- * background session on Save, as the app's own uploads are (ShareHandoff). Words and
- * behaviour follow Android's SaveToHushOS.
+ * background session on Save, as the app's own uploads are (ShareHandoff). A family folder's
+ * is sealed as the queue's family upload, its family checked here first and again before it is
+ * sealed (SaveTargets), and handed to the app as one. Words and behaviour follow Android's SaveToHushOS.
  */
 @MainActor
 @Observable
@@ -31,11 +32,14 @@ final class SaveModel {
     var note: String?
     var root: Places.Folder?
     var folder: Places.Folder?
+    /* The families this account is an accepted member of, each with the folders it may save into: listed below Files. */
+    var families: [SaveTargets.Family] = []
     var problem: String?
     /* Called once the uploads are handed over, to close the sheet. */
     @ObservationIgnored var saved: (() -> Void)?
 
     private var vault: Vault?
+    private var targets: SaveTargets?
     private let staging: URL
 
     init() {
@@ -47,8 +51,10 @@ final class SaveModel {
     // MARK: - Opening
 
     func open(_ extensionItems: [NSExtensionItem]) async {
-        guard let vault = Vault.fromKeychain() else { phase = .signedOut; return }
+        // The session's own family sync, none once that session ended: the gate every family call here goes through.
+        guard let vault = Vault.fromKeychain(), let sync = FamilySync.shared(for: vault) else { phase = .signedOut; return }
         self.vault = vault
+        targets = SaveTargets(vault: vault, families: sync)
         // Plaintext of what was shared, until it is sealed: never in a backup.
         Unbacked.folder(ShareHandoff.staging)
         try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
@@ -60,22 +66,34 @@ final class SaveModel {
         await place
     }
 
-    /* The folder last added to, if it is still there and not in the Trash; else Files. */
+    /*
+     * The folder last added to, if it is still there and not in the Trash (a family folder's only once its family is
+     * checked again here); else Files. Then the families are listed for the picker.
+     */
     private func findFolder(_ vault: Vault) async {
         guard let rootId = try? await vault.rootId() else { problem = "Couldn’t reach HushOS. Check your connection, then try again."; return }
         let top = Places.Folder(id: rootId, name: "Files")
         root = top
-        if let last = Places.last(), last.id != rootId, let found = try? await vault.resolve(last.id), found.isFolder, found.node.trashedAt == nil {
+        if let last = Places.last(), last.family != nil, let targets, (try? await targets.open(last)) != nil {
+            folder = last
+        } else if let last = Places.last(), last.family == nil, last.id != rootId, let found = try? await vault.resolve(last.id), found.isFolder, found.node.trashedAt == nil {
             folder = Places.Folder(id: found.id, name: found.name)
         } else {
             folder = top
         }
+        await loadFamilies()
     }
 
-    func folders(in id: String) async throws -> [Opened] {
-        guard let vault else { return [] }
-        return try await vault.children(of: id).filter { $0.isFolder && $0.node.trashedAt == nil }
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    /* The families for the picker; none when they can't be listed (your own drive still is). */
+    private func loadFamilies() async {
+        guard let targets else { return }
+        do { families = try await targets.listFamilies() } catch is SaveTargets.SessionEnded { phase = .signedOut } catch {}
+    }
+
+    /* The folders in a folder, for the picker: none in the trash, by name; a family folder's once its family is checked again. */
+    func folders(in target: Places.Folder) async throws -> [Opened] {
+        guard let targets else { return [] }
+        return try await targets.folders(in: target)
     }
 
     // MARK: - Reading what was shared
@@ -204,10 +222,25 @@ final class SaveModel {
      * the app, which shows them in the transfers list and finishes them.
      */
     func save() async {
-        guard let vault, let target = folder else { return }
+        guard let vault, let targets, let target = folder else { return }
         phase = .saving
         problem = nil
-        var taken = Set(((try? await vault.children(of: target.id)) ?? []).filter { !$0.isFolder }.map { $0.name.lowercased() })
+        // Signed out or another account mid-sheet: nothing is sealed, and nothing is offered.
+        guard targets.stands() else { phase = .signedOut; return }
+        let listed: [Opened]
+        if let family = target.family {
+            // Checked again: a family that's gone or refused, or a folder that no longer opens, stops it in its own words.
+            do { listed = try await targets.open(target) } catch {
+                if error is SaveTargets.SessionEnded { phase = .signedOut; return }
+                if SaveTargets.notInFamily(error) { families.removeAll { $0.groupId.lowercased() == family.groupId.lowercased() } }
+                problem = StagedSave.words(error)
+                phase = .ready
+                return
+            }
+        } else {
+            listed = (try? await targets.open(target)) ?? []
+        }
+        var taken = Set(listed.filter { !$0.isFolder }.map { $0.name.lowercased() })
         var notes: [ShareHandoff] = []
         var sent: Set<UUID> = []
         let uploads = ShareUploads.shared
@@ -217,14 +250,23 @@ final class SaveModel {
             let id = UUID()
             do {
                 Unbacked.folder(ShareHandoff.transfers)
-                // Failing or cancelled before the note is written, the copy is put back for Try again (StagedSave).
-                let note = try await StagedSave.seal(copy, in: ShareHandoff.directory(id)) { content in
-                    let sealed = try await vault.sealUpload(
-                        fileURL: content, name: name, mime: item.mime, in: target.id, replacing: nil,
-                        thumbnail: Thumbnails.make(for: content, mime: item.mime), into: ShareHandoff.directory(id)
-                    )
+                // Failing or cancelled before the note is written, the copy is put back for Try again (StagedSave). A family
+                // folder's keeps its plaintext there for the queue, which seals it again after a key change.
+                let note = try await StagedSave.seal(copy, in: ShareHandoff.directory(id), keep: target.family != nil) { content in
+                    let thumbnail = Thumbnails.make(for: content, mime: item.mime)
+                    let sealed: Vault.SealedUpload
+                    if let family = target.family {
+                        var upload = FamilyUpload(family: family, folderId: target.id, name: name, mime: item.mime, replacingId: nil, replacingVersionId: nil)
+                        try await targets.sealFamily(&upload, in: ShareHandoff.directory(id), thumbnail: thumbnail)
+                        guard let made = upload.sealed else { throw DriveAPIError.server(409, StagedSave.failed) }
+                        sealed = made
+                    } else {
+                        try targets.requireStands()
+                        sealed = try await vault.sealUpload(fileURL: content, name: name, mime: item.mime, in: target.id, replacing: nil,
+                                                            thumbnail: thumbnail, into: ShareHandoff.directory(id))
+                    }
                     let note = ShareHandoff(id: id, name: name, folderId: target.id, mime: item.mime, size: item.size, sealed: sealed,
-                                            owner: AccountOwner(vault.api.session))
+                                            owner: AccountOwner(vault.api.session), family: target.family)
                     try note.write()
                     return note
                 }
@@ -240,7 +282,7 @@ final class SaveModel {
         // What went to the queue leaves the sheet; what didn't stays, with why, to try again.
         items.removeAll { sent.contains($0.id) }
         if notes.isEmpty, problem != nil { phase = .ready; return }
-        Places.used(target.id, name: target.name)
+        Places.used(target)
         // Small files land in a moment: finish them here, then let the app have the rest.
         let deadline = Date().addingTimeInterval(6)
         var open = notes
@@ -249,7 +291,14 @@ final class SaveModel {
             for note in open where uploads.landed(note.id).count == note.sealed.partCount {
                 // Landed even when its row doesn't open in this process (UploadLanded): finished either way.
                 let finished: Bool
-                do { _ = try await vault.finishUpload(note.sealed, etags: uploads.landed(note.id)); finished = true } catch is UploadLanded { finished = true } catch { finished = false }
+                if let family = note.family {
+                    // A family folder's finishes as the queue's family upload does (the family opened, the plaintext then gone).
+                    let upload = FamilyUpload(family: family, folderId: note.folderId, name: note.name, mime: note.mime, replacingId: nil, replacingVersionId: nil,
+                                              sealed: note.sealed, etags: uploads.landed(note.id))
+                    finished = await targets.finishFamily(upload, in: ShareHandoff.directory(note.id))
+                } else {
+                    do { _ = try await vault.finishUpload(note.sealed, etags: uploads.landed(note.id)); finished = true } catch is UploadLanded { finished = true } catch { finished = false }
+                }
                 if finished {
                     try? FileManager.default.removeItem(at: ShareHandoff.directory(note.id))
                     open.removeAll { $0.id == note.id }

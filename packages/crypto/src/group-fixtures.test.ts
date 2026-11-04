@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
     acceptRosters,
     type AcceptInput,
+    type GroupAnchor,
     type JoinMark,
+    type PairMark,
     type GroupChainCache,
     type ServedIdentity,
     groupIntegrityOf,
@@ -86,10 +88,11 @@ type HistoryCase = {
         mlDsaKeys: Record<string, string>;
         me: AcceptInput['me'];
         cache: GroupChainCache | null;
-        firstKeysChecked: boolean;
+        anchor: GroupAnchor | null;
         record: RecordProbe | null;
         root?: RootProbe | null;
         joinMark?: JoinMark | null;
+        pairMarks?: PairMark[];
         next: {
             roster: Served | null;
             succession: Served | null;
@@ -307,8 +310,9 @@ describe('group records made by the Rust core', () => {
                     mlDsaKeys: input.mlDsaKeys,
                     me: input.me,
                     cache: input.cache,
-                    firstKeysChecked: input.firstKeysChecked,
+                    anchor: input.anchor ?? null,
                     joinMark: input.joinMark ?? null,
+                    pairMarks: input.pairMarks ?? [],
                 },
                 input.record ?? undefined,
                 input.next

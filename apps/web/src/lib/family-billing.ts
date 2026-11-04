@@ -127,8 +127,8 @@ export function lapsedEndsWords(
         ? 'Nothing of them is refunded: no part of them is in use.'
         : 'Nothing of it is refunded: no part of it is in use.';
     return goer.you
-        ? `${family}’s ${names}, which you pay for and ${how}, ${several ? 'end' : 'ends'} at once when you leave. ${after}`
-        : `${goer.name} pays for ${family}’s ${names}, ${how}. ${several ? 'They end' : 'It ends'} at once when they’re removed. ${after}`;
+        ? `The ${names} for ${family}, which you pay for and ${how}, ${several ? 'end' : 'ends'} at once when you leave. ${after}`
+        : `${goer.name} pays for the ${names} for ${family}, ${how}. ${several ? 'They end' : 'It ends'} at once when they’re removed. ${after}`;
 }
 
 /* "Family Pro (monthly)" → "Family Pro"; a neutral "Family plan" → "Family", as "…’s Family plan". */
@@ -407,10 +407,12 @@ export type FamilyActions = {
     removePlaces: boolean;
     /* Withdraw a scheduled cut: free, and the places stay. */
     keepPlaces: boolean;
-    /* "Manage payment and invoices": the payer's billing portal. */
+    /* "Card and invoices": the payer's billing portal at Polar. */
     portal: boolean;
-    /* Cancelling is done in the portal; offered while the plan renews. */
+    /* Set the plan to end at its period's end, here (the reason goes to Polar); while it renews. */
     cancel: boolean;
+    /* Take back an ending: the payer, while the plan is set to end. */
+    resume: boolean;
 };
 
 const nothing: FamilyActions = {
@@ -422,12 +424,13 @@ const nothing: FamilyActions = {
     keepPlaces: false,
     portal: false,
     cancel: false,
+    resume: false,
 };
 
 /*
  * Which controls this person gets. Only the payer changes a live plan (the
  * server answers anyone else 403); a plan set to end refuses changes to its
- * places until it is resumed, in the portal. With no live plan, any `billing`
+ * places until it is resumed, here or in the portal. With no live plan, any `billing`
  * holder may check out and becomes the payer (the server moves the family's
  * customer to them); the portal stays the payer's.
  */
@@ -467,6 +470,7 @@ export function familyActions(
         keepPlaces: changeable && live.pendingUnits !== null,
         portal: true,
         cancel: changeable,
+        resume: state.ending,
     };
 }
 

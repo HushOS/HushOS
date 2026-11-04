@@ -44,9 +44,10 @@ The blockers were fixed on 2026-10-05; the boxes stay for a last look on the rel
 
 ## On real phones (the TestFlight build and the internal-test build)
 
-Deep links have only been tried on the simulator and emulator, with `hushos://` links. The https app links have never been tested.
+Deep links have only been tried on the simulator and emulator, with `hushos://` links and (2026-11-03) an invitation link handed to each app unverified: Android's chooser lists HushOS for `/join` and lands in the invitation sheet; iOS lands there through `-HushOSOpenLink`. Verified https app links have never been tested: they need the real domain serving both files and the real signing.
 
 - [ ] Fresh install, sign in to the review account: Home, Files, Shared and Account load; no "server address" capsule (it shows only for a non-default server).
+- [ ] **Real-domain invitation, both phones.** Invite the review account from a web account; tap the mailed `https://hushos.com/join#invite=…` in Mail or Gmail: it opens HushOS on the invitation sheet (`Join <family>`), not the browser. `https://hushos.com/join/other` stays in the browser.
 - [ ] **Real-domain link, iOS.** In Notes or Mail (not Safari's address bar, which never opens apps), tap `https://hushos.com/s/<token>#<secret>` for a link made on the web: it opens HushOS, not Safari. Tap `https://hushos.com/app/billing`: it stays in Safari. If links open Safari, long-press one and check "Open in HushOS" is offered. Then check `https://app-site-association.cdn-apple.com/a/v1/hushos.com` shows the Team ID (the CDN may take up to 24 hours).
 - [ ] **Real-domain link, Android.** `adb shell pm get-app-links com.hushos.app` says `hushos.com: verified`; tapping the same share link in Gmail or Messages opens HushOS; `/app/billing` stays in the browser.
 - [ ] **The recovery email link** (`https://hushos.com/recover/complete#verify=…`) opens the app's recovery on both.

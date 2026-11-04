@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Alpine ground (packages/tokens), behind the first frame. -->
-    <color name="ground">#0F1013</color>
-    <color name="splash">#0F1013</color>
+    <color name="ground">#000000</color>
+    <color name="splash">#000000</color>
 </resources>

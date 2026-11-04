@@ -90,6 +90,25 @@ extension OnFakeDrive {
             #expect(server.upgrades.isEmpty)
         }
 
+        /*
+         * Another process (the Files extension) opens a newer identity while this one upgrades: the
+         * mark it raised meanwhile counts, and the identity this one opened is refused, not cached.
+         */
+        @Test func aMarkRaisedElsewhereDuringTheUpgradeStillRefusesAnOlderIdentity() async throws {
+            defer { done() }
+            let server = IdentityServer(stored: versionOne(v2))
+            let device = await vault(server)
+            server.hold("/api/auth/identity/upgrade")
+            let opening = Task { try await device.identityKeys() }
+            try await server.waitUntilHeld()
+            try await RollbackMarkStore(folder: RollbackMarkStore.shared(session: "t").folder, floor: MarkFloor()).raise(
+                userId: me, to: RollbackMarks(settings: 0, settingsDocument: false, identity: v2.keyVersion + 1, identityVersion: 2),
+                keys: await device.marksKeys()
+            )
+            server.release()
+            await #expect(throws: AuthError.message(IdentityMarks.downgraded)) { _ = try await opening.value }
+        }
+
         @Test func ownWordsAreOverTheFourKeysAndMatchWhatAContactPins() async throws {
             defer { done() }
             let server = IdentityServer(stored: versionOne(v2))
@@ -114,7 +133,10 @@ extension OnFakeDrive {
         @Test func afterAdoptingTheWinnerOfARaceAnOlderIdentityIsRefused() async throws {
             defer { done() }
             // This device had opened the version 1 identity at key version 3 before the release.
-            IdentityMarks.shared.record(userId: me, keyVersion: v2.keyVersion, identityVersion: 1)
+            try await RollbackMarkStore.shared(session: "t").raise(
+                userId: me, to: RollbackMarks(settings: 0, settingsDocument: false, identity: v2.keyVersion, identityVersion: 1),
+                keys: await vault(IdentityServer(stored: v2)).marksKeys()
+            )
             let old = versionOne(v2)
             // The 409 re-read hands back a version 2 identity of the account at an older key version.
             let older = try identityCreate(userId: me, accountKey: root, keyVersion: v2.keyVersion - 1)
@@ -182,6 +204,8 @@ final class IdentityServer: @unchecked Sendable {
     var sessionGone = false
     /* The account's earlier identities, oldest first. */
     var history: [IdentityEnvelope] = []
+    /* The settings key's envelope, once a device stored one. */
+    var settingsKey: [String: Any]?
     private let lock = NSLock()
     /* The path whose next reply is held (read as the server has it then) until `release()`; whether it arrived. */
     private var holding: String?
@@ -204,16 +228,18 @@ final class IdentityServer: @unchecked Sendable {
         throw NeverArrived()
     }
 
-    /* Called by the transport after `answer`: blocks this request until `release()` when it is the one held. */
-    func wait(for request: URLRequest) {
-        let hit = lock.withLock {
+    /* Called by the transport after `answer`: whether this request is the one held (then it waits for `release()`). */
+    func holds(_ request: URLRequest) -> Bool {
+        lock.withLock {
             guard let holding, request.url?.path == holding else { return false }
             self.holding = nil
             held = true
             return true
         }
-        if hit { _ = gate.wait(timeout: .now() + 10) }
     }
+
+    /* The held request's wait, off the loading thread. */
+    func waitForRelease() { _ = gate.wait(timeout: .now() + 10) }
 
     func answer(_ request: URLRequest, body: Data?) -> (Int, [String: Any]) {
         lock.lock()
@@ -222,7 +248,15 @@ final class IdentityServer: @unchecked Sendable {
         if sessionGone { return (401, ["message": "Sign in to continue."]) }
         if path == "/api/auth/identity", request.httpMethod == "GET" { return (200, ["identity": Auth.json(stored)]) }
         if path == "/api/auth/identity/history", request.httpMethod == "GET" { return (200, ["identities": history.map { Auth.json($0) }]) }
-        if path == "/api/auth/settings", request.httpMethod == "GET" { return (200, ["settingsVersion": 0]) }
+        if path == "/api/auth/settings", request.httpMethod == "GET" {
+            return (200, ["settingsVersion": 0, "settingsKey": settingsKey as Any])
+        }
+        if path == "/api/auth/settings-key", request.httpMethod == "PUT" {
+            // Stored once: the rollback marks are sealed under a key from it.
+            guard settingsKey == nil else { return (409, ["message": "A settings key is already stored."]) }
+            settingsKey = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            return (200, [:])
+        }
         if path == "/api/auth/identity/upgrade", request.httpMethod == "POST" {
             let json = body.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
             bodies.append(json)
@@ -240,7 +274,7 @@ final class IdentityServer: @unchecked Sendable {
     }
 }
 
-final class IdentityServerProtocol: URLProtocol {
+final class IdentityServerProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
@@ -258,8 +292,25 @@ final class IdentityServerProtocol: URLProtocol {
             stream.close()
             body = data
         }
-        let (status, json) = IdentityServer.current?.answer(request, body: body) ?? (500, ["message": "No server"])
-        IdentityServer.current?.wait(for: request)
+        let server = IdentityServer.current
+        let (status, json) = server?.answer(request, body: body) ?? (500, ["message": "No server"])
+        reply = (status, json)
+        guard let server, server.holds(request) else { return finish() }
+        // Held without blocking this thread: every URLProtocol's requests load on one thread (CFNetwork's
+        // CustomProtocols), so waiting here would hold back every other request too, the test's own included (the
+        // mark raised meanwhile reads the settings), until the hold timed out and the reply went first.
+        nonisolated(unsafe) let thread = Thread.current
+        DispatchQueue.global().async {
+            server.waitForRelease()
+            self.perform(#selector(self.finish), on: thread, with: nil, waitUntilDone: false, modes: [RunLoop.Mode.common.rawValue])
+        }
+    }
+
+    private var reply: (Int, [String: Any]) = (500, [:])
+
+    /* The reply answered (on the loading thread): status, then body. */
+    @objc private func finish() {
+        let (status, json) = reply
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: (try? JSONSerialization.data(withJSONObject: json)) ?? Data())

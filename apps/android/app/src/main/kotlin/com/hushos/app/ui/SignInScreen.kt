@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import androidx.compose.runtime.retain.retain
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
@@ -59,7 +60,7 @@ fun SignInScreen(model: DriveViewModel, state: DriveState) {
     val alpine = Alpine.colors
     var email by rememberSaveable { mutableStateOf("") }
     // In memory only: saved state is written to disk when the process is put away.
-    var password by remember { mutableStateOf("") }
+    var password by retain { mutableStateOf("") }
     var pending by rememberSaveable { mutableStateOf(false) }
     var emailError by rememberSaveable { mutableStateOf<String?>(null) }
     var passwordError by rememberSaveable { mutableStateOf<String?>(null) }
