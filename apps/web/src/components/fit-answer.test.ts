@@ -1,5 +1,14 @@
 import { describe, expect, test } from 'vitest';
-import { familyCost, familyNote, fitAnswer, HEADROOM, type FamilyPrice } from './fit-answer';
+import {
+    familyCost,
+    familyNote,
+    fitAnswer,
+    HEADROOM,
+    keptWithin,
+    slidersFor,
+    totalOf,
+    type FamilyPrice,
+} from './fit-answer';
 
 const GB = 1024 ** 3;
 const TB = 1024 * GB;
@@ -155,5 +164,56 @@ describe('family prices', () => {
                 3,
             ),
         ).toBe('₹599 a month, 3 included.');
+    });
+});
+
+describe('slider reach', () => {
+    const fullest = (people: number) => {
+        const sliders = slidersFor(people);
+        return totalOf({
+            photos: sliders.photos.max,
+            hours: sliders.hours.max,
+            documents: sliders.documents.max,
+        });
+    };
+    const biggestFamily = Math.max(...family.map((plan) => plan.quotaBytes));
+    const biggestPersonal = Math.max(...personal.map((plan) => plan.quotaBytes));
+
+    test('a family can slide past the biggest family plan, so Family Max and beyond are reachable', () => {
+        for (const people of [2, 5, 20]) {
+            expect(fullest(people)).toBeGreaterThan(biggestFamily);
+            expect(answer(people, fullest(people)).kind).toBe('beyond');
+        }
+        // And somewhere below that full reach, Family Max is the answer.
+        expect(fullest(2)).toBeGreaterThan(4 * TB * HEADROOM);
+    });
+
+    test('one person keeps the reach the planner has always had', () => {
+        expect(slidersFor(1)).toEqual({
+            photos: { max: 100_000, step: 500 },
+            hours: { max: 200, step: 1 },
+            documents: { max: 50_000, step: 100 },
+        });
+        expect(fullest(1)).toBeGreaterThan(biggestPersonal);
+    });
+
+    test('changing People never puts a value off its step: the steps and maxima line up', () => {
+        for (const people of [1, 2]) {
+            for (const range of Object.values(slidersFor(people))) {
+                expect(range.max % range.step).toBe(0);
+            }
+        }
+        expect(slidersFor(2).photos.step).toBe(slidersFor(1).photos.step);
+        expect(slidersFor(2).hours.step).toBe(slidersFor(1).hours.step);
+        expect(slidersFor(2).documents.step).toBe(slidersFor(1).documents.step);
+    });
+
+    test('back to one person, a value past its reach is brought back, and the rest are kept', () => {
+        expect(
+            keptWithin({ photos: 350_000, hours: 40, documents: 120_000 }, slidersFor(1)),
+        ).toEqual({ photos: 100_000, hours: 40, documents: 50_000 });
+        expect(
+            keptWithin({ photos: 350_000, hours: 640, documents: 120_000 }, slidersFor(3)),
+        ).toEqual({ photos: 350_000, hours: 640, documents: 120_000 });
     });
 });

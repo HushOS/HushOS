@@ -1,7 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { cn } from 'cn';
 import { type ReactNode, useEffect, useId, useState } from 'react';
-import { familyNote, fitAnswer, type FamilyPrice } from '@/components/fit-answer';
+import {
+    familyNote,
+    fitAnswer,
+    keptWithin,
+    slidersFor,
+    totalOf,
+    type FamilyPrice,
+} from '@/components/fit-answer';
 import { TalkToUs, TextLink } from '@/components/site';
 import { formatQuota } from '@/lib/format';
 import { salesContactQueryOptions } from '@/lib/social';
@@ -18,11 +25,6 @@ import { salesContactQueryOptions } from '@/lib/social';
 
 const MB = 1024 * 1024;
 const GB = 1024 * MB;
-
-/* Typical sizes: a phone photo, an hour of 1080p video, a PDF or document. */
-const PHOTO = 3 * MB;
-const VIDEO_HOUR = 4 * GB;
-const DOCUMENT = 0.5 * MB;
 
 export type FitPlan = {
     key: string;
@@ -193,10 +195,19 @@ export function FitPlanner({
     const [hours, setHours] = useState(5);
     const [documents, setDocuments] = useState(2_000);
     const { data: contact } = useQuery(salesContactQueryOptions);
-    const total = photos * PHOTO + hours * VIDEO_HOUR + documents * DOCUMENT;
+    const total = totalOf({ photos, hours, documents });
     const most = Math.max(0, ...families.map((plan) => plan.maxMembers));
     // Without family plans there is one person, whatever the slider was left at.
     const party = most > 1 ? Math.min(people, most) : 1;
+    const sliders = slidersFor(party);
+    // Back to one person, a slider past one person's reach comes back within it.
+    function choosePeople(value: number) {
+        setPeople(value);
+        const kept = keptWithin({ photos, hours, documents }, slidersFor(value));
+        setPhotos(kept.photos);
+        setHours(kept.hours);
+        setDocuments(kept.documents);
+    }
     const answer = fitAnswer<FitPlan & { maxMembers?: number }>({
         personal: plans,
         family: families.map((plan) => ({ ...plan, note: familyNote(plan.price, party) })),
@@ -251,30 +262,30 @@ export function FitPlanner({
                             max={most}
                             step={1}
                             unit={peopleWords}
-                            onChange={setPeople}
+                            onChange={choosePeople}
                         />
                     )}
                     <Slider
                         label="Photos"
                         value={photos}
-                        max={100_000}
-                        step={500}
+                        max={sliders.photos.max}
+                        step={sliders.photos.step}
                         unit={(value) => count.format(value)}
                         onChange={setPhotos}
                     />
                     <Slider
                         label="Video"
                         value={hours}
-                        max={200}
-                        step={1}
+                        max={sliders.hours.max}
+                        step={sliders.hours.step}
                         unit={(value) => `${value} ${value === 1 ? 'hour' : 'hours'}`}
                         onChange={setHours}
                     />
                     <Slider
                         label="Documents"
                         value={documents}
-                        max={50_000}
-                        step={100}
+                        max={sliders.documents.max}
+                        step={sliders.documents.step}
                         unit={(value) => count.format(value)}
                         onChange={setDocuments}
                     />

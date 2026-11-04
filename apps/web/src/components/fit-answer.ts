@@ -10,6 +10,46 @@ import { formatMoney } from '@/lib/format';
 
 export const HEADROOM = 0.9;
 
+const MB = 1024 * 1024;
+const GB = 1024 * MB;
+
+/* Typical sizes: a phone photo, an hour of 1080p video, a PDF or document. */
+export const PHOTO = 3 * MB;
+export const VIDEO_HOUR = 4 * GB;
+export const DOCUMENT = 0.5 * MB;
+
+export type Kept = { photos: number; hours: number; documents: number };
+
+/* What the sliders add up to: everyone's files together. */
+export const totalOf = (kept: Kept) =>
+    kept.photos * PHOTO + kept.hours * VIDEO_HOUR + kept.documents * DOCUMENT;
+
+export type Range = { max: number; step: number };
+
+/*
+ * How far each slider goes. One person's reach about 1.1 TB in all, past the biggest personal
+ * plan; a family's go five times as far (about 4.7 TB), past the biggest family plan, since they
+ * count everyone's files. The steps stay the same either way, so changing People never moves a
+ * value onto a new step, and every maximum is a whole number of steps.
+ */
+export function slidersFor(people: number): Record<keyof Kept, Range> {
+    const family = people > 1;
+    return {
+        photos: { max: family ? 500_000 : 100_000, step: 500 },
+        hours: { max: family ? 800 : 200, step: 1 },
+        documents: { max: family ? 200_000 : 50_000, step: 100 },
+    };
+}
+
+/* The values held within the sliders' reach, as when People goes back to one. */
+export function keptWithin(kept: Kept, sliders: Record<keyof Kept, Range>): Kept {
+    return {
+        photos: Math.min(kept.photos, sliders.photos.max),
+        hours: Math.min(kept.hours, sliders.hours.max),
+        documents: Math.min(kept.documents, sliders.documents.max),
+    };
+}
+
 export type Sized = {
     key: string;
     quotaBytes: number;
