@@ -83,9 +83,10 @@ export function Cta({ children, title = 'Try it' }: { children: ReactNode; title
     return (
         <aside className="mt-8 flex flex-wrap items-center justify-between gap-x-8 gap-y-4 rounded-xl border border-rule px-5 py-5">
             <div className="min-w-0 flex-1 basis-64">
-                <p className="eyebrow text-muted-foreground">{title}</p>
+                {/* A plain bold line, not a small grey label above the words (DESIGN.md, no eyebrows). */}
+                <p className="text-[17px] leading-snug font-bold">{title}</p>
                 {/* MDX wraps the text in its own paragraph, so this must not be one. */}
-                <div className="mt-2 text-base leading-relaxed text-pretty [&>p]:mt-0">
+                <div className="mt-1 text-base leading-relaxed text-pretty text-muted-foreground [&>p]:mt-0">
                     {children}
                 </div>
             </div>

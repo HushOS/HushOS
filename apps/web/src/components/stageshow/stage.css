@@ -1,0 +1,70 @@
+/*
+ * Stageshow kit: the stage. Vendored from Stageshow (MIT, see LICENSE) and cut down to what
+ * HushOS's scenes use: the stage box, the still, offscreen and placing switches and the
+ * keyframes. The kit's own looks (themes, palettes, grounds) and its guards against host CSS
+ * are left out: a HushOS scene is drawn with the app's own tokens and Tailwind classes, and the
+ * kit's unlayered resets would beat those utilities. Everything sits in the components layer,
+ * under Tailwind's utilities.
+ */
+
+@layer components {
+    .ss-fit {
+        position: relative;
+        width: 100%;
+        margin-inline: auto;
+    }
+
+    .ss-stage {
+        --ss-font: var(--font-sans);
+        --ss-mono: var(--font-mono);
+        position: absolute;
+        top: 0;
+        left: 0;
+        transform-origin: 0 0;
+        font-family: var(--ss-font);
+        -webkit-font-smoothing: antialiased;
+        user-select: none;
+        font-size: 16px;
+        line-height: normal;
+        color: var(--foreground);
+        overflow: hidden;
+    }
+
+    /* Transitions off for one patch (act.snap), stage-wide or in one target. */
+    .ss-stage [data-instant],
+    .ss-stage[data-instant] *,
+    .ss-stage [data-instant] *,
+    .ss-stage[data-instant] *::before,
+    .ss-stage[data-instant] *::after {
+        transition: none !important;
+    }
+
+    /* A still (reduced motion, or no script) is the poster, settled. */
+    .ss-stage[data-still] *,
+    .ss-stage[data-still] *::before,
+    .ss-stage[data-still] *::after {
+        transition: none !important;
+        animation: none !important;
+    }
+
+    /* Offscreen, nothing moves; resets settle at once. */
+    .ss-stage[data-offscreen],
+    .ss-stage[data-offscreen] *,
+    .ss-stage[data-offscreen] *::before,
+    .ss-stage[data-offscreen] *::after {
+        transition: none !important;
+        animation-play-state: paused !important;
+    }
+
+    /* First paint and a layout switch: things placed from measurements arrive in place. */
+    .ss-stage[data-placing] *,
+    .ss-stage[data-placing] *::before,
+    .ss-stage[data-placing] *::after {
+        transition: none !important;
+    }
+
+    /* The auto cursor's hit test (stage.tsx): for that one read, everything counts as hittable. */
+    .ss-stage[data-hit] * {
+        pointer-events: auto !important;
+    }
+}

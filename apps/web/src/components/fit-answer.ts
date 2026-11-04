@@ -125,3 +125,21 @@ export function familyNote(price: FamilyPrice, people: number) {
         ? `${money(familyCost(price, people))} ${per} for ${people} people: ${included} included, then ${money(price.perMember)} ${per} each.`
         : `${money(price.base)} ${per}, ${included} included.`;
 }
+
+/*
+ * Which part each of `dots` dots shows, in order: a part takes its share of the whole rounded to
+ * whole dots, at least one when it holds anything, and the parts never take more dots than there
+ * are. `null` is a dot left off.
+ */
+export function dotParts(shares: readonly number[], dots: number): (number | null)[] {
+    const out: (number | null)[] = [];
+    let start = 0;
+    shares.forEach((share, part) => {
+        const want = share > 0 ? Math.max(1, Math.round(share * dots)) : 0;
+        const take = Math.min(want, dots - start);
+        for (let index = 0; index < take; index++) out.push(part);
+        start += take;
+    });
+    while (out.length < dots) out.push(null);
+    return out;
+}

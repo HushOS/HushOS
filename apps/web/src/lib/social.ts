@@ -44,6 +44,20 @@ export const salesContactQueryOptions = queryOptions({
     queryFn: () => getSalesContactServerFn(),
     staleTime: Number.POSITIVE_INFINITY,
 });
+/*
+ * The Android app's Google Play listing (PLAY_STORE_URL), for StoreLinks, or nothing when unset,
+ * as on most self-hosted servers: the store listings are hushos.com's own. Known on the server, so
+ * the first document already has the badge, and never refetched.
+ */
+const getPlayStoreServerFn = createServerFn().handler(() => appEnv.PLAY_STORE_URL ?? null);
+export const playStoreQueryOptions = queryOptions({
+    queryKey: ['stores', 'play'],
+    queryFn: () => getPlayStoreServerFn(),
+    staleTime: Number.POSITIVE_INFINITY,
+});
+export function playStoreHint(queryClient: QueryClient) {
+    return queryClient.ensureQueryData(playStoreQueryOptions);
+}
 export function operatorHint(queryClient: QueryClient) {
     return queryClient.ensureQueryData(operatorNameQueryOptions);
 }

@@ -10,6 +10,7 @@ import { Scramble } from '@/components/scramble';
 import { Phones, Shot } from '@/components/screenshot';
 import { container, Faq, H1, H2, Lede, SitePage, StartFree, TextLink } from '@/components/site';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
+import { StoreLinks } from '@/components/store-links';
 import { Button } from '@/components/ui/button';
 import { formatDate, posts } from '@/lib/content';
 import { cue } from '@/lib/sounds';
@@ -183,7 +184,7 @@ export const Route = createFileRoute('/')({
 });
 
 function LandingPage() {
-    const { billingEnabled } = Route.useRouteContext();
+    const { billingEnabled, playStoreUrl } = Route.useRouteContext();
     const latest = posts[0];
     return (
         <SitePage identity="home">
@@ -302,6 +303,27 @@ function LandingPage() {
                         ))}
                     </div>
                 </section>
+
+                {/* The phone apps, only where this server names their store listings (StoreLinks). */}
+                {playStoreUrl && (
+                    <section
+                        aria-labelledby="apps-title"
+                        className={cn(
+                            container,
+                            'grid items-center gap-6 pb-14 lg:grid-cols-[5fr_7fr] lg:gap-16 lg:pb-24',
+                        )}
+                    >
+                        <div className="flex flex-col gap-3">
+                            <H2 id="apps-title">On your phone, too.</H2>
+                            <p className="max-w-[29.2em] text-[17px] leading-[1.6] text-muted-foreground">
+                                The Android app is on Google Play, with the same folders, sharing
+                                and links, and files kept on the phone to open without a connection.
+                                The iPhone app is coming to the App Store.
+                            </p>
+                        </div>
+                        <StoreLinks className="lg:justify-end" />
+                    </section>
+                )}
 
                 <section aria-labelledby="how-title" className="bg-muted/60">
                     <div className={cn(container, 'py-14 lg:py-24')}>

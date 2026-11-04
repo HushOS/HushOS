@@ -9,8 +9,19 @@ tone: sage
 ---
 
 import { Cta, Ledger } from '../../components/mdx';
+import { Faq } from '../../components/faq';
+import {
+    CheckScene,
+    CreateFamilyScene,
+    FamilyFoldersScene,
+    FamilyStorageView,
+    InviteScene,
+} from '../../components/family-scenes';
+import { StoreLinks } from '../../components/store-links';
 
 HushOS has family plans from today. Up to 20 people share one plan's storage, and it covers both their own files and the family folders they share, end-to-end encrypted. Everyone's own files stay private to them. Families are on the web and in the Android app. The iPhone app isn't in the App Store yet, and its family folders are still being finished.
+
+<StoreLinks className="mt-5" />
 
 ## What a family is
 
@@ -18,11 +29,15 @@ A family is a group of HushOS accounts with folders they share. Every member can
 
 Each member keeps their own files. My files stays private from the rest of the family, exactly as it is private from us. The family folders sit beside it, under the family's name. An account can be in one family at a time.
 
+<FamilyFoldersScene />
+
 One person organizes the family. They can let others manage it too: invite people, let them in, make family folders and remove someone.
 
 ## One plan's storage
 
 A family's storage covers everyone's own files and the family folders together. There is no separate allowance to keep track of: a file in My files and a file in a family folder draw from the same plan.
+
+<FamilyStorageView />
 
 Moving files between My files and a family folder uses no extra storage, because both sides are the same plan. Your device does the move: it downloads each file, locks it again under the keys of where it is going, uploads it, and the original is deleted as the copy lands. Only the current version moves, and the move dialog says what else is lost before it starts.
 
@@ -30,25 +45,29 @@ The people who manage the family see how much space each person's own files take
 
 On a phone, your own files work as before, and the storage the app shows is the family's.
 
-## If you already pay for a plan
-
-When you are let into a family that has a plan, your own plan ends at that moment and the days you paid for but won't use are refunded, prorated, through Polar. The join page tells you this before you accept.
-
-While your files use the family's storage, you can't buy a plan of your own. If you leave later, the plan that ended doesn't come back: you are on Free until you choose one.
-
-The same goes for whoever starts the family: their own plan ends, with the unused days refunded, when the family's plan starts.
-
 ## Joining
 
+Whoever starts a family names it, then chooses its plan before inviting anyone.
+
+<CreateFamilyScene />
+
 You invite someone by email, and the invitation is open for seven days. They sign in, or make an account, and accept. Someone already in another family has to leave it first. Then someone who manages the family lets them in, with one click on the family's page. Nobody reads anything out, on either side.
+
+<InviteScene />
 
 When they are let in, the manager's device writes the keys HushOS gives it for the newcomer into the family's signed member list, and the newcomer's device takes the family as HushOS first shows it. From then on it holds on to that: every later member list has to follow on from it, signed by someone who manages the family, and anything else is noticed and paused, never used.
 
 A newcomer's own files join the family's storage when they are let in, so they have to fit in the family's free space. If they don't, the person letting them in is asked to free up space or move to a bigger plan first.
 
+<Cta title="Start your family">
+    Make an account, then open Family to create one and choose its plan.
+</Cta>
+
 ## Checking each other
 
 Any two members can check each other whenever they like. Each opens the family, chooses Check it's Maya beside the other's name, and the two of you compare twelve words, in person or on a call. Not in a message sent through HushOS.
+
+<CheckScene />
 
 **What a check adds.** A new member's device learns who is in the family and which keys are whose from a member list the server stores and hands out. Until someone checks, a dishonest server could have handed the person letting a newcomer in keys of its own for them, or shown the newcomer a family it made up, and read what goes into those family folders. The twelve words are worked out from the member list that let the later of you in, and from both your accounts, so matching words mean you both see the same family and each of you has the other's real keys. If they do not match, nothing is saved, and the screen says what to do next.
 
@@ -126,6 +145,30 @@ The [security page](/security) lists what the server learns about everything els
 - **Handing over the bill.** While a plan is running, whoever pays for it can't hand it to another member, so they can't leave the family without cancelling it.
 - **Large moves.** A move between My files and a family folder goes down to your device and back up, and a file over 256 MB can't be moved that way yet: download it, then upload it where it should go.
 - **What someone already has.** A member who is removed keeps anything they already downloaded or kept on a device. New keys protect what is written after the keys are replaced; they cannot reach into copies someone already made.
+
+## Questions people ask
+
+<Faq
+    className="mt-6"
+    items={[
+        {
+            q: 'What happens to a plan I already pay for?',
+            a: "When you are let into a family that has a plan, your own plan ends at that moment and the days you paid for but won't use are refunded, prorated, through Polar. The join page tells you this before you accept. While your files use the family's storage, you can't buy a plan of your own. If you leave later, the plan that ended doesn't come back: you are on Free until you choose one. The same goes for whoever starts the family: their own plan ends, with the unused days refunded, when the family's plan starts.",
+        },
+        {
+            q: 'Can the family see my files?',
+            a: 'No. Nobody else in the family can open your own files unless you share them. The people who manage the family see how much space your files take, rounded up to the whole GB, never your files’ names, how many there are or what is in them. Everyone in the family can open the family folders.',
+        },
+        {
+            q: 'Can I be in two families?',
+            a: 'No. An account can be in one family at a time. Someone already in another family has to leave it first.',
+        },
+        {
+            q: 'Can we use it on our phones?',
+            a: 'In the Android app you join a family, use its folders, invite people and let them in; you create a family and choose its plan on the web. The iPhone app isn’t in the App Store yet. Until it is, on an iPhone you use a family in a browser.',
+        },
+    ]}
+/>
 
 <Cta title="Make a family">
     Choose a family plan in Plan and storage, or open Account, then Family. You choose a plan before

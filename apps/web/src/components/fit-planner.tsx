@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { cn } from 'cn';
 import { type ReactNode, useEffect, useId, useState } from 'react';
 import {
+    dotParts,
     familyNote,
     fitAnswer,
     keptWithin,
@@ -58,7 +59,7 @@ function rough(bytes: number) {
     return `${Math.max(1, Math.round(bytes / MB))} MB`;
 }
 
-function Slider({
+export function Slider({
     label,
     value,
     min = 0,
@@ -102,22 +103,32 @@ function Slider({
     );
 }
 
-/* The plan as a bar of dots, filled column by column, as many lit as the share your files take. */
+/*
+ * The plan as a bar of dots, filled column by column, as many lit as the share your files take.
+ * Several shares fill it one after another, each in its own look from `looks` (the family post's
+ * storage view: everyone's own files, then the family folders); a dot no share reaches is off.
+ */
 const DOTS = 120;
 
-function Fill({ share }: { share: number }) {
-    const lit = Math.min(DOTS, Math.max(share > 0 ? 1 : 0, Math.round(share * DOTS)));
+export function Fill({
+    shares,
+    looks = ['bg-primary'],
+}: {
+    shares: readonly number[];
+    looks?: readonly string[];
+}) {
+    const parts = dotParts(shares, DOTS);
     return (
         <div
             aria-hidden="true"
             className="grid auto-cols-fr grid-flow-col grid-rows-3 gap-0.5 sm:gap-1"
         >
-            {Array.from({ length: DOTS }, (_, index) => (
+            {parts.map((part, index) => (
                 <span
                     key={index}
                     className={cn(
                         'aspect-square rounded-full transition-colors duration-300',
-                        index < lit ? 'bg-primary' : 'fit-dot-off bg-foreground/12',
+                        part === null ? 'fit-dot-off bg-foreground/12' : looks[part],
                     )}
                 />
             ))}
@@ -168,7 +179,7 @@ function PlanAction({ plan }: { plan: FitPlan }) {
 }
 
 /* What a screen reader hears: the answer, once the sliders have been still for a moment. */
-function useSettled(text: string) {
+export function useSettled(text: string) {
     const [settled, setSettled] = useState(text);
     useEffect(() => {
         const timer = window.setTimeout(() => setSettled(text), 600);
@@ -311,7 +322,7 @@ export function FitPlanner({
                     ) : answer.kind === 'fits' ? (
                         <>
                             <p className={headline}>{answer.plan.name} fits.</p>
-                            <Fill share={total / answer.plan.quotaBytes} />
+                            <Fill shares={[total / answer.plan.quotaBytes]} />
                             <p className="text-[15px] text-muted-foreground tabular-nums">
                                 {amount} of {quota(answer.plan.quotaBytes)}, with room left for
                                 versions and Trash.
@@ -321,7 +332,7 @@ export function FitPlanner({
                     ) : answer.kind === 'tight' ? (
                         <>
                             <p className={headline}>Tight in {answer.plan.name}.</p>
-                            <Fill share={total / answer.plan.quotaBytes} />
+                            <Fill shares={[total / answer.plan.quotaBytes]} />
                             <p className="text-[15px] text-muted-foreground tabular-nums">
                                 {amount} of {quota(answer.plan.quotaBytes)}, with little room left
                                 for versions and Trash.

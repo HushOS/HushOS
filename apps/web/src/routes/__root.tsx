@@ -39,7 +39,7 @@ import { Toaster } from '@/components/ui/toast';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { billingHint, freeQuotaHint } from '@/lib/billing';
 import { sessionHint } from '@/lib/session';
-import { operatorHint } from '@/lib/social';
+import { operatorHint, playStoreHint } from '@/lib/social';
 import { initSounds } from '@/lib/sounds';
 import { getContrastServerFn, getThemeServerFn } from '@/lib/theme';
 import { isAppleTouch, viewportContent } from '@/lib/viewport';
@@ -72,6 +72,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
             billingEnabled: await billingHint(context.queryClient),
             freeQuotaBytes: await freeQuotaHint(context.queryClient),
             operatorName: await operatorHint(context.queryClient),
+            playStoreUrl: await playStoreHint(context.queryClient),
         };
     },
     // Then the loader, so `head` knows its shape: the theme, and whether analytics may load here.
