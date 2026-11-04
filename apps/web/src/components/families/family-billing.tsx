@@ -1589,7 +1589,7 @@ function AddPlacesDialog({
                     {/* Once the bank holds the raise, the step says only what it holds. */}
                     {!confirmUrl &&
                         range &&
-                        ` You can add up to ${places(range.max)} now; a family has at most ${currentPlan(summary)?.maxMembers ?? FAMILY_MAX_MEMBERS} members.`}
+                        ` A family has at most ${currentPlan(summary)?.maxMembers ?? FAMILY_MAX_MEMBERS} members, so you can add up to ${places(range.max)}.`}
                 </p>
                 {confirmUrl && (
                     <Alert variant="warning">

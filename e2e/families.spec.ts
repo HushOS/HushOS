@@ -1511,13 +1511,14 @@ test.describe.serial('three people', () => {
         await invite(maya, ana.email);
         await invite(maya, ben.email);
 
-        // Ana's invitation opened by Ben's account: refused, and nothing accepted.
+        // Ana's invitation opened by Ben's account: nothing about the family, nothing to accept.
         const anaLink = await invitationPath(ana.email);
         await ben.page.goto(anaLink);
-        await ben.page.getByRole('button', { name: 'Join', exact: true }).click();
         await expect(
-            ben.page.getByText(/This invitation is for another email address than/),
+            ben.page.getByRole('heading', { name: 'This invitation is for someone else' }),
         ).toBeVisible({ timeout: 30_000 });
+        await expect(ben.page.getByText(family)).toHaveCount(0);
+        await expect(ben.page.getByRole('button', { name: 'Join', exact: true })).toHaveCount(0);
 
         await accept(ana, family);
         await accept(ben, family);
@@ -2136,7 +2137,7 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         });
         await refocus();
         await expect(change).toHaveCount(0);
-        await expect(maya.page.getByText(`${family} is on Family Max`)).toBeVisible();
+        await expect(maya.page.getByText('The family’s plan is Family Max now')).toBeVisible();
         // Reverted to Pro after the bank never confirmed it (neither the tier answered nor the
         // one asked for): its step goes.
         await holdUpgrade();
