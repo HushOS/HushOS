@@ -836,28 +836,32 @@ describe('readings of Polar that overlap', () => {
         subscription: GroupSubscriptionSnapshot,
         readingFrom: ReadingStamp,
     ) =>
-        billing.applyGroupState({
-            groupId,
-            provider: 'polar',
-            customerId: null,
-            subscriptions: [subscription],
-            graceMs: GRACE,
-            complete: false,
-            readingFrom,
-        });
+        billing
+            .applyGroupState({
+                groupId,
+                provider: 'polar',
+                customerId: null,
+                subscriptions: [subscription],
+                graceMs: GRACE,
+                complete: false,
+                readingFrom,
+            })
+            .then((result) => result.outcome);
     const reconcile = (
         groupId: string,
         subscriptions: GroupSubscriptionSnapshot[],
         readingFrom: ReadingStamp,
     ) =>
-        billing.applyGroupState({
-            groupId,
-            provider: 'polar',
-            customerId: 'cus_team',
-            subscriptions,
-            graceMs: GRACE,
-            readingFrom,
-        });
+        billing
+            .applyGroupState({
+                groupId,
+                provider: 'polar',
+                customerId: 'cus_team',
+                subscriptions,
+                graceMs: GRACE,
+                readingFrom,
+            })
+            .then((result) => result.outcome);
 
     test('a change answered before the newest reconcile began writes nothing; one answered after it does', async () => {
         const groupId = await family();
@@ -968,5 +972,47 @@ describe('readings of Polar that overlap', () => {
         expect(await billing.getGroupSubscription(unread.id)).toMatchObject({
             productUnread: true,
         });
+    });
+});
+
+test('the one-plan migration gives each family’s current plan served_since: a plan reinstated beside it before the first reconcile is not kept', async () => {
+    const { readFileSync } = await import('node:fs');
+    const migration = readFileSync(
+        new URL('../drizzle/20261026164003_family_one_checkout/migration.sql', import.meta.url),
+        'utf8',
+    );
+    const backfill = migration
+        .split('--> statement-breakpoint')
+        .map((statement) => statement.trim())
+        .filter((statement) => statement.startsWith('UPDATE'));
+    expect(backfill).toHaveLength(1);
+    const { userId } = await createTestAccount();
+    const { groupId } = await createTestFamily({ organizerId: userId, pooled: true });
+    const current = plan({ id: 'sub_current' });
+    expect(await apply(groupId, [current])).toMatchObject({ outcome: 'applied' });
+    // Written by the release before this one: no plan has served_since yet.
+    await db
+        .update(groupBillingSubscriptions)
+        .set({ servedSince: null })
+        .where(eq(groupBillingSubscriptions.groupId, groupId));
+    await db.execute(sql.raw(backfill[0]!));
+    // Polar reinstates an older plan beside it before any reconcile on this release runs.
+    const reinstated = plan({ id: 'sub_reinstated_old' });
+    const result = await billing.applyGroupState({
+        readingFrom: await billing.readingStamp(),
+        groupId,
+        provider: 'polar',
+        customerId: 'cus_team',
+        subscriptions: [current, reinstated],
+        graceMs: GRACE,
+        cure: [
+            { id: current.id, createdAt: Date.now() - 30 * DAY },
+            { id: reinstated.id, createdAt: Date.now() - 365 * DAY },
+        ],
+    });
+    expect(result).toMatchObject({
+        outcome: 'applied',
+        kept: current.id,
+        superseded: [expect.objectContaining({ id: reinstated.id })],
     });
 });
