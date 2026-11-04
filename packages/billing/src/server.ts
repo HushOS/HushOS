@@ -85,6 +85,7 @@ export {
     setCutRetryQueue,
     setDissolveCancelQueue,
     setGroupUnits,
+    setSettleDelays,
     spaceOf,
     startGroupCheckout,
     syncGroup,

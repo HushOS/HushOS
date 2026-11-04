@@ -2036,6 +2036,8 @@ function seatRefusal(result: Exclude<SeatResult, { status: 'ok' }>) {
         confirm:
             'Your bank wants you to confirm the charge for another place. Confirm it in Card and invoices, under Billing, then let them in again.',
         payment: 'The payment for another place did not go through. Nobody was let in.',
+        unconfirmed:
+            'Polar didn’t answer in time, so it isn’t clear yet whether a place was bought. Nobody was let in. Check Billing in a moment before letting them in again.',
         busy: 'Another change to this plan is in progress. Try again in a moment.',
         'upgrade-waiting': 'Confirm the plan change with your bank first, then let them in.',
         changed:
