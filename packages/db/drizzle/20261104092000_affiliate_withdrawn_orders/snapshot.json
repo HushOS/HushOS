@@ -1,0 +1,76 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "9e987009-0306-4cd9-ad83-0439aa3d7484",
+    "prevIds": ["d049730c-0626-4cfe-baa0-05617854d208"],
+    "footprints": [
+        {
+            "statementType": "create_table",
+            "statementTarget": ["table", "public", "affiliate_withdrawn_orders"],
+            "writes": [
+                "s|tbl|public.affiliate_withdrawn_orders",
+                "n|tbl|public.affiliate_withdrawn_orders",
+                "e|tbl|public.affiliate_withdrawn_orders",
+                "n|rel|public.affiliate_withdrawn_orders",
+                "n|type|public.affiliate_withdrawn_orders",
+                "n|rel|public.affiliate_withdrawn_orders_pkey"
+            ],
+            "reads": ["n|sch|public"]
+        }
+    ],
+    "deltas": [
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "name": "affiliate_withdrawn_orders",
+                "isRlsEnabled": false,
+                "entityType": "tables"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "affiliate_withdrawn_orders",
+                "name": "order_id",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "affiliate_withdrawn_orders",
+                "name": "created_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "now()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "affiliate_withdrawn_orders",
+                "name": "affiliate_withdrawn_orders_pkey",
+                "columns": ["order_id"],
+                "nameExplicit": false,
+                "entityType": "pks"
+            }
+        }
+    ]
+}

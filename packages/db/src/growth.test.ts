@@ -279,4 +279,41 @@ describe('affiliates and earnings', () => {
         });
         expect(await db.select().from(affiliateEarnings)).toHaveLength(2);
     });
+
+    test('an order refunded whole earns nothing, even from a delivery that arrives after or races the refund', async () => {
+        const created = await affiliate();
+        const customer = await createTestAccount();
+        const earn = (orderId: string) =>
+            growth.recordEarning({
+                affiliateId: created.id,
+                orderId,
+                userId: customer.userId,
+                currency: 'usd',
+                netAmount: 1000,
+                commissionBps: 2500,
+            });
+        // Withdrawn before any commission was recorded: the late delivery records none.
+        expect(await growth.withdrawEarning('order_late')).toBe('none');
+        expect(await earn('order_late')).toBeNull();
+        // Recorded, then withdrawn while unpaid: gone, and a replayed delivery doesn't bring it back.
+        expect(await earn('order_kept')).not.toBeNull();
+        expect(await growth.withdrawEarning('order_kept')).toBe('withdrawn');
+        expect(await earn('order_kept')).toBeNull();
+        // A delivery and the refund at once, in either order: never payable afterwards.
+        await Promise.all(
+            Array.from({ length: 12 }, (_, index) =>
+                index % 2
+                    ? Promise.all([
+                          earn(`order_race_${index}`),
+                          growth.withdrawEarning(`order_race_${index}`),
+                      ])
+                    : Promise.all([
+                          growth.withdrawEarning(`order_race_${index}`),
+                          earn(`order_race_${index}`),
+                      ]),
+            ),
+        );
+        expect(await db.select().from(affiliateEarnings)).toEqual([]);
+        expect((await growth.affiliateStats(created.id)).earnings).toEqual({});
+    });
 });

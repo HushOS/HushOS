@@ -3,6 +3,7 @@ import { db } from './client';
 import {
     accountIntents,
     affiliateEarnings,
+    affiliateWithdrawnOrders,
     affiliates,
     personalWorkspaces,
     referralCodes,
@@ -442,8 +443,19 @@ export async function listAffiliates() {
 }
 
 /*
+ * One order's earning, recorded or withdrawn: both take this lock first, so a commission is never
+ * recorded after the order was refunded whole (withdrawEarning), however their deliveries race.
+ */
+const EARNING_LOCK_SPACE = 0x6561726e;
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+const lockOrder = (tx: Tx, orderId: string) =>
+    tx.execute(sql`select pg_advisory_xact_lock(${EARNING_LOCK_SPACE}::int, hashtext(${orderId}))`);
+
+/*
  * Commission on one paid order. The order id is unique, so a replayed
- * webhook or a second attribution path records nothing the second time.
+ * webhook or a second attribution path records nothing the second time. Nothing either for an
+ * order HushOS refunded whole: withdrawEarning kept it, and a delivery that arrives after (or
+ * raced it) finds it under the same lock.
  */
 export async function recordEarning(input: {
     affiliateId: string;
@@ -455,41 +467,57 @@ export async function recordEarning(input: {
 }) {
     if (input.netAmount <= 0) return null;
     const commission = Math.floor((input.netAmount * input.commissionBps) / 10_000);
-    const [row] = await db
-        .insert(affiliateEarnings)
-        .values({
-            affiliateId: input.affiliateId,
-            orderId: input.orderId,
-            userId: input.userId,
-            currency: input.currency,
-            netAmount: input.netAmount,
-            commissionAmount: commission,
-        })
-        .onConflictDoNothing({ target: affiliateEarnings.orderId })
-        .returning();
-    return row ?? null;
+    return db.transaction(async (tx) => {
+        await lockOrder(tx, input.orderId);
+        const [withdrawn] = await tx
+            .select({ orderId: affiliateWithdrawnOrders.orderId })
+            .from(affiliateWithdrawnOrders)
+            .where(eq(affiliateWithdrawnOrders.orderId, input.orderId));
+        if (withdrawn) return null;
+        const [row] = await tx
+            .insert(affiliateEarnings)
+            .values({
+                affiliateId: input.affiliateId,
+                orderId: input.orderId,
+                userId: input.userId,
+                currency: input.currency,
+                netAmount: input.netAmount,
+                commissionAmount: commission,
+            })
+            .onConflictDoNothing({ target: affiliateEarnings.orderId })
+            .returning();
+        return row ?? null;
+    });
 }
 
 /*
  * An order HushOS refunds whole (a payment on a plan nothing could be given for): its affiliate's
- * commission is taken back while it is unpaid. `paid`: it had already been paid out, so it stays,
- * marked (`order_refunded_at`) for an operator to settle with the affiliate; said once, the first
- * time, and `none` on every later call.
+ * commission is taken back while it is unpaid, and the order kept (affiliate_withdrawn_orders) so
+ * no later delivery records one. `paid`: it had already been paid out, so it stays, marked
+ * (`order_refunded_at`) for an operator to settle with the affiliate; said once, the first time,
+ * and `none` on every later call.
  */
 export async function withdrawEarning(orderId: string) {
-    const removed = await db
-        .delete(affiliateEarnings)
-        .where(and(eq(affiliateEarnings.orderId, orderId), isNull(affiliateEarnings.paidAt)))
-        .returning({ id: affiliateEarnings.id });
-    if (removed.length) return 'withdrawn' as const;
-    const marked = await db
-        .update(affiliateEarnings)
-        .set({ orderRefundedAt: new Date() })
-        .where(
-            and(eq(affiliateEarnings.orderId, orderId), isNull(affiliateEarnings.orderRefundedAt)),
-        )
-        .returning({ id: affiliateEarnings.id });
-    return marked.length ? ('paid' as const) : ('none' as const);
+    return db.transaction(async (tx) => {
+        await lockOrder(tx, orderId);
+        await tx.insert(affiliateWithdrawnOrders).values({ orderId }).onConflictDoNothing();
+        const removed = await tx
+            .delete(affiliateEarnings)
+            .where(and(eq(affiliateEarnings.orderId, orderId), isNull(affiliateEarnings.paidAt)))
+            .returning({ id: affiliateEarnings.id });
+        if (removed.length) return 'withdrawn' as const;
+        const marked = await tx
+            .update(affiliateEarnings)
+            .set({ orderRefundedAt: new Date() })
+            .where(
+                and(
+                    eq(affiliateEarnings.orderId, orderId),
+                    isNull(affiliateEarnings.orderRefundedAt),
+                ),
+            )
+            .returning({ id: affiliateEarnings.id });
+        return marked.length ? ('paid' as const) : ('none' as const);
+    });
 }
 
 export async function listEarnings(affiliateId: string, limit = 100) {

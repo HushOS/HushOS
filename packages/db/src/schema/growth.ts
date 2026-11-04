@@ -144,3 +144,13 @@ export const affiliateEarnings = pgTable(
     },
     (table) => [index('affiliate_earnings_affiliate_idx').on(table.affiliateId)],
 );
+
+/*
+ * Orders HushOS refunds whole (withdrawEarning), kept so their commission is never recorded
+ * after it was taken back: a late `order.paid` delivery's recordEarning checks it under the same
+ * per-order lock. Ids only: no amount, account or affiliate.
+ */
+export const affiliateWithdrawnOrders = pgTable('affiliate_withdrawn_orders', {
+    orderId: text('order_id').primaryKey(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});

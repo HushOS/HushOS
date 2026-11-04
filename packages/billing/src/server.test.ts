@@ -6811,7 +6811,7 @@ describe('one plan per family', () => {
         expect((await billingRepository.getLiveGroupSubscription(groupId))?.id).toBe(bought.id);
     });
 
-    test('a commission recorded after the cure is taken back when the job refunds the order', async () => {
+    test('a commission delivered after the cure noted the order is never recorded, and the job refunds the order', async () => {
         await growth.createAffiliate({
             name: 'Creator',
             slug: 'creator',
@@ -6823,16 +6823,18 @@ describe('one plan per family', () => {
         const { groupId, newer } = await twoPlans();
         await quietly(() => billing.reconcileGroup(groupId));
         expect(newer.ended_at).toBeTruthy();
-        // Its order.paid, racing the cure, recorded the commission after the ending noted it.
-        await growthRepository.recordEarning({
-            affiliateId: (await growth.listAffiliates())[0]!.id,
-            orderId: 'order_newer',
-            userId: null,
-            currency: 'usd',
-            netAmount: 999,
-            commissionBps: 2000,
-        });
-        expect((await growth.listAffiliates())[0]!.stats.orders).toBe(1);
+        // Its order.paid, racing the cure, records the commission after the ending withdrew it.
+        expect(
+            await growthRepository.recordEarning({
+                affiliateId: (await growth.listAffiliates())[0]!.id,
+                orderId: 'order_newer',
+                userId: null,
+                currency: 'usd',
+                netAmount: 999,
+                commissionBps: 2000,
+            }),
+        ).toBeNull();
+        expect((await growth.listAffiliates())[0]!.stats.orders).toBe(0);
         await quietly(() => runQueued(0));
         expect(refundsMade()).toEqual([['order_newer', 999]]);
         expect((await growth.listAffiliates())[0]!.stats.orders).toBe(0);
