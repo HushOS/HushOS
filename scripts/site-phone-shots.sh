@@ -12,10 +12,18 @@
 # port 5562). It asks you to sign in once per device (the password goes on the clipboard, never on
 # screen), then takes every picture itself. Times read mid-morning (e2e/morning-zone.ts).
 # Output: apps/web/src/screenshots/{ios,android}-{home,folder}[-dark][@1.5x|@1x].png.
+#
+#   PORT   the web server the apps talk to (default 5173). Another port (an isolated instance,
+#          say) rebuilds the Android debug app to talk to it; on iOS, set the sign-in sheet's
+#          Self-hosting address to http://localhost:<port> before signing in.
+#   DB     its database (default hushos), in the hushos-db-1 container.
+#   SIM    another iPhone 18 Pro simulator's name, if "HushOS Site 6.3" can't be used.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 WHICH="${1:-both}"
+PORT="${PORT:-5173}"
+DB="${DB:-hushos}"
 OUT="$ROOT/apps/web/src/screenshots"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -27,9 +35,9 @@ say() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 fail() { printf '\033[31m%s\033[0m\n' "$1" >&2; exit 1; }
 password() { sed -n "s/^export const PASSWORD = '\(.*\)';$/\1/p" e2e/helpers.ts | tr -d '\n'; }
 
-curl -s -o /dev/null --max-time 5 http://localhost:5173/ || fail "Start the web dev server first (bun dev)."
+curl -s -o /dev/null --max-time 5 "http://localhost:$PORT/" || fail "Start the web dev server first (bun dev): the debug apps talk to http://localhost:$PORT."
 command -v magick >/dev/null || fail "Needs ImageMagick (brew install imagemagick) to make the 2x, 1.5x and 1x pictures."
-db() { docker exec hushos-db-1 psql -U hushos -d hushos -Atc "$1"; }
+db() { docker exec hushos-db-1 psql -U hushos -d "$DB" -Atc "$1"; }
 DEMO_EMAIL="${DEMO_EMAIL:-$(db "select email from users where email like 'maya.lindqvist@%' order by created_at desc limit 1" 2>/dev/null || true)}"
 [[ -n "$DEMO_EMAIL" ]] || fail "No demo account: run the screenshot spec first (see the top of this file)."
 # The Lisbon 2026 folder, by structure (names are encrypted): the account's folder of exactly twelve files.
@@ -65,12 +73,15 @@ scales() { # capture name width2x height2x
 }
 
 ios() {
-    local name="HushOS Site 6.3" udid app="apps/ios/DerivedData/Build/Products/Debug-iphonesimulator/HushOS.app"
+    local name="${SIM:-HushOS Site 6.3}" udid app="apps/ios/DerivedData/Build/Products/Debug-iphonesimulator/HushOS.app"
     udid=$(xcrun simctl list devices available | grep "$name (" | grep -oE '[0-9A-F-]{36}' | head -1 || true)
     if [[ -z "$udid" ]]; then
+        # The newest runtime that has the iPhone 18 Pro (a newer one may not).
         local runtime
-        runtime=$(xcrun simctl list runtimes available | grep -oE 'com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+' | tail -1)
-        udid=$(xcrun simctl create "$name" com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro "$runtime")
+        for runtime in $(xcrun simctl list runtimes available | grep -oE 'com\.apple\.CoreSimulator\.SimRuntime\.iOS-[0-9-]+' | sort -rV); do
+            udid=$(xcrun simctl create "$name" com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro "$runtime" 2>/dev/null) && break
+        done
+        [[ -n "$udid" ]] || fail "Couldn't create an iPhone 18 Pro simulator."
     fi
     [[ -d "$app" ]] || bun run ios:build
     xcrun simctl boot "$udid" 2>/dev/null || true
@@ -122,7 +133,11 @@ android() {
     if ! emulator -list-avds | grep -qx "$avd"; then
         echo "no" | avdmanager create avd -n "$avd" -k "system-images;android-36;google_apis;arm64-v8a" -d pixel_8_pro >/dev/null
     fi
-    [[ -f "$apk" ]] || bun run android:build
+    if [[ "$PORT" != 5173 ]]; then
+        (cd apps/android && ./gradlew :app:assembleDebug -q -PdefaultOrigin="http://localhost:$PORT")
+    else
+        [[ -f "$apk" ]] || bun run android:build
+    fi
     if ! adb devices | grep -q "^$serial"; then
         nohup emulator -avd "$avd" -port 5562 -no-snapshot-save -no-boot-anim >/dev/null 2>&1 &
     fi
@@ -130,7 +145,7 @@ android() {
     $a wait-for-device
     until [[ "$($a shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; do sleep 2; done
     $a install -r "$apk" >/dev/null
-    $a reverse tcp:5173 tcp:5173 >/dev/null
+    $a reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
     $a reverse tcp:9000 tcp:9000 >/dev/null
     $a shell cmd alarm set-timezone "$ZONE" >/dev/null
     $a shell cmd uimode night no >/dev/null
