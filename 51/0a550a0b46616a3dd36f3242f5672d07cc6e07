@@ -1,0 +1,19 @@
+apps/web/src/content/legal/terms.mdx
+  s_566b8e0c4467a4::t_20111f77bdc8da 3,29-32,34-36,58-69,76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "510a550a0b46616a3dd36f3242f5672d07cc6e07",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
