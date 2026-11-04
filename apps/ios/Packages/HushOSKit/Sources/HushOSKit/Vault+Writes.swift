@@ -966,6 +966,9 @@ extension Vault {
         // Each folder listed once per batch, its rows or its error kept: siblings changed together (a bulk upload, a
         // re-key) are read from the one listing rather than each listing their folder again.
         var listings: [String: Result<FolderRows, Error>] = [:]
+        // A row met for the first time under a folder that couldn't be listed: the rest of the batch is still read (every such
+        // row is noted at once), and then the batch fails, so a retry decides them all together.
+        var unsettled = false
         // Folders this batch itself says are gone (trashed rows, tombstones): what's in them goes with them, at once.
         let goneHere = Set(feed.changes.compactMap { change -> String? in
             if change.kind == "tombstone" { return change.nodeId?.lowercased() }
@@ -1018,12 +1021,12 @@ extension Vault {
                     // (in this batch), or when the same row fails again on the retry (nothing moved it since): never for a row
                     // that moved out between the feed and the listing, which the retried feed reads from its new folder.
                     let row = "\(node.changeSeq ?? -1):\(folder.lowercased())"
+                    // Noted until a batch succeeds: a later row failing this batch never makes an earlier one start over.
                     if goneHere.contains(folder.lowercased()) || feedSuspects[node.ref] == row {
-                        feedSuspects[node.ref] = nil
                         deleted.append(node.id)
                     } else {
                         feedSuspects[node.ref] = row
-                        throw FamilyFilesError.unavailable
+                        unsettled = true
                     }
                 } catch is CoreError {
                     // A row of the listing didn't open, maybe a sibling's: the node's own envelope decides, never another's.
@@ -1049,6 +1052,9 @@ extension Vault {
                 break
             }
         }
+        if unsettled { throw FamilyFilesError.unavailable }
+        // The batch answered and its cursor moves on: what it noted is decided or moved, and is forgotten.
+        feedSuspects = feedSuspects.filter { $0.key.workspaceId != workspaceId.lowercased() }
         return Changes(updated: updated, deleted: deleted, nextCursor: feed.nextCursor, hasMore: feed.hasMore)
     }
 

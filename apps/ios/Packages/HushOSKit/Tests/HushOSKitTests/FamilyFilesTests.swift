@@ -703,6 +703,45 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         }
     }
 
+    /*
+     * A location given back after a removal is superseded while it is being added: the family is let
+     * go of and accepted again (in a process that found the location being added), so the record
+     * the restore was for is gone and a newer one of the account signed in stands. The location
+     * stays for that newer acceptance. Fails if a restoring add that lost to a newer acceptance of the
+     * same account is rolled back.
+     */
+    @Test func aRestoringAddSupersededByANewerAcceptanceKeepsTheLocation() async throws {
+        // The newer acceptance is the signed-in account's (the location stays) or another account's (it is taken back).
+        for newerOwner in [Self.maya, Self.sam] {
+            signIn(Self.maya)
+            let remover = domains
+            let app = domains
+            let newer = domains
+            let session = TemporaryCopies.session(CopyEpoch())
+            let (group, maya, records, manager) = (UUID().uuidString.lowercased(), Self.maya, self.records, self.manager)
+            await app.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value
+            manager.duringRemove = {
+                await app.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value
+                // The restore's add: meanwhile the family is let go of and accepted again, by a sync that finds the location there.
+                manager.duringAdd = {
+                    records.update { stored in
+                        stored.revoked[group, default: 0] += 1
+                        stored.records[group] = nil
+                    }
+                    manager.put(FamilyFileIds.domain(group), name: "Lindqvist family")
+                    await newer.accepted(group, name: "Lindqvist family", owner: newerOwner, observed: records.generation(group), session: session).value
+                }
+            }
+            await remover.letGo(group, owner: maya).value
+            #expect(try records.read()[group]?.owner == newerOwner)
+            if newerOwner == maya {
+                #expect(manager.names[FamilyFileIds.domain(group)] != nil, "a restoring add superseded by a newer acceptance was rolled back")
+            } else {
+                #expect(manager.names[FamilyFileIds.domain(group)] == nil, "a location stayed for an account that isn't signed in")
+            }
+        }
+    }
+
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
     @Test func aRenamedFamilysLocationTakesTheNewName() async throws {
         let domains = self.domains
@@ -1156,6 +1195,53 @@ extension OnFakeDrive {
             s.server.put(try #require(s.server.node(f.photo.id)).with(parentId: f.rootId))
             let trashed = try #require(try await s.source.changes(since: anchor), "a child of a folder trashed in the batch was retried")
             #expect(trashed.deleted.contains(FamilyFileIds.item(NodeRef(workspaceId: f.workspaceId, nodeId: childId))))
+        }
+
+        /*
+         * Ten files sit in a folder trashed elsewhere, and the folder's own trashed row comes on a later
+         * page of the feed: each page's first read notes every one of them and fails once, and the second
+         * decides them all, so no page needs more than two reads. Fails if a row decided on its second
+         * sight is forgotten when a later row fails the batch (2^N reads, a stalled sync).
+         */
+        @Test func manyFilesUnderAFolderTrashedOnALaterPageSettleInTwoReadsAPage() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            _ = try await s.source.folders()
+            let f = s.family
+            let folderKey = try randomBytes(length: 32)
+            let folderId = try newId(kind: .node, scopeId: f.workspaceId).id
+            let folder = try FamilyFixture.node(id: folderId, in: f.workspaceId, parent: f.rootId, parentKey: f.rootKey, key: folderKey, kind: .folder,
+                                                name: "Old", writer: f.creator)
+            var children: [String] = []
+            for index in 0 ..< 10 {
+                let id = try newId(kind: .node, scopeId: f.workspaceId).id
+                s.server.put(try FamilyFixture.node(id: id, in: f.workspaceId, parent: folderId, parentKey: folderKey, key: randomBytes(length: 32), kind: .file,
+                                                    name: "Inside \(index).txt", writer: f.creator))
+                children.append(id)
+            }
+            // Trashed after them: its row sorts after every child's.
+            s.server.put(folder.with(trashedAt: "2026-11-04T00:00:00.000Z"))
+            s.server.lock.withLock { s.server.rotations.changesPage = 6 }
+            var anchor = FamilyAnchor(folders: [f.workspaceId: .init(root: f.rootId, cursor: 0)])
+            var deleted: Set<String> = []
+            for _ in 0 ..< 10 {
+                var reads = 0
+                var page: FamilyChanges?
+                while page == nil, reads < 4 {
+                    reads += 1
+                    do {
+                        page = try #require(try await s.source.changes(since: anchor))
+                    } catch FamilyFilesError.unavailable {
+                        continue
+                    }
+                }
+                #expect(reads <= 2, "a page took \(reads) reads to settle")
+                guard let page else { return }
+                deleted.formUnion(page.deleted)
+                anchor = page.next
+                if !page.hasMore { break }
+            }
+            for id in children { #expect(deleted.contains(FamilyFileIds.item(NodeRef(workspaceId: f.workspaceId, nodeId: id)))) }
         }
 
         /*

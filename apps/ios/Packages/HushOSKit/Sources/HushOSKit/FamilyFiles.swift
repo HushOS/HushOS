@@ -247,25 +247,26 @@ public final class FamilyFilesDomains: @unchecked Sendable {
             // A let-go this process couldn't write is written first; while it still can't be, nothing is added.
             guard !revocationPending(groupId) else { return }
             var ours = false
-            var written: UInt64 = 0
+            var written: FamilyDomainRecord?
             let wrote = records.update { stored in
                 guard stored.generation(groupId) <= observed else { return }
                 // Signed out or in again elsewhere since this sync's session began: nothing of it is written.
                 if let signedIn, sharedSession() != signedIn { return }
                 if let record = stored.records[groupId], record.owner != owner { return }
-                written = stored.generation(groupId)
-                stored.records[groupId] = FamilyDomainRecord(owner: owner, name: name, workspaces: workspaces.map { $0.lowercased() }.sorted(),
-                                                             generation: written)
+                let record = FamilyDomainRecord(owner: owner, name: name, workspaces: workspaces.map { $0.lowercased() }.sorted(),
+                                                generation: stored.generation(groupId))
+                stored.records[groupId] = record
+                written = record
                 ours = true
             }
-            guard wrote, ours, session.stands else { return }
+            guard wrote, ours, let written, session.stands else { return }
             let identifier = FamilyFileIds.domain(groupId)
             guard let existing = try? await manager.domains() else { return }
             // Missing, or named otherwise than the family is now (a rename, or one whose add failed before): added, which
             // for an identifier that exists updates its name. Compared with the system's name, never the record's.
             if existing[identifier] != name {
                 // Another process may have let the family go (or signed out or in) while this one waited.
-                guard await addVerified(groupId, name: name,
+                guard await addVerified(groupId, name: name, authorisedBy: written,
                                         holds: { stands(groupId, owner: owner, observed: observed, session: session, signedIn: signedIn) })
                 else { return }
             }
@@ -347,7 +348,7 @@ public final class FamilyFilesDomains: @unchecked Sendable {
         // The record now, if it was written during the removal; `addVerified` adds only while it stands, the signed-in account's.
         var now: FamilyDomainRecord?
         guard records.update({ stored in now = stored.records[groupId] }), let record = now, record != before else { return removed }
-        return !(await addVerified(groupId, name: record.name, holds: {
+        return !(await addVerified(groupId, name: record.name, authorisedBy: record, holds: {
             var now: FamilyDomainRecord?
             guard records.update({ stored in now = stored.records[groupId] }), now == record, let signedIn = sharedSession() else { return false }
             return record.owner == AccountOwner(signedIn)
@@ -355,21 +356,32 @@ public final class FamilyFilesDomains: @unchecked Sendable {
     }
 
     /*
-     * A location added only while `holds` (read under the store's lock): asked right before the add,
-     * and again after it, when a revocation (or a session's end) that landed during the add takes the
-     * location back, through `removeVerified`, which gives it back only to a record written since.
-     * False when it doesn't stand.
+     * A location added for the record `authorisedBy` only while `holds` (read under the store's lock):
+     * asked right before the add, and again after it. When it no longer holds, a newer acceptance of the
+     * account signed in now may have superseded it (finding this location, adding nothing): the location
+     * stays for that one. Otherwise (no record, a revocation, a session's end, another account's) it is
+     * taken back through `removeVerified`, which gives it back only to a record written since. True when
+     * the location stands.
      */
     @discardableResult
-    private func addVerified(_ groupId: String, name: String, holds: () -> Bool) async -> Bool {
+    private func addVerified(_ groupId: String, name: String, authorisedBy: FamilyDomainRecord, holds: () -> Bool) async -> Bool {
         let identifier = FamilyFileIds.domain(groupId)
         guard holds() else { return false }
         try? await manager.add(identifier, name: name)
         guard holds() else {
+            if superseded(groupId, authorisedBy) { return true }
             await removeVerified(groupId)
             return false
         }
         return true
+    }
+
+    /* Whether the family's record now is a newer acceptance than `authorisedBy`, held by the account the keychain holds, read under the store's lock. */
+    private func superseded(_ groupId: String, _ authorisedBy: FamilyDomainRecord) -> Bool {
+        var now: FamilyDomainRecord?
+        guard records.update({ stored in now = stored.records[groupId] }), let now, now != authorisedBy,
+              (now.generation ?? 0) >= (authorisedBy.generation ?? 0), let signedIn = sharedSession() else { return false }
+        return now.owner == AccountOwner(signedIn)
     }
 
     /*
