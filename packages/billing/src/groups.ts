@@ -2102,7 +2102,9 @@ export async function startGroupCheckout(
             allow_trial: false,
             discount_id: discountId,
             allow_discount_codes: true,
-            metadata: { hushos_group_id: groupId },
+            // Who pays, as of this checkout: Polar copies it to the plan and every order of it, so a
+            // late order of this plan earns for this payer, whoever pays the family by then.
+            metadata: { hushos_group_id: groupId, hushos_payer: user.id },
         });
     } catch (error) {
         throw unavailable(error);

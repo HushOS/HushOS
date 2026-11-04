@@ -2869,6 +2869,46 @@ describe('referrals', () => {
         expect((await growth.getReferralSummary(inviter.userId)).paid).toMatchObject({ count: 1 });
     });
 
+    test('a family order that lands after another member took over the checkout earns for the payer who bought it', async () => {
+        const [inviterA, inviterB] = [await createTestAccount(), await createTestAccount()];
+        const [a, b] = [await createTestAccount(), await createTestAccount()];
+        await growth.attributeNewAccount(
+            a.userId,
+            (await growth.getReferralSummary(inviterA.userId)).code,
+        );
+        await growth.attributeNewAccount(
+            b.userId,
+            (await growth.getReferralSummary(inviterB.userId)).code,
+        );
+        const { groupId } = await createTestFamily({
+            organizerId: a.userId,
+            members: [{ userId: b.userId, roles: ['billing'] }],
+            pooled: true,
+        });
+        await billing.startGroupCheckout(userOf(a, 'Ana'), groupId, { productId: PRO_FAMILY });
+        const bought = polar.checkouts.at(-1)!;
+        expect(bought.metadata).toMatchObject({ hushos_group_id: groupId, hushos_payer: a.userId });
+        // B starts a checkout of their own before A's order is delivered: the family's payer is B now.
+        await billing.startGroupCheckout(userOf(b, 'Ben'), groupId, { productId: PRO_FAMILY });
+        expect((await billingRepository.getGroupCustomer(groupId))?.payerUserId).toBe(b.userId);
+        // A's order, carrying what A's checkout recorded, as Polar copies it to the plan's orders.
+        await billing.handleWebhook(
+            await signedWebhook({
+                type: 'order.paid',
+                data: {
+                    id: 'order_fam_late',
+                    net_amount: 2000,
+                    currency: 'usd',
+                    billing_reason: 'subscription_create',
+                    customer: { id: `cus_${groupId}`, external_id: `group:${groupId}` },
+                    metadata: bought.metadata,
+                },
+            }),
+        );
+        expect((await growth.getReferralSummary(inviterA.userId)).paid).toMatchObject({ count: 1 });
+        expect((await growth.getReferralSummary(inviterB.userId)).paid).toMatchObject({ count: 0 });
+    });
+
     test('an invite gives both people storage, and a code that resolves to nobody gives nothing', async () => {
         const inviter = await createTestAccount();
         const summary = await growth.getReferralSummary(inviter.userId);

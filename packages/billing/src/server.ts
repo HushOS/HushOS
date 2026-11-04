@@ -576,15 +576,24 @@ export async function grantOrderRewards(
 }
 
 /*
- * What a paid order of a family's plan earns, as a personal order does, with the family's payer
+ * What a paid order of a family's plan earns, as a personal order does, with that order's payer
  * as its owner: the commission of the affiliate whose discount it used, else of the one the
- * payer signed up through; and the paid bonus for whoever invited the payer, once.
+ * payer signed up through; and the paid bonus for whoever invited the payer, once. The payer is
+ * the one its checkout recorded (`hushos_payer`, carried on the plan's orders), never whoever
+ * pays the family when the order lands: another member may have taken over for a new checkout
+ * by then. An order from before the checkout recorded one falls back to the family's payer now.
  */
 export async function grantFamilyOrderRewards(
     groupId: string,
-    order: Parameters<typeof recordAffiliateEarning>[0],
+    order: Parameters<typeof recordAffiliateEarning>[0] & {
+        metadata?: Record<string, unknown> | null;
+    },
 ) {
-    const payer = (await billingRepository.getGroupCustomer(groupId))?.payerUserId ?? null;
+    const recorded = order.metadata?.hushos_payer;
+    const payer =
+        typeof recorded === 'string' && USER_ID_PATTERN.test(recorded)
+            ? recorded
+            : ((await billingRepository.getGroupCustomer(groupId))?.payerUserId ?? null);
     await recordAffiliateEarning({ ...order, customer: payer ? { external_id: payer } : null });
     if (payer) await rewardPaidReferral(payer);
 }
