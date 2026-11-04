@@ -6032,11 +6032,32 @@ describe('one plan per family', () => {
         expect(callsTo('checkouts.create')).toHaveLength(1);
         await expireClaim(groupId);
         polar.calls = [];
-        const tabs = await Promise.allSettled([
-            billing.startGroupCheckout(first, groupId, { productId: PRO_FAMILY }),
-            billing.startGroupCheckout(first, groupId, { productId: MAX_FAMILY }),
-        ]);
-        expect(tabs.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+        // The two tabs overlap only while the first is still being opened: once its checkout is
+        // made, a second choice is a later one and replaces it (the next test). So the first is
+        // held at Polar until the second has its answer, however slowly the second arrives.
+        const original = fakeClient.checkouts.create.bind(fakeClient.checkouts);
+        let reached!: () => void;
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => (reached = resolve));
+        const released = new Promise<void>((resolve) => (release = resolve));
+        const spy = vi
+            .spyOn(fakeClient.checkouts, 'create')
+            .mockImplementationOnce(async (body: Record<string, unknown>) => {
+                reached();
+                await released;
+                return original(body);
+            });
+        try {
+            const tab = billing.startGroupCheckout(first, groupId, { productId: PRO_FAMILY });
+            await held;
+            await expect(
+                billing.startGroupCheckout(first, groupId, { productId: MAX_FAMILY }),
+            ).rejects.toMatchObject({ status: 409 });
+            release();
+            await tab;
+        } finally {
+            spy.mockRestore();
+        }
         expect(callsTo('checkouts.create')).toHaveLength(1);
     });
 
