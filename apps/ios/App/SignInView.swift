@@ -24,19 +24,23 @@ struct SignInView: View {
     private enum Field { case email, password }
 
     var body: some View {
-        NavigationStack { form.toolbar(.hidden, for: .navigationBar).navigationDestination(isPresented: $showingServer) { SelfHostingView() } }
+        NavigationStack {
+            form
+                // The system bar: the large title with the gear beside it, as every screen carries its actions.
+                .navigationTitle("Welcome back")
+                .toolbarTitleDisplayMode(.inlineLarge)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { showingServer = true } label: { HeaderIcon(symbol: "gearshape") }
+                            .accessibilityLabel("Self-hosting")
+                    }
+                }
+                .navigationDestination(isPresented: $showingServer) { SelfHostingView() }
+        }
     }
 
     private var form: some View {
         VStack(spacing: 0) {
-            // The title at the top with the gear beside it, as every screen carries its actions.
-            ScreenHeader(title: "Welcome back") {
-                Button { showingServer = true } label: { HeaderIcon(symbol: "gearshape") }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Self-hosting")
-            }
-            .padding(.horizontal, Alpine.Space.s4).padding(.top, Alpine.Space.s2)
-
             ScrollView {
                 VStack(alignment: .leading, spacing: Alpine.Space.s6) {
                     if let host = model.selfHostedName {
@@ -69,8 +73,10 @@ struct SignInView: View {
                     }
 
                     if !formError.isEmpty {
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: "exclamationmark.circle").font(.body.weight(.semibold))
+                        // The icon sits on the first line's baseline at the text's size, so it lines up with that
+                        // line however many lines the message takes.
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Image(systemName: "exclamationmark.circle").font(Theme.Text.callout.weight(.semibold))
                             Text(formError).font(Theme.Text.callout).frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .foregroundStyle(Alpine.danger)

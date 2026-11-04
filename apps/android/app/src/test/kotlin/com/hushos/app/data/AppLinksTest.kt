@@ -19,6 +19,22 @@ class AppLinksTest {
     private fun opens(link: AppLink) = AppLinkResult.Open(link)
     private fun refused(reason: AppLinkRefusal) = AppLinkResult.Refused(reason)
 
+    /*
+     * The mailed invitation: its token kept exactly from the fragment (never a path or query a server would log), a cut
+     * one incomplete, a forged one refused, and another server's never opened here. iOS's AppLinksTests cases.
+     */
+    @Test
+    fun anInvitationLinkKeepsItsTokenAndRefusesOthers() {
+        assertEquals(opens(AppLink.Join(token)), parse("https://hushos.com/join#invite=$token"))
+        assertEquals(opens(AppLink.Join(token)), parse("hushos://join#invite=$token"))
+        assertEquals(opens(AppLink.IncompleteInvite), parse("https://hushos.com/join"))
+        assertEquals(opens(AppLink.IncompleteInvite), parse("https://hushos.com/join#invite="))
+        assertEquals(refused(AppLinkRefusal.Malformed), parse("https://hushos.com/join#invite=${token.dropLast(3)}"))
+        assertEquals(refused(AppLinkRefusal.Malformed), parse("https://hushos.com/join#invite=$token%3Cscript"))
+        assertEquals(refused(AppLinkRefusal.OtherServer("evil.example")), parse("https://evil.example/join#invite=$token"))
+        assertEquals(refused(AppLinkRefusal.WebOnly), parse("https://hushos.com/join/other#invite=$token"))
+    }
+
     @Test
     fun aShareLinkKeepsItsKeyExactly() {
         assertEquals(opens(AppLink.Share("https://hushos.com/s/$token#$secret")), parse("https://hushos.com/s/$token#$secret"))

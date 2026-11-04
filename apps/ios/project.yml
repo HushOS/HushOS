@@ -20,9 +20,13 @@ settings:
         # One version and one build number for the app and its four extensions (App Store Connect
         # refuses an upload whose extensions disagree with the app); every Info.plist reads these.
         # The version is the product's (the root package.json): the release pull request sets it.
-        MARKETING_VERSION: '0.9.0' # x-release-please-version
+        MARKETING_VERSION: '0.14.0' # x-release-please-version
         # Xcode's own builds say 1; archive.sh passes the build number from scripts/build-number.sh.
         CURRENT_PROJECT_VERSION: '1'
+# Project-wide settings that a fork may override (APP_GROUP_ID), with App/Local.xcconfig on top.
+configFiles:
+    Debug: Project.xcconfig
+    Release: Project.xcconfig
 packages:
     HushOSCore:
         path: Packages/HushOSCore
@@ -62,6 +66,7 @@ targets:
                 CFBundleName: HushOS
                 CFBundleShortVersionString: '$(MARKETING_VERSION)'
                 CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
+                HushOSAppGroup: '$(APP_GROUP_ID)'
                 UILaunchScreen:
                     UIColorName: LaunchBackground
                     UIImageName: SplashMark
@@ -106,7 +111,8 @@ targets:
                       UIApplicationShortcutItemTitle: Search
                       UIApplicationShortcutItemIconSymbolName: magnifyingglass
                 # Background transfers: iOS runs this task with a network to start uploads and keeps queued offline.
-                BGTaskSchedulerPermittedIdentifiers: [com.hushos.app.transfers.start]
+                BGTaskSchedulerPermittedIdentifiers:
+                    [com.hushos.app.transfers.start, com.hushos.app.families.walks]
                 UIBackgroundModes: [processing, fetch]
         settings:
             base:
@@ -129,14 +135,15 @@ targets:
         entitlements:
             path: Files/HushOSFiles.entitlements
             properties:
-                com.apple.security.application-groups: [group.com.hushos.app]
-                keychain-access-groups: [$(AppIdentifierPrefix)group.com.hushos.app]
+                com.apple.security.application-groups: [$(APP_GROUP_ID)]
+                keychain-access-groups: [$(AppIdentifierPrefix)$(APP_GROUP_ID)]
         info:
             path: Files/Info.plist
             properties:
                 CFBundleDisplayName: HushOS Files
                 CFBundleShortVersionString: '$(MARKETING_VERSION)'
                 CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
+                HushOSAppGroup: '$(APP_GROUP_ID)'
                 NSExtension:
                     NSExtensionPointIdentifier: com.apple.fileprovider-nonui
                     NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderExtension
@@ -164,14 +171,15 @@ targets:
         entitlements:
             path: FilesUI/HushOSFilesUI.entitlements
             properties:
-                com.apple.security.application-groups: [group.com.hushos.app]
-                keychain-access-groups: [$(AppIdentifierPrefix)group.com.hushos.app]
+                com.apple.security.application-groups: [$(APP_GROUP_ID)]
+                keychain-access-groups: [$(AppIdentifierPrefix)$(APP_GROUP_ID)]
         info:
             path: FilesUI/Info.plist
             properties:
                 CFBundleDisplayName: HushOS
                 CFBundleShortVersionString: '$(MARKETING_VERSION)'
                 CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
+                HushOSAppGroup: '$(APP_GROUP_ID)'
                 NSExtension:
                     NSExtensionPointIdentifier: com.apple.fileprovider-actionsui
                     NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderUIController
@@ -201,6 +209,7 @@ targets:
                 CFBundleDisplayName: HushOS
                 CFBundleShortVersionString: '$(MARKETING_VERSION)'
                 CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
+                HushOSAppGroup: '$(APP_GROUP_ID)'
                 NSExtension:
                     NSExtensionPointIdentifier: com.apple.widgetkit-extension
         settings:
@@ -216,25 +225,27 @@ targets:
             # Apple's required-reason declarations (docs/release/privacy-answers.md): one manifest for every bundle.
             - path: Privacy/PrivacyInfo.xcprivacy
               buildPhase: resources
+            # Each in the group the app files it under: Xcode 27.2 refuses a file reference in two groups.
             - path: App/Theme.swift
-              group: Share/Shared
+              group: App
             - path: App/Glyphs.swift
-              group: Share/Shared
+              group: App
             - path: ../../packages/tokens/generated/Alpine.swift
-              group: Share/Shared
+              group: App/Theme
         dependencies:
             - package: HushOSKit
         entitlements:
             path: Share/HushOSShare.entitlements
             properties:
-                com.apple.security.application-groups: [group.com.hushos.app]
-                keychain-access-groups: [$(AppIdentifierPrefix)group.com.hushos.app]
+                com.apple.security.application-groups: [$(APP_GROUP_ID)]
+                keychain-access-groups: [$(AppIdentifierPrefix)$(APP_GROUP_ID)]
         info:
             path: Share/Info.plist
             properties:
                 CFBundleDisplayName: Save to HushOS
                 CFBundleShortVersionString: '$(MARKETING_VERSION)'
                 CFBundleVersion: '$(CURRENT_PROJECT_VERSION)'
+                HushOSAppGroup: '$(APP_GROUP_ID)'
                 NSExtension:
                     NSExtensionPointIdentifier: com.apple.share-services
                     NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { leaveBlocker } from './family-leave';
+import { leaveBlocker, removeBlocker } from './family-leave';
 
 const MAYA = 'a0000000-0000-4000-8000-000000000001';
 const SAM = 'a0000000-0000-4000-8000-000000000002';
@@ -37,5 +37,22 @@ describe('who can leave a family', () => {
         expect(
             leaveBlocker(MAYA, [member(MAYA, ['billing', 'members']), member(SAM, [], 'accepted')]),
         ).toBeNull();
+    });
+});
+
+describe('who can be removed from a family', () => {
+    test('the only organizer is not offered for removal, with the reason; once another holds billing, they are', () => {
+        const family = [member(MAYA, ['billing', 'members']), member(SAM, ['members'])];
+        expect(removeBlocker(MAYA, 'Maya', family)).toBe(
+            'Maya is the only one who manages the family’s plan. Make someone else the organizer first.',
+        );
+        expect(removeBlocker(SAM, 'Sam', family)).toBeNull();
+        expect(
+            removeBlocker(MAYA, 'Maya', [family[0]!, member(SAM, ['billing', 'members'])]),
+        ).toBeNull();
+        // Someone who left holds no role here.
+        expect(
+            removeBlocker(MAYA, 'Maya', [family[0]!, member(SAM, ['billing'], 'left')]),
+        ).not.toBeNull();
     });
 });

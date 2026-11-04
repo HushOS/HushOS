@@ -51,8 +51,8 @@ function steps(
             calls.push('store');
             return identity;
         },
-        seen: () => marks,
-        remember: (keyVersion, identityVersion) => {
+        seen: async () => marks,
+        remember: async (keyVersion, identityVersion) => {
             marks = {
                 keyVersion: Math.max(marks.keyVersion, keyVersion),
                 identityVersion: Math.max(marks.identityVersion, identityVersion),
@@ -169,5 +169,18 @@ describe('opening this account’s identity', () => {
         const stubborn = steps(v1, { store: async () => v1 });
         await expect(openOwnIdentity(stubborn.value)).rejects.toThrow(/could not be upgraded/);
         expect(stubborn.marks().identityVersion).toBe(0);
+    });
+});
+
+describe('the mark an opened identity leaves', () => {
+    test('is part of opening it: when it cannot be kept, the identity is not taken', async () => {
+        const s = steps(v1, {
+            remember: async () => {
+                throw new Error(
+                    'HushOS couldn’t record what this browser has seen of your account.',
+                );
+            },
+        });
+        await expect(openOwnIdentity(s.value)).rejects.toThrow('couldn’t record');
     });
 });

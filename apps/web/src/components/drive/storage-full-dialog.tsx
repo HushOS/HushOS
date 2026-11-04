@@ -1,7 +1,14 @@
 import { useNavigate } from '@tanstack/react-router';
+import { planTierName } from '@hushos/billing/protocol';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
-import { HistoryIcon, SparklesIcon, Trash2Icon, type LucideIcon } from 'lucide-react';
+import {
+    CreditCardIcon,
+    HistoryIcon,
+    SparklesIcon,
+    Trash2Icon,
+    type LucideIcon,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
@@ -13,6 +20,7 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
+import { lapsedPlan, livePlan, planStanding } from '@hushos/billing/protocol';
 import { billingQueryOptions, catalogueQueryOptions } from '@/lib/billing';
 import { driveClient, driveError, formatBytes, invalidateFolders } from '@/lib/drive';
 import { formatQuota, storageQueryOptions, useBillingEnabled } from '@/lib/queries';
@@ -76,10 +84,9 @@ export function StorageFullDialog() {
     const billing = useBillingEnabled();
     const catalogue = useQuery({ ...catalogueQueryOptions, enabled: open && billing });
     const summary = useQuery({ ...billingQueryOptions, enabled: open && billing });
-    const current =
-        summary.data?.subscription && !summary.data.subscription.endedAt
-            ? summary.data.subscription
-            : null;
+    const current = livePlan(summary.data?.subscription);
+    // A plan whose payment failed (or that is paused) gives nothing until it is fixed: said first.
+    const lapsed = storage.data?.pool ? null : lapsedPlan(summary.data?.subscription);
     // The smallest plan with more room than this one: what "Get more room" leads to. None while
     // the person's files draw from a family's pool: a plan of their own wouldn't add to it.
     const bigger =
@@ -112,7 +119,7 @@ export function StorageFullDialog() {
                 purged += step.purged;
                 if (step.remaining === 0 || step.purged === 0) break;
             }
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: 'Trash emptied',
@@ -142,7 +149,7 @@ export function StorageFullDialog() {
                 purged += step.purged;
                 if (step.remaining === 0 || step.purged === 0) break;
             }
-            cue('droplet');
+            cue('close');
             toast.add({
                 type: 'success',
                 title: purged === 1 ? 'Earlier version removed' : 'Earlier versions removed',
@@ -180,11 +187,24 @@ export function StorageFullDialog() {
                     </DialogDescription>
                 </DialogHeader>
                 <div className="flex flex-col gap-2">
-                    {bigger && (
+                    {lapsed && (
+                        <Way
+                            icon={CreditCardIcon}
+                            label="Open your plan"
+                            detail={planStanding(lapsed) === 'paused' ? 'Paused' : 'Payment failed'}
+                            primary
+                            disabled={working !== null}
+                            onClick={() => {
+                                setOpen(false);
+                                void navigate({ to: '/app/billing' });
+                            }}
+                        />
+                    )}
+                    {bigger && !lapsed && (
                         <Way
                             icon={SparklesIcon}
                             label="Get more room"
-                            detail={`${bigger.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '')} is ${formatQuota(bigger.quotaBytes)}`}
+                            detail={`${planTierName({ name: bigger.name })} is ${formatQuota(bigger.quotaBytes)}`}
                             primary
                             disabled={working !== null}
                             onClick={() => {
@@ -266,7 +286,7 @@ function Way({
             disabled={disabled}
             onClick={onClick}
             className={cn(
-                'flex h-14 w-full cursor-pointer items-center gap-3 rounded-md border px-4 text-left outline-none focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-default disabled:opacity-60',
+                'flex h-14 w-full cursor-pointer items-center gap-3 rounded-md border px-4 text-left outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring disabled:cursor-default disabled:opacity-60',
                 primary
                     ? 'border-primary bg-accent text-accent-foreground'
                     : 'border-rule enabled:hover:bg-muted',

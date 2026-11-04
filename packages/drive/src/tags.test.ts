@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { FOLDER_COLOURS } from './colour';
 import {
     addTag,
     assign,
@@ -73,5 +74,24 @@ describe('fields this app does not know', () => {
 
     test('a document from a newer version is refused rather than rewritten', () => {
         expect(() => parseRegistry({ ...newer(), version: 3 })).toThrow(/newer app/);
+    });
+});
+
+describe('a tag’s colour', () => {
+    test('new tags take the folder swatches in turn, stored as their hex', () => {
+        let registry = parseRegistry({ version: 2, tags: [], items: {} });
+        const colours: string[] = [];
+        for (let i = 0; i <= FOLDER_COLOURS.length; i++) {
+            const added = addTag(registry, `Tag ${i}`);
+            registry = added.registry;
+            colours.push(added.tag.colour);
+        }
+        expect(colours).toEqual([...FOLDER_COLOURS, FOLDER_COLOURS[0]]);
+    });
+
+    test('a tag made with a Ledger preset keeps it, and a picked hex is stored lower case', () => {
+        const opened = parseRegistry(newer());
+        expect(opened.tags.find((tag) => tag.id === WORK)?.colour).toBe('blue');
+        expect(addTag(opened, 'Mine', '#7C5CBF').tag.colour).toBe('#7c5cbf');
     });
 });

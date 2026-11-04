@@ -195,6 +195,10 @@ const groupActions: [RegExp, string][] = (
         ['groups/:id/members/:userId', `groups/${UUID}/members/${UUID}`],
         ['groups/:id/members/:userId/admit', `groups/${UUID}/members/${UUID}/admit`],
         ['groups/:id/members/:userId/remove', `groups/${UUID}/members/${UUID}/remove`],
+        [
+            'groups/:id/members/:userId/remove-preview',
+            `groups/${UUID}/members/${UUID}/remove-preview`,
+        ],
         ['groups/:id/members/:userId/decline', `groups/${UUID}/members/${UUID}/decline`],
         ['groups/:id/members/:userId/hold', `groups/${UUID}/members/${UUID}/hold`],
         ['groups/:id/leave', `groups/${UUID}/leave`],

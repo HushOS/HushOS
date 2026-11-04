@@ -1,4 +1,11 @@
-import type { TagColour, TagPreset, TagRegistry } from '@hushos/drive/client';
+import {
+    COLOUR_NAMES,
+    nextColour,
+    OFFERED_TAG_COLOURS,
+    type TagColour,
+    type TagPreset,
+    type TagRegistry,
+} from '@hushos/drive/client';
 import { queryOptions, useQuery, type QueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { driveClient, useCatalogueState } from '@/lib/drive';
@@ -21,21 +28,13 @@ export function invalidateTags(queryClient: QueryClient) {
 }
 
 /*
- * The presets offered for a new tag, in the board's order. Yellow is offered
- * again: links are marked by a blue icon now, so no colour is reserved for them.
- * Yellow, teal and coral are their own colours, not the warning, success and
- * danger signals, so a tag never reads as one.
+ * The swatches offered for a tag: the ones folders offer, stored as their hex, so
+ * the two pickers match. Tags made before keep their Ledger preset (TAG_SWATCH).
  */
-export const OFFERED_COLOURS = [
-    'blue',
-    'ink',
-    'yellow',
-    'teal',
-    'coral',
-] as const satisfies readonly TagPreset[];
+export const OFFERED_COLOURS = OFFERED_TAG_COLOURS;
 /* The colour a new tag starts with: the next offered one, cycling. */
 export function suggestedColour(registry: TagRegistry): TagColour {
-    return OFFERED_COLOURS[registry.tags.length % OFFERED_COLOURS.length]!;
+    return nextColour(registry);
 }
 const TEAL = '#23766d';
 const CORAL = '#b4503b';
@@ -48,13 +47,21 @@ export const TAG_SWATCH: Record<TagPreset, string> = {
     teal: 'bg-[#23766d]',
     coral: 'bg-[#b4503b]',
 };
-export const TAG_COLOUR_LABEL: Record<TagPreset, string> = {
+const TAG_COLOUR_LABEL: Record<TagPreset, string> = {
     blue: 'Blue',
     ink: 'Ink',
     yellow: 'Yellow',
     teal: 'Teal',
     coral: 'Coral',
 };
+/* A tag colour's name: an offered swatch's, an older tag's preset, or null for one of its own. */
+export function tagColourLabel(colour: TagColour): string | null {
+    return (
+        (COLOUR_NAMES as Record<string, string>)[colour] ??
+        (TAG_COLOUR_LABEL as Record<string, string>)[colour] ??
+        null
+    );
+}
 /*
  * A stamp's ink: the colour as CSS and the text that reads on it. A preset
  * brings its own foreground token, so it follows the theme; a hex colour gets

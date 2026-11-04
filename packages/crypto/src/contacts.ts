@@ -1,7 +1,7 @@
 import { CryptoError } from './errors';
 import { decryptKey, encryptKey } from './aead';
 import { decode, encode } from './keys';
-import type { GroupPin } from './pins';
+import { SETTINGS_MAX_BYTES, type GroupPin } from './pins';
 
 /*
  * Contacts and the settings they are pinned in.
@@ -18,7 +18,16 @@ import type { GroupPin } from './pins';
  * and a version 1 document reads as no settings at all.
  */
 
-export const SETTINGS_MAX_BYTES = 64 * 1024;
+// Pure, so the web's main thread uses them without libsodium; re-exported here as before.
+export {
+    CONTACTS_FULL,
+    contactRemoved,
+    SETTINGS_MAX_BYTES,
+    settingsThatFit,
+    settingsWithoutContact,
+    settingsWithPin,
+    withoutRemoval,
+} from './pins';
 export const SETTINGS_PAD_STEP = 1024;
 
 export { fingerprint } from './fingerprint';
@@ -67,6 +76,14 @@ export type ContactPin = {
      * check over the keys clears it.
      */
     trustedVia?: string | null;
+    /*
+     * How a first-seen pin (`fingerprint` exactly "", pinTrust in pins.ts)
+     * came to be: added by email, met through something they shared, or a
+     * family's newcomer (docs/optional-verification.md 2.2). Informational
+     * only, for Technical details and support: no rule reads it, and a words
+     * check over the keys keeps it.
+     */
+    firstSeen?: 'added' | 'shared-with-me' | 'family';
 };
 
 export type Settings = {
@@ -90,6 +107,50 @@ export type Settings = {
      * malformed one. Only a version 2 document holds it.
      */
     groups?: Record<string, GroupPin>;
+    /*
+     * Per group, the family check this person made (docs/optional-verification.md
+     * 3.4): the pair code compared with member `with` over the roster at
+     * `rosterVersion`, which acceptance holds as a pair mark (settings-marks.ts
+     * familyCheckOf); or, with no code, an anchor this person vouched for
+     * otherwise (7.2: `before`, a family accepted before first use; `created`;
+     * `join`, a join code compared), which is a mark but no pair mark. Every
+     * shipped client keeps it when it saves.
+     */
+    familyChecks?: Record<
+        string,
+        | { rosterVersion: number; with: string; code: string[]; checkedAt: string }
+        | { rosterVersion: number; how: 'before' | 'created' | 'join'; checkedAt: string }
+    >;
+    /*
+     * When this account's first client able to take a family on first use
+     * began recording family checks (7.2): a group pin without a check record
+     * is first-use only once this is set. Saved with, or before, the first
+     * first-use pin, never after.
+     */
+    familyChecksSince?: string;
+    /*
+     * Per group, then per invitation id: the manager role this account asked
+     * for when it sent Invite someone (docs/optional-verification.md 3.6,
+     * 6.8), with the address it typed and when, and the member's account id
+     * once one with that address was let in. Only this account's devices
+     * read it, never the server's invitation roles: once that member reads
+     * Verified here, this account is asked whether to give the role. Cleared
+     * when given, declined, or the invitation, the person or the family is
+     * gone.
+     */
+    pendingRoles?: Record<
+        string,
+        Record<string, { email: string; roles: 'members'[]; since: string; userId?: string }>
+    >;
+    /*
+     * People this account removed from its contacts and has not added back,
+     * by lowercased account id, with when (docs/optional-verification.md
+     * 2.8): a share from them is never added on its own, it waits until the
+     * person opens it. Writing their pin again forgets the entry; the oldest
+     * go first when the document runs out of room (settingsThatFit in
+     * pins.ts). Every shipped client keeps it when it saves.
+     */
+    removedContacts?: Record<string, string>;
 };
 
 export const EMPTY_SETTINGS: Settings = { version: 2, contacts: {} };

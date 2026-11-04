@@ -1,0 +1,55 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "bb9fc702-d677-442b-bfd8-17564d2f505b",
+    "prevIds": ["24deb6fc-9d8b-4338-bc4d-a05b02779157"],
+    "footprints": [
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "personal_plan_refunds", "rewards_pending"],
+            "writes": [
+                "s|col|public.personal_plan_refunds.rewards_pending",
+                "n|col|public.personal_plan_refunds.rewards_pending",
+                "e|col|public.personal_plan_refunds.rewards_pending"
+            ],
+            "reads": ["n|tbl|public.personal_plan_refunds", "n|sch|public"]
+        },
+        {
+            "statementType": "alter_column",
+            "statementTarget": ["column", "public", "personal_plan_endings", "group_id"],
+            "writes": ["s|colprop|public.personal_plan_endings.group_id.notNull"],
+            "reads": [
+                "n|tbl|public.personal_plan_endings",
+                "n|sch|public",
+                "n|col|public.personal_plan_endings.group_id"
+            ],
+            "sqlHash": "c08d655abcb81daa"
+        }
+    ],
+    "deltas": [
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "personal_plan_refunds",
+                "name": "rewards_pending",
+                "type": "boolean",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "false",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "alter",
+            "key": "columns\u0000[\"public\",\"personal_plan_endings\",\"group_id\"]",
+            "set": {
+                "notNull": false
+            }
+        }
+    ]
+}

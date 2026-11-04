@@ -38,7 +38,7 @@ class ResealTest {
     private val copyEnvelope = randomBytes(64u)
     private val copyKeyEnvelope = randomBytes(84u)
 
-    private fun trust(): Trust = Trust.of(me, myKey, emptyList(), emptyMap())
+    private fun trust(): Trust = Trust.of(me, myKey, emptyList(), emptyList())
 
     /* A node as the server serves it: the source record, signed by `signer` with `seed`. */
     private fun sourceNode(signer: String, seed: ByteArray) = NodeView(
@@ -73,7 +73,7 @@ class ResealTest {
     fun aRecordSignedUnderAKeyThisPersonReplacedIsReSealedNotRevived() {
         val earlier = randomBytes(32u)
         val old = sourceNode(me, earlier)
-        val prior = Prior.of(old, Trust.of(me, myKey, listOf(signingPublicKey(earlier)), emptyMap()))
+        val prior = Prior.of(old, Trust.of(me, myKey, listOf(signingPublicKey(earlier)), emptyList()))
         assertEquals(Prior(Integrity.RETIRED_KEY, Integrity.RETIRED_KEY), prior)
         assertEquals(Integrity.RESEALED to Integrity.RESEALED, readBack(prior))
     }
@@ -105,7 +105,7 @@ class ResealTest {
         val relocked = sourceNode(maya, mayaSeed).let { node ->
             node.copy(metadataSignature = base64urlEncode(com.hushos.core.metadataResealedSign(mayaSeed, source, envelope)))
         }
-        val prior = Prior.of(relocked, Trust.of(me, myKey, emptyList(), mapOf(maya to pin)))
+        val prior = Prior.of(relocked, Trust.of(me, myKey, emptyList(), listOf(pin)))
         assertEquals(Integrity.RESEALED, prior.metadata)
         assertEquals(Integrity.VERIFIED, prior.version)
         assertEquals(Integrity.RESEALED to Integrity.VERIFIED, readBack(prior))

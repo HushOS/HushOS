@@ -1,6 +1,12 @@
 import { describe, expect, test } from 'vitest';
 import { CryptoError } from './errors';
-import { NOT_THIS_ACCOUNT, OLDER_CHAIN, OPEN_SETTINGS, SPLIT_CHAIN } from './protocol';
+import {
+    FAMILY_FORGOTTEN,
+    NOT_THIS_ACCOUNT,
+    OLDER_CHAIN,
+    OPEN_SETTINGS,
+    SPLIT_CHAIN,
+} from './protocol';
 import { acceptFromRecord } from './record-acceptance';
 
 /*
@@ -105,8 +111,9 @@ describe('the order acceptance runs in', () => {
         expect(second.error).toBeInstanceOf(RouteError);
     });
 
-    test('a session or account that changed, or settings not open, is never retried', async () => {
-        for (const message of [NOT_THIS_ACCOUNT, OPEN_SETTINGS]) {
+    test('a session or account that changed, settings not open, or a family wiped meanwhile is never retried', async () => {
+        // A retry after a wipe would verify afresh and take the family back.
+        for (const message of [NOT_THIS_ACCOUNT, OPEN_SETTINGS, FAMILY_FORGOTTEN]) {
             const first = await run(5, [new CryptoError(message)]);
             expect(first.attempts).toEqual(['5']);
             expect((first.error as Error).message).toBe(message);

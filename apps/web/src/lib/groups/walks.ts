@@ -84,3 +84,399 @@ export async function walkToEnd(deps: {
 export function backoffDelay(attempts: number, base = 30_000, cap = 10 * 60_000) {
     return Math.min(cap, base * 2 ** Math.max(0, attempts - 1));
 }
+
+/*
+ * How long a family page waits before checking a running key change again: `base` at first,
+ * then twice as long for each doubling of the time it has been found running, never more than
+ * `cap`. A function of the clock alone: TanStack Query asks a query's `refetchInterval` on every
+ * render and every update of the query, so a count kept there moved with renders, and a page
+ * that rendered often (a storage figure refreshed, a dialog) pushed its next check out to ten
+ * minutes while a walk waited on it.
+ */
+export function walkPollDelay(walkingSince: number, now: number, base: number, cap = 10 * 60_000) {
+    const elapsed = Math.max(0, now - walkingSince);
+    return Math.min(cap, base * 2 ** Math.floor(Math.log2(elapsed / base + 1)));
+}
+
+/*
+ * The clock the retries run by. Monotonic by default (performance.now), so a wall-clock step
+ * (a laptop waking, the time zone or NTP moving it) never strands a wait.
+ */
+export type WalkClock = {
+    now: () => number;
+    schedule: (run: () => void, ms: number) => unknown;
+    cancel: (handle: unknown) => void;
+};
+const systemClock: WalkClock = {
+    now: () => performance.now(),
+    schedule: (run, ms) => setTimeout(run, ms),
+    cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
+/*
+ * What a failed walk does to its run's next wait:
+ * - `counted`: one more attempt, so the wait grows (backoffDelay);
+ * - `progressed`: it re-keyed something before it stopped, so the wait starts over (a slow
+ *   server never pushes a walk that is getting somewhere out to the cap);
+ * - `offline`: the device is offline, so nothing is counted and no timer runs; it is walked
+ *   again when the device is back online (`online`);
+ * - `gone`: the account locked or signed out (or someone else unlocked), so the run is
+ *   forgotten, nothing counted: the next unlocked sync walks it at once.
+ */
+export type WalkFailure = 'counted' | 'progressed' | 'offline' | 'gone';
+
+const RETRY_CAP_MS = 10 * 60_000;
+
+/*
+ * When this tab walks each key change run again (keyed by folder and run). A walk that ended
+ * leaves the run alone for backoffDelay of its attempts so far, give or take a fifth (so tabs
+ * and devices that failed together don't all come back together); one that failed is also
+ * tried again at the end of that wait, on a timer of its own: never only "at the next sync",
+ * whose timing pages and renders decide. Asking whether a run is due, or syncing, any number
+ * of times meanwhile moves nothing.
+ */
+export function walkRetries(clock: WalkClock = systemClock, random: () => number = Math.random) {
+    type Entry = {
+        attempts: number;
+        until: number;
+        timer: unknown;
+        /* Lined up to run once: when the timer fires, or (offline) when the device is back online. */
+        retry: (() => void) | null;
+        /* It failed while the device was offline: only such a run is walked again on `online`. */
+        offline: boolean;
+    };
+    const runs = new Map<string, Entry>();
+    const inFlight = new Set<string>();
+    // Bumped by clear(): a walk that settles after it (signed out meanwhile) leaves nothing.
+    let generation = 0;
+    const stop = (entry: Entry | undefined) => {
+        if (entry?.timer === undefined) return;
+        clock.cancel(entry.timer);
+        entry.timer = undefined;
+    };
+    /*
+     * A walk of the run ended: well (no `retry`), or it failed and `retry` runs once the wait
+     * is over. Returns the wait, or null when there is none (offline, or forgotten).
+     */
+    function ended(
+        key: string,
+        options: { retry?: () => void; failure?: WalkFailure } = {},
+    ): number | null {
+        const previous = runs.get(key);
+        stop(previous);
+        const failure = options.failure ?? 'counted';
+        if (failure === 'gone') {
+            runs.delete(key);
+            return null;
+        }
+        const before = failure === 'progressed' ? 0 : (previous?.attempts ?? 0);
+        if (failure === 'offline') {
+            runs.set(key, {
+                attempts: before,
+                until: clock.now(),
+                timer: undefined,
+                retry: options.retry ?? null,
+                offline: true,
+            });
+            return null;
+        }
+        const attempts = before + 1;
+        const delay = Math.min(
+            RETRY_CAP_MS,
+            Math.round(backoffDelay(attempts, 30_000, RETRY_CAP_MS) * (0.8 + 0.4 * random())),
+        );
+        const entry: Entry = {
+            attempts,
+            until: clock.now() + delay,
+            timer: undefined,
+            retry: options.retry ?? null,
+            offline: false,
+        };
+        const retry = options.retry;
+        if (retry)
+            entry.timer = clock.schedule(() => {
+                entry.timer = undefined;
+                // Used once: a retry whose sync fails lines up the next itself (ended again).
+                entry.retry = null;
+                // The wait is over, whatever the clock reads now: the retry walks.
+                entry.until = -Infinity;
+                retry();
+            }, delay);
+        runs.set(key, entry);
+        return delay;
+    }
+    /* Whether the run may be walked now: not while it waits out its last walk. */
+    const due = (key: string) => {
+        const run = runs.get(key);
+        return !run || clock.now() >= run.until;
+    };
+    return {
+        due,
+        /* When it may be walked again, by `clock` (null: now). */
+        nextAt(key: string) {
+            return runs.get(key)?.until ?? null;
+        },
+        ended,
+        /* The run is no one's to retry here (locked, signed out): its timer stops, nothing counts. */
+        forget(key: string) {
+            stop(runs.get(key));
+            runs.delete(key);
+        },
+        /* Signed out or locked: every timer stops, and walks settling later leave nothing. */
+        clear() {
+            generation++;
+            for (const entry of runs.values()) stop(entry);
+            runs.clear();
+            inFlight.clear();
+        },
+        /*
+         * Back online: what failed because the device was offline is walked again now, its count
+         * started over, once. A run waiting out a failure while online (the server's, a timeout)
+         * keeps its wait: the device coming back says nothing about the server.
+         */
+        online() {
+            const waiting: (() => void)[] = [];
+            for (const entry of runs.values()) {
+                if (!entry.offline || entry.retry === null) continue;
+                waiting.push(entry.retry);
+                entry.retry = null;
+                entry.offline = false;
+                entry.attempts = 0;
+                entry.until = -Infinity;
+            }
+            for (const retry of waiting) retry();
+        },
+        /*
+         * Walks the run unless it waits out its last walk or is being walked already, and
+         * counts the walk once, however many syncs asked for it meanwhile: a sync that finds the
+         * run while this tab walks it joins nothing, so one failed walk is one attempt, never
+         * one per page that synced during it (which once sent a run's next try minutes out).
+         * `judge` says how a failure counts; `failed` hears the wait that follows.
+         */
+        run(
+            key: string,
+            walk: () => Promise<unknown>,
+            then: {
+                retry: () => void;
+                judge: (error: unknown) => WalkFailure;
+                failed?: (failure: WalkFailure, wait: number | null) => void;
+            },
+        ) {
+            if (inFlight.has(key) || !due(key)) return false;
+            inFlight.add(key);
+            const at = generation;
+            void walk().then(
+                () => {
+                    if (at !== generation) return;
+                    inFlight.delete(key);
+                    ended(key);
+                },
+                (error: unknown) => {
+                    if (at !== generation) return;
+                    inFlight.delete(key);
+                    const failure = then.judge(error);
+                    const wait = ended(key, { retry: then.retry, failure });
+                    then.failed?.(failure, wait);
+                },
+            );
+            return true;
+        },
+    };
+}
+
+/* A run of a family folder's key change, as a walk is given it. */
+export type WalkTarget = {
+    workspaceId: string;
+    rotationId: string | null;
+    nodeId: string;
+    targetEpoch: number;
+};
+
+/*
+ * Who hears that a walk of one of a family's folders ended (walked to its end here, or ended
+ * elsewhere): the family's pages, which sync again so they stop showing it. Said once, from the
+ * walk itself, whoever started it (a page's sync, an upload waiting on it, the outbox, a retry).
+ */
+export function walkEndings() {
+    const listeners = new Map<string, Set<() => void>>();
+    return {
+        subscribe(groupId: string, listener: () => void) {
+            const set = listeners.get(groupId) ?? new Set();
+            set.add(listener);
+            listeners.set(groupId, set);
+            return () => {
+                set.delete(listener);
+                if (set.size === 0) listeners.delete(groupId);
+            };
+        },
+        emit(groupId: string) {
+            for (const listener of listeners.get(groupId) ?? []) {
+                try {
+                    listener();
+                } catch (error) {
+                    console.error('A page could not hear that a key change ended.', error);
+                }
+            }
+        },
+    };
+}
+/* The app's one: lib/spaces.ts says it, the family pages (lib/families.ts) listen. */
+export const familyWalkEndings = walkEndings();
+
+/*
+ * This tab's walks of the key changes running in its families' folders (lib/spaces.ts gives it
+ * the folders' clients): one walk per folder at a time, joined rather than started twice; the
+ * runs a sync found, walked when due (walkRetries) and only with this device's own reason to
+ * (ownReasonToWalk); a failed one walked again on its own timer through a sync of the family;
+ * and the family's syncs for uploads waiting on a key change, one at a time and none within
+ * `refreshGapMs` of the last, except a retry's. Kept free of the Drive clients, so it is tested
+ * with its parts injected.
+ */
+export function familyWalks(deps: {
+    /*
+     * Walks the run in its folder to its end (the folder's client, its lock), saying how many
+     * items this walk has re-keyed so far as it goes.
+     */
+    walkFolder: (
+        userId: string,
+        groupId: string,
+        target: WalkTarget,
+        progress: (done: number) => void,
+    ) => Promise<void>;
+    /* A sync of the family: its folders' states when it was accepted, else null. */
+    sync: (userId: string, groupId: string) => Promise<readonly AreaState[] | null>;
+    /* Whose keys this tab holds now (null: locked or signed out). */
+    unlockedUser: () => string | null;
+    online: () => boolean;
+    /* A failed walk's next try: in `ms`, once back online, or not from here (null). */
+    scheduled?: (workspaceId: string, next: number | 'online' | null) => void;
+    endings?: ReturnType<typeof walkEndings>;
+    clock?: WalkClock;
+    random?: () => number;
+    refreshGapMs?: number;
+}) {
+    const clock = deps.clock ?? systemClock;
+    const endings = deps.endings ?? familyWalkEndings;
+    const gap = deps.refreshGapMs ?? 4_000;
+    const retries = walkRetries(clock, deps.random);
+    // The walk of each folder this tab runs, and how many items it has re-keyed: a failure counts
+    // as `progressed` only when this very walk got somewhere.
+    const walking = new Map<string, { settled: Promise<void>; done: number }>();
+    const refreshes = new Map<string, { at: number; pending: Promise<void> | null }>();
+
+    function track(userId: string, groupId: string, target: WalkTarget) {
+        const workspaceId = target.workspaceId;
+        const held = walking.get(workspaceId);
+        if (held) return held;
+        const entry = { settled: Promise.resolve(), done: 0 };
+        entry.settled = deps
+            .walkFolder(userId, groupId, target, (done) => {
+                entry.done = done;
+            })
+            .then(() => endings.emit(groupId))
+            .finally(() => {
+                // Only its own: clear() may have let a newer walk of the folder start meanwhile.
+                if (walking.get(workspaceId) === entry) walking.delete(workspaceId);
+            });
+        walking.set(workspaceId, entry);
+        return entry;
+    }
+    function walk(userId: string, groupId: string, target: WalkTarget): Promise<void> {
+        return track(userId, groupId, target).settled;
+    }
+
+    /*
+     * Why a walk or a retry's sync failed, as walkRetries counts it. `progressed` only for a
+     * walk that itself re-keyed something; a sync that failed re-keyed nothing.
+     */
+    function failureOf(userId: string, progressed: boolean): WalkFailure {
+        if (deps.unlockedUser() !== userId) return 'gone';
+        if (!deps.online()) return 'offline';
+        return progressed ? 'progressed' : 'counted';
+    }
+    const nextOf = (failure: WalkFailure, wait: number | null) =>
+        wait ?? (failure === 'offline' ? ('online' as const) : null);
+
+    function pending(userId: string, groupId: string, states: readonly AreaState[]) {
+        for (const state of states) {
+            const rotation = state.view.rotation;
+            // Only a roster rotation this device saw for itself: never a run on the server's
+            // word alone, since a walk closes every share and link its own ledger lacks.
+            if (!rotation || !ownReasonToWalk(state)) continue;
+            const workspaceId = state.workspaceId;
+            const key = `${workspaceId}:${rotation.id}`;
+            const target = {
+                workspaceId,
+                rotationId: rotation.id,
+                nodeId: rotation.nodeId,
+                targetEpoch: rotation.targetEpoch,
+            };
+            // Once the wait is over: a sync of the family, which walks what still runs. Never for
+            // an account that locked or left meanwhile (its sync would reopen what signing out
+            // deleted), and a sync that fails waits again, counted: a sync re-keys nothing.
+            const retry = () => {
+                if (deps.unlockedUser() !== userId) {
+                    retries.forget(key);
+                    return;
+                }
+                refresh(userId, groupId, { due: true }).catch(() => {
+                    const failure = failureOf(userId, false);
+                    const wait = retries.ended(key, { retry, failure });
+                    deps.scheduled?.(workspaceId, nextOf(failure, wait));
+                });
+            };
+            let attempt: ReturnType<typeof track> | null = null;
+            retries.run(
+                key,
+                () => {
+                    attempt = track(userId, groupId, target);
+                    return attempt.settled;
+                },
+                {
+                    retry,
+                    judge: () => failureOf(userId, (attempt?.done ?? 0) > 0),
+                    failed: (failure, wait) => deps.scheduled?.(workspaceId, nextOf(failure, wait)),
+                },
+            );
+        }
+    }
+
+    function refresh(
+        userId: string,
+        groupId: string,
+        options: { due?: boolean } = {},
+    ): Promise<void> {
+        const held = refreshes.get(groupId);
+        if (held?.pending) return held.pending;
+        // A retry is already spaced out by its own wait: never skipped for being close to another.
+        if (!options.due && held && clock.now() - held.at < gap) return Promise.resolve();
+        const work: Promise<void> = (async () => {
+            const states = await deps.sync(userId, groupId);
+            if (states) pending(userId, groupId, states);
+        })().finally(() => {
+            if (refreshes.get(groupId)?.pending === work)
+                refreshes.set(groupId, { at: clock.now(), pending: null });
+        });
+        refreshes.set(groupId, { at: held?.at ?? -Infinity, pending: work });
+        return work;
+    }
+
+    return {
+        /* Walks the run to its end; one this tab walks already is joined. */
+        walk,
+        /* Every run a sync of the family found that this device walks, when due. */
+        pending,
+        /* A sync of the family for an upload waiting on a key change, then the walks it finds. */
+        refresh,
+        /* Signed out or locked: no retry fires, nothing settling later counts. */
+        clear() {
+            retries.clear();
+            refreshes.clear();
+            // A walk still running for the account that left is doomed: the first sync after an
+            // unlock starts its own rather than joining it and being counted with its failure.
+            walking.clear();
+        },
+        /* Back online: what failed offline (or waits) is walked again now. */
+        online: () => retries.online(),
+    };
+}

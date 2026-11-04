@@ -137,15 +137,64 @@ data class BillingSummary(
     val cancelAtPeriodEnd: Boolean,
     /* The family whose plan the storage comes from while pooled; absent on older servers. */
     val family: BillingFamily? = null,
+    /* Polar's status for the personal plan, and when it ended: `/api/billing` keeps answering with the last plan. */
+    val status: String? = null,
+    val endedAt: String? = null,
 ) {
+    val standing: PlanStanding get() = if (planName == null) PlanStanding.ENDED else PlanStanding.of(status, endedAt)
+
     companion object {
         fun from(json: JSONObject): BillingSummary {
             val subscription = json.optJSONObject("subscription")
             return BillingSummary(
                 json.optBoolean("enabled"), subscription?.optString("productName"), subscription?.optString("currentPeriodEnd"),
                 subscription?.optBoolean("cancelAtPeriodEnd") ?: false, json.optJSONObject("family")?.let(BillingFamily::from),
+                // `opt` and a type check: a JSON null is JSONObject.NULL, which `optString` turns into "null".
+                subscription?.opt("status") as? String, subscription?.opt("endedAt") as? String,
             )
         }
+    }
+}
+
+/*
+ * What a personal plan's status means, as the web's `planStanding`
+ * (packages/billing/src/protocol.ts). Only a live plan (active, trialing, or
+ * past_due while Polar retries a renewal) gives its storage and is the plan
+ * Account names. `unpaid` and `incomplete` (a payment that never went through)
+ * and `paused` haven't ended, since a payment or a resume brings them back, but
+ * give nothing: the person is on Free meanwhile. An ended plan, `canceled`,
+ * `incomplete_expired`, or a status Polar adds later is Free. A server that
+ * records an unpaid plan as ended lands on Free too, never on "Renews".
+ */
+enum class PlanStanding {
+    LIVE, PAYMENT_FAILED, PAUSED, ENDED;
+
+    companion object {
+        fun of(status: String?, endedAt: String?): PlanStanding = when {
+            endedAt != null -> ENDED
+            status == "active" || status == "trialing" || status == "past_due" -> LIVE
+            status == "unpaid" || status == "incomplete" -> PAYMENT_FAILED
+            status == "paused" -> PAUSED
+            else -> ENDED
+        }
+    }
+}
+
+/* A personal plan Polar still holds that gives nothing: its payment failed, or it is paused. */
+data class LapsedPlan(
+    /* "Pro", without an interval the product's name may end in ("Pro (monthly)"). */
+    val name: String,
+    val paused: Boolean,
+) {
+    /* The card's line: "Pro’s payment didn’t go through", "Pro is paused". */
+    val line: String get() = if (paused) "$name is paused" else "$name’s payment didn’t go through"
+    /* Why the room is Free's, for Plan and storage and Not enough room. */
+    val room: String get() = if (paused) "$name is paused, so you have Free’s storage until it resumes."
+        else "$name’s payment didn’t go through, so you have Free’s storage for now."
+
+    companion object {
+        private val interval = Regex("""\s*\((monthly|yearly|annual)\)\s*$""", RegexOption.IGNORE_CASE)
+        fun of(productName: String, paused: Boolean) = LapsedPlan(productName.replace(interval, ""), paused)
     }
 }
 
@@ -168,7 +217,8 @@ data class BillingFamily(val name: String, val planName: String?) {
  * name from `/api/billing`'s `family` ("Family plan" until that answers) and the
  * line "Shared with <family>" (no possessive: "The Lindqvists’s" reads badly). A personal plan is never shown then, since the
  * person no longer draws from it (billing ends it, 5.1). Without a readable
- * `pool` it is today's display: the personal plan, or Free.
+ * `pool` it is the personal plan while it is live (PlanStanding), else Free,
+ * with the lapsed plan's words when its payment failed or it is paused.
  */
 data class PlanDisplay(
     /* The plan's name, the card's heading. */
@@ -177,9 +227,13 @@ data class PlanDisplay(
     val source: String?,
     /* The family's name while pooled, for labels that would otherwise read as the person's own. */
     val family: String?,
-    /* The personal plan's renewal or end date, shown only when not pooled. */
+    /* The live personal plan's renewal or end date, shown only when not pooled. */
     val periodEnd: String?,
     val cancelAtPeriodEnd: Boolean,
+    /* The live personal plan's renewal is past due: Polar is still retrying it. */
+    val overdue: Boolean = false,
+    /* The personal plan that gives nothing until it is paid for or resumed; null while pooled. */
+    val lapsed: LapsedPlan? = null,
 ) {
     companion object {
         fun of(allowance: StorageAllowance?, billing: BillingSummary?): PlanDisplay {
@@ -189,7 +243,13 @@ data class PlanDisplay(
             return if (family != null) {
                 PlanDisplay(billing?.family?.planName ?: "Family plan", "Shared with $family", family, null, false)
             } else {
-                PlanDisplay(billing?.planName?.takeIf { it.isNotEmpty() } ?: "Free", null, null, billing?.periodEnd, billing?.cancelAtPeriodEnd ?: false)
+                val name = billing?.planName?.takeIf { it.isNotEmpty() }
+                val standing = billing?.standing ?: PlanStanding.ENDED
+                when {
+                    billing == null || standing == PlanStanding.ENDED -> PlanDisplay("Free", null, null, null, false)
+                    standing == PlanStanding.LIVE -> PlanDisplay(name ?: "Free", null, null, billing.periodEnd, billing.cancelAtPeriodEnd, overdue = billing.status == "past_due")
+                    else -> PlanDisplay("Free", null, null, null, false, lapsed = LapsedPlan.of(name ?: "Your plan", standing == PlanStanding.PAUSED))
+                }
             }
         }
     }
@@ -329,7 +389,9 @@ object Auth {
         val user = finished.body.optJSONObject("user")?.let(SessionUser::from) ?: throw AuthFailure("Signed in, but the session was not returned.")
         val envelopeJson = finished.body.optJSONObject("envelope") ?: throw AuthFailure("Signed in, but the session was not returned.")
         val token = finished.cookie ?: throw AuthFailure("Signed in, but the session was not returned.")
-        // Another account's data on this phone goes before this one's session exists.
+        // Another account's data on this phone goes before this one's session exists, and that account's session goes
+        // first, so nothing still at work for it (a rollback mark) writes after the wipe.
+        if (!AccountStore.of(context).owner().equals(user.id, ignoreCase = true)) Shared.clearSession(context)
         AccountStore.of(context).claim(user.id)
         Shared.writeOrigin(context, origin)
         Shared.writeSession(context, Shared.Session(origin, token, user.id, user.email))
@@ -433,8 +495,9 @@ object Auth {
     private fun cookie(session: Shared.Session) =
         (if (session.origin.startsWith("https:")) "__Host-hushos-session" else "hushos-session") + "=" + session.token
 
-    private fun call(context: Context, path: String, body: JSONObject? = null, method: String? = null): JSONObject {
-        val session = Shared.session(context) ?: throw AuthFailure("Sign in first.")
+    /* `as` names the session to send: a vault's own, so what it writes never goes out under another account's. */
+    private fun call(context: Context, path: String, body: JSONObject? = null, method: String? = null, `as`: Shared.Session? = null): JSONObject {
+        val session = `as` ?: Shared.session(context) ?: throw AuthFailure("Sign in first.")
         val connection = URL(session.origin + path).openConnection() as HttpURLConnection
         connection.requestMethod = method ?: if (body == null) "GET" else "POST"
         connection.setRequestProperty("Cookie", cookie(session))
@@ -463,17 +526,18 @@ object Auth {
     }
 
     /* The identity envelope the server keeps for this account. */
-    fun identity(context: Context): com.hushos.core.IdentityEnvelope = identityEnvelope(call(context, "/api/auth/identity").getJSONObject("identity"))
+    fun identity(context: Context, `as`: Shared.Session? = null): com.hushos.core.IdentityEnvelope =
+        identityEnvelope(call(context, "/api/auth/identity", `as` = `as`).getJSONObject("identity"))
 
     /* The account's earlier identities, oldest first, still sealed under the root: shares sealed to earlier keys open only with them. */
-    fun identityHistory(context: Context): List<com.hushos.core.IdentityEnvelope> {
-        val list = call(context, "/api/auth/identity/history").optJSONArray("identities") ?: return emptyList()
+    fun identityHistory(context: Context, `as`: Shared.Session? = null): List<com.hushos.core.IdentityEnvelope> {
+        val list = call(context, "/api/auth/identity/history", `as` = `as`).optJSONArray("identities") ?: return emptyList()
         return (0 until list.length()).map { identityEnvelope(list.getJSONObject(it)) }
     }
 
     /* Stores the next identity, vouched for by the current signing key; the server keeps the current one in the history. */
-    fun succeedIdentity(context: Context, succession: com.hushos.core.IdentitySuccession) {
-        call(context, "/api/auth/identity/succession", JSONObject().put("identity", json(succession.identity)).put("signature", succession.signature))
+    fun succeedIdentity(context: Context, succession: com.hushos.core.IdentitySuccession, `as`: Shared.Session? = null) {
+        call(context, "/api/auth/identity/succession", JSONObject().put("identity", json(succession.identity)).put("signature", succession.signature), `as` = `as`)
     }
 
     /*
@@ -481,15 +545,15 @@ object Auth {
      * ML-DSA and the keys statement); returns the identity the server stored. A 409 (`status`) means another device
      * upgraded first: read the identity again and open that one.
      */
-    fun upgradeIdentity(context: Context, identity: com.hushos.core.IdentityEnvelope): com.hushos.core.IdentityEnvelope =
-        identityEnvelope(call(context, "/api/auth/identity/upgrade", JSONObject().put("identity", json(identity))).getJSONObject("identity"))
+    fun upgradeIdentity(context: Context, identity: com.hushos.core.IdentityEnvelope, `as`: Shared.Session? = null): com.hushos.core.IdentityEnvelope =
+        identityEnvelope(call(context, "/api/auth/identity/upgrade", JSONObject().put("identity", json(identity)), `as` = `as`).getJSONObject("identity"))
 
     /*
      * A contact's whole succession chain (version 2 links only), in order, for the device to check link by link. Asked from the first version
      * whatever the pin holds, so the request does not say which version this device pinned.
      */
-    fun succession(context: Context, userId: String): List<com.hushos.core.SuccessionLink> {
-        val links = call(context, "/api/auth/contacts/${java.net.URLEncoder.encode(userId, "UTF-8")}/succession?from=$CHAIN_FROM").optJSONArray("links") ?: return emptyList()
+    fun succession(context: Context, userId: String, `as`: Shared.Session? = null): List<com.hushos.core.SuccessionLink> {
+        val links = call(context, "/api/auth/contacts/${java.net.URLEncoder.encode(userId, "UTF-8")}/succession?from=$CHAIN_FROM", `as` = `as`).optJSONArray("links") ?: return emptyList()
         return (0 until links.length()).map { index ->
             val link = links.getJSONObject(index)
             com.hushos.core.SuccessionLink(
@@ -553,8 +617,8 @@ object Auth {
         .put("wrappingNonce", grant.wrappingNonce).put("encryptedKey", grant.encryptedKey)
 
     /* A person by email, with their identity's public keys. The address goes in the body, never the URL a log keeps. */
-    fun lookupContact(context: Context, email: String): Contact {
-        val json = call(context, "/api/auth/contacts/lookup", JSONObject().put("email", email)).optJSONObject("contact")
+    fun lookupContact(context: Context, email: String, `as`: Shared.Session? = null): Contact {
+        val json = call(context, "/api/auth/contacts/lookup", JSONObject().put("email", email), `as` = `as`).optJSONObject("contact")
             ?: throw AuthFailure("No HushOS account uses that email.")
         return Contact(json.getString("userId"), json.optString("name"), json.optString("email", email), ServedIdentity.from(json))
     }
@@ -566,7 +630,7 @@ object Auth {
      */
     data class StoredSettings(val envelope: com.hushos.core.SettingsEnvelope?, val key: com.hushos.core.SettingsKeyEnvelope?, val sequence: ULong = envelope?.settingsVersion ?: 0uL)
 
-    fun settings(context: Context): StoredSettings = call(context, "/api/auth/settings").let { body ->
+    fun settings(context: Context, `as`: Shared.Session? = null): StoredSettings = call(context, "/api/auth/settings", `as` = `as`).let { body ->
         val envelope = body.optJSONObject("settings")?.let(::settingsEnvelope)
         StoredSettings(envelope,
             body.optJSONObject("settingsKey")?.let { com.hushos.core.SettingsKeyEnvelope(it.getString("nonce"), it.getString("ciphertext")) },
@@ -574,14 +638,14 @@ object Auth {
     }
 
     /* Stores the wrapped settings key once; a 409 means another device stored one first (read it and use that). */
-    fun putSettingsKey(context: Context, envelope: com.hushos.core.SettingsKeyEnvelope) {
-        call(context, "/api/auth/settings-key", json(envelope), "PUT")
+    fun putSettingsKey(context: Context, envelope: com.hushos.core.SettingsKeyEnvelope, `as`: Shared.Session? = null) {
+        call(context, "/api/auth/settings-key", json(envelope), "PUT", `as`)
     }
 
     /* Saves the envelope over `expectedVersion`, as its own envelope version; returns the version the server now holds. */
-    fun putSettings(context: Context, expectedVersion: ULong, envelope: com.hushos.core.SettingsEnvelope): ULong =
+    fun putSettings(context: Context, expectedVersion: ULong, envelope: com.hushos.core.SettingsEnvelope, `as`: Shared.Session? = null): ULong =
         call(context, "/api/auth/settings", JSONObject().put("expectedVersion", expectedVersion.toLong()).put("version", envelope.version.toInt())
-            .put("nonce", envelope.nonce).put("ciphertext", envelope.ciphertext), "PUT")
+            .put("nonce", envelope.nonce).put("ciphertext", envelope.ciphertext), "PUT", `as`)
             .optLong("settingsVersion", envelope.settingsVersion.toLong()).toULong()
 
     private fun json(key: com.hushos.core.SettingsKeyEnvelope): JSONObject = JSONObject().put("nonce", key.nonce).put("ciphertext", key.ciphertext)
@@ -672,6 +736,9 @@ object Auth {
     fun storage(context: Context): StorageAllowance = StorageAllowance.from(call(context, "/api/auth/storage").getJSONObject("storage"))
 
     fun billing(context: Context): BillingSummary = BillingSummary.from(call(context, "/api/billing"))
+
+    /* A family's plan as this member may see it (FamilyPlan); `groupId` a lowercase UUID, checked by the caller. */
+    fun familyBilling(context: Context, groupId: String, session: Shared.Session): JSONObject = call(context, "/api/billing/groups/$groupId", `as` = session)
 
     private fun envelope(json: JSONObject) = AccountKeyEnvelope(
         json.getInt("envelopeVersion").toUInt(), json.getLong("keyVersion").toULong(), json.getLong("credentialVersion").toULong(),

@@ -1,0 +1,135 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "6316cac2-cd13-4af6-86ae-966871e5935d",
+    "prevIds": ["bb9fc702-d677-442b-bfd8-17564d2f505b"],
+    "footprints": [
+        {
+            "statementType": "add_column",
+            "statementTarget": [
+                "column",
+                "public",
+                "group_billing_customers",
+                "plans_unlisted_since"
+            ],
+            "writes": [
+                "s|col|public.group_billing_customers.plans_unlisted_since",
+                "n|col|public.group_billing_customers.plans_unlisted_since",
+                "e|col|public.group_billing_customers.plans_unlisted_since"
+            ],
+            "reads": ["n|tbl|public.group_billing_customers", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": [
+                "column",
+                "public",
+                "group_billing_subscriptions",
+                "lapsed_revoke_refusal"
+            ],
+            "writes": [
+                "s|col|public.group_billing_subscriptions.lapsed_revoke_refusal",
+                "n|col|public.group_billing_subscriptions.lapsed_revoke_refusal",
+                "e|col|public.group_billing_subscriptions.lapsed_revoke_refusal"
+            ],
+            "reads": ["n|tbl|public.group_billing_subscriptions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": [
+                "column",
+                "public",
+                "group_billing_subscriptions",
+                "lapsed_revoke_refused_at"
+            ],
+            "writes": [
+                "s|col|public.group_billing_subscriptions.lapsed_revoke_refused_at",
+                "n|col|public.group_billing_subscriptions.lapsed_revoke_refused_at",
+                "e|col|public.group_billing_subscriptions.lapsed_revoke_refused_at"
+            ],
+            "reads": ["n|tbl|public.group_billing_subscriptions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": [
+                "column",
+                "public",
+                "group_billing_subscriptions",
+                "product_unread"
+            ],
+            "writes": [
+                "s|col|public.group_billing_subscriptions.product_unread",
+                "n|col|public.group_billing_subscriptions.product_unread",
+                "e|col|public.group_billing_subscriptions.product_unread"
+            ],
+            "reads": ["n|tbl|public.group_billing_subscriptions", "n|sch|public"]
+        }
+    ],
+    "deltas": [
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_billing_customers",
+                "name": "plans_unlisted_since",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_billing_subscriptions",
+                "name": "lapsed_revoke_refusal",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_billing_subscriptions",
+                "name": "lapsed_revoke_refused_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_billing_subscriptions",
+                "name": "product_unread",
+                "type": "boolean",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "false",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        }
+    ]
+}

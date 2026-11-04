@@ -84,9 +84,7 @@ function FamilyFolderPage() {
             <EmptyState
                 title="This folder couldn’t be opened"
                 body={
-                    error
-                        ? driveError(error)
-                        : `It isn’t in ${space.family}’s folders, or it was deleted.`
+                    error ? driveError(error) : 'It isn’t in the family folders, or it was deleted.'
                 }
             >
                 {error ? (

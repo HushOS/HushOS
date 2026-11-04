@@ -4,6 +4,7 @@ import {
     createIndexedDbMirror,
     type DriveClient,
     type DriveNode,
+    type TrashItem,
 } from '@hushos/drive/client';
 import { ROOT_LABEL } from '@hushos/drive/protocol';
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
@@ -19,10 +20,11 @@ import {
     trustedSigners,
     trustGrantee,
     trustGranter,
+    onGuardMovedElsewhere,
 } from '@/lib/contacts';
 import { driveApi, linkApi, reportApi } from '@/lib/drive-api';
 import { keyChangeWords } from '@/lib/key-change-words';
-import { restoreBatch, trashBatch, type TrashParts } from '@/lib/trash-batch';
+import { purgeBatch, restoreBatch, trashBatch, type TrashParts } from '@/lib/trash-batch';
 import { createSpaceRegistry } from '@/lib/space-registry';
 
 /*
@@ -40,8 +42,10 @@ function unlockedUser() {
 export const driveClient = createDriveClient(authClient.rpc, driveApi, {
     mirror: typeof indexedDB === 'undefined' ? undefined : createIndexedDbMirror(),
     trustGranter,
+    // The server names the grantee here (a rotation, the re-seal pass): a legacy pin whose
+    // migration can't be saved for room is sealed to its own keys unsaved, never left out.
     trustGrantee: async (granteeUserId, served) =>
-        trustGrantee(unlockedUser(), granteeUserId, served),
+        trustGrantee(unlockedUser(), granteeUserId, served, { sealUnsaved: true }),
     signers: async () => trustedSigners(unlockedUser()),
     openIdentity: (userId) => openIdentity(userId),
     resealPending: async () => resealPending(unlockedUser()),
@@ -52,6 +56,8 @@ export const driveClient = createDriveClient(authClient.rpc, driveApi, {
     reportApi,
     ledger: sharingLedger(() => authClient.store.getState().unlockedUserId),
 });
+// Another tab continued, checked or added someone: the catalogue's verdicts are judged again.
+onGuardMovedElsewhere(() => void driveClient.recheckIntegrity().catch(() => {}));
 
 /*
  * Family folders each have a Drive client of their own (lib/spaces.ts, loaded
@@ -71,8 +77,12 @@ export const refuseWrite = spaces.refuseWrite;
 export const waitsForKeyChange = spaces.waitsForKeyChange;
 /* A family folder's family synced again while an upload waits out its key change. */
 export const refreshKeyChange = spaces.refreshKeyChange;
-/* After a lock: every family folder's client forgets what it opened, as the personal one does. */
+/* After a lock or a sign-out: every family folder's client forgets what it opened, as the personal one does. */
 export const closeSpaces = spaces.closeAll;
+/* What the families layer stops with them: its walks' retries (lib/spaces.ts). */
+export const onSpacesClosed = spaces.onClose;
+/* That alone, the clients left open: a sign-out starting, before the device's stores go. */
+export const stopSpaces = spaces.stopAll;
 /* A family wiped from this device, or a folder it no longer has: its client goes, and stays gone. */
 export const forgetSpace = spaces.forget;
 export const pruneSpaces = spaces.prune;
@@ -189,8 +199,30 @@ export function refreshSharing(queryClient: QueryClient) {
 const trashParts: TrashParts = {
     trash: (workspaceId, nodeIds) => clientFor(workspaceId).trashMany(workspaceId, nodeIds),
     restore: (workspaceId, nodeIds) => clientFor(workspaceId).restoreMany(workspaceId, nodeIds),
+    purge: (workspaceId, nodeIds) => clientFor(workspaceId).purgeMany(workspaceId, nodeIds),
     ancestorsOf: (node) => clientFor(node.workspaceId).ancestorsOf(node.id),
 };
+/* Trash rows carry their own folders: the catalogue leaves out what is in the Trash. */
+function trashRowParts(items: TrashItem[]): TrashParts {
+    const above = new Map(items.map((item) => [item.node.id, item.ancestors]));
+    return { ...trashParts, ancestorsOf: (node) => above.get(node.id) ?? [] };
+}
+/* Trash rows put back where they were, in place only (lib/trash-batch.ts restoreBatch). */
+export function restoreTrashRows(items: TrashItem[], onBack?: (back: DriveNode[]) => void) {
+    return restoreBatch(
+        items.map((item) => item.node),
+        trashRowParts(items),
+        onBack,
+    );
+}
+/* Trash rows deleted forever (lib/trash-batch.ts purgeBatch). */
+export function purgeTrashRows(items: TrashItem[], onGone?: (ids: string[]) => void) {
+    return purgeBatch(
+        items.map((item) => item.node),
+        trashRowParts(items),
+        onGone,
+    );
+}
 export function trashNodes(nodes: DriveNode[], onMoved?: (ids: string[]) => void) {
     return trashBatch(nodes, trashParts, onMoved);
 }

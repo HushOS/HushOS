@@ -117,3 +117,81 @@ describe('the whole request', () => {
         ).toMatchObject({ status: 'trashed' });
     }, 15_000);
 });
+
+describe('delete forever for a selection', () => {
+    test('404 for anyone not a member, an editor of something in it included, before any lock', async () => {
+        const item = await folder(owner, top);
+        await server.trashNodes(owner.userId, owner.workspaceId, [item.id]);
+        const editor = await createTestAccount();
+        await createTestIdentity(editor.userId);
+        const shared = await folder(owner, top);
+        await share(owner, shared, editor, 'editor');
+        const stranger = await createTestAccount();
+        const seq = await workspaceSeq();
+        for (const person of [stranger, editor])
+            expect(
+                await refusal(server.purgeNodes(person.userId, owner.workspaceId, [item.id])),
+            ).toEqual({ status: 404, code: 'not-found' });
+        expect(await workspaceSeq()).toBe(seq);
+    });
+
+    test(`400 for more than ${MAX_TRASH_BATCH} items, none, or one named twice; the single route’s words for each refusal`, async () => {
+        const item = await folder(owner, top);
+        const many = [item.id, ...Array.from({ length: MAX_TRASH_BATCH }, () => randomUUID())];
+        for (const nodeIds of [many, [], [item.id, item.id]])
+            expect(
+                await refusal(server.purgeNodes(owner.userId, owner.workspaceId, nodeIds)),
+            ).toEqual({ status: 400, code: 'invalid' });
+        const { results } = await server.purgeNodes(owner.userId, owner.workspaceId, [
+            item.id,
+            top.id,
+        ]);
+        expect(results).toEqual([
+            {
+                id: item.id,
+                status: 'refused',
+                reason: 'not-trashed',
+                message: 'Move this item to the trash first.',
+            },
+            {
+                id: top.id,
+                status: 'refused',
+                reason: 'root',
+                message: 'The top folder cannot be deleted.',
+            },
+        ]);
+    });
+
+    test('shares the batch budget with trash and restore: 429 past it', async () => {
+        const item = await folder(owner, top);
+        for (let sent = 0; sent < TRASH_BATCHES_PER_MINUTE; sent++)
+            await server.purgeNodes(owner.userId, owner.workspaceId, [item.id]);
+        expect(
+            await refusal(server.trashNodes(owner.userId, owner.workspaceId, [item.id])),
+        ).toEqual({ status: 429, code: 'conflict' });
+        expect(
+            await refusal(server.purgeNodes(owner.userId, owner.workspaceId, [item.id])),
+        ).toEqual({ status: 429, code: 'conflict' });
+    }, 30_000);
+
+    test('409 to try again when the workspace stays locked elsewhere, having purged nothing', async () => {
+        const item = await folder(owner, top);
+        await server.trashNodes(owner.userId, owner.workspaceId, [item.id]);
+        const other = await db.$client.connect();
+        await other.query('begin');
+        await other.query('select id from workspaces where id = $1 for update', [
+            owner.workspaceId,
+        ]);
+        try {
+            expect(
+                await refusal(server.purgeNodes(owner.userId, owner.workspaceId, [item.id])),
+            ).toEqual({ status: 409, code: 'conflict' });
+        } finally {
+            await other.query('commit');
+            other.release();
+        }
+        expect(
+            (await server.purgeNodes(owner.userId, owner.workspaceId, [item.id])).results[0],
+        ).toMatchObject({ status: 'purged' });
+    }, 15_000);
+});

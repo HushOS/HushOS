@@ -18,10 +18,10 @@ const post = (path: string, body: string) =>
     });
 
 describe('a batch request’s body', () => {
-    test('past the cap is a 413, for trash and for restore', async () => {
+    test('past the cap is a 413, for trash, restore and purge', async () => {
         const huge = JSON.stringify({ nodeIds: Array.from({ length: 400 }, (_, n) => id(n)) });
         expect(huge.length).toBeGreaterThan(TRASH_BATCH_BODY_BYTES);
-        for (const route of ['trash-batch', 'restore-batch']) {
+        for (const route of ['trash-batch', 'restore-batch', 'purge-batch']) {
             const answer = await boundTrashBatch(
                 post(`/api/drive/workspaces/${WORKSPACE}/${route}`, huge),
             );

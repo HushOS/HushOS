@@ -116,7 +116,7 @@ export function TagView({ tagId }: { tagId: string }) {
         try {
             await driveClient.saveTags(removeTag(registry.data, tag.id));
             await invalidateTags(queryClient);
-            cue('droplet');
+            cue('close');
             toast.add({ type: 'success', title: `Tag “${tag.name}” removed` });
             await navigate({ to: '/app/drive' });
         } catch (error) {

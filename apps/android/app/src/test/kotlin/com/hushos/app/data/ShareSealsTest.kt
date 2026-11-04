@@ -59,4 +59,31 @@ class ShareSealsTest {
         assertNull(ShareSeals(file).pending)
         assertEquals(seal(3uL, 2uL), ShareSeals(file).get("s-1"))
     }
+
+    private val seals = ShareSeals(File(Files.createTempDirectory("seals").toFile(), ShareSeals.FILE))
+
+    /*
+     * The re-seal queue (ShareSeals.queue): a pass acknowledges only the requests it read before it began. A Continue that
+     * queues someone again while an earlier pass for them is still running owes a new re-seal (to keys that pass never
+     * saw), and that pass finishing must not erase it.
+     */
+    @Test
+    fun aPassAcknowledgesOnlyTheRequestItReadNeverOneQueuedWhileItRan() {
+        seals.queue("Grace")
+        val read = seals.queued
+        seals.queue("grace")
+        seals.unqueue(read)
+        assertTrue("grace" in seals.queued)
+        // The next pass reads the newer request and acknowledges it.
+        seals.unqueue(seals.queued)
+        assertFalse("grace" in seals.queued)
+    }
+
+    @Test
+    fun aRequestNobodyQueuedAgainIsAcknowledged() {
+        seals.queue("grace")
+        seals.queue("lee")
+        seals.unqueue(seals.queued)
+        assertFalse("grace" in seals.queued || "lee" in seals.queued)
+    }
 }

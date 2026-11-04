@@ -10,9 +10,13 @@ import {
     needsPlan,
     nextCharge,
     placesOf,
+    lapsedPlanEndsLine,
+    lapsedEndsWords,
+    planState,
     quoteAdd,
     removeRange,
     seatNoteFor,
+    tierTooSmall,
     type FamilyBillingFull,
     type FamilyGlance,
 } from './family-billing';
@@ -178,6 +182,7 @@ describe('who gets which controls', () => {
             keepPlaces: false,
             portal: true,
             cancel: true,
+            resume: false,
         });
     });
 
@@ -185,6 +190,10 @@ describe('who gets which controls', () => {
         expect(Object.values(familyActions(summary({ you: false }), organizer))).not.toContain(
             true,
         );
+        // Nor resumes one set to end: the server answers them 403.
+        expect(
+            Object.values(familyActions(summary({ you: false, ending: true }), organizer)),
+        ).not.toContain(true);
     });
 
     test('a member’s glance, a manager without billing included, gets no controls at all', () => {
@@ -192,7 +201,7 @@ describe('who gets which controls', () => {
         expect(Object.values(familyActions(glance(false), ['members']))).not.toContain(true);
     });
 
-    test('a plan set to end can only be resumed in the portal: no place changes, no second cancel', () => {
+    test('a plan set to end can only be resumed: no place changes, no second cancel', () => {
         expect(familyActions(summary({ units: 8, used: 3, ending: true }), organizer)).toEqual({
             choosePlan: false,
             changePlan: false,
@@ -202,6 +211,7 @@ describe('who gets which controls', () => {
             keepPlaces: false,
             portal: true,
             cancel: false,
+            resume: true,
         });
     });
 
@@ -531,5 +541,158 @@ describe('tierMoves', () => {
         expect(
             familyActions(onTier('pro-month', { units: 6, paidUnits: 5 }), organizer).changePlan,
         ).toBe(false);
+    });
+});
+
+describe('tierTooSmall', () => {
+    const GIB = 1024n ** 3n;
+    const tier = (name: string, quota: bigint) => ({
+        name: `Family ${name} (monthly)`,
+        quotaBytes: String(quota),
+    });
+    const plus = tier('Plus', 800n * GIB);
+    const pro = tier('Pro', 2048n * GIB);
+    const max = tier('Max', 4096n * GIB);
+    const tiers = [plus, pro, max];
+    const own = (bytes: bigint) => ({ usedBytes: String(bytes), pool: null });
+
+    test('a tier exactly as big as their files is offered; one byte more than it holds is not', () => {
+        expect(tierTooSmall(own(800n * GIB), plus, tiers)).toBeNull();
+        // The pool counts their files rounded up to a whole GiB, and says it in whole GB.
+        expect(tierTooSmall(own(800n * GIB + 1n), plus, tiers)).toBe(
+            'Your files take 801 GB, more than Family Plus’s 800 GB. Choose a bigger plan or free at least 1 GB.',
+        );
+    });
+
+    test('says it in the server’s words, rounded up', () => {
+        expect(tierTooSmall(own(950n * GIB - 5n), plus, tiers)).toBe(
+            'Your files take 950 GB, more than Family Plus’s 800 GB. Choose a bigger plan or free at least 150 GB.',
+        );
+    });
+
+    test('a quota that isn’t whole GiB is compared with what the pool counts, not the exact bytes', () => {
+        // The provider takes any quota_bytes. 800.5 GiB holds 800 GiB, counted as 800 GiB...
+        const odd = tier('Odd', 800n * GIB + GIB / 2n);
+        expect(tierTooSmall(own(800n * GIB), odd, [odd, pro])).toBeNull();
+        // ...but not one byte more: exactly, that would fit; the pool counts it as 801 GiB.
+        expect(tierTooSmall(own(800n * GIB + 1n), odd, [odd, pro])).toBe(
+            'Your files take 801 GB, more than Family Odd’s 800.5 GB. Choose a bigger plan or free at least 1 GB.',
+        );
+    });
+
+    test('with no bigger tier on offer, it says only what to free', () => {
+        expect(tierTooSmall(own(4096n * GIB + 512n * GIB), max, tiers)).toBe(
+            'Your files take 4.5 TB, more than Family Max’s 4 TB. Free at least 512 GB.',
+        );
+    });
+
+    test('pooled figures are the family’s, not theirs: nothing is refused from them', () => {
+        expect(
+            tierTooSmall(
+                { usedBytes: String(900n * GIB), pool: { groupId: 'g', name: 'F' } },
+                plus,
+                tiers,
+            ),
+        ).toBeNull();
+        expect(tierTooSmall(undefined, plus, tiers)).toBeNull();
+    });
+});
+
+describe('a family plan whose payment didn’t go through', () => {
+    const organizer = ['billing', 'members'];
+    const unpaid = {
+        productName: 'Family Pro (monthly)',
+        standing: 'payment-failed' as const,
+        ids: ['sub_unpaid'],
+    };
+    const lapsed = { productName: 'Family (monthly)', endedAt: end.toISOString() };
+
+    test('is the plan the page shows while none is live, ahead of an older one that ended', () => {
+        expect(
+            planState({ ...summary({ live: false, lastPlan: lapsed }), lapsedPlan: unpaid }),
+        ).toEqual({ kind: 'unpaid', ...unpaid });
+        // A live plan beats it, and without it the ended one shows as before.
+        expect(planState({ ...summary(), lapsedPlan: unpaid }).kind).toBe('live');
+        expect(planState(summary({ live: false, lastPlan: lapsed })).kind).toBe('lapsed');
+    });
+
+    test('its payer gets the portal and a new plan; another billing holder only a new plan; nothing moves storage meanwhile', () => {
+        const payer = familyActions({ ...summary({ live: false }), lapsedPlan: unpaid }, organizer);
+        expect(payer).toMatchObject({ choosePlan: true, portal: true, addPlaces: false });
+        const other = familyActions(
+            { ...summary({ live: false, you: false }), lapsedPlan: unpaid },
+            organizer,
+        );
+        expect(other).toMatchObject({ choosePlan: true, portal: false });
+        // Invites and folders wait, as for no plan at all: the pool gives nothing.
+        expect(needsPlan({ ...summary({ live: false }), lapsedPlan: unpaid })).toBe(true);
+        const seen = { productName: unpaid.productName, standing: unpaid.standing, youPay: false };
+        expect(needsPlan({ ...glance(false), lapsedPlan: seen })).toBe(true);
+        expect(
+            Object.values(familyActions({ ...glance(false), lapsedPlan: seen }, organizer)),
+        ).not.toContain(true);
+    });
+});
+
+describe('lapsedPlanEndsLine', () => {
+    const paused = { productName: 'Family Pro (monthly)', standing: 'paused' as const, ids: ['s'] };
+
+    test('says the plan ends at once only when the one who goes pays for it', () => {
+        const mine = { ...summary({ live: false }), lapsedPlan: paused };
+        expect(lapsedPlanEndsLine(mine, 'Lindqvist family', { userId: 'payer', you: true })).toBe(
+            'The Family Pro plan for Lindqvist family, which you pay for and which is paused, ends at once when you leave. Nothing of it is refunded: no part of it is in use.',
+        );
+        expect(
+            lapsedPlanEndsLine(mine, 'Lindqvist family', {
+                userId: 'payer',
+                you: false,
+                name: 'Maya',
+            }),
+        ).toBe(
+            'Maya pays for the Family Pro plan for Lindqvist family, which is paused. It ends at once when they’re removed. Nothing of it is refunded: no part of it is in use.',
+        );
+        // Someone who doesn't pay, or no lapsed plan: nothing said.
+        expect(lapsedPlanEndsLine(mine, 'F', { userId: 'someone', you: true })).toBeNull();
+        expect(
+            lapsedPlanEndsLine(summary({ live: false }), 'F', { userId: 'payer', you: true }),
+        ).toBeNull();
+    });
+
+    test('a member’s glance says it to the payer leaving (one whose billing was taken), never about anyone else', () => {
+        const theirs = { productName: 'Family Pro (monthly)', standing: 'paused' as const };
+        const mine = { ...glance(false), lapsedPlan: { ...theirs, youPay: true } };
+        expect(lapsedPlanEndsLine(mine, 'F', { userId: 'me', you: true })).toBe(
+            'The Family Pro plan for F, which you pay for and which is paused, ends at once when you leave. Nothing of it is refunded: no part of it is in use.',
+        );
+        // Not theirs to pay: nothing; and a glance never says that someone else pays.
+        const other = { ...glance(false), lapsedPlan: { ...theirs, youPay: false } };
+        expect(lapsedPlanEndsLine(other, 'F', { userId: 'me', you: true })).toBeNull();
+        expect(
+            lapsedPlanEndsLine(mine, 'F', { userId: 'payer', you: false, name: 'Maya' }),
+        ).toBeNull();
+    });
+
+    test('the removal’s words for a plan the server named', () => {
+        expect(
+            lapsedEndsWords('F', [{ name: 'Family Pro (monthly)', standing: 'payment-failed' }], {
+                you: false,
+                name: 'Maya',
+            }),
+        ).toBe(
+            'Maya pays for the Family Pro plan for F, whose payment didn’t go through. It ends at once when they’re removed. Nothing of it is refunded: no part of it is in use.',
+        );
+        // Every plan named, and the neutral name of one HushOS can't read said as a plan once.
+        expect(
+            lapsedEndsWords(
+                'F',
+                [
+                    { name: 'Family Pro (monthly)', standing: 'paused' },
+                    { name: 'Family plan', standing: 'payment-failed' },
+                ],
+                { you: true },
+            ),
+        ).toBe(
+            'The Family Pro and Family plans for F, which you pay for and which give nothing now, end at once when you leave. Nothing of them is refunded: no part of them is in use.',
+        );
     });
 });

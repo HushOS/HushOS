@@ -36,6 +36,7 @@ import {
 } from '@/lib/queries';
 import { publicOrigin, salesContactQueryOptions } from '@/lib/social';
 import type { Catalogue, Plan } from '@hushos/billing/api';
+import { lapsedPlan, livePlan } from '@hushos/billing/protocol';
 import {
     currenciesOf,
     FAMILY_POOL_LINE,
@@ -275,9 +276,11 @@ function PricingPage() {
     const questions = faqFor(familyOffers(catalogue, 'month', currency), currency, saving);
     // Signed in: the buttons say where this person stands rather than "start".
     const { data: summary } = useQuery({ ...billingQueryOptions, enabled: hasSession });
-    const live =
-        summary?.subscription && !summary.subscription.endedAt ? summary.subscription : null;
+    const live = livePlan(summary?.subscription);
     const onFree = hasSession && summary !== undefined && !live;
+    // A plan whose payment failed, or that is paused: the person is on Free, but choosing a plan
+    // ends that one first, which the billing page says before it opens the checkout.
+    const lapsed = lapsedPlan(summary?.subscription);
     // Signed in and not yet paying: the button starts Polar's checkout itself, no stop
     // on the billing page. Paying subscribers go there for the confirmation step.
     const [starting, setStarting] = useState<string | null>(null);
@@ -355,7 +358,7 @@ function PricingPage() {
             : live
               ? `Switch to ${tier.name}`
               : `Choose ${tier.name}`;
-        return onFree ? (
+        return onFree && !lapsed ? (
             <Button
                 variant={lead ? 'default' : 'outline'}
                 size={size}

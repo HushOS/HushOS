@@ -30,17 +30,20 @@ import {
     MAX_TRASH_BATCH,
     checkClient,
     legacyMinimums,
+    parseClientHeader,
     parseMinimums,
 } from '@hushos/drive/protocol';
 import { REPORT_CATEGORIES } from '@hushos/drive/api';
 import * as drive from '@hushos/drive/server';
 import * as groups from '@hushos/groups/server';
 import {
+    GROUP_WRITE_HEADER,
     MAX_GRANTS_PER_CALL,
     MAX_ROTATIONS_PER_CALL,
     MAX_SEALS_PER_CALL,
 } from '@hushos/groups/protocol';
 import { createGroupRequestHandler } from '@/lib/group-requests';
+import { followsGroupWrites, groupWriteMinimums } from '@/lib/group-write-floor';
 import { boundTrashBatch } from '@/lib/trash-batch-request';
 import { storageEnv } from '@hushos/env/storage';
 import { CANCELLATION_REASONS } from '@hushos/billing/protocol';
@@ -273,8 +276,8 @@ if (legacyClientMinimums.length > 0)
             'DRIVE_CLIENT_MINIMUMS has pre-1.0 protocol floors; they hold only clients from before 1.0.0. Use product versions such as web/1.0.0.',
         drive: { legacyClientMinimums },
     });
-function requireClient(request: Request) {
-    const check = checkClient(request.headers.get(CLIENT_HEADER), clientMinimums);
+function requireClient(request: Request, minimums: ReadonlyMap<string, string> = clientMinimums) {
+    const check = checkClient(request.headers.get(CLIENT_HEADER), minimums);
     if (!check.ok)
         throw new drive.DriveError(
             check.status === 426 ? 'unsupported' : 'invalid',
@@ -632,6 +635,8 @@ const rosterCallFields = {
     rotations: t.Optional(t.Array(rotationSchema, { maxItems: MAX_ROTATIONS_PER_CALL })),
 };
 const groupParams = t.Object({ id: uuidSchema });
+/* The lapsed plans (subscription ids) a leave or a removal was confirmed to end. */
+const endsLapsedSchema = t.Optional(t.Array(t.String({ maxLength: 100 }), { maxItems: 10 }));
 const memberParams = t.Object({ id: uuidSchema, userId: uuidSchema });
 const areaParams = t.Object({ id: uuidSchema, workspaceId: uuidSchema });
 
@@ -675,6 +680,29 @@ async function groupUser(request: Request, sessionToken: string | null) {
     const user = await auth.getSessionUser(sessionToken);
     if (!user) throw new auth.AuthError('Sign in to open your groups.', 401);
     return user;
+}
+
+/*
+ * The routes that let people in, change roles or seal family keys
+ * (docs/optional-verification.md 7.3): as groupUser, but a client below the
+ * family-change floor is refused with 426 before anything is read or stored,
+ * so a tab still running code from before the family-write rules changed
+ * can't change a family. Every other route keeps serving it
+ * (lib/group-write-floor.ts).
+ */
+const groupWriteFloor = groupWriteMinimums(
+    clientMinimums,
+    parseMinimums(storageEnv.GROUP_WRITE_CLIENT_MINIMUMS),
+);
+async function groupWriter(request: Request, sessionToken: string | null) {
+    const client = requireClient(request, groupWriteFloor);
+    if (!followsGroupWrites(client.name, request.headers.get(GROUP_WRITE_HEADER)))
+        throw new drive.DriveError(
+            'unsupported',
+            'This version of HushOS is out of date. Reload the page to update.',
+            426,
+        );
+    return groupUser(request, sessionToken);
 }
 
 /* The second half of the password exchange removing devices asks for (POST /auth/devices/reauth). */
@@ -1237,12 +1265,17 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 productId: t.String({ minLength: 1, maxLength: 100 }),
                 currency: t.Optional(t.String({ pattern: '^[a-z]{3}$' })),
                 units: t.Optional(t.Integer({ minimum: 1, maximum: 10_000 })),
+                // Confirmed: these lapsed plans of the family end now (refusal code `ends-lapsed`).
+                endLapsed: t.Optional(
+                    t.Array(t.String({ minLength: 1, maxLength: 100 }), { maxItems: 20 }),
+                ),
             }),
         },
         async ({ request, sessionToken, params, body }) =>
             billing.startGroupCheckout(await billingMutation(request, sessionToken), params.id, {
                 productId: body.productId,
                 units: body.units,
+                endLapsed: body.endLapsed,
                 address: requestAddress(request),
                 currency: chargeableCurrency(body.currency, requestCountry(request)) ?? undefined,
             }),
@@ -1281,6 +1314,18 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 await billingMutation(request, sessionToken),
                 params.id,
             ),
+    )
+    .post(
+        '/billing/groups/:id/cancel',
+        { params: t.Object({ id: uuidSchema }), body: cancellationSchema },
+        async ({ request, sessionToken, params, body }) =>
+            billing.cancelGroupPlan(await billingMutation(request, sessionToken), params.id, body),
+    )
+    .post(
+        '/billing/groups/:id/resume',
+        { params: t.Object({ id: uuidSchema }), body: t.Object({}) },
+        async ({ request, sessionToken, params }) =>
+            billing.resumeGroupPlan(await billingMutation(request, sessionToken), params.id),
     )
     .post(
         '/billing/groups/:id/sync',
@@ -1442,6 +1487,17 @@ export const apiApp = new Elysia({ prefix: '/api' })
         { params: t.Object({ id: uuidSchema }), body: t.Object({ nodeIds: nodeBatchSchema }) },
         async ({ request, sessionToken, params, body }) =>
             drive.restoreNodes(
+                (await driveMutation(request, sessionToken)).id,
+                params.id,
+                body.nodeIds,
+            ),
+    )
+    // Delete forever for a selection in the Trash: per-item results, in order.
+    .post(
+        '/drive/workspaces/:id/purge-batch',
+        { params: t.Object({ id: uuidSchema }), body: t.Object({ nodeIds: nodeBatchSchema }) },
+        async ({ request, sessionToken, params, body }) =>
+            drive.purgeNodes(
                 (await driveMutation(request, sessionToken)).id,
                 params.id,
                 body.nodeIds,
@@ -2466,7 +2522,11 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 '/groups/:id/rosters',
                 { params: groupParams, body: t.Object(rosterCallFields) },
                 async ({ request, sessionToken, params, body }) =>
-                    groups.postRoster((await groupUser(request, sessionToken)).id, params.id, body),
+                    groups.postRoster(
+                        (await groupWriter(request, sessionToken)).id,
+                        params.id,
+                        body,
+                    ),
             )
             .get(
                 '/groups/:id/key-seal',
@@ -2484,7 +2544,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 },
                 async ({ request, sessionToken, params, body }) =>
                     groups.putKeySeals(
-                        (await groupUser(request, sessionToken)).id,
+                        (await groupWriter(request, sessionToken)).id,
                         params.id,
                         body,
                     ),
@@ -2501,7 +2561,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 },
                 async ({ request, sessionToken, params, body }) =>
                     groups.postSuccession(
-                        (await groupUser(request, sessionToken)).id,
+                        (await groupWriter(request, sessionToken)).id,
                         params.id,
                         body,
                     ),
@@ -2582,10 +2642,17 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 },
                 async ({ request, sessionToken, params, body }) =>
                     groups.admit(
-                        (await groupUser(request, sessionToken)).id,
+                        (await groupWriter(request, sessionToken)).id,
                         params.id,
                         params.userId,
                         body,
+                        // Only the web buys a place for a full plan (it says the cost first); the
+                        // phone apps never do, resends of their kept calls included.
+                        {
+                            mayBuy: groups.mayBuySeatFrom(
+                                parseClientHeader(request.headers.get(CLIENT_HEADER))?.name,
+                            ),
+                        },
                     ),
             )
             .patch(
@@ -2596,7 +2663,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 },
                 async ({ request, sessionToken, params, body }) =>
                     groups.patchMember(
-                        (await groupUser(request, sessionToken)).id,
+                        (await groupWriter(request, sessionToken)).id,
                         params.id,
                         params.userId,
                         body,
@@ -2604,13 +2671,26 @@ export const apiApp = new Elysia({ prefix: '/api' })
             )
             .post(
                 '/groups/:id/members/:userId/remove',
-                { params: memberParams, body: t.Object(rosterCallFields) },
+                {
+                    params: memberParams,
+                    body: t.Object({ ...rosterCallFields, endsLapsed: endsLapsedSchema }),
+                },
                 async ({ request, sessionToken, params, body }) =>
                     groups.removeMember(
-                        (await groupUser(request, sessionToken)).id,
+                        (await groupWriter(request, sessionToken)).id,
                         params.id,
                         params.userId,
                         body,
+                    ),
+            )
+            .post(
+                '/groups/:id/members/:userId/remove-preview',
+                { params: memberParams, body: t.Object({}) },
+                async ({ request, sessionToken, params }) =>
+                    groups.removalPreview(
+                        (await groupUser(request, sessionToken)).id,
+                        params.id,
+                        params.userId,
                     ),
             )
             .post(
@@ -2635,15 +2715,19 @@ export const apiApp = new Elysia({ prefix: '/api' })
             )
             .post(
                 '/groups/:id/leave',
-                { params: groupParams, body: t.Object({}) },
-                async ({ request, sessionToken, params }) =>
-                    groups.leave((await groupUser(request, sessionToken)).id, params.id),
+                { params: groupParams, body: t.Object({ endsLapsed: endsLapsedSchema }) },
+                async ({ request, sessionToken, params, body }) =>
+                    groups.leave((await groupUser(request, sessionToken)).id, params.id, body),
             )
             .post(
                 '/groups/:id/areas',
                 { params: groupParams, body: t.Object({ ...rosterCallFields, area: areaSchema }) },
                 async ({ request, sessionToken, params, body }) =>
-                    groups.createArea((await groupUser(request, sessionToken)).id, params.id, body),
+                    groups.createArea(
+                        (await groupWriter(request, sessionToken)).id,
+                        params.id,
+                        body,
+                    ),
             )
             .post(
                 '/groups/:id/areas/:workspaceId/grants',
@@ -2658,7 +2742,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 },
                 async ({ request, sessionToken, params, body }) =>
                     groups.postGrants(
-                        (await groupUser(request, sessionToken)).id,
+                        (await groupWriter(request, sessionToken)).id,
                         params.id,
                         params.workspaceId,
                         body,
@@ -2687,7 +2771,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 },
                 async ({ request, sessionToken, params, body }) =>
                     groups.putPreviousRoot(
-                        (await groupUser(request, sessionToken)).id,
+                        (await groupWriter(request, sessionToken)).id,
                         params.id,
                         params.workspaceId,
                         body,
@@ -2710,7 +2794,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 { params: areaParams, body: t.Object(rosterCallFields) },
                 async ({ request, sessionToken, params, body }) =>
                     groups.deleteArea(
-                        (await groupUser(request, sessionToken)).id,
+                        (await groupWriter(request, sessionToken)).id,
                         params.id,
                         params.workspaceId,
                         body,
@@ -2724,7 +2808,7 @@ export const apiApp = new Elysia({ prefix: '/api' })
                 },
                 async ({ request, sessionToken, params, body }) =>
                     groups.rotateArea(
-                        (await groupUser(request, sessionToken)).id,
+                        (await groupWriter(request, sessionToken)).id,
                         params.id,
                         params.workspaceId,
                         body,

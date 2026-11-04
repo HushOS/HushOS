@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test, vi } from 'vitest';
 import type * as Pq from './pq';
+import { check as checkRemovals, fixture as removals } from './removal-calls-testkit';
 import { check, fixture, sessionRun, sessionStep } from './roster-calls-testkit';
 import { check as checkSettingsAreas, fixture as settingsAreas } from './settings-areas-testkit';
 
@@ -29,6 +30,17 @@ describe('roster calls the core built', () => {
 
     test('the web’s own calls say what they declare, and read here as the core reads them', async () => {
         await expect(check(await fixture())).resolves.toBeUndefined();
+    }, 120_000);
+});
+
+describe('removals, key replacements and folder deletions (Core 5b)', () => {
+    test('the core’s bodies land as every member takes them, its refusals are the same sentences, and its previous roots check alike', async () => {
+        await expect(checkRemovals(core)).resolves.toBeUndefined();
+    }, 120_000);
+
+    test('the web’s own calls say what they declare, and read here as the core reads them', async () => {
+        const doc = await fixture();
+        await expect(checkRemovals({ ...doc, ...(await removals(doc)) })).resolves.toBeUndefined();
     }, 120_000);
 });
 

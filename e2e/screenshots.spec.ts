@@ -226,10 +226,12 @@ async function upload(p: Page, paths: string[], last: string) {
  * fresh contexts.
  */
 async function backdate(p: Page) {
-    await p.goto('/app', { waitUntil: 'networkidle' });
     const rows: string[] = [];
     for (const name of Object.keys(HISTORY)) {
-        const id = await row(p, name).getAttribute('data-node-id', { timeout: 60_000 });
+        // Found by search, which lists every node: Recent shows a recent folder for what it holds.
+        // The exact name is the best match, so it comes first.
+        await p.goto(`/app/search#q=${encodeURIComponent(name)}`, { waitUntil: 'networkidle' });
+        const id = await row(p, name).first().getAttribute('data-node-id', { timeout: 60_000 });
         rows.push(`('${id}'::uuid, '${ago(name).toISOString()}'::timestamptz)`);
     }
     const sql = `update drive_nodes n set updated_at = v.at, created_at = least(n.created_at, v.at) from (values ${rows.join(', ')}) v(id, at) where n.id = v.id`;
@@ -354,7 +356,7 @@ test.beforeAll(async ({ browser }) => {
     await tag(page, 'Finances', ['Tax']);
     await tag(page, 'Lease agreement.pdf', ['Tax', 'Home']);
     await tag(page, 'Trip plan.md', ['Travel']);
-    await page.goto('/app/people', { waitUntil: 'networkidle' });
+    await page.goto('/app/contacts', { waitUntil: 'networkidle' });
     await addContact(page, jonasEmail);
     await page.goto('/app/drive', { waitUntil: 'networkidle' });
     await expect(row(page, 'Family')).toBeVisible({ timeout: 60_000 });
@@ -450,7 +452,7 @@ async function wideShots(p: Page, suffix: string, scale: Scale) {
         const before = await links.count();
         await links.first().getByRole('button', { name: 'More for this link' }).click();
         await p.getByRole('menuitem', { name: 'Turn off link' }).click();
-        await p.getByRole('alertdialog').getByRole('button', { name: 'Turn off link' }).click();
+        await dialog(p).getByRole('button', { name: 'Turn off link' }).click();
         await expect(links).toHaveCount(before - 1, { timeout: 30_000 });
     }
     await dialog(p).getByRole('button', { name: 'New link' }).click();

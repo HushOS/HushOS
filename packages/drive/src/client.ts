@@ -7,6 +7,7 @@ import type {
     DriveSigners,
     DriveVersionEnvelope,
     GroupRotationTrust,
+    NodeAttributes,
     NodeMetadata,
     ServedRekey,
 } from '@hushos/crypto';
@@ -14,7 +15,8 @@ import { checkName, DRIVE_ENVELOPE_SUITE } from '@hushos/crypto/drive';
 import { newId } from '@hushos/crypto/ids';
 import { LINK_KDF_VERSION } from '@hushos/crypto/links';
 import { NOT_CARRIED, SHARED_IN_FAMILY } from '@hushos/crypto/protocol';
-import { Catalogue, parentsBefore, parentsFirst } from './catalogue';
+import { Catalogue, collapseRecent, parentsBefore, parentsFirst, type NodeKind } from './catalogue';
+import { COLOUR_ATTRIBUTE, toColour } from './colour';
 import type { TreeMirror } from './mirror';
 import {
     TAGS_DOCUMENT,
@@ -44,7 +46,9 @@ import {
     type RekeyView,
 } from './api';
 import { MAX_FOLDER_BATCH, ROOT_NAME } from './protocol';
+import { holdFolder, takeFolders } from './walk-holds';
 import {
+    GranteeRefusedError,
     signatureFormFor,
     type NodeIntegrity,
     type RecordIntegrity,
@@ -188,8 +192,9 @@ export type CatalogueState = {
 export { checkName };
 /* The catalogue's parts, reachable from the client entry the app already imports. */
 export { createIndexedDbMirror, createMemoryMirror, type TreeMirror } from './mirror';
-export { Catalogue, tokenize, type CatalogueHit } from './catalogue';
+export { Catalogue, tokenize, type CatalogueHit, type NodeKind } from './catalogue';
 export * from './tags';
+export * from './colour';
 
 export function splitPath(input: string) {
     return input
@@ -267,13 +272,17 @@ export type DriveClientOptions = {
      * (followed through a signed succession when the served keys moved on), and
      * only when the served keys match. Throws to refuse (no pin, an unchecked
      * one, or keys that changed). Without it, shares received cannot be opened.
+     * `explicit` is the person opening that one share (openShare): only then
+     * may it follow a succession or add back someone the person removed;
+     * listing what was shared (mountShares) opens only what needs neither.
      */
-    trustGranter?: (granter: Granter) => Promise<TrustedGranter>;
+    trustGranter?: (granter: Granter, how: { explicit: boolean }) => Promise<TrustedGranter>;
     /*
      * Decides which keys a share is sealed to when the server, not the person,
      * names the grantee: on rotation and when re-sealing older shares. Returns
      * the pinned X25519 key and the KEM key the pin vouches for, or null for
-     * none; throws to refuse a served key that differs from the pin.
+     * none; throws GranteeRefusedError to refuse the person (a served key that
+     * differs from the pin, nobody pinned), anything else when it couldn't check.
      */
     trustGrantee?: (granteeUserId: string, served: ServedIdentity) => Promise<TrustedGrantee>;
     /*
@@ -330,12 +339,33 @@ export type SharingLedger = {
     removeLink(linkId: string): Promise<void>;
 };
 
-/* `unverified`: the share stays shut until its granter is pinned after a words check. */
+/*
+ * `unverified`: the share stays shut until its granter can be pinned.
+ * `waiting`: it opens when the person opens it (openShare), which may add its
+ * granter back or follow their succession; listing never does.
+ */
 export type ShareMount = SharedWithMeView & {
     node: DriveNode;
     error: string | null;
     unverified: boolean;
+    waiting: boolean;
 };
+
+/*
+ * The nodes of a rotation's work that may be sealed now: none whose parent is
+ * in the same work. The server applies each node of a batch on its own, so
+ * another device walking the same rotation can win the parent (this one comes
+ * back stale, and its fresh key is dropped) while this device wins the child,
+ * which would then be wrapped under a key nobody kept. Both devices pick the
+ * same target epoch, so the server cannot tell the two keys apart. The work is
+ * listed parents first, so each child held back comes in a later batch, once
+ * its parent's key is the server's: committed here, or opened as the other
+ * device's. Siblings still go together.
+ */
+export function deferChildren<T extends { id: string; parentId: string | null }>(nodes: T[]): T[] {
+    const inWork = new Set(nodes.map((n) => n.id));
+    return nodes.filter((n) => n.parentId === null || !inWork.has(n.parentId));
+}
 
 export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientOptions = {}) {
     let workspace: WorkspaceView | undefined;
@@ -850,17 +880,30 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     function byTags(tagIds: string[]) {
         return catalogueState.phase === 'ready' ? catalogue.byTags(tagIds) : [];
     }
-    /* Search answers while the build is still opening rows, since a partial answer beats none. */
-    function search(query: string, limit?: number) {
+    /*
+     * Search answers while the build is still opening rows, since a partial answer beats none.
+     * `kindOf` says what each node is for the kind words; without it they find folders only.
+     */
+    function search(query: string, limit?: number, kindOf?: (node: DriveNode) => NodeKind | null) {
         return catalogueState.phase === 'ready' || catalogueState.phase === 'opening'
-            ? catalogue.search({ query, limit })
+            ? catalogue.search({ query, limit, kindOf })
             : [];
     }
-    /* Home's Recent: answers while rows are still opening, like search. */
-    function recent(limit: number, keep?: (node: DriveNode) => boolean) {
+    /*
+     * Home's Recent: answers while rows are still opening, like search, and from `fresher` (rows
+     * ahead of the catalogue) alone before that.
+     */
+    function recent(
+        limit: number,
+        keep: (node: DriveNode) => boolean = () => true,
+        fresher: DriveNode[] = [],
+    ) {
         return catalogueState.phase === 'ready' || catalogueState.phase === 'opening'
-            ? catalogue.recent(limit, keep)
-            : [];
+            ? catalogue.recent(limit, keep, fresher)
+            : collapseRecent(
+                  fresher.filter((node) => node.parentId && !node.trashedAt && keep(node)),
+                  limit,
+              );
     }
     /* Root first, the node's parent last, as far as the catalogue knows. */
     function ancestorsOf(nodeId: string) {
@@ -1020,11 +1063,14 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
      * signatureFormFor): ordinary for folders this person makes, `saved` for
      * those a save from a link recreates, `resealed` for names taken from
      * something this person did not verify, which they re-lock, nothing more.
+     * `attributes` go on the last folder, the one the path names: a copy
+     * passes its source's, so a copied folder keeps its colour and every key
+     * this client does not know.
      */
     async function createFolderPath(
         parent: DriveNode,
         path: string[],
-        options: { signAs?: SignatureForm } = {},
+        options: { signAs?: SignatureForm; attributes?: NodeAttributes } = {},
     ) {
         const ws = parent.workspaceId;
         const names = path.map((name) => checkName(name));
@@ -1039,18 +1085,29 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 name,
             })),
         );
-        const { nodes } = await rpc('driveCreateNodes', {
-            workspaceId: ws,
-            nodes: specs.map((spec, index) => ({
-                id: spec.id,
-                kind: 'folder' as const,
-                parentId: index === 0 ? parent.id : specs[index - 1]!.id,
-                parentKeyEpoch: index === 0 ? parent.keyEpoch : specs[index - 1]!.keyEpoch,
-                keyEpoch: spec.keyEpoch,
-                metadata: { name: spec.name, mime: null, size: null, modified: null },
-                signAs: options.signAs ?? 'ordinary',
-            })),
-        });
+        // Never under a key a walk's batch holds pending in `parent` (walk-holds.ts).
+        const { nodes } = await holdFolder(rpc, ws, parent, () =>
+            rpc('driveCreateNodes', {
+                workspaceId: ws,
+                nodes: specs.map((spec, index) => ({
+                    id: spec.id,
+                    kind: 'folder' as const,
+                    parentId: index === 0 ? parent.id : specs[index - 1]!.id,
+                    parentKeyEpoch: index === 0 ? parent.keyEpoch : specs[index - 1]!.keyEpoch,
+                    keyEpoch: spec.keyEpoch,
+                    metadata: {
+                        name: spec.name,
+                        mime: null,
+                        size: null,
+                        modified: null,
+                        ...(index === specs.length - 1 && options.attributes
+                            ? { attributes: options.attributes }
+                            : {}),
+                    },
+                    signAs: options.signAs ?? 'ordinary',
+                })),
+            }),
+        );
         const created = await api.createFolders(
             ws,
             specs.map((spec, index) => ({
@@ -1077,18 +1134,48 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
      * record this person vouches for.
      */
     async function rename(node: DriveNode, name: string) {
-        const ws = node.workspaceId;
         const clean = checkName(name);
+        return reseal(node, (metadata) => ({ ...metadata, name: clean }));
+    }
+
+    /*
+     * Sets a folder's colour (see colour.ts), or with null takes it back to the plain
+     * folder colour: the record is sealed again as a rename seals it, the name and every other attribute carried over, so it is checked and
+     * signed by the same rules and the server sees only a new envelope.
+     */
+    async function recolour(node: DriveNode, colour: string | null) {
+        if (node.kind !== 'folder') throw new Error('Only a folder has a colour.');
+        // Its name would be lost: a folder whose record did not open is renamed first.
+        if (!node.metadata)
+            throw new Error('This folder could not be opened, so it cannot be changed.');
+        const clean = colour === null ? null : toColour(colour);
+        if (colour !== null && !clean) throw new Error('Choose a colour.');
+        const { name } = node.metadata;
+        return reseal(node, ({ attributes, ...metadata }) => {
+            const { [COLOUR_ATTRIBUTE]: _, ...others } = attributes ?? {};
+            const next = clean ? { ...others, [COLOUR_ATTRIBUTE]: clean } : others;
+            // Back to the plain colour with nothing else set leaves no attributes at all.
+            return { ...metadata, name, ...(Object.keys(next).length ? { attributes: next } : {}) };
+        });
+    }
+
+    /*
+     * Seals a node's record again with `change` applied: the path a rename and a colour
+     * share. A record that did not open starts from no type, size or date, which is how a
+     * rename repairs it.
+     */
+    async function reseal(
+        node: DriveNode,
+        change: (metadata: Omit<NodeMetadata, 'name'> & { name?: string }) => NodeMetadata,
+    ) {
+        const ws = node.workspaceId;
         const checked = (await verify([node])).get(node.id);
         const { metadataEnvelope, metadataSignature } = await rpc('driveSealMetadata', {
             workspaceId: ws,
             nodeId: node.id,
             kind: node.kind,
             metadataVersion: node.metadataVersion + 1,
-            metadata: {
-                ...(node.metadata ?? { mime: null, size: null, modified: null }),
-                name: clean,
-            },
+            metadata: change(node.metadata ?? { mime: null, size: null, modified: null }),
             signAs: signatureFormFor(checked?.metadata),
         });
         const result = await api.rename(ws, node.id, {
@@ -1103,13 +1190,16 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     /* Moves one node under `destination`, whose key must already be open. */
     async function move(node: DriveNode, destination: DriveNode) {
         const ws = node.workspaceId;
-        const { keyEnvelope } = await rpc('driveRewrapNode', {
-            workspaceId: ws,
-            nodeId: node.id,
-            parentId: destination.id,
-            parentKeyEpoch: destination.keyEpoch,
-            keyEpoch: node.keyEpoch,
-        });
+        // Never under a key a walk's batch holds pending in `destination` (walk-holds.ts).
+        const { keyEnvelope } = await holdFolder(rpc, ws, destination, () =>
+            rpc('driveRewrapNode', {
+                workspaceId: ws,
+                nodeId: node.id,
+                parentId: destination.id,
+                parentKeyEpoch: destination.keyEpoch,
+                keyEpoch: node.keyEpoch,
+            }),
+        );
         const result = await api.move(ws, node.id, {
             parentId: destination.id,
             parentKeyEpoch: destination.keyEpoch,
@@ -1131,37 +1221,42 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         const { id, seed } = await newId('node', ws);
         const { id: versionId, seed: versionIdSeed } = await newId('version', ws);
         const signed = signedNodeOf(node, [version]);
-        const sealed = await rpc('driveCopyFile', {
-            workspaceId: ws,
-            // The source's records are checked in the worker before anything is re-signed.
-            signers: await trustedSigners(),
-            source: {
-                nodeId: node.id,
-                ...versionEnvelopeOf(version),
-                metadataVersion: signed.metadataVersion,
-                metadataEnvelope: signed.metadataEnvelope,
-                metadataSigner: signed.metadataSigner,
-                metadataSignature: signed.metadataSignature,
-                signer: signed.versions?.[0]?.signer ?? null,
-                signature: signed.versions?.[0]?.signature ?? null,
-                // A re-keyed source is judged on its writer's record (family folders, rekeyedFor).
-                keyEpoch: signed.keyEpoch,
-                metadataRekey: signed.metadataRekey ?? null,
-                rekey: signed.versions?.[0]?.rekey ?? null,
-            },
-            node: {
-                id,
-                parentId: destination.id,
-                parentKeyEpoch: destination.keyEpoch,
-                keyEpoch: from,
-                metadata: {
-                    ...(node.metadata ?? { mime: null, size: null, modified: null }),
-                    name: checkName(name),
+        const signers = await trustedSigners();
+        const group = options.rotationTrust ? await options.rotationTrust() : null;
+        // Never under a key a walk's batch holds pending in `destination` (walk-holds.ts).
+        const sealed = await holdFolder(rpc, ws, destination, () =>
+            rpc('driveCopyFile', {
+                workspaceId: ws,
+                // The source's records are checked in the worker before anything is re-signed.
+                signers,
+                source: {
+                    nodeId: node.id,
+                    ...versionEnvelopeOf(version),
+                    metadataVersion: signed.metadataVersion,
+                    metadataEnvelope: signed.metadataEnvelope,
+                    metadataSigner: signed.metadataSigner,
+                    metadataSignature: signed.metadataSignature,
+                    signer: signed.versions?.[0]?.signer ?? null,
+                    signature: signed.versions?.[0]?.signature ?? null,
+                    // A re-keyed source is judged on its writer's record (family folders, rekeyedFor).
+                    keyEpoch: signed.keyEpoch,
+                    metadataRekey: signed.metadataRekey ?? null,
+                    rekey: signed.versions?.[0]?.rekey ?? null,
                 },
-            },
-            versionId,
-            ...(options.rotationTrust ? { group: await options.rotationTrust() } : {}),
-        });
+                node: {
+                    id,
+                    parentId: destination.id,
+                    parentKeyEpoch: destination.keyEpoch,
+                    keyEpoch: from,
+                    metadata: {
+                        ...(node.metadata ?? { mime: null, size: null, modified: null }),
+                        name: checkName(name),
+                    },
+                },
+                versionId,
+                ...(group ? { group } : {}),
+            }),
+        );
         const result = await api.copy(ws, node.id, {
             sourceVersionId: version.id,
             node: {
@@ -1205,7 +1300,10 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         // A folder's name is re-signed as this person's only when the source's verified
         // (and stays saved only when it verified as saved from a link).
         const signAs = (folder: DriveNode) => signatureFormFor(folder.integrity?.metadata);
-        const [made] = await createFolderPath(destination, [name], { signAs: signAs(node) });
+        const [made] = await createFolderPath(destination, [name], {
+            signAs: signAs(node),
+            attributes: node.metadata?.attributes,
+        });
         tick();
         const stack: { source: DriveNode; target: DriveNode }[] = [{ source: node, target: made! }];
         while (stack.length) {
@@ -1215,6 +1313,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 if (child.kind === 'folder') {
                     const [folder] = await createFolderPath(target, [child.name], {
                         signAs: signAs(child),
+                        attributes: child.metadata?.attributes,
                     });
                     stack.push({ source: child, target: folder! });
                 } else if (child.currentVersion) await copyFile(child, target, child.name);
@@ -1619,7 +1718,9 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
      * Rotation: after a revocation, fresh keys for the node and everything
      * beneath it, in server-sized batches parents first, every version, share
      * and link re-sealed on this device. Survives a reload: the server keeps the
-     * work list and previous envelopes, and `resumeRotation` picks it up.
+     * work list and previous envelopes, and `resumeRotation` picks it up. A
+     * batch never holds a node beside its parent (deferChildren): children go
+     * once the parent's new key is the server's.
      */
     async function rotate(node: DriveNode, onProgress?: (done: number) => void) {
         const ws = node.workspaceId;
@@ -1660,24 +1761,24 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 continue;
             }
             remember(work.nodes);
-            // Parents not opened on this device (a resumed rotation, a deep subtree):
-            // listing a parent opens it and, mid-rotation, its previous key too.
+            const ready = deferChildren(work.nodes);
+            // Parents not opened on this device (a resumed rotation, a deep subtree, one another
+            // device re-keyed first): listing a parent opens it under the key the server holds
+            // and, mid-rotation, its previous key too.
             const parents = new Set(
-                work.nodes.map((n) => n.parentId).filter((id): id is string => id !== null),
+                ready.map((n) => n.parentId).filter((id): id is string => id !== null),
             );
-            const inBatch = new Set(work.nodes.map((n) => n.id));
             for (const parentId of parents)
-                if (!inBatch.has(parentId) && !openedNodes.has(parentId))
-                    await listFolder(parentId);
+                if (!openedNodes.has(parentId)) await listFolder(parentId);
             // A family folder's walk refuses any share or link the server lists on a node, the
             // walker's own included (design 3.4): none is made there, so none is sealed again or
             // filtered down to the ledger's and the rest left to close. The worker and the core
             // refuse such a node alike; this one never reaches the worker.
             const sending = group
-                ? work.nodes.filter((n) => !n.shares.length && !n.links.length)
-                : work.nodes;
-            if (sending.length < work.nodes.length) shared = true;
-            const sealed = await rpc('driveRotateNodes', {
+                ? ready.filter((n) => !n.shares.length && !n.links.length)
+                : ready;
+            if (sending.length < ready.length) shared = true;
+            const input = {
                 workspaceId: ws,
                 targetEpoch,
                 granterUserId: currentUserId,
@@ -1717,6 +1818,9 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                                     // A share either refuses keeps its old envelope, which the
                                     // rotation leaves unopenable: closed, never re-sealed to someone
                                     // the person did not share with or a key they did not vouch for.
+                                    // Only a verdict on the grantee leaves them out (the server then
+                                    // revokes their share); any other failure stops the rotation
+                                    // before this batch is sent, and its retry takes over.
                                     if (!ledger.shares[n.id]?.includes(share.granteeUserId))
                                         return null;
                                     if (!options.trustGrantee) return null;
@@ -1726,8 +1830,9 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                                             share.granteeUserId,
                                             share.grantee,
                                         );
-                                    } catch {
-                                        return null;
+                                    } catch (error) {
+                                        if (error instanceof GranteeRefusedError) return null;
+                                        throw error;
                                     }
                                     return {
                                         id: share.id,
@@ -1742,13 +1847,22 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                         links: n.links.filter((link) => ledger.links[link.id] === n.id),
                     })),
                 ),
-            });
+            };
             let applied = 0;
             // The keys the worker made become the nodes' own only for what the server applied:
             // whatever stops this batch, every other key it made is dropped, so a retry in this
             // tab walks those nodes again instead of finding them pending.
             const kept = new Set<string>();
+            // From the first fresh key to the last one committed or dropped, no write in this tab
+            // derives a key under these nodes (walk-holds.ts): the worker hands their pending keys
+            // to whatever it wraps under them at the target, and the server may refuse them yet.
+            const release = await takeFolders(
+                rpc,
+                ws,
+                sending.map((n) => ({ id: n.id, keyEpoch: targetEpoch })),
+            );
             try {
+                const sealed = await rpc('driveRotateNodes', input);
                 const batch = [];
                 for (const [index, result] of sealed.nodes.entries()) {
                     const source = sending[index]!;
@@ -1800,14 +1914,21 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 }
             } finally {
                 const ids = work.nodes.map((n) => n.id);
-                await rpc('driveRotateCommit', {
-                    workspaceId: ws,
-                    nodeIds: ids.filter((id) => kept.has(id)),
-                });
-                await rpc('driveRotateDrop', {
-                    workspaceId: ws,
-                    nodeIds: ids.filter((id) => !kept.has(id)),
-                });
+                try {
+                    await rpc('driveRotateCommit', {
+                        workspaceId: ws,
+                        nodeIds: ids.filter((id) => kept.has(id)),
+                    });
+                    await rpc('driveRotateDrop', {
+                        workspaceId: ws,
+                        nodeIds: ids.filter((id) => !kept.has(id)),
+                    });
+                } finally {
+                    release();
+                }
+                // What the server refused may be another device's now, under a key this worker
+                // never held: opened again from the server before anything is wrapped under it.
+                for (const n of sending) if (!kept.has(n.id)) openedNodes.delete(n.id);
             }
             done += applied;
             onProgress?.(done);
@@ -1820,7 +1941,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                           ? 'One item in this folder can’t take the new keys. A manager can move it to Trash and delete it forever, then the key change finishes.'
                           : 'The rotation could not finish. Try again.',
                 );
-            // Everything applied: continue past the batch; otherwise start over so parents come first.
+            // Everything applied: continue past the batch; otherwise (a refusal, or children held
+            // back for a later batch) start over so parents come first.
             cursor = applied === work.nodes.length ? work.nextCursor : null;
         }
         // Envelopes changed under every folder: what this client listed is stale.
@@ -1918,12 +2040,16 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         };
     }
 
-    /* Everything shared with this person, keys opened; a share whose granter is not trusted is reported, not opened. */
-    function mountShares(refresh = false) {
+    /*
+     * Everything shared with this person, keys opened; a share whose granter is
+     * not trusted is reported, not opened. `explicit`, the one share the person
+     * is opening now (openShare): its granter may be added back or followed.
+     */
+    function mountShares(refresh = false, explicit?: string) {
         // Before Drive is open there is no identity to open a share with; a failure
         // this early must not be remembered as the answer.
         if (!currentUserId) return Promise.reject(new Error('Open Drive first.'));
-        if (refresh) mounts = undefined;
+        if (refresh || explicit !== undefined) mounts = undefined;
         mounts ??= (async () => {
             const { shares } = await api.sharedWithMe();
             const granteeUserId = currentUserId;
@@ -1932,13 +2058,16 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 remember([received.node]);
                 let error: string | null = null;
                 let unverified = false;
+                let waiting = false;
                 try {
                     if (!options.trustGranter || !granteeUserId)
                         throw new Error('Shares cannot be opened on this client.');
                     // The granter's current key only: a share signed before they replaced
                     // their keys waits for them to seal it again.
                     const { signingPublicKey, mlDsaPublicKey, replaced } =
-                        await options.trustGranter(received.granter);
+                        await options.trustGranter(received.granter, {
+                            explicit: received.id === explicit,
+                        });
                     try {
                         await rpc('driveOpenShare', {
                             workspaceId: received.workspaceId,
@@ -1965,6 +2094,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                     error =
                         cause instanceof Error ? cause.message : 'This share could not be opened.';
                     unverified = cause instanceof Error && cause.name === 'UnverifiedGranterError';
+                    waiting = cause instanceof Error && cause.name === 'GranterWaitingError';
                 }
                 const node: DriveNode = error
                     ? {
@@ -1976,7 +2106,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                           integrity: null,
                       }
                     : (await decorate([received.node]))[0]!;
-                out.push({ ...received, node, error, unverified });
+                out.push({ ...received, node, error, unverified, waiting });
             }
             return out;
         })().catch((error: unknown) => {
@@ -1984,6 +2114,15 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             throw error;
         });
         return mounts;
+    }
+
+    /* The person opening one share: its granter may be added back or followed, and it opens. */
+    async function openShare(shareId: string) {
+        const mounted = await mountShares(true, shareId);
+        const share = mounted.find((each) => each.id === shareId);
+        if (!share) throw new Error('This share no longer exists.');
+        if (share.error) throw new Error(share.error);
+        return share;
     }
 
     /*
@@ -2012,13 +2151,15 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     async function restore(node: DriveNode, toRoot?: DriveNode) {
         const ws = node.workspaceId;
         if (!toRoot) return withPlace(node, (await api.restore(ws, node.id)).node);
-        const { keyEnvelope } = await rpc('driveRewrapNode', {
-            workspaceId: ws,
-            nodeId: node.id,
-            parentId: toRoot.id,
-            parentKeyEpoch: toRoot.keyEpoch,
-            keyEpoch: node.keyEpoch,
-        });
+        const { keyEnvelope } = await holdFolder(rpc, ws, toRoot, () =>
+            rpc('driveRewrapNode', {
+                workspaceId: ws,
+                nodeId: node.id,
+                parentId: toRoot.id,
+                parentKeyEpoch: toRoot.keyEpoch,
+                keyEpoch: node.keyEpoch,
+            }),
+        );
         const result = await api.restore(ws, node.id, {
             parentKeyEpoch: toRoot.keyEpoch,
             keyEnvelope,
@@ -2037,6 +2178,10 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     }
     function restoreMany(workspaceId: string, nodeIds: string[]) {
         return api.restoreBatch(workspaceId, nodeIds);
+    }
+    /* Delete forever for a selection in this workspace's trash, in one request (api.ts purgeBatch). */
+    function purgeMany(workspaceId: string, nodeIds: string[]) {
+        return api.purgeBatch(workspaceId, nodeIds);
     }
 
     /* Delete forever. The server refuses anything not itself in the trash. */
@@ -2159,6 +2304,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         listFolder,
         createFolderPath,
         rename,
+        recolour,
         move,
         copyFile,
         copyTree,
@@ -2170,6 +2316,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         upgradeShares,
         revokeShare,
         mountShares,
+        openShare,
         mySharing,
         createLink,
         linkUrl,
@@ -2210,6 +2357,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         restore,
         trashMany,
         restoreMany,
+        purgeMany,
         purge,
         emptyTrash,
         storageBreakdown,

@@ -39,7 +39,7 @@ public enum AuthError: Error, LocalizedError, Sendable, Equatable {
     /* The server refused a write based on a version that is no longer current (409). */
     case conflict(String)
     /* The server no longer knows this session (401): signed out elsewhere, a password change, or expiry. */
-    case sessionEnded
+    case sessionEnded(session: String? = nil)
 
     public var errorDescription: String? {
         switch self {
@@ -50,6 +50,26 @@ public enum AuthError: Error, LocalizedError, Sendable, Equatable {
         case .sessionEnded: return "Your session ended. Sign in again."
         }
     }
+}
+
+/* The session a refusal (a 401) was for, by its tag; nil when the error isn't one or doesn't say. */
+public func refusedSession(_ error: Error) -> String? {
+    switch error {
+    case DriveAPIError.notAuthenticated(let session): return session
+    case AuthError.sessionEnded(let session): return session
+    default: return nil
+    }
+}
+
+/*
+ * Whether a failure ends `current`, the session in use now: a 401 sent under another session (one
+ * that ended before this one began, answering late) is stale and ends nothing; one that doesn't
+ * say which session it was for is taken as this one's.
+ */
+public func endsSession(_ error: Error, current: SharedKeychain.Session?) -> Bool {
+    guard endsSession(error) else { return false }
+    guard let refused = refusedSession(error), let current else { return true }
+    return refused == current.tag
 }
 
 /* Whether a request failed because the session is gone (a 401 from the Drive API or the account API): sign-in, not a retry. */
@@ -139,8 +159,13 @@ public enum Auth {
         let user = try JSONDecoder().decode(SessionUser.self, from: JSONSerialization.data(withJSONObject: userJson))
         guard let envelopeJson = finished.body["envelope"] as? [String: Any] else { throw AuthError.message("Signed in, but HushOS returned no account key.") }
         guard let token = finished.cookie else { throw AuthError.noSession }
-        // Another account's data on this phone goes before this one's session exists.
-        AccountStore.shared.claim(AccountOwner(userId: user.id, origin: origin))
+        // Another account's data on this phone goes before this one's session exists, and that account's session goes
+        // first, so nothing still at work for it (a rollback mark, in this process or an extension) writes after the wipe.
+        let owner = AccountOwner(userId: user.id, origin: origin)
+        if AccountStore.shared.owner() != owner { SharedKeychain.delete(SharedKeychain.sessionAccount) }
+        AccountStore.shared.claim(owner)
+        // The session this one replaces (a re-sign-in after Change password or Rotate account key included) is closed first.
+        SessionChange.closeLastSession()
         try SharedKeychain.write(SharedKeychain.configAccount, SharedKeychain.Config(origin: origin))
         try SharedKeychain.write(SharedKeychain.sessionAccount, SharedKeychain.Session(origin: origin, token: token, userId: user.id))
         // A device the proof did not bring back describes itself and gets a key; a failure waits for the next launch.

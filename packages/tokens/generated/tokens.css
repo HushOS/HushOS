@@ -48,16 +48,16 @@
 
 @media (prefers-color-scheme: dark) {
     :root:not(.light) {
-        --surface: #17181c;
-        --ground: #0f1013;
+        --surface: #1c1c1e;
+        --ground: #000000;
         --ink: #ecedf1;
         --ink-muted: #9a9ea9;
-        --rule: #2a2c33;
-        --field: #70737d;
+        --rule: #38383a;
+        --field: #777a84;
         --primary: #aab8f4;
         --primary-pressed: #bcc7f8;
         --on-primary: #121833;
-        --tint: #232a44;
+        --tint: #262e4a;
         --on-tint: #c0cbf8;
         --folder-back: #3d4c80;
         --folder-front: #52629a;
@@ -89,16 +89,16 @@
 }
 
 .dark {
-    --surface: #17181c;
-    --ground: #0f1013;
+    --surface: #1c1c1e;
+    --ground: #000000;
     --ink: #ecedf1;
     --ink-muted: #9a9ea9;
-    --rule: #2a2c33;
-    --field: #70737d;
+    --rule: #38383a;
+    --field: #777a84;
     --primary: #aab8f4;
     --primary-pressed: #bcc7f8;
     --on-primary: #121833;
-    --tint: #232a44;
+    --tint: #262e4a;
     --on-tint: #c0cbf8;
     --folder-back: #3d4c80;
     --folder-front: #52629a;

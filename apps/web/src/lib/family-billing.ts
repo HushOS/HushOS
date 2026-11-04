@@ -9,6 +9,8 @@ import {
     FAMILY_MAX_MEMBERS,
     MAX_MEMBERS_PER_RAISE,
     quoteTierChange,
+    countedPool,
+    firstPlanTooSmall,
     quoteUnitsChange,
 } from '@hushos/billing/protocol';
 import { queryOptions } from '@tanstack/react-query';
@@ -46,6 +48,11 @@ export type PlanState =
     | { kind: 'none' }
     /* A plan ran out or was cancelled, and nothing has replaced it. */
     | { kind: 'lapsed'; productName: string; endedAt: string }
+    /*
+     * A plan Polar still holds whose payment didn't go through (or that is paused): the pool
+     * and the extra places give nothing meanwhile, and choosing a plan ends it first.
+     */
+    | { kind: 'unpaid'; productName: string; standing: 'payment-failed' | 'paused' }
     | {
           kind: 'live';
           subscription: FamilySubscription;
@@ -65,9 +72,70 @@ export function planState(summary: FamilyBillingFull): PlanState {
             ending: live.cancelAtPeriodEnd,
             overdue: live.status === 'past_due',
         };
+    if (summary.lapsedPlan) return { kind: 'unpaid', ...summary.lapsedPlan };
     if (summary.lastPlan) return { kind: 'lapsed', ...summary.lastPlan };
     return { kind: 'none' };
 }
+
+/*
+ * Said before a leave or a removal: the family's plan that gives nothing (its payment failed,
+ * or it is paused) ends at once when the person who pays for it goes (the server revokes it
+ * first). From a manager's summary, which names the payer; from a member's glance only for
+ * the person themselves (`youPay`), which names nobody else. Null when nothing lapsed is there
+ * to end, or the summary can't say this person pays: then the server names the plans itself
+ * (`ends-lapsed`, or the removal preview), and lapsedEndsWords says them.
+ */
+export function lapsedPlanEndsLine(
+    summary: FamilyBilling | undefined,
+    family: string,
+    goer: { userId: string; you: true } | { userId: string; you: false; name: string },
+) {
+    const shown = lapsedPlanShown(summary, goer);
+    return shown ? lapsedEndsWords(family, [shown], goer) : null;
+}
+
+/*
+ * The lapsed plan the summary shows as ending with this person's leave or removal, with the ids
+ * to confirm it by (all the family's lapsed plans, as the page knows them); null as above.
+ */
+export function lapsedPlanShown(
+    summary: FamilyBilling | undefined,
+    goer: { userId: string; you: boolean },
+) {
+    if (!summary?.enabled) return null;
+    const lapsed = summary.lapsedPlan;
+    if (!lapsed) return null;
+    if (summary.view === 'manage')
+        return summary.payer?.userId === goer.userId
+            ? { name: lapsed.productName, standing: lapsed.standing, ids: lapsed.ids }
+            : null;
+    return goer.you && 'youPay' in lapsed && lapsed.youPay
+        ? { name: lapsed.productName, standing: lapsed.standing, ids: lapsed.ids ?? [] }
+        : null;
+}
+
+/* What ends when the person who pays for these plans goes, every plan named. */
+export function lapsedEndsWords(
+    family: string,
+    plans: { name: string; standing: 'payment-failed' | 'paused' }[],
+    goer: { you: true } | { you: false; name: string },
+) {
+    const several = plans.length > 1;
+    const names = `${plans.map((plan) => planWord(plan.name)).join(' and ')} ${several ? 'plans' : 'plan'}`;
+    const how = several ? 'which give nothing now' : standingWords(plans[0]!.standing);
+    const after = several
+        ? 'Nothing of them is refunded: no part of them is in use.'
+        : 'Nothing of it is refunded: no part of it is in use.';
+    return goer.you
+        ? `The ${names} for ${family}, which you pay for and ${how}, ${several ? 'end' : 'ends'} at once when you leave. ${after}`
+        : `${goer.name} pays for the ${names} for ${family}, ${how}. ${several ? 'They end' : 'It ends'} at once when they’re removed. ${after}`;
+}
+
+/* "Family Pro (monthly)" → "Family Pro"; a neutral "Family plan" → "Family", as "…’s Family plan". */
+const planWord = (productName: string) =>
+    productName.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '').replace(/\s+plan$/i, '');
+const standingWords = (standing: 'payment-failed' | 'paused') =>
+    standing === 'paused' ? 'which is paused' : 'whose payment didn’t go through';
 
 /*
  * A renewal the bank refused, and this person pays: then Manage payment and invoices is the
@@ -339,10 +407,12 @@ export type FamilyActions = {
     removePlaces: boolean;
     /* Withdraw a scheduled cut: free, and the places stay. */
     keepPlaces: boolean;
-    /* "Manage payment and invoices": the payer's billing portal. */
+    /* "Card and invoices": the payer's billing portal at Polar. */
     portal: boolean;
-    /* Cancelling is done in the portal; offered while the plan renews. */
+    /* Set the plan to end at its period's end, here (the reason goes to Polar); while it renews. */
     cancel: boolean;
+    /* Take back an ending: the payer, while the plan is set to end. */
+    resume: boolean;
 };
 
 const nothing: FamilyActions = {
@@ -354,12 +424,13 @@ const nothing: FamilyActions = {
     keepPlaces: false,
     portal: false,
     cancel: false,
+    resume: false,
 };
 
 /*
  * Which controls this person gets. Only the payer changes a live plan (the
  * server answers anyone else 403); a plan set to end refuses changes to its
- * places until it is resumed, in the portal. With no live plan, any `billing`
+ * places until it is resumed, here or in the portal. With no live plan, any `billing`
  * holder may check out and becomes the payer (the server moves the family's
  * customer to them); the portal stays the payer's.
  */
@@ -399,6 +470,7 @@ export function familyActions(
         keepPlaces: changeable && live.pendingUnits !== null,
         portal: true,
         cancel: changeable,
+        resume: state.ending,
     };
 }
 
@@ -443,3 +515,26 @@ export function familyCurrencies(plans: readonly FamilyPlan[]) {
 
 /* In lib/plans, shared with the pricing page, which must not load this module's API clients. */
 export { familyPrice } from '@/lib/plans';
+
+/*
+ * Whether a family tier can be someone's new family's first plan: once it is live, their own
+ * files draw from it, so the server refuses a tier smaller than what the pool would count
+ * (startGroupCheckout): their own files as one part, rounded up to a whole GiB (countedPool, the
+ * server's own count), said in the server's words (firstPlanTooSmall), so nobody is left with a
+ * family and no plan. `storage` is the account's own figures (/api/auth/storage while not
+ * pooled); unknown, or pooled already (someone in a family can't make another), nothing is
+ * refused here. `tiers` is the family plans on offer.
+ */
+export function tierTooSmall(
+    storage: { usedBytes: string; pool: unknown } | null | undefined,
+    plan: Pick<FamilyPlan, 'name' | 'quotaBytes'>,
+    tiers: readonly Pick<FamilyPlan, 'quotaBytes'>[],
+) {
+    if (!storage || storage.pool) return null;
+    return firstPlanTooSmall({
+        countedBytes: countedPool([BigInt(storage.usedBytes)]),
+        plan,
+        tiers,
+        family: false,
+    });
+}

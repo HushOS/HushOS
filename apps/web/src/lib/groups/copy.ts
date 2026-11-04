@@ -2,7 +2,6 @@ import { keyChangeWords } from '@/lib/key-change-words';
 import { GroupApiError, NO_ANSWER } from './api';
 import type { GroupNotice } from './context';
 import type { SendOutcome } from './outbox';
-import { joinCheckMessage } from '@hushos/crypto/join-session';
 
 /*
  * What the families pages say when the server refuses something, when the
@@ -11,6 +10,12 @@ import { joinCheckMessage } from '@hushos/crypto/join-session';
  * "roster", no "succession" (DESIGN.md, Content). Names come from the server
  * and are passed in; a family is named, a person by their first name.
  */
+
+/* "Sam", "Sam and Ana", "Sam, Ana and Lee": names joined as the family page says them. */
+export function namesInWords(names: readonly string[]) {
+    if (names.length <= 1) return names[0] ?? '';
+    return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
 
 export type CopyContext = {
     family?: string;
@@ -89,30 +94,33 @@ export function refusalCopy(
     data: unknown,
     ctx: CopyContext = {},
 ): string {
-    const family = ctx.family ?? 'This family';
+    const family = ctx.family ?? 'this family';
     const person = ctx.person ?? 'They';
     switch (code) {
         case 'invalid':
             return 'Couldn’t save that change. Reload and try again.';
         case 'succession-due':
-            return `${family} needs a manager to finish an earlier change first. Reload and try again.`;
+            return `A manager of ${family} needs to finish an earlier change first. Reload and try again.`;
         case 'left-due':
             return leftDueCopy(data, ctx);
         case 'members-changed':
             return `${family} changed while you were working on it. Try again.`;
         case 'stale':
             return `${family} changed while you were working on it. Try again.`;
+        // The family's payer leaving or removed while a change to its plan holds the plan's claim.
+        case 'busy':
+            return 'Another change to this plan is in progress. Try again in a moment.';
         case 'seats': {
             // With billing on, the server says why no place could be had (docs/groups-design.md 3.5).
             switch (stringField(data, 'reason')) {
                 case 'no-plan':
                     return `Choose a plan for ${ctx.family ?? 'this family'} before letting anyone in.`;
                 case 'payer':
-                    return `${family} is full. Ask the person who pays for it to add a place.`;
+                    return `Every place in the plan for ${family} is taken. Ask the person who pays for it to add a place.`;
                 case 'cap':
-                    return `${family} has as many members as its plan allows.`;
+                    return `The plan for ${family} allows no more members.`;
                 case 'canceling':
-                    return `${family}’s plan is set to end, so nobody new can join. Resume it under Billing first.`;
+                    return `The plan for ${family} is set to end, so nobody new can join. Resume it under Billing first.`;
                 case 'declined':
                     return 'Your bank declined the charge for another place. Nothing was charged and nobody was let in.';
                 case 'confirm':
@@ -127,13 +135,13 @@ export function refusalCopy(
             const used = numberField(data, 'used');
             const limit = numberField(data, 'limit');
             return used !== null && limit !== null
-                ? `${family} is full (${used} of ${limit}).`
-                : `${family} is full.`;
+                ? `Every place in ${family} is taken (${used} of ${limit}).`
+                : `Every place in ${family} is taken.`;
         }
         case 'no-plan':
             // The invitee of a family whose plan lapsed, or a manager inviting or making a folder.
             return data && typeof data === 'object' && (data as { invitee?: unknown }).invitee
-                ? `${ctx.family ?? 'This family'} can’t take anyone new right now. Ask whoever invited you; this invitation works again once the family has a plan.`
+                ? `Nobody new can join ${ctx.family ?? 'this family'} right now. Ask whoever invited you; this invitation works again once there’s a plan.`
                 : `Choose a plan for ${ctx.family ?? 'this family'} first. Until it has one, nobody can be invited and no family folders can be made.`;
         case 'in-family': {
             // Let them in: the newcomer's other family is never named to this one.
@@ -153,8 +161,8 @@ export function refusalCopy(
         // on this page (through the billing portal). Removing them names them; leaving doesn't.
         case 'payer':
             return ctx.person
-                ? `${ctx.person} pays for ${ctx.family ?? 'this family'}’s plan. They can cancel it under Billing on this page; then you can remove them.`
-                : `You pay for ${ctx.family ?? 'this family'}’s plan. Cancel it under Billing on this page first; the family keeps it until the end of the period.`;
+                ? `${ctx.person} pays for the family’s plan. They can cancel it under Billing on this page; then you can remove them.`
+                : `You pay for the family’s plan. Cancel it under Billing on this page first; the family keeps it until the end of the period.`;
         case 'last-holder':
             return MANAGER_FIRST;
         case 'unsupported':
@@ -222,6 +230,16 @@ export function errorCopy(error: unknown, ctx: CopyContext = {}) {
         if (error.status === 501) return 'Families aren’t available on this server.';
         return 'HushOS couldn’t do that just now. Try again in a moment.';
     }
+    // A request the client gave up on (lib/api-client.ts, 30 s), in each browser's words:
+    // "signal timed out" (Chromium), "The operation timed out." (Safari, Firefox). A DOMException,
+    // which some runtimes don't count as an Error.
+    const { name, message } = (error ?? {}) as { name?: unknown; message?: unknown };
+    if (
+        name === 'TimeoutError' ||
+        (typeof message === 'string' &&
+            /^(signal timed out|the operation timed out)/i.test(message))
+    )
+        return 'HushOS’s server took too long to answer.';
     if (!(error instanceof Error) || !error.message) return 'Something went wrong. Try again.';
     // A request outside the groups client (the worker's, a sync's) that never reached the server
     // fails with the browser's own words, as isNetworkFailure in lib/drive.ts reads them.
@@ -272,7 +290,7 @@ export function noticeCopy(
             const what =
                 notice.owner === null
                     ? 'your own files, in My files'
-                    : `${notice.count === 1 ? 'one' : notice.count} of ${familyOf(notice.owner) ?? 'another family'}’s folders`;
+                    : `${notice.count === 1 ? 'one' : notice.count} of the folders belonging to ${familyOf(notice.owner) ?? 'another family'}`;
             return [
                 `It names ${what}.`,
                 `HushOS ignored that, so nothing in ${them} was shared or changed.`,
@@ -295,27 +313,11 @@ export function noticeCopy(
 }
 
 /* A notice's title, where it has one. */
-export function noticeTitle(notice: GroupNotice, family = 'The family') {
+export function noticeTitle(notice: GroupNotice, family = 'the family') {
     if (notice.kind !== 'foreign-listing') return null;
     // My files isn't a folder, and one family may name both: the titles differ.
-    if (notice.owner === null) return `${family}’s member list names your own files`;
+    if (notice.owner === null) return `The member list of ${family} names your own files`;
     return notice.count === 1
-        ? `${family}’s member list names a folder that isn’t its own`
-        : `${family}’s member list names folders that aren’t its own`;
-}
-
-/*
- * The two hidden words of the join code typed, and not the code's: most
- * likely one misheard, so it is said calmly, and never which one, or a
- * guesser could find them one at a time. The warning that HushOS may be
- * showing a different member list is kept for "They don't match".
- */
-/* After the family's first wrong pair: the calm line (the core's join_check_message says the same). */
-export function wrongWordsCopy(them: string) {
-    return joinCheckMessage(false, them);
-}
-
-/* After a wrong pair again: the alarm's first line. */
-export function mismatchCopy(them: string) {
-    return joinCheckMessage(true, them);
+        ? `The member list of ${family} names a folder that isn’t its own`
+        : `The member list of ${family} names folders that aren’t its own`;
 }

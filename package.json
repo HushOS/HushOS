@@ -1,6 +1,6 @@
 {
     "name": "hushos",
-    "version": "0.9.0",
+    "version": "0.14.0",
     "private": true,
     "license": "AGPL-3.0-only",
     "workspaces": [
@@ -40,6 +40,7 @@
         "android:release-apk": "apps/android/scripts/release-apk.sh",
         "android:device": "bun run android:release && adb install -r apps/android/app/build/outputs/apk/release/app-release.apk",
         "ios:archive": "apps/ios/scripts/archive.sh",
+        "ios:release-ipa": "apps/ios/scripts/release-ipa.sh",
         "ios:device": "bun run ios:project && apps/ios/scripts/run-device.sh",
         "setup": "bun scripts/setup.ts",
         "infra:up": "docker compose -f compose.yaml -f compose.dev.yaml up -d --wait db mailpit garage && docker compose -f compose.yaml -f compose.dev.yaml run --rm garage-init",
@@ -63,29 +64,29 @@
         "polar:seed": "bun --env-file=../../.env run --cwd packages/billing seed"
     },
     "devDependencies": {
+        "@hushos/billing": "workspace:*",
         "@hushos/config": "workspace:*",
-        "@playwright/test": "1.63.0",
-        "@types/bun": "1.4.2",
+        "@playwright/test": "1.64.1",
+        "@types/bun": "1.4.4",
         "fflate": "^0.8.2",
-        "oxfmt": "0.66.0",
-        "oxlint": "1.81.0",
-        "oxlint-tsgolint": "7.0.2001",
-        "turbo": "2.10.13",
+        "oxfmt": "0.75.0",
+        "oxlint": "1.90.0",
+        "oxlint-tsgolint": "7.0.2005",
+        "turbo": "2.11.10",
         "typescript": "7.0.2",
-        "vitest": "^5.0.0",
-        "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+        "vitest": "^5.0.5",
+        "xlsx": "file:vendor/xlsx-0.20.3.tgz"
     },
     "engines": {
-        "bun": ">=1.4.2"
+        "bun": ">=1.4.4"
     },
-    "packageManager": "bun@1.4.2",
+    "packageManager": "bun@1.4.4",
     "intent": {
         "skills": [
             "*"
         ]
     },
     "patchedDependencies": {
-        "env-runner@0.2.1": "patches/env-runner@0.2.1.patch",
         "@tanstack/router-ssr-query-core@1.169.3": "patches/@tanstack%2Frouter-ssr-query-core@1.169.3.patch"
     }
 }

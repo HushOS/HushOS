@@ -1,5 +1,5 @@
-import type { Catalogue, FamilyPlan, Plan } from '@hushos/billing/api';
-import { DEFAULT_CURRENCY } from '@hushos/billing/protocol';
+import type { BillingSubscription, Catalogue, FamilyPlan, Plan } from '@hushos/billing/api';
+import { DEFAULT_CURRENCY, planStanding, planTierName } from '@hushos/billing/protocol';
 import { formatMoney, formatQuota } from '@/lib/format';
 
 export type Tier = {
@@ -42,7 +42,7 @@ export function tiersOf(plans: Plan[]) {
     for (const plan of plans) {
         const tier = tiers.get(plan.quotaBytes) ?? {
             key: plan.quotaBytes,
-            name: plan.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, ''),
+            name: planTierName(plan),
             description: plan.description,
             quotaBytes: plan.quotaBytes,
             recommended: false,
@@ -149,9 +149,31 @@ export function familyPrice(plan: FamilyPlan, currency: string) {
     return fallback ? { ...fallback, currency: DEFAULT_CURRENCY } : null;
 }
 
+/*
+ * What happens to a personal plan of theirs when someone's files join a family's pool
+ * (docs/families-shared-pool.md 5.1), said before they pay or are let in; `when` ends
+ * the clause ("the family’s plan starts", "you’re let in"). A live plan ends with its
+ * unused days refunded. A lapsed one (its payment failed, or paused) is ended too, with
+ * nothing refunded: no part of it is in use. Null when they have neither.
+ */
+export function personalPlanEnding(
+    subscription: BillingSubscription | null | undefined,
+    when: string,
+): string | null {
+    if (!subscription) return null;
+    const standing = planStanding(subscription);
+    const name = familyTierName({ name: subscription.productName });
+    if (standing === 'live')
+        return `Your ${name} plan ends when ${when}, and the unused days are refunded.`;
+    if (standing === 'payment-failed')
+        return `Your ${name} plan, whose payment didn’t go through, ends when ${when}. Nothing is refunded: no part of it is in use.`;
+    if (standing === 'paused')
+        return `Your paused ${name} plan ends when ${when}. Nothing is refunded: no part of it is in use.`;
+    return null;
+}
+
 /* A family plan's name without its billing period: "Family Pro (monthly)" → "Family Pro". */
-export const familyTierName = (plan: Pick<FamilyPlan, 'name'>) =>
-    plan.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+export const familyTierName = (plan: Pick<FamilyPlan, 'name'>) => planTierName(plan);
 
 export type FamilyOffer = {
     plan: FamilyPlan;

@@ -347,7 +347,7 @@ extension OnFakeDrive {
                 let theirs: NodeView
                 if change == "rename" {
                     let envelope = try metadataSeal(ctx: MetadataContext(workspaceId: family.workspaceId, nodeId: family.fileId, metadataVersion: landed.metadataVersion + 1),
-                                                    nodeKey: family.fileKey, metadata: NodeMetadata(name: "Recipes (Ana).txt", mime: "text/plain", size: 3, modified: nil))
+                                                    nodeKey: family.fileKey, metadata: NodeMetadata(name: "Recipes (Ana).txt", mime: "text/plain", size: 3, modified: nil, attributes: [:]))
                     theirs = landed.with(metadataVersion: landed.metadataVersion + 1, metadataEnvelope: base64urlEncode(bytes: envelope))
                 } else {
                     let ours = try #require(landed.currentVersion)

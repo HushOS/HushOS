@@ -3,6 +3,7 @@ import { Brand } from '@/components/brand';
 import { Spinner } from '@/components/motion';
 import { PersonAvatar } from '@/components/person-avatar';
 import { formatDay, useCatalogueState } from '@/lib/drive';
+import { familyTierName } from '@/lib/plans';
 import { Progress, ProgressValue } from '@/components/ui/progress';
 import {
     Sidebar,
@@ -26,6 +27,7 @@ import {
     storageQueryOptions,
     useBillingEnabled,
 } from '@/lib/queries';
+import { lapsedPlan, livePlan, planStanding } from '@hushos/billing/protocol';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation, useRouter } from '@tanstack/react-router';
 import {
@@ -50,7 +52,7 @@ export type NavItem = {
         | '/app/trash'
         | '/app/shared'
         | '/app/account'
-        | '/app/people'
+        | '/app/contacts'
         | '/app/tags'
         | '/app/billing'
         | '/app/recovery-key'
@@ -86,10 +88,10 @@ export const workspace: NavItem[] = [
 export const organise: NavItem[] = [
     { to: '/app/tags', label: 'Tags', icon: TagIcon, active: under('/app/tags') },
     {
-        to: '/app/people',
-        label: 'People you share with',
+        to: '/app/contacts',
+        label: 'Contacts',
         icon: ContactIcon,
-        active: under('/app/people'),
+        active: under('/app/contacts'),
     },
 ];
 export const operator: NavItem[] = [
@@ -126,7 +128,7 @@ function CatalogueStatus() {
             ? 'Search couldn’t get ready. It tries again next time you open HushOS.'
             : 'Getting search ready';
     return (
-        <output className="flex items-center gap-2 px-2 text-xs text-muted-foreground rail:hidden">
+        <output className="flex items-center gap-2 px-3 text-xs text-muted-foreground rail:hidden">
             {state.phase !== 'failed' && <Spinner className="size-3 shrink-0" />}
             <span className="truncate">{line}</span>
         </output>
@@ -175,11 +177,11 @@ function PoolMeter({
                 nearlyFull={nearlyFull}
                 line={`${family}: ${usedLine}, ${line}`}
             />
-            <div className="flex flex-col gap-2 px-2 rail:hidden" data-storage-meter="pool">
+            <div className="flex flex-col gap-2 px-3 rail:hidden" data-storage-meter="pool">
                 <span className="eyebrow truncate text-muted-foreground">{family}</span>
                 <Progress
                     value={Math.round(used * 100)}
-                    aria-label={`${family}’s storage used`}
+                    aria-label={`Storage used, ${family}`}
                     className={cn(
                         'gap-2 **:data-[slot=progress-track]:h-1.5 **:data-[slot=progress-track]:rounded-full',
                         nearlyFull && '**:data-[slot=progress-indicator]:bg-destructive',
@@ -218,8 +220,8 @@ function OwnMeter({ label }: { label: string | null }) {
     const { data: summary } = useQuery({ ...billingQueryOptions, enabled: billing });
     const used = storage ? Number(storage.usedBytes) / Number(storage.quotaBytes) : 0;
     // "Get more room" only while a plan with more room than the current one is on sale.
-    const current =
-        summary?.subscription && !summary.subscription.endedAt ? summary.subscription : null;
+    const current = livePlan(summary?.subscription);
+    const lapsed = lapsedPlan(summary?.subscription);
     const currentQuota = current ? BigInt(current.quotaBytes) : 0n;
     const canUpgrade = Boolean(
         catalogue?.plans.some((plan) => BigInt(plan.quotaBytes) > currentQuota),
@@ -231,7 +233,9 @@ function OwnMeter({ label }: { label: string | null }) {
         ? null
         : ending
           ? `${ending.productName} ends ${formatDay(ending.currentPeriodEnd)}`
-          : `${formatSpace(storage.availableBytes)} free`;
+          : lapsed
+            ? `${familyTierName({ name: lapsed.productName })}${planStanding(lapsed) === 'paused' ? ' is paused' : '’s payment failed'}`
+            : `${formatSpace(storage.availableBytes)} free`;
     const usedLine = storage
         ? `${formatSpace(storage.usedBytes)} of ${formatQuota(storage.quotaBytes)} used`
         : 'Storage';
@@ -242,7 +246,7 @@ function OwnMeter({ label }: { label: string | null }) {
                 nearlyFull={nearlyFull && !ending}
                 line={`${label ? `${label}: ` : ''}${usedLine}${line ? `, ${line}` : ''}`}
             />
-            <div className="flex flex-col gap-2 px-2 rail:hidden" data-storage-meter="own">
+            <div className="flex flex-col gap-2 px-3 rail:hidden" data-storage-meter="own">
                 {label && <span className="eyebrow text-muted-foreground">{label}</span>}
                 <Progress
                     value={Math.round(used * 100)}
@@ -447,11 +451,15 @@ export function AppSidebar({
     return (
         <Sidebar collapsible="icon" className="group-data-[side=left]:border-r-0">
             <SidebarHeader className="px-4 pt-4 pb-0 rail:px-2">
-                {/* The logo's square shares the nav icons' centre line (37px in); the name then starts near their labels. */}
+                {/*
+                 * The column's text edge is the places' icons, 28px in (DESIGN.md: align the text, not
+                 * the box); their tinted rows hang 12px outside it. The logo's square starts on that
+                 * edge, and its 6px gap puts the name on the labels' edge, 58px in.
+                 */}
                 <Brand
                     to="/app"
                     compact={state === 'collapsed'}
-                    className="h-9 self-start rounded-md border-r-0 pr-1 pl-[9px] rail:size-10 rail:justify-center rail:px-0 rail:[&_[data-wordmark-name]]:sr-only"
+                    className="h-9 self-start rounded-md border-r-0 pr-1 pl-3 rail:size-10 rail:justify-center rail:px-0 rail:[&_[data-wordmark-name]]:sr-only [&>span]:gap-1.5"
                 />
             </SidebarHeader>
             <SidebarContent className="gap-5 px-4 pt-5 rail:px-2">

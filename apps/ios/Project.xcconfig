@@ -1,0 +1,6 @@
+// Settings every target shares, under the spec's own (project.yml). The app group is the app's
+// and its extensions' shared container, defaults and keychain access group; a build signed under
+// another team registers its own group and sets it here, or in App/Local.xcconfig (not committed).
+// The entitlements and each bundle's Info.plist (HushOSAppGroup, read by HushOSKit) take it from here.
+APP_GROUP_ID = group.com.hushos.app
+#include? "App/Local.xcconfig"

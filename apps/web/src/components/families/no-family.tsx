@@ -8,7 +8,7 @@ import { PageHeader } from '@/components/page-header';
 import { Setting, SettingsGroup } from '@/components/settings';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { myInvitationsQueryOptions } from '@/lib/families-shell';
-import { familyTierName } from '@/lib/plans';
+import { personalPlanEnding } from '@/lib/plans';
 import { billingQueryOptions, catalogueQueryOptions, useBillingEnabled } from '@/lib/queries';
 import type { GroupSummary } from '@/lib/groups/api';
 import type { GroupNotice } from '@/lib/groups/context';
@@ -50,7 +50,6 @@ export function NoFamily({
     const plan = chosen
         ? { plan: chosen, currency: create?.currency ?? Object.keys(chosen.prices)[0] ?? 'usd' }
         : undefined;
-    const live = personal.data?.subscription;
     // Arrived from Plans with a tier: the dialog opens with it, until it is closed.
     const [dismissed, setDismissed] = useState(false);
     const open = creating || (Boolean(chosen) && !dismissed);
@@ -60,8 +59,8 @@ export function NoFamily({
                 title="Family"
                 description={
                     billing
-                        ? 'A family shares one plan’s storage, for everyone’s own files and the family folders, and everyone in it is checked before they join. You can be in one family.'
-                        : 'A family shares folders, and everyone in it is checked before they join. You can be in one family.'
+                        ? 'A family shares one plan’s storage, for everyone’s own files and the family folders. You can be in one family.'
+                        : 'A family shares folders. You can be in one family.'
                 }
             >
                 <Button onClick={() => setCreating(true)}>Create a family</Button>
@@ -86,7 +85,7 @@ export function NoFamily({
                                 }
                             >
                                 <span className="text-muted-foreground">
-                                    You accepted. Check each other’s words to finish.
+                                    You accepted. You’re in once someone who manages it lets you in.
                                 </span>
                             </Setting>
                         ))}
@@ -134,9 +133,10 @@ export function NoFamily({
                     if (!next) setDismissed(true);
                 }}
                 plan={plan}
-                personalPlan={
-                    live && !live.endedAt ? familyTierName({ name: live.productName }) : null
-                }
+                personalPlan={personalPlanEnding(
+                    personal.data?.subscription,
+                    'the family’s plan starts',
+                )}
             />
         </div>
     );

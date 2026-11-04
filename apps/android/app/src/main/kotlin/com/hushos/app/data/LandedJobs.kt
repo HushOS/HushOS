@@ -26,12 +26,15 @@ class LandedJobs(private val dir: File) {
         if (!mark(id)) android.util.Log.w("HushOS", "couldn't mark transfer $id as landed; a rerun may send it again")
     }
 
+    /* Whether `id` landed, the mark left in place (a family's removal reading it: the job ends as uploaded, not failed). */
+    fun has(id: String): Boolean = File(dir, id).exists()
+
     /* Whether `id` already landed; the mark is used up, so a later, new run of the same id isn't skipped. */
     fun take(id: String): Boolean = File(dir, id).delete()
 
-    /* Marks nobody will take (a cancelled job is never rerun): gone after a day. */
-    fun sweep(now: Long = System.currentTimeMillis()) {
-        dir.listFiles()?.filter { now - it.lastModified() > DAY_MS }?.forEach { it.delete() }
+    /* Marks nobody will take (a cancelled job is never rerun): gone after a day, unless WorkManager still lists the job (`keep`). */
+    fun sweep(now: Long = System.currentTimeMillis(), keep: Set<String> = emptySet()) {
+        dir.listFiles()?.filter { now - it.lastModified() > DAY_MS && it.name !in keep }?.forEach { it.delete() }
     }
 
     companion object {

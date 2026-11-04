@@ -7,7 +7,9 @@ import { TriangleAlertIcon, XIcon } from 'lucide-react';
 import { Spinner } from '@/components/motion';
 
 /*
- * A toast is a dark notice, bottom right. It confirms something that already
+ * A toast is a dark notice, bottom right, in front of the transfers panel: it
+ * goes in seconds and the panel stays, so it covers the panel for a moment rather
+ * than float above it. It confirms something that already
  * happened (a copy, a move to Trash) and may offer one way back, such as Undo;
  * anything the user must act on stays inline as an Alert.
  */
@@ -27,7 +29,7 @@ function ToastViewport({ className, ...props }: ToastPrimitive.Viewport.Props) {
         <ToastPrimitive.Viewport
             data-slot="toast-viewport"
             className={cn(
-                'pointer-events-none fixed inset-x-4 bottom-[calc(1rem+var(--transfers-lift,0px)+var(--selection-lift,0px))] z-[70] mx-auto w-auto max-w-sm outline-none sm:right-6 sm:bottom-[calc(1.5rem+var(--transfers-lift,0px)+var(--selection-lift,0px))] sm:left-auto sm:mx-0 sm:w-full',
+                'pointer-events-none fixed inset-x-4 bottom-[calc(1rem+var(--selection-lift,0px))] z-[70] mx-auto w-auto max-w-sm outline-none sm:right-6 sm:bottom-[calc(1.5rem+var(--selection-lift,0px))] sm:left-auto sm:mx-0 sm:w-full',
                 className,
             )}
             {...props}
@@ -40,12 +42,12 @@ function Toast({ className, ...props }: ToastPrimitive.Root.Props) {
         <ToastPrimitive.Root
             data-slot="toast"
             className={cn(
-                'group/toast pointer-events-auto absolute right-0 bottom-0 z-[calc(1000-var(--toast-index))] w-full origin-bottom rounded-xl bg-snackbar text-on-snackbar shadow-xl outline-none select-none will-change-transform focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-snackbar-action',
+                'group/toast pointer-events-auto absolute right-0 bottom-0 z-[calc(1000-var(--toast-index))] w-full origin-bottom rounded-xl bg-snackbar text-on-snackbar shadow-xl outline-none select-none will-change-transform focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-snackbar-action',
                 '[--gap:0.5rem] [--height:var(--toast-frontmost-height,var(--toast-height))] [--offset-y:calc(var(--toast-offset-y)*-1+calc(var(--toast-index)*var(--gap)*-1)+var(--toast-swipe-movement-y))] [--peek:0.5rem] [--scale:calc(max(0,1-(var(--toast-index)*0.06)))] [--shrink:calc(1-var(--scale))]',
                 'h-(--height) [transform:translateX(var(--toast-swipe-movement-x))_translateY(calc(var(--toast-swipe-movement-y)-(var(--toast-index)*var(--peek))-(var(--shrink)*var(--height))))_scale(var(--scale))] [transition:transform_400ms_var(--ease-out-expo),opacity_300ms_var(--ease-out-expo),height_150ms] motion-reduce:transition-none',
                 "after:absolute after:top-full after:left-0 after:h-[calc(var(--gap)+1px)] after:w-full after:content-['']",
                 'data-expanded:h-(--toast-height) data-expanded:[transform:translateX(var(--toast-swipe-movement-x))_translateY(var(--offset-y))]',
-                // Coming and going they fade as they slide: lifted over the transfers panel, a solid toast would cross it.
+                // Coming and going they fade as they slide: in front of the transfers panel, a solid toast would cross it.
                 'data-limited:opacity-0 data-starting-style:opacity-0 data-starting-style:[transform:translateY(150%)] data-ending-style:opacity-0',
                 '[&[data-ending-style]:not([data-limited]):not([data-swipe-direction])]:[transform:translateY(150%)]',
                 'data-ending-style:data-[swipe-direction=down]:[transform:translateY(calc(var(--toast-swipe-movement-y)+150%))]',
@@ -101,7 +103,7 @@ function ToastActionButton(props: React.ComponentProps<'button'>) {
     return (
         <button
             type="button"
-            className="cursor-pointer rounded-md px-2 py-1 text-sm font-semibold text-snackbar-action outline-none hover:bg-on-snackbar/10 focus-visible:outline-2 focus-visible:outline-snackbar-action"
+            className="cursor-pointer rounded-md px-2 py-1 text-sm font-semibold text-snackbar-action outline-none hover:bg-on-snackbar/10 focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-snackbar-action"
             {...props}
         />
     );
@@ -128,7 +130,7 @@ function ToastClose({ className, children, ...props }: ToastPrimitive.Close.Prop
             data-slot="toast-close"
             aria-label="Dismiss"
             className={cn(
-                'flex w-10 shrink-0 cursor-pointer items-center justify-center opacity-70 transition-opacity outline-none hover:opacity-100 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-snackbar-action',
+                'flex w-10 shrink-0 cursor-pointer items-center justify-center opacity-70 transition-opacity outline-none hover:opacity-100 focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-snackbar-action',
                 className,
             )}
             {...props}

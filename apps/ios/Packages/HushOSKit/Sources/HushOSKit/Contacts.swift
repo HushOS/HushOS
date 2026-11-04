@@ -32,7 +32,7 @@ public struct ContactPin: Codable, Sendable, Identifiable, Hashable {
     public let name: String
     public let encryptionPublicKey: String
     public let signingPublicKey: String
-    public let fingerprint: String
+    public var fingerprint: String
     public let pinnedAt: String
     /* Hex SHA-256 of their ML-KEM key. */
     public var kemPublicKeyHash: String?
@@ -57,6 +57,8 @@ public struct ContactPin: Codable, Sendable, Identifiable, Hashable {
      * from such a pin, and no member is admitted from one (docs/groups-design.md 2.8).
      */
     public var trustedVia: String? = nil
+    /* Where this person was first met ("added", "shared-with-me", "family"): informational, read by no rule. */
+    public var firstSeen: String? = nil
     public var id: String { userId }
 }
 
@@ -76,37 +78,64 @@ public struct ShareView: Codable, Sendable, Identifiable, Hashable {
 }
 
 struct SharesListResponse: Codable, Sendable { let shares: [ShareView] }
+
+/*
+ * A share made, and whether checking whom it is sealed to moved whom this phone trusts (a legacy pin made first-seen, a
+ * succession followed, a first guard entry), so what is drawn is judged again.
+ */
+public struct SharedWith: Sendable {
+    public let share: ShareView
+    public let trustChanged: Bool
+}
 struct ShareCreated: Codable, Sendable { let share: ShareView }
 
-/* The lookup's verdict against the pin, the way the web's contacts page shows it. */
+/* Where this phone stands with someone looked up by email: for Check it's Maya and the changed-account notice. */
 public struct Lookup: Sendable {
     public let contact: Contact
-    public let pinned: ContactPin?
-    /* The served keys differ from the pin and no followed chain explains them: nothing is trusted until the person re-pins. */
-    public let changed: Bool
-    /* Pinned over these same X25519 and Ed25519 keys, but the pin vouches for nothing (made before the release): compare the words again. */
-    public var recheck: Bool = false
-    /* The pin just followed their succession to the keys served now: said quietly, with comparing the words again offered. */
-    public var followed: Bool = false
-    /* Changed, and the served keys are newer than a version 3 pin's: "Check again" may find a succession their pinned keys signed. */
-    public var canFollow: Bool = false
-    /* Words can be compared only over an upgraded identity whose keys statement holds. */
+    /* The pin held for this person, after any succession it followed just now. */
+    public var pinned: ContactPin?
+    /* The served keys are not the ones this phone holds and no signed chain explains it: the notice, never a silent update. */
+    public var changed: Bool
+    /* The pin is verified and agrees with this phone: "Verified", and Check again. */
+    public var verified = false
+    /* For a change: whether this phone had them checked, so the notice leads with a check. */
+    public var wasVerified = false
+    /* For a change: the key commitment of the keys this phone held, for Technical details. */
+    public var heldFingerprint: String?
+    /* The pin followed their signed succession to the keys looked up just now. */
+    public var followed = false
+    /*
+     * The lookup itself saved or remembered something (followed a succession, settled an act left
+     * pending, a first guard entry): whom signatures count for moved, so what is drawn is judged again.
+     */
+    public var trustChanged = false
+    /* Words can be compared, and a pin made, only over an upgraded identity whose keys statement holds. */
     public var upgraded: Bool { contact.upgraded }
+
+    public init(contact: Contact, pinned: ContactPin?, changed: Bool) {
+        self.contact = contact
+        self.pinned = pinned
+        self.changed = changed
+    }
 }
 
 public enum ContactError: Error, LocalizedError, Equatable {
     case unpinned, changed, message(String)
-    /* A pin that vouches for nothing (from before the release, or edited): its words must be compared again. */
-    case recheck(String)
-    /* Their identity is not version 2 yet, or its keys statement does not hold: no words to compare, nothing to seal to. */
+    /* Their identity is not version 2 yet, or its keys statement does not hold: nothing to pin or seal to. */
     case notUpgraded(String)
+    /* Another device (or process) moved this person's pin between the read an act was decided over and its save. */
+    case moved
+    /* Their keys moved on by a succession nobody followed here yet: sharing with them again (the person's act) follows it. */
+    case notFollowed(String)
     public var errorDescription: String? {
         switch self {
-        case .unpinned: return "Add them to your contacts before sharing with them."
-        case .changed: return "Their account changed since you added them. Check it’s them in People you share with before you share."
-        case .recheck(let name): return "\(name)’s keys were upgraded. Compare words with them again in People you share with before you share."
-        case .notUpgraded(let name): return "\(name) needs to sign in to HushOS once more before you can compare words."
-        case .message(let text): return text
+        case .unpinned: return "This person is not in your contacts. Add them before sharing."
+        case .changed: return "That address now belongs to a different account."
+        case .notUpgraded(let name):
+            let first = name.split(separator: " ").first.map(String.init) ?? name
+            return "\(first) needs to sign in to HushOS once more before you can share with them."
+        case .moved: return GuardWords.moved
+        case .message(let text), .notFollowed(let text): return text
         }
     }
 }
@@ -125,9 +154,9 @@ func keysHold(userId: String, _ served: ServedContactKeys, identityVersion: Int?
 }
 
 extension Auth {
-    static func lookupContact(email: String) async throws -> Contact {
+    static func lookupContact(email: String, as owner: SharedKeychain.Session? = nil) async throws -> Contact {
         // In the body, not the query: an address in a URL ends up in logs along the way.
-        let reply = try await call("/api/auth/contacts/lookup", method: "POST", body: ["email": email])
+        let reply = try await call("/api/auth/contacts/lookup", method: "POST", body: ["email": email], as: owner)
         guard let json = reply["contact"] as? [String: Any], let userId = json["userId"] as? String,
               let encryption = json["encryptionPublicKey"] as? String, let signing = json["signingPublicKey"] as? String
         else { throw ContactError.message("No HushOS account uses that email.") }
@@ -158,8 +187,8 @@ extension Auth {
      * the settings key beside it, and the stored sequence: always the row's, version 1 or 2,
      * 0 when there is none. A save names that sequence and is sealed one above it.
      */
-    static func settings() async throws -> (envelope: SettingsEnvelope?, key: SettingsKeyEnvelope?, version: UInt64) {
-        let reply = try await call("/api/auth/settings")
+    static func settings(as owner: SharedKeychain.Session? = nil) async throws -> (envelope: SettingsEnvelope?, key: SettingsKeyEnvelope?, version: UInt64) {
+        let reply = try await call("/api/auth/settings", as: owner)
         let envelope = (reply["settings"] as? [String: Any]).map { json in
             SettingsEnvelope(
                 version: UInt32((json["version"] as? NSNumber)?.intValue ?? 0), settingsVersion: (json["settingsVersion"] as? NSNumber)?.uint64Value ?? 0,
@@ -179,16 +208,16 @@ extension Auth {
 
     /* The settings version the server stored the document as. */
     @discardableResult
-    static func putSettings(expectedVersion: UInt64, envelope: SettingsEnvelope) async throws -> UInt64 {
+    static func putSettings(expectedVersion: UInt64, envelope: SettingsEnvelope, as owner: SharedKeychain.Session? = nil) async throws -> UInt64 {
         let reply = try await call("/api/auth/settings", method: "PUT", body: [
             "expectedVersion": expectedVersion, "version": envelope.version, "nonce": envelope.nonce, "ciphertext": envelope.ciphertext,
-        ])
+        ], as: owner)
         return (reply["settingsVersion"] as? NSNumber)?.uint64Value ?? envelope.settingsVersion
     }
 
     /* Stored once; 409 (`AuthError.conflict`) when another device stored one first. */
-    static func putSettingsKey(_ key: SettingsKeyEnvelope) async throws {
-        _ = try await call("/api/auth/settings-key", method: "PUT", body: json(key))
+    static func putSettingsKey(_ key: SettingsKeyEnvelope, as owner: SharedKeychain.Session? = nil) async throws {
+        _ = try await call("/api/auth/settings-key", method: "PUT", body: json(key), as: owner)
     }
 }
 
@@ -230,7 +259,7 @@ extension Vault {
      * fails rather than show words it can't confirm are current, and a 401 is `AuthError.sessionEnded`.
      */
     public func currentOwnFingerprint() async throws -> String {
-        let served = try await Auth.identity()
+        let served = try await Auth.identity(as: session)
         if let opened = identityEnvelope, !served.servesSameIdentity(as: opened) { forgetIdentity() }
         identityCheckedAt = Date()
         return try fingerprint(of: try await identityKeys())
@@ -244,81 +273,37 @@ extension Vault {
         )
     }
 
-    /*
-     * A person by email, with what the pin says about them (`ContactPin.compare`). A pin whose
-     * served keys moved on is not followed here: that asks the server for their chain, which
-     * only "Check again" does.
-     */
-    public func lookup(email: String) async throws -> Lookup {
-        let contact = try await Auth.lookupContact(email: email)
-        let pinned = try await loadSettings().contacts[contact.userId]
-        let comparison = pinned?.compare(contact.served)
-        return Lookup(contact: contact, pinned: pinned, changed: comparison == .changed || comparison == .succession,
-                      recheck: comparison == .recheck, canFollow: comparison == .succession)
-    }
-
-    /* "Check again" from a lookup: follows the pinned keys along the chain to the served ones, then looks them up afresh. */
-    public func checkAgain(_ found: Lookup) async throws -> Lookup {
-        guard let pin = found.pinned else { return found }
-        let decision = try await checkAgain(pin, served: found.contact.served)
-        var next = try await lookup(email: found.contact.email)
-        if case .followed = decision { next.followed = true }
-        return next
-    }
-
-    /*
-     * Trusts the keys shown now: what the person does after comparing the words. Writes a
-     * version 3 pin from the served keys (X25519, Ed25519, the digests of ML-DSA and ML-KEM, and
-     * the fingerprint over all four), and only for an upgraded identity whose keys statement held.
-     */
-    public func pin(_ contact: Contact) async throws {
-        guard contact.upgraded else { throw ContactError.notUpgraded(contact.name.isEmpty ? contact.email : contact.name) }
-        var pin = try ContactPin.of(contact.served, userId: contact.userId, email: contact.email, name: contact.name,
-                                    pinnedAt: ISO8601DateFormatter().string(from: Date()))
-        try await updateSettings { settings in
-            // The same keys checked again keep what a succession chain vouched for; brand-new keys start afresh.
-            if let stored = settings.contacts[contact.userId], stored.signingPublicKey == pin.signingPublicKey,
-               stored.encryptionPublicKey == pin.encryptionPublicKey {
-                pin.previousSigningKeys = stored.previousSigningKeys
-                pin.keysReplacedAt = stored.keysReplacedAt
-            }
-            settings.setPin(pin)
-        }
-        ReplacedKeysSeen.acknowledge(pin)
-        // Shares to them still in an older suite can be sealed in suite 4 now that a version 3 pin vouches for their keys.
-        Task { _ = try? await self.upgradeShares() }
-    }
-
-    public func unpin(_ pin: ContactPin) async throws {
-        try await updateSettings { $0.removePin(pin.userId) }
-    }
-
     public func shares(of item: Opened) async throws -> [ShareView] {
         try await api.shares(of: item.id, workspaceId: item.node.workspaceId)
     }
 
     /*
-     * Shares an item with a pinned, checked contact: the served keys must be the ones the
-     * version 3 pin vouches for (see `ContactPin.sealKeys`), then the node key is sealed to them
-     * in suite 4, signed with both of this identity's signing keys, and the share joins the ledger.
+     * Shares an item with a contact: the served keys must be the ones the pin (verified or
+     * first-seen) holds and agree with this phone's guard (`trustGrantee`), then the node key is
+     * sealed to them in suite 4, signed with both of this identity's signing keys, and the share
+     * joins the ledger. A changed account throws `AccountChangedError`: nothing is shared.
      */
-    public func share(_ item: Opened, with pin: ContactPin, role: String) async throws -> ShareView {
+    @discardableResult
+    public func share(_ item: Opened, with pin: ContactPin, role: String) async throws -> SharedWith {
         // Sharing is hidden in family folders (design 3.4): the server's list of shares there is no one's ledger.
         try refuseFamilyWrite(item.node.workspaceId)
         guard let nodeKey = nodeKey(of: item) else { throw DriveAPIError.server(500, "Node not opened") }
-        guard pin.verified else { throw ContactError.recheck(pin.displayName) }
-        let contact = try await Auth.lookupContact(email: pin.email)
-        guard contact.userId == pin.userId else { throw ContactError.changed }
-        let sealing = try pin.sealKeys(contact.served)
+        let contact = try await Auth.lookupContact(email: pin.email, as: session)
+        guard contact.userId.lowercased() == pin.userId.lowercased() else { throw ContactError.changed }
+        // Every guard write and settings save forgets the signers (moves this generation): one during the check (a legacy
+        // pin made first-seen, a succession followed, a first guard entry) is a change in trust the caller refreshes for.
+        let generation = signersGeneration
+        let sealing = try await trustGrantee(contact, follow: true)
+        let trustChanged = signersGeneration != generation
         let keys = try await identityKeys()
-        let ctx = ShareContext(workspaceId: item.node.workspaceId, nodeId: item.id, keyEpoch: item.node.keyEpoch, granteeUserId: pin.userId, granterUserId: session.userId)
+        let ctx = ShareContext(workspaceId: item.node.workspaceId, nodeId: item.id, keyEpoch: item.node.keyEpoch, granteeUserId: contact.userId, granterUserId: session.userId)
         let envelope = try shareSeal(ctx: ctx, nodeKey: nodeKey, granter: keys, granteePublicKey: sealing.publicKey, granteeKemPublicKey: sealing.kem)
         let share = try await api.createShare(nodeId: item.id, body: [
-            "workspaceId": item.node.workspaceId, "granteeUserId": pin.userId, "role": role, "keyEpoch": item.node.keyEpoch,
+            "workspaceId": item.node.workspaceId, "granteeUserId": contact.userId, "role": role, "keyEpoch": item.node.keyEpoch,
             "shareEnvelope": base64urlEncode(bytes: envelope),
         ])
-        try await updateSettings { $0.ledger.addShare(node: item.id, grantee: pin.userId) }
-        return share
+        try await updateSettings { $0.ledger.addShare(node: item.id, grantee: contact.userId) }
+        return SharedWith(share: share, trustChanged: trustChanged)
     }
 
     /* Out of the ledger first, so the rotation that follows never seals to them again. */
@@ -370,7 +355,8 @@ extension Vault {
     func openAnywhere(_ node: NodeView) async -> Opened? {
         if let done = opened[node.ref] { return done }
         if let parent = node.parentId {
-            _ = try? await listChildren(of: parent)
+            // In the node's own workspace: a share's folder this vault hasn't opened is never looked for in the own drive.
+            _ = try? await listChildren(of: parent, in: node.workspaceId)
         } else if let root = try? await rootId() {
             _ = try? await listChildren(of: root)
         }
@@ -397,13 +383,15 @@ extension Vault {
 
 /* Who can open each of one's own shared items: the people on it and how many links open it. Names are the server's; nothing is opened. */
 public struct SharingIndex: Sendable {
-    public struct Entry: Sendable {
+    public struct Entry: Sendable, Equatable {
         public var people: [ShareView.Grantee] = []
         /* Grantee id to role ("viewer" or "editor"). */
         public var roles: [String: String] = [:]
         public var links = 0
     }
     public var entries: [String: Entry] = [:]
+    /* What By me lists (`SharingRefresh.listing`). */
+    public var listed: Set<String> = []
 }
 
 extension Vault {
@@ -416,6 +404,7 @@ extension Vault {
             index.entries[share.node.id, default: .init()].roles[share.grantee.id] = share.role
         }
         for link in reply.links { index.entries[link.node.id, default: .init()].links += 1 }
+        index.listed = SharingRefresh.listing(shares: reply.shares.map { ($0.id, $0.role) }, links: reply.links.map(\.id))
         return index
     }
 }

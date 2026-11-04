@@ -244,6 +244,12 @@ jobs:
         if: ${{ !cancelled() && needs.images.result == 'success' && needs.images.outputs.skip == 'false' }}
         runs-on: ubuntu-latest
         timeout-minutes: 5
+        # release-notes-section.sh reads and rewrites the whole body: one writer per release at a
+        # time, with android-release.yml's apk job.
+        concurrency:
+            group: release-notes-${{ needs.images.outputs.tag }}
+            cancel-in-progress: false
+            queue: max
         permissions:
             contents: write
         steps:

@@ -1,3 +1,8 @@
+import { wholeGibUp } from '@hushos/db/pool-count';
+
+/* How a family's pool counts what it holds, shared with the server's checks. */
+export { countedPool } from '@hushos/db/pool-count';
+
 /* Product metadata keys read from the provider's catalogue. */
 export const PLAN_METADATA_KEY = 'hushos_plan';
 export const QUOTA_METADATA_KEY = 'quota_bytes';
@@ -26,6 +31,44 @@ export const QUOTA_PER_MEMBER_METADATA_KEY = 'quota_bytes_per_member';
 export const TIER_METADATA_KEY = 'hushos_tier';
 export const FAMILY_TIERS = ['plus', 'pro', 'max'] as const;
 export type FamilyTier = (typeof FAMILY_TIERS)[number];
+
+/*
+ * What a personal plan's Polar status means (docs/self-hosting.md, Billing). Only a
+ * live plan gives its storage and is "the current plan" for a switch, a cancel or a
+ * resume; `past_due` is Polar still retrying a renewal. `unpaid` (Polar's retries ran
+ * out), `incomplete` (a first payment that never went through) and `paused` are not
+ * ended, since a payment or a resume can bring them back, but give nothing: the
+ * person is on Free meanwhile, and a new checkout revokes such a plan first.
+ */
+export const LIVE_PLAN_STATUSES = ['active', 'trialing', 'past_due'] as const;
+export type PlanStanding = 'live' | 'payment-failed' | 'paused' | 'ended';
+
+export function planStanding(plan: {
+    status: string;
+    endedAt: string | Date | null;
+}): PlanStanding {
+    if (plan.endedAt) return 'ended';
+    if ((LIVE_PLAN_STATUSES as readonly string[]).includes(plan.status)) return 'live';
+    if (plan.status === 'unpaid' || plan.status === 'incomplete') return 'payment-failed';
+    if (plan.status === 'paused') return 'paused';
+    // `canceled`, `incomplete_expired`, or a status Polar adds later: nothing to offer.
+    return 'ended';
+}
+
+/* The plan if it is live, else null. */
+export function livePlan<T extends { status: string; endedAt: string | Date | null }>(
+    plan: T | null | undefined,
+): T | null {
+    return plan && planStanding(plan) === 'live' ? plan : null;
+}
+
+/* The plan if Polar still holds it but it gives nothing (a failed payment, a pause), else null. */
+export function lapsedPlan<T extends { status: string; endedAt: string | Date | null }>(
+    plan: T | null | undefined,
+): T | null {
+    const standing = plan ? planStanding(plan) : 'ended';
+    return standing === 'payment-failed' || standing === 'paused' ? plan! : null;
+}
 
 /* A group's customer at the provider is keyed `group:<groupId>`; a person's by their user id. */
 export const GROUP_CUSTOMER_PREFIX = 'group:';
@@ -130,6 +173,33 @@ export function spaceOf(bytes: bigint, round: 'nearest' | 'up' = 'nearest') {
     const whole = hundredths / 100n;
     const fraction = (hundredths % 100n).toString().padStart(2, '0').replace(/0+$/, '');
     return `${whole}${fraction ? `.${fraction}` : ''} ${label}`;
+}
+
+/* A plan's name without its billing period: "Family Pro (monthly)" is "Family Pro". */
+export const planTierName = (plan: { name: string }) =>
+    plan.name.replace(/\s*\((monthly|yearly|annual)\)\s*$/i, '');
+
+/*
+ * Why a family's first plan (or one bought again) is refused: it would be smaller than what its
+ * pool counts the moment it goes live, everyone's own files and the family folders, each part
+ * rounded up to a whole GiB (countedPool; docs/families-shared-pool.md 3.2, 3.9, 5.2). The server
+ * refuses the checkout with these words, and Plans says them before a family is made, from the
+ * same count. "Choose a bigger plan" only where a bigger one is on offer.
+ */
+export function firstPlanTooSmall(input: {
+    /* What the pool counts as stored (countedPool of its parts). */
+    countedBytes: bigint;
+    plan: { name: string; quotaBytes: string | bigint };
+    /* The family plans on offer, to know whether a bigger one is. */
+    tiers: readonly { quotaBytes: string | bigint; archived?: boolean }[];
+    /* More than one person in the family: what "it" stores is everyone's. */
+    family: boolean;
+}) {
+    const room = BigInt(input.plan.quotaBytes);
+    if (input.countedBytes <= room) return null;
+    const bigger = input.tiers.some((tier) => !tier.archived && BigInt(tier.quotaBytes) > room);
+    const free = spaceOf(wholeGibUp(input.countedBytes - room));
+    return `${input.family ? 'Your family stores' : 'Your files take'} ${spaceOf(wholeGibUp(input.countedBytes))}, more than ${planTierName(input.plan)}’s ${spaceOf(room)}. ${bigger ? `Choose a bigger plan or free at least ${free}` : `Free at least ${free}`}.`;
 }
 
 /* The organisation's default payment currency at the provider; every plan has a price in it. */

@@ -16,7 +16,7 @@ Open: the web's consent checkboxes and plan choice need a phone form; the verifi
 
 ### 2. Invite by email
 
-Sharing with someone who has no HushOS account: they get an email, create an account, and the share completes once their keys exist. People already on HushOS are added at once, with "Check it's them" as a quiet later step in People you share with.
+Sharing with someone who has no HushOS account: they get an email, create an account, and the share completes once their keys exist. People already on HushOS are added at once, with "Check it's them" as a quiet later step in Contacts.
 
 Open: the share has to wait, sealed, for keys that don't exist yet, so the server holds an invitation, not a share; the sharer still checks the twelve words afterwards. Today adding by email only finds existing accounts and no email is sent.
 

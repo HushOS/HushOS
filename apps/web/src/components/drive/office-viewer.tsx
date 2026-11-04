@@ -318,7 +318,7 @@ function SheetView({
                                 aria-selected={index === active}
                                 onClick={() => setActive(index)}
                                 className={cn(
-                                    'h-8 shrink-0 cursor-pointer rounded-t-md px-4 text-[13px] whitespace-nowrap outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring',
+                                    'h-8 shrink-0 cursor-pointer rounded-t-md px-4 text-[13px] whitespace-nowrap outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring',
                                     index === active
                                         ? 'border-x border-t border-rule bg-card font-bold text-foreground'
                                         : 'text-muted-foreground hover:text-foreground',
@@ -360,7 +360,7 @@ function SlidesView({ slides }: { slides: Slide[] }) {
                             aria-current={index === at ? 'true' : undefined}
                             onClick={() => setAt(index)}
                             className={cn(
-                                'flex w-full max-w-56 cursor-pointer gap-2 rounded-md px-2.5 py-2 text-left text-[13px] outline-none focus-visible:outline-2 focus-visible:outline-ring',
+                                'flex w-full max-w-56 cursor-pointer gap-2 rounded-md px-2.5 py-2 text-left text-[13px] outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring',
                                 index === at
                                     ? 'bg-accent font-bold text-accent-foreground'
                                     : 'hover:bg-card',

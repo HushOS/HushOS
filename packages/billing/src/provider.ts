@@ -30,9 +30,10 @@ const CATALOGUE_TTL_MS = 60_000;
 /*
  * A refusal the pages tell apart without matching on its words: `in-family`, a
  * personal plan asked for while the person's storage comes from a family's
- * (docs/families-shared-pool.md 3.3).
+ * (docs/families-shared-pool.md 3.3); `ends-lapsed`, a family checkout that would end
+ * the family's lapsed plan, asked again once the person has confirmed it.
  */
-export type BillingErrorCode = 'in-family';
+export type BillingErrorCode = 'in-family' | 'ends-lapsed';
 
 export class BillingError extends Error {
     readonly code: BillingErrorCode | undefined;
@@ -66,7 +67,7 @@ export function polar() {
 export function unavailable(error: unknown) {
     if (error instanceof PolarClientError && error.statusCode === 403)
         return new BillingError(
-            'Polar does not allow that change on this subscription right now. Manage it in the billing portal, or contact support.',
+            'Polar does not allow that change on this subscription right now. Manage it in Card and invoices, or contact support.',
             409,
             { cause: error },
         );
@@ -83,6 +84,13 @@ export function unavailable(error: unknown) {
 
 export function statusOf(error: unknown) {
     return error instanceof PolarClientError ? error.statusCode : null;
+}
+
+/* Polar's error name on a refused call (`AlreadyCanceledSubscription`, `InactiveSubscription`). */
+export function polarErrorName(error: unknown) {
+    return error instanceof PolarClientError
+        ? ((error.error as { error?: string } | undefined)?.error ?? null)
+        : null;
 }
 
 /* ------------------------------------------------------------------------- */

@@ -1,0 +1,63 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "e840cd67-44e5-45b9-bb9a-e30d06f11ee7",
+    "prevIds": ["6316cac2-cd13-4af6-86ae-966871e5935d"],
+    "footprints": [
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "group_billing_subscriptions", "served_until"],
+            "writes": [
+                "s|col|public.group_billing_subscriptions.served_until",
+                "n|col|public.group_billing_subscriptions.served_until",
+                "e|col|public.group_billing_subscriptions.served_until"
+            ],
+            "reads": ["n|tbl|public.group_billing_subscriptions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "personal_plan_endings", "paid_after"],
+            "writes": [
+                "s|col|public.personal_plan_endings.paid_after",
+                "n|col|public.personal_plan_endings.paid_after",
+                "e|col|public.personal_plan_endings.paid_after"
+            ],
+            "reads": ["n|tbl|public.personal_plan_endings", "n|sch|public"]
+        }
+    ],
+    "deltas": [
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_billing_subscriptions",
+                "name": "served_until",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "personal_plan_endings",
+                "name": "paid_after",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        }
+    ]
+}

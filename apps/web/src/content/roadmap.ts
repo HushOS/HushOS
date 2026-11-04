@@ -48,7 +48,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-10-21';
+export const updated = '2026-11-04';
 
 export const sections: RoadmapSection[] = [
     {
@@ -59,11 +59,20 @@ export const sections: RoadmapSection[] = [
             {
                 id: 'families',
                 status: 'shipped',
-                month: 'October 2026',
+                // The month families are switched on at hushos.com, set when this is merged.
+                month: 'November 2026',
                 area: 'Families',
                 title: 'Family plans',
-                body: 'One plan’s storage for up to 20 people, covering everyone’s own files and the family folders, with each newcomer checked with their twelve words before they join. On the web; the iPhone and Android apps follow.',
+                body: 'One plan’s storage for up to 20 people, covering everyone’s own files and the family folders. Someone who manages the family lets each newcomer in, and anyone in it can check the others with twelve words. On the web and in the Android app.',
                 links: [{ kind: 'blog', slug: 'family-plans', label: 'Read the announcement' }],
+            },
+            {
+                id: 'android-app',
+                status: 'shipped',
+                month: 'October 2026',
+                area: 'Apps',
+                title: 'The Android app on Google Play',
+                body: 'Your folders, sharing and links, files kept on the phone to open without a connection, and HushOS in the phone’s Files app. It’s on Google Play, and its APK is also on each GitHub release. You make your account on the web.',
             },
             {
                 id: 'devices',
@@ -164,15 +173,15 @@ export const sections: RoadmapSection[] = [
                 id: 'phone-apps',
                 status: 'now',
                 area: 'Apps',
-                title: 'The iPhone and Android apps in the stores',
-                body: 'The apps are built: your folders, sharing and links, files kept on the phone to open without a connection, and HushOS in the phone’s Files app. The Android app is with Google Play for review, and its APK is on each GitHub release; the iPhone app follows on the App Store. You make your account on the web.',
+                title: 'The iPhone app on the App Store',
+                body: 'Built, with the same folders, sharing, links, offline files and Files app as the Android app, and being prepared for the App Store.',
             },
             {
                 id: 'families-on-phones',
                 status: 'now',
                 area: 'Apps',
-                title: 'Families on iPhone and Android',
-                body: 'Family folders in the apps, checked by the same rules as on the web.',
+                title: 'Families on iPhone',
+                body: 'Family folders in the iPhone app, with joining, inviting and letting people in, as in the Android app. It comes with the app’s App Store release.',
             },
             {
                 id: 'releases',

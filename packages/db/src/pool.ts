@@ -2,6 +2,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { billingEnv } from '@hushos/env/billing';
 import type { db } from './client';
 import type { Tx } from './drive';
+import { countedPool, wholeGibUp } from './pool-count';
 import {
     groupMemberships,
     groupStorage,
@@ -55,12 +56,7 @@ export async function takePoolLock(tx: Tx, groupId: string) {
     );
 }
 
-export const GIB = 1n << 30n;
-
-/* Bytes rounded up to a whole GiB (an amount to free, a total shown). */
-export function wholeGibUp(bytes: bigint) {
-    return bytes <= 0n ? 0n : ((bytes + GIB - 1n) / GIB) * GIB;
-}
+export { GIB, wholeGibUp } from './pool-count';
 
 /*
  * How a pool counts what it holds (3.6 step 5, 3.9): in parts, the family folders
@@ -80,6 +76,10 @@ export type PoolPart = { workspaceId: string | null; used: bigint; reserved: big
 const counted = (part: { used: bigint; reserved: bigint }, reserved: boolean) =>
     wholeGibUp(part.used + (reserved ? part.reserved : 0n));
 
+/* The whole pool as it counts it (countedPool, which Plans uses too), with or without uploads. */
+const countedAll = (parts: readonly PoolPart[], reserved: boolean) =>
+    countedPool(parts.map((part) => part.used + (reserved ? part.reserved : 0n)));
+
 /*
  * The pool's usage: the used and reserved bytes of every workspace of the
  * family (a deleted family folder included until its purge deletes its files)
@@ -98,9 +98,9 @@ export async function poolUsage(tx: Conn, groupId: string) {
         reserved: parts.reduce((sum, part) => sum + part.reserved, 0n),
         // What the pool counts as stored, part by part (see PoolPart): the figure shown and
         // the one the downgrade and first-purchase guards compare.
-        counted: parts.reduce((sum, part) => sum + counted(part, false), 0n),
+        counted: countedAll(parts, false),
         // The same with uploads in flight, as every reservation and pool-full count it.
-        countedReserved: parts.reduce((sum, part) => sum + counted(part, true), 0n),
+        countedReserved: countedAll(parts, true),
         parts,
     };
 }

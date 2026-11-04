@@ -53,7 +53,7 @@ A personal plan doesn't change this (owner decision 2): someone who pays for one
 `expires_at` is the plan's period end plus `BILLING_GRACE_DAYS` (3 by default), and it is null for a family that never had a plan (`createGroup` writes `quota_bytes = 0`, `expires_at = null`). So:
 
 - **An organizer who created a family but hasn't paid yet** keeps their own allowance, a paid personal plan included. Their files join the pool when the family's plan goes live, and then their personal plan ends with the unused days refunded (5.1).
-- **When a family plan ends** (cancelled, or a renewal never paid, past the grace days), every member's own files go back to their own allowance at the same moment, with no job to run: the rule is computed on every check. The family folders read an empty pool, as today.
+- **When a family plan ends** (cancelled at its period's end, or revoked; at once when Polar's payment retries run out, `unpaid`, or the plan is paused: groups-design 3.5, Polar's statuses; the grace days only cover a renewal that is late, not a plan that has ended), every member's own files go back to their own allowance at the same moment, with no job to run: the rule is computed on every check. The family folders read an empty pool, as today.
 - **Family folders always read the pool**, as today: a family without a live plan stores nothing in them.
 
 Nothing else adds to the pool while a person is pooled: not Free's 2 GB ("no stacking of free allowances", groups-design 3.5), not referral bonuses, not an operator's grant, not a personal plan in the moment before billing ends it. Those rows stay in `storage_entitlements` and count again the moment the person is no longer pooled.
@@ -196,7 +196,7 @@ Owner decision 2: the personal plan ends the moment its owner's files join the p
 
 - **`getGroupPoolUsage`** becomes `poolUsage` (3.7). The downgrade guard in `changeGroupPlan` and the summary's `storage.usedBytes` read it, so both now count members' own files.
 - **`getGroupBilling`** gains `usage: { ownBytes, foldersBytes, members }` in both views (as built): `ownBytes` is the caller's own files, exact, or null for a payer who is no longer a member; `foldersBytes` the family folders' total in whole GiB, rounded up; `members: [{ userId, ownBytesRounded }]`, already rounded (3.9; "0" for anything under 1 GiB, read "Under 1 GB"), largest first, only for a caller who holds `members` or `billing` (the organizer holds both), null for anyone else.
-- **First purchase** (`startGroupCheckout`) refuses a tier smaller than what the pool would hold the moment it goes live (3.2): the organizer's own files, and, for a lapsed family buying again, every member's and the folders'. Checked exactly, said in whole GiB rounded up: "Your files take 950 GB, more than Family Plus's 800 GB. Choose a bigger plan or free at least 150 GB." ("Your family stores …" with more than one member).
+- **First purchase** (`startGroupCheckout`) refuses a tier smaller than what the pool would hold the moment it goes live (3.2): the organizer's own files, and, for a lapsed family buying again, every member's and the folders'. Compared with what the pool counts (each part rounded up to a whole GiB, 5 above), said in whole GiB rounded up: "Your files take 950 GB, more than Family Plus's 800 GB. Choose a bigger plan or free at least 150 GB." ("Your family stores …" with more than one member; "Free at least …" alone where no bigger tier is on offer). Plans and the Create a family dialog say the same before a family is made, from the same count (`countedPool`, `firstPlanTooSmall`).
 - **Polar products** keep their metadata: `quota_bytes` is already the whole family's. Only the description changes, through `bun run polar:seed --update`: from "storage for the whole family" to "{storage} for the whole family: everyone's own files and the family folders, {n} members included." Prices are unchanged, so `--update` replaces no price.
 - **The catalogue** (`listCatalogue`) changes no shape. What the pages say about it is section 7.
 
@@ -247,7 +247,7 @@ Company plans are later; this records where their rules attach so nothing here h
 
 Not in a family:
 
-- Home, My files, Shared, Trash; Tags and People you share with. No Families item (`organise` loses it; `FamilyRows` goes).
+- Home, My files, Shared, Trash; Tags and Contacts. No Families item (`organise` loses it; `FamilyRows` goes).
 
 In a family:
 

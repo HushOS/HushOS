@@ -1,12 +1,12 @@
 import { readCapped } from '@/lib/read-capped';
 
 /*
- * The edge of the batch trash and restore routes: the body is read whole under
+ * The edge of the batch trash, restore and purge routes: the body is read whole under
  * a cap before anything parses it. MAX_TRASH_BATCH ids are about 7.8 KB of
  * JSON (`{"nodeIds":[...]}`, 39 bytes an id), and nothing larger is one.
  */
 export const TRASH_BATCH_BODY_BYTES = 12 * 1024;
-const TRASH_BATCH_PATH = /^\/api\/drive\/workspaces\/[^/]+\/(trash|restore)-batch\/?$/;
+const TRASH_BATCH_PATH = /^\/api\/drive\/workspaces\/[^/]+\/(trash|restore|purge)-batch\/?$/;
 
 /*
  * For a batch request: the request again, its body read under the cap, or a

@@ -23,6 +23,10 @@ sealed interface AppLink {
     data class Node(val id: String) : AppLink
     /* The emailed recovery link, /recover/complete#verify=<token>: account recovery picks up in the app. */
     data class Recover(val verify: String) : AppLink
+    /* The mailed family invitation, /join#invite=<token>: the invitation sheet (the token stays in memory, never a request). */
+    data class Join(val token: String) : AppLink
+    /* An invitation link whose token was cut off: "This invitation link is incomplete". */
+    data object IncompleteInvite : AppLink
 }
 
 sealed interface AppLinkRefusal {
@@ -96,6 +100,16 @@ object AppLinks {
                 val verify = uri.rawFragment.orEmpty().split('&').firstOrNull { it.startsWith("verify=") }?.removePrefix("verify=")
                 if (verify == null || !TOKEN.matches(verify)) refuse(AppLinkRefusal.Malformed) else open(AppLink.Recover(verify))
             }
+            "join" -> {
+                if (path.size != 1) return refuse(AppLinkRefusal.WebOnly)
+                // The token rides in the fragment, as the web reads it (routes/join), so it never reaches a server log.
+                val invite = uri.rawFragment.orEmpty().split('&').firstOrNull { it.startsWith("invite=") }?.removePrefix("invite=")
+                when {
+                    invite.isNullOrEmpty() -> open(AppLink.IncompleteInvite)
+                    !isToken(invite) -> refuse(AppLinkRefusal.Malformed)
+                    else -> open(AppLink.Join(invite))
+                }
+            }
             "app" -> {
                 val page = path.drop(1)
                 when (page.firstOrNull()) {
@@ -124,6 +138,9 @@ object AppLinks {
         uri.scheme.equals("http", ignoreCase = true) -> 80
         else -> null
     }
+
+    /* An emailed link's one-time token (an invitation's, a recovery's): 43 base64url characters. */
+    fun isToken(value: String) = TOKEN.matches(value)
 
     /* Node ids are UUIDs; anything else (a path, a query, a script) is refused before it reaches a lookup. */
     fun isId(value: String) = UUID.matches(value)

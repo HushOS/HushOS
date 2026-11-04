@@ -91,7 +91,7 @@ A pin made before the release holds X25519 and Ed25519 and a version 2 fingerpri
 
 After the release, **a version 2 pin trusts nothing, whatever the server serves**: a version 2 identity, or the version 1 form with the same X25519 and Ed25519 keys and no ML-DSA key.
 
-- When the served X25519 and Ed25519 keys equal the pin's, People shows the contact with a **Check again** badge and the menu item **Check their words again**; an Unverified mark's "Check again" says "Maya’s keys were upgraded. Compare words with them again in People you share with." Until then the contact reads as someone not yet checked, for records, shares and verdicts alike.
+- When the served X25519 and Ed25519 keys equal the pin's, Contacts shows the contact with a **Check again** badge and the menu item **Check their words again**; an Unverified mark's "Check again" says "Maya’s keys were upgraded. Compare words with them again in Contacts." Until then the contact reads as someone not yet checked, for records, shares and verdicts alike.
 - When the keys differ, it is the changed-key warning, as today.
 - `pinVerified` requires the version 3 fingerprint. The KEM binding (`identityVerifyKem`) is no longer a path to trust: a KEM key is trusted only through a version 3 pin or a verified keys statement under one.
 

@@ -22,7 +22,10 @@ export function AddMenu({
 }) {
     return (
         <DropdownMenu>
-            <DropdownMenuTrigger render={<Button className="pr-4.5 pl-3.5 max-sm:px-3" />}>
+            {/* Only the + on a phone: a square, 36px and 44px to a finger. */}
+            <DropdownMenuTrigger
+                render={<Button className="max-sm:w-9 max-sm:px-0 max-sm:pointer-coarse:w-11" />}
+            >
                 <PlusIcon strokeWidth={2.4} />
                 <span className="max-sm:sr-only">Add</span>
             </DropdownMenuTrigger>

@@ -43,6 +43,7 @@ export function createSpaceRegistry<C extends { close(): void; knows(nodeId: str
 ) {
     const entries = new Map<string, Entry<C>>();
     const gone = new Set<string>();
+    const closers = new Set<() => void>();
     function forget(workspaceId: string) {
         const entry = entries.get(workspaceId);
         if (!entry) return;
@@ -84,9 +85,24 @@ export function createSpaceRegistry<C extends { close(): void; knows(nodeId: str
         refreshKeyChange: async (folder: WriteTarget) => {
             await entries.get(folder.workspaceId)?.refreshKeyChange?.();
         },
-        /* After a lock: every family client forgets what it opened. */
+        /* After a lock or a sign-out: every family client forgets what it opened. */
         closeAll: () => {
             for (const { client } of entries.values()) client.close();
+            for (const closer of closers) closer();
+        },
+        /*
+         * Only what goes with them, the clients left as they are: at the start of a sign-out,
+         * before the device's stores are deleted (lib/sign-out.ts).
+         */
+        stopAll: () => {
+            for (const closer of closers) closer();
+        },
+        /* What else goes with them (lib/spaces.ts: the key-change walks' retries). */
+        onClose: (closer: () => void) => {
+            closers.add(closer);
+            return () => {
+                closers.delete(closer);
+            };
         },
         forget,
         /* A family's folders not in `keep` (all of them for a family gone from this device). */
