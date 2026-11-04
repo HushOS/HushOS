@@ -134,7 +134,23 @@ export const affiliateEarnings = pgTable(
         netAmount: integer('net_amount').notNull(),
         commissionAmount: integer('commission_amount').notNull(),
         paidAt: timestamp('paid_at', { withTimezone: true }),
+        /*
+         * Its order was refunded whole after this commission was paid out (a second family plan,
+         * a deleted family's): for an operator to settle with the affiliate. Set once, so it is
+         * logged once.
+         */
+        orderRefundedAt: timestamp('order_refunded_at', { withTimezone: true }),
         createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
     },
     (table) => [index('affiliate_earnings_affiliate_idx').on(table.affiliateId)],
 );
+
+/*
+ * Orders HushOS refunds whole (withdrawEarning), kept so their commission is never recorded
+ * after it was taken back: a late `order.paid` delivery's recordEarning checks it under the same
+ * per-order lock. Ids only: no amount, account or affiliate.
+ */
+export const affiliateWithdrawnOrders = pgTable('affiliate_withdrawn_orders', {
+    orderId: text('order_id').primaryKey(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});

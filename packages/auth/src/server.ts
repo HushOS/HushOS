@@ -1128,6 +1128,8 @@ export async function getAdminOverview(sessionToken: string | null) {
          */
         orphanedPlans: orphaned.map((row) => ({
             groupId: row.groupId,
+            /* Its family is gone (purged); otherwise it was the family's second plan. */
+            why: row.secondPlan ? ('second-plan' as const) : ('deleted-family' as const),
             subscriptionId: row.subscriptionId,
             status: row.status,
             revoked: row.revokedAt !== null,

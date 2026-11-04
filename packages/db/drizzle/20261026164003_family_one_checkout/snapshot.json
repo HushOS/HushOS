@@ -1,0 +1,391 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "d049730c-0626-4cfe-baa0-05617854d208",
+    "prevIds": ["7f7e99b2-90c5-4308-896b-9dbf1557b6b1"],
+    "footprints": [
+        {
+            "statementType": "create_table",
+            "statementTarget": ["table", "public", "group_checkouts"],
+            "writes": [
+                "s|tbl|public.group_checkouts",
+                "n|tbl|public.group_checkouts",
+                "e|tbl|public.group_checkouts",
+                "n|rel|public.group_checkouts",
+                "n|type|public.group_checkouts",
+                "n|rel|public.group_checkouts_pkey"
+            ],
+            "reads": ["n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "affiliate_earnings", "order_refunded_at"],
+            "writes": [
+                "s|col|public.affiliate_earnings.order_refunded_at",
+                "n|col|public.affiliate_earnings.order_refunded_at",
+                "e|col|public.affiliate_earnings.order_refunded_at"
+            ],
+            "reads": ["n|tbl|public.affiliate_earnings", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "group_billing_subscriptions", "served_since"],
+            "writes": [
+                "s|col|public.group_billing_subscriptions.served_since",
+                "n|col|public.group_billing_subscriptions.served_since",
+                "e|col|public.group_billing_subscriptions.served_since"
+            ],
+            "reads": ["n|tbl|public.group_billing_subscriptions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "group_billing_subscriptions", "superseded_at"],
+            "writes": [
+                "s|col|public.group_billing_subscriptions.superseded_at",
+                "n|col|public.group_billing_subscriptions.superseded_at",
+                "e|col|public.group_billing_subscriptions.superseded_at"
+            ],
+            "reads": ["n|tbl|public.group_billing_subscriptions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "group_billing_subscriptions", "superseded_by"],
+            "writes": [
+                "s|col|public.group_billing_subscriptions.superseded_by",
+                "n|col|public.group_billing_subscriptions.superseded_by",
+                "e|col|public.group_billing_subscriptions.superseded_by"
+            ],
+            "reads": ["n|tbl|public.group_billing_subscriptions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": [
+                "column",
+                "public",
+                "group_billing_subscriptions",
+                "superseded_paid_after"
+            ],
+            "writes": [
+                "s|col|public.group_billing_subscriptions.superseded_paid_after",
+                "n|col|public.group_billing_subscriptions.superseded_paid_after",
+                "e|col|public.group_billing_subscriptions.superseded_paid_after"
+            ],
+            "reads": ["n|tbl|public.group_billing_subscriptions", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "personal_plan_endings", "orders_noted_at"],
+            "writes": [
+                "s|col|public.personal_plan_endings.orders_noted_at",
+                "n|col|public.personal_plan_endings.orders_noted_at",
+                "e|col|public.personal_plan_endings.orders_noted_at"
+            ],
+            "reads": ["n|tbl|public.personal_plan_endings", "n|sch|public"]
+        },
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "personal_plan_endings", "attempt"],
+            "writes": [
+                "s|col|public.personal_plan_endings.attempt",
+                "n|col|public.personal_plan_endings.attempt",
+                "e|col|public.personal_plan_endings.attempt"
+            ],
+            "reads": ["n|tbl|public.personal_plan_endings", "n|sch|public"]
+        }
+    ],
+    "deltas": [
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "name": "group_checkouts",
+                "isRlsEnabled": false,
+                "entityType": "tables"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "affiliate_earnings",
+                "name": "order_refunded_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_billing_subscriptions",
+                "name": "served_since",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_billing_subscriptions",
+                "name": "superseded_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_billing_subscriptions",
+                "name": "superseded_by",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_billing_subscriptions",
+                "name": "superseded_paid_after",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_checkouts",
+                "name": "group_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_checkouts",
+                "name": "user_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_checkouts",
+                "name": "token",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_checkouts",
+                "name": "product_id",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_checkouts",
+                "name": "terms",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_checkouts",
+                "name": "provider_checkout_id",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_checkouts",
+                "name": "url",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_checkouts",
+                "name": "until",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_checkouts",
+                "name": "created_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "now()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_checkouts",
+                "name": "updated_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "now()",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "personal_plan_endings",
+                "name": "orders_noted_at",
+                "type": "timestamp with time zone",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "personal_plan_endings",
+                "name": "attempt",
+                "type": "integer",
+                "typeSchema": null,
+                "notNull": true,
+                "dimensions": 0,
+                "default": "0",
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        },
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "group_checkouts",
+                "name": "group_checkouts_pkey",
+                "columns": ["group_id"],
+                "nameExplicit": false,
+                "entityType": "pks"
+            }
+        }
+    ]
+}
