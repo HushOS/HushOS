@@ -175,6 +175,10 @@ const polar = {
     chargeSettlesInMs: null as number | null,
     /* A raise's change order that Polar makes only this many milliseconds after answering. */
     raiseOrderLagMs: null as number | null,
+    /* How long every order listing takes (0: at once). */
+    slowOrderReadsMs: 0,
+    /* The timeout HushOS gave the client of its latest call, in seconds (null: none). */
+    callTimeoutS: null as number | null,
     /* How many scheduled cuts (next_period) fail before Polar takes one again. */
     cutFailures: 0,
     /* Runs once as Polar takes the next cut: an admission landing mid-flight. */
@@ -644,6 +648,15 @@ const fakeClient = {
             polar.calls.push(
                 `orders.list:${query.subscription_id ?? `customer:${query.external_customer_id}`}`,
             );
+            // Slow, as a Polar under load answers; cut off at the call's timeout, as the SDK does.
+            const timeoutMs = (polar.callTimeoutS ?? Number.POSITIVE_INFINITY) * 1000;
+            if (polar.slowOrderReadsMs) {
+                await new Promise((resolve) =>
+                    setTimeout(resolve, Math.min(polar.slowOrderReadsMs, timeoutMs)),
+                );
+                if (polar.slowOrderReadsMs > timeoutMs)
+                    throw new DOMException('The operation timed out.', 'TimeoutError');
+            }
             if (polar.ordersFail) throw new PolarClientError(403, { error: 'NotPermitted' });
             // A customer's orders: every one of its subscriptions', ended ones included.
             const ofCustomer = query.external_customer_id
@@ -1056,7 +1069,14 @@ const fakeClient = {
 
 vi.mock('@polar-sh/sdk/2026-10', async (importOriginal) => {
     const real = await importOriginal<typeof PolarSdk>();
-    return { ...real, createPolar: () => fakeClient };
+    // The timeout HushOS gives the call it is about to make (seconds), as the SDK takes it.
+    return {
+        ...real,
+        createPolar: (options?: { timeout?: number }) => {
+            polar.callTimeoutS = options?.timeout ?? null;
+            return fakeClient;
+        },
+    };
 });
 
 /*
@@ -1184,6 +1204,7 @@ beforeEach(async () => {
     polar.raiseLeavesOrder = false;
     polar.chargeSettlesInMs = null;
     polar.raiseOrderLagMs = null;
+    polar.slowOrderReadsMs = 0;
     // Short waits for a charge to settle, so a charge the bank holds costs a test no seconds;
     // the tests of the waits themselves put the real ones back.
     billing.setSettleDelays([5, 10, 20]);
@@ -4138,6 +4159,27 @@ describe('unpaid places', () => {
         expect(added).not.toHaveProperty('confirmPayment');
         expect(await seatLimit(groupId)).toBe(6);
     });
+
+    test(
+        'a raise answers well inside the browser’s 30 s however slowly Polar lists orders',
+        {
+            timeout: 60_000,
+        },
+        async () => {
+            billing.setSettleDelays(undefined);
+            const { payer, groupId } = await familyOnPlan({ units: 6, members: 5 });
+            // The bank holds the raise, and every order listing takes 2 s: each read of the wait is
+            // two listings, so seven reads and the waits between them would take 34 s.
+            polar.raiseLeavesOrder = true;
+            polar.slowOrderReadsMs = 2000;
+            const started = performance.now();
+            expect(await billing.setGroupUnits(payer, groupId, 7, 6)).toMatchObject({
+                confirmPayment: true,
+            });
+            expect(performance.now() - started).toBeLessThan(20_000);
+            expect(await seatLimit(groupId)).toBe(6);
+        },
+    );
 
     test('a raise whose order is still not made when the wait ends goes to the bank', async () => {
         const { payer, groupId } = await familyOnPlan({ units: 6, members: 5 });

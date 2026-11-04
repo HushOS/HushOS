@@ -22,10 +22,12 @@ import {
     offeredFamilies,
     polar,
     polarErrorName,
+    polarTimeLeft,
     statusOf,
     unavailable,
     type BillingUser,
     type FamilyCatalogueProduct,
+    withPolarDeadline,
 } from './provider';
 import {
     GROUP_CUSTOMER_PREFIX,
@@ -170,8 +172,7 @@ async function orderState(subscriptionId: string) {
  * The waits between reads while a charge Polar has just taken settles. Polar answers a raise or
  * an upgrade before it charges the order the change makes; the order is paid a second or two
  * later (sandbox, 2026-11-04), so read at once every such charge looks like one the bank holds.
- * Six seconds in all, well inside Polar's 15 s timeout on the request that waits; a charge still
- * unpaid after them is one the bank holds.
+ * A charge still unpaid when the wait ends is one the bank holds.
  */
 const SETTLE_DELAYS_MS: readonly number[] = [250, 500, 750, 1000, 1500, 2000];
 let settleDelays = SETTLE_DELAYS_MS;
@@ -181,16 +182,49 @@ export function setSettleDelays(delays: readonly number[] | undefined) {
     settleDelays = delays ?? SETTLE_DELAYS_MS;
 }
 
+/* The whole wait, its reads counted: it ends this long after it starts, however slow Polar is. */
+const SETTLE_MS = 6_000;
+/* Kept back from the request's deadline for what follows the wait (the write, the summary). */
+const SETTLE_TAIL_MS = 4_000;
+/* A read is started only with this long left, and is cut off when the wait ends. */
+const SETTLE_READ_MS = 1_000;
+
+/*
+ * The Polar calls of a place purchase or a plan change, from the first read to the portal
+ * address it answers with: inside the 30 s the browser waits (api-client.ts), with room for the
+ * database. The change itself is sent only with CHANGE_CALL_MS of it left, so it is never cut
+ * off by the deadline (a change Polar may have made, answered as a failure).
+ */
+const PLAN_CHANGE_BUDGET_MS = 18_000;
+const CHANGE_CALL_MS = 8_000;
+
+/* Whether there is time left to send the change itself (PLAN_CHANGE_BUDGET_MS). */
+function timeForChange(groupId: string) {
+    if (polarTimeLeft() >= CHANGE_CALL_MS) return true;
+    log.warn({
+        message: 'A family plan change was not sent: Polar answered too slowly before it',
+        billing: { group: groupId },
+    });
+    return false;
+}
+
 /*
  * Reads `paid` until it says true, the waits run out (false), or it says null (unreadable:
- * reading again would say no more, so it is answered as unpaid at once).
+ * reading again would say no more, so it is answered as unpaid at once). Bounded by elapsed
+ * time, not by its waits: it ends SETTLE_MS after it starts (sooner when the request's deadline
+ * needs it), no read is started that couldn't finish by then, and each one's Polar calls are cut
+ * off at the end. A read cut off counts as unpaid.
  */
 async function settled(paid: () => Promise<boolean | null>) {
-    let state = await paid();
+    const until = Date.now() + Math.min(SETTLE_MS, polarTimeLeft() - SETTLE_TAIL_MS);
+    const left = () => until - Date.now();
+    const read = () =>
+        left() < SETTLE_READ_MS ? Promise.resolve(false) : withPolarDeadline(left(), paid);
+    let state = await read();
     for (const delay of settleDelays) {
-        if (state !== false) break;
+        if (state !== false || left() < delay + SETTLE_READ_MS) break;
         await new Promise((resolve) => setTimeout(resolve, delay));
-        state = await paid();
+        state = await read();
     }
     return state === true;
 }
@@ -2792,6 +2826,7 @@ async function raisePlaces(
     // What the raise's own order is told apart from. Unreadable, nothing can show the raise
     // paid: it still goes to Polar, and the payer is sent to the portal.
     const before = await orderIdsBefore(subscription.id);
+    if (!timeForChange(groupId)) return { status: 'unavailable' };
     let raised: models.Subscription;
     try {
         raised = await polar().subscriptions.update(subscription.id, {
@@ -2890,10 +2925,20 @@ async function writeRaisePaid(
  * (an admission from a client that sells nothing, a phone app's) never buys:
  * a full plan is `full`, and Polar isn't asked.
  */
-export async function ensureGroupSeat(
+export function ensureGroupSeat(
     groupId: string,
     admitterId: string,
-    { mayBuy = true }: { mayBuy?: boolean } = {},
+    options: { mayBuy?: boolean } = {},
+): Promise<SeatResult> {
+    return withPolarDeadline(PLAN_CHANGE_BUDGET_MS, () =>
+        ensureGroupSeatNow(groupId, admitterId, options),
+    );
+}
+
+async function ensureGroupSeatNow(
+    groupId: string,
+    admitterId: string,
+    { mayBuy = true }: { mayBuy?: boolean },
 ): Promise<SeatResult> {
     if (!billingEnabled()) return { status: 'ok' };
     const live = await billingRepository.getLiveGroupSubscription(groupId);
@@ -2923,13 +2968,19 @@ export async function ensureGroupSeat(
  * refused whole on a 402), fewer is scheduled for the period's end and never
  * below the members admitted or the plan's included count.
  */
-export async function setGroupUnits(
+export function setGroupUnits(
     user: BillingUser,
     groupId: string,
     units: number,
     /* The count the payer saw: a raise from another one is refused (`moved`), never re-aimed. */
     from?: number,
 ) {
+    return withPolarDeadline(PLAN_CHANGE_BUDGET_MS, () =>
+        setGroupUnitsNow(user, groupId, units, from),
+    );
+}
+
+async function setGroupUnitsNow(user: BillingUser, groupId: string, units: number, from?: number) {
     requireFamilyBilling();
     // The payer may always pay for less, even after leaving the family; adding needs a member.
     await requirePayer(groupId, user.id);
@@ -3052,7 +3103,17 @@ export type PlanChange = {
  *
  * A plan set to end, or with a renewal the bank refused, is not changed.
  */
-export async function changeGroupPlan(
+export function changeGroupPlan(
+    user: BillingUser,
+    groupId: string,
+    productId: string,
+): Promise<PlanChange> {
+    return withPolarDeadline(PLAN_CHANGE_BUDGET_MS, () =>
+        changeGroupPlanNow(user, groupId, productId),
+    );
+}
+
+async function changeGroupPlanNow(
     user: BillingUser,
     groupId: string,
     productId: string,
@@ -3161,6 +3222,11 @@ export async function changeGroupPlan(
                     throw new BillingError(
                         'Your bank hasn’t confirmed the last charge yet. Confirm it in Card and invoices, then change the plan.',
                         409,
+                    );
+                if (!timeForChange(groupId))
+                    throw new BillingError(
+                        'Billing is temporarily unavailable. Please try again.',
+                        503,
                     );
                 let changed: models.Subscription;
                 let changedAt: billingRepository.ReadingStamp;

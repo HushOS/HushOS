@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { billingEnv } from '@hushos/env/billing';
 import { log } from '@hushos/logging';
 import { createPolar, type Polar, type models } from '@polar-sh/sdk/2026-10';
@@ -53,15 +54,46 @@ export function billingEnabled() {
     return billingEnv.BILLING_PROVIDER === 'polar';
 }
 
+/* Seconds Polar is given to answer a call, at most. */
+const POLAR_TIMEOUT_S = 15;
+/* Seconds a call is given however little of a deadline is left, so it can still answer. */
+const POLAR_MIN_TIMEOUT_S = 1;
+
+/* When the Polar calls of a request must be done by (withPolarDeadline). */
+const polarDeadline = new AsyncLocalStorage<number>();
+
+/*
+ * Runs `run` with every Polar call in it bounded by what is left of `ms` from now (or of a
+ * deadline it runs under already, if that ends first): a request the browser gives up on after
+ * 30 s (api-client.ts) answers before then, however slowly Polar answers each call.
+ */
+export function withPolarDeadline<T>(ms: number, run: () => Promise<T>) {
+    const outer = polarDeadline.getStore() ?? Number.POSITIVE_INFINITY;
+    return polarDeadline.run(Math.min(Date.now() + ms, outer), run);
+}
+
+/* Milliseconds left before the Polar deadline this runs under; Infinity outside one. */
+export function polarTimeLeft() {
+    const until = polarDeadline.getStore();
+    return until === undefined ? Number.POSITIVE_INFINITY : until - Date.now();
+}
+
 let client: Polar | undefined;
 export function polar() {
     if (!billingEnabled() || !billingEnv.POLAR_ACCESS_TOKEN)
         throw new BillingError('Billing is not available on this server.', 404);
-    client ??= createPolar({
+    const options = {
         accessToken: billingEnv.POLAR_ACCESS_TOKEN,
         environment: billingEnv.POLAR_ENVIRONMENT,
-        timeout: 15,
-    });
+    };
+    const left = polarTimeLeft();
+    // Under a deadline, a client for this one call, timed to what is left of it.
+    if (Number.isFinite(left))
+        return createPolar({
+            ...options,
+            timeout: Math.max(POLAR_MIN_TIMEOUT_S, Math.min(POLAR_TIMEOUT_S, left / 1000)),
+        });
+    client ??= createPolar({ ...options, timeout: POLAR_TIMEOUT_S });
     return client;
 }
 

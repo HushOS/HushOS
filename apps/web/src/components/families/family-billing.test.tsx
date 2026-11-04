@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { FamilyBilling } from '@/lib/family-billing';
 
 /*
@@ -22,8 +22,18 @@ const setUnits = vi.fn(async (..._args: unknown[]): Promise<never> => {
 const changePlan = vi.fn(async (..._args: unknown[]): Promise<never> => {
     throw declined;
 });
-// Polar's portal address never comes back while the test looks.
-const portal = vi.fn((..._args: unknown[]) => new Promise<{ url: string }>(() => {}));
+// Each request for Polar's portal address answers only when the test says so.
+type Pending = {
+    resolve: (answer: { url: string }) => void;
+    reject: (error: Error) => void;
+};
+const requests: Pending[] = [];
+const portal = vi.fn(
+    (..._args: unknown[]) =>
+        new Promise<{ url: string }>((resolve, reject) => {
+            requests.push({ resolve, reject });
+        }),
+);
 vi.mock('@/lib/billing-api', () => ({
     groupBillingApi: {
         setUnits: (...args: unknown[]) => setUnits(...args),
@@ -122,6 +132,10 @@ describe('Card and invoices after a declined charge', () => {
         setUnits.mockClear();
         changePlan.mockClear();
         portal.mockClear();
+        requests.length = 0;
+    });
+    afterEach(() => {
+        vi.unstubAllGlobals();
     });
 
     test.each([
@@ -146,6 +160,61 @@ describe('Card and invoices after a declined charge', () => {
             dialog = await screen.findByRole('dialog', { name: opens });
             expect(within(dialog).getByRole('button', { name: retry })).toBeEnabled();
             expect(within(dialog).queryByRole('button', { name: /^Card and invoices/ })).toBeNull();
+        },
+    );
+
+    test.each(['answers', 'fails'] as const)(
+        'a closed dialog’s portal request that %s afterwards acts on nothing',
+        async (outcome) => {
+            const assign = vi.fn();
+            vi.stubGlobal('location', {
+                href: window.location.href,
+                origin: window.location.origin,
+                assign,
+            });
+            const user = userEvent.setup();
+            renderBilling();
+            const decline = async () => {
+                await user.click(screen.getByRole('button', { name: 'Add places' }));
+                const dialog = await screen.findByRole('dialog', { name: 'Add places' });
+                await user.click(within(dialog).getByRole('button', { name: 'Add 1 place' }));
+                await user.click(
+                    await within(dialog).findByRole('button', { name: /^Card and invoices/ }),
+                );
+                await within(dialog).findByRole('button', { name: /^Opening/ });
+                return dialog;
+            };
+            // Opened, then closed while its request is still out.
+            let dialog = await decline();
+            await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+            await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+            // Opened again, declined again, and its own request out.
+            dialog = await decline();
+            expect(requests).toHaveLength(2);
+            const retry = within(dialog).getByRole('button', { name: 'Add 1 place' });
+            expect(retry).toBeDisabled();
+
+            await act(async () => {
+                if (outcome === 'answers') requests[0]!.resolve({ url: 'https://polar.test/old' });
+                else
+                    requests[0]!.reject(
+                        new Error('Billing is temporarily unavailable. Please try again.'),
+                    );
+            });
+            // The closed dialog's answer leaves the page where it is, and this attempt as it was.
+            expect(assign).not.toHaveBeenCalled();
+            expect(retry).toBeDisabled();
+            expect(within(dialog).getByRole('button', { name: /^Opening/ })).toBeInTheDocument();
+            expect(within(dialog).queryByText(/temporarily unavailable/)).toBeNull();
+            expect(within(dialog).getByRole('alert')).toHaveTextContent(
+                /bank declined this charge/,
+            );
+
+            // This attempt's own answer still opens the portal.
+            await act(async () => {
+                requests[1]!.resolve({ url: 'https://polar.test/new' });
+            });
+            expect(assign).toHaveBeenCalledExactlyOnceWith('https://polar.test/new');
         },
     );
 });

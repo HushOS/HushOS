@@ -10,7 +10,7 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
 import { ArrowUpRightIcon, MinusIcon, PlusIcon } from 'lucide-react';
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { PortalLink } from '@/components/portal-link';
 import { Segmented, Setting, SettingsGroup } from '@/components/settings';
 import { StorageMeter } from '@/components/storage-card';
@@ -1394,6 +1394,15 @@ function DeclinedPortal({
     onError: (message: string) => void;
 }) {
     const [opening, setOpening] = useState(false);
+    // Gone with the dialog it was in (closed, or declined no longer): whatever its request
+    // answers then is the closed dialog's, so it neither leaves the page nor touches a new one.
+    const shown = useRef(true);
+    useEffect(() => {
+        shown.current = true;
+        return () => {
+            shown.current = false;
+        };
+    }, []);
     usePageRestored(() => {
         setOpening(false);
         onOpening(false);
@@ -1402,8 +1411,10 @@ function DeclinedPortal({
         setOpening(true);
         onOpening(true);
         try {
-            window.location.assign((await groupBillingApi.portal(groupId)).url);
+            const { url } = await groupBillingApi.portal(groupId);
+            if (shown.current) window.location.assign(url);
         } catch (cause) {
+            if (!shown.current) return;
             cue('error');
             onError(authError(cause));
             setOpening(false);
