@@ -1,0 +1,35 @@
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_4c5ed0b96a4e4e 2795-2801
+  s_566b8e0c4467a4::t_53904708f95e9c 166-194,3229
+  s_566b8e0c4467a4::t_e721cf4d1e5c21 3117-3130,3133-3145,3253
+apps/web/src/components/families/family-billing.tsx
+  s_566b8e0c4467a4::t_d8e37f41afcec8 1365,1381-1428,1526-1527,1542,1563,1594,1671-1683,1711-1712,1727,1752,1784,1915-1934
+apps/web/src/dev/components-page.tsx
+  s_566b8e0c4467a4::t_562e78cd39cc1b 4,71
+apps/web/src/dev/demos/app.tsx
+  s_566b8e0c4467a4::t_ae457219668578 25,363,484-567
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_031242bb99fa64 581-582
+packages/billing/src/provider.ts
+  s_566b8e0c4467a4::t_a2538d765084ab 34-35,37
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_083b41fe0440b7 171-175,448-455,781-782,785-786,791-793,857-869,1153-1156,3684,3687,3935-3990,8883,8905-8945
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_047fc74acbfa1a 88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "09615d867b3bdda88071e04a5b8897517bd47b48",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
