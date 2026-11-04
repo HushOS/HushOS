@@ -228,16 +228,18 @@ final class IdentityServer: @unchecked Sendable {
         throw NeverArrived()
     }
 
-    /* Called by the transport after `answer`: blocks this request until `release()` when it is the one held. */
-    func wait(for request: URLRequest) {
-        let hit = lock.withLock {
+    /* Called by the transport after `answer`: whether this request is the one held (then it waits for `release()`). */
+    func holds(_ request: URLRequest) -> Bool {
+        lock.withLock {
             guard let holding, request.url?.path == holding else { return false }
             self.holding = nil
             held = true
             return true
         }
-        if hit { _ = gate.wait(timeout: .now() + 10) }
     }
+
+    /* The held request's wait, off the loading thread. */
+    func waitForRelease() { _ = gate.wait(timeout: .now() + 10) }
 
     func answer(_ request: URLRequest, body: Data?) -> (Int, [String: Any]) {
         lock.lock()
@@ -272,7 +274,7 @@ final class IdentityServer: @unchecked Sendable {
     }
 }
 
-final class IdentityServerProtocol: URLProtocol {
+final class IdentityServerProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
@@ -290,8 +292,25 @@ final class IdentityServerProtocol: URLProtocol {
             stream.close()
             body = data
         }
-        let (status, json) = IdentityServer.current?.answer(request, body: body) ?? (500, ["message": "No server"])
-        IdentityServer.current?.wait(for: request)
+        let server = IdentityServer.current
+        let (status, json) = server?.answer(request, body: body) ?? (500, ["message": "No server"])
+        reply = (status, json)
+        guard let server, server.holds(request) else { return finish() }
+        // Held without blocking this thread: every URLProtocol's requests load on one thread (CFNetwork's
+        // CustomProtocols), so waiting here would hold back every other request too, the test's own included (the
+        // mark raised meanwhile reads the settings), until the hold timed out and the reply went first.
+        nonisolated(unsafe) let thread = Thread.current
+        DispatchQueue.global().async {
+            server.waitForRelease()
+            self.perform(#selector(self.finish), on: thread, with: nil, waitUntilDone: false, modes: [RunLoop.Mode.common.rawValue])
+        }
+    }
+
+    private var reply: (Int, [String: Any]) = (500, [:])
+
+    /* The reply answered (on the loading thread): status, then body. */
+    @objc private func finish() {
+        let (status, json) = reply
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: (try? JSONSerialization.data(withJSONObject: json)) ?? Data())
