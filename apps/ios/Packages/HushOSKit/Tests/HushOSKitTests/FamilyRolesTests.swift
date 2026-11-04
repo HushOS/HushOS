@@ -370,6 +370,79 @@ extension OnFakeDrive {
             #expect(try Self.handover(m) == FamilyRecords.KeptHandover(to: maya, staged: true))
         }
 
+        /* Make them the organizer whose staged marker can't be written (a full disk) once billing's call is kept: it fails. */
+        static func handOverWithTheMarkerUnwritable(_ m: Managed) async throws {
+            let failed: Bool = await FamilyRecords.$markFault.withValue({ staged in if staged { throw GuardError.unsaved } }) {
+                do { _ = try await Self.quickly { try await m.phone.sync.handOver(m.summary, to: m.family.creator.userId, first: "Maya") }; return false } catch { return true }
+            }
+            #expect(failed, "the handover didn't fail on its marker")
+            #expect(try m.kept.count == 1, "billing's call wasn't kept")
+            #expect(m.server.lock.withLock { m.server.manage.memberCalls }.isEmpty, "something was sent")
+        }
+
+        /*
+         * Codex #287 / #285 round 8 (billing): billing's call is kept, then its staged marker can't be
+         * written. The handover isn't dropped, since its billing call is on the device: the next open
+         * sends it, it lands, and the handover finishes with one organizer. Fails if a failed marker
+         * drops the record while its billing call stays kept, leaving two organizers once that lands.
+         */
+        @Test func aHandoverWhoseMarkerFailsAfterBillingWasKeptStillFinishes() async throws {
+            let m = try await Self.organizer()
+            defer { m.phone.done() }
+            try await Self.checkMaya(m)
+            let maya = m.family.creator.userId.lowercased()
+            try await Self.handOverWithTheMarkerUnwritable(m)
+            #expect(try Self.handover(m)?.to == maya, "the handover was dropped though its billing call is kept")
+            _ = try await Self.quickly { try await m.phone.sync.resumeOutbox(m.family.groupId, names: [maya: "Maya"]) }
+            #expect(try await Self.roles(m, maya).contains("billing"))
+            #expect(try await !Self.roles(m, m.me).contains("billing"), "two organizers")
+            #expect(try Self.handover(m) == nil)
+        }
+
+        /*
+         * The same, but the kept billing call is refused at the next open: its end marks the handover
+         * staged before the entry goes, so the handover ends there and no fresh billing change is
+         * signed. Fails if a handover whose marker failed is taken for one never staged, and billing
+         * signed again after a definite refusal.
+         */
+        @Test func aHandoverWhoseMarkerFailsIsNeverSignedAgainAfterARefusal() async throws {
+            let m = try await Self.organizer()
+            defer { m.phone.done() }
+            try await Self.checkMaya(m)
+            let maya = m.family.creator.userId.lowercased()
+            try await Self.handOverWithTheMarkerUnwritable(m)
+            m.server.lock.withLock { m.server.manage.memberAnswers = [answering(409, ["code": "held", "message": "Paused."])] }
+            _ = try await Self.quickly { try await m.phone.sync.resumeOutbox(m.family.groupId, names: [maya: "Maya"]) }
+            #expect(m.server.lock.withLock { m.server.manage.memberCalls }.count == 1, "billing was signed again after the refusal")
+            #expect(try Self.handover(m) == nil)
+            #expect(try await !Self.roles(m, maya).contains("billing"))
+        }
+
+        /*
+         * Codex #285 round 8 (billing): billing lands with Maya and the step down gets no answer
+         * (kept). The next open sends it and it is refused for good: the handover ends there, both
+         * stay organizers, and nothing signs another step down; Finish handing over is the person's
+         * to press. Fails if a resumed handover whose step down was refused is finished anyway.
+         */
+        @Test func aRefusedResumedStepDownEndsTheHandover() async throws {
+            let m = try await Self.organizer()
+            defer { m.phone.done() }
+            try await Self.checkMaya(m)
+            let maya = m.family.creator.userId.lowercased()
+            m.server.lock.withLock { m.server.manage.memberAnswers = [{ _ in nil }, Self.noAnswer, Self.noAnswer, Self.noAnswer] }
+            guard case .pending = try await Self.quickly({ try await m.phone.sync.handOver(m.summary, to: maya, first: "Maya") }) else {
+                Issue.record("the step down wasn't kept"); return
+            }
+            #expect(try Self.handover(m) == FamilyRecords.KeptHandover(to: maya, staged: true))
+            let calls = m.server.lock.withLock { m.server.manage.memberCalls }.count
+            m.server.lock.withLock { m.server.manage.memberAnswers = [answering(409, ["code": "held", "message": "Paused."])] }
+            _ = try await Self.quickly { try await m.phone.sync.resumeOutbox(m.family.groupId, names: [maya: "Maya"]) }
+            #expect(m.server.lock.withLock { m.server.manage.memberCalls }.count == calls + 1, "another step down was signed after the refusal")
+            #expect(try Self.handover(m) == nil)
+            #expect(try await Self.roles(m, maya).contains("billing"))
+            #expect(try await Self.roles(m, m.me).contains("billing"), "the handover was finished after its refusal")
+        }
+
         /*
          * Billing moved to someone else meanwhile (another device): this account no longer holds it,
          * so it isn't this account's to give. Nothing is signed or sent. Fails if a former organizer

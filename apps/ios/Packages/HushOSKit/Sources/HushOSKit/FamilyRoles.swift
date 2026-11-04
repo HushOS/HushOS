@@ -114,7 +114,13 @@ extension FamilySync {
                 // made and never staged goes with it, so the next open never hands the organizer role over unasked. One
                 // that was there already (a resumed or re-confirmed handover) stays as it was.
                 if created, let kept = try? self.records.handover(userId: me, groupId: groupId), !kept.staged {
-                    try? self.records.clearHandover(userId: me, groupId: groupId)
+                    if (try? self.billingKept(groupId, to: to)) != false {
+                        // Billing's call kept before its marker could be written (a full disk): staged in fact. Marked once
+                        // more; if that fails too, the entry's end marks it (handoverHears). Unknown counts as kept.
+                        try? self.records.markHandover(userId: me, groupId: groupId, to: to, staged: true)
+                    } else {
+                        try? self.records.clearHandover(userId: me, groupId: groupId)
+                    }
                 }
                 throw error
             }
@@ -315,6 +321,16 @@ extension FamilySync {
         switch opened {
         case .send(_, let r, _), .hold(_, let r, _), .landed(_, let r), .superseded(_, let r): return r
         }
+    }
+
+    /* Whether billing's call to `to` is kept here (an entry noted billing-to, about them): a handover with it is staged in fact. */
+    func billingKept(_ groupId: String, to: String) throws -> Bool {
+        for call in try records.outboxList(userId: userId, groupId: groupId)
+        where try records.outboxOperation(userId: userId, groupId: groupId, outboxId: call.outboxId) == RoleOperation.billingTo.rawValue {
+            if let opened = try? ledger.outboxOpen(groupId: groupId, outboxId: call.outboxId, userId: userId, entry: call.entry),
+               Self.person(of: Self.route(of: opened)) == to.lowercased() { return true }
+        }
+        return false
     }
 
     /* `body`, with a not-member answer from any of its reads let go of as a removal (published), then `wiped`. */

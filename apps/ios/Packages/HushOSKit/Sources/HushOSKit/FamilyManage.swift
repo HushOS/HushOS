@@ -284,6 +284,7 @@ extension FamilySync {
             if saysLater, let unsaid = FamilyRecords.UnsaidEnd(outboxId: outboxId, end: end, route: route) {
                 try records.keepUnsaid(userId: userId, groupId: groupId, unsaid)
             }
+            try handoverHears(end, groupId: groupId, outboxId: outboxId, route: route)
             try records.outboxDelete(userId: userId, groupId: groupId, outboxId: outboxId)
         }
         while true {
@@ -506,6 +507,23 @@ extension FamilySync {
             guard let served = now.identity else { throw StageRefused(words: ManageWords.keysUnread) }
             return try self.ledger.admitBody(me: try await self.vault.ownIdentities(), identity: try await self.vault.currentIdentityEnvelope(), groupId: summary.id,
                                              expectedRevision: revision, userId: person.userId.lowercased(), served: served, roles: [], kems: kems)
+        }
+    }
+
+    /*
+     * What the handover kept here learns from one of its calls ending, before the entry goes (Codex #285 round 8):
+     * billing's call to them ending means the handover was staged, whatever its marker said (one that couldn't be
+     * written after the entry was kept), so finishHandover never signs billing again; its step down refused for good
+     * ends the handover there, both still organizers, Finish handing over to {first} the person's to press.
+     */
+    private func handoverHears(_ end: CallEnd, groupId: String, outboxId: String, route: ChainRoute?) throws {
+        guard let handover = try records.handover(userId: userId, groupId: groupId) else { return }
+        let operation = try records.outboxOperation(userId: userId, groupId: groupId, outboxId: outboxId)
+        if !handover.staged, operation == RoleOperation.billingTo.rawValue, case .member(let about)? = route, about.lowercased() == handover.to {
+            try records.markHandover(userId: userId, groupId: groupId, to: handover.to, staged: true)
+        }
+        if case .refused = end, operation == RoleOperation.stepDown.rawValue {
+            try records.clearHandover(userId: userId, groupId: groupId)
         }
     }
 

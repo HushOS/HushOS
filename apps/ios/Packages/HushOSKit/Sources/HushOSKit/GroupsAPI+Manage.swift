@@ -326,8 +326,12 @@ extension FamilyRecords {
         return outboxFolder.appendingPathComponent("\(userId.lowercased())_\(groupId).handover")
     }
 
+    /* A test's full disk: thrown before a handover record is written (`staged` the record's); none outside tests. */
+    @TaskLocal static var markFault: (@Sendable (_ staged: Bool) throws -> Void)?
+
     func markHandover(userId: String, groupId: String, to: String, staged: Bool = false) throws {
         guard let url = handoverFile(userId, groupId), Self.valid(to.lowercased()) else { throw GuardError.unsaved }
+        try Self.markFault?(staged)
         Unbacked.folder(folder)
         try underLock {
             try FileManager.default.createDirectory(at: outboxFolder, withIntermediateDirectories: true)
