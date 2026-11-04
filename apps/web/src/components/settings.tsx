@@ -40,7 +40,11 @@ export function SettingsGroup({
     );
 }
 
-/* One row: label, what it is now, and the action. On a phone they stack. */
+/*
+ * One row: label, what it is now, and the action. On a phone they stack. Rows are told
+ * apart by their spacing, not by rules: the group's heading keeps the one rule. The label
+ * column fits the longest fixed label ("Member list version") on one line; a long name wraps.
+ */
 export function Setting({
     label,
     children,
@@ -56,13 +60,15 @@ export function Setting({
     data?: Record<`data-${string}`, string | boolean>;
 }) {
     return (
-        <div {...data} className="flex flex-col gap-2 border-b border-rule py-4 last:border-0">
-            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 gap-y-1 sm:grid-cols-[11rem_minmax(0,1fr)_auto]">
-                <span className="text-sm font-semibold max-sm:col-span-2">{label}</span>
+        <div {...data} className="flex flex-col gap-2 py-3">
+            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 gap-y-1 sm:grid-cols-[8.5rem_minmax(0,1fr)_auto]">
+                <span className="text-sm font-semibold wrap-break-word max-sm:col-span-2">
+                    {label}
+                </span>
                 <div className="min-w-0 text-[15px]">{children}</div>
                 <div className="hang-end flex items-center justify-end gap-2">{action}</div>
             </div>
-            {below && <div className="sm:pl-[calc(11rem+1.5rem)]">{below}</div>}
+            {below && <div className="sm:pl-[calc(8.5rem+1.5rem)]">{below}</div>}
         </div>
     );
 }

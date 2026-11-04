@@ -273,10 +273,8 @@ test.describe.serial('two people', () => {
         test.setTimeout(180_000);
         await createFamily(maya, family);
         const members = maya.page.locator(`[data-member="${maya.email}"]`);
-        await expect(members.locator('[data-roles] [data-slot=badge]')).toHaveText([
-            'Organizer',
-            'Manages the family',
-        ]);
+        // One badge: "Manages the family" beside it would only repeat what organizer says.
+        await expect(members.locator('[data-roles] [data-slot=badge]')).toHaveText(['Organizer']);
         await invite(maya, 'nobody-yet@hushos.local');
         await maya.page
             .locator('[data-invitation="nobody-yet@hushos.local"]')
@@ -350,7 +348,7 @@ test.describe.serial('two people', () => {
         );
         await expect(
             sam.page.locator(`[data-member="${maya.email}"] [data-roles] [data-slot=badge]`),
-        ).toHaveText(['Organizer', 'Manages the family']);
+        ).toHaveText(['Organizer']);
         // A plain member carries no role badge, and their own row no label.
         await expect(maya.page.locator(`[data-member="${sam.email}"] [data-roles]`)).toHaveCount(0);
         await expect(sam.page.locator(`[data-member="${sam.email}"] [data-checked]`)).toHaveCount(

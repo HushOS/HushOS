@@ -366,7 +366,7 @@ function GlanceSection({
         <SettingsGroup title="Plan">
             <div data-family-plan="glance" className="flex flex-col">
                 {/* The group is already called Plan: its first row says only which one. */}
-                <p className="border-b border-rule py-4 text-[15px] font-semibold last:border-0">
+                <p className="py-3 text-[15px] font-semibold">
                     {planTierName({ name: summary.planName })}
                     {summary.storage && summary.storage.quotaBytes !== '0'
                         ? ` · ${formatQuota(summary.storage.quotaBytes)}`
@@ -1045,30 +1045,36 @@ function PlanSection(props: Inner) {
                     <Setting
                         label="Paid by"
                         action={
-                            actions.portal &&
                             // A failed renewal the payer must fix: the portal is the step, so a
-                            // blue button. Otherwise a link: it opens Polar's page and changes
-                            // nothing on the plan, beside Change plan and Add places.
-                            (paymentNeedsYou(summary) ? (
+                            // blue button, at the row's end as a row's action.
+                            actions.portal &&
+                            paymentNeedsYou(summary) && (
                                 <Button disabled={busy !== null} onClick={() => void portal()}>
                                     {busy === 'portal' ? 'Opening' : 'Card and invoices'}
                                     <ArrowUpRightIcon />
                                 </Button>
-                            ) : (
+                            )
+                        }
+                    >
+                        {actions.portal && !paymentNeedsYou(summary) ? (
+                            // Otherwise a link, right after the payer's name: it opens Polar's
+                            // page and changes nothing on the plan.
+                            <span className="flex flex-wrap items-center gap-x-3">
+                                {payerName}
                                 <PortalLink
                                     busy={busy === 'portal'}
                                     disabled={busy !== null}
                                     onOpen={() => void portal()}
                                 />
-                            ))
-                        }
-                    >
-                        {payerName}
+                            </span>
+                        ) : (
+                            payerName
+                        )}
                     </Setting>
                 )}
                 {(anyChange || actions.cancel || actions.resume) && (
                     // One row: the changes first, Cancel plan last and quiet, at the row's end.
-                    <div className="flex flex-wrap items-center gap-2 py-4">
+                    <div className="flex flex-wrap items-center gap-2 py-3">
                         {actions.changePlan && (
                             <Button
                                 variant="outline"

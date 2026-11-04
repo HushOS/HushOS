@@ -169,18 +169,12 @@ function Row({
     );
 }
 
-/* A member's roles in words, as small badges: "Organizer", "Manages the family", or nothing. */
+/* A member's role in words, as a small badge: "Organizer", "Manages the family", or nothing. */
 function RoleBadges({ roles }: { roles: readonly string[] }) {
     if (!roles.includes('billing') && !roles.includes('members')) return null;
     return (
         <span className="flex flex-wrap gap-1" data-roles>
-            {rolesLine(roles)
-                .split(' · ')
-                .map((role) => (
-                    <Badge key={role} variant="secondary">
-                        {role}
-                    </Badge>
-                ))}
+            <Badge variant="secondary">{rolesLine(roles)}</Badge>
         </span>
     );
 }

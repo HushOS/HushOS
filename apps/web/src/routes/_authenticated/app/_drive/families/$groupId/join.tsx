@@ -170,11 +170,7 @@ function JoinFamily() {
 
     return (
         <div className="flex flex-1 flex-col">
-            <PageHeader
-                back={<Link to="/app/family">Family</Link>}
-                title={title}
-                description={description}
-            />
+            <PageHeader title={title} description={description} />
             {/* Always on the page, so each change of step is announced. */}
             <p
                 aria-live="polite"
