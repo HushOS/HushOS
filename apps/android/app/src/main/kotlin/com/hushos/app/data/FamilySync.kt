@@ -973,16 +973,15 @@ class FamilySync(
             GroupRole.RECOVERY -> "recovery"
         }
 
-        /* How a member reads in a list: the roles in words, never colour alone (the web's rolesLine). */
-        fun rolesLine(roles: List<String>): String {
-            val organizer = "billing" in roles
-            val manages = "members" in roles
-            return when {
-                organizer && manages -> "Organizer · Manages the family"
-                organizer -> "Organizer"
-                manages -> "Manages the family"
-                else -> "Member"
-            }
+        /*
+         * How a member reads in a list: the roles in words, never colour alone (the web's
+         * rolesLine). An organizer reads "Organizer" alone: "Manages the family" beside it only
+         * said it again.
+         */
+        fun rolesLine(roles: List<String>): String = when {
+            "billing" in roles -> "Organizer"
+            "members" in roles -> "Manages the family"
+            else -> "Member"
         }
 
         fun fork(of: ForkOf, version: ULong, sides: List<MarkSide>) = FamilyFork(of == ForkOf.ROSTER, version, sides.map { side ->

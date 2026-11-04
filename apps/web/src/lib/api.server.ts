@@ -47,6 +47,7 @@ import { followsGroupWrites, groupWriteMinimums } from '@/lib/group-write-floor'
 import { boundTrashBatch } from '@/lib/trash-batch-request';
 import { storageEnv } from '@hushos/env/storage';
 import { CANCELLATION_REASONS } from '@hushos/billing/protocol';
+import { intentSchema } from '@/lib/signup-intent';
 import { appEnv } from '@hushos/env/app';
 import { chargeableCurrency } from '@/lib/currency';
 
@@ -402,13 +403,6 @@ const uploadNodeSchema = t.Union([
 const partSchema = t.Object({
     partNumber: t.Integer({ minimum: 1, maximum: 10_000 }),
     etag: t.String({ minLength: 1, maxLength: 256 }),
-});
-
-const intentValue = t.String({ minLength: 1, maxLength: 64, pattern: '^[A-Za-z0-9_-]+$' });
-const intentSchema = t.Object({
-    plan: t.Optional(intentValue),
-    referral: t.Optional(intentValue),
-    source: t.Optional(intentValue),
 });
 
 const cancellationSchema = t.Object({
@@ -1247,6 +1241,15 @@ export const apiApp = new Elysia({ prefix: '/api' })
     .post('/billing/resume', { body: t.Object({}) }, async ({ request, sessionToken }) =>
         billing.resume(await billingMutation(request, sessionToken)),
     )
+    // The family tier chosen at signup, once the app has opened Create a family with it.
+    .post(
+        '/billing/intended-family/forget',
+        { body: t.Object({}) },
+        async ({ request, sessionToken }) => {
+            await billing.forgetIntendedFamily(await billingMutation(request, sessionToken));
+            return { success: true as const };
+        },
+    )
     // A family's plan (docs/groups-design.md 3.5): only with GROUPS_ENABLED and billing on,
     // which the billing functions check; managers see it, the payer changes it.
     .get(
@@ -1284,13 +1287,17 @@ export const apiApp = new Elysia({ prefix: '/api' })
         '/billing/groups/:id/units',
         {
             params: t.Object({ id: uuidSchema }),
-            body: t.Object({ units: t.Integer({ minimum: 1, maximum: 10_000 }) }),
+            body: t.Object({
+                units: t.Integer({ minimum: 1, maximum: 10_000 }),
+                from: t.Optional(t.Integer({ minimum: 1, maximum: 10_000 })),
+            }),
         },
         async ({ request, sessionToken, params, body }) =>
             billing.setGroupUnits(
                 await billingMutation(request, sessionToken),
                 params.id,
                 body.units,
+                body.from,
             ),
     )
     .post(
@@ -2715,7 +2722,13 @@ export const apiApp = new Elysia({ prefix: '/api' })
             )
             .post(
                 '/groups/:id/leave',
-                { params: groupParams, body: t.Object({ endsLapsed: endsLapsedSchema }) },
+                {
+                    params: groupParams,
+                    body: t.Object({
+                        endsLapsed: endsLapsedSchema,
+                        expect: t.Optional(t.Literal('accepted')),
+                    }),
+                },
                 async ({ request, sessionToken, params, body }) =>
                     groups.leave((await groupUser(request, sessionToken)).id, params.id, body),
             )

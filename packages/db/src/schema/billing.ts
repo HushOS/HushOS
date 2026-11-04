@@ -88,6 +88,8 @@ export const accountIntents = pgTable('account_intents', {
         .primaryKey()
         .references(() => users.id, { onDelete: 'cascade' }),
     planProductId: text('plan_product_id'),
+    /* The currency a family tier was shown in on Pricing (`^[a-z]{3}$`), for its checkout. */
+    currency: text(),
     referralCode: text('referral_code'),
     source: text(),
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
@@ -280,14 +282,36 @@ export const groupBillingSubscriptions = pgTable(
         changedFrom: bigint('changed_from', { mode: 'bigint' }),
         /*
          * The end of the last period in which this was the family's plan while `active` or
-         * `trialing` (applyGroupState sets it when it picks the family's plan): what a payment on
-         * it bought. Null for a plan that never served the family (an incomplete checkout, one
-         * made beside the family's plan, one a deleted family's Polar customer was billed for),
-         * which bought nothing. A past-due or unpaid period never moves it, nor anything after the
-         * family is deleted: the cutoff a deleted family's plan, or a second plan, is refunded
-         * from (unwantedPlanCutoff).
+         * `trialing` (settleTenure sets it when it picks the family's plan): what a payment on
+         * it bought; brought back to when it stopped supplying the family, if its period ran on.
+         * Null for a plan that never served the family (an incomplete checkout, one made beside
+         * the family's plan, one a deleted family's Polar customer was billed for), which bought
+         * nothing. A past-due or unpaid period never moves it, nor anything after the family is
+         * deleted: the cutoff a deleted family's plan, or a second plan, is refunded from
+         * (unwantedPlanCutoff).
          */
         servedUntil: timestamp('served_until', { withTimezone: true }),
+        /*
+         * Since when this has supplied the family without a break (settleTenure): only the family's
+         * plan has one, cleared the moment it stops (lapsed, ended, superseded, or beside the
+         * family's plan). The family's plan is the live one supplying it now, so a second plan
+         * bought beside it, even one a racing delivery wrote, never takes its place, and a plan
+         * that lapses and resumes after a replacement was bought never takes the replacement's.
+         */
+        servedSince: timestamp('served_since', { withTimezone: true }),
+        /*
+         * A second live plan of a family HushOS is ending (two checkouts both paid, or one Polar
+         * reinstated beside the plan bought since): when it set out to, and the plan it keeps.
+         * Never the family's plan meanwhile: the live-plan read, the pool and the places skip it
+         * while its revoke waits on Polar.
+         */
+        supersededAt: timestamp('superseded_at', { withTimezone: true }),
+        supersededBy: text('superseded_by'),
+        /*
+         * Its refund cutoff (unwantedPlanCutoff), taken from the row as it stood before the write
+         * that marked it and stored with the mark: every later run that ends it uses this one.
+         */
+        supersededPaidAfter: timestamp('superseded_paid_after', { withTimezone: true }),
         /*
          * Orders HushOS refused to credit: a raise Polar billed on another product than the one
          * it was asked on. They never count as paying for a tier.
@@ -310,6 +334,32 @@ export const groupBillingSubscriptions = pgTable(
         ),
     ],
 );
+
+/*
+ * The one checkout a family may have open at Polar (docs/groups-design.md 3.5): who opened it,
+ * Polar's checkout and its link, and until when it can be paid (Polar's `expires_at`; a short
+ * hold while it is being made). Another `billing` holder, or another tab, is refused (the same
+ * person is given the same link back) until it expires, so two checkouts can't both be paid
+ * for one family. No foreign key: a billing record, kept by the family's id.
+ */
+export const groupCheckouts = pgTable('group_checkouts', {
+    groupId: uuid('group_id').primaryKey(),
+    userId: uuid('user_id').notNull(),
+    /* The claim's own token: only the request that took it records or renews it. */
+    token: uuid().notNull(),
+    /* The plan it is for: the same person choosing it again gets the same link back. */
+    productId: text('product_id').notNull(),
+    /*
+     * What else the checkout was made with (places, currency, billing address), as one string:
+     * the link is given back only for the same plan on the same terms.
+     */
+    terms: text().notNull(),
+    providerCheckoutId: text('provider_checkout_id'),
+    url: text(),
+    until: timestamp('until', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+});
 
 /*
  * A personal plan HushOS ends because its owner's files joined a family's pool
@@ -344,12 +394,26 @@ export const personalPlanEndings = pgTable(
         pooledAt: timestamp('pooled_at', { withTimezone: true }).notNull(),
         revokedAt: timestamp('revoked_at', { withTimezone: true }),
         /*
-         * A deleted family's plan that Polar billed again (endOrphanedFamilyPlan): every order of it
+         * A family plan HushOS revokes and refunds whole (endUnwantedFamilyPlan): a deleted family's plan that
+         * Polar billed again, or a family's second plan: every order of it
          * paid at or after this is refunded whole. That plan's own first recorded end, or the epoch
          * for a plan the mirror never held (HushOS gave nothing for it). Written once, with the
          * ending, and never recomputed; null on every other ending.
          */
         paidAfter: timestamp('paid_after', { withTimezone: true }),
+        /*
+         * When the plan's paid orders were noted on this ending (noteEndingOrders), in the same
+         * transaction as the notes. An ending with `paid_after` and none is unfinished, whatever
+         * its outcome: its plan's orders are read and noted again (a run that stopped between
+         * writing the ending and noting them would otherwise leave every charge unrefunded).
+         */
+        ordersNotedAt: timestamp('orders_noted_at', { withTimezone: true }),
+        /*
+         * Bumped each time a run restarts or takes the ending over (beginLapsedRevoke): a read of
+         * the plan's orders that began before stamps `orders_noted_at` only if this is unchanged
+         * (markOrdersNoted), so it never marks noted an ending another run restarted meanwhile.
+         */
+        attempt: integer().notNull().default(0),
         periodStart: timestamp('period_start', { withTimezone: true }),
         periodEnd: timestamp('period_end', { withTimezone: true }),
         /*

@@ -273,10 +273,8 @@ test.describe.serial('two people', () => {
         test.setTimeout(180_000);
         await createFamily(maya, family);
         const members = maya.page.locator(`[data-member="${maya.email}"]`);
-        await expect(members.locator('[data-roles] [data-slot=badge]')).toHaveText([
-            'Organizer',
-            'Manages the family',
-        ]);
+        // One badge: "Manages the family" beside it would only repeat what organizer says.
+        await expect(members.locator('[data-roles] [data-slot=badge]')).toHaveText(['Organizer']);
         await invite(maya, 'nobody-yet@hushos.local');
         await maya.page
             .locator('[data-invitation="nobody-yet@hushos.local"]')
@@ -350,7 +348,7 @@ test.describe.serial('two people', () => {
         );
         await expect(
             sam.page.locator(`[data-member="${maya.email}"] [data-roles] [data-slot=badge]`),
-        ).toHaveText(['Organizer', 'Manages the family']);
+        ).toHaveText(['Organizer']);
         // A plain member carries no role badge, and their own row no label.
         await expect(maya.page.locator(`[data-member="${sam.email}"] [data-roles]`)).toHaveCount(0);
         await expect(sam.page.locator(`[data-member="${sam.email}"] [data-checked]`)).toHaveCount(
@@ -1511,13 +1509,14 @@ test.describe.serial('three people', () => {
         await invite(maya, ana.email);
         await invite(maya, ben.email);
 
-        // Ana's invitation opened by Ben's account: refused, and nothing accepted.
+        // Ana's invitation opened by Ben's account: nothing about the family, nothing to accept.
         const anaLink = await invitationPath(ana.email);
         await ben.page.goto(anaLink);
-        await ben.page.getByRole('button', { name: 'Join', exact: true }).click();
         await expect(
-            ben.page.getByText(/This invitation is for another email address than/),
+            ben.page.getByRole('heading', { name: 'This invitation is for someone else' }),
         ).toBeVisible({ timeout: 30_000 });
+        await expect(ben.page.getByText(family)).toHaveCount(0);
+        await expect(ben.page.getByRole('button', { name: 'Join', exact: true })).toHaveCount(0);
 
         await accept(ana, family);
         await accept(ben, family);
@@ -1686,9 +1685,83 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         await maya?.page.context().close();
     });
 
+    let clocked = false;
     async function show(summary: unknown, path = '/app/family') {
         answer = summary;
+        // A faked clock moved on by an earlier step comes back to now: the summaries are dated
+        // from now, as the server dates them.
+        if (clocked) await maya.page.clock.setSystemTime(new Date());
         await maya.page.goto(path);
+    }
+
+    /* The page's clock, faked from the next load on; it runs as usual until moved. */
+    async function fakeClock() {
+        if (clocked) return;
+        await maya.page.clock.install();
+        clocked = true;
+    }
+
+    /*
+     * Coming back to the tab after `by` (the summary is stale after 15 s): visibilitychange at
+     * the document and at the window, where the summary's own refetch listens.
+     */
+    async function refocus(by: number | string = 20_000) {
+        if (by) await maya.page.clock.fastForward(by);
+        await maya.page.evaluate(() => {
+            document.dispatchEvent(new Event('visibilitychange'));
+            window.dispatchEvent(new Event('visibilitychange'));
+        });
+    }
+
+    /*
+     * A read that brings something unrelated to the change on screen: one more person in the
+     * family, which the Billing card counts from the summary itself.
+     */
+    const oneMore = <T extends { seats: { used: number; limit: number } }>(summary: T): T => ({
+        ...summary,
+        seats: { ...summary.seats, used: summary.seats.used + 1 },
+    });
+    async function readAgain(summary: { seats: { used: number; limit: number } }) {
+        await expect(maya.page.locator('[data-family-plan="billing"]')).toContainText(
+            `${summary.seats.used} of ${summary.seats.limit} taken`,
+        );
+    }
+
+    /*
+     * Presses `button`, then waits for the summary read that the change's answer sets off: the
+     * first read answered after the change itself, so `answer` is the stub's settled state.
+     */
+    async function pressAndRead(button: Locator) {
+        const base = `/api/billing/groups/${groupId}`;
+        let answered = false;
+        const read = maya.page.waitForResponse((response) => {
+            const path = new URL(response.url()).pathname;
+            const method = response.request().method();
+            if (method === 'POST' && path.startsWith(`${base}/`)) answered = true;
+            return answered && method === 'GET' && path === base;
+        });
+        await button.click();
+        await read;
+    }
+
+    /*
+     * Raises (`units`) or moves (`plan`) answered as held by the bank; reads then answer
+     * `held`. A 402 PaymentActionRequired answers the summary unchanged.
+     */
+    async function heldByBank(path: 'units' | 'plan', held: unknown) {
+        const match = (url: URL) => url.pathname === `/api/billing/groups/${groupId}/${path}`;
+        await maya.page.route(match, (route: Route) => {
+            answer = held;
+            return route.fulfill({
+                json: {
+                    billing: held,
+                    url: 'https://bank.example/confirm/held',
+                    confirmPayment: true,
+                    when: 'now',
+                },
+            });
+        });
+        return () => maya.page.unroute(match);
     }
 
     /* The folder row's menu still offers Delete family folder; nothing is deleted here. */
@@ -1820,6 +1893,496 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
         await expect(maya.page.getByRole('button', { name: 'New family folder' })).toBeVisible({
             timeout: 60_000,
         });
+    });
+
+    test('a raise that fills the family and needs the bank keeps its confirm step until it is pressed or closed', async () => {
+        // 18 of 20: the last two places, quoted at the summary the raise was made from (twenty of
+        // thirty-one days of 2 × 1.50 is 1.9355, charged 1.93; then 20 + 16 × 1.50 a month).
+        const before = live({ units: 18, paidUnits: 18 });
+        before.seats = { used: 1, limit: 18 };
+        // What the server answers once the bank holds the raise: twenty places, eighteen paid.
+        const after = live({ units: 20, paidUnits: 18 });
+        after.seats = { used: 1, limit: 20 };
+        const bank = 'https://bank.example/confirm/raise';
+        let raises = 0;
+        const units = (url: URL) => url.pathname === `/api/billing/groups/${groupId}/units`;
+        await maya.page.route(units, async (route: Route) => {
+            raises += 1;
+            // Counted from the eighteen it showed, so a total changed meanwhile is refused.
+            expect(route.request().postDataJSON()).toEqual({ units: 20, from: 18 });
+            // The refetch that follows reads the same held raise.
+            answer = after;
+            await route.fulfill({ json: { billing: after, url: bank, confirmPayment: true } });
+        });
+        await maya.page.route(`${bank}*`, (route: Route) =>
+            route.fulfill({ contentType: 'text/html', body: '<h1>Confirm with your bank</h1>' }),
+        );
+        const billing = maya.page.locator('[data-family-plan="billing"]');
+        const dialog = maya.page.getByRole('dialog', { name: 'Add places' });
+
+        async function raiseToTwenty() {
+            await show(before);
+            await billing.getByRole('button', { name: 'Add places' }).click({ timeout: 60_000 });
+            await dialog.getByRole('button', { name: 'More' }).click();
+            await dialog.getByRole('button', { name: 'Add 2 places' }).click();
+            await expect(dialog).toContainText(
+                'Your bank wants you to confirm this payment. The places open once you do.',
+            );
+            // The card has caught up with the held raise, so this is after the summary changed.
+            await expect(billing).toContainText('2 places wait for the bank');
+        }
+
+        await raiseToTwenty();
+        await expect(dialog).toContainText('Charged now$1.93');
+        await expect(dialog).toContainText('Then$44 a month');
+        // Only the raise the bank holds: no room left to offer, nor the limit it was made under.
+        await expect(dialog).not.toContainText(/can add up to/i);
+        await expect(dialog).toContainText(
+            'Before any discount. Plus tax where it applies; Polar adds it to each charge.',
+        );
+        await expect(dialog.getByRole('button', { name: 'Confirm with your bank' })).toBeVisible();
+        await expect(dialog.getByRole('button', { name: /^Add / })).toHaveCount(0);
+        await maya.page.screenshot({ path: test.info().outputPath('raise-to-limit-confirm.png') });
+        const size = maya.page.viewportSize();
+        await maya.page.setViewportSize({ width: 375, height: 812 });
+        await maya.page.screenshot({
+            path: test.info().outputPath('raise-to-limit-confirm-375.png'),
+        });
+        if (size) await maya.page.setViewportSize(size);
+        // Closed, it goes, and the family is full: no Add places to open it again.
+        await dialog.getByRole('button', { name: 'Cancel' }).click();
+        await expect(dialog).toHaveCount(0);
+        await expect(billing.getByRole('button', { name: 'Add places' })).toHaveCount(0);
+
+        // Pressed, it opens the bank's page the raise answered with.
+        await raiseToTwenty();
+        await dialog.getByRole('button', { name: 'Confirm with your bank' }).click();
+        await expect(maya.page).toHaveURL(bank);
+        expect(raises).toBe(2);
+        await maya.page.unroute(units);
+        await maya.page.unroute(`${bank}*`);
+    });
+
+    test('Cancel on a raise the bank holds starts Add places afresh, and the page still points to the confirmation', async () => {
+        // 8 places, one more held by the bank: Add places stays, as the family isn't full.
+        const after = live({ units: 9, paidUnits: 8 });
+        after.seats = { used: 1, limit: 9 };
+        const units = (url: URL) => url.pathname === `/api/billing/groups/${groupId}/units`;
+        await maya.page.route(units, (route: Route) => {
+            answer = after;
+            return route.fulfill({
+                json: {
+                    billing: after,
+                    url: 'https://bank.example/confirm/one',
+                    confirmPayment: true,
+                },
+            });
+        });
+        await show(live());
+        const billing = maya.page.locator('[data-family-plan="billing"]');
+        const dialog = maya.page.getByRole('dialog', { name: 'Add places' });
+        await billing.getByRole('button', { name: 'Add places' }).click({ timeout: 60_000 });
+        await dialog.getByRole('button', { name: 'Add 1 place' }).click();
+        await expect(dialog.getByRole('button', { name: 'Confirm with your bank' })).toBeVisible();
+        await dialog.getByRole('button', { name: 'Cancel' }).click();
+        await expect(dialog).toHaveCount(0);
+        // The held charge is still findable: the page's notice sends the payer to the portal.
+        await expect(maya.page.locator('[data-plan-notice="places-waiting"]')).toContainText(
+            'Your bank hasn’t confirmed the charge for 1 place yet',
+        );
+
+        await billing.getByRole('button', { name: 'Add places' }).click();
+        await expect(dialog.getByRole('button', { name: 'Add 1 place' })).toBeEnabled();
+        await expect(dialog).not.toContainText('Your bank wants you to confirm this payment.');
+        await expect(dialog.getByRole('button', { name: 'Confirm with your bank' })).toHaveCount(0);
+        await expect(dialog.getByRole('button', { name: 'More' })).toBeEnabled();
+        await dialog.getByRole('button', { name: 'Cancel' }).click();
+        await maya.page.unroute(units);
+    });
+
+    test('an upgrade that needs the bank keeps its confirm step, quoted as it was made, until it is pressed or closed', async () => {
+        // Pro to Max, held by the bank: the plan names Max, the paid tier is still Pro.
+        const after = live({
+            productId: 'max-month',
+            productName: 'Family Max (monthly)',
+            paidProductId: 'pro-month',
+            amount: 3600,
+        });
+        const bank = 'https://bank.example/confirm/upgrade';
+        let changes = 0;
+        const plan = (url: URL) => url.pathname === `/api/billing/groups/${groupId}/plan`;
+        await maya.page.route(plan, async (route: Route) => {
+            changes += 1;
+            expect(route.request().postDataJSON()).toEqual({ productId: 'max-month' });
+            answer = after;
+            await route.fulfill({
+                json: { billing: after, url: bank, confirmPayment: true, when: 'now' },
+            });
+        });
+        await maya.page.route(`${bank}*`, (route: Route) =>
+            route.fulfill({ contentType: 'text/html', body: '<h1>Confirm with your bank</h1>' }),
+        );
+        const billing = maya.page.locator('[data-family-plan="billing"]');
+        const change = maya.page.getByRole('dialog', { name: 'Change plan' });
+
+        async function upgradeToMax() {
+            await show(live());
+            await billing.getByRole('button', { name: 'Change plan' }).click({ timeout: 60_000 });
+            await change.getByRole('button', { name: 'Change to Family Max' }).click();
+            await expect(change).toContainText(
+                'Your bank wants you to confirm this payment. The plan changes once you do.',
+            );
+            // The page has caught up with the held upgrade, so this is after the summary changed.
+            await expect(maya.page.locator('[data-plan-notice="upgrade-waiting"]')).toBeVisible();
+        }
+
+        await upgradeToMax();
+        // The move the bank holds, priced from Pro as it was quoted, not from Max.
+        await expect(change.locator('[data-tier-option]')).toHaveText([
+            /Family Plus · 800 GB\$16 a month/,
+            /Family Pro · 2 TB\s*Your plan/,
+            /Family Max · 4 TB\$36 a month/,
+        ]);
+        await expect(change.getByRole('radio', { name: /Family Max/ })).toBeChecked();
+        await expect(change).toContainText('Charged nowAbout $6.45');
+        await expect(change).toContainText('Then$36 a month from');
+        await expect(change.getByRole('button', { name: 'Confirm with your bank' })).toBeVisible();
+        await maya.page.screenshot({ path: test.info().outputPath('upgrade-confirm.png') });
+        const size = maya.page.viewportSize();
+        await maya.page.setViewportSize({ width: 375, height: 812 });
+        await maya.page.screenshot({ path: test.info().outputPath('upgrade-confirm-375.png') });
+        if (size) await maya.page.setViewportSize(size);
+        // Closed, it goes; nothing stacks on the held upgrade, so no Change plan to reopen it.
+        await change.getByRole('button', { name: 'Cancel' }).click();
+        await expect(change).toHaveCount(0);
+        await expect(billing.getByRole('button', { name: 'Change plan' })).toHaveCount(0);
+
+        // Pressed, it opens the bank's page the upgrade answered with.
+        await upgradeToMax();
+        await change.getByRole('button', { name: 'Confirm with your bank' }).click();
+        await expect(maya.page).toHaveURL(bank);
+        expect(changes).toBe(2);
+        await maya.page.unroute(plan);
+        await maya.page.unroute(`${bank}*`);
+    });
+
+    test('a confirm step settled or dropped elsewhere goes: with the success line when paid, quietly when gone', async () => {
+        await fakeClock();
+        const billing = maya.page.locator('[data-family-plan="billing"]');
+        const add = maya.page.getByRole('dialog', { name: 'Add places' });
+        const change = maya.page.getByRole('dialog', { name: 'Change plan' });
+        const bankStep = 'Your bank wants you to confirm';
+
+        // A raise of one (8 to 9), held; then paid in another tab, the summary read on refocus.
+        const raise = await heldByBank('units', live({ units: 9, paidUnits: 8 }));
+        async function holdRaise() {
+            await show(live());
+            await billing.getByRole('button', { name: 'Add places' }).click({ timeout: 60_000 });
+            await pressAndRead(add.getByRole('button', { name: 'Add 1 place' }));
+            await expect(add).toContainText(bankStep);
+        }
+        await holdRaise();
+        answer = live({ units: 9, paidUnits: 9 });
+        await refocus();
+        await expect(add).toHaveCount(0);
+        await expect(maya.page.getByText(`Added 1 place to ${family}`)).toBeVisible();
+        // A cut scheduled in another tab: the held place is still owed, so the step stays.
+        await holdRaise();
+        const cut = oneMore(live({ units: 9, paidUnits: 8, pendingUnits: 8 }));
+        answer = cut;
+        await refocus();
+        await readAgain(cut);
+        await expect(add).toContainText(bankStep);
+        // The renewal came with the cut: fewer places than the raise was answered with, so the
+        // raise is gone, and so is its step, quietly.
+        answer = live({ units: 8, paidUnits: 8 });
+        await refocus();
+        await expect(add).toHaveCount(0);
+        await expect(maya.page.getByText(`Added 1 place to ${family}`)).toHaveCount(0);
+        await holdRaise();
+        // The plan ended: the raise is gone, and so is its step, quietly.
+        answer = {
+            ...none,
+            payer: { userId: 'payer', you: true },
+            lastPlan: { productName: 'Family Pro (monthly)', endedAt: new Date().toISOString() },
+        };
+        await refocus();
+        await expect(maya.page.locator('[data-plan-notice="lapsed"]')).toBeVisible();
+        await expect(add).toHaveCount(0);
+        await raise();
+
+        // Pro to Max, held; then paid, so the plan is Max and nothing waits.
+        const held = live({
+            productId: 'max-month',
+            productName: 'Family Max (monthly)',
+            paidProductId: 'pro-month',
+            amount: 3600,
+        });
+        const move = await heldByBank('plan', held);
+        async function holdUpgrade() {
+            await show(live());
+            await billing.getByRole('button', { name: 'Change plan' }).click({ timeout: 60_000 });
+            await pressAndRead(change.getByRole('button', { name: 'Change to Family Max' }));
+            await expect(change).toContainText(bankStep);
+        }
+        await holdUpgrade();
+        answer = live({
+            productId: 'max-month',
+            productName: 'Family Max (monthly)',
+            paidProductId: 'max-month',
+            amount: 3600,
+            quotaBytes: String(4 * 1024 ** 4),
+        });
+        await refocus();
+        await expect(change).toHaveCount(0);
+        await expect(maya.page.getByText('The family’s plan is Family Max now')).toBeVisible();
+        // Reverted to Pro after the bank never confirmed it (neither the tier answered nor the
+        // one asked for): its step goes.
+        await holdUpgrade();
+        answer = live();
+        await refocus();
+        await expect(change).toHaveCount(0);
+        await move();
+    });
+
+    test('a confirmation answered with nothing changed (a 402) stays through unrelated reads, and goes when paid', async () => {
+        await fakeClock();
+        const billing = maya.page.locator('[data-family-plan="billing"]');
+        const add = maya.page.getByRole('dialog', { name: 'Add places' });
+        const change = maya.page.getByRole('dialog', { name: 'Change plan' });
+        const bankStep = 'Your bank wants you to confirm';
+
+        // Polar refused the raise with PaymentActionRequired: the summary is as it was.
+        const raise = await heldByBank('units', live());
+        await show(live());
+        await billing.getByRole('button', { name: 'Add places' }).click({ timeout: 60_000 });
+        await pressAndRead(add.getByRole('button', { name: 'Add 1 place' }));
+        await expect(add).toContainText(bankStep);
+        // Nobody has seen Polar apply a raise it refused this way once confirmed: no promise.
+        await expect(add).toContainText(
+            'Your bank wants you to confirm this payment. If the places don’t open after you confirm, add them again.',
+        );
+        await expect(add).not.toContainText('The places open once you do.');
+        const unrelated = oneMore(live());
+        answer = unrelated;
+        await refocus();
+        await readAgain(unrelated);
+        await expect(add).toContainText(bankStep);
+        answer = live({ units: 9, paidUnits: 9 });
+        await refocus();
+        await expect(add).toHaveCount(0);
+        await expect(maya.page.getByText(`Added 1 place to ${family}`)).toBeVisible();
+        await raise();
+
+        // The same for an upgrade: still Pro after the 402, through an unrelated read.
+        const move = await heldByBank('plan', live());
+        await show(live());
+        await billing.getByRole('button', { name: 'Change plan' }).click({ timeout: 60_000 });
+        await pressAndRead(change.getByRole('button', { name: 'Change to Family Max' }));
+        await expect(change).toContainText(bankStep);
+        answer = unrelated;
+        await refocus();
+        await readAgain(unrelated);
+        await expect(change).toContainText(bankStep);
+        await change.getByRole('button', { name: 'Cancel' }).click();
+        await move();
+    });
+
+    test('back from the bank within seconds, a held step reads the summary again', async () => {
+        await fakeClock();
+        const add = maya.page.getByRole('dialog', { name: 'Add places' });
+        const raise = await heldByBank('units', live({ units: 9, paidUnits: 8 }));
+        await show(live());
+        await maya.page
+            .locator('[data-family-plan="billing"]')
+            .getByRole('button', { name: 'Add places' })
+            .click({ timeout: 60_000 });
+        await pressAndRead(add.getByRole('button', { name: 'Add 1 place' }));
+        await expect(add.getByRole('button', { name: 'Confirm with your bank' })).toBeVisible();
+        // Confirmed in the portal and back at once, well inside the summary's 15 s.
+        answer = live({ units: 9, paidUnits: 9 });
+        await refocus(0);
+        await expect(add).toHaveCount(0);
+        await expect(maya.page.getByText(`Added 1 place to ${family}`)).toBeVisible();
+        await raise();
+    });
+
+    test('a form opens afresh after it went through, and stays open to show a refusal', async () => {
+        await fakeClock();
+        const billing = maya.page.locator('[data-family-plan="billing"]');
+        const add = maya.page.getByRole('dialog', { name: 'Add places' });
+        const change = maya.page.getByRole('dialog', { name: 'Change plan' });
+
+        // Two places added, paid at once: reopened, it offers one again.
+        const units = (url: URL) => url.pathname === `/api/billing/groups/${groupId}/units`;
+        await maya.page.route(units, (route: Route) => {
+            answer = live({ units: 10 });
+            return route.fulfill({ json: { billing: answer, url: null } });
+        });
+        await show(live());
+        await billing.getByRole('button', { name: 'Add places' }).click({ timeout: 60_000 });
+        await add.getByRole('button', { name: 'More' }).click();
+        await add.getByRole('button', { name: 'Add 2 places' }).click();
+        await expect(add).toHaveCount(0);
+        await billing.getByRole('button', { name: 'Add places' }).click();
+        await expect(add.getByRole('button', { name: 'Add 1 place' })).toBeVisible();
+        await add.getByRole('button', { name: 'Cancel' }).click();
+        await maya.page.unroute(units);
+
+        // A move to Plus scheduled: reopened, it starts from the next tier up again.
+        const plan = (url: URL) => url.pathname === `/api/billing/groups/${groupId}/plan`;
+        await maya.page.route(plan, (route: Route) => {
+            answer = live({ pendingProductId: 'plus-month' });
+            return route.fulfill({ json: { billing: answer, url: null, when: 'renewal' } });
+        });
+        await show(live());
+        await billing.getByRole('button', { name: 'Change plan' }).click({ timeout: 60_000 });
+        await change.getByText('Family Plus · 800 GB').click();
+        await change.getByRole('button', { name: /^Change on / }).click();
+        await expect(change).toHaveCount(0);
+        await billing.getByRole('button', { name: 'Change plan' }).click();
+        await expect(change.getByRole('radio', { name: /Family Max/ })).toBeChecked();
+        await change.getByRole('button', { name: 'Cancel' }).click();
+        await maya.page.unroute(plan);
+
+        // Refused, and the plan set to end before the person read why: the form stays to say it.
+        const refusal = 'Another change to this plan is in progress. Try again in a moment.';
+        await maya.page.route(units, (route: Route) =>
+            route.fulfill({ status: 409, json: { error: 'busy', message: refusal } }),
+        );
+        await show(live());
+        await billing.getByRole('button', { name: 'Add places' }).click({ timeout: 60_000 });
+        await add.getByRole('button', { name: 'Add 1 place' }).click();
+        await expect(add.getByRole('alert')).toContainText(refusal);
+        answer = live({ cancelAtPeriodEnd: true });
+        await refocus();
+        await expect(maya.page.locator('[data-plan-notice="ending"]')).toBeVisible();
+        await expect(add.getByRole('alert')).toContainText(refusal);
+        await add.getByRole('button', { name: 'Cancel' }).click();
+        await expect(add).toHaveCount(0);
+        await maya.page.unroute(units);
+
+        // Refused because another tab already took the family to twenty: read again, it has no
+        // room left, and the refusal still shows, with nothing more to add.
+        const moved =
+            'Your family’s places changed a moment ago. Check the new total and try again.';
+        const before = live({ units: 18, paidUnits: 18 });
+        before.seats = { used: 1, limit: 18 };
+        const full = live({ units: 20, paidUnits: 20 });
+        full.seats = { used: 1, limit: 20 };
+        await maya.page.route(units, (route: Route) => {
+            answer = full;
+            return route.fulfill({ status: 409, json: { message: moved } });
+        });
+        await show(before);
+        await billing.getByRole('button', { name: 'Add places' }).click({ timeout: 60_000 });
+        await add.getByRole('button', { name: 'More' }).click();
+        await add.getByRole('button', { name: 'Add 2 places' }).click();
+        await readAgain(full);
+        await expect(add.getByRole('alert')).toContainText(moved);
+        await expect(add.getByRole('button', { name: /^Add/ })).toBeDisabled();
+        await add.getByRole('button', { name: 'Cancel' }).click();
+        await expect(add).toHaveCount(0);
+        await expect(billing.getByRole('button', { name: 'Add places' })).toHaveCount(0);
+        // Room again later: the dialog closed, and does not come back by itself.
+        answer = before;
+        await refocus();
+        await expect(billing.getByRole('button', { name: 'Add places' })).toBeVisible();
+        await expect(add).toHaveCount(0);
+        await maya.page.unroute(units);
+    });
+
+    test('a form open when the plan ends does not come back by itself when a plan is live again', async () => {
+        await fakeClock();
+        const billing = maya.page.locator('[data-family-plan="billing"]');
+        const add = maya.page.getByRole('dialog', { name: 'Add places' });
+        await show(live());
+        await billing.getByRole('button', { name: 'Add places' }).click({ timeout: 60_000 });
+        await expect(add).toBeVisible();
+        answer = {
+            ...none,
+            payer: { userId: 'payer', you: true },
+            lastPlan: { productName: 'Family Pro (monthly)', endedAt: new Date().toISOString() },
+        };
+        await refocus();
+        await expect(maya.page.locator('[data-plan-notice="lapsed"]')).toBeVisible();
+        await expect(add).toHaveCount(0);
+        answer = live();
+        await refocus();
+        await expect(billing).toBeVisible();
+        await expect(add).toHaveCount(0);
+        await expect(billing.getByRole('button', { name: 'Add places' })).toBeVisible();
+    });
+
+    test('a held quote keeps the price it was made at while the days pass', async () => {
+        await fakeClock();
+        const billing = maya.page.locator('[data-family-plan="billing"]');
+        // 18 to 20: twenty days left, $1.93; a day later the same raise would be $1.83.
+        const before = live({ units: 18, paidUnits: 18 });
+        before.seats = { used: 1, limit: 18 };
+        const held = live({ units: 20, paidUnits: 18 });
+        held.seats = { used: 1, limit: 20 };
+        const raise = await heldByBank('units', held);
+        await show(before);
+        const add = maya.page.getByRole('dialog', { name: 'Add places' });
+        await billing.getByRole('button', { name: 'Add places' }).click({ timeout: 60_000 });
+        await add.getByRole('button', { name: 'More' }).click();
+        await add.getByRole('button', { name: 'Add 2 places' }).click();
+        await expect(add).toContainText('Charged now$1.93');
+        // A day on, a fresh summary (one more member) renders the dialog again.
+        answer = oneMore(held);
+        await refocus('24:00:00');
+        await readAgain(oneMore(held));
+        await expect(add).toContainText('Charged now$1.93');
+        await raise();
+
+        // Pro to Max: about $6.45 over twenty days, $6.13 over nineteen.
+        const upgrade = live({
+            productId: 'max-month',
+            productName: 'Family Max (monthly)',
+            paidProductId: 'pro-month',
+            amount: 3600,
+        });
+        const move = await heldByBank('plan', upgrade);
+        await show(live());
+        const change = maya.page.getByRole('dialog', { name: 'Change plan' });
+        await billing.getByRole('button', { name: 'Change plan' }).click({ timeout: 60_000 });
+        await change.getByRole('button', { name: 'Change to Family Max' }).click();
+        await expect(change).toContainText('Charged nowAbout $6.45');
+        answer = oneMore(upgrade);
+        await refocus('24:00:00');
+        await readAgain(oneMore(upgrade));
+        await expect(change).toContainText('Charged nowAbout $6.45');
+        await move();
+    });
+
+    test('an open form closes once its control is withdrawn, while a held confirm step stays', async () => {
+        await fakeClock();
+        const billing = maya.page.locator('[data-family-plan="billing"]');
+        const ending = maya.page.locator('[data-plan-notice="ending"]');
+        // The plan is set to end in another tab: no Add places, no Change plan, so neither form.
+        for (const name of ['Add places', 'Change plan']) {
+            await show(live());
+            await billing.getByRole('button', { name }).click({ timeout: 60_000 });
+            const form = maya.page.getByRole('dialog', { name });
+            await expect(form).toBeVisible();
+            answer = live({ cancelAtPeriodEnd: true });
+            await refocus();
+            await expect(ending).toBeVisible();
+            await expect(form).toHaveCount(0);
+        }
+        // A raise the bank holds is still owed after that: its step stays.
+        const raise = await heldByBank('units', live({ units: 9, paidUnits: 8 }));
+        await show(live());
+        const add = maya.page.getByRole('dialog', { name: 'Add places' });
+        await billing.getByRole('button', { name: 'Add places' }).click({ timeout: 60_000 });
+        await add.getByRole('button', { name: 'Add 1 place' }).click();
+        await expect(add.getByRole('button', { name: 'Confirm with your bank' })).toBeVisible();
+        answer = live({ units: 9, paidUnits: 8, cancelAtPeriodEnd: true });
+        await refocus();
+        await expect(ending).toBeVisible();
+        await expect(add.getByRole('button', { name: 'Confirm with your bank' })).toBeVisible();
+        await raise();
     });
 
     test('a plan set to end, one that ended, and a member’s view each say only what is true', async () => {
@@ -1954,48 +2517,337 @@ test.describe.serial('family plans, with the billing summary stubbed', () => {
 });
 
 /*
- * The pricing page's Create a family, pressed signed out: it signs up first and lands on
- * Plans, where the family tiers sit beside the personal ones (docs/families-shared-pool.md 7.4),
- * through the return it keeps in this browser (rememberReturn, for an hour). The
- * section shows only where the server sells plans and lists a family plan, so this skips
- * with billing off, as every CI job runs; it runs against a server with a Polar catalogue
- * (verify-hushos `launch --billing polar`).
+ * Family in the sidebar, wherever families are served: someone in no family (or only waiting to
+ * join one) has a Family place leading to Account → Family, where they can create one; once in
+ * a family, its name heads the sidebar instead and leads to the same page.
  */
-test.describe.serial('creating a family from the pricing page', () => {
+test.describe.serial('Family in the sidebar', () => {
     test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
 
-    test('someone without an account signs up from Create a family and lands on Plans, at the family tiers', async ({
+    test('someone in no family finds Family there; in one, the family’s name leads to it instead', async ({
+        browser,
+    }) => {
+        test.setTimeout(300_000);
+        const nia = await person(browser, 'Nia Okafor');
+        const family = 'Okafor family';
+        // Asked once the families are known, so what the sidebar shows means something.
+        const listed = nia.page.waitForResponse(
+            (response) => new URL(response.url()).pathname === '/api/groups' && response.ok(),
+        );
+        await nia.page.goto('/app/drive');
+        await listed;
+        const place = nia.page
+            .locator('[data-family-place]')
+            .getByRole('link', { name: 'Family', exact: true });
+        await expect(place).toBeVisible({ timeout: 60_000 });
+        await expect(nia.page.locator('[data-family-header]')).toHaveCount(0);
+        await place.click();
+        await expect(nia.page).toHaveURL(/\/app\/family$/);
+        await expect(
+            nia.page.locator('[data-no-family]').getByRole('button', { name: 'Create a family' }),
+        ).toBeVisible({ timeout: 60_000 });
+
+        await createFamily(nia, family);
+        await nia.page.goto('/app/drive');
+        const header = nia.page
+            .locator('[data-family-header]')
+            .getByRole('link', { name: family, exact: true });
+        await expect(header).toBeVisible({ timeout: 60_000 });
+        // One way to the family, never a second Family beside its name.
+        await expect(nia.page.locator('[data-family-place]')).toHaveCount(0);
+        await header.click();
+        await expect(nia.page).toHaveURL(/\/app\/family$/);
+        await expect(nia.page.getByRole('heading', { level: 1, name: family })).toBeVisible({
+            timeout: 60_000,
+        });
+        await nia.page.context().close();
+    });
+});
+
+/*
+ * A family plan from the pricing page, like a personal one: each family tier has its own
+ * button. Signed out, it signs up with the tier as the plan; sign-up says it's a family plan,
+ * and the first visit after it (recovery kit saved, device unlocked) opens Create a family with
+ * that tier and a name already filled in, so one click goes to checkout. The server then
+ * forgets the tier, so the next visit goes where the person chooses. Signed in and in no
+ * family, each tier opens Create a family with it; in a family, the section offers only theirs.
+ * The section shows only where the server sells plans and lists a family plan, so this skips
+ * with billing off, as every CI job runs; it runs against a server with a Polar catalogue
+ * (verify-hushos `launch --groups --billing polar`). Nothing is paid: Create and pay is never
+ * pressed, and the family made at the end is made without a plan.
+ */
+test.describe.serial('signing up for a family plan from the pricing page', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+
+    test('a tier signs up with it, and the first visit opens Create a family with it and a name', async ({
         browser,
         request,
     }) => {
-        const catalogue = (await (await request.get('/api/billing/catalogue')).json()) as {
-            enabled?: boolean;
-            families?: unknown[];
-        };
+        const plans = await familyCatalogue(request);
         test.skip(
-            !catalogue.enabled || !catalogue.families?.length,
+            !plans.length,
             'Billing is off or sells no family plan, so the pricing page has no family section.',
         );
         test.setTimeout(300_000);
         const page = await (await newContext(browser)).newPage();
         await page.goto('/pricing', { waitUntil: 'networkidle' });
-        const create = page
-            .locator('[data-family-plan]')
-            .getByRole('link', { name: 'Create a family', exact: true });
-        // A press before hydration follows the link without keeping the return.
-        await hydrated(create);
-        await create.click();
-        await expect(page).toHaveURL(/\/register$/);
+        const section = page.locator('[data-family-plan]');
+        // One button per tier, none for the section as a whole.
+        await expect(section.getByRole('link', { name: 'Create a family' })).toHaveCount(0);
+        const tiers = section.locator('[data-family-tier]');
+        await expect(tiers.getByRole('link', { name: /^Start with Family / })).toHaveCount(
+            await tiers.count(),
+        );
+        const pro = section.locator('[data-family-tier="pro"]');
+        const start = pro.getByRole('link', { name: 'Start with Family Pro', exact: true });
+        const href = new URL((await start.getAttribute('href'))!, 'http://hushos.invalid');
+        expect(href.pathname).toBe('/register');
+        const tier = plans.find((plan) => plan.id === href.searchParams.get('plan'));
+        expect(tier?.tier).toBe('pro');
+        // The currency the tier is shown in rides along, so sign-up and checkout use it.
+        const shownIn = href.searchParams.get('currency');
+        expect(Object.keys(tier!.prices)).toContain(shownIn);
+        await hydrated(start);
+        await start.click();
+        await expect(page).toHaveURL(/\/register\?plan=/);
+        const chosen = page.locator('[data-chosen-plan="family"]');
+        await expect(chosen).toContainText(`${planTierName(tier!)} · `, { timeout: 60_000 });
+        await expect(chosen).toContainText(
+            `A family plan with ${tier!.includedMembers} members included.`,
+        );
+        await expect(chosen).toContainText(
+            'You name your family and pay after your account is set up.',
+        );
+
         await registerAccount(page, 'Rosa Ekström', undefined, {
             viaCurrentPage: true,
-            landsOn: /\/app\/billing$/,
+            landsOn: /\/app\/family\?create=/,
         });
+        const landed = new URL(page.url());
+        expect(landed.searchParams.get('create')).toBe(tier!.id);
+        expect(landed.searchParams.get('currency')).toBe(shownIn);
+        const dialog = page.getByRole('dialog', { name: 'Create a family' });
+        await expect(dialog).toContainText(`Then you pay for ${planTierName(tier!)}`, {
+            timeout: 60_000,
+        });
+        await expect(dialog.getByLabel('Name')).toHaveValue('Rosa Ekström’s family');
+        await expect(dialog.getByRole('button', { name: 'Create and pay' })).toBeEnabled();
+        // Opened once: the server no longer offers it, so the next visit goes where they choose.
+        const summary = (await (await page.request.get('/api/billing')).json()) as {
+            intendedFamily?: string | null;
+        };
+        expect(summary.intendedFamily).toBeNull();
+        await dialog.getByRole('button', { name: 'Cancel' }).click();
+
+        // Signed in and in no family: each tier opens Create a family with it, priced as shown.
+        await page.goto('/pricing', { waitUntil: 'networkidle' });
+        const choose = section
+            .locator('[data-family-tier="pro"]')
+            .getByRole('link', { name: 'Choose Family Pro', exact: true });
+        await expect(choose).toBeVisible({ timeout: 60_000 });
+        const target = new URL((await choose.getAttribute('href'))!, 'http://hushos.invalid');
+        expect(target.pathname).toBe('/app/family');
+        expect(target.searchParams.get('create')).toBe(tier!.id);
+        expect(Object.keys(tier!.prices)).toContain(target.searchParams.get('currency'));
+        await expect(section.getByRole('link', { name: /^Start with / })).toHaveCount(0);
+
+        // In a family: only theirs, never a second one.
+        await createFamily({ page, email: '', name: 'Rosa Ekström' }, 'Ekström family');
+        await page.goto('/pricing', { waitUntil: 'networkidle' });
         await expect(
-            page
-                .locator('[data-family-plans]')
-                .getByRole('button', { name: /^Create a family with Family / })
-                .first(),
+            section.getByRole('link', { name: 'Open Ekström family', exact: true }),
+        ).toHaveAttribute('href', '/app/family', { timeout: 60_000 });
+        await expect(section.getByRole('link', { name: /^Choose Family / })).toHaveCount(0);
+        await page.context().close();
+    });
+});
+
+/*
+ * Backing out of a pending join (accepted, not let in): Decline invitation, on the join screen
+ * and on Family's Waiting to join row, asked once. The server's leave withdraws it; Family
+ * then offers Create a family again. Real accounts and a real invitation, so it runs where
+ * plans aren't sold (as CI runs): where they are, inviting needs a family with a paid plan.
+ */
+test.describe.serial('declining a pending join', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+
+    test('someone waiting to join declines from Family: the wait is gone, and Create a family is back', async ({
+        browser,
+        request,
+    }) => {
+        test.skip(
+            await sellsPlans(request),
+            'Where plans are sold, inviting needs a family with a plan, which can’t be paid for here.',
+        );
+        test.setTimeout(300_000);
+        const maya = await person(browser, 'Maya Berg');
+        const sam = await person(browser, 'Sam Okafor');
+        await createFamily(maya, 'Berg family');
+        await invite(maya, sam.email);
+        await accept(sam, 'Berg family');
+        // The join screen offers it too, quietly.
+        await expect(sam.page.getByRole('button', { name: 'Decline invitation' })).toBeVisible();
+        await sam.page.goto('/app/family');
+        const page = sam.page.locator('[data-no-family]');
+        await expect(page.getByRole('link', { name: 'Continue joining Berg family' })).toBeVisible({
+            timeout: 60_000,
+        });
+        await expect(page.getByRole('button', { name: 'Create a family' })).toHaveCount(0);
+        await page.getByRole('button', { name: 'Decline invitation to Berg family' }).click();
+        const ask = sam.page.getByRole('alertdialog');
+        await expect(ask).toContainText('Decline the invitation to Berg family?');
+        await expect(ask).toContainText('You can be invited again.');
+        await ask.getByRole('button', { name: 'Decline invitation' }).click();
+        await expect(ask).toHaveCount(0, { timeout: 60_000 });
+        await expect(page.getByRole('link', { name: 'Continue joining Berg family' })).toHaveCount(
+            0,
+        );
+        await expect(page.getByRole('button', { name: 'Create a family' })).toBeVisible();
+        // The server says so too: the membership is gone from the account's families.
+        const listed = (await (
+            await sam.page.request.get('/api/groups', { headers: { 'HushOS-Client': 'web/1' } })
+        ).json()) as {
+            groups: { id: string; state: string }[];
+        };
+        expect(listed.groups.filter((group) => group.state === 'accepted')).toEqual([]);
+        for (const who of [maya, sam]) await who.page.context().close();
+    });
+    test('a decline that comes after they were let in leaves nothing, and the page then shows them as a member', async ({
+        browser,
+        request,
+    }) => {
+        test.skip(
+            await sellsPlans(request),
+            'Where plans are sold, inviting needs a family with a plan, which can’t be paid for here.',
+        );
+        test.setTimeout(300_000);
+        const maya = await person(browser, 'Maya Berg');
+        const sam = await person(browser, 'Sam Okafor');
+        await createFamily(maya, 'Berg family');
+        await invite(maya, sam.email);
+        await accept(sam, 'Berg family');
+        await sam.page.goto('/app/family');
+        const page = sam.page.locator('[data-no-family]');
+        await expect(page.getByRole('link', { name: 'Continue joining Berg family' })).toBeVisible({
+            timeout: 60_000,
+        });
+        // Sam's page stays as it loaded (waiting) while Maya lets Sam in.
+        let loaded: unknown = null;
+        const groupsList = (url: URL) => url.pathname === '/api/groups';
+        await sam.page.route(groupsList, async (route: Route) => {
+            if (route.request().method() !== 'GET') return route.continue();
+            loaded ??= await (await route.fetch()).json();
+            return route.fulfill({ json: loaded });
+        });
+        // Maya lets Sam in from the family's page (Sam's own page isn't watched: it stays as it loaded).
+        const pending = maya.page.locator(`[data-pending="${sam.email}"]`);
+        await expect(pending).toBeVisible({ timeout: 60_000 });
+        await pending.getByRole('button', { name: 'Let them in' }).click();
+        await expect(maya.page.getByText('Sam is in Berg family')).toBeVisible({ timeout: 90_000 });
+        await page.getByRole('button', { name: 'Decline invitation to Berg family' }).click();
+        const ask = sam.page.getByRole('alertdialog');
+        await expect(ask).toContainText('Decline the invitation to Berg family?');
+        await sam.page.unroute(groupsList);
+        await ask.getByRole('button', { name: 'Decline invitation' }).click();
+        await expect(
+            sam.page.getByText('Berg family changed while you were working on it. Try again.'),
         ).toBeVisible({ timeout: 60_000 });
+        await expect(ask).toHaveCount(0);
+        // The family page, read again: Sam is a member, and nothing left.
+        await expect(sam.page.locator('[data-no-family]')).toHaveCount(0, { timeout: 60_000 });
+        await expect(sam.page.locator(`[data-member="${maya.email}"]`)).toBeVisible({
+            timeout: 60_000,
+        });
+        const listed = (await (
+            await sam.page.request.get('/api/groups', { headers: { 'HushOS-Client': 'web/1' } })
+        ).json()) as { groups: { name: string; state: string }[] };
+        expect(listed.groups.map((group) => group.state)).toEqual(['active']);
+        for (const who of [maya, sam]) await who.page.context().close();
+    });
+});
+
+test.describe.serial('Family for someone waiting to join one', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+
+    test('offers to finish joining, never Create a family, which would be refused once let in', async ({
+        browser,
+    }) => {
+        test.setTimeout(300_000);
+        const ines = await person(browser, 'Inês Ortega');
+        // Accepted and not let in, as route 2 lists it (an invitation needs a family with a plan
+        // where plans are sold, so the list is answered here).
+        const groupId = randomUUID();
+        await ines.page.route(
+            (url) => url.pathname === '/api/groups',
+            (route: Route) =>
+                route.request().method() === 'GET'
+                    ? route.fulfill({
+                          json: {
+                              groups: [
+                                  {
+                                      id: groupId,
+                                      kind: 'family',
+                                      name: 'Ortega family',
+                                      state: 'accepted',
+                                  },
+                              ],
+                          },
+                      })
+                    : route.continue(),
+        );
+        await ines.page.goto('/app/family');
+        const page = ines.page.locator('[data-no-family]');
+        await expect(
+            page.getByRole('link', { name: 'Continue joining Ortega family' }),
+        ).toHaveAttribute('href', `/app/families/${groupId}/join`, { timeout: 60_000 });
+        await expect(page.getByRole('button', { name: 'Create a family' })).toHaveCount(0);
+        await ines.page.context().close();
+    });
+});
+
+test.describe.serial('Pricing for someone waiting to join a family', () => {
+    test.skip(!familiesOn, 'Families are off (GROUPS_ENABLED).');
+
+    test('offers to finish joining, never a tier that would make a second family', async ({
+        browser,
+        request,
+    }) => {
+        test.skip(
+            !(await familyCatalogue(request)).length,
+            'Billing is off or sells no family plan, so the pricing page has no family section.',
+        );
+        test.setTimeout(300_000);
+        const ines = await person(browser, 'Inês Ortega');
+        // Accepted an invitation and not let in yet, as route 2 lists it: the invitation flow
+        // needs a family with a plan, which can't be paid for here, so the list is answered.
+        const groupId = randomUUID();
+        await ines.page.route(
+            (url) => url.pathname === '/api/groups',
+            (route: Route) =>
+                route.request().method() === 'GET'
+                    ? route.fulfill({
+                          json: {
+                              groups: [
+                                  {
+                                      id: groupId,
+                                      kind: 'family',
+                                      name: 'Ortega family',
+                                      state: 'accepted',
+                                  },
+                              ],
+                          },
+                      })
+                    : route.continue(),
+        );
+        await ines.page.goto('/pricing', { waitUntil: 'networkidle' });
+        const section = ines.page.locator('[data-family-plan]');
+        await expect(
+            section.getByRole('link', { name: 'Continue joining Ortega family', exact: true }),
+        ).toHaveAttribute('href', `/app/families/${groupId}/join`, { timeout: 60_000 });
+        await expect(
+            section.getByRole('link', { name: /^(Choose|Start with) Family / }),
+        ).toHaveCount(0);
+        await ines.page.context().close();
     });
 });
 
@@ -2295,6 +3147,7 @@ type CatalogueFamily = {
     tier: string | null;
     quotaBytes: string;
     includedMembers: number;
+    prices: Record<string, unknown>;
 };
 
 /* Whether this server sells family plans, and which: only then is anyone's storage pooled. */
@@ -2404,7 +3257,7 @@ test.describe.serial('one view for a family member, with one pool', () => {
 
     const sellsFamilies = () => plans.some((plan) => plan.interval === 'month');
 
-    test('a personal account sees no family in the sidebar, and its storage is its own', async () => {
+    test('a personal account has no family of its own in the sidebar, and its storage is its own', async () => {
         // Asked once the families are known, so the absence means something.
         const listed = rosa.page.waitForResponse(
             (response) => new URL(response.url()).pathname === '/api/groups' && response.ok(),
@@ -3238,6 +4091,7 @@ test.describe.serial('families off', () => {
         await expect(page.locator('[data-your-family]')).toHaveCount(0);
         await expect(page.getByRole('heading', { level: 2, name: 'Family' })).toHaveCount(0);
         await expect(page.locator('[data-family-header]')).toHaveCount(0);
+        await expect(page.locator('[data-family-place]')).toHaveCount(0);
         await page.goto('/app/families');
         await expect(page.getByText('Families aren’t available here')).toBeVisible({
             timeout: 60_000,

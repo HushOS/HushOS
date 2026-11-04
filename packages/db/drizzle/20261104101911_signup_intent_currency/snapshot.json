@@ -1,0 +1,37 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "fc7e741b-e996-4753-97cb-643f4fa97eb9",
+    "prevIds": ["78e28932-a220-4c61-a6d2-5a32519268f9"],
+    "footprints": [
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "account_intents", "currency"],
+            "writes": [
+                "s|col|public.account_intents.currency",
+                "n|col|public.account_intents.currency",
+                "e|col|public.account_intents.currency"
+            ],
+            "reads": ["n|tbl|public.account_intents", "n|sch|public"]
+        }
+    ],
+    "deltas": [
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "account_intents",
+                "name": "currency",
+                "type": "text",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        }
+    ]
+}

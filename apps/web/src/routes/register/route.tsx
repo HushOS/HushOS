@@ -4,8 +4,14 @@ import { ensureSessionUser } from '@/lib/session';
 
 export const Route = createFileRoute('/register')({
     // A plan from the pricing page, and a referral or affiliate code from an invite or a creator's page.
-    validateSearch: (search: Record<string, unknown>): { plan?: string; ref?: string } => ({
+    validateSearch: (
+        search: Record<string, unknown>,
+    ): { plan?: string; ref?: string; currency?: string } => ({
         ...(typeof search.plan === 'string' ? { plan: search.plan } : {}),
+        // The currency a family tier was shown in on Pricing.
+        ...(typeof search.currency === 'string' && /^[a-z]{3}$/.test(search.currency)
+            ? { currency: search.currency }
+            : {}),
         ...(typeof search.ref === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(search.ref)
             ? { ref: search.ref }
             : {}),

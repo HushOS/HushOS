@@ -67,8 +67,12 @@ jobs:
                           # Served at /design.md, and the suite's own fixtures. In a case
                           # pattern `*` crosses `/`, so these come before the prose patterns.
                           DESIGN.md | e2e/*) browser=true ;;
-                          # Prose only. The pages' MDX renders in the app, so it is not here.
+                          # Prose only.
                           docs/* | *.md) ;;
+                          # The pages' prose (terms, privacy, about, blog). It renders in the
+                          # app, so check and build still compile it; no browser suite reads
+                          # its words, and it changes no header or script.
+                          apps/web/src/content/*.mdx) ;;
                           *) browser=true ;;
                       esac
                       # The core, its bindings, and the TypeScript twin its fixtures are checked against.

@@ -48,6 +48,13 @@ const polar = {
     beforeOrders: null as (() => void | Promise<void>) | null,
     /* Runs once as Polar lists the family's plans: the lapsed-plan lookup's first read. */
     beforeList: null as (() => void | Promise<void>) | null,
+    /* The change order each raise Polar took made, paid at once, with no places on it (spike E8). */
+    raiseOrders: [] as {
+        id: string;
+        subscription_id: string;
+        product_id: string;
+        created_at: string;
+    }[],
 };
 
 /* A family plan with one member included, so a family of two already needs a paid place. */
@@ -156,6 +163,13 @@ const fakeClient = {
                 }
                 if (body.units > subscription.units && polar.refusal)
                     throw new PolarClientError(402, polar.refusal);
+                if (body.units > subscription.units)
+                    polar.raiseOrders.push({
+                        id: `order_raise_${polar.raiseOrders.length + 1}`,
+                        subscription_id: id,
+                        product_id: subscription.product_id,
+                        created_at: new Date().toISOString(),
+                    });
                 subscription.units = body.units;
                 subscription.pending_update = null;
             }
@@ -167,16 +181,29 @@ const fakeClient = {
     // No order waits for payment here: every raise this fake accepts is paid, and each plan's
     // checkout order was paid, which is what gives the family its tier and pool.
     orders: {
-        async list(query: { subscription_id?: string; status?: string }) {
+        async list(query: { subscription_id?: string; status?: string | string[] }) {
             const hook = polar.beforeOrders;
             polar.beforeOrders = null;
             await hook?.();
             const subscription = query.subscription_id
                 ? polar.subscriptions.get(query.subscription_id)
                 : undefined;
-            if (query.status === 'pending' || !subscription) return { items: [] };
+            if (!subscription || (query.status && ![query.status].flat().includes('paid')))
+                return { items: [] };
             return {
                 items: [
+                    ...polar.raiseOrders
+                        .filter((order) => order.subscription_id === subscription.id)
+                        .map((order) => ({
+                            ...order,
+                            status: 'paid',
+                            paid: true,
+                            due_amount: 0,
+                            refunded_amount: 0,
+                            billing_reason: 'subscription_update',
+                            currency: 'usd',
+                            units: null,
+                        })),
                     {
                         id: `order_create_${subscription.id}`,
                         subscription_id: subscription.id,
@@ -245,6 +272,7 @@ beforeEach(async () => {
     polar.revokes = [];
     polar.beforeOrders = null;
     polar.beforeList = null;
+    polar.raiseOrders = [];
 });
 afterAll(closeDatabase);
 
@@ -342,13 +370,14 @@ describe('admission with billing on', () => {
         expect(polar.updates).toEqual([]);
     });
 
-    test('someone who made a family since accepting is refused before Polar is asked for a place', async () => {
+    test('someone in another family since accepting is refused before Polar is asked for a place', async () => {
         const fam = await kit.family();
         await onPlan(fam, 1);
         const newcomer = await kit.member();
         const call = await admission(fam, newcomer);
-        // One family per account: theirs, made after they accepted.
-        await kit.family(newcomer);
+        // One family per account: another one they're in since they accepted (let in there; the
+        // rows are written directly, as making one while waiting is refused).
+        await createTestFamily({ organizerId: newcomer.userId });
         const before = await kit.head(fam.groupId);
         polar.updates = [];
         expect(

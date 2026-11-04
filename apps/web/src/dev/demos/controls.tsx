@@ -42,6 +42,7 @@ const VARIANTS = [
     'default',
     'secondary',
     'outline',
+    'tint',
     'ghost',
     'destructive',
     'destructive-outline',

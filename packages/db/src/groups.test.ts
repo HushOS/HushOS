@@ -3498,7 +3498,7 @@ describe('invitations', () => {
         ).toEqual({
             status: 'gone',
         });
-        expect(await groups.openInvitation(first.tokenHash)).toBeNull();
+        expect(await groups.openInvitation(first.tokenHash, randomUUID())).toBeNull();
         expect((await membership(groupId, invitee.userId))!.state).toBe('accepted');
 
         const late = await invite(other.email);
@@ -3509,7 +3509,7 @@ describe('invitations', () => {
                 expiresAt: new Date(Date.now() - 1000),
             })
             .where(eq(groupInvitations.tokenHash, late.tokenHash));
-        expect(await groups.openInvitation(late.tokenHash)).toBeNull();
+        expect(await groups.openInvitation(late.tokenHash, randomUUID())).toBeNull();
         expect(
             await groups.acceptInvitation({ tokenHash: late.tokenHash, userId: other.userId }),
         ).toEqual({

@@ -22,7 +22,8 @@ import { Done, Segmented, Setting, SettingsGroup } from '@/components/settings';
 import { StorageMeter } from '@/components/storage-card';
 import { Button } from '@/components/ui/button';
 import { Demo, Row, Sample, SheetFrame, States } from '@/dev/demo';
-import { familyBillingQueryOptions, type FamilyGlance } from '@/lib/family-billing';
+import { familyBillingQueryOptions, type FamilyBilling } from '@/lib/family-billing';
+import { familyQueryOptions, type FamilyDetail } from '@/lib/families';
 
 const GB = 1024 ** 3;
 
@@ -49,7 +50,6 @@ ${scope} h1 + div { gap: ${dial.actionGap}px; }`}</style>
             <SheetFrame className="pt-5">
                 <div data-tune="page-header" data-measure="">
                     <PageHeader
-                        back={<a href="#page-header">Family</a>}
                         title="Lisbon 2026"
                         description="You and Sam can open everything in this folder."
                     >
@@ -360,12 +360,25 @@ const USER = 'playground-user';
 const GROUP = 'playground-family';
 const FAMILY = 'The Lindqvists';
 
-function StubFamily({ summary, children }: { summary: FamilyGlance; children: ReactNode }) {
+function StubFamily({
+    summary,
+    names,
+    children,
+}: {
+    summary: FamilyBilling;
+    /* Members' names by user id, for the rows that name them (Storage's per person). */
+    names?: Record<string, string>;
+    children: ReactNode;
+}) {
     const [client] = useState(() => {
         const stub = new QueryClient({
             defaultOptions: { queries: { enabled: false, retry: false } },
         });
         stub.setQueryData(familyBillingQueryOptions(USER, GROUP).queryKey, summary);
+        if (names)
+            stub.setQueryData(familyQueryOptions(USER, GROUP).queryKey, {
+                members: Object.entries(names).map(([userId, name]) => ({ userId, name })),
+            } as unknown as FamilyDetail);
         return stub;
     });
     return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
@@ -477,6 +490,100 @@ export function FamilyGlanceDemo() {
                         </StubFamily>
                     </FamilyBody>
                 </div>
+            </Row>
+        </Demo>
+    );
+}
+
+/* A tier as the catalogue lists it: $10, $20 or $30 a month with four places, $1.50 each after. */
+const tier = (key: 'plus' | 'pro' | 'max', label: string, gib: number, base: number) => ({
+    id: `${key}-month`,
+    name: `Family ${label} (monthly)`,
+    description: null,
+    interval: 'month' as const,
+    tier: key,
+    recommended: key === 'pro',
+    prices: { usd: { base, perMember: 150 } },
+    includedMembers: 4,
+    maxMembers: 20,
+    quotaBytes: String(gib * GB),
+});
+
+/*
+ * The payer's Billing section on a live plan, with its real dialogs. They call the real API,
+ * which refuses the playground's family; the screenshots of their refusals answer those calls
+ * in the browser (Playwright's page.route), so nothing reaches Polar.
+ */
+export function FamilyBillingDemo() {
+    const day = 24 * 60 * 60 * 1000;
+    // Read once: the period is dated from the first render, as the server dates it from now.
+    const [now] = useState(() => Date.now());
+    return (
+        <Demo
+            id="family-billing"
+            title="Family plan billing"
+            note="What the payer is shown on a live plan: Change plan, Add places and the rest, opening the real dialogs, then Storage as a manager reads it."
+        >
+            <Row label="Family Pro, eight places, the payer">
+                <StubFamily
+                    summary={{
+                        enabled: true,
+                        view: 'manage',
+                        plans: [
+                            tier('plus', 'Plus', 800, 1000),
+                            tier('pro', 'Pro', 2048, 2000),
+                            tier('max', 'Max', 4096, 3000),
+                        ],
+                        payer: { userId: USER, you: true },
+                        subscription: {
+                            id: 'playground-subscription',
+                            productId: 'pro-month',
+                            productName: 'Family Pro (monthly)',
+                            status: 'active',
+                            recurringInterval: 'month',
+                            amount: 2600,
+                            currency: 'usd',
+                            units: 8,
+                            paidUnits: 8,
+                            pendingUnits: null,
+                            pendingProductId: null,
+                            paidProductId: 'pro-month',
+                            includedMembers: 4,
+                            quotaBytes: String(2048 * GB),
+                            currentPeriodStart: new Date(now - 11 * day).toISOString(),
+                            currentPeriodEnd: new Date(now + 20 * day).toISOString(),
+                            cancelAtPeriodEnd: false,
+                        },
+                        lastPlan: null,
+                        storage: { usedBytes: String(300 * GB), quotaBytes: String(2048 * GB) },
+                        usage: {
+                            ownBytes: '0',
+                            foldersBytes: String(300 * GB),
+                            members: [
+                                { userId: USER, ownBytesRounded: String(42 * GB) },
+                                { userId: 'playground-sam', ownBytesRounded: String(18 * GB) },
+                                { userId: 'playground-ana', ownBytesRounded: '0' },
+                            ],
+                        },
+                        seats: { used: 6, limit: 8 },
+                        nextPlace: { amount: 96, currency: 'usd' },
+                    }}
+                    names={{ 'playground-sam': 'Sam Ortega', 'playground-ana': 'Ana Lindqvist' }}
+                >
+                    <div className="w-full">
+                        <FamilyBody>
+                            <FamilyPlan
+                                place="bottom"
+                                userId={USER}
+                                groupId={GROUP}
+                                family={FAMILY}
+                                roles={['organizer', 'billing']}
+                                onCheckoutSeen={() => {}}
+                            />
+                            <FamilyStorage userId={USER} groupId={GROUP} family={FAMILY} />
+                        </FamilyBody>
+                    </div>
+                </StubFamily>
             </Row>
         </Demo>
     );

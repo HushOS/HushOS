@@ -187,15 +187,18 @@ export function StartFree({
 export function TalkToUs({
     className,
     variant = 'default',
+    subject = 'HushOS for teams',
 }: {
     className?: string;
     variant?: 'default' | 'outline';
+    /* The email's subject: what the person is asking about. */
+    subject?: string;
 }) {
     const { data: contact } = useQuery(salesContactQueryOptions);
     if (!contact) return null;
     return (
         <a
-            href={`mailto:${contact}?subject=${encodeURIComponent('HushOS for teams')}`}
+            href={`mailto:${contact}?subject=${encodeURIComponent(subject)}`}
             className={buttonVariants({ size: 'lg', variant, className })}
         >
             Talk to us

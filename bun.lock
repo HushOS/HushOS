@@ -142,6 +142,7 @@
         "@polar-sh/sdk": "1.0.2",
       },
       "devDependencies": {
+        "@hushos/auth": "workspace:*",
         "@hushos/config": "workspace:*",
         "@types/bun": "1.4.4",
         "typescript": "7.0.2",
@@ -282,6 +283,7 @@
         "@hushos/billing": "workspace:*",
         "@hushos/db": "workspace:*",
         "@hushos/drive": "workspace:*",
+        "@hushos/emails": "workspace:*",
         "@hushos/env": "workspace:*",
         "@hushos/logging": "workspace:*",
         "pg-boss": "^12.38.0",

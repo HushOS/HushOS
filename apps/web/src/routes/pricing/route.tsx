@@ -1,4 +1,4 @@
-import { FitPlanner } from '@/components/fit-planner';
+import { FitPlanner, SizeDots } from '@/components/fit-planner';
 import { SiteFooter, SiteHeader } from '@/components/site-header';
 import {
     container,
@@ -24,8 +24,8 @@ import { currencyLabel, pickCurrency } from '@/lib/currency';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
 import { faqFor } from '@/lib/pricing-faq';
-import { activeFamily, familiesQueryOptions } from '@/lib/families-shell';
-import { rememberReturn } from '@/lib/return-to';
+import { familiesQueryOptions } from '@/lib/families-shell';
+import { familyStanding } from '@/lib/family-signup';
 import { sessionQueryOptions } from '@/lib/session';
 import {
     billingQueryOptions,
@@ -42,6 +42,7 @@ import {
     FAMILY_POOL_LINE,
     familyOffers,
     familyPairs,
+    familyPrice,
     personalPairs,
     priceOf,
     pricingLede,
@@ -274,6 +275,10 @@ function PricingPage() {
     // Only where the server serves families and sells plans: it lists none otherwise.
     const family = familyOffers(catalogue, interval, currency, byMonth);
     const questions = faqFor(familyOffers(catalogue, 'month', currency), currency, saving);
+    // Where the visitor stands with families, for the family cards' buttons and the planner's.
+    const standing = usePricingStanding(hasSession);
+    // Each family tier has its own button only for someone who can make a family.
+    const buyingFamily = standing?.kind === 'signed-out' || standing?.kind === 'none';
     // Signed in: the buttons say where this person stands rather than "start".
     const { data: summary } = useQuery({ ...billingQueryOptions, enabled: hasSession });
     const live = livePlan(summary?.subscription);
@@ -324,7 +329,7 @@ function PricingPage() {
         const width = place === 'card' ? 'w-full' : 'w-full sm:w-fit';
         // The plan already held is a disabled button, not a link that still follows on Enter.
         const held = (
-            <Button variant="outline" size={size} className={width} disabled>
+            <Button variant="tint" size={size} className={width} disabled>
                 Your plan
             </Button>
         );
@@ -336,7 +341,7 @@ function PricingPage() {
                     className={buttonVariants({
                         size,
                         // Primary in the planner only for a newcomer; a subscriber is not sold Free.
-                        variant: place === 'planner' && !hasSession ? 'default' : 'outline',
+                        variant: place === 'planner' && !hasSession ? 'default' : 'tint',
                         className: width,
                     })}
                 >
@@ -360,7 +365,7 @@ function PricingPage() {
               : `Choose ${tier.name}`;
         return onFree && !lapsed ? (
             <Button
-                variant={lead ? 'default' : 'outline'}
+                variant={lead ? 'default' : 'tint'}
                 size={size}
                 className={width}
                 disabled={starting !== null}
@@ -374,7 +379,7 @@ function PricingPage() {
                 search={{ plan: plan.id }}
                 className={buttonVariants({
                     size,
-                    variant: lead ? 'default' : 'outline',
+                    variant: lead ? 'default' : 'tint',
                     className: width,
                 })}
             >
@@ -496,6 +501,7 @@ function PricingPage() {
                                 <PlanCard
                                     name="Free"
                                     storage={free}
+                                    quotaBytes={Number(catalogue.freeQuotaBytes)}
                                     blurb="To try it, or for the few things that matter most."
                                     price={money(0)}
                                     note="No card needed."
@@ -515,6 +521,7 @@ function PricingPage() {
                                             key={tier.key}
                                             name={tier.name}
                                             storage={formatQuota(tier.quotaBytes)}
+                                            quotaBytes={Number(tier.quotaBytes)}
                                             blurb={blurbOf(tier.name, tier.description)}
                                             recommended={tier.recommended}
                                             price={
@@ -541,10 +548,14 @@ function PricingPage() {
                                     ' Checkout charges in the currency of the country you are in.'}
                             </p>
                             {family.length > 0 && (
-                                <FamilySection offers={family} hasSession={hasSession} />
+                                <FamilySection
+                                    offers={family}
+                                    standing={standing}
+                                    buying={buyingFamily}
+                                />
                             )}
 
-                            <div className="flex flex-col gap-4 rounded-xl bg-muted p-6">
+                            <div className="id-edge flex flex-col gap-4 rounded-xl bg-[var(--id-raised,var(--card))] p-6">
                                 <h2 className="text-lg font-bold">Every plan, including Free</h2>
                                 <ul className="grid gap-x-8 gap-y-3 lg:grid-cols-3">
                                     {included.map((line) => (
@@ -593,6 +604,33 @@ function PricingPage() {
                                     note: priceNote(tier),
                                 })),
                             ]}
+                            families={family.flatMap((offer) => {
+                                const price = familyPrice(offer.plan, offer.currency);
+                                if (!price) return [];
+                                return [
+                                    {
+                                        key: offer.plan.id,
+                                        name: offer.name,
+                                        quotaBytes: Number(offer.plan.quotaBytes),
+                                        maxMembers: offer.plan.maxMembers,
+                                        price: {
+                                            base: price.base,
+                                            perMember: price.perMember,
+                                            currency: price.currency,
+                                            includedMembers: offer.plan.includedMembers,
+                                            interval: offer.plan.interval,
+                                        },
+                                        action: buyingFamily ? (
+                                            <FamilyTierAction
+                                                offer={offer}
+                                                signedOut={standing?.kind === 'signed-out'}
+                                                place="planner"
+                                                lead={!live}
+                                            />
+                                        ) : undefined,
+                                    },
+                                ];
+                            })}
                             error={
                                 startedFrom === 'planner' && failedTier && checkoutError
                                     ? { key: failedTier, message: checkoutError }
@@ -623,7 +661,7 @@ function Business() {
     const { data: contact } = useQuery(salesContactQueryOptions);
     return (
         <div className="grid items-start gap-6 lg:grid-cols-[7fr_5fr] lg:gap-10">
-            <div className="flex flex-col gap-5 rounded-xl border border-rule bg-card p-7">
+            <div className="id-edge flex flex-col gap-5 rounded-xl bg-[var(--id-raised,var(--card))] p-7">
                 <div className="flex flex-col gap-2">
                     <span className="flex items-baseline gap-2 text-[17px] font-bold">
                         Team
@@ -673,91 +711,140 @@ function Business() {
 }
 
 /*
- * The family section's button. Create a family is offered only to someone in no family (one
- * per account), and leads to Plans (/app/billing), where the family tiers sit beside the
- * personal plans, each creating a family and going to its checkout
- * (docs/families-shared-pool.md 7.4); signed out, it signs up first and lands there. Someone
- * already in a family opens theirs instead.
- * Nothing shows until that is known, so the button never offers what the server would refuse;
- * if the families can't be read, it opens /app/family, which shows whichever is true. A
- * session cookie that turns out to have expired (no account behind it) is treated as signed out.
+ * Where the visitor stands with families, for the family section's buttons: signed out (a
+ * session cookie with no account behind it counts), in no family, in one, waiting to join one
+ * (familyStanding), or unknown (the families can't be read). Null until that is known, so
+ * nothing shows that the server would refuse or that would make a second family.
  */
-function FamilyAction({ hasSession }: { hasSession: boolean }) {
+type PricingStanding =
+    | { kind: 'signed-out' }
+    | { kind: 'none' }
+    | { kind: 'in'; name: string }
+    | { kind: 'waiting'; name: string; groupId: string }
+    | { kind: 'unknown' };
+
+function usePricingStanding(hasSession: boolean): PricingStanding | null {
     const session = useQuery({ ...sessionQueryOptions, enabled: hasSession });
     const userId = session.data?.id;
     const families = useQuery({ ...familiesQueryOptions(userId ?? ''), enabled: Boolean(userId) });
-    const className = buttonVariants({ size: 'lg', className: 'w-full shrink-0 lg:w-fit' });
-    const signedOut = !hasSession || (session.isSuccess && !session.data);
-    if (signedOut)
-        return (
-            <Link
-                to="/register"
-                onClick={() => rememberReturn('/app/billing')}
-                className={className}
-            >
-                Create a family
-            </Link>
-        );
-    if (session.isError || families.isError)
-        return (
-            <Link to="/app/family" className={className}>
-                Family
-            </Link>
-        );
+    if (!hasSession || (session.isSuccess && !session.data)) return { kind: 'signed-out' };
+    if (session.isError || families.isError) return { kind: 'unknown' };
     if (!userId || families.isPending) return null;
-    const yours = activeFamily(families.data);
-    return yours ? (
-        <Link to="/app/family" className={className}>
-            Open {yours.name}
+    const standing = familyStanding(families.data);
+    if (standing.kind === 'in') return { kind: 'in', name: standing.family.name };
+    if (standing.kind === 'waiting')
+        return { kind: 'waiting', name: standing.family.name, groupId: standing.family.id };
+    return { kind: 'none' };
+}
+
+/*
+ * A family tier's button, as a personal plan's (docs/families-shared-pool.md 7.4). Signed out,
+ * it signs up with the tier as the plan: sign-up says what it is, and the first visit after it
+ * opens Create a family with it. Signed in and in no family, it opens Create a family with it,
+ * priced as shown here. Tint on its card, the quiet filled button: the recommended personal plan
+ * has the page's blue one. Under the planner's answer it leads, as a personal plan's does (`lead`).
+ */
+function FamilyTierAction({
+    offer,
+    signedOut,
+    place = 'card',
+    lead = false,
+}: {
+    offer: FamilyOffer;
+    signedOut: boolean;
+    place?: Place;
+    lead?: boolean;
+}) {
+    const className = buttonVariants({
+        variant: lead ? 'default' : 'tint',
+        size: 'lg',
+        className: place === 'card' ? 'mt-auto w-full' : 'w-full sm:w-fit',
+    });
+    return signedOut ? (
+        <Link
+            to="/register"
+            search={{ plan: offer.plan.id, currency: offer.currency }}
+            className={className}
+        >
+            Start with {offer.name}
         </Link>
     ) : (
-        <Link to="/app/billing" className={className}>
-            Create a family
+        <Link
+            to="/app/family"
+            search={{ create: offer.plan.id, currency: offer.currency }}
+            className={className}
+        >
+            Choose {offer.name}
         </Link>
     );
 }
 
-function FamilySection({ offers, hasSession }: { offers: FamilyOffer[]; hasSession: boolean }) {
+function FamilySection({
+    offers,
+    standing,
+    buying,
+}: {
+    offers: FamilyOffer[];
+    standing: PricingStanding | null;
+    buying: boolean;
+}) {
     // The same on every tier (a tier change keeps the family's places), as the questions say too.
     const { includedMembers, maxMembers } = offers[0]!.plan;
+    // Each tier has its own button for someone who can make a family (`buying`). Someone in one,
+    // or waiting to join one, is offered that family instead, once; where the families can't be
+    // read, the family page says which.
+    const sectionClass = buttonVariants({ size: 'lg', className: 'w-full shrink-0 lg:w-fit' });
+    const sectionAction =
+        standing?.kind === 'waiting' ? (
+            <Link
+                to="/app/families/$groupId/join"
+                params={{ groupId: standing.groupId }}
+                className={sectionClass}
+            >
+                Continue joining {standing.name}
+            </Link>
+        ) : standing?.kind === 'in' || standing?.kind === 'unknown' ? (
+            <Link to="/app/family" className={sectionClass}>
+                {standing.kind === 'in' ? `Open ${standing.name}` : 'Family'}
+            </Link>
+        ) : null;
     return (
         <section
             aria-labelledby="family-plan"
             data-family-plan
-            className="flex flex-col gap-6 rounded-xl border border-rule bg-card p-6 lg:p-7"
+            className="flex flex-col gap-6 pt-6"
         >
-            <div className="flex flex-col gap-3">
-                <h2 id="family-plan" className="text-[17px] font-bold">
-                    Family
-                </h2>
-                {/* The button sits level with the headline's first line on a wide screen, under the words on a phone. */}
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-10">
-                    <div className="flex flex-col gap-3">
-                        <p className="text-[28px] leading-tight font-extrabold tracking-[-0.025em] text-balance sm:text-[32px]">
-                            Storage for up to {maxMembers} people, and folders you share.
-                        </p>
-                        <p className="max-w-[40em] text-base leading-relaxed">
-                            Each plan includes {includedMembers} members, and every member can open
-                            the family folders. {FAMILY_POOL_LINE}
-                        </p>
-                    </div>
-                    <FamilyAction hasSession={hasSession} />
+            {/* A button here sits level with the heading's first line on a wide screen, under the words on a phone. */}
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-10">
+                <div className="flex flex-col gap-3">
+                    <h2
+                        id="family-plan"
+                        className="text-[28px] leading-tight font-extrabold tracking-[-0.025em] text-balance sm:text-[32px]"
+                    >
+                        Storage for up to {maxMembers} people, and folders you share.
+                    </h2>
+                    <p className="max-w-[40em] text-base leading-relaxed">
+                        Each plan includes {includedMembers} members, and every member can open the
+                        family folders. {FAMILY_POOL_LINE}
+                    </p>
                 </div>
+                {sectionAction}
             </div>
             <ul className="grid gap-4 lg:grid-cols-3">
                 {offers.map((offer) => (
                     <li
                         key={offer.plan.id}
                         data-family-tier={offer.plan.tier ?? offer.plan.id}
-                        className="flex flex-col gap-4 rounded-lg border border-rule p-5"
+                        className="id-edge flex flex-col gap-5 rounded-xl border-2 border-transparent bg-[var(--id-raised,var(--card))] p-6"
                     >
                         <div className="flex flex-col gap-2">
                             <span className="text-[17px] font-bold">{offer.name}</span>
                             <span className="text-[32px] leading-none font-extrabold tracking-[-0.03em] tabular-nums">
                                 {offer.storage}
                             </span>
+                            <SizeDots quotaBytes={Number(offer.plan.quotaBytes)} />
                         </div>
-                        <div className="flex flex-col gap-1 border-t border-rule pt-4 tabular-nums">
+                        <div className="flex flex-col gap-1 tabular-nums">
                             <span className="text-[22px] font-bold">{offer.price}</span>
                             <span className="text-sm leading-snug text-muted-foreground">
                                 {offer.billed}
@@ -768,6 +855,12 @@ function FamilySection({ offers, hasSession }: { offers: FamilyOffer[]; hasSessi
                                 </span>
                             )}
                         </div>
+                        {buying && (
+                            <FamilyTierAction
+                                offer={offer}
+                                signedOut={standing?.kind === 'signed-out'}
+                            />
+                        )}
                     </li>
                 ))}
             </ul>
@@ -781,6 +874,7 @@ function FamilySection({ offers, hasSession }: { offers: FamilyOffer[]; hasSessi
 function PlanCard({
     name,
     storage,
+    quotaBytes,
     blurb,
     price,
     note,
@@ -789,6 +883,7 @@ function PlanCard({
 }: {
     name: string;
     storage: string;
+    quotaBytes: number;
     blurb: string | null;
     price: string;
     note: string;
@@ -799,8 +894,9 @@ function PlanCard({
         <div
             data-plan={name}
             className={cn(
-                'flex flex-col gap-5 rounded-xl bg-card p-6',
-                recommended ? 'border-2 border-primary shadow-md' : 'border border-rule',
+                'flex flex-col gap-5 rounded-xl border-2 bg-[var(--id-raised,var(--card))] p-6',
+                // The one outlined card. The others are filled, with no line round them.
+                recommended ? 'border-primary shadow-md' : 'id-edge border-transparent',
             )}
         >
             <div className="flex flex-1 flex-col gap-2">
@@ -813,11 +909,12 @@ function PlanCard({
                 <span className="text-[40px] leading-none font-extrabold tracking-[-0.03em] tabular-nums">
                     {storage}
                 </span>
+                <SizeDots quotaBytes={quotaBytes} />
                 {blurb && (
                     <span className="text-[15px] leading-snug text-muted-foreground">{blurb}</span>
                 )}
             </div>
-            <div className="flex flex-col gap-1 border-t border-rule pt-4 tabular-nums">
+            <div className="flex flex-col gap-1 tabular-nums">
                 <span className="text-[22px] font-bold">{price}</span>
                 <span className="min-h-10 text-sm leading-snug text-muted-foreground">{note}</span>
             </div>

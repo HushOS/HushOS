@@ -229,6 +229,9 @@ function normalizeIntent(intent: SignupIntent | undefined) {
         const value = intent[key];
         if (typeof value === 'string' && INTENT_VALUE.test(value)) clean[key] = value;
     }
+    // Only with a plan to price: a currency on its own means nothing.
+    if (clean.plan && typeof intent.currency === 'string' && /^[a-z]{3}$/.test(intent.currency))
+        clean.currency = intent.currency;
     return Object.keys(clean).length ? clean : undefined;
 }
 
@@ -1128,6 +1131,8 @@ export async function getAdminOverview(sessionToken: string | null) {
          */
         orphanedPlans: orphaned.map((row) => ({
             groupId: row.groupId,
+            /* Its family is gone (purged); otherwise it was the family's second plan. */
+            why: row.secondPlan ? ('second-plan' as const) : ('deleted-family' as const),
             subscriptionId: row.subscriptionId,
             status: row.status,
             revoked: row.revokedAt !== null,

@@ -1,25 +1,30 @@
+import { useQuery } from '@tanstack/react-query';
 import { cn } from 'cn';
 import { type ReactNode, useEffect, useId, useState } from 'react';
-import { TextLink } from '@/components/site';
+import {
+    familyNote,
+    fitAnswer,
+    keptWithin,
+    slidersFor,
+    totalOf,
+    type FamilyPrice,
+} from '@/components/fit-answer';
+import { TalkToUs, TextLink } from '@/components/site';
 import { formatQuota } from '@/lib/format';
+import { salesContactQueryOptions } from '@/lib/social';
 
 /*
  * Pricing's "What will you keep?": three sliders for the things people actually
  * store, a rough total, and the smallest plan it fits in, with a bar of dots
  * showing how full that plan would be. The sizes are typical, not measured, and
- * the page says so; the plans and their sizes are the catalogue's own. A plan
- * fits with a tenth to spare, because versions, Trash and thumbnails count too.
+ * the page says so; the plans and their sizes are the catalogue's own. Where
+ * family plans are offered, a fourth slider says how many people: one person is
+ * answered with personal plans, two or more with family plans (fit-answer.ts).
  * The plan it names carries its own button, the one its card on the page has.
  */
 
 const MB = 1024 * 1024;
 const GB = 1024 * MB;
-
-/* Typical sizes: a phone photo, an hour of 1080p video, a PDF or document. */
-const PHOTO = 3 * MB;
-const VIDEO_HOUR = 4 * GB;
-const DOCUMENT = 0.5 * MB;
-const HEADROOM = 0.9;
 
 export type FitPlan = {
     key: string;
@@ -29,6 +34,15 @@ export type FitPlan = {
     /* What the button charges, beside it, since the planner shows no prices of its own. */
     note?: string;
 };
+
+/* A family plan: its note is worked out for the people chosen, from its own prices. */
+export type FitFamilyPlan = Omit<FitPlan, 'note'> & {
+    maxMembers: number;
+    price: FamilyPrice;
+};
+
+/* What the people slider shows and a screen reader hears. */
+const peopleWords = (value: number) => (value === 1 ? '1 person' : `${value} people`);
 
 const count = new Intl.NumberFormat('en-GB');
 
@@ -47,6 +61,7 @@ function rough(bytes: number) {
 function Slider({
     label,
     value,
+    min = 0,
     max,
     step,
     unit,
@@ -54,6 +69,7 @@ function Slider({
 }: {
     label: string;
     value: number;
+    min?: number;
     max: number;
     step: number;
     unit: (value: number) => string;
@@ -74,7 +90,7 @@ function Slider({
             <input
                 id={id}
                 type="range"
-                min={0}
+                min={min}
                 max={max}
                 step={step}
                 value={value}
@@ -109,9 +125,38 @@ function Fill({ share }: { share: number }) {
     );
 }
 
-/* The answer's button and, under it, what it charges. */
+/*
+ * A plan card's size as a small block of the same dots, lit on a log scale from 2 GB (one dot)
+ * to 4 TB (all but one), so each step up a plan reads as more without the small ones vanishing.
+ * Decoration: the size is in words beside it.
+ */
+const SIZE_DOTS = 36;
+const SIZE_FLOOR = 2 * GB;
+const SIZE_CEILING = 4 * 1024 * GB;
+
+export function SizeDots({ quotaBytes }: { quotaBytes: number }) {
+    const share =
+        Math.log(Math.min(SIZE_CEILING, Math.max(SIZE_FLOOR, quotaBytes)) / SIZE_FLOOR) /
+        Math.log(SIZE_CEILING / SIZE_FLOOR);
+    const lit = 1 + Math.round(share * (SIZE_DOTS - 2));
+    return (
+        <div aria-hidden="true" className="grid w-fit grid-flow-col grid-rows-3 gap-[3px]">
+            {Array.from({ length: SIZE_DOTS }, (_, index) => (
+                <span
+                    key={index}
+                    className={cn(
+                        'size-1.5 rounded-full',
+                        index < lit ? 'bg-primary' : 'fit-dot-off bg-foreground/12',
+                    )}
+                />
+            ))}
+        </div>
+    );
+}
+
+/* The answer's button and, beside it, what it charges. */
 function PlanAction({ plan }: { plan: FitPlan }) {
-    if (!plan.action) return null;
+    if (!plan.action && !plan.note) return null;
     return (
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
             {plan.action}
@@ -132,38 +177,70 @@ function useSettled(text: string) {
     return settled;
 }
 
+const headline = 'text-[28px] leading-tight font-extrabold tracking-[-0.025em] sm:text-[36px]';
+
 export function FitPlanner({
     plans,
+    families = [],
     error = null,
 }: {
     plans: FitPlan[];
+    /* Family plans, only where the page offers them; with none the planner has no people slider. */
+    families?: FitFamilyPlan[];
     /* A checkout that failed from here, shown only while the answer is still that plan. */
     error?: { key: string; message: string } | null;
 }) {
+    const [people, setPeople] = useState(1);
     const [photos, setPhotos] = useState(8_000);
     const [hours, setHours] = useState(5);
     const [documents, setDocuments] = useState(2_000);
-    const total = photos * PHOTO + hours * VIDEO_HOUR + documents * DOCUMENT;
-    const sorted = [...plans].sort((a, b) => a.quotaBytes - b.quotaBytes);
-    const fits = sorted.find((plan) => total <= plan.quotaBytes * HEADROOM);
-    // Within a plan but past the headroom: it holds, with no room for versions and Trash.
-    const tight = fits ? undefined : sorted.find((plan) => total <= plan.quotaBytes);
-    const largest = sorted.at(-1);
+    const { data: contact } = useQuery(salesContactQueryOptions);
+    const total = totalOf({ photos, hours, documents });
+    const most = Math.max(0, ...families.map((plan) => plan.maxMembers));
+    // Without family plans there is one person, whatever the slider was left at.
+    const party = most > 1 ? Math.min(people, most) : 1;
+    const sliders = slidersFor(party);
+    // Back to one person, a slider past one person's reach comes back within it.
+    function choosePeople(value: number) {
+        setPeople(value);
+        const kept = keptWithin({ photos, hours, documents }, slidersFor(value));
+        setPhotos(kept.photos);
+        setHours(kept.hours);
+        setDocuments(kept.documents);
+    }
+    const answer = fitAnswer<FitPlan & { maxMembers?: number }>({
+        personal: plans,
+        family: families.map((plan) => ({ ...plan, note: familyNote(plan.price, party) })),
+        people: party,
+        total,
+        // Sales is offered past the biggest plan only beside the family plans; without them the
+        // planner ends at self-hosting, as it always has.
+        contact: most > 1 && Boolean(contact),
+    });
+    const named = answer.kind === 'fits' || answer.kind === 'tight' ? answer.plan : undefined;
     // en-GB on server and browser alike, as the counts are, so the numbers hydrate unchanged.
     const quota = (bytes: number) => formatQuota(bytes, 'en-GB');
     const amount = rough(total);
+    const more =
+        answer.kind === 'beyond' && answer.largest
+            ? `More than ${quota(answer.largest.quotaBytes)}.`
+            : 'More than any plan holds.';
+    const ask = 'Tell us how much you need, and we’ll find you a plan.';
+    const about = party > 1 ? `About ${amount} for ${peopleWords(party)}.` : `About ${amount}.`;
     const spoken = useSettled(
-        !total
+        answer.kind === 'empty'
             ? 'Nothing yet.'
-            : fits
-              ? `About ${amount}. ${fits.name} fits, ${quota(fits.quotaBytes)}.`
-              : tight
-                ? `About ${amount}. Tight in ${tight.name}, ${quota(tight.quotaBytes)}.`
-                : `About ${amount}. More than any plan holds.`,
+            : answer.kind === 'fits'
+              ? `${about} ${answer.plan.name} fits, ${quota(answer.plan.quotaBytes)}.`
+              : answer.kind === 'tight'
+                ? `${about} Tight in ${answer.plan.name}, ${quota(answer.plan.quotaBytes)}.`
+                : answer.reach === 'contact'
+                  ? `${about} ${more} ${ask}`
+                  : `${about} More than any plan holds.`,
     );
     return (
         <section aria-labelledby="fit-title" className="mt-20">
-            <div className="grid gap-8 rounded-xl border border-rule bg-[var(--id-raised,var(--card))] p-5 sm:p-8 lg:grid-cols-[5fr_6fr] lg:gap-12">
+            <div className="id-edge grid gap-8 rounded-xl bg-[var(--id-raised,var(--card))] p-5 sm:p-8 lg:grid-cols-[5fr_6fr] lg:gap-12">
                 <div className="flex flex-col gap-6">
                     <div className="flex flex-col gap-2">
                         <h2
@@ -177,27 +254,38 @@ export function FitPlanner({
                             Yours will vary.
                         </p>
                     </div>
+                    {most > 1 && (
+                        <Slider
+                            label="People"
+                            value={party}
+                            min={1}
+                            max={most}
+                            step={1}
+                            unit={peopleWords}
+                            onChange={choosePeople}
+                        />
+                    )}
                     <Slider
                         label="Photos"
                         value={photos}
-                        max={100_000}
-                        step={500}
+                        max={sliders.photos.max}
+                        step={sliders.photos.step}
                         unit={(value) => count.format(value)}
                         onChange={setPhotos}
                     />
                     <Slider
                         label="Video"
                         value={hours}
-                        max={200}
-                        step={1}
+                        max={sliders.hours.max}
+                        step={sliders.hours.step}
                         unit={(value) => `${value} ${value === 1 ? 'hour' : 'hours'}`}
                         onChange={setHours}
                     />
                     <Slider
                         label="Documents"
                         value={documents}
-                        max={50_000}
-                        step={100}
+                        max={sliders.documents.max}
+                        step={sliders.documents.step}
                         unit={(value) => count.format(value)}
                         onChange={setDocuments}
                     />
@@ -218,39 +306,39 @@ export function FitPlanner({
                             'Nothing yet'
                         )}
                     </p>
-                    {!total ? (
-                        <p className="text-[28px] leading-tight font-extrabold tracking-[-0.025em] sm:text-[36px]">
-                            Move a slider to start.
-                        </p>
-                    ) : fits ? (
+                    {answer.kind === 'empty' ? (
+                        <p className={headline}>Move a slider to start.</p>
+                    ) : answer.kind === 'fits' ? (
                         <>
-                            <p className="text-[28px] leading-tight font-extrabold tracking-[-0.025em] sm:text-[36px]">
-                                {fits.name} fits.
-                            </p>
-                            <Fill share={total / fits.quotaBytes} />
+                            <p className={headline}>{answer.plan.name} fits.</p>
+                            <Fill share={total / answer.plan.quotaBytes} />
                             <p className="text-[15px] text-muted-foreground tabular-nums">
-                                {amount} of {quota(fits.quotaBytes)}, with room left for versions
-                                and Trash.
-                            </p>
-                            <PlanAction plan={fits} />
-                        </>
-                    ) : tight ? (
-                        <>
-                            <p className="text-[28px] leading-tight font-extrabold tracking-[-0.025em] sm:text-[36px]">
-                                Tight in {tight.name}.
-                            </p>
-                            <Fill share={total / tight.quotaBytes} />
-                            <p className="text-[15px] text-muted-foreground tabular-nums">
-                                {amount} of {quota(tight.quotaBytes)}, with little room left for
+                                {amount} of {quota(answer.plan.quotaBytes)}, with room left for
                                 versions and Trash.
                             </p>
-                            <PlanAction plan={tight} />
+                            <PlanAction plan={answer.plan} />
+                        </>
+                    ) : answer.kind === 'tight' ? (
+                        <>
+                            <p className={headline}>Tight in {answer.plan.name}.</p>
+                            <Fill share={total / answer.plan.quotaBytes} />
+                            <p className="text-[15px] text-muted-foreground tabular-nums">
+                                {amount} of {quota(answer.plan.quotaBytes)}, with little room left
+                                for versions and Trash.
+                            </p>
+                            <PlanAction plan={answer.plan} />
+                        </>
+                    ) : answer.reach === 'contact' ? (
+                        <>
+                            <p className={headline}>{more}</p>
+                            <p className="text-[15px] leading-relaxed text-muted-foreground">
+                                {ask}
+                            </p>
+                            <TalkToUs subject="More storage" className="w-full sm:w-fit" />
                         </>
                     ) : (
                         <>
-                            <p className="text-[28px] leading-tight font-extrabold tracking-[-0.025em] sm:text-[36px]">
-                                More than {largest ? quota(largest.quotaBytes) : 'any plan holds'}.
-                            </p>
+                            <p className={headline}>{more}</p>
                             <p className="text-[15px] leading-relaxed text-muted-foreground">
                                 Run HushOS on your own server and set each account’s storage
                                 yourself.
@@ -260,7 +348,7 @@ export function FitPlanner({
                             </TextLink>
                         </>
                     )}
-                    {error && error.key === (fits ?? tight)?.key && (
+                    {error && error.key === named?.key && (
                         <p
                             role="alert"
                             className="rounded-md bg-destructive-soft px-4 py-3 text-sm text-destructive"

@@ -420,6 +420,25 @@ h2:hover > .heading-anchor,
     color: var(--id-wire, var(--primary));
 }
 
+/* ── Pricing ──────────────────────────────────────────────────────────── */
+
+/*
+ * The plan cards, the family cards, the list under them and the planner are filled
+ * surfaces on the lavender, with no line round them; only the recommended card is
+ * outlined. High contrast has no identity, so the fill would be the page's own colour:
+ * there they take the solid edge that stands in for depth.
+ */
+@media (prefers-contrast: more) {
+    .id-edge {
+        outline: 1px solid var(--edge);
+        outline-offset: -1px;
+    }
+}
+.hc .id-edge {
+    outline: 1px solid var(--edge);
+    outline-offset: -1px;
+}
+
 /* ── Sliders ────────────────────────────────────────────────────────── */
 
 .fits-range {

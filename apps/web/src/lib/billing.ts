@@ -26,6 +26,7 @@ const signedOut: BillingSummary = {
     hasCustomer: false,
     subscription: null,
     intendedPlan: null,
+    intendedFamily: null,
     family: null,
 };
 const readBillingSummary = createIsomorphicFn()
