@@ -296,6 +296,7 @@ describe('a departure that is refused or rolled back', () => {
             customerId: 'cus_team',
             subscriptions: [plan()],
             graceMs: 3 * DAY,
+            readingFrom: await billing.readingStamp(),
         });
         expect(await groups.leaveGroup(family.groupId, organizer.userId)).toEqual({
             status: 'billed',
