@@ -329,7 +329,7 @@ function PricingPage() {
         const width = place === 'card' ? 'w-full' : 'w-full sm:w-fit';
         // The plan already held is a disabled button, not a link that still follows on Enter.
         const held = (
-            <Button variant="outline" size={size} className={width} disabled>
+            <Button variant="tint" size={size} className={width} disabled>
                 Your plan
             </Button>
         );
@@ -341,7 +341,7 @@ function PricingPage() {
                     className={buttonVariants({
                         size,
                         // Primary in the planner only for a newcomer; a subscriber is not sold Free.
-                        variant: place === 'planner' && !hasSession ? 'default' : 'outline',
+                        variant: place === 'planner' && !hasSession ? 'default' : 'tint',
                         className: width,
                     })}
                 >
@@ -365,7 +365,7 @@ function PricingPage() {
               : `Choose ${tier.name}`;
         return onFree && !lapsed ? (
             <Button
-                variant={lead ? 'default' : 'outline'}
+                variant={lead ? 'default' : 'tint'}
                 size={size}
                 className={width}
                 disabled={starting !== null}
@@ -379,7 +379,7 @@ function PricingPage() {
                 search={{ plan: plan.id }}
                 className={buttonVariants({
                     size,
-                    variant: lead ? 'default' : 'outline',
+                    variant: lead ? 'default' : 'tint',
                     className: width,
                 })}
             >
@@ -741,8 +741,8 @@ function usePricingStanding(hasSession: boolean): PricingStanding | null {
  * A family tier's button, as a personal plan's (docs/families-shared-pool.md 7.4). Signed out,
  * it signs up with the tier as the plan: sign-up says what it is, and the first visit after it
  * opens Create a family with it. Signed in and in no family, it opens Create a family with it,
- * priced as shown here. Outline on its card: the recommended personal plan has the page's blue
- * button. Under the planner's answer it leads, as a personal plan's does (`lead`).
+ * priced as shown here. Tint on its card, the quiet filled button: the recommended personal plan
+ * has the page's blue one. Under the planner's answer it leads, as a personal plan's does (`lead`).
  */
 function FamilyTierAction({
     offer,
@@ -756,7 +756,7 @@ function FamilyTierAction({
     lead?: boolean;
 }) {
     const className = buttonVariants({
-        variant: lead ? 'default' : 'outline',
+        variant: lead ? 'default' : 'tint',
         size: 'lg',
         className: place === 'card' ? 'mt-auto w-full' : 'w-full sm:w-fit',
     });

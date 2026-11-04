@@ -20,6 +20,9 @@ const buttonVariants = cva(
                 // in dialogs and cards it shows their surface, as before. Light keeps the white fill.
                 outline:
                     'border-input bg-card text-foreground hover:bg-muted focus-visible:outline-ring aria-expanded:bg-muted dark:bg-transparent dark:hover:bg-muted dark:aria-expanded:bg-muted',
+                // Quiet filled: a choice beside the one blue button where an outline would box it in.
+                // No edge on its fill, except in high contrast, where the tint alone is too faint to find.
+                tint: 'border-transparent bg-tint text-on-tint hover:bg-[color-mix(in_oklch,var(--tint),var(--on-tint)_12%)] focus-visible:outline-ring aria-expanded:bg-[color-mix(in_oklch,var(--tint),var(--on-tint)_12%)] hc:border-edge',
                 ghost: 'border-transparent bg-transparent text-foreground hover:bg-muted focus-visible:outline-ring aria-expanded:bg-muted',
                 row: 'w-full justify-between border-transparent bg-transparent text-foreground hover:bg-muted focus-visible:outline-ring aria-expanded:bg-muted [&>svg]:text-primary',
                 destructive:

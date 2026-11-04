@@ -68,6 +68,16 @@
     }
 }
 
+/* High contrast, asked for here (`.hc`) or by the computer, as the tokens follow it. */
+@custom-variant hc {
+    &:where(.hc, .hc *) {
+        @slot;
+    }
+    @media (prefers-contrast: more) {
+        @slot;
+    }
+}
+
 /*
  * The sidebar folded to its icon rail (shadcn's collapsible="icon"). Before anyone has opened or
  * closed it (no sidebar cookie), the server cannot know the width, so it marks the sidebar
