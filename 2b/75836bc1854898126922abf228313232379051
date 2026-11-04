@@ -1,0 +1,31 @@
+DESIGN.md
+  s_b8f73d2e892afc::t_8216fd462cef90 392,525,530
+apps/web/src/components/fit-answer.test.ts
+  s_b8f73d2e892afc::t_6dcc62b431318a 1-159
+apps/web/src/components/fit-answer.ts
+  s_b8f73d2e892afc::t_bd99060d55bbba 1-87
+apps/web/src/components/fit-planner.tsx
+  s_b8f73d2e892afc::t_22acc169e4bcba 1,4-5,7,13-15,36-44,62,70,91,126-155,157,178-179,182,186-187,191,195,197-209,213-218,220,222-228,232,246-256,298-300,302-303,305-306,308,310,312-313,315-316,318,320,322-324,326-330,340
+apps/web/src/components/site.tsx
+  s_b8f73d2e892afc::t_c4b291fcac16ee 190,194-195,201
+apps/web/src/identities.css
+  s_b8f73d2e892afc::t_6bea99cd76571e 423-441
+apps/web/src/routes/pricing/route.tsx
+  s_b8f73d2e892afc::t_64ff48ba6c749b 1,45,278-281,504,524,551-555,558,607-633,664,744-745,747-757,759,761,782-790,793-795,815,817-829,831,838,845,847,877,886,897-899,912,917
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2b75836bc1854898126922abf228313232379051",
+  "prompts": {},
+  "sessions": {
+    "s_b8f73d2e892afc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1a660-eb3e-7310-a15b-c28cf1cfc43e",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
