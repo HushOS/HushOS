@@ -1,0 +1,89 @@
+apps/web/src/components/families/family-billing.tsx
+  s_566b8e0c4467a4::t_1c165254a1fd6a 1450-1452
+apps/web/src/content/legal/privacy.mdx
+  s_566b8e0c4467a4::t_fbc6b3b9c49762 3,86-91
+apps/web/src/lib/family-billing.test.ts
+  s_566b8e0c4467a4::t_89cc9c5e9a3309 143-147,151-158
+apps/web/src/lib/family-billing.ts
+  s_566b8e0c4467a4::t_c025051c639a15 216-217,222
+apps/web/src/routes/join/route.tsx
+  s_566b8e0c4467a4::t_4c018a06861256 167,238-247
+bun.lock
+  s_566b8e0c4467a4::t_86af4fe1b101eb 286
+compose.yaml
+  s_566b8e0c4467a4::t_b96c4baaab26aa 164-166
+docs/groups-design.md
+  s_566b8e0c4467a4::t_675ad75d122496 348-349
+docs/polar-group-billing-spike.md
+  s_566b8e0c4467a4::t_7ad0da2f6c6077 545-546,738
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_516540955b3d0f 77,87,214,579,731
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_f32c40df8a74d7 1514,1518,1520-1521
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_d75061ab202ecd 2281-2282,2339,2363,2909
+packages/billing/src/protocol.ts
+  s_566b8e0c4467a4::t_e0fa3fe3a9e598 77-88
+packages/billing/src/seed-prices.test.ts
+  s_566b8e0c4467a4::t_56c3740be53204 2,5,160-205
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_594a46ebc3d655 3492,3496,3516-3557
+packages/db/drizzle/20261104085718_group_dissolve_notices/migration.sql
+  s_566b8e0c4467a4::t_db6b476a50f0a8 1-26
+packages/db/drizzle/20261104085718_group_dissolve_notices/snapshot.json
+  s_566b8e0c4467a4::t_8c12084b7585bd 1-471
+packages/db/drizzle/20261104094101_signup_intent_currency/snapshot.json
+  s_566b8e0c4467a4::t_1fba4d2cd5fba1 5-6
+packages/db/src/dissolve-notices.ts
+  s_566b8e0c4467a4::t_927e0ec17cf7e2 1-195
+packages/db/src/groups.dissolve-notices-off.test.ts
+  s_566b8e0c4467a4::t_445d7a85a00222 1-54
+packages/db/src/groups.dissolve-notices.test.ts
+  s_566b8e0c4467a4::t_fd4b2f436259fb 1-616
+packages/db/src/groups.test.ts
+  s_566b8e0c4467a4::t_7e1a235531eb06 3501,3512
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_9e4a81efce9bf3 15,2079-2080,2476,2482-2483,3558-3559
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_1d84d9e5185712 14
+packages/db/src/schema/groups.ts
+  s_566b8e0c4467a4::t_bf2988c1e9327d 413-456
+packages/emails/scripts/render.tsx
+  s_566b8e0c4467a4::t_348b9a6112b833 2,217-260
+packages/emails/src/rendered/family-dissolved.ts
+  s_566b8e0c4467a4::t_9e5c5e8f7b2286 1-15
+packages/emails/src/service.ts
+  s_566b8e0c4467a4::t_64a6befb3b14ae 6,293-323
+packages/emails/src/templates/family-dissolved.tsx
+  s_566b8e0c4467a4::t_b1e826fe3b4ef2 1-293
+packages/groups/src/server.test.ts
+  s_566b8e0c4467a4::t_4a1598458c5c69 996-1029
+packages/groups/src/server.ts
+  s_566b8e0c4467a4::t_c09b8309dc95b9 1905,1907-1913,1950-1957
+packages/jobs/Dockerfile
+  s_566b8e0c4467a4::t_e3aae7ddcae776 32
+packages/jobs/package.json
+  s_566b8e0c4467a4::t_1c89721a804234 21
+packages/jobs/src/client.ts
+  s_566b8e0c4467a4::t_8df79c0b7d6358 29,59,157-169
+packages/jobs/src/jobs/groups.ts
+  s_566b8e0c4467a4::t_5007946c2306dc 2-3,48-115
+packages/jobs/src/worker.ts
+  s_566b8e0c4467a4::t_d04c2f64c9bd3a 11,14,105-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "eef0d4cda8b414c6b17a17fa90f86ca1247cacb0",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
