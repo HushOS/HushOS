@@ -1,0 +1,27 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_0b388e012c9a75 224-228,348,397,532
+apps/web/src/components/ui/button.tsx
+  s_566b8e0c4467a4::t_2152d46222e983 23-25
+apps/web/src/dev/demos/controls.tsx
+  s_566b8e0c4467a4::t_4c12d0faf42a81 45
+apps/web/src/routes/pricing/route.tsx
+  s_566b8e0c4467a4::t_bd50d40905c96a 332,344,368,382,744-745,759
+apps/web/src/styles.css
+  s_566b8e0c4467a4::t_024ce2a3fbacb6 71-80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a38373ec496dc89b3f137017c8dd47438432342c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
