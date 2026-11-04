@@ -137,7 +137,8 @@ async function planOf(productId: string) {
 
 /*
  * Whether an order of the subscription waits for payment (a raise the bank
- * has not confirmed, a renewal being retried), and since when: `unpaid` is
+ * has not confirmed, a renewal being retried, or one Polar has made and not yet
+ * finalized: a `draft`, whatever it says is due), and since when: `unpaid` is
  * true, false, or null when the orders could not be read (`orders:read`).
  * Only false lets places count as paid.
  */
@@ -145,10 +146,12 @@ async function orderState(subscriptionId: string) {
     try {
         const orders = await polar().orders.list({
             subscription_id: subscriptionId,
-            status: 'pending',
+            status: ['draft', 'pending'],
             limit: 10,
         });
-        const waiting = orders.items.filter((order) => order.due_amount > 0);
+        const waiting = orders.items.filter(
+            (order) => order.status === 'draft' || order.due_amount > 0,
+        );
         const oldest = waiting.reduce<number | null>((min, order) => {
             const at = Date.parse(order.created_at);
             return Number.isNaN(at) ? min : min === null ? at : Math.min(min, at);
@@ -2710,35 +2713,58 @@ async function placesHeld(
     }
 }
 
+/* How many of a subscription's newest orders a raise is told apart from (raiseOrders). */
+const RAISE_ORDERS_READ = 20;
+
 /*
- * The orders a raise made: change orders for the product Polar billed it on, at
- * its count of places, since it was asked for. Unreadable, none (logged).
+ * The ids of a subscription's newest orders, read just before a raise: the raise's own
+ * order is the one that wasn't among them (raiseOrders). Unreadable, null (logged).
  */
-async function raiseOrders(raised: models.Subscription, units: number, since: number) {
+async function orderIdsBefore(subscriptionId: string) {
+    try {
+        const orders = await polar().orders.list({
+            subscription_id: subscriptionId,
+            sorting: ['-created_at'],
+            limit: RAISE_ORDERS_READ,
+        });
+        return new Set(orders.items.map((order) => order.id));
+    } catch (error) {
+        log.warn({
+            message: 'Group orders could not be read before a raise',
+            billing: { status: statusOf(error) },
+        });
+        return null;
+    }
+}
+
+/*
+ * The orders a raise made: change orders for the product Polar billed it on that
+ * weren't there just before it was asked for (`before`). Not told by places or time:
+ * Polar leaves a change order's `units` null (sandbox, 2026-11-04), and a raise a moment
+ * earlier made a change order of its own. Unreadable, null.
+ */
+async function raiseOrders(raised: models.Subscription, before: Set<string>) {
     try {
         const orders = (
             await polar().orders.list({
                 subscription_id: raised.id,
                 product_id: raised.product_id,
                 sorting: ['-created_at'],
-                limit: 10,
+                limit: RAISE_ORDERS_READ,
             })
         ).items;
-        return orders
-            .filter(
-                (order) =>
-                    order.billing_reason === 'subscription_update' &&
-                    order.product_id === raised.product_id &&
-                    order.units === units &&
-                    Date.parse(order.created_at) >= since - 60_000,
-            )
-            .map((order) => order.id);
+        return orders.filter(
+            (order) =>
+                !before.has(order.id) &&
+                order.billing_reason === 'subscription_update' &&
+                order.product_id === raised.product_id,
+        );
     } catch (error) {
         log.warn({
-            message: 'A raise’s orders could not be read to set them aside',
+            message: 'A raise’s orders could not be read',
             billing: { status: statusOf(error) },
         });
-        return [];
+        return null;
     }
 }
 
@@ -2761,7 +2787,9 @@ async function raisePlaces(
     const row = await billingRepository.getLiveGroupSubscription(groupId);
     if (row && subscription.product_id !== paidTier(row).productId)
         return { status: 'upgrade-waiting', url: null };
-    const startedAt = Date.now();
+    // What the raise's own order is told apart from. Unreadable, nothing can show the raise
+    // paid: it still goes to Polar, and the payer is sent to the portal.
+    const before = await orderIdsBefore(subscription.id);
     let raised: models.Subscription;
     try {
         raised = await polar().subscriptions.update(subscription.id, {
@@ -2780,9 +2808,15 @@ async function raisePlaces(
             message: 'A raise was billed on another product than it was asked on; not credited',
             billing: { group: groupId, asked: subscription.product_id, billed: raised.product_id },
         });
+        const orders = before ? await raiseOrders(raised, before) : null;
+        if (!orders)
+            log.error({
+                message: 'A raise billed on another product: its order could not be set aside',
+                billing: { group: groupId, subscription: raised.id },
+            });
         await billingRepository.addUncreditedOrders(
             live.id,
-            await raiseOrders(raised, target, startedAt),
+            (orders ?? []).map((order) => order.id),
         );
         await applyChanged(groupId, raised, false, answeredAt);
         await reconcileGroup(groupId);
@@ -2792,13 +2826,19 @@ async function raisePlaces(
     // now, so the cut is not put back, or they would pay for places they could not fill.
     // A scheduled tier move survives it (T1); restorePending below only checks.
     if (cut !== null) await billingRepository.setIntendedUnits(live.id, null);
-    // Paid only when Polar shows no order waiting; one that cannot be read is not paid yet. Polar
-    // charges the raise's order just after answering, so it is given a few seconds to settle
-    // before the payer is sent to their bank.
-    const paid = await settled(async () => {
-        const { unpaid } = await orderState(subscription.id);
-        return unpaid === null ? null : !unpaid;
-    });
+    // Paid only once the raise's own order is there and paid, and no other order waits: no
+    // order yet is not a paid one. Orders that cannot be read are not paid either. Polar makes
+    // and charges the raise's order just after answering, so it is given a few seconds to
+    // settle before the payer is sent to their bank.
+    const paid =
+        before !== null &&
+        (await settled(async () => {
+            const own = await raiseOrders(raised, before);
+            if (own === null) return null;
+            if (!own.length || !own.every((order) => order.paid)) return false;
+            const { unpaid } = await orderState(subscription.id);
+            return unpaid === null ? null : !unpaid;
+        }));
     await applyChanged(groupId, raised, paid, answeredAt);
     // Polar keeps a scheduled move through a raise; were it lost, it is asked for again.
     await restorePending(groupId);
