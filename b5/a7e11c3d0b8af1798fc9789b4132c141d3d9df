@@ -1,0 +1,23 @@
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_43658f3fdc1dc4 2912-2965
+packages/db/src/growth.test.ts
+  s_566b8e0c4467a4::t_f17a00e3e538f5 1,223-258
+packages/db/src/growth.ts
+  s_566b8e0c4467a4::t_6d47c1e8d3eefc 3,459-481
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b5a7e11c3d0b8af1798fc9789b4132c141d3d9df",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
