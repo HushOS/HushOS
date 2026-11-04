@@ -1,0 +1,29 @@
+DESIGN.md
+  s_566b8e0c4467a4::t_54d29330ae951d 537-541
+apps/web/src/components/family-scenes/check-scene.tsx
+  s_566b8e0c4467a4::t_b100a20ac48646 191-195
+apps/web/src/components/family-scenes/create-scene.tsx
+  s_566b8e0c4467a4::t_a3bef0f57b4642 21-23,38,45,48,133-143,147,193,234
+apps/web/src/components/family-scenes/faux.tsx
+  s_566b8e0c4467a4::t_b6f6071882a25e 392,397-398,403-406,410-417
+apps/web/src/components/family-scenes/invite-scene.tsx
+  s_566b8e0c4467a4::t_4cabb74e02cf50 122-126
+apps/web/src/routes/index.tsx
+  s_566b8e0c4467a4::t_bd007c2fe244db 307-311,317,320,327-338
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8669b0245ae7f91455617f3d304cfc819960f3b1",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
