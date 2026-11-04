@@ -1,0 +1,33 @@
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_cd8c4e17606d3a 212,586
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_c4421a9f9f283b 6814,6826-6837
+packages/db/drizzle/20261104092000_affiliate_withdrawn_orders/migration.sql
+  s_566b8e0c4467a4::t_10efdb34edfa16 1-7
+packages/db/drizzle/20261104092000_affiliate_withdrawn_orders/snapshot.json
+  s_566b8e0c4467a4::t_9d99636aef9090 1-76
+packages/db/src/growth.test.ts
+  s_566b8e0c4467a4::t_82ead2f2390672 282-318
+packages/db/src/growth.ts
+  s_566b8e0c4467a4::t_b9055a0f3f5bec 6,445-453,456-458,470-490,495-498,501-520
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_c7792a5048649a 14
+packages/db/src/schema/growth.ts
+  s_566b8e0c4467a4::t_41c06479e0dd76 147-156
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "15d21883f460d55b471d442e04a1a465a5f8560e",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
