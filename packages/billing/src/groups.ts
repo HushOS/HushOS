@@ -2745,10 +2745,12 @@ async function orderIdsBefore(subscriptionId: string) {
  */
 async function raiseOrders(raised: models.Subscription, before: Set<string>) {
     try {
+        // The same window as orderIdsBefore (the plan's newest, every product): only orders
+        // made since can be in it and not in `before`. Scoped to the product, it would reach
+        // back past `before` to that product's older orders.
         const orders = (
             await polar().orders.list({
                 subscription_id: raised.id,
-                product_id: raised.product_id,
                 sorting: ['-created_at'],
                 limit: RAISE_ORDERS_READ,
             })
@@ -2839,10 +2841,44 @@ async function raisePlaces(
             const { unpaid } = await orderState(subscription.id);
             return unpaid === null ? null : !unpaid;
         }));
-    await applyChanged(groupId, raised, paid, answeredAt);
+    // Paid after the wait, Polar is read again and written as it is now: a reconcile that
+    // committed during the wait (a delivery, the order still pending) holds a newer reading
+    // than Polar's answer, which would be dropped as stale and leave the places shut.
+    if (paid) await writeRaisePaid(groupId, raised, answeredAt);
+    else await applyChanged(groupId, raised, false, answeredAt);
     // Polar keeps a scheduled move through a raise; were it lost, it is asked for again.
     await restorePending(groupId);
     return paid ? { status: 'ok' } : { status: 'confirm', url: null };
+}
+
+/*
+ * A raise whose order is paid, written from a fresh read of the plan, its places paid only
+ * while Polar still holds the count and product it was answered with. A read that fails
+ * writes Polar's answer to the raise (`answeredAt`) instead.
+ */
+async function writeRaisePaid(
+    groupId: string,
+    raised: models.Subscription,
+    answeredAt: billingRepository.ReadingStamp,
+) {
+    const readAt = await billingRepository.readingStamp();
+    let now: models.Subscription;
+    try {
+        now = await polar().subscriptions.get(raised.id);
+    } catch (error) {
+        log.warn({
+            message: 'A paid raise’s plan could not be read again; writing Polar’s answer',
+            billing: { group: groupId, status: statusOf(error) },
+        });
+        await applyChanged(groupId, raised, true, answeredAt);
+        return;
+    }
+    await applyChanged(
+        groupId,
+        now,
+        now.units === raised.units && now.product_id === raised.product_id,
+        readAt,
+    );
 }
 
 /*
@@ -3154,19 +3190,18 @@ export async function changeGroupPlan(
                 await billingRepository.setIntendedProduct(live.id, null);
                 // The places are unchanged (their paid count stays); the tier from Polar's orders. Polar has
                 // changed the product: a write that fails here is put right from Polar at once.
-                const write = async () => {
-                    try {
-                        return await applyChanged(groupId, changed, false, changedAt);
-                    } catch (error) {
-                        log.warn({
-                            message: 'Upgrade not written after Polar took it; reconciling',
-                            billing: { group: groupId, failure: String((error as Error)?.name) },
-                        });
-                        await reconcileGroup(groupId);
-                        return (await billingRepository.getLiveGroupSubscription(groupId)) !== null;
-                    }
-                };
-                if (!(await write())) throw unresolvedPlan();
+                let applied: boolean;
+                try {
+                    applied = await applyChanged(groupId, changed, false, changedAt);
+                } catch (error) {
+                    log.warn({
+                        message: 'Upgrade not written after Polar took it; reconciling',
+                        billing: { group: groupId, failure: String((error as Error)?.name) },
+                    });
+                    await reconcileGroup(groupId);
+                    applied = (await billingRepository.getLiveGroupSubscription(groupId)) !== null;
+                }
+                if (!applied) throw unresolvedPlan();
                 const paidNow = async () =>
                     (await billingRepository.getLiveGroupSubscription(groupId))?.paidProductId ===
                     target.id;
@@ -3180,7 +3215,10 @@ export async function changeGroupPlan(
                         return tier.known ? tier.paidTier?.productId === target.id : null;
                     }))
                 ) {
-                    await write();
+                    // Read again and written from Polar as it is now, not from `changed`: a
+                    // reconcile that committed during the wait holds a newer reading, and the
+                    // change's own answer would be dropped as stale.
+                    await writeAsPolarHolds(groupId, held.id);
                     paid = await paidNow();
                 }
                 log.info({

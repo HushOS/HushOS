@@ -1524,7 +1524,10 @@ function AddPlacesDialog({
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
     const [declined, setDeclined] = useState(false);
+    // Card and invoices opening: kept here, so closing the dialog (which takes the button with
+    // it) or coming back to the page from Polar's never leaves the retry disabled.
     const [opening, setOpening] = useState(false);
+    usePageRestored(() => setOpening(false));
     const [sent, setSent] = useState<Sent<number> | null>(null);
     const confirmUrl = sent?.url ?? null;
     const standing = sent?.url ? raiseStanding(props.summary, sent) : null;
@@ -1540,6 +1543,7 @@ function AddPlacesDialog({
         onOpenChange(false);
         setError('');
         setDeclined(false);
+        setOpening(false);
         setSent(null);
         setCount(1);
     }
@@ -1709,7 +1713,10 @@ function ChangePlanDialog({
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
     const [declined, setDeclined] = useState(false);
+    // Card and invoices opening: kept here, so closing the dialog (which takes the button with
+    // it) or coming back to the page from Polar's never leaves the retry disabled.
     const [opening, setOpening] = useState(false);
+    usePageRestored(() => setOpening(false));
     const [sent, setSent] = useState<Sent<string> | null>(null);
     const confirmUrl = sent?.url ?? null;
     const standing = sent?.url ? upgradeStanding(props.summary, sent) : null;
@@ -1725,6 +1732,7 @@ function ChangePlanDialog({
         onOpenChange(false);
         setError('');
         setDeclined(false);
+        setOpening(false);
         setSent(null);
         setChoice(null);
     }

@@ -448,6 +448,16 @@ function notFound() {
     return error;
 }
 
+/* Orders as Polar lists them: sorted newest first and cut to `limit` when asked to be. */
+function newestFirst<T extends { created_at: string }>(
+    query: { sorting?: string[]; limit?: number },
+    orders: T[],
+) {
+    if (!query.sorting?.includes('-created_at')) return orders;
+    const sorted = [...orders].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+    return query.limit ? sorted.slice(0, query.limit) : sorted;
+}
+
 /* An order Polar charges a moment after answering for it (chargeSettlesInMs; Infinity, never). */
 function chargeLater(order: { status: string; due_amount: number }) {
     if (!Number.isFinite(polar.chargeSettlesInMs)) return;
@@ -628,6 +638,8 @@ const fakeClient = {
             status?: string | string[];
             product_id?: string;
             created_after?: string;
+            sorting?: string[];
+            limit?: number;
         }) {
             polar.calls.push(
                 `orders.list:${query.subscription_id ?? `customer:${query.external_customer_id}`}`,
@@ -649,30 +661,34 @@ const fakeClient = {
                   )
                 : null;
             return {
-                // Listed in no particular order: HushOS must sort.
-                items: [...polar.checkoutOrders, ...polar.orders]
-                    .filter(
-                        (order) =>
-                            !order.hidden &&
-                            (ofCustomer
-                                ? ofCustomer.has(order.subscription_id)
-                                : order.subscription_id === query.subscription_id) &&
-                            (!query.status || [query.status].flat().includes(order.status)) &&
-                            // `created_after` is taken loosely here: HushOS checks dates itself.
-                            (!query.product_id || order.product_id === query.product_id),
-                    )
-                    // As Polar keeps them: a refunded order stays paid, with its refunds counted;
-                    // one refunded whole is marked so. `net_amount` is what it charged.
-                    .map((order) => ({
-                        billing_reason: 'subscription_update',
-                        refunded_amount: 0,
-                        net_amount: order.status === 'pending' ? order.due_amount : 1000,
-                        // Polar adds sales tax on top of net; HushOS must never refund it.
-                        tax_amount: order.status === 'pending' ? 0 : 180,
-                        currency: 'usd',
-                        ...order,
-                        paid: ['paid', 'partially_refunded', 'refunded'].includes(order.status),
-                    })),
+                // Listed in no particular order unless sorted; a sorted page is Polar's window:
+                // the newest `limit` of them.
+                items: newestFirst(
+                    query,
+                    [...polar.checkoutOrders, ...polar.orders]
+                        .filter(
+                            (order) =>
+                                !order.hidden &&
+                                (ofCustomer
+                                    ? ofCustomer.has(order.subscription_id)
+                                    : order.subscription_id === query.subscription_id) &&
+                                (!query.status || [query.status].flat().includes(order.status)) &&
+                                // `created_after` is taken loosely here: HushOS checks dates itself.
+                                (!query.product_id || order.product_id === query.product_id),
+                        )
+                        // As Polar keeps them: a refunded order stays paid, with its refunds counted;
+                        // one refunded whole is marked so. `net_amount` is what it charged.
+                        .map((order) => ({
+                            billing_reason: 'subscription_update',
+                            refunded_amount: 0,
+                            net_amount: order.status === 'pending' ? order.due_amount : 1000,
+                            // Polar adds sales tax on top of net; HushOS must never refund it.
+                            tax_amount: order.status === 'pending' ? 0 : 180,
+                            currency: 'usd',
+                            ...order,
+                            paid: ['paid', 'partially_refunded', 'refunded'].includes(order.status),
+                        })),
+                ),
                 pagination: { total_count: 0, max_page: 1 },
             };
         },
@@ -4062,6 +4078,65 @@ describe('unpaid places', () => {
         polar.orders.at(-1)!.status = 'paid';
         await billing.reconcileGroup(groupId);
         expect(await seatLimit(groupId)).toBe(8);
+    });
+
+    test(
+        'a raise paid during the wait opens its places even after a sync wrote it pending meanwhile',
+        {
+            timeout: 30_000,
+        },
+        async () => {
+            billing.setSettleDelays(undefined);
+            const { payer, groupId, subscription } = await familyOnPlan({ units: 6, members: 5 });
+            polar.chargeSettlesInMs = 3000;
+            const raising = billing.setGroupUnits(payer, groupId, 8, 6);
+            // Polar has the raise; a delivery's sync lands while its order still waits, and is
+            // written with a newer reading than Polar's answer to the raise.
+            await vi.waitFor(() => expect(subscription.units).toBe(8));
+            await billing.reconcileGroup(groupId);
+            expect(await seatLimit(groupId)).toBe(6);
+            const added = await raising;
+            expect(added).not.toHaveProperty('confirmPayment');
+            expect(await seatLimit(groupId)).toBe(8);
+            expect(
+                (await priced(billing.getGroupBilling(payer, groupId))).subscription,
+            ).toMatchObject({
+                units: 8,
+                paidUnits: 8,
+            });
+        },
+    );
+
+    test('a raise on a tier the family had before is told apart from that tier’s old orders', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({
+            product: PRO_FAMILY,
+            units: 4,
+        });
+        // Long ago a change order on Family Pro was voided; since, twenty orders on Family Plus,
+        // so it is past the plan's newest twenty, though among Family Pro's own.
+        polar.orders.push({
+            id: 'order_void_pro',
+            subscription_id: subscription.id,
+            status: 'void',
+            due_amount: 0,
+            created_at: new Date(Date.now() - 400 * DAY).toISOString(),
+            product_id: PRO_FAMILY,
+            billing_reason: 'subscription_update',
+            units: null,
+        });
+        for (let index = 0; index < 20; index++)
+            polar.orders.push({
+                id: `order_plus_${index}`,
+                subscription_id: subscription.id,
+                status: 'paid',
+                due_amount: 0,
+                created_at: new Date(Date.now() - (390 - index * 15) * DAY).toISOString(),
+                product_id: PLUS,
+                billing_reason: 'subscription_cycle',
+            });
+        const added = await billing.setGroupUnits(payer, groupId, 6, 4);
+        expect(added).not.toHaveProperty('confirmPayment');
+        expect(await seatLimit(groupId)).toBe(6);
     });
 
     test('a raise whose order is still not made when the wait ends goes to the bank', async () => {
@@ -9052,6 +9127,28 @@ describe('family tiers', () => {
             });
             expect(performance.now() - started).toBeLessThan(10_000);
             expect(await pool(groupId)).toBe(PLUS_POOL);
+        },
+    );
+
+    test(
+        'an upgrade paid during the wait starts now even after a sync wrote it pending meanwhile',
+        {
+            timeout: 30_000,
+        },
+        async () => {
+            billing.setSettleDelays(undefined);
+            const { payer, groupId, subscription } = await familyOnPlan({ product: PLUS });
+            polar.chargeSettlesInMs = 3000;
+            const changing = billing.changeGroupPlan(payer, groupId, MAX_FAMILY);
+            // Polar has the change; a delivery's sync lands while its order still waits, and is
+            // written with a newer reading than Polar's answer to the change.
+            await vi.waitFor(() => expect(subscription.product_id).toBe(MAX_FAMILY));
+            await billing.reconcileGroup(groupId);
+            expect((await live(groupId))?.paidProductId).toBe(PLUS);
+            const result = await changing;
+            expect(result).not.toHaveProperty('confirmPayment');
+            expect(await live(groupId)).toMatchObject({ paidProductId: MAX_FAMILY });
+            expect(await pool(groupId)).toBe(MAX_POOL);
         },
     );
 
