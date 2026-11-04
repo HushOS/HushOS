@@ -119,7 +119,11 @@ export function InviteScene() {
                                         </span>
                                     </span>
                                 </Dialog>
-                                <Toast show={s.joined} title={`Sam is in ${FAMILY}`} />
+                                <Toast
+                                    compact={compact}
+                                    show={s.joined}
+                                    title={`Sam is in ${FAMILY}`}
+                                />
                             </>
                         }
                     >

@@ -304,24 +304,39 @@ function LandingPage() {
                     </div>
                 </section>
 
-                {/* The phone apps, only where this server names their store listings (StoreLinks). */}
+                {/*
+                 * The phone apps, only where this server names their store listings (StoreLinks): the
+                 * words and the links in one column, and the Android app's own Home beside them, cut
+                 * off where the band below begins, so the phone stands on it.
+                 */}
                 {playStoreUrl && (
                     <section
                         aria-labelledby="apps-title"
                         className={cn(
                             container,
-                            'grid items-center gap-6 pb-14 lg:grid-cols-[5fr_7fr] lg:gap-16 lg:pb-24',
+                            'grid gap-10 lg:grid-cols-[6fr_5fr] lg:items-end lg:gap-16',
                         )}
                     >
-                        <div className="flex flex-col gap-3">
+                        <div className="flex flex-col gap-4 lg:self-center lg:pb-16">
                             <H2 id="apps-title">On your phone, too.</H2>
                             <p className="max-w-[29.2em] text-[17px] leading-[1.6] text-muted-foreground">
                                 The Android app is on Google Play, with the same folders, sharing
                                 and links, and files kept on the phone to open without a connection.
                                 The iPhone app is coming to the App Store.
                             </p>
+                            <StoreLinks className="pt-2" />
                         </div>
-                        <StoreLinks className="lg:justify-end" />
+                        <div className="flex h-72 justify-center overflow-hidden px-6 pt-2 sm:h-80 lg:h-[23rem]">
+                            <Shot
+                                name="android-home"
+                                width={896}
+                                height={1995}
+                                sizes="(min-width: 64rem) 17rem, 15rem"
+                                alt="The Android app’s Home: search, the files kept on this phone, and recent folders and files with their tags."
+                                className="block w-60 shrink-0 self-start overflow-hidden rounded-t-[28px] border border-b-0 border-rule shadow-lg lg:w-68"
+                                imageClassName="block h-auto w-full"
+                            />
+                        </div>
                     </section>
                 )}
 

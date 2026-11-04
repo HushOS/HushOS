@@ -389,19 +389,32 @@ export function Toast({
     show,
     title,
     description,
+    compact = false,
 }: {
     show: boolean;
     title: string;
     description?: string;
+    /* The phone column's: the width of the window, its line a size down so it stays one line. */
+    compact?: boolean;
 }) {
     return (
         <span
             className={cn(
-                'absolute right-4 bottom-4 flex max-w-[calc(100%-2rem)] flex-col gap-0.5 rounded-xl bg-snackbar px-4 py-3 text-on-snackbar shadow-overlay transition-[opacity,translate] duration-300 ease-out-expo',
+                'absolute flex flex-col gap-0.5 rounded-xl bg-snackbar py-3 text-on-snackbar shadow-overlay transition-[opacity,translate] duration-300 ease-out-expo',
+                compact
+                    ? 'inset-x-2.5 bottom-2.5 px-3.5'
+                    : 'right-4 bottom-4 max-w-[calc(100%-2rem)] px-4',
                 show ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0',
             )}
         >
-            <span className="text-sm font-semibold text-pretty">{title}</span>
+            <span
+                className={cn(
+                    'font-semibold',
+                    compact ? 'text-[13px] whitespace-nowrap' : 'text-sm text-pretty',
+                )}
+            >
+                {title}
+            </span>
             {description && <span className="text-[13px] opacity-80">{description}</span>}
         </span>
     );

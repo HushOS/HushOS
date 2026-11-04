@@ -18,8 +18,9 @@ import {
 import { Scene } from './scene';
 
 /*
- * Creating a family and choosing its plan. Beats: Create a family opens its dialog, the name is
- * typed, Create family makes it; the family's page asks for a plan first, Family Pro is chosen,
+ * Creating a family and choosing its plan. It opens on Create a family's dialog, already open over
+ * the Family page (a page that is mostly empty until there is a family); the name is typed, Create
+ * family makes it; the family's page asks for a plan first, Family Pro is chosen,
  * and back from Polar's checkout the plan is on. The payoff (the poster) is the family's page with
  * its plan, and the toast that says so. Polar's own page is left out: it is someone else's.
  */
@@ -34,20 +35,17 @@ type S = {
 };
 
 const initial: S = {
-    dialog: false,
+    dialog: true,
     name: '',
     focus: false,
     created: false,
     paying: false,
     paid: false,
 };
-const poster: S = { ...initial, name: FAMILY, created: true, paid: true };
+const poster: S = { ...initial, dialog: false, name: FAMILY, created: true, paid: true };
 
 async function script(a: Act<S>) {
-    await a.wait(700);
-    await a.click({ at: 'create', x: 0.5, y: 0.55 });
-    await a.set({ dialog: true });
-    await a.wait(500);
+    await a.wait(900);
     await a.click({ at: 'name', x: 0.3, y: 0.5 });
     await a.set({ focus: true });
     await a.type('name', FAMILY, { interval: 60 });
@@ -132,10 +130,21 @@ function ChoosePlan({ compact }: { compact: boolean }) {
     );
 }
 
+/* What the server learns from a family, at the foot of the families pages, as the app says it. */
+function ServerKnows() {
+    return (
+        <span className="mt-auto px-6 pb-5 text-[13px] leading-snug text-muted-foreground">
+            HushOS’s server knows the family’s name, who is in it and what each person can do, who
+            invited and let in whom, and how many family folders there are and roughly how big. It
+            can’t open family folders.
+        </span>
+    );
+}
+
 export function CreateFamilyScene() {
     return (
         <Scene<S>
-            label={`Creating a family on its page in HushOS. Create a family opens a dialog, the name ${FAMILY} is typed and the family is made. Its page then asks for a plan before anyone can be invited: Family Plus, 800 GB for $10 a month; Family Pro, 2 TB for $20; Family Max, 4 TB for $30. Choosing Family Pro and paying ends on the family's page with its plan: “Payment received. Family Pro (monthly) is on”.`}
+            label={`Creating a family in HushOS. In the Create a family dialog, the name ${FAMILY} is typed and the family is made. Its page then asks for a plan before anyone can be invited: Family Plus, 800 GB for $10 a month; Family Pro, 2 TB for $20; Family Max, 4 TB for $30. Choosing Family Pro and paying ends on the family's page with its plan: “Payment received. Family Pro (monthly) is on”.`}
             height={430}
             compact={{ height: 520 }}
             initial={initial}
@@ -181,6 +190,7 @@ export function CreateFamilyScene() {
                                     </span>
                                 </Dialog>
                                 <Toast
+                                    compact={compact}
                                     show={s.paid}
                                     title="Payment received. Family Pro (monthly) is on"
                                     description="You can invite people now."
@@ -221,6 +231,7 @@ export function CreateFamilyScene() {
                                     No invitations right now.
                                 </span>
                             </Section>
+                            <ServerKnows />
                         </span>
 
                         {/* The family's page: the plan first, then, once it's on, its members. */}

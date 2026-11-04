@@ -188,7 +188,11 @@ export function CheckScene() {
                                         className="top-[92px] right-5 w-[236px]"
                                     />
                                 )}
-                                <Toast show={s.matched} title="You and Sam checked each other" />
+                                <Toast
+                                    compact={compact}
+                                    show={s.matched}
+                                    title="You and Sam checked each other"
+                                />
                             </>
                         }
                     >
