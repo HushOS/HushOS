@@ -24,8 +24,8 @@ import { currencyLabel, pickCurrency } from '@/lib/currency';
 import { authError } from '@/lib/form';
 import { usePageRestored } from '@/lib/page-restore';
 import { faqFor } from '@/lib/pricing-faq';
-import { activeFamily, familiesQueryOptions } from '@/lib/families-shell';
-import { rememberReturn } from '@/lib/return-to';
+import { familiesQueryOptions } from '@/lib/families-shell';
+import { familyStanding } from '@/lib/family-signup';
 import { sessionQueryOptions } from '@/lib/session';
 import {
     billingQueryOptions,
@@ -673,46 +673,59 @@ function Business() {
 }
 
 /*
- * The family section's button. Create a family is offered only to someone in no family (one
- * per account), and leads to Plans (/app/billing), where the family tiers sit beside the
- * personal plans, each creating a family and going to its checkout
- * (docs/families-shared-pool.md 7.4); signed out, it signs up first and lands there. Someone
- * already in a family opens theirs instead.
- * Nothing shows until that is known, so the button never offers what the server would refuse;
- * if the families can't be read, it opens /app/family, which shows whichever is true. A
- * session cookie that turns out to have expired (no account behind it) is treated as signed out.
+ * Where the visitor stands with families, for the family section's buttons: signed out (a
+ * session cookie with no account behind it counts), in no family, in one, waiting to join one
+ * (familyStanding), or unknown (the families can't be read). Null until that is known, so
+ * nothing shows that the server would refuse or that would make a second family.
  */
-function FamilyAction({ hasSession }: { hasSession: boolean }) {
+type PricingStanding =
+    | { kind: 'signed-out' }
+    | { kind: 'none' }
+    | { kind: 'in'; name: string }
+    | { kind: 'waiting'; name: string; groupId: string }
+    | { kind: 'unknown' };
+
+function usePricingStanding(hasSession: boolean): PricingStanding | null {
     const session = useQuery({ ...sessionQueryOptions, enabled: hasSession });
     const userId = session.data?.id;
     const families = useQuery({ ...familiesQueryOptions(userId ?? ''), enabled: Boolean(userId) });
-    const className = buttonVariants({ size: 'lg', className: 'w-full shrink-0 lg:w-fit' });
-    const signedOut = !hasSession || (session.isSuccess && !session.data);
-    if (signedOut)
-        return (
-            <Link
-                to="/register"
-                onClick={() => rememberReturn('/app/billing')}
-                className={className}
-            >
-                Create a family
-            </Link>
-        );
-    if (session.isError || families.isError)
-        return (
-            <Link to="/app/family" className={className}>
-                Family
-            </Link>
-        );
+    if (!hasSession || (session.isSuccess && !session.data)) return { kind: 'signed-out' };
+    if (session.isError || families.isError) return { kind: 'unknown' };
     if (!userId || families.isPending) return null;
-    const yours = activeFamily(families.data);
-    return yours ? (
-        <Link to="/app/family" className={className}>
-            Open {yours.name}
+    const standing = familyStanding(families.data);
+    if (standing.kind === 'in') return { kind: 'in', name: standing.family.name };
+    if (standing.kind === 'waiting')
+        return { kind: 'waiting', name: standing.family.name, groupId: standing.family.id };
+    return { kind: 'none' };
+}
+
+/*
+ * A family tier's button, as a personal plan's (docs/families-shared-pool.md 7.4). Signed out,
+ * it signs up with the tier as the plan: sign-up says what it is, and the first visit after it
+ * opens Create a family with it. Signed in and in no family, it opens Create a family with it,
+ * priced as shown here. Outline: the recommended personal plan has the page's blue button.
+ */
+function FamilyTierAction({ offer, signedOut }: { offer: FamilyOffer; signedOut: boolean }) {
+    const className = buttonVariants({
+        variant: 'outline',
+        size: 'lg',
+        className: 'mt-auto w-full',
+    });
+    return signedOut ? (
+        <Link
+            to="/register"
+            search={{ plan: offer.plan.id, currency: offer.currency }}
+            className={className}
+        >
+            Start with {offer.name}
         </Link>
     ) : (
-        <Link to="/app/billing" className={className}>
-            Create a family
+        <Link
+            to="/app/family"
+            search={{ create: offer.plan.id, currency: offer.currency }}
+            className={className}
+        >
+            Choose {offer.name}
         </Link>
     );
 }
@@ -720,6 +733,26 @@ function FamilyAction({ hasSession }: { hasSession: boolean }) {
 function FamilySection({ offers, hasSession }: { offers: FamilyOffer[]; hasSession: boolean }) {
     // The same on every tier (a tier change keeps the family's places), as the questions say too.
     const { includedMembers, maxMembers } = offers[0]!.plan;
+    const standing = usePricingStanding(hasSession);
+    // Each tier has its own button for someone who can make a family. Someone in one, or waiting
+    // to join one, is offered that family instead, once; where the families can't be read, the
+    // family page says which.
+    const buying = standing?.kind === 'signed-out' || standing?.kind === 'none';
+    const sectionClass = buttonVariants({ size: 'lg', className: 'w-full shrink-0 lg:w-fit' });
+    const sectionAction =
+        standing?.kind === 'waiting' ? (
+            <Link
+                to="/app/families/$groupId/join"
+                params={{ groupId: standing.groupId }}
+                className={sectionClass}
+            >
+                Continue joining {standing.name}
+            </Link>
+        ) : standing?.kind === 'in' || standing?.kind === 'unknown' ? (
+            <Link to="/app/family" className={sectionClass}>
+                {standing.kind === 'in' ? `Open ${standing.name}` : 'Family'}
+            </Link>
+        ) : null;
     return (
         <section
             aria-labelledby="family-plan"
@@ -730,7 +763,7 @@ function FamilySection({ offers, hasSession }: { offers: FamilyOffer[]; hasSessi
                 <h2 id="family-plan" className="text-[17px] font-bold">
                     Family
                 </h2>
-                {/* The button sits level with the headline's first line on a wide screen, under the words on a phone. */}
+                {/* A button here sits level with the headline's first line on a wide screen, under the words on a phone. */}
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-10">
                     <div className="flex flex-col gap-3">
                         <p className="text-[28px] leading-tight font-extrabold tracking-[-0.025em] text-balance sm:text-[32px]">
@@ -741,7 +774,7 @@ function FamilySection({ offers, hasSession }: { offers: FamilyOffer[]; hasSessi
                             the family folders. {FAMILY_POOL_LINE}
                         </p>
                     </div>
-                    <FamilyAction hasSession={hasSession} />
+                    {sectionAction}
                 </div>
             </div>
             <ul className="grid gap-4 lg:grid-cols-3">
@@ -768,6 +801,12 @@ function FamilySection({ offers, hasSession }: { offers: FamilyOffer[]; hasSessi
                                 </span>
                             )}
                         </div>
+                        {buying && (
+                            <FamilyTierAction
+                                offer={offer}
+                                signedOut={standing?.kind === 'signed-out'}
+                            />
+                        )}
                     </li>
                 ))}
             </ul>

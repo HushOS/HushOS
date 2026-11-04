@@ -2085,7 +2085,10 @@ export async function startGroupCheckout(
     requireFamilyBilling();
     await familyOf(groupId, user.id, 'billing');
     const tiers = await getFamilyCatalogue();
-    const plan = tiers.find((candidate) => candidate.id === input.productId && !candidate.archived);
+    // A first plan (or one bought again) is one on sale: never a tier an operator has replaced
+    // since, nor the single plan from before the tiers while they're on sale. Pages offer only
+    // these; an old link or a crafted request must not buy what is no longer sold.
+    const plan = offeredFamilies(tiers).find((candidate) => candidate.id === input.productId);
     if (!plan) throw new BillingError('That plan is not available.', 404);
     if (input.currency !== undefined && !(input.currency in plan.prices))
         throw new BillingError('That plan is not priced in that currency.', 400);
@@ -2319,6 +2322,10 @@ async function openGroupCheckout(input: {
         await reconcileGroup(groupId);
         throw new BillingError('This family already has a plan.', 409);
     }
+    // A code they signed up with, or a creator they came through, applies as it would to a
+    // personal plan (the payer's); the intent is then used, as a personal checkout uses it.
+    const { discountFor } = await import('./server');
+    const discountId = await discountFor(user.id, plan.id);
     await renew();
     let checkout: Awaited<ReturnType<ReturnType<typeof polar>['checkouts']['create']>>;
     try {
@@ -2334,12 +2341,16 @@ async function openGroupCheckout(input: {
             success_url: `${familyPage()}?checkout_id={CHECKOUT_ID}`,
             return_url: familyPage(),
             allow_trial: false,
+            discount_id: discountId,
             allow_discount_codes: true,
-            metadata: { hushos_group_id: groupId },
+            // Who pays, as of this checkout: Polar copies it to the plan and every order of it, so a
+            // late order of this plan earns for this payer, whoever pays the family by then.
+            metadata: { hushos_group_id: groupId, hushos_payer: user.id },
         });
     } catch (error) {
         throw unavailable(error);
     }
+    await billingRepository.consumeIntent(user.id);
     const expires = Date.parse(checkout.expires_at ?? '');
     const recorded = await billingRepository.recordGroupCheckout({
         groupId,

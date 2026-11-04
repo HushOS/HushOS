@@ -20,7 +20,7 @@ export const bytea = customType<{ data: Buffer; driverData: Buffer }>({
     codec: 'bytea',
 });
 
-export type SignupIntent = { plan?: string; referral?: string; source?: string };
+export type SignupIntent = { plan?: string; referral?: string; source?: string; currency?: string };
 
 /*
  * Secrets the server minted for itself on first start and must keep for as long

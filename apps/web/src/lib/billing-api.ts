@@ -11,6 +11,7 @@ export const billingApi: BillingApi = {
     sync: () => unwrap(api().sync.post({})),
     cancel: (input) => unwrap(api().cancel.post(input)),
     resume: () => unwrap(api().resume.post({})),
+    forgetIntendedFamily: () => unwrap(api()['intended-family'].forget.post({})),
 };
 
 const group = (id: string) => api().groups({ id });

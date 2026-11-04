@@ -19,6 +19,22 @@ describe('a request the client gave up on', () => {
     });
 });
 
+describe('creating a family while waiting to join one', () => {
+    test('names the family they wait to join, never as one they’re already in', () => {
+        const waiting = new GroupApiError('', 409, 'in-family', {
+            reason: 'waiting',
+            family: { groupId: 'g1', name: 'Ortega family' },
+        });
+        expect(errorCopy(waiting)).toBe(
+            'You’re joining Ortega family already. Decline that invitation first, then you can create your own.',
+        );
+        const unnamed = new GroupApiError('', 409, 'in-family', { reason: 'waiting' });
+        expect(errorCopy(unnamed)).toBe(
+            'You’re joining a family already. Decline that invitation first, then you can create your own.',
+        );
+    });
+});
+
 describe('a payer’s leave or removal while a change to the plan is under way', () => {
     test('says to try again in a moment, not to reload', () => {
         const busy = new GroupApiError('Another change…', 409, 'busy', undefined);

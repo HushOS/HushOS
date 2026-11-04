@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { closeDatabase, createTestAccount, resetDatabase } from '../test/helpers';
@@ -217,6 +218,42 @@ describe('affiliates and earnings', () => {
         ).toEqual([]);
         expect(await db.select().from(users).where(eq(users.id, customer.userId))).toHaveLength(1);
         expect(await db.select().from(affiliateEarnings)).toEqual([]);
+    });
+
+    test('an order whose customer deleted their account since is still the affiliate’s, with nobody named', async () => {
+        const created = await affiliate();
+        const gone = randomUUID();
+        const row = await growth.recordEarning({
+            affiliateId: created.id,
+            orderId: 'order_gone',
+            userId: gone,
+            currency: 'usd',
+            netAmount: 2000,
+            commissionBps: 2500,
+        });
+        expect(row).toMatchObject({ orderId: 'order_gone', userId: null, commissionAmount: 500 });
+        // Replayed: recorded once.
+        expect(
+            await growth.recordEarning({
+                affiliateId: created.id,
+                orderId: 'order_gone',
+                userId: gone,
+                currency: 'usd',
+                netAmount: 2000,
+                commissionBps: 2500,
+            }),
+        ).toBeNull();
+        // An affiliate that is gone is still refused: only a missing customer is let through.
+        await expect(
+            growth.recordEarning({
+                affiliateId: randomUUID(),
+                orderId: 'order_no_affiliate',
+                userId: null,
+                currency: 'usd',
+                netAmount: 2000,
+                commissionBps: 2500,
+            }),
+        ).rejects.toThrow();
     });
 
     test('a commission is recorded once per order, rounded down, and paid out as a whole', async () => {

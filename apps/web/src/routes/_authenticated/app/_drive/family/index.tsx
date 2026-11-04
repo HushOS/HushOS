@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, useRouteContext } from '@tanstack/react-router';
 import { RotateCcwIcon } from 'lucide-react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { useDrive } from '@/components/drive/drive-shell';
@@ -13,7 +13,8 @@ import { errorCopy } from '@/lib/groups/copy';
 export const Route = createFileRoute('/_authenticated/app/_drive/family/')({
     head: () => ({ meta: [{ title: 'Family · HushOS' }] }),
     // Back from Polar's checkout: `checkout_id` says a plan is on its way. From Plans on a locked
-    // device: `create` is the family tier chosen there, priced in `currency`.
+    // device, from the pricing page, or after signing up for one: `create` is the family tier
+    // chosen there, priced in `currency`.
     validateSearch: (
         search: Record<string, unknown>,
     ): { checkout_id?: string; create?: string; currency?: string } => ({
@@ -33,6 +34,7 @@ export const Route = createFileRoute('/_authenticated/app/_drive/family/')({
  */
 function FamilyRoute() {
     const { userId } = useDrive();
+    const { user } = useRouteContext({ from: '/_authenticated' });
     const { checkout_id: checkoutId, create, currency } = Route.useSearch();
     const families = useQuery(familiesQueryOptions(userId));
     // Read here, never started: the Drive runtime runs it.
@@ -72,6 +74,7 @@ function FamilyRoute() {
             notices={notices}
             nameOf={(id) => list.find((at) => at.id === id)?.name}
             create={create ? { planId: create, currency } : undefined}
+            accountName={user.name}
         />
     );
 }
