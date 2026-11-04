@@ -1479,6 +1479,47 @@ extension OnFakeDrive {
         }
 
         /*
+         * A batch lists the top folder (for Docs' own row), then Docs (for a note in it), by which time
+         * another member moved the photo into Docs, so Docs' listing opens the photo's newer row; then
+         * the photo's own feed row, from before the move, replays the top folder's kept listing. The
+         * newer row stays: the photo is answered in Docs. Fails if a cached listing's older row
+         * replaces a newer one held.
+         */
+        @Test func aCachedListingNeverReplacesANewerRowHeld() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            _ = try await s.source.folders()
+            let f = s.family
+            let noteId = try newId(kind: .node, scopeId: f.workspaceId).id
+            let note = try FamilyFixture.node(id: noteId, in: f.workspaceId, parent: f.docs.id, parentKey: f.docsKey, key: randomBytes(length: 32), kind: .file,
+                                              name: "Note.txt", writer: f.creator, parentKeyEpoch: 2).with()
+            // Feed order: Docs (top folder's listing), then the note (Docs' listing), then the photo (the top folder's again).
+            s.server.put(f.docs, note, try #require(s.server.node(f.photo.id)).with().with())
+            let version = try #require(f.photo.currentVersion)
+            let moved = try FamilyFixture.node(id: f.photo.id, in: f.workspaceId, parent: f.docs.id, parentKey: f.docsKey, key: f.photoKey,
+                                               kind: .file, name: "Beach.jpg", writer: f.creator, keyEpoch: 3, parentKeyEpoch: 2)
+                .with(version: version).with(version: version).with(version: version).with(version: version)
+            let (server, docs) = (s.server, f.docs.id)
+            server.lock.withLock {
+                server.manage.beforeAnswer = { method, path in
+                    guard method == "GET", path == "/api/drive/nodes/\(docs)/children" else { return }
+                    server.lock.withLock { server.manage.beforeAnswer = nil }
+                    server.put(moved)
+                }
+            }
+            let changes = try #require(try await s.source.changes(since: FamilyAnchor(folders: [f.workspaceId: .init(root: f.rootId, cursor: 0)])))
+            let photo = try #require(changes.updated.last { $0.ref == f.photo.ref })
+            #expect(photo.node.parentId == f.docs.id, "a cached listing's older row replaced the newer one held")
+            #expect(await s.phone.vault.item(f.photo.ref)?.node.parentId == f.docs.id)
+
+            // Trashed since: answered deleted, and no longer held for a look-up to serve.
+            s.server.put(try #require(s.server.node(f.photo.id)).with(trashedAt: "2026-11-04T00:00:00.000Z"))
+            let trashed = try #require(try await s.source.changes(since: FamilyAnchor(folders: [f.workspaceId: .init(root: f.rootId, cursor: 0)])))
+            #expect(trashed.deleted.contains(FamilyFileIds.item(f.photo.ref)))
+            #expect(await s.phone.vault.item(f.photo.ref) == nil, "a trashed row stayed held")
+        }
+
+        /*
          * The same account signs in again in the app (a new token in the shared keychain) while the
          * extension's sync of the old session still runs: its late definite refusal, written at once
          * or left pending and written later, lets nothing of the new session's location go. Fails if

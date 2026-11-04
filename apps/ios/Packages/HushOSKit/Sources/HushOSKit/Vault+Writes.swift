@@ -978,8 +978,8 @@ extension Vault {
             switch change.kind {
             case "node":
                 guard let node = change.node, node.ref.workspaceId == workspaceId.lowercased() else { continue }
-                opened[node.ref] = nil
                 if node.trashedAt != nil {
+                    opened[node.ref] = nil
                     deleted.append(node.id)
                     continue
                 }
@@ -1004,8 +1004,10 @@ extension Vault {
                         // fails with its cursor where it was, and the node's newer row says where it is now.
                         throw FamilyFilesError.unavailable
                     }
-                    if let row = rows.opened[node.ref] {
-                        // Held again as the listing opened it (cleared above when an earlier change of the batch listed it).
+                    if let listed = rows.opened[node.ref] {
+                        // The newer of the listing's row and the row held now: a later listing of the batch (the folder it moved
+                        // to) may have opened a newer one since this listing was kept, which a replay never takes back.
+                        let row = opened[node.ref].map { listed.node.isOlder(than: $0.node) ? $0 : listed } ?? listed
                         opened[node.ref] = row
                         updated.append(row)
                     } else {
