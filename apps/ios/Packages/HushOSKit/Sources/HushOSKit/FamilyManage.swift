@@ -14,7 +14,9 @@ import HushOSCore
  * - Not-member from any step is the removal path (removedInTurn): published, and the family's
  *   kept calls go with the wipe.
  * - A second press while a call is unanswered sends that call again; nothing new is signed.
- * - Kept calls are judged per person: another person's kept call is left alone.
+ * - One staging gate for every roster call (`stageCall`, Android #281's): whatever is kept for the
+ *   family is sent first (what each came to kept until the screens say it, keptEnds), and nothing new
+ *   is staged while any is still unresolved, so a new roster never overtakes a kept call.
  * - Staging syncs the chain first and checks the head the server serves against it, and reads
  *   the newcomer's keys from route 16 again every time.
  * - A store that can't be read is never read as empty: nothing is signed or sent.
@@ -51,7 +53,19 @@ enum Staged {
     case call(StagedCall)
     case refused(String)
     case wiped
+    /* The manager rule: a promotion over keys this phone hasn't checked. */
+    case checkFirst
+    /* The core found nothing to change (`UNCHANGED`). */
+    case unchanged
+    /* An earlier change kept here is unresolved: nothing was staged (the gate). */
+    case waiting
 }
+
+/* A refusal a build met before anything was signed, in its words. */
+struct StageRefused: Error { let words: String }
+
+/* A promotion whose person isn't verified on this phone now (guard included): their words first. */
+struct CheckFirstNeeded: Error {}
 
 public enum ManageWords {
     public static let keptOnDevice = "Kept on this device."
@@ -66,6 +80,12 @@ public enum ManageWords {
 
     static func keepsChanging(_ family: String) -> String { "\(family) keeps changing. Try again in a moment." }
     static func couldntCheck(_ family: String) -> String { "Couldn’t check \(family). Try again." }
+    /* The gate's words (Android #281's): an earlier change of this phone's is still unresolved. */
+    public static func earlierWaiting(_ family: String) -> String { "An earlier change to \(family) hasn’t reached the server yet. Try again once it has." }
+    /* The core's and the web's words (roster_calls.rs). */
+    static let checkManagerFirst = "Check it’s them first. Managers are checked before they get the role."
+    static let unchanged = "That doesn’t change their roles."
+    static let organizerFirst = "Make someone else the organizer first."
     public static func notWaiting(_ first: String?) -> String {
         first.map { "\($0) isn’t waiting to join any more." } ?? "They aren’t waiting to join any more."
     }
@@ -87,10 +107,12 @@ public enum ManageWords {
      * words; an admission another change overtook (nothing of it was made: they're let in again,
      * Android #276's words); nil for one that landed. `name`: a person's first name, if known.
      */
-    public static func resumed(_ end: CallEnd, route: ChainRoute?, name: (String) -> String?) -> String? {
+    public static func resumed(_ end: CallEnd, route: ChainRoute?, family: String = "The family", name: (String) -> String?) -> String? {
         switch (end, route) {
         case (.refused(let words), _): return words
         case (.stale, .admit(let userId)?): return "An earlier admission of \(name(userId) ?? "someone waiting to join") wasn’t sent; let them in again."
+        // A role change another change overtook: nothing of it was made (Android #276's words, the web's `stale`).
+        case (.stale, .member?): return "\(family) changed while you were working on it. Try again."
         default: return nil
         }
     }
@@ -216,40 +238,53 @@ extension FamilySync {
 
     /*
      * Every call kept for the family, sent again (or let go of) in the family's turn: what each
-     * came to, by outbox id. Stops at a removal. A store that can't be read throws. `handOver`
-     * hears each call that is let go of, before its entry is deleted, so what it came to is said
-     * even when whoever asked has stopped waiting (a page left mid-resend).
+     * came to, by outbox id. Stops at a removal. A store that can't be read throws. What each call
+     * that is let go of came to is kept to be said before its entry is deleted (`keptEnds`), so it
+     * is said even when whoever asked has stopped waiting (a page left mid-resend, a relaunch).
+     * `handed` hears what a handover the resume finished came to, after the turn is let go of: it
+     * may sync.
      */
-    public func resumeOutbox(_ groupId: String, handOver: (@Sendable (CallEnd, ChainRoute?) async -> Void)? = nil) async throws -> [String: CallEnd] {
+    public func resumeOutbox(_ groupId: String, names: [String: String] = [:],
+                             handed: (@Sendable (String, RoleEnd) async -> Void)? = nil) async throws -> [String: CallEnd] {
         let user = userId
-        return try await exclusive(groupId) {
+        let (out, settled) = try await exclusive(groupId) { () -> ([String: CallEnd], (String, RoleEnd)?) in
             var out: [String: CallEnd] = [:]
+            var settled: (String, RoleEnd)?
             do {
                 for kept in try self.records.outboxList(userId: user, groupId: groupId) {
-                    let end = try await self.sendKept(groupId, outboxId: kept.outboxId, entry: kept.entry, only: nil, handOver: handOver)
+                    let end = try await self.sendKept(groupId, outboxId: kept.outboxId, entry: kept.entry, only: nil, saysLater: true)
                     out[kept.outboxId] = end
                     if end == .wiped { break }
                 }
+                // A handover the app stopped in the middle of is finished.
+                if !out.values.contains(.wiped) { settled = try await self.finishHandover(groupId, names: names) }
             } catch let error as GroupsAPIError where error.isNotMember {
                 _ = await self.removedInTurn(groupId)
                 out["wiped"] = .wiped
             }
-            return out
+            return (out, settled)
         }
+        // Told once the family's turn is let go of: whoever hears it may sync the family (its own turn), which waited on this one for ever.
+        if let (to, end) = settled { await handed?(to, end) }
+        return out
     }
 
     /*
      * One kept call, in the family's turn: the settings read afresh, the core's judgement of it,
      * then sent (as the same bytes, a few times on no answer) and its answer followed. `only`: a
-     * person's Let them in looks only at their own admission; anyone else's is `other`, untouched.
+     * call on that route (a person's admission, a change of their roles) looks only at its own;
+     * anyone else's is `other`, untouched.
      */
-    func sendKept(_ groupId: String, outboxId: String, entry: String, only: String?,
-                  handOver: (@Sendable (CallEnd, ChainRoute?) async -> Void)? = nil) async throws -> CallEnd {
+    func sendKept(_ groupId: String, outboxId: String, entry: String, only: ChainRoute?, saysLater: Bool = false) async throws -> CallEnd {
         var sends = 0
         var fixes = 0
-        // What the call came to is handed over first, then its entry goes: a caller that stops waiting loses nothing.
+        // `saysLater`: a call nobody waits on for its own answer (the resume, the gate) keeps what it came to to be said,
+        // first, then its entry goes: a crash in between says it once (one per outbox id), and a relaunch loses nothing.
         func drop(_ end: CallEnd, _ route: ChainRoute?) async throws {
-            await handOver?(end, route)
+            if saysLater, let unsaid = FamilyRecords.UnsaidEnd(outboxId: outboxId, end: end, route: route) {
+                try records.keepUnsaid(userId: userId, groupId: groupId, unsaid)
+            }
+            try handoverHears(end, groupId: groupId, outboxId: outboxId, route: route)
             try records.outboxDelete(userId: userId, groupId: groupId, outboxId: outboxId)
         }
         while true {
@@ -260,6 +295,12 @@ extension FamilySync {
                 // The session ended: the app's lost session. Any other failure sends nothing; the call stays kept.
                 if case DriveAPIError.notAuthenticated = error { throw error }
                 if case AuthError.sessionEnded = error { throw error }
+                // Pending only for the caller's own call: whose it is read from the entry (the settings as last read), and
+                // one of anyone else, or that doesn't open, is left alone (Codex #285 round 5), never said as kept for them.
+                if let only {
+                    guard let opened = try? ledger.outboxOpen(groupId: groupId, outboxId: outboxId, userId: userId, entry: entry),
+                          Self.route(of: opened) == only else { return .other }
+                }
                 return .pending(Self.transient(error) ? FamilyWords.noAnswer : FamilyWords.error(error))
             }
             let opened: OutboxCall
@@ -275,10 +316,19 @@ extension FamilySync {
             switch opened {
             case .send(_, let r, _), .hold(_, let r, _), .landed(_, let r), .superseded(_, let r): route = r
             }
-            if let only, route != .admit(userId: only.lowercased()) { return .other }
+            if let only, route != only { return .other }
             switch opened {
-            case .hold(_, _, let reason):
-                return reason == .otherKeys ? .otherKeys : .pending(ManageWords.keptOnDevice)
+            case .hold(_, let held, let reason):
+                guard reason == .otherKeys else { return .pending(ManageWords.keptOnDevice) }
+                // Held for keys they had before, for someone who no longer waits: retired, so it never holds back every change.
+                switch try await retireOrphan(groupId, route: held) {
+                case nil: return .otherKeys
+                // The sync let go of the family (not-member): the wipe took the entry with it.
+                case .wiped?: return .wiped
+                case let end?:
+                    try await drop(end, held)
+                    return end
+                }
             case .landed:
                 try await drop(.landed, route)
                 await syncInTurn(groupId)
@@ -398,7 +448,7 @@ extension FamilySync {
         let groupId = summary.id
         let first = person.name.split(whereSeparator: \.isWhitespace).first.map(String.init)
         for kept in try records.outboxList(userId: userId, groupId: groupId) {
-            switch try await sendKept(groupId, outboxId: kept.outboxId, entry: kept.entry, only: person.userId) {
+            switch try await sendKept(groupId, outboxId: kept.outboxId, entry: kept.entry, only: .admit(userId: person.userId.lowercased())) {
             case .other, .stale: continue
             case .landed: if try await !stillWaiting(groupId, person) { return .landed }
             case .pending(let words): return .pending(words)
@@ -411,6 +461,8 @@ extension FamilySync {
             switch try await stageAdmit(summary, person, first: first) {
             case .wiped: return .wiped
             case .refused(let words): return .refused(words)
+            case .waiting: return .refused(ManageWords.earlierWaiting(summary.name))
+            case .checkFirst, .unchanged: return .refused(ManageWords.keepsChanging(summary.name))
             case .call(let call):
                 switch try await sendKept(groupId, outboxId: call.outboxId, entry: call.entry, only: nil) {
                 case .landed: return .landed
@@ -444,12 +496,94 @@ extension FamilySync {
     }
 
     /*
-     * The web's stageLocked: the chain synced first, the head the server serves checked against
-     * it, their keys read from route 16 again, the settings read afresh, then the core signs; kept
-     * before anything is sent.
+     * The admission: staged as every call is (stageCall), with their keys as route 16 serves them
+     * now (a row drawn before their account changed and this phone's Continue holds the old ones).
      */
     func stageAdmit(_ summary: GroupSummary, _ person: PendingPerson, first: String?) async throws -> Staged {
+        try await stageCall(summary) { _, revision, kems in
+            guard let now = try await self.api.pending(summary.id).first(where: { $0.userId == person.userId.lowercased() }) else {
+                throw StageRefused(words: ManageWords.notWaiting(first))
+            }
+            guard let served = now.identity else { throw StageRefused(words: ManageWords.keysUnread) }
+            return try self.ledger.admitBody(me: try await self.vault.ownIdentities(), identity: try await self.vault.currentIdentityEnvelope(), groupId: summary.id,
+                                             expectedRevision: revision, userId: person.userId.lowercased(), served: served, roles: [], kems: kems)
+        }
+    }
+
+    /*
+     * What the handover kept here learns from one of its calls ending, before the entry goes (Codex #285 round 8):
+     * billing's call to them ending means the handover was staged, whatever its marker said (one that couldn't be
+     * written after the entry was kept), so finishHandover never signs billing again; its step down refused for good
+     * ends the handover there, both still organizers, Finish handing over to {first} the person's to press.
+     */
+    private func handoverHears(_ end: CallEnd, groupId: String, outboxId: String, route: ChainRoute?) throws {
+        guard let handover = try records.handover(userId: userId, groupId: groupId) else { return }
+        let operation = try records.outboxOperation(userId: userId, groupId: groupId, outboxId: outboxId)
+        if !handover.staged, operation == RoleOperation.billingTo.rawValue, case .member(let about)? = route, about.lowercased() == handover.to {
+            try records.markHandover(userId: userId, groupId: groupId, to: handover.to, staged: true)
+        }
+        if case .refused = end, operation == RoleOperation.stepDown.rawValue {
+            try records.clearHandover(userId: userId, groupId: groupId)
+        }
+    }
+
+    /*
+     * An admission held for keys this phone no longer pins (`otherKeys`) whose person no longer waits
+     * to join, per reads that answered (Android #281's retireOrphan): in the member list just synced,
+     * they joined (`landed`, quiet: the list says it); neither waiting nor a member, they were turned
+     * down or went (`stale`, said as an admission that wasn't sent). Nil keeps it held: they still
+     * wait (their row offers Drop it and let them in), or a read didn't answer. Definite answers are
+     * never swallowed: route 16's not-member and a lost session are thrown, and a sync that let go of
+     * the family is `wiped`. Runs in the family's turn.
+     */
+    private func retireOrphan(_ groupId: String, route: ChainRoute) async throws -> CallEnd? {
+        guard case .admit(let person) = route else { return nil }
+        let waiting: [PendingPerson]
+        do {
+            waiting = try await api.pending(groupId)
+        } catch {
+            if let refused = error as? GroupsAPIError, refused.isNotMember { throw error }
+            if case DriveAPIError.notAuthenticated = error { throw error }
+            if case AuthError.sessionEnded = error { throw error }
+            return nil
+        }
+        if waiting.contains(where: { $0.userId.lowercased() == person.lowercased() }) { return nil }
+        let state = await syncInTurn(groupId)
+        switch state {
+        case .accepted(let view)?:
+            return view.members.contains { $0.userId.lowercased() == person.lowercased() } ? .landed : .stale
+        case .wiped?:
+            return .wiped
+        default:
+            if case .failed? = state, let ended = endedBy {
+                if case DriveAPIError.notAuthenticated = ended { throw ended }
+                if case AuthError.sessionEnded = ended { throw ended }
+            }
+            return nil
+        }
+    }
+
+    /*
+     * The one staging path of every roster call (the web's stageLocked, Android's stageCall). First
+     * the gate: every call kept for the family is sent as it was signed (what each came to kept until
+     * the screens say it, keptEnds), and while any is still unresolved nothing new is staged
+     * (`waiting`): a new roster would overtake it, and its next resume would drop it as superseded,
+     * unseen. Then the chain synced in this turn, the head the server serves checked against it
+     * (a change between the two: synced again), the settings read afresh, every member's ML-KEM key,
+     * and `build` given the head's revision; the group key's seal opened when the core asks. The
+     * call is kept before anything is sent (`kept` hears it, after the put). A sync that fails is a
+     * refusal or the lost session, never a landing or an absence.
+     */
+    func stageCall(_ summary: GroupSummary, operation: RoleOperation? = nil, kept: (() throws -> Void)? = nil,
+                   build: (FamilyView, UInt64, [String: String]) async throws -> RosterCall) async throws -> Staged {
         let groupId = summary.id
+        summaries[groupId] = summary
+        families[groupId] = summary.name
+        for call in try records.outboxList(userId: userId, groupId: groupId) {
+            let end = try await sendKept(groupId, outboxId: call.outboxId, entry: call.entry, only: nil, saysLater: true)
+            if end == .wiped { return .wiped }
+        }
+        if try !records.outboxList(userId: userId, groupId: groupId).isEmpty { return .waiting }
         var openedKey = false
         for _ in 0 ..< 4 {
             let state = await syncInTurn(groupId)
@@ -469,25 +603,29 @@ extension FamilySync {
             guard let version = head.version, let revision = head.revision else { return .refused("HushOS couldn’t do that just now. Try again in a moment.") }
             // A change landed between the sync and the head read: synced again before anything is signed.
             if version != view.rosterVersion { continue }
-            guard let now = try await api.pending(groupId).first(where: { $0.userId == person.userId.lowercased() }) else {
-                return .refused(ManageWords.notWaiting(first))
-            }
-            guard let served = now.identity else { return .refused(ManageWords.keysUnread) }
             _ = try await vault.familyPin(groupId)
             let identities = try await fetchIdentities(groupId)
             let kems = Dictionary(identities.compactMap { id, member in member.identity.map { (id, $0.kemPublicKey) } }, uniquingKeysWith: { a, _ in a })
-            let me = try await vault.ownIdentities()
-            let envelope = try await vault.currentIdentityEnvelope()
             let staged: RosterCall
             do {
-                staged = try ledger.admitBody(me: me, identity: envelope, groupId: groupId, expectedRevision: revision, userId: person.userId.lowercased(),
-                                              served: served, roles: [], kems: kems)
+                staged = try await build(view, revision, kems)
+            } catch let refused as StageRefused {
+                return .refused(refused.words)
+            } catch is CheckFirstNeeded {
+                return .checkFirst
             } catch let error as CoreError {
-                return .refused(FamilyWords.error(error))
+                switch FamilyWords.message(of: error) {
+                case ManageWords.checkManagerFirst: return .checkFirst
+                case ManageWords.unchanged: return .unchanged
+                default: return .refused(FamilyWords.error(error))
+                }
             }
             switch staged {
             case .staged(let call):
+                // What it does first, so no entry is ever kept without it.
+                if let operation { try records.outboxNoteOperation(userId: userId, groupId: groupId, outboxId: call.outboxId, operation.rawValue) }
                 try records.outboxPut(userId: userId, groupId: groupId, outboxId: call.outboxId, entry: call.entry)
+                try kept?()
                 return .call(call)
             case .syncFirst, .openFoldersFirst:
                 continue
@@ -498,6 +636,32 @@ extension FamilySync {
             }
         }
         return .refused(ManageWords.keepsChanging(summary.name))
+    }
+
+    /* One kept call let go of whose end is still to be said: `outboxId` is what `dropKeptEnds` lets go of once it is. */
+    public struct KeptEnd: Sendable, Equatable {
+        public let groupId: String
+        public let outboxId: String
+        public let route: ChainRoute?
+        public let end: CallEnd
+    }
+
+    /*
+     * What the kept calls the resume and the staging gate let go of came to and is still to be said, for this account,
+     * read only: kept on this phone until a screen says it (`dropKeptEnds`), so one the session changed under, or the
+     * app stopped before, is said by the next look. A store that can't be read throws.
+     */
+    public func keptEnds() throws -> [KeptEnd] {
+        try records.unsaidList(userId: userId).compactMap { kept in
+            kept.end.said.map { KeptEnd(groupId: kept.groupId, outboxId: kept.end.outboxId, route: $0.route, end: $0.end) }
+        }
+    }
+
+    /* Lets go of the ends a screen said; one kept since it looked stays. */
+    public func dropKeptEnds(_ said: [KeptEnd]) throws {
+        for (groupId, ends) in Dictionary(grouping: said, by: \.groupId) {
+            try records.dropUnsaid(userId: userId, groupId: groupId, outboxIds: Set(ends.map(\.outboxId)))
+        }
     }
 
     /* Route 8's seal opened by the ledger (a first change after a key change); the words when it can't be. */
@@ -621,6 +785,41 @@ public struct NoticeQueue: Sendable, Equatable {
  * Each family's manager lists as loads numbered as they start: an answer of a load begun before
  * the last one started (a refresh answered after a cancel's own reload) is dropped.
  */
+/*
+ * Whose role change runs on the family page (one at a time), as the session's: a change begun
+ * before a reset (sign-out, another account, the same account's session adopted in place) never
+ * leaves the next session's menus disabled, and its late end never clears the next one's.
+ */
+public struct RoleChanges: Sendable, Equatable {
+    public struct Token: Sendable, Equatable {
+        let generation: UInt64
+        let member: String
+    }
+
+    public private(set) var busy: String?
+    private var generation: UInt64 = 0
+
+    public init() {}
+
+    /* The change of `member` begins; nil while another runs. */
+    public mutating func begin(_ member: String) -> Token? {
+        guard busy == nil else { return nil }
+        busy = member.lowercased()
+        return Token(generation: generation, member: member.lowercased())
+    }
+
+    /* The change `token` began ended: only its own session's, only its own. */
+    public mutating func end(_ token: Token) {
+        if token.generation == generation, busy == token.member { busy = nil }
+    }
+
+    /* The session ended or was replaced: nothing runs any more as far as the page goes. */
+    public mutating func reset() {
+        busy = nil
+        generation &+= 1
+    }
+}
+
 public struct ManagedLoads: Sendable, Equatable {
     private var latest: [String: UInt64] = [:]
     public init() {}

@@ -99,6 +99,10 @@ extension DriveStore {
         manageChange = nil
         manageNotices.clear()
         managedLoads.reset()
+        // A role change of the ended session neither keeps the menus disabled nor asks anything of the next one.
+        roleAsk = nil
+        checkFirstAsk = nil
+        roleChanges.reset()
         for groupId in familyStates.keys { familyGenerations.published(groupId) }
         familyRevisions = FamilyRevisions()
         familyList = nil
@@ -893,6 +897,10 @@ struct FamilyPage: View {
             await store.loadManaged(summary)
         }
         .modifier(FamilyManageDialogs(groupId: groupId))
+        .modifier(FamilyRoleDialogs(groupId: groupId) { ref in
+            let standing = view.flatMap { v in v.members.first { $0.userId.lowercased() == ref.userId.lowercased() }.flatMap { label($0, in: v) } }
+            checking = MemberCheck(member: ref, personal: standing == .changed || (checkedWith?.lowercased() == ref.userId.lowercased() && standing != .verified))
+        })
         // The labels are read again after every finished check of the family (pull to refresh included), every trust
         // reload and every check made here: a pin changed on another device never leaves someone shown Verified.
         .task(id: "\(view?.rosterDigest ?? "")-\(checks)-\(store.familyRefreshed[groupId] ?? 0)-\(store.trustGeneration)") {
@@ -1088,15 +1096,51 @@ struct FamilyPage: View {
                             checking = MemberCheck(member: ref, personal: personal)
                         }
                         .disabled(ref.email.isEmpty)
+                        // A manager's role changes (the web's MemberList menu): managing the family, and the handover.
+                        if store.manages(groupId), who != nil {
+                            let verified = standing == .verified
+                            if member.roles.contains("members") {
+                                Button("Stop them managing the family", systemImage: "person.badge.minus") {
+                                    store.askRole(RoleAsk(groupId: groupId, member: ref, kind: .stop), verified: verified)
+                                }
+                            } else {
+                                Button("Let them manage the family", systemImage: "person.badge.key") {
+                                    store.askRole(RoleAsk(groupId: groupId, member: ref, kind: .manage), verified: verified)
+                                }
+                            }
+                            // Not while a handover is left half done: Finish handing over is the way on from there.
+                            if view.members.contains(where: { $0.userId.lowercased() == me && $0.roles.contains("billing") }), !member.roles.contains("billing"),
+                               FamilySync.handoverToFinish(view, me: me) == nil {
+                                Button("Make them the organizer", systemImage: "creditcard") {
+                                    store.askRole(RoleAsk(groupId: groupId, member: ref, kind: .organizer), verified: verified)
+                                }
+                            }
+                        }
                     } label: {
                         memberRow(member, you: false)
                     }
                     .accessibilityLabel("More for \(ref.name)")
+                    .disabled(store.roleChanges.busy != nil)
                     .alpineRow()
                 }
             }
         } header: {
             Text("Members").font(Theme.Text.label).foregroundStyle(Alpine.inkMuted)
+        }
+        // Both organizers after a handover's last step didn't land: the web's words, and Finish handing over.
+        if store.manages(groupId), let other = FamilySync.handoverToFinish(view, me: me), let who = served(other) {
+            Section {
+                VStack(alignment: .leading, spacing: Alpine.Space.s2) {
+                    Text("\(firstName(who.name)) is an organizer now, and so are you still.").font(Theme.Text.body).foregroundStyle(Alpine.ink)
+                    Button("Finish handing over to \(firstName(who.name))") {
+                        store.finishHandingOver(groupId, member: FamilyMemberRef(userId: who.userId, email: who.email ?? "", name: who.name))
+                    }
+                    .buttonStyle(PrimaryCapsuleStyle())
+                    .disabled(store.roleChanges.busy != nil)
+                }
+                .padding(.vertical, Alpine.Space.s2)
+                .alpineRow()
+            }
         }
     }
 

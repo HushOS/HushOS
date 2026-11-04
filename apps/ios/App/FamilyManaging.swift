@@ -39,6 +39,16 @@ struct ManageChangeAsk: Identifiable {
     var id: AccountChange.ID { change.id }
 }
 
+/* A manager's role change of someone (the web's MemberList menu), and the handover's last step left half done. */
+enum RoleKind: Equatable { case manage, stop, organizer, finish }
+
+struct RoleAsk: Identifiable, Equatable {
+    let groupId: String
+    let member: FamilyMemberRef
+    let kind: RoleKind
+    var id: String { "\(groupId)|\(member.userId.lowercased())|\(kind)" }
+}
+
 struct CancelInvitationAsk: Identifiable, Equatable {
     let groupId: String
     let invitation: FamilyInvitation
@@ -56,15 +66,16 @@ extension DriveStore {
 
     /*
      * The manager lists of a family: calls kept on this phone sent again first, as the session's
-     * own work (leaving the page doesn't stop it, and each refusal is handed to the notices before
-     * its call goes, said until read), then who waits and the open invitations read again.
+     * own work (leaving the page doesn't stop it; what each call let go of came to is kept on this
+     * phone until said, and said until read), then who waits and the open invitations read again.
      */
     func loadManaged(_ summary: GroupSummary) async {
         let groupId = summary.id
         guard let session = beginSession() else { return }
         do {
+            let names = memberNames(groupId)
             let resumed = try await inFamilyLanding(session, { sync in
-                try await sync.resumeOutbox(groupId) { end, route in await self.handOver(end, route: route, groupId: groupId, session: session) }
+                try await sync.resumeOutbox(groupId, names: names, handed: { to, end in await self.handed(to, end, summary: summary, session: session) })
             }, land: { result in await self.landResumed(summary, result, session: session) })
             guard let ends = resumed, !ends.values.contains(.wiped) else { return }
         } catch {
@@ -89,15 +100,137 @@ extension DriveStore {
                 ?? self.familyDetails[groupId]?.members.first { $0.userId.lowercased() == id }?.name
             return name.map { HushOS.firstName($0) }
         }
-        if let words = ManageWords.resumed(end, route: route, name: named) { manageNotices.untilRead(words) }
+        let family: String = familyNames[groupId] ?? familyList?.first(where: { $0.id == groupId })?.name ?? "The family"
+        if let words = ManageWords.resumed(end, route: route, family: family, name: named) {
+            manageNotices.untilRead(words)
+        }
+    }
+
+    /* First names by user id, for sentences about members and those waiting (whoever else holds billing). */
+    func memberNames(_ groupId: String) -> [String: String] {
+        var out: [String: String] = [:]
+        for member in familyDetails[groupId]?.members ?? [] { out[member.userId.lowercased()] = HushOS.firstName(member.name) }
+        for person in waitingToJoin[groupId] ?? [] where out[person.userId.lowercased()] == nil { out[person.userId.lowercased()] = HushOS.firstName(person.name) }
+        return out
+    }
+
+    /* A handover the resume finished (or tried to): said as Make them the organizer's own outcome, the family read again. */
+    private func handed(_ to: String, _ end: RoleEnd, summary: GroupSummary, session: Session) async {
+        guard current(session) else { return }
+        let who = memberNames(summary.id)[to.lowercased()] ?? "They"
+        if end == .checkFirst {
+            // Their pin was no longer verified when it went on (removed on another device): the same check a fresh
+            // Make them the organizer asks for, then they can be asked again.
+            let member = familyDetails[summary.id]?.members.first { $0.userId.lowercased() == to.lowercased() }
+            let ref = FamilyMemberRef(userId: to, email: member?.email ?? "", name: member?.name ?? who)
+            checkFirstAsk = RoleAsk(groupId: summary.id, member: ref, kind: .organizer)
+        }
+        sayRole(end, kind: .organizer, who: who)
+        await refreshFamily(summary, session: session)
+    }
+
+    /*
+     * What kept calls let go of came to (the resume's, the staging gate's), said as the resume says
+     * them, then let go of: only by the session that looked and is still current, so ends a reset
+     * came between stay kept on this phone for the next look (said twice at worst, never lost).
+     */
+    private func sayKeptEnds(_ session: Session) async {
+        guard current(session), let ends = try? await inFamily(session, { try await $0.keptEnds() }), !ends.isEmpty, current(session) else { return }
+        for kept in ends { handOver(kept.end, route: kept.route, groupId: kept.groupId, session: session) }
+        _ = try? await inFamily(session, { try await $0.dropKeptEnds(ends) })
+    }
+
+    // MARK: Roles
+
+    /*
+     * A member's role change from their row: a promotion (managing the family, or its billing) over
+     * someone not verified on this phone asks for a check first (the web's needsCheckFor); the data
+     * layer reads their standing again before anything is signed.
+     */
+    func askRole(_ ask: RoleAsk, verified: Bool) {
+        guard roleChanges.busy == nil else { return }
+        if (ask.kind == .manage || ask.kind == .organizer) && !verified { checkFirstAsk = ask } else { roleAsk = ask }
+    }
+
+    /* Finish handing over to {first}: the step the person already asked for, asked again to confirm. */
+    func finishHandingOver(_ groupId: String, member: FamilyMemberRef) {
+        guard roleChanges.busy == nil else { return }
+        roleAsk = RoleAsk(groupId: groupId, member: member, kind: .finish)
+    }
+
+    /*
+     * The confirmed change, as the session's own work: said once it lands, kept on this phone when no
+     * answer came; an ended session's answer lands nothing. The family is read again after anything
+     * short of a landing too: part of a handover may have landed (billing given before its last step).
+     */
+    func confirmRole(_ ask: RoleAsk) {
+        roleAsk = nil
+        guard roleChanges.busy == nil, let summary = familyList?.first(where: { $0.id == ask.groupId }), let session = beginSession() else { return }
+        _ = managedLoads.begin(ask.groupId)
+        let who = HushOS.firstName(ask.member.name)
+        let names = memberNames(ask.groupId)
+        let person = ask.member.userId
+        guard let token = roleChanges.begin(person) else { return }
+        Task {
+            // Its own session's only: a reset meanwhile already let the page go on (RoleChanges).
+            defer { roleChanges.end(token) }
+            var answer: Answered<RoleEnd>?
+            var failure: Error?
+            do {
+                answer = try await familyAnswer(session, { sync -> RoleEnd in
+                    switch ask.kind {
+                    case .manage: return try await sync.changeRole(summary, userId: person, first: who, change: .grant)
+                    case .stop: return try await sync.changeRole(summary, userId: person, first: who, change: .take)
+                    case .organizer: return try await sync.handOver(summary, to: person, first: who, names: names)
+                    case .finish: return try await sync.finishHandingOver(summary, to: person, first: who, names: names)
+                    }
+                })
+            } catch {
+                failure = error
+            }
+            // What the gate's kept calls came to, before this one's own words, answered or thrown (kept until said).
+            await sayKeptEnds(session)
+            guard current(session) else { return }
+            if let failure {
+                if endsSession(failure) {
+                    report(failure)
+                    return
+                }
+                notify("Couldn’t change that. \(FamilyWords.error(failure))")
+                await refreshFamily(summary, session: session)
+                return
+            }
+            guard case .answered(let end)? = answer else { return }
+            if end == .checkFirst { checkFirstAsk = ask; return }
+            sayRole(end, kind: ask.kind, who: who)
+            if end == .wiped { await refreshFamilies(force: true, session: session); return }
+            await refreshFamily(summary, session: session)
+        }
+    }
+
+    /* A role change's outcome in its words (Android #276's). */
+    private func sayRole(_ end: RoleEnd, kind: RoleKind, who: String) {
+        switch end {
+        case .landed:
+            switch kind {
+            case .manage: notify("\(who) can manage the family")
+            case .stop: notify("\(who) no longer manages the family")
+            case .organizer, .finish: notify("\(who) is the organizer")
+            }
+        case .pending(let reason): notify("Saved on this device. \(reason)")
+        case .refused(let words), .waiting(let words): notify("Couldn’t change that. \(words)")
+        case .checkFirst, .wiped: break
+        }
     }
 
     /* A resume's end, the session's: the family checked again after a call landed or was overtaken; a failure said. */
     private func landResumed(_ summary: GroupSummary, _ result: Result<[String: CallEnd], Error>, session: Session) async {
+        // What the calls it let go of came to, first, whether or not it then failed.
+        await sayKeptEnds(session)
         guard current(session) else { return }
         switch result {
         case .success(let ends):
-            if !ends.values.contains(.wiped), ends.values.contains(where: { $0 == .landed || $0 == .stale }) { await refreshFamily(summary) }
+            if !ends.values.contains(.wiped), ends.values.contains(where: { $0 == .landed || $0 == .stale }) { await refreshFamily(summary, session: session) }
         case .failure(let error):
             if endsSession(error) {
                 report(error)
@@ -137,7 +270,9 @@ extension DriveStore {
 
     /* Pull to refresh: the families checked again, and the manager lists read again. */
     func refreshManagedPage(_ groupId: String) async {
-        await refreshFamilies(force: true)
+        guard let session = beginSession() else { return }
+        await refreshFamilies(force: true, session: session)
+        guard current(session) else { return }
         if manages(groupId), let summary = familyList?.first(where: { $0.id == groupId }) { await loadManaged(summary) }
     }
 
@@ -151,6 +286,8 @@ extension DriveStore {
         let first = HushOS.firstName(person.name)
         Task {
             defer { if current(session) { waitingRows[key]?.busy = nil } }
+            var answer: Answered<LetIn>?
+            var failure: Error?
             do {
                 if dropKept {
                     guard case .answered = try await familyAnswer(session, { try await $0.dropKeptAdmission(summary.id, userId: person.userId) }) else { return }
@@ -158,31 +295,38 @@ extension DriveStore {
                 }
                 // Pinning them may have moved trust: what they and anyone else signed is judged again, as after Contacts' add.
                 let trustMoved: @Sendable () async -> Void = { await self.trustMovedByLetIn(session) }
-                guard case .answered(let outcome) = try await familyAnswer(session, { try await $0.letIn(summary, person, trustMoved: trustMoved) }) else { return }
-                if let words = ManageWords.letIn(outcome, first: first, family: summary.name) { notify(words) }
-                switch outcome {
-                case .landed:
-                    await reloadManaged(summary.id, session: session)
-                    guard current(session) else { return }
-                    await refreshFamily(summary)
-                case .pending:
-                    break
-                case .refused(let words):
-                    waitingRows[key]?.error = words
-                case .changed(let change):
-                    manageChange = ManageChangeAsk(change: change, summary: summary, person: person)
-                case .keptOther:
-                    waitingRows[key]?.keptOther = true
-                case .wiped:
-                    await refreshFamilies(force: true)
-                }
+                answer = try await familyAnswer(session, { try await $0.letIn(summary, person, trustMoved: trustMoved) })
             } catch {
-                guard current(session) else { return }
-                if endsSession(error) {
-                    report(error)
+                failure = error
+            }
+            // What the gate's kept calls came to, before this one's own words, answered or thrown (kept until said).
+            await sayKeptEnds(session)
+            guard current(session) else { return }
+            if let failure {
+                if endsSession(failure) {
+                    report(failure)
                     return
                 }
-                waitingRows[key]?.error = FamilyWords.error(error)
+                waitingRows[key]?.error = FamilyWords.error(failure)
+                return
+            }
+            guard case .answered(let outcome)? = answer else { return }
+            if let words = ManageWords.letIn(outcome, first: first, family: summary.name) { notify(words) }
+            switch outcome {
+            case .landed:
+                await reloadManaged(summary.id, session: session)
+                guard current(session) else { return }
+                await refreshFamily(summary, session: session)
+            case .pending:
+                break
+            case .refused(let words):
+                waitingRows[key]?.error = words
+            case .changed(let change):
+                manageChange = ManageChangeAsk(change: change, summary: summary, person: person)
+            case .keptOther:
+                waitingRows[key]?.keptOther = true
+            case .wiped:
+                await refreshFamilies(force: true, session: session)
             }
         }
     }
@@ -438,7 +582,6 @@ struct InviteSheet: View {
 struct FamilyManageDialogs: ViewModifier {
     @Environment(DriveStore.self) private var store
     let groupId: String
-
     func body(content: Self.Content) -> some View {
         content
             .sheet(isPresented: Binding(get: { store.inviting?.groupId == groupId }, set: { if !$0 { store.dismissInvite() } })) {
@@ -470,6 +613,71 @@ struct FamilyManageDialogs: ViewModifier {
             .alert(store.manageNotices.shown?.text ?? "",
                    isPresented: Binding(get: { store.manageNotices.shown?.untilRead == true }, set: { if !$0 { store.manageNotices.dismiss() } })) {
                 Button("OK", role: .cancel) {}
+            }
+    }
+}
+
+/* A manager's role dialogs on the family page: RoleConfirm, and the manager rule's check first. */
+struct FamilyRoleDialogs: ViewModifier {
+    @Environment(DriveStore.self) private var store
+    let groupId: String
+    /* Opens the member's check (Check it's {first}), as their row does. */
+    var check: (FamilyMemberRef) -> Void = { _ in }
+
+    private var familyName: String {
+        if let name = store.familyNames[groupId] { return name }
+        return store.familyList?.first(where: { $0.id == groupId })?.name ?? "the family"
+    }
+
+    private var checkFirstTitle: String {
+        guard let ask = store.checkFirstAsk else { return "" }
+        return "Check it’s \(firstName(ask.member.name)) first"
+    }
+
+    /* The web's RoleConfirm: what the change means, and its own action (Android #276's words). */
+    static func roleTitle(_ ask: RoleAsk) -> String {
+        let who = firstName(ask.member.name)
+        switch ask.kind {
+        case .manage: return "Let \(who) manage the family?"
+        case .stop: return "Stop \(who) managing the family?"
+        case .organizer, .finish: return "Make \(who) the organizer?"
+        }
+    }
+
+    static func roleBody(_ ask: RoleAsk, family: String) -> String {
+        let who = firstName(ask.member.name)
+        switch ask.kind {
+        case .manage: return "\(who) can invite people, let them in and change who manages \(family)."
+        case .stop: return "\(who) stays in \(family) and keeps the family folders, but can’t change who’s in it any more."
+        case .organizer, .finish: return "\(who) takes over the family’s billing. You keep managing the family."
+        }
+    }
+
+    static func roleAction(_ ask: RoleAsk) -> String {
+        switch ask.kind {
+        case .manage: return "Let them manage"
+        case .stop: return "Stop managing"
+        case .organizer, .finish: return "Make organizer"
+        }
+    }
+
+    func body(content: Self.Content) -> some View {
+        content
+            .alert(store.roleAsk.map { Self.roleTitle($0) } ?? "",
+                   isPresented: Binding(get: { store.roleAsk?.groupId == groupId }, set: { if !$0 { store.roleAsk = nil } }),
+                   presenting: store.roleAsk) { ask in
+                Button(Self.roleAction(ask)) { store.confirmRole(ask) }
+                Button("Cancel", role: .cancel) {}
+            } message: { ask in
+                Text(Self.roleBody(ask, family: familyName))
+            }
+            .alert(checkFirstTitle,
+                   isPresented: Binding(get: { store.checkFirstAsk?.groupId == groupId }, set: { if !$0 { store.checkFirstAsk = nil } }),
+                   presenting: store.checkFirstAsk) { ask in
+                Button("Check it’s \(firstName(ask.member.name))") { store.checkFirstAsk = nil; check(ask.member) }
+                Button("Cancel", role: .cancel) {}
+            } message: { ask in
+                Text("Managers can let people in and change the family, so check it’s \(firstName(ask.member.name)) before they manage it. It takes a minute on a call or in person.")
             }
     }
 }

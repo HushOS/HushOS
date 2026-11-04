@@ -22,6 +22,10 @@ final class ManageStub: @unchecked Sendable {
     var manageAnswer: (Int, Any)?
     /* Scripted answers for route 17, oldest first (each handed the body); then applied as the server would. */
     var admitAnswers: [@Sendable ([String: Any]) -> (Int, Any)?] = []
+    /* Scripted answers for route 18 (a role change), oldest first; then applied as the server would. */
+    var memberAnswers: [@Sendable ([String: Any]) -> (Int, Any)?] = []
+    /* Every route 18 call: whose roles it changes. */
+    var memberCalls: [String] = []
     var callBodies: [Data] = []
     var callClients: [String] = []
     var grantPosts: [(workspaceId: String, body: Data)] = []
@@ -104,6 +108,26 @@ extension FamilyServer {
                                           chain: head, holderKemPublicKey: try base64urlDecode(value: f.member.keys.kemPublicKey!), sealer: f.creator.keys) }
             manage.keySeal = ["groupKeyVersion": 1, "holderKeyVersion": f.member.keys.keyVersion, "sealerUserId": f.creator.userId, "rosterVersion": 3,
                               "rosterDigest": digest, "envelope": base64urlEncode(bytes: sealed)]
+        }
+    }
+
+    /*
+     * The creator signs a member list where `roles` are each person's roles (by user id), the rest as
+     * they are: another device's role change (billing moved, a handover half done). Under the lock.
+     */
+    func creatorSetsRoles(_ roles: [String: [GroupRole]]) throws {
+        let f = family
+        try lock.withLock {
+            let accepted = try creatorChain()
+            let members = accepted.roster().members.map { member -> RosterMember in
+                var member = member
+                if let set = roles[member.userId.lowercased()] { member.roles = set }
+                return member
+            }
+            chain += [try onLargeStackNow {
+                try rosterSign(roster: try rosterNext(chain: accepted, members: members, signerUserId: f.creator.userId, areaKeys: nil, retireAreas: nil, format: nil),
+                               groupSeed: f.groupSeed, signer: f.creator.keys)
+            }]
         }
     }
 
@@ -201,6 +225,15 @@ extension FamilyServer {
                 manage.callBodies.append(body ?? Data())
                 manage.callClients.append(request.value(forHTTPHeaderField: "HushOS-Client") ?? "")
                 return manage.admitAnswers.isEmpty ? nil : manage.admitAnswers.removeFirst()
+            }
+            if let scripted, let answer = scripted(sent) { return answer }
+            return lock.withLock { apply(sent, userId: p[1]) }
+        case ("PATCH", let p) where p.count == 2 && p[0] == "members":
+            let scripted = lock.withLock { () -> (@Sendable ([String: Any]) -> (Int, Any)?)? in
+                manage.callBodies.append(body ?? Data())
+                manage.callClients.append(request.value(forHTTPHeaderField: "HushOS-Client") ?? "")
+                manage.memberCalls.append(p[1])
+                return manage.memberAnswers.isEmpty ? nil : manage.memberAnswers.removeFirst()
             }
             if let scripted, let answer = scripted(sent) { return answer }
             return lock.withLock { apply(sent, userId: p[1]) }
