@@ -56,6 +56,8 @@ export function billingEnabled() {
 
 /* Seconds Polar is given to answer a call, at most. */
 const POLAR_TIMEOUT_S = 15;
+/* What a change that charges is always given (polarForChange), in milliseconds. */
+export const POLAR_CHANGE_TIMEOUT_MS = POLAR_TIMEOUT_S * 1000;
 /* Seconds a call is given however little of a deadline is left, so it can still answer. */
 const POLAR_MIN_TIMEOUT_S = 1;
 
@@ -95,6 +97,21 @@ export function polar() {
         });
     client ??= createPolar({ ...options, timeout: POLAR_TIMEOUT_S });
     return client;
+}
+
+/*
+ * The client for a change that charges (a raise, an upgrade): its full timeout, whatever
+ * deadline it runs under. Cut short, it could charge at Polar while HushOS gives up on it; the
+ * caller sends it only when that timeout fits the deadline.
+ */
+export function polarForChange() {
+    if (!billingEnabled() || !billingEnv.POLAR_ACCESS_TOKEN)
+        throw new BillingError('Billing is not available on this server.', 404);
+    return createPolar({
+        accessToken: billingEnv.POLAR_ACCESS_TOKEN,
+        environment: billingEnv.POLAR_ENVIRONMENT,
+        timeout: POLAR_TIMEOUT_S,
+    });
 }
 
 export function unavailable(error: unknown) {

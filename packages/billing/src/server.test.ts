@@ -177,6 +177,10 @@ const polar = {
     raiseOrderLagMs: null as number | null,
     /* How long every order listing takes (0: at once). */
     slowOrderReadsMs: 0,
+    /* How long Polar takes to answer a change charged now, made at once all the same. */
+    slowChangeMs: 0,
+    /* The next change charged now is made at Polar, and its answer never reaches HushOS. */
+    changeAnswerLost: false,
     /* The timeout HushOS gave the client of its latest call, in seconds (null: none). */
     callTimeoutS: null as number | null,
     /* How many scheduled cuts (next_period) fail before Polar takes one again. */
@@ -469,6 +473,170 @@ function chargeLater(order: { status: string; due_amount: number }) {
         order.status = 'paid';
         order.due_amount = 0;
     }, polar.chargeSettlesInMs!);
+}
+
+/* What Polar does with a subscription update (fakeClient.subscriptions.update answers it). */
+async function applySubscriptionUpdate(id: string, body: Record<string, unknown>) {
+    polar.calls.push(`subscriptions.update:${id}:${JSON.stringify(body)}`);
+    if (polar.unauthorized) throw new PolarClientError(401, { error: 'Unauthorized' });
+    const subscription = polar.subscriptions.get(id);
+    if (!subscription) throw notFound();
+    if ('pending_update' in body && body.pending_update === null) {
+        subscription.pending_update = null;
+        return structuredClone(subscription);
+    }
+    // Spike 8, T1: a product change and units in one call are refused.
+    if (typeof body.product_id === 'string' && typeof body.units === 'number')
+        throw new PolarClientError(422, { error: 'HTTPValidationError' });
+    // A product change keeps `units` (unit to unit, spike 1); a plan set to end refuses it.
+    if (typeof body.product_id === 'string') {
+        if (subscription.cancel_at_period_end)
+            throw new PolarClientError(403, { error: 'AlreadyCanceledSubscription' });
+        const hook = polar.beforeProductChange;
+        polar.beforeProductChange = null;
+        polar.beforeRaise = null;
+        polar.afterGet = null;
+        await hook?.();
+        // T1: a scheduled change overwrites only its own part of the pending update.
+        if (body.proration_behavior === 'next_period') {
+            if (polar.ignoresMoves) return structuredClone(subscription);
+            subscription.pending_update = {
+                units: subscription.pending_update?.units ?? null,
+                product_id: body.product_id,
+                applies_at: subscription.current_period_end,
+            };
+            return structuredClone(subscription);
+        }
+        // A refused charge changes nothing (T2, 0341), unless the change is kept with
+        // its order waiting (raiseLeavesOrder), the case the sandbox never showed.
+        if (polar.raiseRefusal && !polar.raiseLeavesOrder)
+            throw new PolarClientError(402, polar.raiseRefusal);
+        // Every immediate change is its own `subscription_update` order, charged at once,
+        // or left waiting.
+        const settling = polar.chargeSettlesInMs !== null && !polar.raiseLeavesOrder;
+        const change = {
+            id: `order_${polar.orders.length + 1}`,
+            subscription_id: id,
+            status: polar.raiseLeavesOrder || settling ? 'pending' : 'paid',
+            due_amount: polar.raiseLeavesOrder || settling ? 1000 : 0,
+            created_at: new Date().toISOString(),
+            product_id: body.product_id,
+            billing_reason: 'subscription_update',
+            hidden: polar.ordersLag,
+        };
+        polar.orders.push(change);
+        if (settling) chargeLater(change);
+        // T1: an immediate product change drops the whole pending update.
+        subscription.product_id = body.product_id;
+        subscription.amount = planAmount(
+            body.product_id,
+            subscription.units ?? 0,
+            subscription.currency,
+        );
+        subscription.pending_update = null;
+        if (polar.raiseRefusal) throw new PolarClientError(402, polar.raiseRefusal);
+        return structuredClone(subscription);
+    }
+    if (typeof body.units === 'number') {
+        if (subscription.cancel_at_period_end)
+            throw new PolarClientError(403, { error: 'AlreadyCanceledSubscription' });
+        if (body.units < minimumUnits(subscription))
+            throw new PolarClientError(422, { error: 'BelowMinimumUnits' });
+        if (body.proration_behavior === 'next_period') {
+            if (polar.cutFailures > 0) {
+                polar.cutFailures -= 1;
+                throw new PolarClientError(503, { error: 'ServiceUnavailable' });
+            }
+            const hook = polar.beforeCut;
+            polar.beforeCut = null;
+            await hook?.();
+            subscription.pending_update = {
+                units: body.units,
+                product_id: subscription.pending_update?.product_id ?? null,
+                applies_at: subscription.current_period_end,
+            };
+            return structuredClone(subscription);
+        }
+        const raise = body.units > (subscription.units ?? 0);
+        if (raise) {
+            const hook = polar.beforeRaise;
+            polar.beforeRaise = null;
+            await hook?.();
+        }
+        // T1: an immediate raise drops only the pending units; a scheduled move survives.
+        const dropUnits = () => {
+            const product = subscription.pending_update?.product_id ?? null;
+            subscription.pending_update = product
+                ? {
+                      units: null,
+                      product_id: product,
+                      applies_at: subscription.current_period_end,
+                  }
+                : null;
+        };
+        if (raise && polar.raiseLeavesOrder) {
+            subscription.units = body.units;
+            dropUnits();
+            polar.orders.push({
+                id: `order_${polar.orders.length + 1}`,
+                subscription_id: id,
+                status: 'pending',
+                due_amount: 235,
+                created_at: new Date().toISOString(),
+                product_id: subscription.product_id,
+                billing_reason: 'subscription_update',
+            });
+        }
+        if (raise && polar.raiseRefusal) throw new PolarClientError(402, polar.raiseRefusal);
+        // A raise Polar takes makes its own change order (spike E8, 3184: paid at once, no
+        // places on it), or one charged a moment later (chargeSettlesInMs), made a moment
+        // after the answer (raiseOrderLagMs).
+        if (raise && !polar.raiseLeavesOrder) {
+            const settling = polar.chargeSettlesInMs !== null;
+            const product = subscription.product_id;
+            // This test's orders, even if the order lands after the test has ended.
+            const orders = polar.orders;
+            const place = () => {
+                const order = {
+                    id: `order_${orders.length + 1}`,
+                    subscription_id: id,
+                    status: settling ? 'pending' : 'paid',
+                    due_amount: settling ? 235 : 0,
+                    created_at: new Date().toISOString(),
+                    product_id: product,
+                    billing_reason: 'subscription_update',
+                    units: null,
+                };
+                orders.push(order);
+                if (settling) chargeLater(order);
+            };
+            if (polar.raiseOrderLagMs === null) place();
+            else setTimeout(place, polar.raiseOrderLagMs);
+        }
+        subscription.units = body.units;
+        dropUnits();
+        return structuredClone(subscription);
+    }
+    if (typeof body.cancel_at_period_end === 'boolean') {
+        if (polar.cancelFailures > 0) {
+            polar.cancelFailures -= 1;
+            throw new PolarClientError(503, { error: 'ServiceUnavailable' });
+        }
+        if (polar.cancelRefusal)
+            throw new PolarClientError(polar.cancelRefusal.status, {
+                error: polar.cancelRefusal.error,
+                detail: 'Refused.',
+            });
+        const hook = polar.beforeCancel;
+        polar.beforeCancel = null;
+        await hook?.();
+        subscription.cancel_at_period_end = body.cancel_at_period_end;
+        if (polar.cancelAnswerLost) {
+            polar.cancelAnswerLost = false;
+            throw new Error('The request timed out.');
+        }
+    }
+    return structuredClone(subscription);
 }
 
 const fakeClient = {
@@ -775,167 +943,25 @@ const fakeClient = {
          * leaves everything as it was; a plan set to cancel refuses both (403).
          */
         async update(id: string, body: Record<string, unknown>) {
-            polar.calls.push(`subscriptions.update:${id}:${JSON.stringify(body)}`);
-            if (polar.unauthorized) throw new PolarClientError(401, { error: 'Unauthorized' });
-            const subscription = polar.subscriptions.get(id);
-            if (!subscription) throw notFound();
-            if ('pending_update' in body && body.pending_update === null) {
-                subscription.pending_update = null;
-                return structuredClone(subscription);
-            }
-            // Spike 8, T1: a product change and units in one call are refused.
-            if (typeof body.product_id === 'string' && typeof body.units === 'number')
-                throw new PolarClientError(422, { error: 'HTTPValidationError' });
-            // A product change keeps `units` (unit to unit, spike 1); a plan set to end refuses it.
-            if (typeof body.product_id === 'string') {
-                if (subscription.cancel_at_period_end)
-                    throw new PolarClientError(403, { error: 'AlreadyCanceledSubscription' });
-                const hook = polar.beforeProductChange;
-                polar.beforeProductChange = null;
-                polar.beforeRaise = null;
-                polar.afterGet = null;
-                await hook?.();
-                // T1: a scheduled change overwrites only its own part of the pending update.
-                if (body.proration_behavior === 'next_period') {
-                    if (polar.ignoresMoves) return structuredClone(subscription);
-                    subscription.pending_update = {
-                        units: subscription.pending_update?.units ?? null,
-                        product_id: body.product_id,
-                        applies_at: subscription.current_period_end,
-                    };
-                    return structuredClone(subscription);
+            // The timeout HushOS gave this call, taken before anything else runs.
+            const timeoutMs = (polar.callTimeoutS ?? Number.POSITIVE_INFINITY) * 1000;
+            const answer = await applySubscriptionUpdate(id, body);
+            // A change charged now that Polar has made, but whose answer is slow (cut off at the
+            // call's timeout, as the SDK does) or lost on the way: made at Polar all the same.
+            if (body.proration_behavior === 'invoice') {
+                if (polar.slowChangeMs) {
+                    await new Promise((resolve) =>
+                        setTimeout(resolve, Math.min(polar.slowChangeMs, timeoutMs)),
+                    );
+                    if (polar.slowChangeMs > timeoutMs)
+                        throw new DOMException('The operation timed out.', 'TimeoutError');
                 }
-                // A refused charge changes nothing (T2, 0341), unless the change is kept with
-                // its order waiting (raiseLeavesOrder), the case the sandbox never showed.
-                if (polar.raiseRefusal && !polar.raiseLeavesOrder)
-                    throw new PolarClientError(402, polar.raiseRefusal);
-                // Every immediate change is its own `subscription_update` order, charged at once,
-                // or left waiting.
-                const settling = polar.chargeSettlesInMs !== null && !polar.raiseLeavesOrder;
-                const change = {
-                    id: `order_${polar.orders.length + 1}`,
-                    subscription_id: id,
-                    status: polar.raiseLeavesOrder || settling ? 'pending' : 'paid',
-                    due_amount: polar.raiseLeavesOrder || settling ? 1000 : 0,
-                    created_at: new Date().toISOString(),
-                    product_id: body.product_id,
-                    billing_reason: 'subscription_update',
-                    hidden: polar.ordersLag,
-                };
-                polar.orders.push(change);
-                if (settling) chargeLater(change);
-                // T1: an immediate product change drops the whole pending update.
-                subscription.product_id = body.product_id;
-                subscription.amount = planAmount(
-                    body.product_id,
-                    subscription.units ?? 0,
-                    subscription.currency,
-                );
-                subscription.pending_update = null;
-                if (polar.raiseRefusal) throw new PolarClientError(402, polar.raiseRefusal);
-                return structuredClone(subscription);
-            }
-            if (typeof body.units === 'number') {
-                if (subscription.cancel_at_period_end)
-                    throw new PolarClientError(403, { error: 'AlreadyCanceledSubscription' });
-                if (body.units < minimumUnits(subscription))
-                    throw new PolarClientError(422, { error: 'BelowMinimumUnits' });
-                if (body.proration_behavior === 'next_period') {
-                    if (polar.cutFailures > 0) {
-                        polar.cutFailures -= 1;
-                        throw new PolarClientError(503, { error: 'ServiceUnavailable' });
-                    }
-                    const hook = polar.beforeCut;
-                    polar.beforeCut = null;
-                    await hook?.();
-                    subscription.pending_update = {
-                        units: body.units,
-                        product_id: subscription.pending_update?.product_id ?? null,
-                        applies_at: subscription.current_period_end,
-                    };
-                    return structuredClone(subscription);
-                }
-                const raise = body.units > (subscription.units ?? 0);
-                if (raise) {
-                    const hook = polar.beforeRaise;
-                    polar.beforeRaise = null;
-                    await hook?.();
-                }
-                // T1: an immediate raise drops only the pending units; a scheduled move survives.
-                const dropUnits = () => {
-                    const product = subscription.pending_update?.product_id ?? null;
-                    subscription.pending_update = product
-                        ? {
-                              units: null,
-                              product_id: product,
-                              applies_at: subscription.current_period_end,
-                          }
-                        : null;
-                };
-                if (raise && polar.raiseLeavesOrder) {
-                    subscription.units = body.units;
-                    dropUnits();
-                    polar.orders.push({
-                        id: `order_${polar.orders.length + 1}`,
-                        subscription_id: id,
-                        status: 'pending',
-                        due_amount: 235,
-                        created_at: new Date().toISOString(),
-                        product_id: subscription.product_id,
-                        billing_reason: 'subscription_update',
-                    });
-                }
-                if (raise && polar.raiseRefusal)
-                    throw new PolarClientError(402, polar.raiseRefusal);
-                // A raise Polar takes makes its own change order (spike E8, 3184: paid at once, no
-                // places on it), or one charged a moment later (chargeSettlesInMs), made a moment
-                // after the answer (raiseOrderLagMs).
-                if (raise && !polar.raiseLeavesOrder) {
-                    const settling = polar.chargeSettlesInMs !== null;
-                    const product = subscription.product_id;
-                    // This test's orders, even if the order lands after the test has ended.
-                    const orders = polar.orders;
-                    const place = () => {
-                        const order = {
-                            id: `order_${orders.length + 1}`,
-                            subscription_id: id,
-                            status: settling ? 'pending' : 'paid',
-                            due_amount: settling ? 235 : 0,
-                            created_at: new Date().toISOString(),
-                            product_id: product,
-                            billing_reason: 'subscription_update',
-                            units: null,
-                        };
-                        orders.push(order);
-                        if (settling) chargeLater(order);
-                    };
-                    if (polar.raiseOrderLagMs === null) place();
-                    else setTimeout(place, polar.raiseOrderLagMs);
-                }
-                subscription.units = body.units;
-                dropUnits();
-                return structuredClone(subscription);
-            }
-            if (typeof body.cancel_at_period_end === 'boolean') {
-                if (polar.cancelFailures > 0) {
-                    polar.cancelFailures -= 1;
-                    throw new PolarClientError(503, { error: 'ServiceUnavailable' });
-                }
-                if (polar.cancelRefusal)
-                    throw new PolarClientError(polar.cancelRefusal.status, {
-                        error: polar.cancelRefusal.error,
-                        detail: 'Refused.',
-                    });
-                const hook = polar.beforeCancel;
-                polar.beforeCancel = null;
-                await hook?.();
-                subscription.cancel_at_period_end = body.cancel_at_period_end;
-                if (polar.cancelAnswerLost) {
-                    polar.cancelAnswerLost = false;
-                    throw new Error('The request timed out.');
+                if (polar.changeAnswerLost) {
+                    polar.changeAnswerLost = false;
+                    throw new DOMException('The operation timed out.', 'TimeoutError');
                 }
             }
-            return structuredClone(subscription);
+            return answer;
         },
         // Ends it now; one already ended is refused as Polar refuses it (403).
         async revoke(id: string) {
@@ -1205,6 +1231,8 @@ beforeEach(async () => {
     polar.chargeSettlesInMs = null;
     polar.raiseOrderLagMs = null;
     polar.slowOrderReadsMs = 0;
+    polar.slowChangeMs = 0;
+    polar.changeAnswerLost = false;
     // Short waits for a charge to settle, so a charge the bank holds costs a test no seconds;
     // the tests of the waits themselves put the real ones back.
     billing.setSettleDelays([5, 10, 20]);
@@ -4180,6 +4208,69 @@ describe('unpaid places', () => {
             expect(await seatLimit(groupId)).toBe(6);
         },
     );
+
+    test(
+        'a raise Polar answers slowly after slow reads gets its full timeout, and is recorded',
+        {
+            timeout: 60_000,
+        },
+        async () => {
+            const { payer, groupId, subscription } = await familyOnPlan({ units: 6, members: 5 });
+            // The reads before the raise take 3.6 s; Polar then takes 14.8 s to answer it, within the
+            // call's own 15 s but more than an 18 s deadline would have left it.
+            polar.slowOrderReadsMs = 1800;
+            polar.beforeRaise = async () => {
+                polar.slowOrderReadsMs = 0;
+            };
+            polar.slowChangeMs = 14_800;
+            const started = performance.now();
+            expect(await billing.ensureGroupSeat(groupId, payer.id)).toEqual({ status: 'ok' });
+            expect(performance.now() - started).toBeLessThan(26_000);
+            expect(subscription.units).toBe(7);
+            expect(await seatLimit(groupId)).toBe(7);
+            expect(
+                (await priced(billing.getGroupBilling(payer, groupId))).subscription,
+            ).toMatchObject({
+                units: 7,
+                paidUnits: 7,
+            });
+        },
+    );
+
+    test('a raise whose answer is lost after Polar made it is answered from what Polar holds', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 6, members: 5 });
+        polar.changeAnswerLost = true;
+        const added = await billing.setGroupUnits(payer, groupId, 7, 6);
+        expect(added).not.toHaveProperty('confirmPayment');
+        expect(subscription.units).toBe(7);
+        expect(await seatLimit(groupId)).toBe(7);
+        expect((await priced(billing.getGroupBilling(payer, groupId))).subscription).toMatchObject({
+            units: 7,
+            paidUnits: 7,
+        });
+    });
+
+    test('a raise whose answer is lost, with the plan unreadable after, never says nothing was charged', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ units: 6, members: 5 });
+        polar.changeAnswerLost = true;
+        // Polar makes the raise, then stops answering anything for a while.
+        polar.beforeRaise = async () => {
+            polar.unauthorized = true;
+        };
+        const refusal = await billing.setGroupUnits(payer, groupId, 7, 6).then(
+            () => null,
+            (error: Error) => error,
+        );
+        expect(refusal).toMatchObject({ status: 503 });
+        expect(refusal?.message).toMatch(/isn’t clear yet whether the places were added/);
+        expect(refusal?.message).not.toMatch(/nothing was charged|try again/i);
+        expect(subscription.units).toBe(7);
+        expect(await seatLimit(groupId)).toBe(6);
+        // The next reconcile reads what Polar holds and opens the paid places.
+        polar.unauthorized = false;
+        await billing.reconcileGroup(groupId);
+        expect(await seatLimit(groupId)).toBe(7);
+    });
 
     test('a raise whose order is still not made when the wait ends goes to the bank', async () => {
         const { payer, groupId } = await familyOnPlan({ units: 6, members: 5 });
@@ -9193,6 +9284,17 @@ describe('family tiers', () => {
             expect(await pool(groupId)).toBe(MAX_POOL);
         },
     );
+
+    test('an upgrade whose answer is lost after Polar made it is answered from what Polar holds', async () => {
+        const { payer, groupId, subscription } = await familyOnPlan({ product: PLUS });
+        polar.changeAnswerLost = true;
+        const result = await billing.changeGroupPlan(payer, groupId, MAX_FAMILY);
+        expect(result).toMatchObject({ when: 'now', url: null });
+        expect(result).not.toHaveProperty('confirmPayment');
+        expect(subscription.product_id).toBe(MAX_FAMILY);
+        expect(await live(groupId)).toMatchObject({ paidProductId: MAX_FAMILY });
+        expect(await pool(groupId)).toBe(MAX_POOL);
+    });
 
     test('an unpaid upgrade keeps the old pool; once its order is paid, the new one', async () => {
         const { payer, groupId, subscription } = await familyOnPlan({
