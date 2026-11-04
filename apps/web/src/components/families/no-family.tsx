@@ -123,7 +123,7 @@ export function NoFamily({
                             {invitations.data.map((invitation) => (
                                 <li
                                     key={invitation.id}
-                                    className="flex flex-col gap-0.5 border-b border-rule py-4 last:border-0"
+                                    className="flex flex-col gap-0.5 py-3"
                                     data-invitation-to={invitation.name}
                                 >
                                     <span className="font-medium">
@@ -140,10 +140,10 @@ export function NoFamily({
                         </ul>
                     )}
                     {invitations.isSuccess && invitations.data.length === 0 && (
-                        <p className="py-4 text-muted-foreground">No invitations right now.</p>
+                        <p className="py-3 text-muted-foreground">No invitations right now.</p>
                     )}
                     {invitations.isError && (
-                        <p className="py-4 text-destructive">{errorCopy(invitations.error)}</p>
+                        <p className="py-3 text-destructive">{errorCopy(invitations.error)}</p>
                     )}
                 </SettingsGroup>
             </div>

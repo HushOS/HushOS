@@ -48,13 +48,13 @@ export const familiesQueryOptions = (userId: string) =>
         retry: 1,
     });
 
-/* How a member reads in a list: the roles in words, never colour alone. */
+/*
+ * How a member reads in a list: the roles in words, never colour alone. An organizer reads
+ * "Organizer" alone: "Manages the family" beside it only said again what organizer says.
+ */
 export function rolesLine(roles: readonly string[]) {
-    const organizer = roles.includes('billing');
-    const manages = roles.includes('members');
-    if (organizer && manages) return 'Organizer · Manages the family';
-    if (organizer) return 'Organizer';
-    if (manages) return 'Manages the family';
+    if (roles.includes('billing')) return 'Organizer';
+    if (roles.includes('members')) return 'Manages the family';
     return 'Member';
 }
 

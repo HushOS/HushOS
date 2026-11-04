@@ -102,7 +102,7 @@ export function AccountDevices() {
         <div id="devices" className="scroll-mt-20">
             <SettingsGroup title="Your devices" description="Where your account is signed in.">
                 {devices.isPending ? (
-                    <div className="flex flex-col gap-2 py-4" aria-busy="true">
+                    <div className="flex flex-col gap-2 py-3" aria-busy="true">
                         <Skeleton className="h-5 w-48" />
                         <Skeleton className="h-4 w-72" />
                     </div>

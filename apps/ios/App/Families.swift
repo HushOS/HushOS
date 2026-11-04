@@ -510,13 +510,13 @@ extension DriveStore {
         await refresh(folder: id, session: session)
     }
 
-    /* How a member reads in a list: the roles in words, never colour alone (the web's rolesLine). */
+    /*
+     * How a member reads in a list: the roles in words, never colour alone (the web's rolesLine).
+     * An organizer reads "Organizer" alone: "Manages the family" beside it only said it again.
+     */
     static func rolesLine(_ roles: [String]) -> String {
-        let organizer = roles.contains("billing")
-        let manages = roles.contains("members")
-        if organizer && manages { return "Organizer · Manages the family" }
-        if organizer { return "Organizer" }
-        if manages { return "Manages the family" }
+        if roles.contains("billing") { return "Organizer" }
+        if roles.contains("members") { return "Manages the family" }
         return "Member"
     }
 }

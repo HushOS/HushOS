@@ -23,6 +23,7 @@ import { StorageMeter } from '@/components/storage-card';
 import { Button } from '@/components/ui/button';
 import { Demo, Row, Sample, SheetFrame, States } from '@/dev/demo';
 import { familyBillingQueryOptions, type FamilyBilling } from '@/lib/family-billing';
+import { familyQueryOptions, type FamilyDetail } from '@/lib/families';
 
 const GB = 1024 ** 3;
 
@@ -49,7 +50,6 @@ ${scope} h1 + div { gap: ${dial.actionGap}px; }`}</style>
             <SheetFrame className="pt-5">
                 <div data-tune="page-header" data-measure="">
                     <PageHeader
-                        back={<a href="#page-header">Family</a>}
                         title="Lisbon 2026"
                         description="You and Sam can open everything in this folder."
                     >
@@ -360,12 +360,25 @@ const USER = 'playground-user';
 const GROUP = 'playground-family';
 const FAMILY = 'The Lindqvists';
 
-function StubFamily({ summary, children }: { summary: FamilyBilling; children: ReactNode }) {
+function StubFamily({
+    summary,
+    names,
+    children,
+}: {
+    summary: FamilyBilling;
+    /* Members' names by user id, for the rows that name them (Storage's per person). */
+    names?: Record<string, string>;
+    children: ReactNode;
+}) {
     const [client] = useState(() => {
         const stub = new QueryClient({
             defaultOptions: { queries: { enabled: false, retry: false } },
         });
         stub.setQueryData(familyBillingQueryOptions(USER, GROUP).queryKey, summary);
+        if (names)
+            stub.setQueryData(familyQueryOptions(USER, GROUP).queryKey, {
+                members: Object.entries(names).map(([userId, name]) => ({ userId, name })),
+            } as unknown as FamilyDetail);
         return stub;
     });
     return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
@@ -509,7 +522,7 @@ export function FamilyBillingDemo() {
         <Demo
             id="family-billing"
             title="Family plan billing"
-            note="What the payer is shown on a live plan: Change plan, Add places and the rest, opening the real dialogs."
+            note="What the payer is shown on a live plan: Change plan, Add places and the rest, opening the real dialogs, then Storage as a manager reads it."
         >
             <Row label="Family Pro, eight places, the payer">
                 <StubFamily
@@ -543,10 +556,19 @@ export function FamilyBillingDemo() {
                         },
                         lastPlan: null,
                         storage: { usedBytes: String(300 * GB), quotaBytes: String(2048 * GB) },
-                        usage: { ownBytes: '0', foldersBytes: String(300 * GB), members: [] },
+                        usage: {
+                            ownBytes: '0',
+                            foldersBytes: String(300 * GB),
+                            members: [
+                                { userId: USER, ownBytesRounded: String(42 * GB) },
+                                { userId: 'playground-sam', ownBytesRounded: String(18 * GB) },
+                                { userId: 'playground-ana', ownBytesRounded: '0' },
+                            ],
+                        },
                         seats: { used: 6, limit: 8 },
                         nextPlace: { amount: 96, currency: 'usd' },
                     }}
+                    names={{ 'playground-sam': 'Sam Ortega', 'playground-ana': 'Ana Lindqvist' }}
                 >
                     <div className="w-full">
                         <FamilyBody>
@@ -558,6 +580,7 @@ export function FamilyBillingDemo() {
                                 roles={['organizer', 'billing']}
                                 onCheckoutSeen={() => {}}
                             />
+                            <FamilyStorage userId={USER} groupId={GROUP} family={FAMILY} />
                         </FamilyBody>
                     </div>
                 </StubFamily>

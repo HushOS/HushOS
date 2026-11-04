@@ -225,7 +225,6 @@ export function FamilyPage({
     return (
         <div className="flex flex-1 flex-col">
             <PageHeader
-                back={<Link to="/app/account">Account</Link>}
                 title={family}
                 titleAction={
                     manager && (
