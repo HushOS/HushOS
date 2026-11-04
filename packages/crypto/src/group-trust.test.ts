@@ -19,6 +19,8 @@ import {
     type AcceptInput,
     type AcceptedRosters,
     type GroupReading,
+    type JoinMark,
+    type PairMark,
     type RosterChain,
     type ServedIdentity,
 } from './group-trust';
@@ -197,7 +199,7 @@ describe('accepting the chain the server serves', () => {
             await Promise.all(f.h.rosters.map((r) => rosterDigest(r.statement))),
         );
         // With no pin, no cache and no words check, nothing is taken on faith.
-        await expect(acceptRosters(newcomer(f, { firstKeysChecked: false }))).rejects.toThrow(
+        await expect(acceptRosters(newcomer(f, { anchor: null }))).rejects.toThrow(
             'have not been checked',
         );
     });
@@ -301,7 +303,7 @@ describe('accepting the chain the server serves', () => {
             acceptRosters(
                 newcomer(f, {
                     pins: [await pinOf(f.h, 2, f.all)],
-                    firstKeysChecked: false,
+                    anchor: null,
                     rosters: junk,
                 }),
             ),
@@ -1055,7 +1057,7 @@ describe('group key succession', () => {
             h.keys[0]!,
             holder,
         );
-        const marked = { pins: [pin], firstKeysChecked: false };
+        const marked = { pins: [pin], anchor: null };
         expect(
             (await acceptedOf(h, people, { ...marked, successions: [...h.successions, early] }))
                 .roster.rosterVersion,
@@ -1071,7 +1073,7 @@ describe('group key succession', () => {
             acceptRosters(
                 inputOf(h, people, {
                     pins: [atTwo],
-                    firstKeysChecked: false,
+                    anchor: null,
                     rosters: h.rosters.slice(0, 2),
                     successions: [early],
                 }),
@@ -1361,7 +1363,7 @@ describe('the device’s cache', () => {
             newcomer(f, {
                 cache: three.cache,
                 rosters: [f.h.rosters[3]!],
-                firstKeysChecked: false,
+                anchor: null,
             }),
         );
         const full = await accepted(newcomer(f));
@@ -1582,6 +1584,40 @@ describe('folding in changes', () => {
             newRosterEntry(
                 pin,
                 { ...adult.served, keysSignature: outsider.served.keysSignature },
+                { roles: [], rosterVersion: 4 },
+            ),
+        ).rejects.toThrow('not the keys whose words were checked');
+    });
+
+    test('a new member’s entry comes from a first-seen pin of the served keys, never from a family’s word', async () => {
+        // docs/optional-verification.md 3.3: the keys served when they were let in, pinned first-seen.
+        const { adult, outsider } = await cast();
+        const seen = { ...(await adult.pin()), fingerprint: '' };
+        expect(
+            await newRosterEntry(seen, adult.served, { roles: ['members'], rosterVersion: 4 }),
+        ).toEqual(adult.entry(['members'], 4));
+        // Not the served identity's keys, or a statement that does not hold: nobody is added.
+        for (const served of [
+            outsider.served,
+            { ...adult.served, encryptionPublicKey: outsider.served.encryptionPublicKey },
+            { ...adult.served, keysSignature: outsider.served.keysSignature },
+        ])
+            await expect(
+                newRosterEntry(seen, served, { roles: [], rosterVersion: 4 }),
+            ).rejects.toThrow('not the keys whose words were checked');
+        // A pin trusted through a family is the family's word, first-seen or verified.
+        for (const pin of [seen, await adult.pin()])
+            await expect(
+                newRosterEntry({ ...pin, trustedVia: GROUP }, adult.served, {
+                    roles: [],
+                    rosterVersion: 4,
+                }),
+            ).rejects.toThrow('not the keys whose words were checked');
+        // A fingerprint over other keys is neither verified nor first-seen.
+        await expect(
+            newRosterEntry(
+                { ...seen, fingerprint: (await outsider.pin()).fingerprint },
+                adult.served,
                 { roles: [], rosterVersion: 4 },
             ),
         ).rejects.toThrow('not the keys whose words were checked');
@@ -3166,7 +3202,7 @@ describe('milestone 1c: creating a group', () => {
             groupId: GROUP,
             firstKeys: groupKey.publicKey,
             // The creator made the keys just now: the one other place that says so (design 2.4).
-            firstKeysChecked: true,
+            anchor: 'created',
             pins: [],
             rosters: [await signRoster(roster, groupKey, organizer.signer)],
             successions: [],
@@ -3394,10 +3430,10 @@ describe('milestone 1c: creating a group', () => {
     });
 });
 
-/* A creator accepting their own group: they made the keys, so firstKeysChecked; their own identity. */
+/* A creator accepting their own group: they made the keys, so anchored `created`; their own identity. */
 function creatorReading(who: Person) {
     return {
-        firstKeysChecked: true,
+        anchor: 'created' as const,
         pins: [],
         successions: [],
         mlDsaKeys: mlDsaKeysOf(who),
@@ -3405,3 +3441,59 @@ function creatorReading(who: Person) {
         cache: null,
     };
 }
+
+describe('a pair mark is never a join mark (docs/optional-verification.md 3.4)', () => {
+    test('a join mark naming a member, or a pair mark naming none, is refused by its shape', async () => {
+        const [organizer, adult, child] = (await Promise.all([1, 2, 4].map((n) => person(n)))) as [
+            Person,
+            Person,
+            Person,
+        ];
+        const owner = organizer.entry(['billing', 'members']);
+        const h = await history();
+        await h.roster(organizer, [owner]);
+        await h.roster(organizer, [owner, adult.entry([]), child.entry([])]);
+        const people = [organizer, adult, child];
+        const code = await joinCode(
+            await rosterDigest(h.rosters[1]!.statement),
+            h.keys[0]!.publicKey,
+            1,
+        );
+        const asAdult = { userId: adult.userId, identities: [servedKeysOf(adult)] };
+        // The join's own code as a join mark: taken.
+        await expect(
+            acceptRosters(inputOf(h, people, { joinMark: { rosterVersion: 2, code } })),
+        ).resolves.toMatchObject({ status: 'accepted', checked: { how: 'join' } });
+        // A pair mark (it names whom it was compared with) handed in as the join mark.
+        await expect(
+            acceptRosters(
+                inputOf(h, people, {
+                    joinMark: { rosterVersion: 2, code, with: child.userId } as JoinMark,
+                }),
+            ),
+        ).rejects.toThrow('Invalid join mark.');
+        // A join mark (no member named) handed in as a pair mark, beside the pin that decides.
+        const pin = await pinOf(h, 2, people);
+        await expect(
+            acceptRosters(
+                inputOf(h, people, {
+                    anchor: null,
+                    pins: [pin],
+                    me: asAdult,
+                    pairMarks: [{ rosterVersion: 2, code } as PairMark],
+                }),
+            ),
+        ).rejects.toThrow('Invalid pair mark.');
+        // A pair mark with no reader to hold it against.
+        await expect(
+            acceptRosters(
+                inputOf(h, people, {
+                    anchor: null,
+                    pins: [pin],
+                    pairMarks: [{ rosterVersion: 2, with: child.userId, code }],
+                    me: null as unknown as typeof asAdult,
+                }),
+            ),
+        ).rejects.toThrow();
+    });
+});

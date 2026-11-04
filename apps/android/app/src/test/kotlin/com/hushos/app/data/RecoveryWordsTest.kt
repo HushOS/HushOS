@@ -53,7 +53,7 @@ class RecoveryWordsTest {
     @Test
     fun signOutAndAnotherAccountClearItTheSameAccountKeepsIt() {
         RecoveryWords.use(RecoveryMarker(file))
-        val store = AccountStore(File(dir, "files"), File(dir, "cache"))
+        val store = AccountStore(File(dir, "files"), File(dir, "cache"), File(dir, "no_backup"))
         store.claim("alice")
         RecoveryWords.begun("alice")
         store.claim("alice")

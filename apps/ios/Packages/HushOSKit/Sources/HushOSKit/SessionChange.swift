@@ -36,10 +36,25 @@ public enum SessionChange: Equatable, Sendable {
      * the family keys its area ledger holds, and its vault. Each session has its own vault and
      * ledger (`Vault.fromKeychain`), so a new session for the same account (`adopt`) starts
      * clean too; otherwise the previous account's family keys stayed in memory after another
-     * signed in from the Files sheet.
+     * signed in from the Files sheet. First the last session is closed as a sign-out closes it
+     * (TemporaryCopies.endAccount): its syncs, which can't be cancelled and may answer late, then
+     * delete and write no copy or record, and its downloads write nothing, before anything of the
+     * new session starts. The same account's new session (`adopt`) included.
      */
-    public func forgetLastSession() {
+    public func forgetLastSession(account: CopyEpoch = .process) {
         guard self != .none else { return }
+        Self.closeLastSession(account: account)
+    }
+
+    /*
+     * The last session closed as a sign-out closes it, before a new one starts work: its syncs
+     * (which can't be cancelled, and may answer late) delete and write no copy or record, its
+     * downloads write nothing, and its family sync and keys leave memory. Every new session goes
+     * through it: a session another process stored (`forgetLastSession`) and every sign-in in this
+     * one (Auth.signIn: the sign-in screen, Change password, Rotate account key, recovery).
+     */
+    public static func closeLastSession(account: CopyEpoch = .process) {
+        TemporaryCopies.endAccount(account)
         FamilySync.forget()
     }
 }

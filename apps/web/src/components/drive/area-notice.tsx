@@ -46,9 +46,9 @@ export function AreaNotice({ area, waiting }: { area: FamilyArea; waiting: boole
                 <Alert variant="info">
                     <AlertTitle>{FINISHING_KEY_CHANGE}</AlertTitle>
                     <AlertDescription>
-                        Uploads to this folder wait until {area.family}’s new keys reach it, then go
-                        on their own while this tab stays open; new folders and moves can be made
-                        once it’s done. You can still open what’s in it.
+                        Uploads to this folder wait until the family’s new keys reach it, then go on
+                        their own while this tab stays open; new folders and moves can be made once
+                        it’s done. You can still open what’s in it.
                     </AlertDescription>
                 </Alert>
             </div>

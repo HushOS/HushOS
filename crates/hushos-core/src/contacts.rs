@@ -169,6 +169,94 @@ pub fn pin_verified(
     check().unwrap_or(false)
 }
 
+/// The key fields of a contact pin, as every pin rule reads them: the X25519
+/// and Ed25519 keys (base64url), the hex digests of the ML-DSA and ML-KEM
+/// keys (none on a pin from before post-quantum identities), the key version
+/// and the fingerprint: the version 3 one on a verified pin, `""` on a
+/// first-seen one (docs/optional-verification.md 2.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct PinKeys {
+    pub key_version: Option<u64>,
+    pub encryption_public_key: String,
+    pub signing_public_key: String,
+    pub ml_dsa_public_key_hash: Option<String>,
+    pub kem_public_key_hash: Option<String>,
+    pub fingerprint: String,
+}
+
+/// The key commitment (docs/optional-verification.md 1): the version 3
+/// fingerprint over a pin's four keys, whether or not anyone compared it. It
+/// is how two pins, a pin and a guard entry, or a pin and a staged admission
+/// are compared; the pin's own `fingerprint` never is, since every first-seen
+/// pin holds `""` there. None when a key field is missing or not canonical, so
+/// a malformed pin matches nothing. packages/crypto's `keyCommitment` is its
+/// twin.
+///
+/// ```
+/// use hushos_core::*;
+/// let pin = PinKeys {
+///     key_version: Some(1),
+///     encryption_public_key: base64url_encode(vec![1; 32]),
+///     signing_public_key: base64url_encode(vec![2; 32]),
+///     ml_dsa_public_key_hash: Some("03".repeat(32)),
+///     kem_public_key_hash: Some("04".repeat(32)),
+///     fingerprint: String::new(),
+/// };
+/// let print = identity_fingerprint(vec![1; 32], vec![2; 32], vec![3; 32], vec![4; 32])?;
+/// assert_eq!(key_commitment(pin.clone()), Some(print));
+/// assert_eq!(pin_trust(pin), PinTrust::Seen);
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn key_commitment(pin: PinKeys) -> Option<String> {
+    identity_fingerprint(
+        decode("encryptionPublicKey", &pin.encryption_public_key, Some(32)).ok()?,
+        decode("signingPublicKey", &pin.signing_public_key, Some(32)).ok()?,
+        digest_bytes(pin.ml_dsa_public_key_hash.as_deref()?)?,
+        digest_bytes(pin.kem_public_key_hash.as_deref()?)?,
+    )
+    .ok()
+}
+
+/// What a contact pin stands for (docs/optional-verification.md 2.2), the
+/// one rule every client applies, twinned by packages/crypto's `pinTrust`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PinTrust {
+    /// [`pin_verified`]: a words check over its four keys.
+    Verified,
+    /// A first-seen pin: `fingerprint` exactly `""`, every key field well
+    /// formed. The keys first seen for the person, which nobody checked.
+    Seen,
+    /// No ML-DSA digest: a pin from before post-quantum identities.
+    Legacy,
+    /// Anything else (a fingerprint over other keys, a malformed key). Read as
+    /// legacy: it can become first-seen again, never verified.
+    Invalid,
+}
+
+/// The [`PinTrust`] of a pin's key fields.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn pin_trust(pin: PinKeys) -> PinTrust {
+    if pin.ml_dsa_public_key_hash.as_deref().is_none_or(str::is_empty) {
+        return PinTrust::Legacy;
+    }
+    if pin_verified(
+        pin.encryption_public_key.clone(),
+        pin.signing_public_key.clone(),
+        pin.ml_dsa_public_key_hash.clone(),
+        pin.kem_public_key_hash.clone(),
+        pin.fingerprint.clone(),
+    ) {
+        return PinTrust::Verified;
+    }
+    if pin.fingerprint.is_empty() && key_commitment(pin).is_some() {
+        return PinTrust::Seen;
+    }
+    PinTrust::Invalid
+}
+
 pub(crate) fn hkdf(ikm: &[u8], info: &[u8]) -> CoreResult<Zeroizing<[u8; KEY_BYTES]>> {
     let mut key = Zeroizing::new([0u8; KEY_BYTES]);
     Hkdf::<Sha256>::new(Some(&[0u8; 32]), ikm)

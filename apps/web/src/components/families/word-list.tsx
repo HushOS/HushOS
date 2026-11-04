@@ -1,6 +1,6 @@
 /*
- * Twelve words two people read to each other: a join code (over the roster
- * that let someone in). The same grid as a person's own words, in the text face: whole words are read
+ * Twelve words two people read to each other: a family check's (the pair
+ * code), or the old join code read to an older app's newcomer. The same grid as a person's own words, in the text face: whole words are read
  * aloud, not characters one by one, so mono (DESIGN.md, Typography) is not
  * for them.
  */
@@ -11,7 +11,7 @@ export function WordList({
 }: {
     words: readonly string[];
     label: string;
-    kind: 'join-code';
+    kind: 'pair-code' | 'older-code';
 }) {
     return (
         <ol
@@ -35,15 +35,5 @@ export function WordList({
                 </li>
             ))}
         </ol>
-    );
-}
-
-/* Where to compare words: said on both join screens, so nobody reads them over HushOS itself. */
-export function CompareGuidance() {
-    return (
-        <p className="text-[13px] leading-snug text-muted-foreground">
-            Compare these in person or on a call through another app, never in a message sent
-            through HushOS.
-        </p>
     );
 }

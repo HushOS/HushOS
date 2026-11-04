@@ -297,7 +297,8 @@ export function SiteFooter() {
 }
 
 function FullFooter() {
-    const year = new Date().getFullYear();
+    // Read once per mount: render stays pure, and the year cannot change between renders.
+    const [year] = useState(() => new Date().getFullYear());
     const { operatorName, billingEnabled } = useRouteContext({ from: '__root__' });
     const shown = usePages();
     const columns: { title: string; items: FooterItem[] }[] = [

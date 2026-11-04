@@ -138,6 +138,33 @@ fn the_node_key_and_metadata_open_under_the_parent_key() {
     assert_eq!(metadata.modified.as_deref(), expected["modified"].as_str());
 }
 
+/* A record the web sealed with attributes opens to every one of them, and the core writes the web's exact bytes for it. */
+#[test]
+fn a_record_with_attributes_opens_and_the_core_writes_the_same_plaintext() {
+    let node = &fixture()["node"];
+    let attributed = &node["attributed"];
+    let ctx = &attributed["metadataCtx"];
+    let ctx = MetadataContext {
+        workspace_id: s(ctx, "workspaceId"),
+        node_id: s(ctx, "nodeId"),
+        metadata_version: n(ctx, "metadataVersion"),
+    };
+    let opened = metadata_open(ctx.clone(), b(node, "nodeKey"), b(attributed, "metadataEnvelope")).unwrap();
+    let expected: std::collections::HashMap<String, String> =
+        serde_json::from_value(attributed["metadata"]["attributes"].clone()).unwrap();
+    assert_eq!(expected.len(), 3);
+    assert_eq!(opened.attributes, expected);
+    // `name` is an attribute like any other: the name is the record's own.
+    assert_eq!(opened.name, "Plans");
+    assert_eq!(serde_json::to_string(&opened).unwrap(), s(attributed, "plaintext"));
+    // Sealed again here, as a rename would after opening it: every attribute survives.
+    let renamed = NodeMetadata { name: "Plans 2".into(), ..opened };
+    let mut next = ctx;
+    next.metadata_version += 1;
+    let envelope = metadata_seal(next.clone(), b(node, "nodeKey"), renamed.clone()).unwrap();
+    assert_eq!(metadata_open(next, b(node, "nodeKey"), envelope).unwrap().attributes, expected);
+}
+
 fn version_ctx(ctx: &Value) -> VersionContext {
     VersionContext {
         workspace_id: s(ctx, "workspaceId"),
@@ -402,11 +429,12 @@ fn the_web_s_writer_signatures_verify_and_nothing_near_them_does() {
         b(metadata, "envelope"),
         b(metadata, "signature")
     ));
-    let current = TrustedKeys { current: public.clone(), retired: vec![] };
+    let current = TrustedKeys { current: public.clone(), retired: vec![], seen: false };
     // The web's successor key as current, the signer's key only as retired.
     let replaced = TrustedKeys {
         current: base64url_decode(s(&fixture()["succession"]["identity"], "signingPublicKey")).unwrap(),
         retired: vec![public.clone()],
+        seen: false,
     };
     let verdict = |trusted: &TrustedKeys, signature: &str| {
         metadata_integrity(
@@ -452,7 +480,7 @@ fn the_web_s_writer_signatures_verify_and_nothing_near_them_does() {
         b(version, "envelope"),
         b(version, "signature")
     ));
-    let current = TrustedKeys { current: public, retired: vec![] };
+    let current = TrustedKeys { current: public, retired: vec![], seen: false };
     assert_eq!(
         version_integrity(
             Some(current.clone()),
@@ -781,7 +809,7 @@ fn the_web_s_scoped_ids_derive_here_from_the_same_seed_and_scope() {
 fn the_web_s_saved_signatures_read_as_saved_and_as_nothing_else() {
     let signatures = &fixture()["signatures"];
     let public = b(signatures, "signingPublicKey");
-    let me = TrustedKeys { current: public.clone(), retired: vec![] };
+    let me = TrustedKeys { current: public.clone(), retired: vec![], seen: false };
     let metadata = &signatures["metadata"];
     let statement = MetadataStatement {
         workspace_id: s(&metadata["statement"], "workspaceId"),

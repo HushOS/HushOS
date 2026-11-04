@@ -5,6 +5,7 @@ import { buttonVariants } from '@/components/ui/button';
 import { Spinner } from '@/components/motion';
 import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
+import { forgetSent } from '@/lib/link-sent';
 import { cue } from '@/lib/sounds';
 
 type Enrollment = { id: string; email: string };
@@ -40,6 +41,8 @@ export function VerifiedEmailStep({
                         'This link belongs to a different account flow. Request a new link.',
                     );
                 cue('ready');
+                // The link did its job: the address it was sent to is not kept any longer.
+                forgetSent();
                 setEnrollment(enrollment);
             })
             .catch((error) => {

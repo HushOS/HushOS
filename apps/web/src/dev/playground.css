@@ -1,0 +1,31 @@
+/*
+ * The playground's own drawing aids, which the product's one-blue rule doesn't bind: a warm
+ * ground for frames, and redline colours for Measure (magenta distances, cyan edges). Each
+ * was measured against every scheme's surface, ground and this warm ground: lines at least
+ * 4.2:1, white pill text on the pill fill at least 5.1:1 (7:1 in high contrast).
+ */
+:root,
+.light {
+    --pg-ground: #f2efe9;
+    --pg-ground-edge: #e3ded4;
+    --pg-measure: #d6006a;
+    --pg-measure-pill: #d6006a;
+    --pg-edge: #007c9c;
+}
+.dark {
+    --pg-ground: #1c1a17;
+    --pg-ground-edge: #2e2b26;
+    --pg-measure: #ff5ca8;
+    --pg-measure-pill: #d6006a;
+    --pg-edge: #3cc8e8;
+}
+.hc:not(.dark) {
+    --pg-measure: #b0005a;
+    --pg-measure-pill: #b0005a;
+    --pg-edge: #00627c;
+}
+.dark.hc {
+    --pg-measure: #ff85bd;
+    --pg-measure-pill: #b0005a;
+    --pg-edge: #7adcf2;
+}

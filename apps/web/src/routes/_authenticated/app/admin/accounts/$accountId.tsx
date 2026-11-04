@@ -303,7 +303,7 @@ function AddStorageDialog({
 
     const segment = (selected: boolean) =>
         cn(
-            'flex h-9 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-sm px-2 text-sm whitespace-nowrap outline-none focus-visible:outline-2 focus-visible:outline-ring pointer-coarse:h-11',
+            'flex h-9 min-w-0 flex-1 cursor-pointer items-center justify-center rounded-sm px-2 text-sm whitespace-nowrap outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring pointer-coarse:h-11',
             selected
                 ? 'bg-accent font-semibold text-accent-foreground'
                 : 'text-muted-foreground hover:text-foreground',

@@ -14,6 +14,9 @@ import {
     EmptyState,
     LIST_COLUMN,
     MarqueeBox,
+    ROW_FOCUS,
+    ROW_FOCUS_WITHIN,
+    reveal,
     RowName,
     SelectableMark,
     SkeletonRows,
@@ -35,6 +38,7 @@ import {
 import { Preview } from '@/components/drive/preview';
 import { RenameDialog } from '@/components/drive/rename-dialog';
 import { ShareDialog } from '@/components/drive/share-dialog';
+import { isTyping } from '@/components/drive/shortcuts';
 import { Swatch } from '@/components/drive/tag-colour';
 import { TagDialog } from '@/components/drive/tag-dialog';
 import { TagStamps } from '@/components/drive/tag-stamp';
@@ -58,45 +62,23 @@ import {
     useCatalogueState,
 } from '@/lib/drive';
 import { usePaletteOpen } from '@/lib/palette';
-import { previewKind } from '@/lib/previews';
 import { cue } from '@/lib/sounds';
 import { tagsQueryOptions } from '@/lib/tags';
 
 /*
  * Home: where the app opens. What changed lately across every folder, from the
- * catalogue on this device, narrowed by a type or a tag. Rows select, open and offer the same menu as in a folder;
- * a folder opens where it lives, a file opens in the viewer over Home.
+ * catalogue on this device, narrowed by a tag (search finds things by kind:
+ * "photos"). Rows select, open and offer the same menu as in a folder; a folder
+ * opens where it lives, a file opens in the viewer over Home.
  */
 
 const LIMIT = 50;
-
-type TypeFilter = 'All' | 'Folders' | 'Images' | 'Videos' | 'Documents';
-const TYPES: TypeFilter[] = ['All', 'Folders', 'Images', 'Videos', 'Documents'];
-const DOCUMENT_KINDS = new Set(['pdf', 'office', 'markdown', 'text']);
-
-function matchesType(node: DriveNode, type: TypeFilter) {
-    switch (type) {
-        case 'All':
-            return true;
-        case 'Folders':
-            return node.kind === 'folder';
-        case 'Images':
-            return previewKind(node) === 'image';
-        case 'Videos':
-            return previewKind(node) === 'video';
-        case 'Documents':
-            return DOCUMENT_KINDS.has(previewKind(node));
-    }
-}
 
 function folderLink(rootId: string, folderId: string) {
     return folderId === rootId
         ? ({ to: '/app/drive' } as const)
         : ({ to: '/app/drive/f/$folderId', params: { folderId } } as const);
 }
-
-/* When an item last changed in HushOS: an upload, a new version, a rename or a move. */
-const changedAt = (node: DriveNode) => Date.parse(node.updatedAt) || 0;
 
 export function HomeView() {
     const { rootId, workspaceId } = useDrive();
@@ -107,7 +89,6 @@ export function HomeView() {
     const top = useQuery(folderQueryOptions(rootId));
     const registry = useQuery(tagsQueryOptions).data ?? null;
     const tags = registry?.tags ?? [];
-    const [type, setType] = useState<TypeFilter>('All');
     const [tagId, setTagId] = useState<string | null>(null);
     // A tag removed elsewhere stops filtering here.
     const tag = tags.find((entry) => entry.id === tagId) ?? null;
@@ -116,24 +97,20 @@ export function HomeView() {
     const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
     const [back, setBack] = useState<ReadonlyMap<string, DriveNode>>(new Map());
 
-    // The catalogue knows every folder; the top folder's own listing is fresher right
-    // after something is added here, so it wins for the items it holds.
+    // The catalogue knows every folder; the top folder's own listing is fresher right after
+    // something is added here, and a row put back is ahead of it until the refresh, so both win
+    // for the items they hold. A folder stands in for what it holds, after the tag.
     const rows = useMemo(() => {
         const keep = (node: DriveNode) =>
             !gone.has(node.id) &&
-            matchesType(node, type) &&
+            // What was inside a folder trashed from here goes with it, not into the folder's place.
+            (gone.size === 0 ||
+                !driveClient.ancestorsOf(node.id).some((folder) => gone.has(folder.id))) &&
             (!tag || (registry !== null && tagsOf(registry, node.id).includes(tag.id)));
-        const found = new Map<string, DriveNode>();
-        for (const node of back.values()) if (keep(node)) found.set(node.id, node);
-        for (const node of driveClient.recent(LIMIT, keep)) found.set(node.id, node);
-        for (const node of top.data?.children ?? [])
-            if (!node.trashedAt && keep(node)) found.set(node.id, node);
-        return [...found.values()]
-            .sort((a, b) => changedAt(b) - changedAt(a) || a.name.localeCompare(b.name))
-            .slice(0, LIMIT);
+        return driveClient.recent(LIMIT, keep, [...back.values(), ...(top.data?.children ?? [])]);
         // The catalogue state stands in for the catalogue's contents, which it follows.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [catalogue, top.data, type, tag, registry, gone, back]);
+    }, [catalogue, top.data, tag, registry, gone, back]);
     const ids = useMemo(() => rows.map((row) => row.id), [rows]);
     const dropRef = useRef<HTMLDivElement>(null);
     const mobile = useIsMobile();
@@ -141,13 +118,13 @@ export function HomeView() {
         coarse,
         selected,
         setSelected,
-        focused,
         marquee,
         select,
         toggle,
         clear,
         selectAll,
         moveFocus,
+        focusShown,
     } = useListSelection(ids, dropRef);
     const picker = useRef<UploadPicker>(null);
     const [creating, setCreating] = useState(false);
@@ -291,7 +268,7 @@ export function HomeView() {
             went = result.gone;
             // Everything picked is in the trash, itself or inside a folder that went.
             if (went.length === nodes.length) {
-                cue('droplet');
+                cue('close');
                 const id = toast.add({
                     type: 'success',
                     title:
@@ -349,14 +326,27 @@ export function HomeView() {
     useHotkey('T', () => selection.length > 0 && setTagging(selection), { enabled: idle });
     useHotkey('Backspace', () => void trash(selection), { enabled });
     useHotkey('Delete', () => void trash(selection), { enabled });
-    // Enter on a focused link or button is that control's, not the selection's.
+    // Enter on a focused link or button is that control's, not the selection's,
+    // except a selected row's own name or thumbnail: Enter there opens the row when it is
+    // the whole selection, and otherwise keeps the selection the button's click would collapse.
     useHotkey(
         'Enter',
         (event) => {
-            if (event.target instanceof Element && event.target.closest('a, button')) return;
+            if (!(event.target instanceof Element)) return;
+            if (isTyping(event.target)) return;
+            const control = event.target.closest('a, button');
+            const id = control?.matches('[data-row-name], [data-row-thumb]')
+                ? control.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId
+                : undefined;
+            if (id && selected.has(id)) {
+                event.preventDefault();
+                if (selection.length === 1) open(selection[0]!);
+                return;
+            }
+            if (control) return;
             if (selection.length === 1) open(selection[0]!);
         },
-        { enabled, preventDefault: false },
+        { enabled, preventDefault: false, ignoreInputs: false },
     );
     useHotkey('ArrowDown', () => moveFocus(1), { enabled });
     useHotkey('ArrowUp', () => moveFocus(-1), { enabled });
@@ -396,7 +386,7 @@ export function HomeView() {
         catalogue.phase === 'idle' ||
         catalogue.phase === 'pulling' ||
         catalogue.phase === 'opening';
-    const heading = tag ? tag.name : type === 'All' ? 'Recent' : `Recent ${type.toLowerCase()}`;
+    const heading = tag ? tag.name : 'Recent';
 
     return (
         <div
@@ -440,41 +430,36 @@ export function HomeView() {
                 </EmptyState>
             ) : (
                 <>
-                    {/* Recent is the page: its title first, then its own filters. */}
+                    {/* Recent is the page: its title first, then its tags. */}
                     <h2 className="shrink-0 px-5 pb-3 text-lg leading-tight font-bold tracking-[-0.015em] sm:px-8 sm:text-[22px]">
                         {heading}
                     </h2>
-                    <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 px-5 pb-4 sm:px-8">
-                        <TypeChips value={type} onChange={setType} />
-                        {/* Hidden until there is a tag to choose. */}
-                        {tags.length > 0 && (
-                            <div className="flex flex-wrap items-center gap-2">
-                                {tags.map((entry) => (
-                                    <TagPill
-                                        key={entry.id}
-                                        tag={entry}
-                                        selected={tag?.id === entry.id}
-                                        onClick={() =>
-                                            setTagId(tag?.id === entry.id ? null : entry.id)
-                                        }
-                                    />
-                                ))}
-                                <Link
-                                    to="/app/tags"
-                                    className="pl-1 text-[13px] font-semibold text-primary underline underline-offset-2 hover:text-primary-hover"
-                                >
-                                    Manage tags
-                                </Link>
-                            </div>
-                        )}
-                    </div>
+                    {/* Hidden until there is a tag to choose. */}
+                    {tags.length > 0 && (
+                        <div className="flex shrink-0 flex-wrap items-center gap-2 px-5 pb-4 sm:px-8">
+                            {tags.map((entry) => (
+                                <TagPill
+                                    key={entry.id}
+                                    tag={entry}
+                                    selected={tag?.id === entry.id}
+                                    onClick={() => setTagId(tag?.id === entry.id ? null : entry.id)}
+                                />
+                            ))}
+                            <Link
+                                to="/app/tags"
+                                className="pl-1 text-[13px] font-semibold text-primary underline underline-offset-2 hover:text-primary-hover"
+                            >
+                                Manage tags
+                            </Link>
+                        </div>
+                    )}
                     <div className="flex min-h-0 flex-1">
                         <div className="@container/list flex min-h-0 min-w-0 flex-1 flex-col">
                             {rows.length === 0 &&
                                 (building || top.isPending ? (
                                     <SkeletonRows rows={5} />
                                 ) : (
-                                    <FilterEmpty type={type} tagged={tag !== null} />
+                                    <FilterEmpty tagged={tag !== null} />
                                 ))}
                             {rows.length > 0 && (
                                 <table
@@ -484,7 +469,7 @@ export function HomeView() {
                                 >
                                     <thead>
                                         <tr className="h-10 border-b border-rule text-xs font-semibold text-muted-foreground">
-                                            <th scope="col" className="pl-4 text-left md:pl-8">
+                                            <th scope="col" className="pl-5 text-left sm:pl-8">
                                                 <span className="flex items-center gap-3 md:gap-4">
                                                     <span className="w-8 shrink-0 md:w-10" />
                                                     Name
@@ -520,7 +505,7 @@ export function HomeView() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {rows.map((node) => {
+                                        {rows.map((node, index) => {
                                             const isSelected = selected.has(node.id);
                                             const entries = entriesFor(node);
                                             return (
@@ -530,6 +515,7 @@ export function HomeView() {
                                                             <tr
                                                                 aria-selected={isSelected}
                                                                 data-node-id={node.id}
+                                                                {...reveal(index)}
                                                                 onDoubleClick={() => open(node)}
                                                                 onContextMenu={(event) => {
                                                                     event.stopPropagation();
@@ -540,12 +526,11 @@ export function HomeView() {
                                                         }
                                                         className={cn(
                                                             'group/row h-14 cursor-default border-b border-rule select-none',
+                                                            ROW_FOCUS_WITHIN,
                                                             isSelected
                                                                 ? 'bg-accent'
                                                                 : 'hover:bg-muted',
-                                                            focused === node.id &&
-                                                                !isSelected &&
-                                                                'ring-1 ring-ring ring-inset',
+                                                            focusShown(node.id) && ROW_FOCUS,
                                                         )}
                                                     >
                                                         <td className="min-w-0 p-0">
@@ -629,7 +614,7 @@ export function HomeView() {
                                                                 'text-[13px] text-muted-foreground tabular-nums',
                                                             )}
                                                         >
-                                                            {formatWhen(node.updatedAt)}
+                                                            {formatWhen(node.recentAt)}
                                                         </td>
                                                         <td
                                                             className={cn(
@@ -804,40 +789,6 @@ function HomeName({
     );
 }
 
-/* What to show: everything, or one kind. The chosen one is ink with a check. */
-function TypeChips({
-    value,
-    onChange,
-}: {
-    value: TypeFilter;
-    onChange: (value: TypeFilter) => void;
-}) {
-    return (
-        <fieldset className="m-0 flex min-w-0 flex-wrap gap-2 border-0 p-0">
-            <legend className="sr-only">Show</legend>
-            {TYPES.map((filter) => (
-                <button
-                    key={filter}
-                    type="button"
-                    aria-pressed={value === filter}
-                    onClick={() => onChange(filter)}
-                    className={cn(
-                        'flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-3.5 text-sm font-semibold transition-colors outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring pointer-coarse:h-10',
-                        value === filter
-                            ? 'border-ink bg-ink text-secondary-foreground'
-                            : 'border-rule bg-card text-foreground hover:bg-muted',
-                    )}
-                >
-                    {value === filter && filter !== 'All' && (
-                        <CheckIcon className="size-3.5" strokeWidth={3} aria-hidden="true" />
-                    )}
-                    {filter}
-                </button>
-            ))}
-        </fieldset>
-    );
-}
-
 /* A tag to narrow Recent by: its colour and name; chosen, a tint and a check. */
 function TagPill({ tag, selected, onClick }: { tag: Tag; selected: boolean; onClick: () => void }) {
     return (
@@ -846,10 +797,10 @@ function TagPill({ tag, selected, onClick }: { tag: Tag; selected: boolean; onCl
             aria-pressed={selected}
             onClick={onClick}
             className={cn(
-                'flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-[13px] font-semibold transition-colors outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring pointer-coarse:h-10',
+                'flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-[13px] font-semibold transition-colors outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring pointer-coarse:h-10',
                 selected
                     ? 'border-primary bg-accent text-accent-foreground'
-                    : 'border-rule bg-card text-foreground hover:bg-muted',
+                    : 'border-rule bg-panel text-foreground hover:bg-muted',
             )}
         >
             {selected ? (
@@ -862,21 +813,20 @@ function TagPill({ tag, selected, onClick }: { tag: Tag; selected: boolean; onCl
     );
 }
 
-/* A chip or a tag that matches nothing says so, in the words of what was chosen. */
-function FilterEmpty({ type, tagged }: { type: TypeFilter; tagged: boolean }) {
-    const kind = type === 'All' ? null : type.toLowerCase();
+/* Recent with nothing in it, or a tag that matches nothing, says so. */
+function FilterEmpty({ tagged }: { tagged: boolean }) {
     if (tagged)
         return (
             <EmptyState
-                title={kind ? `No ${kind} with this tag yet` : 'Nothing has this tag yet'}
+                title="Nothing has this tag yet"
                 body="Select items and press T to tag them."
                 className="sm:py-12"
             />
         );
     return (
         <EmptyState
-            title={`No ${kind ?? 'recent files'} yet`}
-            body={`${type === 'All' ? 'Files' : type} you add or change show up here.`}
+            title="No recent files yet"
+            body="Files you add or change show up here."
             className="sm:py-12"
         />
     );

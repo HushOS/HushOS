@@ -15,7 +15,7 @@ extension OfflineStore {
         let node = NodeView(id: id, workspaceId: workspace, parentId: "p", kind: folder ? "folder" : "file", keyEpoch: 1, parentKeyEpoch: 1,
                             keyEnvelope: "", metadataVersion: 1, metadataEnvelope: "", currentVersion: nil, trashedAt: nil,
                             changeSeq: 1, createdAt: nil, updatedAt: nil)
-        return Opened(node: node, metadata: NodeMetadata(name: id, mime: nil, size: 3, modified: nil), nodeKey: nil)
+        return Opened(node: node, metadata: NodeMetadata(name: id, mime: nil, size: 3, modified: nil, attributes: [:]), nodeKey: nil)
     }
 
     @Test func aFailingFileWaitsLongerEachTimeUpToAnHour() {

@@ -80,7 +80,7 @@ fn main() {
     let RosterChain::Accepted { chain } = accept_rosters(
         GROUP.into(),
         old.clone(),
-        true,
+        Some(GroupAnchor::Created),
         vec![],
         rosters.iter().map(|(_, signed)| signed.clone()).collect(),
         vec![succession.clone()],

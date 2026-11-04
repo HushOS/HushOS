@@ -12,6 +12,9 @@ for target in aarch64-linux-android x86_64-linux-android; do
     rustup target list --installed | grep -q "^$target$" || rustup target add "$target"
 done
 rm -rf "$OUT/src/main/jniLibs" "$OUT/src/main/kotlin/com/hushos/core"
+# A GNU build ID on each library: Play matches the native debug symbols a release bundle carries to a crash by it.
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-Wl,--build-id=sha1"
+export CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-Wl,--build-id=sha1"
 cargo ndk -t arm64-v8a -t x86_64 -o "$OUT/src/main/jniLibs" build -p hushos-core --release
 cargo run -q -p hushos-bindgen -- generate \
     --library target/aarch64-linux-android/release/libhushos_core.so \

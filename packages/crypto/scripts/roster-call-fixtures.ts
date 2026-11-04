@@ -1,4 +1,5 @@
 import { writeFile } from 'node:fs/promises';
+import { fixture as removals } from '../src/removal-calls-testkit';
 import { fixture } from '../src/roster-calls-testkit';
 import { fixture as settingsAreas } from '../src/settings-areas-testkit';
 
@@ -13,9 +14,12 @@ import { fixture as settingsAreas } from '../src/settings-areas-testkit';
  * Regenerate with `bun run fixtures:groups` at the repository root.
  */
 
+const calls = await fixture();
 const document = {
     generatedBy: 'packages/crypto/scripts/roster-call-fixtures.ts',
-    ...(await fixture()),
+    ...calls,
+    // Core 5b: removals, key replacements and deletions, and previous roots (removal-calls-testkit.ts).
+    ...(await removals(calls)),
     // Core 6: the settings this twin sealed and the family folders it opened.
     ...(await settingsAreas()),
 };

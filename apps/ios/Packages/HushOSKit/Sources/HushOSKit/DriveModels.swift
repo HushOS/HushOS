@@ -251,3 +251,21 @@ public func parseDate(_ value: String?) -> Date? {
     fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
 }
+
+extension NodeView {
+    /*
+     * Whether this is an older version of the same node than `held`: the server's change order
+     * first, then key epoch, then metadata version. What keeps a family row (the vault's cache,
+     * the verdicts) keeps the newer one when answers arrive out of order.
+     */
+    public func isOlder(than held: NodeView) -> Bool {
+        if let a = changeSeq, let b = held.changeSeq, a != b { return a < b }
+        if keyEpoch != held.keyEpoch { return keyEpoch < held.keyEpoch }
+        return metadataVersion < held.metadataVersion
+    }
+}
+
+/* A copy asked for one version of a file whose row now names another: nothing is written, the caller asks again. */
+public struct VersionChanged: WordedError {
+    public var errorDescription: String? { "It changed meanwhile. Try again." }
+}

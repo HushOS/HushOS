@@ -63,7 +63,8 @@ import kotlinx.coroutines.withContext
 
 /*
  * Save to HushOS: what another app shares (files of any kind, one or many, or a browser's
- * page as a link), saved into a folder of your own drive. The shared files are copied into
+ * page as a link), saved into a folder of your own drive or of a family you're in (SaveTargets:
+ * each family checked here, again before anything is queued). The shared files are copied into
  * HushOS's storage as soon as the sheet opens, streamed, since the sending app's permission
  * ends with this sheet; Save hands the copies to the transfer queue, so they upload after
  * the sheet closes and show in transfers and the finished notification.
@@ -84,8 +85,11 @@ class SaveViewModel(application: Application) : AndroidViewModel(application) {
     var problem by mutableStateOf<String?>(null)
     /* Files, once the drive answered: the picker starts there. */
     var root by mutableStateOf<Places.Folder?>(null)
+    /* The families this account is an accepted member of, each with the folders it may save into: listed below Files. */
+    val families = mutableStateListOf<com.hushos.app.data.SaveTargets.Family>()
 
     private var vault: Vault? = null
+    private var targets: com.hushos.app.data.SaveTargets? = null
     private val dir = File(context.cacheDir, "share/${UUID.randomUUID()}")
     private var started = false
     private var handed = false
@@ -143,7 +147,8 @@ class SaveViewModel(application: Application) : AndroidViewModel(application) {
         }
         val mime = runCatching { context.contentResolver.getType(uri) }.getOrNull()
         val fallback = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "Shared file"
-        return Item((name ?: fallback).replace('/', ' ').trim().ifEmpty { "Shared file" }, mime, size)
+        // As the sharing app gives it, it may hold a lone surrogate: made well formed, so it uploads under a readable name.
+        return Item(com.hushos.app.data.wellFormed((name ?: fallback).replace('/', ' ').trim()).ifEmpty { "Shared file" }, mime, size)
     }
 
     /* Streamed copies, one by one, into the app's own storage (AccountStore wipes it with the cache). */
@@ -161,16 +166,23 @@ class SaveViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /* The folder last added to, if it's still there; otherwise Files. */
+    /*
+     * The folder last added to, if it's still there; otherwise Files. A family folder's only once its family is checked
+     * again here (SaveTargets.open); otherwise Files. Then the families are listed for the picker.
+     */
     private suspend fun chooseFolder() {
         val last = Places.last(context)
         val result = withContext(Dispatchers.IO) {
             // attempt, not runCatching: the block suspends (withContext), and a cancelled screen is not "no folder".
             com.hushos.app.data.attempt {
                 val vault = vault ?: Vault.fromShared(context)?.also { runCatching { it.buildCatalogue() }; vault = it } ?: throw IllegalStateException("Signed out")
+                val saving = targets ?: com.hushos.app.data.SaveTargets(vault, vault.jobFamilies) { Shared.session(context) }.also { targets = it }
                 val top = Places.Folder(vault.rootId, "Files")
                 withContext(Dispatchers.Main) { root = top }
-                if (last != null) {
+                if (last?.family != null) {
+                    // Checked as a save is: a family that's gone, refused or can't be checked now is never the place offered.
+                    if (runCatching { saving.open(last) }.isSuccess) return@attempt last
+                } else if (last != null) {
                     val found = try { vault.resolve(last.id) } catch (gone: NotFound) { null }
                     if (found != null && found.isFolder && found.node.trashedAt == null) return@attempt Places.Folder(found.id, if (found.node.parentId == null) "Files" else found.name)
                 }
@@ -178,44 +190,62 @@ class SaveViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         result.onSuccess { folder = it; problem = null }.onFailure { error ->
-            // Offline: the last folder is used as it was; the queue waits for a connection.
-            if (last != null) folder = last else problem = Problems.of(error).body
+            // Offline: your own last folder is used as it was (the queue waits for a connection); a family's never unchecked.
+            if (last != null && last.family == null) folder = last else problem = Problems.of(error).body
         }
+        loadFamilies()
     }
 
-    /* The folders in a folder, for the picker: none in the trash, by name. */
-    suspend fun folders(id: String): Result<List<Opened>> = withContext(Dispatchers.IO) {
-        runCatching { (vault ?: throw IllegalStateException("Signed out")).listChildren(id).filter { it.isFolder && it.node.trashedAt == null }.sortedBy { it.name.lowercase() } }
+    /* The families for the picker; none when they can't be listed (your own drive still is). */
+    private suspend fun loadFamilies() {
+        val saving = targets ?: return
+        val found = withContext(Dispatchers.IO) { com.hushos.app.data.attempt { saving.families() } }
+        found.onSuccess { families.clear(); families.addAll(it) }.onFailure { if (it is com.hushos.app.data.SaveTargets.SessionEnded) phase = Phase.SIGNED_OUT }
+    }
+
+    /* The folders in a folder, for the picker: none in the trash, by name; a family folder's once its family is checked again. */
+    suspend fun folders(folder: Places.Folder): Result<List<Opened>> = withContext(Dispatchers.IO) {
+        runCatching { (targets ?: throw IllegalStateException("Signed out")).folders(folder) }
+    }
+
+    /* A family folder's refusal in the family's words; anything else as the drive says it. */
+    private fun words(error: Throwable): String = when (error) {
+        is com.hushos.app.data.GroupsApiError, is com.hushos.app.data.FamilyFailure, is com.hushos.core.CoreException, is com.hushos.app.data.Refused ->
+            com.hushos.app.data.FamilyWords.error(error)
+        else -> Problems.of(error).body
     }
 
     fun save() {
         val target = folder ?: return
+        val saving = targets ?: return
         phase = Phase.SAVING
+        problem = null
         viewModelScope.launch {
             copying?.join()
-            withContext(Dispatchers.IO) {
-                // A name the folder already has gets " (2)", as an upload in the app does.
-                val taken = runCatching { vault?.listChildren(target.id)?.filter { !it.isFolder }?.map { it.name.lowercase() } }.getOrNull().orEmpty().toMutableSet()
-                for (item in items) {
-                    val copy = item.copy ?: continue
-                    val name = freeName(item.name, taken).also { taken.add(it.lowercase()) }
-                    TransferQueue.upload(context, copy, name, item.mime, target.id, null)
+            val saved = withContext(Dispatchers.IO) {
+                com.hushos.app.data.attempt {
+                    // A name the folder already has gets " (2)", as an upload in the app does; a family folder's goes as the family's upload.
+                    saving.save(target, items.mapNotNull { item -> item.copy?.let { com.hushos.app.data.SaveTargets.Outgoing(it, item.name, item.mime) } }) { copy, name, mime, folderId, family ->
+                        TransferQueue.upload(context, copy, name, mime, folderId, null, family)
+                    }
+                    Places.used(context, target)
                 }
-                Places.used(context, target.id, target.name)
+            }
+            saved.exceptionOrNull()?.let { error ->
+                // Signed out or another account mid-sheet: nothing was queued, and nothing is offered.
+                if (error is com.hushos.app.data.SaveTargets.SessionEnded) { phase = Phase.SIGNED_OUT; return@launch }
+                // A family that's gone or refused: nothing queued, said in its words, and it isn't offered again.
+                if (error is com.hushos.app.data.FamilyFailure && error.message == com.hushos.app.data.FamilyWords.NOT_IN_FAMILY) {
+                    families.removeAll { it.groupId.equals(target.groupId, ignoreCase = true) }
+                }
+                problem = words(error)
+                phase = Phase.READY
+                return@launch
             }
             handed = true
             val notNow = context.getSharedPreferences("asked", android.content.Context.MODE_PRIVATE).getLong("background-not-now", 0L).takeIf { it > 0L }
             phase = if (Background.shouldAsk(Background.read(context), notNow, System.currentTimeMillis())) Phase.ASK else Phase.DONE
         }
-    }
-
-    private fun freeName(name: String, taken: Set<String>): String {
-        if (name.lowercase() !in taken) return name
-        val dot = name.lastIndexOf('.')
-        val stem = if (dot > 0) name.substring(0, dot) else name
-        val ext = if (dot > 0) name.substring(dot) else ""
-        for (n in 2..999) { val candidate = "$stem ($n)$ext"; if (candidate.lowercase() !in taken) return candidate }
-        return "$stem ${System.nanoTime() % 100000}$ext"
     }
 
     /* Closed without saving, or saved (the queue moved the copies out): nothing is left behind. */
@@ -293,7 +323,10 @@ private fun Items(model: SaveViewModel, change: () -> Unit) {
     }
 }
 
-/* The folders of your drive, walked from Files with a way back up; Save here picks the one you're in. */
+/*
+ * The folders of your drive, walked from Files with a way back up, and below Files' own, each family you're in under its
+ * name with its folders (a family folder walks within its family); Save here picks the one you're in.
+ */
 @Composable
 private fun FolderPicker(model: SaveViewModel, onPick: (Places.Folder) -> Unit, onBack: () -> Unit) {
     val alpine = Alpine.colors
@@ -301,7 +334,7 @@ private fun FolderPicker(model: SaveViewModel, onPick: (Places.Folder) -> Unit, 
     var trail by remember { mutableStateOf(listOfNotNull(root)) }
     val here = trail.lastOrNull() ?: return
     var folders by remember { mutableStateOf<Result<List<Opened>>?>(null) }
-    LaunchedEffect(here.id) { folders = null; folders = model.folders(here.id) }
+    LaunchedEffect(here) { folders = null; folders = model.folders(here) }
     Column(Modifier.fillMaxWidth().heightIn(min = 480.dp)) {
         Row(Modifier.fillMaxWidth().padding(start = AlpineSpace.S2, end = AlpineSpace.S4, bottom = AlpineSpace.S1), verticalAlignment = Alignment.CenterVertically) {
             if (trail.size > 1) IconButton(onClick = { trail = trail.dropLast(1) }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Up one folder") }
@@ -319,17 +352,26 @@ private fun FolderPicker(model: SaveViewModel, onPick: (Places.Folder) -> Unit, 
                     modifier = Modifier.fillMaxWidth().padding(vertical = 40.dp, horizontal = AlpineSpace.S6))
                 list.getOrThrow().isEmpty() -> Text("No folders in here.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().padding(vertical = 40.dp))
-                else -> for (folder in list.getOrThrow()) Row(
-                    Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable { trail = trail + Places.Folder(folder.id, folder.name) }.padding(horizontal = AlpineSpace.S4),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { FolderMark() }
-                    Text(folder.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = AlpineSpace.S4))
-                    Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = alpine.inkMuted)
-                }
+                // A family folder's folders are its family's: walked within the same family and workspace.
+                else -> for (folder in list.getOrThrow()) PickerRow(folder.name) { trail = trail + Places.Folder(folder.id, folder.name, here.groupId, here.workspaceId) }
+            }
+            // Below Files' own: each family you're in, by its name, with the folders you may save into.
+            if (here == root) for (family in model.families) {
+                Subheader(family.name)
+                for (folder in family.folders) PickerRow(folder.name) { trail = trail + folder }
             }
         }
         HorizontalDivider(color = alpine.divider)
         Button(onClick = { onPick(here) }, modifier = Modifier.fillMaxWidth().padding(AlpineSpace.S6).height(56.dp)) { Text("Save here") }
+    }
+}
+
+@Composable
+private fun PickerRow(name: String, open: () -> Unit) {
+    val alpine = Alpine.colors
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = open).padding(horizontal = AlpineSpace.S4), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) { FolderMark() }
+        Text(name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = AlpineSpace.S4))
+        Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = alpine.inkMuted)
     }
 }

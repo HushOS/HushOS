@@ -39,9 +39,18 @@ async function family(options: { bobRoles?: ('members' | 'billing')[]; carol?: b
             kind: 'admit',
             userId,
             served: who.served,
-            roles,
+            roles: [],
         });
         expect(staged).toMatchObject({ status: 'sent', outcome: { status: 'landed' } });
+        // Roles never come with the admission: a role change of their own (the testkit's device
+        // holds a verified pin of everyone).
+        if (roles.length > 0)
+            expect(await stageChange(ctx, groupId, { kind: 'roles', userId, roles })).toMatchObject(
+                {
+                    status: 'sent',
+                    outcome: { status: 'landed' },
+                },
+            );
     };
     await admit(BOB, options.bobRoles);
     if (options.carol) await admit(CAROL);
@@ -130,7 +139,8 @@ describe('removing someone: hold, finish, remove', () => {
         expect(
             server.log.map((entry) => entry.route).filter((route) => route !== 'remove-preview'),
         ).not.toContain('hold');
-        expect(server.sent('member')).toEqual([]);
+        // Only the role change that made Bob a manager in setting up.
+        expect(server.sent('member')).toHaveLength(1);
         expect(server.sent('remove')).toEqual([]);
         // Confirmed by id: the call carries it, and Bob is removed.
         expect(
@@ -171,13 +181,14 @@ describe('removing someone: hold, finish, remove', () => {
         expect(outcome).toEqual({ status: 'removed' });
         // No walk was running, so no earlier key change is said to be finished.
         expect(steps).toEqual(['demote', 'hold', 'remove']);
-        const [demotion] = server.sent('member');
+        const demotion = server.sent('member').at(-1);
         expect(demotion!.succession).toBeDefined();
         expect(rotationsOf(demotion!)).toEqual([]);
+        // After the role change that made Bob a manager in setting up.
         const order = server.log
             .map((entry) => entry.route)
             .filter((route) => ['member', 'hold', 'remove'].includes(route));
-        expect(order).toEqual(['hold', 'member', 'hold', 'hold', 'remove']);
+        expect(order).toEqual(['member', 'hold', 'member', 'hold', 'hold', 'remove']);
     });
 
     test('a third manager’s pause is said as theirs, and a demotion that did not end it offers nothing more', async () => {
@@ -265,11 +276,30 @@ describe('removing someone: hold, finish, remove', () => {
         ]);
     });
 
-    test('someone no longer active is not removed again', async () => {
+    test('members-changed while they are still in the family is never said as them being gone', async () => {
         const { server, ctx, groupId } = await family();
         server.answer('hold', refusal(409, 'members-changed', { reason: 'target' }));
-        expect(await removeMember(ctx, groupId, BOB)).toEqual({ status: 'changed' });
+        // Bob is still active on the member list read again: the family changed, and the remover looks again.
+        expect(await removeMember(ctx, groupId, BOB)).toEqual({ status: 'moved' });
         expect(server.sent('remove')).toEqual([]);
+    });
+
+    test('someone no longer active is not removed again', async () => {
+        const { server, ctx, groupId } = await family();
+        const other = await server.device();
+        expect((await syncGroup(other, groupId)).status).toBe('accepted');
+        // Another of Alice's devices removes Bob between this one's read and its hold.
+        const hold = ctx.api.hold.bind(ctx.api);
+        let raced = false;
+        vi.spyOn(ctx.api, 'hold').mockImplementation(async (group, user) => {
+            if (raced) return hold(group, user);
+            raced = true;
+            expect(await removeMember(other, groupId, BOB)).toEqual({ status: 'removed' });
+            throw refusal(409, 'members-changed', { reason: 'target' });
+        });
+        const removals = server.sent('remove').length;
+        expect(await removeMember(ctx, groupId, BOB)).toEqual({ status: 'changed' });
+        expect(server.sent('remove').length).toBe(removals + 1);
     });
 });
 

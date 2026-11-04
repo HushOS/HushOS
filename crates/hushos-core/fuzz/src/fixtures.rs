@@ -76,7 +76,7 @@ pub fn chain() -> Arc<AcceptedRosters> {
                     ed25519_public_key: first["ed25519PublicKey"].as_str().unwrap().into(),
                     ml_dsa_public_key: first["mlDsaPublicKey"].as_str().unwrap().into(),
                 },
-                true,
+                Some(GroupAnchor::Created),
                 vec![],
                 fixture["rosters"].as_array().unwrap().iter().map(signed_of).collect(),
                 fixture["successions"].as_array().unwrap().iter().map(signed_of).collect(),

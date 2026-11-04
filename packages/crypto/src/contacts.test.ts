@@ -10,6 +10,7 @@ import {
 } from './identity';
 import { fingerprintOfKeys, keyDigest } from './fingerprint';
 import {
+    CONTACTS_FULL,
     createSettingsKey,
     EMPTY_SETTINGS,
     fingerprint,
@@ -17,7 +18,11 @@ import {
     openSettingsKey,
     rewrapSettingsKey,
     sealSettings,
+    SETTINGS_MAX_BYTES,
     SETTINGS_PAD_STEP,
+    contactRemoved,
+    settingsWithoutContact,
+    settingsWithPin,
     type Settings,
     type SettingsEnvelope,
 } from './contacts';
@@ -378,6 +383,116 @@ describe('settings', () => {
                 name: 'x'.repeat(80),
             };
         await expect(sealSettings(key, USER, 1, big)).rejects.toThrow(/too large/);
+    });
+});
+
+describe('room for first-seen pins', () => {
+    /* A first-seen pin as adding someone writes it (docs/optional-verification.md 2.2), for person `i`. */
+    const firstSeen = (i: number) => {
+        const userId = `${i.toString(16).padStart(8, '0')}-1111-4111-8111-111111111111`;
+        const fill = (n: number) => Buffer.from(new Uint8Array(32).fill(n)).toString('base64url');
+        return {
+            userId,
+            email: `person.number${i}@example.com`,
+            name: `Person Number ${i}`,
+            encryptionPublicKey: fill(i % 251),
+            signingPublicKey: fill((i + 1) % 251),
+            mlDsaPublicKeyHash: (i % 256).toString(16).padStart(2, '0').repeat(32),
+            kemPublicKeyHash: ((i + 7) % 256).toString(16).padStart(2, '0').repeat(32),
+            fingerprint: '',
+            pinnedAt: '2026-10-26T10:00:00.000Z',
+            keyVersion: 1,
+            firstSeen: 'added' as const,
+        };
+    };
+
+    test('about a hundred people fit; at the cap one more is refused and nothing is changed', async () => {
+        let settings: Settings = { version: 2, contacts: {}, sharing: { shares: {}, links: {} } };
+        let count = 0;
+        for (;;) {
+            try {
+                settings = settingsWithPin(settings, firstSeen(count));
+            } catch (error) {
+                expect((error as Error).message).toBe(CONTACTS_FULL);
+                break;
+            }
+            count++;
+        }
+        expect(count).toBeGreaterThanOrEqual(100);
+        // The full document still seals: the refusal came before anything was written.
+        const { key } = await createSettingsKey(crypto.getRandomValues(new Uint8Array(32)), USER);
+        const before = structuredClone(settings);
+        await expect(sealSettings(key, USER, 1, settings)).resolves.toBeDefined();
+        expect(() => settingsWithPin(settings, firstSeen(count))).toThrow(CONTACTS_FULL);
+        expect(settings).toEqual(before);
+        expect(Object.keys(settings.contacts)).toHaveLength(count);
+        // What the refusal stood for: the document with that pin would not seal.
+        const over = { ...settings, contacts: { ...settings.contacts, x: firstSeen(count) } };
+        expect(new TextEncoder().encode(JSON.stringify(over)).length).toBeGreaterThan(
+            SETTINGS_MAX_BYTES,
+        );
+        await expect(sealSettings(key, USER, 1, over)).rejects.toThrow(/too large/);
+        // Writing a pin over one already there needs no room it does not have.
+        expect(
+            settingsWithPin(settings, { ...firstSeen(0), name: 'P' }).contacts[firstSeen(0).userId]!
+                .name,
+        ).toBe('P');
+    });
+
+    test('a removal is recorded, forgotten when they are pinned again, and the oldest go first when room runs out', async () => {
+        const one = firstSeen(1);
+        let settings: Settings = settingsWithPin({ version: 2, contacts: {} }, one);
+        settings = settingsWithoutContact(
+            settings,
+            one.userId.toUpperCase(),
+            '2026-10-01T00:00:00Z',
+        );
+        expect(settings.contacts).toEqual({});
+        expect(contactRemoved(settings, one.userId)).toBe(true);
+        expect(contactRemoved(settingsWithPin(settings, one), one.userId)).toBe(false);
+
+        // A document full of pins, with removals filling what room is left.
+        let full: Settings = { version: 2, contacts: {} };
+        let count = 0;
+        for (;;) {
+            try {
+                full = settingsWithPin(full, firstSeen(1000 + count));
+            } catch {
+                break;
+            }
+            count++;
+        }
+        // Drop the last pin and fill its room and more with removals, oldest first in time.
+        const last = firstSeen(1000 + count - 1);
+        full = settingsWithoutContact(full, last.userId, '2026-01-01T00:00:00Z');
+        const removedAt = (n: number) => `2026-02-${String(n + 1).padStart(2, '0')}T00:00:00Z`;
+        const removals: Record<string, string> = { ...full.removedContacts };
+        for (let n = 0; n < 20; n++) removals[`dead${n}`.padEnd(36, '0')] = removedAt(n);
+        full = { ...full, removedContacts: removals };
+        // Pinning again needs room the removals hold: the oldest are forgotten until it fits.
+        const back = settingsWithPin(full, last);
+        const kept = Object.keys(back.removedContacts ?? {});
+        expect(back.contacts[last.userId]).toBeDefined();
+        expect(contactRemoved(back, last.userId)).toBe(false);
+        expect(kept.length).toBeGreaterThan(0);
+        expect(kept.length).toBeLessThan(20);
+        // Only the oldest went: every one kept is newer than every one forgotten.
+        const forgotten = Object.keys(removals).filter(
+            (id) => !kept.includes(id) && id !== last.userId,
+        );
+        const newest = (ids: string[]) =>
+            ids
+                .map((id) => removals[id]!)
+                .sort()
+                .at(-1)!;
+        const oldest = (ids: string[]) => ids.map((id) => removals[id]!).sort()[0]!;
+        expect(newest(forgotten) < oldest(kept)).toBe(true);
+        const { key } = await createSettingsKey(crypto.getRandomValues(new Uint8Array(32)), USER);
+        await expect(sealSettings(key, USER, 1, back)).resolves.toBeDefined();
+        // With no removal left to forget, one more pin is still refused.
+        expect(() =>
+            settingsWithPin({ ...back, removedContacts: undefined }, firstSeen(5000)),
+        ).toThrow(CONTACTS_FULL);
     });
 });
 

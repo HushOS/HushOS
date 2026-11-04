@@ -1,12 +1,15 @@
 import type { CryptoRequests, GroupPin, RosterCallBody } from '@hushos/crypto';
+import { keyCommitment, type PinKeys } from '@hushos/crypto/pins';
 import { GroupApiError, type ChainHead, type GroupsApi } from './api';
-import type {
-    GroupContext,
-    GroupOperation,
-    GroupSettings,
-    RotationSource,
-    SettingsAccess,
+import {
+    familyGuardOf,
+    type GroupContext,
+    type GroupOperation,
+    type GroupSettings,
+    type RotationSource,
+    type SettingsAccess,
 } from './context';
+import { createMemoryFamilyGuard } from '@/lib/contact-guard';
 import { createMemoryGroupStore, type GroupStore } from './store';
 
 /*
@@ -210,7 +213,8 @@ export function harness(
         groupStoreSeal: (input) => ({ envelope: `sealed:${JSON.stringify(input.value)}` }),
         groupStoreOpen: (input) => ({ value: JSON.parse(input.envelope.slice('sealed:'.length)) }),
         groupDrop: () => ({ dropped: true }),
-        groupForget: () => ({ forgotten: true }),
+        groupForget: () => ({ forgotten: true, guard: null }),
+        groupGuardKept: () => ({ kept: true }),
         groupOpenSeal: () => ({ groupKeyVersion: 1 }),
         groupAccept: () => ({
             status: 'accepted',
@@ -243,21 +247,24 @@ export function harness(
                 })),
             },
         }),
-        groupStage: (input) => ({
+        groupStage: async (input) => ({
             outboxId: 'staged-admit',
             body: { ...rosterBody('admit'), expectedRevision: input.expectedRevision },
             stagedEnvelope: 'staged-secrets',
             joinCode: { rosterVersion: server.head + 1, code: Array(12).fill('word') },
             needsCheck: [],
             replaced: [],
-            // As the worker does: an admission over the contact pin in the settings it opened.
+            // As the worker does: an admission over the contact pin in the settings it opened, kept
+            // by the key commitment of that pin.
             admits:
                 input.op.kind === 'admit'
                     ? {
                           userId: input.op.userId,
-                          fingerprint: (
-                              settingsDoc.doc.contacts as Record<string, { fingerprint: string }>
-                          )[input.op.userId]!.fingerprint,
+                          keys: (await keyCommitment(
+                              (settingsDoc.doc.contacts as Record<string, PinKeys>)[
+                                  input.op.userId
+                              ]!,
+                          ))!,
                       }
                     : null,
             previousRosterDigest: 'head',
@@ -327,12 +334,14 @@ export function harness(
     };
 
     const mirrorsDeleted: string[][] = [];
+    const guard = createMemoryFamilyGuard();
     const ctx: GroupContext = {
         userId: USER,
         api,
         rpc,
         store,
         settings,
+        guard: familyGuardOf(() => guard, USER),
         lock: async (groupId, work) => {
             if (held.has(groupId)) throw new Error('The write lock was taken twice.');
             held.add(groupId);
@@ -369,5 +378,6 @@ export function harness(
         rotationLog,
         mirrorsDeleted,
         results,
+        guard,
     };
 }
