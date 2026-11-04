@@ -6958,6 +6958,64 @@ describe('one plan per family', () => {
         expect(refundsMade()).toEqual([['order_x', 999]]);
     });
 
+    test('a plan whose lapsed revoke noted its charge as paid before, then bought beside the family’s, never served it: refunded whole', async () => {
+        const organizer = await createTestAccount();
+        const { groupId } = await createTestFamily({ organizerId: organizer.userId, pooled: true });
+        await billing.startGroupCheckout(userOf(organizer), groupId, { productId: PRO_FAMILY });
+        const started = new Date(Date.now() - 2 * DAY).toISOString();
+        // X's checkout waited on the bank two days ago, and its invoice was paid since.
+        const x = familySubscription(groupId, {
+            id: 'sub_x',
+            product_id: PRO_FAMILY,
+            status: 'incomplete',
+            created_at: started,
+            current_period_start: started,
+        });
+        polar.checkoutOrders = polar.checkoutOrders.filter(
+            (order) => order.subscription_id !== 'sub_x',
+        );
+        addPaidOrder(x, 'order_x', started);
+        // A lapsed revoke of it (revokeLapsed, as a checkout's) found that payment and gave up:
+        // the charge noted as paid before, the ending dropped.
+        const owner = randomUUID();
+        await billingRepository.beginLapsedRevoke({
+            subscriptionId: 'sub_x',
+            userId: groupId,
+            at: new Date(),
+            owner,
+            leaseMs: 60_000,
+        });
+        await billingRepository.notePaidBeforeRevoke([
+            {
+                orderId: 'order_x',
+                subscriptionId: 'sub_x',
+                refundKey: `lapsed:${randomUUID()}`,
+                currency: 'usd',
+            },
+        ]);
+        await billingRepository.dropPlanEnding('sub_x');
+        await billingRepository.releasePlanEndingLease('sub_x', owner);
+        expect((await billingRepository.getPlanRefund('order_x'))?.status).toBe('none');
+        // Y is paid and becomes the family's plan; then Polar shows X active.
+        familySubscription(groupId, {
+            id: 'sub_y',
+            product_id: PRO_FAMILY,
+            created_at: new Date().toISOString(),
+        });
+        await quietly(() => billing.reconcileGroup(groupId));
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.id).toBe('sub_y');
+        x.status = 'active';
+        polar.calls = [];
+        endingJobs.length = 0;
+        await quietly(async () => {
+            await billing.reconcileGroup(groupId);
+            await runQueued(0);
+        });
+        expect(callsTo('subscriptions.revoke')).toEqual(['subscriptions.revoke:sub_x']);
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.id).toBe('sub_y');
+        expect(refundsMade()).toEqual([['order_x', 999]]);
+    });
+
     test('a delivery that names a plan, its reading older than one written meanwhile, reads Polar again: the plan is recorded and the one bought second refunded', async () => {
         const organizer = await createTestAccount();
         const { groupId } = await createTestFamily({ organizerId: organizer.userId, pooled: true });

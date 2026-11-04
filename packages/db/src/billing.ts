@@ -2486,19 +2486,27 @@ export async function notePaidBeforeRevoke(
  * before and never worked (a redelivery after the first try failed midway), either way
  * open now. `worked`: refunded or being refunded already. `paid-before`: it was paid when
  * HushOS revoked the plan. `none`: no lapsed ending (or a dropped one) to note it on.
+ * `unwanted`: the ending is a plan nothing could be given for (endUnwantedFamilyPlan), and the
+ * order was made at or after its cutoff, so the family never used it: one an earlier lapsed
+ * revoke noted as paid before (`none`), never asked of Polar, is noted for a refund under
+ * this ending's key, its rewards no longer owed.
  */
-export async function notePaidOnLapsed(input: {
-    orderId: string;
-    subscriptionId: string;
-    refundKey: string;
-    currency: string;
-}): Promise<'noted' | 'worked' | 'paid-before' | 'none'> {
-    return db.transaction((tx) => notePaidOnLapsedIn(tx, input));
+export async function notePaidOnLapsed(
+    input: {
+        orderId: string;
+        subscriptionId: string;
+        refundKey: string;
+        currency: string;
+    },
+    options: { unwanted?: boolean } = {},
+): Promise<'noted' | 'worked' | 'paid-before' | 'none'> {
+    return db.transaction((tx) => notePaidOnLapsedIn(tx, input, options));
 }
 
 async function notePaidOnLapsedIn(
     tx: Tx,
     input: { orderId: string; subscriptionId: string; refundKey: string; currency: string },
+    options: { unwanted?: boolean } = {},
 ): Promise<'noted' | 'worked' | 'paid-before' | 'none'> {
     const [ending] = await tx
         .select()
@@ -2510,8 +2518,23 @@ async function notePaidOnLapsedIn(
         .select()
         .from(personalPlanRefunds)
         .where(eq(personalPlanRefunds.orderId, input.orderId));
-    if (row?.status === 'none') return 'paid-before';
-    if (row && (row.status !== 'requested' || row.firstAttemptedAt)) return 'worked';
+    const reclaim =
+        options.unwanted &&
+        row?.status === 'none' &&
+        row.subscriptionId === input.subscriptionId &&
+        !row.firstAttemptedAt;
+    if (reclaim)
+        await tx
+            .update(personalPlanRefunds)
+            .set({
+                status: 'requested',
+                refundKey: input.refundKey,
+                rewardsPending: false,
+                updatedAt: new Date(),
+            })
+            .where(eq(personalPlanRefunds.orderId, input.orderId));
+    else if (row?.status === 'none') return 'paid-before';
+    else if (row && (row.status !== 'requested' || row.firstAttemptedAt)) return 'worked';
     if (!row)
         await tx.insert(personalPlanRefunds).values({ ...input, amount: 0, status: 'requested' });
     await tx
@@ -2529,8 +2552,9 @@ async function notePaidOnLapsedIn(
 /*
  * A plan HushOS ends because nothing could be given for it (endUnwantedFamilyPlan): every paid
  * order of it noted on its ending in one transaction, those made before its cutoff as used
- * (notePaidBeforeRevoke, `keepOwed`) and those at or after it for a refund (notePaidOnLapsed),
- * with `orders_noted_at` set in the same write. Until then the ending is unfinished. Only for the
+ * (notePaidBeforeRevoke, `keepOwed`) and those at or after it for a refund (notePaidOnLapsed,
+ * `unwanted`: an earlier lapsed revoke's `none` is no proof the family used it), with
+ * `orders_noted_at` set in the same write. Until then the ending is unfinished. Only for the
  * run that read those orders: the ending still at its `attempt` and leased to its `owner`. One
  * another run restarted or took over meanwhile (it may have seen a newer charge) is left to that
  * run, and nothing is written: false.
@@ -2559,7 +2583,11 @@ export async function noteEndingOrders(input: {
             tx,
         );
         for (const row of input.after)
-            await notePaidOnLapsedIn(tx, { ...row, subscriptionId: input.subscriptionId });
+            await notePaidOnLapsedIn(
+                tx,
+                { ...row, subscriptionId: input.subscriptionId },
+                { unwanted: true },
+            );
         await tx
             .update(personalPlanEndings)
             .set({ ordersNotedAt: sql`now()`, updatedAt: new Date() })

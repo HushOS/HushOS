@@ -1725,10 +1725,10 @@ export async function notePaidAfterRevoke(order: {
     if (!billingEnabled() || !order.id || !order.subscription_id) return false;
     const ending = await billingRepository.getPlanEnding(order.subscription_id);
     if (!ending || !isLapsedEnding(ending)) return false;
+    const made = Date.parse(order.created_at ?? '');
     // A deleted family's plan (or a second plan): an order made before its cutoff paid for time
     // the family had, however late it is paid; it is noted as used, never refunded.
     if (ending.paidAfter !== null) {
-        const made = Date.parse(order.created_at ?? '');
         if (!Number.isNaN(made) && made < ending.paidAfter.getTime()) {
             await billingRepository.notePaidBeforeRevoke(
                 [
@@ -1746,12 +1746,16 @@ export async function notePaidAfterRevoke(order: {
             return (await billingRepository.getPlanRefund(order.id))?.status !== 'none';
         }
     }
-    const result = await billingRepository.notePaidOnLapsed({
-        orderId: order.id,
-        subscriptionId: ending.subscriptionId,
-        refundKey: refundKey(ending, order.id),
-        currency: order.currency ?? 'usd',
-    });
+    // Made past an unwanted plan's cutoff: refunded, whatever an earlier lapsed revoke noted.
+    const result = await billingRepository.notePaidOnLapsed(
+        {
+            orderId: order.id,
+            subscriptionId: ending.subscriptionId,
+            refundKey: refundKey(ending, order.id),
+            currency: order.currency ?? 'usd',
+        },
+        { unwanted: ending.paidAfter !== null && !Number.isNaN(made) },
+    );
     if (result === 'none' || result === 'paid-before') return false;
     if (result === 'worked') return true;
     log.warn({
