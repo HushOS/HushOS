@@ -95,7 +95,9 @@ const FAILURES_PER_RUN = 3;
 const RETRY_AFTER_MINUTES = 15;
 
 /*
- * Sends what is owed, oldest first, at most `limit` a run, through `send`. Each
+ * Sends what is owed, at most `limit` a run, through `send`: never tried first, oldest
+ * first, then those that failed by when they may be tried again, so addresses that keep
+ * failing fall behind every newer email instead of taking their places back. Each
  * email is read first (one whose account or address is gone is dropped), then
  * claimed by a conditional update only one run can win, then handed over: two
  * runs at once never both send one. A send that throws gives its claim back and
@@ -124,7 +126,12 @@ export async function deliverDissolveNotices(input: {
                 sql`(${groupDissolveNotices.retryAfter} is null or ${groupDissolveNotices.retryAfter} <= now())`,
             ),
         )
-        .orderBy(asc(groupDissolveNotices.createdAt), asc(groupDissolveNotices.id))
+        .orderBy(
+            sql`${groupDissolveNotices.retryAfter} is not null`,
+            asc(groupDissolveNotices.retryAfter),
+            asc(groupDissolveNotices.createdAt),
+            asc(groupDissolveNotices.id),
+        )
         .limit(input.limit ?? 100);
     for (const { id } of due) {
         // Read before the claim: a read that fails then loses nothing.

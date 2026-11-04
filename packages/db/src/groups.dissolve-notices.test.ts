@@ -467,6 +467,37 @@ describe('sending what is owed', () => {
         expect(three).toMatchObject({ sent: 0, failed: 3 });
     });
 
+    test('sixty addresses that keep failing fall behind a newer email never tried', async () => {
+        // A family dissolved with sixty invitations open, every email of it tried before and due again.
+        const organizer = await createTestAccount();
+        const family = await createTestFamily({ organizerId: organizer.userId });
+        for (let n = 0; n < 60; n++)
+            await invite(family.groupId, organizer.userId, `refused-${n}@hushos.test`);
+        await groups.leaveGroup(family.groupId, organizer.userId);
+        expect(await owed(family.groupId)).toHaveLength(61);
+        await db
+            .update(s.groupDissolveNotices)
+            .set({
+                createdAt: sql`now() - interval '1 hour'`,
+                retryAfter: sql`now() - interval '1 second'`,
+            })
+            .where(eq(s.groupDissolveNotices.groupId, family.groupId));
+        // A family dissolved since, whose last member's email was never tried.
+        const last = await createTestAccount();
+        const later = await createTestFamily({ organizerId: last.userId });
+        await groups.leaveGroup(later.groupId, last.userId);
+        const [{ email } = { email: '' }] = await db
+            .select({ email: s.users.email })
+            .from(s.users)
+            .where(eq(s.users.id, last.userId));
+        const run = await deliver(async (notice) => {
+            if (notice.email !== email) throw new Error('mailbox refused');
+        });
+        // Sent first; the run then spends its three failures on the ones due again.
+        expect(run.notices.map((notice) => notice.email)).toEqual([email]);
+        expect(run).toMatchObject({ sent: 1, failed: 3 });
+    });
+
     test('a run stops after three failed sends, and later runs send them all', async () => {
         const { first, second } = await sixOwed();
         let tried = 0;
