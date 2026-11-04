@@ -332,7 +332,7 @@ public final class FamilyFilesDomains: @unchecked Sendable {
         return enqueue { [self] in
             // Left pending: the generation its write reached since, if it did (until then nothing is accepted).
             let generation = wrote ?? lock.withLock { landed[groupId] }
-            guard mayRemove(groupId, owner: owner, session: session, after: generation) else { return }
+            guard mayRemove(groupId, owner: owner, session: session, signedIn: signedIn, after: generation) else { return }
             // An acceptance that came after the let-go and landed during the removal keeps its location (`removeVerified`).
             await removeVerified(groupId)
         }
@@ -397,10 +397,16 @@ public final class FamilyFilesDomains: @unchecked Sendable {
      * before the let-go and is still `owner`'s while that session stands. A store that can't be read
      * removes it (fail-safe: Files only drops a cache).
      */
-    private func mayRemove(_ groupId: String, owner: AccountOwner?, session: CopySession?, after generation: UInt64?) -> Bool {
+    private func mayRemove(_ groupId: String, owner: AccountOwner?, session: CopySession?, signedIn: SharedKeychain.Session?, after generation: UInt64?) -> Bool {
         var record: FamilyDomainRecord?
-        guard records.update({ stored in record = stored.records[groupId] }) else { return true }
+        var moved = false
+        guard records.update({ [self] stored in
+            record = stored.records[groupId]
+            // Signed out or in again elsewhere since the let-go (the same account included): a record there now is that session's.
+            if let signedIn { moved = sharedSession() != signedIn }
+        }) else { return true }
         guard let record else { return true }
+        if moved { return false }
         // Written at the generation the let-go moved the family to, or later: an acceptance that came after it.
         if let generation, let written = record.generation, written >= generation { return false }
         if let owner, record.owner != owner { return false }
@@ -707,6 +713,8 @@ public actor FamilyFilesSource {
     private var checkedAt: Date?
     /* Every folder of the family this source has answered for: whose copies go once it is let go of. */
     private var known: Set<String> = []
+    /* Folders the accepted view names that the location's record couldn't be made to name yet: not served until it does. */
+    private var unrecorded: Set<String> = []
     /* Folders this source has shown Files open: one of them that doesn't open now is a key change met mid-way, never gone. */
     private var shownOpen: Set<String> = []
 
@@ -819,7 +827,11 @@ public actor FamilyFilesSource {
 
     private func currentView() async throws -> FamilyView {
         try admit()
-        if let view, let checkedAt, now().timeIntervalSince(checkedAt) < Self.fresh { return view }
+        if let view, let checkedAt, now().timeIntervalSince(checkedAt) < Self.fresh {
+            // A folder still waiting for the record: tried again on every call, nothing asked of the server.
+            if !unrecorded.isEmpty { note(view) }
+            return view
+        }
         return try await check()
     }
 
@@ -867,8 +879,8 @@ public actor FamilyFilesSource {
         switch revised.state {
         case .accepted(let accepted):
             // Its folders recorded before any is served: another process's sweep keeps their copies (a folder made while the
-            // app was closed is found here first).
-            recordFolders(accepted.areas)
+            // app was closed is found here first). One the record couldn't be made to name waits (`unrecorded`).
+            note(accepted)
             view = accepted
             snapshotHeads = heads ?? [:]
             known.formUnion(accepted.areas.map { $0.workspaceId.lowercased() })
@@ -896,17 +908,34 @@ public actor FamilyFilesSource {
      * the record is still this account's, written at the family's generation now (no let-go or
      * account change since). Nothing else of the record changes, and no generation moves.
      */
-    private func recordFolders(_ areas: [FamilyArea]) {
+    /*
+     * The folders the record names once the view's are merged in (tried twice); nil when it couldn't
+     * be written, or no let-go is pending.
+     */
+    private func recordFolders(_ areas: [FamilyArea]) -> Set<String>? {
         let found = Set(areas.map { $0.workspaceId.lowercased() })
-        guard !found.isEmpty, domains?.revocationPending(groupId) != true else { return }
-        records.update { [self] stored in
-            guard vault.copySession.stands, sharedSession() == session, var record = stored.records[groupId], record.owner == owner,
-                  (record.generation ?? 0) == stored.generation(groupId) else { return }
-            let held = Set(record.workspaces ?? [])
-            guard !found.isSubset(of: held) else { return }
-            record.workspaces = held.union(found).sorted()
-            stored.records[groupId] = record
+        guard domains?.revocationPending(groupId) != true else { return nil }
+        for _ in 0 ..< 2 {
+            var named: Set<String> = []
+            let wrote = records.update { [self] stored in
+                guard var record = stored.records[groupId] else { return }
+                named = Set(record.workspaces ?? [])
+                guard vault.copySession.stands, sharedSession() == session, record.owner == owner,
+                      (record.generation ?? 0) == stored.generation(groupId), !found.isSubset(of: named) else { return }
+                named.formUnion(found)
+                record.workspaces = named.sorted()
+                stored.records[groupId] = record
+            }
+            if wrote { return named }
         }
+        return nil
+    }
+
+    /* `view`'s folders the record doesn't name, after trying to record them; those on the record already are served as ever. */
+    private func note(_ view: FamilyView) {
+        let found = Set(view.areas.map { $0.workspaceId.lowercased() })
+        let named = recordFolders(view.areas) ?? Set((try? records.read())?[groupId]?.workspaces ?? [])
+        unrecorded = found.subtracting(named)
     }
 
     /* The family's folders that open here, as the location's top level. */
@@ -921,13 +950,20 @@ public actor FamilyFilesSource {
     private func openFolders() async throws -> [FamilyArea] {
         let view = try await currentView()
         if view.areas.contains(where: { !$0.openable && shownOpen.contains($0.workspaceId.lowercased()) }) { throw FamilyFilesError.keyChange }
-        let folders = Self.open(in: view)
+        // One shown before that the record doesn't name now: asked again, never dropped from Files.
+        if !unrecorded.isDisjoint(with: shownOpen) { throw FamilyFilesError.unavailable }
+        let folders = servable(in: view)
         shownOpen.formUnion(folders.map { $0.workspaceId.lowercased() })
         return folders
     }
 
     private static func open(in view: FamilyView) -> [FamilyArea] {
         view.areas.filter(\.openable).sorted { ($0.name ?? "").localizedStandardCompare($1.name ?? "") == .orderedAscending }
+    }
+
+    /* The folders that open here and that the record names: what Files is shown. */
+    private func servable(in view: FamilyView) -> [FamilyArea] {
+        Self.open(in: view).filter { !unrecorded.contains($0.workspaceId.lowercased()) }
     }
 
     /*
@@ -938,6 +974,8 @@ public actor FamilyFilesSource {
     private func area(_ ref: NodeRef, in view: FamilyView) throws -> FamilyArea {
         guard let area = view.areas.first(where: { $0.workspaceId.lowercased() == ref.workspaceId }) else { throw FamilyFilesError.notInFamily }
         guard area.openable else { throw FamilyFilesError.keyChange }
+        // Not on the record yet (it couldn't be written): asked again, so no copy of it is made that a sweep would take.
+        guard !unrecorded.contains(ref.workspaceId.lowercased()) else { throw FamilyFilesError.unavailable }
         return area
     }
 
@@ -1049,7 +1087,7 @@ public actor FamilyFilesSource {
 
     private func changesSince(_ anchor: FamilyAnchor) async throws -> FamilyChanges? {
         let view = try await currentView()
-        let folders = Self.open(in: view)
+        let folders = servable(in: view)
         var next = FamilyAnchor()
         var added: [FamilyArea] = []
         var updated: [Opened] = []

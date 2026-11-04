@@ -789,6 +789,47 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         #expect(manager.names[FamilyFileIds.domain(group)] != nil, "the old session's lost add took the new session's location")
     }
 
+    /*
+     * A let-go the store refused waits, its removal queued with no generation, while Maya signs in
+     * again in another process and that process accepts the family (the pending let-go never written
+     * there): the queued removal, of a session the keychain no longer holds, leaves the new session's
+     * location. Fails if a removal without a generation asks only its own process's session.
+     */
+    @Test func aPendingLetGosRemovalLeavesTheLocationOfASignInSince() async throws {
+        let oldSession = SharedKeychain.Session(origin: Self.maya.origin, token: "old", userId: Self.maya.userId)
+        let newSession = SharedKeychain.Session(origin: Self.maya.origin, token: "new", userId: Self.maya.userId)
+        keychain.session = oldSession
+        let old = domains
+        let elsewhere = domains
+        let session = TemporaryCopies.session(CopyEpoch())
+        let (group, maya, records, keychain) = (UUID().uuidString.lowercased(), Self.maya, self.records, self.keychain)
+        await old.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value
+        let held = open(records.lockPath, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        let (entered, enter) = AsyncStream<Void>.makeStream()
+        let (letGoCalled, called) = AsyncStream<Void>.makeStream()
+        manager.duringAdd = {
+            enter.yield()
+            for await _ in letGoCalled { break }
+            // The store frees; elsewhere Maya signs in again and accepts the family, knowing nothing of the pending let-go.
+            flock(held, LOCK_UN)
+            close(held)
+            keychain.session = newSession
+            await elsewhere.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session,
+                                     signedIn: newSession).value
+        }
+        // The old process's queue is busy with another family's add.
+        let busy = old.accepted(UUID().uuidString.lowercased(), name: "Holm family", owner: maya, observed: 0, session: session)
+        for await _ in entered { break }
+        #expect(flock(held, LOCK_EX | LOCK_NB) == 0)
+        let removal = old.letGo(group, owner: maya, session: session, signedIn: oldSession)
+        called.yield()
+        called.finish()
+        await busy.value
+        await removal.value
+        #expect(records.admission(group, owner: maya) == .admitted)
+        #expect(manager.names[FamilyFileIds.domain(group)] != nil, "a pending let-go of the old session removed the new session's location")
+    }
+
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
     @Test func aRenamedFamilysLocationTakesTheNewName() async throws {
         let domains = self.domains
@@ -1352,6 +1393,36 @@ extension OnFakeDrive {
             s.clock.now = s.clock.now.addingTimeInterval(120)
             _ = try? await s.source.folders()
             #expect(try s.records.read()[group]?.workspaces == [], "a check whose session ended meanwhile wrote the record")
+        }
+
+        /*
+         * The record can't be written when the extension accepts a folder it doesn't name (its lock held
+         * elsewhere): that folder isn't served yet (Files asks again) while the record stays unwritten,
+         * then is once it is; a folder the record already names is served as ever. Fails if a folder is
+         * served whose copies a sweep would take.
+         */
+        @Test func aFolderTheRecordCouldntBeMadeToNameWaits() async throws {
+            for named in [false, true] {
+                let s = try await Self.source()
+                defer { s.phone.done() }
+                let group = s.family.groupId
+                if !named { s.records.update { stored in stored.records[group]?.workspaces = [] } }
+                let root = NodeRef(workspaceId: s.family.workspaceId, nodeId: s.family.rootId)
+                let held = open(s.records.lockPath, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+                #expect(flock(held, LOCK_EX | LOCK_NB) == 0)
+                if named {
+                    #expect(try await s.source.children(of: root).contains { $0.ref == s.family.photo.ref }, "a folder the record names wasn't served")
+                    flock(held, LOCK_UN)
+                    close(held)
+                    continue
+                }
+                await #expect(throws: FamilyFilesError.unavailable) { _ = try await s.source.children(of: root) }
+                #expect(try await s.source.folders().isEmpty, "a folder the record doesn't name was listed")
+                flock(held, LOCK_UN)
+                close(held)
+                #expect(try await s.source.children(of: root).contains { $0.ref == s.family.photo.ref })
+                #expect(try s.records.read()[group]?.workspaces == [s.family.workspaceId.lowercased()])
+            }
         }
 
         /*
