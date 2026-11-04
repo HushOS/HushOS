@@ -332,10 +332,22 @@ public final class FamilyFilesDomains: @unchecked Sendable {
         return enqueue { [self] in
             // Left pending: the generation its write reached since, if it did (until then nothing is accepted).
             let generation = wrote ?? lock.withLock { landed[groupId] }
-            guard mayRemove(groupId, owner: owner, session: session, signedIn: signedIn, after: generation) else { return }
-            // An acceptance that came after the let-go and landed during the removal keeps its location (`removeVerified`).
-            await removeVerified(groupId)
+            // Decided in the same locked read that notes the record; an acceptance that came after the let-go and landed during
+            // the removal keeps its location (`removeVerified`).
+            await removeVerified(groupId) { [self] stored in
+                mayRemove(stored.records[groupId], owner: owner, session: session, signedIn: signedIn, after: generation)
+            }
         }
+    }
+
+    /* What a verified removal came to. */
+    enum Removal {
+        /* No longer due when its record was read: nothing was removed. */
+        case refused
+        /* The location went. */
+        case gone
+        /* It stays: given back to a record written meanwhile, or the system didn't remove it. */
+        case stays
     }
 
     /*
@@ -347,20 +359,35 @@ public final class FamilyFilesDomains: @unchecked Sendable {
      * True when the location is gone.
      */
     @discardableResult
-    private func removeVerified(_ groupId: String) async -> Bool {
+    private func removeVerified(_ groupId: String, if due: (FamilyDomainRecords.Stored) -> Bool) async -> Removal {
         let identifier = FamilyFileIds.domain(groupId)
+        #if DEBUG
+        await beforeRemoval?()
+        #endif
+        // Whether the removal is still due is decided in the same locked read that notes the record: nothing lands in between.
         var before: FamilyDomainRecord?
-        guard records.update({ stored in before = stored.records[groupId] }) else { return (try? await manager.remove(identifier)) != nil }
+        var isDue = false
+        guard records.update({ stored in
+            before = stored.records[groupId]
+            isDue = due(stored)
+        }) else { return (try? await manager.remove(identifier)) != nil ? .gone : .stays }
+        guard isDue else { return .refused }
         let removed = (try? await manager.remove(identifier)) != nil
         // The record now, if it was written during the removal; `addVerified` adds only while it stands, the signed-in account's.
         var now: FamilyDomainRecord?
-        guard records.update({ stored in now = stored.records[groupId] }), let record = now, record != before else { return removed }
-        return !(await addVerified(groupId, name: record.name, authorisedBy: record, holds: {
+        guard records.update({ stored in now = stored.records[groupId] }), let record = now, record != before else { return removed ? .gone : .stays }
+        let back = await addVerified(groupId, name: record.name, authorisedBy: record, holds: {
             var now: FamilyDomainRecord?
             guard records.update({ stored in now = stored.records[groupId] }), now == record, let signedIn = sharedSession() else { return false }
             return record.owner == AccountOwner(signedIn)
-        }))
+        })
+        return back ? .stays : .gone
     }
+
+    #if DEBUG
+    /* Tests: what another process does as a removal begins, before its record is read. */
+    var beforeRemoval: (@Sendable () async -> Void)?
+    #endif
 
     /*
      * A location added for the record `authorisedBy` only while `holds` (read under the store's lock):
@@ -376,37 +403,30 @@ public final class FamilyFilesDomains: @unchecked Sendable {
         guard holds() else { return false }
         try? await manager.add(identifier, name: name)
         guard holds() else {
-            if superseded(groupId, authorisedBy) { return true }
-            await removeVerified(groupId)
-            return false
+            // Taken back unless superseded, decided in the removal's own locked read.
+            let taken = await removeVerified(groupId) { [self] stored in !supersedes(stored.records[groupId], authorisedBy) }
+            return taken == .refused
         }
         return true
     }
 
-    /* Whether the family's record now is a newer acceptance than `authorisedBy`, held by the account the keychain holds, read under the store's lock. */
-    private func superseded(_ groupId: String, _ authorisedBy: FamilyDomainRecord) -> Bool {
-        var now: FamilyDomainRecord?
-        guard records.update({ stored in now = stored.records[groupId] }), let now, now != authorisedBy,
-              (now.generation ?? 0) >= (authorisedBy.generation ?? 0), let signedIn = sharedSession() else { return false }
+    /* Whether `now` is a newer acceptance than `authorisedBy`, held by the account the keychain holds; read under the store's lock. */
+    private func supersedes(_ now: FamilyDomainRecord?, _ authorisedBy: FamilyDomainRecord) -> Bool {
+        guard let now, now != authorisedBy, (now.generation ?? 0) >= (authorisedBy.generation ?? 0), let signedIn = sharedSession() else { return false }
         return now.owner == AccountOwner(signedIn)
     }
 
     /*
      * Whether a let-go of `owner` and `session`, which moved the family's generation to `generation`,
-     * may still remove its location: read under the store's lock, the record is gone, or was written
-     * before the let-go and is still `owner`'s while that session stands. A store that can't be read
-     * removes it (fail-safe: Files only drops a cache).
+     * may still remove its location, given its record as read under the store's lock: the record is
+     * gone, or was written before the let-go and is still `owner`'s while that session stands. (A
+     * store that can't be read removes it in `removeVerified`, fail-safe: Files only drops a cache.)
      */
-    private func mayRemove(_ groupId: String, owner: AccountOwner?, session: CopySession?, signedIn: SharedKeychain.Session?, after generation: UInt64?) -> Bool {
-        var record: FamilyDomainRecord?
-        var moved = false
-        guard records.update({ [self] stored in
-            record = stored.records[groupId]
-            // Signed out or in again elsewhere since the let-go (the same account included): a record there now is that session's.
-            if let signedIn { moved = sharedSession() != signedIn }
-        }) else { return true }
+    private func mayRemove(_ record: FamilyDomainRecord?, owner: AccountOwner?, session: CopySession?, signedIn: SharedKeychain.Session?,
+                           after generation: UInt64?) -> Bool {
         guard let record else { return true }
-        if moved { return false }
+        // Signed out or in again elsewhere since the let-go (the same account included): a record there now is that session's.
+        if let signedIn, sharedSession() != signedIn { return false }
         // Written at the generation the let-go moved the family to, or later: an acceptance that came after it.
         if let generation, let written = record.generation, written >= generation { return false }
         if let owner, record.owner != owner { return false }
@@ -510,9 +530,24 @@ public final class FamilyFilesDomains: @unchecked Sendable {
                     kept.append(identifier)
                     continue
                 }
-                // Whoever's acceptance landed while the location was removed keeps it, if they are signed in (`removeVerified`).
-                let gone = if let groupId { await removeVerified(groupId) } else { (try? await manager.remove(identifier)) != nil }
-                if gone { present.remove(identifier) }
+                guard let groupId else {
+                    if (try? await manager.remove(identifier)) != nil { present.remove(identifier) }
+                    continue
+                }
+                // Still due in the removal's own locked read (still this account in, the record still not its), and whoever's
+                // acceptance landed while the location was removed keeps it, if they are signed in (`removeVerified`).
+                switch await removeVerified(groupId, if: { stored in current(stored) && stored.records[groupId]?.owner != owner }) {
+                case .gone: present.remove(identifier)
+                case .stays: break
+                case .refused:
+                    // Accepted for this account just now (kept), or the account changed (stop).
+                    var nowOurs = false
+                    guard records.update({ stored in
+                        still = current(stored)
+                        nowOurs = stored.records[groupId]?.owner == owner
+                    }), still, nowOurs else { return }
+                    kept.append(identifier)
+                }
             }
             records.update { stored in
                 guard current(stored) else { return }
@@ -565,13 +600,13 @@ public final class FamilyFilesDomains: @unchecked Sendable {
         return enqueue { [self] in
             // `current` still signed in: a switch to the record's own account meanwhile makes it no longer foreign.
             func signedIn() -> Bool { sharedSession().map(AccountOwner.init) == current }
-            func foreign() -> Bool {
-                var record: FamilyDomainRecord?
-                guard records.update({ stored in record = stored.records[groupId] }), let record else { return false }
+            // Due while the record is another account's and `current` is signed in, decided in the removal's own locked read;
+            // whoever's acceptance landed while the location was removed keeps it, if they are signed in (`removeVerified`).
+            let due: (FamilyDomainRecords.Stored) -> Bool = { stored in
+                guard let record = stored.records[groupId] else { return false }
                 return record.owner != current && signedIn()
             }
-            // Whoever's acceptance landed while the location was removed keeps it, if they are signed in (`removeVerified`).
-            guard foreign(), await removeVerified(groupId) else { return }
+            guard await removeVerified(groupId, if: due) == .gone else { return }
             records.update { stored in
                 if let record = stored.records[groupId], record.owner != current, signedIn() { stored.records[groupId] = nil }
             }
@@ -991,7 +1026,9 @@ public actor FamilyFilesSource {
             let listing = try await vault.listChildren(of: folder.nodeId, in: folder.workspaceId)
             var out: [Opened] = []
             for child in listing.children where child.ref.workspaceId == folder.workspaceId {
-                if let opened = await vault.item(child.ref) { out.append(opened) }
+                // The row held, which may be newer than this listing's (another folder's listing opened it after a move): shown
+                // here only while it is still in this folder, so a moved file shows in its new folder alone.
+                if let opened = await vault.item(child.ref), opened.node.parentId?.lowercased() == folder.nodeId.lowercased() { out.append(opened) }
             }
             return out
         }

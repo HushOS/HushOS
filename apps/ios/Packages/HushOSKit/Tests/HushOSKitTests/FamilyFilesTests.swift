@@ -830,6 +830,36 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         #expect(manager.names[FamilyFileIds.domain(group)] != nil, "a pending let-go of the old session removed the new session's location")
     }
 
+    /*
+     * An acceptance lands in another process just as a removal begins, after whatever authorised it:
+     * the removal asks again in the same locked read that notes the record, and the location stays,
+     * for a let-go's removal and for a sign-in's reconcile alike. Fails if a removal is decided apart
+     * from the read it then trusts.
+     */
+    @Test func anAcceptanceLandingAsARemovalBeginsKeepsTheLocation() async throws {
+        for path in ["let-go", "reconcile"] {
+            signIn(Self.maya)
+            let remover = domains
+            let elsewhere = domains
+            let session = TemporaryCopies.session(CopyEpoch())
+            let (group, maya, records) = (UUID().uuidString.lowercased(), Self.maya, self.records)
+            if path == "let-go" {
+                await remover.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value
+            } else {
+                manager.put(FamilyFileIds.domain(group), name: "Lindqvist family")
+            }
+            remover.beforeRemoval = {
+                await elsewhere.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: session).value
+            }
+            if path == "let-go" { await remover.letGo(group, owner: maya).value } else { await remover.reconcile(owner: maya).value }
+            #expect(records.admission(group, owner: maya) == .admitted)
+            #expect(!manager.removals.contains(FamilyFileIds.domain(group)), "a removal decided before an acceptance landed went ahead (\(path))")
+            #expect(manager.names[FamilyFileIds.domain(group)] != nil)
+            // Kept by a sign-in's reconcile: told the session is back, as every kept location is.
+            if path == "reconcile" { #expect(manager.resolutions.contains(FamilyFileIds.domain(group))) }
+        }
+    }
+
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
     @Test func aRenamedFamilysLocationTakesTheNewName() async throws {
         let domains = self.domains
@@ -1423,6 +1453,29 @@ extension OnFakeDrive {
                 #expect(try await s.source.children(of: root).contains { $0.ref == s.family.photo.ref })
                 #expect(try s.records.read()[group]?.workspaces == [s.family.workspaceId.lowercased()])
             }
+        }
+
+        /*
+         * Another member moved the photo from the top folder into Docs: Docs' listing opens the moved
+         * row, then a listing of the top folder from before the move lands. The location shows the
+         * photo in Docs alone. Fails if a family folder lists a row the vault holds as moved out.
+         */
+        @Test func aFamilyFileMovedBetweenFoldersShowsOnlyInTheNewOneInFiles() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            let f = s.family
+            s.server.put(f.docs)
+            let root = NodeRef(workspaceId: f.workspaceId, nodeId: f.rootId)
+            #expect(try await s.source.children(of: root).contains { $0.ref == f.photo.ref })
+            let version = try #require(f.photo.currentVersion)
+            let moved = try FamilyFixture.node(id: f.photo.id, in: f.workspaceId, parent: f.docs.id, parentKey: f.docsKey, key: f.photoKey,
+                                               kind: .file, name: "Beach.jpg", writer: f.creator, keyEpoch: 3, parentKeyEpoch: 2)
+                .with(version: version).with(version: version)
+            s.server.put(moved)
+            #expect(try await s.source.children(of: NodeRef(workspaceId: f.workspaceId, nodeId: f.docs.id)).map(\.ref) == [f.photo.ref])
+            // The top folder's listing from before the move lands now.
+            s.server.put(f.photo)
+            #expect(!(try await s.source.children(of: root).contains { $0.ref == f.photo.ref }), "a moved file showed in the folder it left")
         }
 
         /*
