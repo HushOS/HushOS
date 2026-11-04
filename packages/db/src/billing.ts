@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, desc, eq, inArray, isNotNull, isNull, notInArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, ne, notInArray, sql } from 'drizzle-orm';
 import { db } from './client';
 import { memberUsage, poolUsage, pooledFamilyOf, takePoolLock } from './pool';
 
@@ -529,13 +529,61 @@ const liveGroupSubscription = (groupId: string) =>
     );
 
 /*
- * Which live plan is the family's when there are two: the one that has served it longest
- * (`served_since`, which a plan bought beside it never gets), then the one running longest.
+ * Which live plan is the family's when there are two: the one supplying it now (`served_since`,
+ * which only the family's plan has: settleTenure; the latest, should rows from before that rule
+ * hold two), then the one running longest.
  */
 const familyPlanOrder = [
-    sql`${groupBillingSubscriptions.servedSince} asc nulls last`,
+    sql`${groupBillingSubscriptions.servedSince} desc nulls last`,
     desc(groupBillingSubscriptions.currentPeriodEnd),
 ];
+
+/*
+ * Tenure, settled after every write that can change which plan supplies the family (applyGroupState,
+ * recordUnreadGroupSubscription), and nowhere else. `served_since` is when a plan began supplying the
+ * family without a break, so only the family's plan has one: it keeps its start, or starts now, and
+ * while active or trialing is served through its period (`served_until`, what a payment on it
+ * bought; a past-due or unpaid period never moves that). Every other row of the family stops: one
+ * that lapsed (unpaid, paused, incomplete), ended, was marked superseded, or runs beside the
+ * family's plan. Its `served_since` is cleared, so a plan that lapses and resumes after a
+ * replacement was bought never outranks the replacement, and its `served_until` is brought back to
+ * now if its period ran on: a payment made after it stopped paid for nothing, should it be ended as
+ * unwanted (unwantedPlanCutoff). Returns the family's plan, or none.
+ */
+async function settleTenure(tx: Tx, groupId: string) {
+    const [plan] = await tx
+        .select()
+        .from(groupBillingSubscriptions)
+        .where(liveGroupSubscription(groupId))
+        .orderBy(...familyPlanOrder)
+        .limit(1);
+    await tx
+        .update(groupBillingSubscriptions)
+        .set({
+            servedSince: null,
+            servedUntil: sql`case when ${groupBillingSubscriptions.servedUntil} > now() then now() else ${groupBillingSubscriptions.servedUntil} end`,
+        })
+        .where(
+            and(
+                eq(groupBillingSubscriptions.groupId, groupId),
+                isNotNull(groupBillingSubscriptions.servedSince),
+                plan ? ne(groupBillingSubscriptions.id, plan.id) : undefined,
+            ),
+        );
+    if (plan)
+        await tx
+            .update(groupBillingSubscriptions)
+            .set({
+                servedSince: sql`coalesce(${groupBillingSubscriptions.servedSince}, now())`,
+                ...(plan.status === 'active' || plan.status === 'trialing'
+                    ? {
+                          servedUntil: sql`greatest(${groupBillingSubscriptions.servedUntil}, ${plan.currentPeriodEnd})`,
+                      }
+                    : {}),
+            })
+            .where(eq(groupBillingSubscriptions.id, plan.id));
+    return plan;
+}
 
 /* The group's plan: its live subscription (familyPlanOrder if there were ever two). */
 export async function getLiveGroupSubscription(groupId: string) {
@@ -1228,6 +1276,8 @@ export async function recordUnreadGroupSubscription(
         if (claimed !== 'applied') return claimed;
         await writeUnread(tx, groupId, input);
         await markChanged(tx, [input.id], readingFrom);
+        // A plan it ends, or reinstates, may change which supplies the family.
+        await settleTenure(tx, groupId);
         return 'applied';
     });
 }
@@ -1261,8 +1311,6 @@ async function writeUnread(tx: Tx, groupId: string, input: UnreadGroupSubscripti
             cancelAtPeriodEnd: input.cancelAtPeriodEnd,
             currentPeriodStart: input.currentPeriodStart,
             currentPeriodEnd: input.currentPeriodEnd,
-            // Ended: no longer the family's plan, should it ever come back (as applyGroupState).
-            ...(input.endedAt || ENDED.has(input.status) ? { servedSince: null } : {}),
             updatedAt: new Date(),
         })
         .where(where);
@@ -1425,8 +1473,10 @@ export function unwantedPlanCutoff(row: { servedUntil: Date | null; endedAt: Dat
  * A family with more than one live plan keeps one; decided under the group's lock, from the rows
  * this write just made, so two reconciles curing at once never end both: a plan another cure has
  * marked already is no candidate, and the plan kept is always one still live and unmarked. Kept:
- * the one that has served the family longest (`served_since`, which a plan bought beside it never
- * gets), then the oldest by Polar's creation time, then by id. The others are marked superseded
+ * the one supplying the family now (`served_since`, which only the family's plan has, settleTenure:
+ * never one bought beside it, nor one that lapsed and resumed after a replacement took over; the
+ * latest start, should rows from before that rule hold two), then the oldest by Polar's creation
+ * time, then by id. The others are marked superseded
  * by it and returned with their refund cutoffs (taken before this write), for the caller to end.
  */
 async function supersedeOthers(
@@ -1454,10 +1504,10 @@ async function supersedeOthers(
         .for('update');
     if (live.length < 2) return none;
     const served = (row: { servedSince: Date | null }) =>
-        row.servedSince?.getTime() ?? Number.POSITIVE_INFINITY;
+        row.servedSince?.getTime() ?? Number.NEGATIVE_INFINITY;
     live.sort(
         (a, b) =>
-            (served(a) === served(b) ? 0 : served(a) - served(b)) ||
+            (served(a) === served(b) ? 0 : served(b) - served(a)) ||
             created.get(a.id)! - created.get(b.id)! ||
             a.id.localeCompare(b.id),
     );
@@ -1673,10 +1723,6 @@ export async function applyGroupState(input: {
                 ...(LAPSED_STATUSES.includes(subscription.status) && !subscription.endedAt
                     ? {}
                     : { lapsedRevokeRefusal: null, lapsedRevokeRefusedAt: null }),
-                // Ended: no longer the family's plan, should it ever come back.
-                ...(subscription.endedAt || ENDED.has(subscription.status)
-                    ? { servedSince: null }
-                    : {}),
             };
             await tx
                 .insert(groupBillingSubscriptions)
@@ -1734,8 +1780,6 @@ export async function applyGroupState(input: {
                 .set({
                     status: sql`case when ${groupBillingSubscriptions.status} in ('active', 'trialing', 'past_due') then 'canceled' else ${groupBillingSubscriptions.status} end`,
                     endedAt: sql`coalesce(${groupBillingSubscriptions.endedAt}, now())`,
-                    // Ended: no longer the family's plan, should it ever come back.
-                    servedSince: null,
                     updatedAt: now,
                 })
                 .where(
@@ -1754,27 +1798,7 @@ export async function applyGroupState(input: {
         const cured = input.cure
             ? await supersedeOthers(tx, input.groupId, input.cure, cutoffs, now)
             : { kept: null, superseded: [] };
-        const [plan] = await tx
-            .select()
-            .from(groupBillingSubscriptions)
-            .where(liveGroupSubscription(input.groupId))
-            .orderBy(...familyPlanOrder)
-            .limit(1);
-        // The family's plan from now on, if it wasn't (servedSince); and, while active or
-        // trialing, served through this period: what a payment on it bought (servedUntil). A
-        // past-due or unpaid period never moves that.
-        if (plan)
-            await tx
-                .update(groupBillingSubscriptions)
-                .set({
-                    servedSince: sql`coalesce(${groupBillingSubscriptions.servedSince}, now())`,
-                    ...(plan.status === 'active' || plan.status === 'trialing'
-                        ? {
-                              servedUntil: sql`greatest(${groupBillingSubscriptions.servedUntil}, ${plan.currentPeriodEnd})`,
-                          }
-                        : {}),
-                })
-                .where(eq(groupBillingSubscriptions.id, plan.id));
+        const plan = await settleTenure(tx, input.groupId);
         await tx
             .update(groups)
             .set({ seatLimit: plan ? seatLimitOf(plan) : null, updatedAt: now })

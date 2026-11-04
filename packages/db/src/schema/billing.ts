@@ -280,18 +280,21 @@ export const groupBillingSubscriptions = pgTable(
         changedFrom: bigint('changed_from', { mode: 'bigint' }),
         /*
          * The end of the last period in which this was the family's plan while `active` or
-         * `trialing` (applyGroupState sets it when it picks the family's plan): what a payment on
-         * it bought. Null for a plan that never served the family (an incomplete checkout, one
-         * made beside the family's plan, one a deleted family's Polar customer was billed for),
-         * which bought nothing. A past-due or unpaid period never moves it, nor anything after the
-         * family is deleted: the cutoff a deleted family's plan, or a second plan, is refunded
-         * from (unwantedPlanCutoff).
+         * `trialing` (settleTenure sets it when it picks the family's plan): what a payment on
+         * it bought; brought back to when it stopped supplying the family, if its period ran on.
+         * Null for a plan that never served the family (an incomplete checkout, one made beside
+         * the family's plan, one a deleted family's Polar customer was billed for), which bought
+         * nothing. A past-due or unpaid period never moves it, nor anything after the family is
+         * deleted: the cutoff a deleted family's plan, or a second plan, is refunded from
+         * (unwantedPlanCutoff).
          */
         servedUntil: timestamp('served_until', { withTimezone: true }),
         /*
-         * Since when this has been the family's plan (applyGroupState, the first time it picks it),
-         * cleared when it ends: the family's plan is the live one that has served it longest, so a
-         * second plan bought beside it, even one a racing delivery wrote, never takes its place.
+         * Since when this has supplied the family without a break (settleTenure): only the family's
+         * plan has one, cleared the moment it stops (lapsed, ended, superseded, or beside the
+         * family's plan). The family's plan is the live one supplying it now, so a second plan
+         * bought beside it, even one a racing delivery wrote, never takes its place, and a plan
+         * that lapses and resumes after a replacement was bought never takes the replacement's.
          */
         servedSince: timestamp('served_since', { withTimezone: true }),
         /*

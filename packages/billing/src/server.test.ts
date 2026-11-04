@@ -7051,6 +7051,62 @@ describe('one plan per family', () => {
         expect(refundsMade()).toEqual([['order_x', 999]]);
     });
 
+    test('a plan that lapsed, then resumed after the family bought a replacement: the replacement is kept, and the resumed plan revoked and its new charge refunded', async () => {
+        const { groupId, subscription: a } = await familyOnPlan({ product: PRO_FAMILY });
+        // A's payment fails: unpaid, nothing supplies the family.
+        a.status = 'unpaid';
+        await quietly(() => billing.reconcileGroup(groupId));
+        expect(await billingRepository.getLiveGroupSubscription(groupId)).toBeNull();
+        // The family buys B, which supplies it from now on.
+        familySubscription(groupId, {
+            id: 'sub_b',
+            product_id: PRO_FAMILY,
+            created_at: new Date().toISOString(),
+        });
+        await quietly(() => billing.reconcileGroup(groupId));
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.id).toBe('sub_b');
+        // A's card is updated: Polar resumes it and charges it again.
+        a.status = 'active';
+        addPaidOrder(a, 'order_a_resumed');
+        polar.calls = [];
+        endingJobs.length = 0;
+        await quietly(async () => {
+            await billing.reconcileGroup(groupId);
+            await runQueued(0);
+        });
+        expect(callsTo('subscriptions.revoke')).toEqual([`subscriptions.revoke:${a.id}`]);
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.id).toBe('sub_b');
+        expect(refundsMade()).toEqual([['order_a_resumed', 999]]);
+    });
+
+    test('a plan that lapsed, replaced by one that lapsed too, then resumed: the resumed plan is the family’s, nothing revoked', async () => {
+        const { groupId, subscription: a } = await familyOnPlan({ product: PRO_FAMILY });
+        a.status = 'unpaid';
+        await quietly(() => billing.reconcileGroup(groupId));
+        const b = familySubscription(groupId, {
+            id: 'sub_b',
+            product_id: PRO_FAMILY,
+            created_at: new Date().toISOString(),
+        });
+        await quietly(() => billing.reconcileGroup(groupId));
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.id).toBe('sub_b');
+        // B's payment fails too; then Polar resumes A.
+        b.status = 'unpaid';
+        await quietly(() => billing.reconcileGroup(groupId));
+        expect(await billingRepository.getLiveGroupSubscription(groupId)).toBeNull();
+        a.status = 'active';
+        addPaidOrder(a, 'order_a_resumed');
+        polar.calls = [];
+        endingJobs.length = 0;
+        await quietly(async () => {
+            await billing.reconcileGroup(groupId);
+            await runQueued(0);
+        });
+        expect((await billingRepository.getLiveGroupSubscription(groupId))?.id).toBe(a.id);
+        expect(callsTo('subscriptions.revoke')).toEqual([]);
+        expect(refundsMade()).toEqual([]);
+    });
+
     test('a delivery that names a plan, its reading older than one written meanwhile, reads Polar again: the plan is recorded and the one bought second refunded', async () => {
         const organizer = await createTestAccount();
         const { groupId } = await createTestFamily({ organizerId: organizer.userId, pooled: true });
