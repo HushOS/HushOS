@@ -49,12 +49,19 @@ public struct FamilyDomainRecord: Codable, Sendable, Equatable {
      * or below came before the record (nil: a record from before generations were kept).
      */
     public var generation: UInt64?
+    /*
+     * Which acceptance wrote it, new on every write (nil: an older version's record): two acceptances
+     * of the same family, account and generation (a same-account sign-in again) still differ, so a
+     * removal or a lost add can tell a newer one landed meanwhile.
+     */
+    public var revision: String?
 
-    public init(owner: AccountOwner, name: String, workspaces: [String]? = nil, generation: UInt64? = nil) {
+    public init(owner: AccountOwner, name: String, workspaces: [String]? = nil, generation: UInt64? = nil, revision: String? = nil) {
         self.owner = owner
         self.name = name
         self.workspaces = workspaces
         self.generation = generation
+        self.revision = revision
     }
 }
 
@@ -254,7 +261,7 @@ public final class FamilyFilesDomains: @unchecked Sendable {
                 if let signedIn, sharedSession() != signedIn { return }
                 if let record = stored.records[groupId], record.owner != owner { return }
                 let record = FamilyDomainRecord(owner: owner, name: name, workspaces: workspaces.map { $0.lowercased() }.sorted(),
-                                                generation: stored.generation(groupId))
+                                                generation: stored.generation(groupId), revision: UUID().uuidString.lowercased())
                 stored.records[groupId] = record
                 written = record
                 ours = true
@@ -955,8 +962,9 @@ public actor FamilyFilesSource {
 
     /*
      * A file's current version, decrypted under the family's copy gate to the process's
-     * `opened/family/<workspace>/files/<node>/<version>/content` (where a forget of the family
-     * reaches it; a partial there is continued by the next try), handed on only through `serving`:
+     * `opened/family/<workspace>/<node>/<version>/content` (`TemporaryCopies.openedFolder`, the one
+     * layout the day-old sweep and a forget of the family both read; a partial there is continued by
+     * the next try), handed on only through `serving`:
      * however the download ends, a revocation found then (here or from another process) leaves no
      * copy of the family's folders, partials included.
      */
@@ -967,8 +975,9 @@ public actor FamilyFilesSource {
         do {
             return try await serving(copy: nil, gate: gate) {
                 let item = try await lookUp(ref)
-                let file = temporary.appendingPathComponent("opened/family/\(ref.workspaceId)/files/\(ref.nodeId)/\(item.node.currentVersion?.id ?? "none")", isDirectory: true)
-                    .appendingPathComponent("content")
+                guard let folder = TemporaryCopies.openedFolder(itemId: ref.nodeId, version: item.node.currentVersion?.id ?? "none", familyWorkspace: ref.workspaceId,
+                                                                in: temporary) else { throw FamilyFilesError.notInFamily }
+                let file = folder.appendingPathComponent("content")
                 made = file
                 try gate.perform { try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true) }
                 try await vault.download(ref.nodeId, ref: ref, expectedVersionId: item.node.currentVersion?.id, to: file, gate: gate, progress: progress)

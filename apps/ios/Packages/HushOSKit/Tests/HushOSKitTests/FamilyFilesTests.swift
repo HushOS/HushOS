@@ -136,7 +136,7 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         let domains = FamilyFilesDomains(records: records, manager: manager, temporary: temporary)
         let (kept, stray, revoked) = (UUID().uuidString.lowercased(), UUID().uuidString.lowercased(), UUID().uuidString.lowercased())
         func copy(_ workspace: String) throws -> URL {
-            let folder = temporary.appendingPathComponent("opened/family/\(workspace)/files/x/y", isDirectory: true)
+            let folder = temporary.appendingPathComponent("opened/family/\(workspace)/x/y", isDirectory: true)
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let file = folder.appendingPathComponent("content.part")
             try Data("plaintext".utf8).write(to: file)
@@ -766,6 +766,29 @@ final class TestFamilyDomains: FamilyDomainManaging, @unchecked Sendable {
         #expect(manager.names[FamilyFileIds.domain(second)] != nil, "reconcile removed a family accepted while its earlier removal waited")
     }
 
+    /*
+     * Maya signs in again while her last session's acceptance adds the location: the old session's
+     * add no longer holds, and the new session's acceptance wrote a record equal in every field but
+     * which acceptance wrote it. The location stays for the new one. Fails if two acceptances of the
+     * same account and generation can't be told apart.
+     */
+    @Test func aSameAccountSignInDuringTheAddKeepsTheLocation() async throws {
+        signIn(Self.maya)
+        let old = domains
+        let new = domains
+        let ending = CopyEpoch()
+        let oldSession = TemporaryCopies.session(ending)
+        let newSession = TemporaryCopies.session(CopyEpoch())
+        let (group, maya, records) = (UUID().uuidString.lowercased(), Self.maya, self.records)
+        manager.duringAdd = {
+            TemporaryCopies.endAccount(ending)
+            await new.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: newSession).value
+        }
+        await old.accepted(group, name: "Lindqvist family", owner: maya, observed: records.generation(group), session: oldSession).value
+        #expect(records.admission(group, owner: maya) == .admitted)
+        #expect(manager.names[FamilyFileIds.domain(group)] != nil, "the old session's lost add took the new session's location")
+    }
+
     /* A renamed family's location takes the new name. Fails if an existing location keeps the old one. */
     @Test func aRenamedFamilysLocationTakesTheNewName() async throws {
         let domains = self.domains
@@ -1269,6 +1292,34 @@ extension OnFakeDrive {
         }
 
         /*
+         * A download lands where the day-old sweep looks: a version folder untouched for a day goes,
+         * and a fresh one stays even under a node folder from days ago. Fails if downloads and the
+         * sweep disagree on the layout (stale partials kept, fresh downloads deleted).
+         */
+        @Test func theDayOldSweepReadsTheDownloadsOwnLayout() async throws {
+            let s = try await Self.source()
+            defer { s.phone.done() }
+            _ = try await s.source.children(of: NodeRef(workspaceId: s.family.workspaceId, nodeId: s.family.rootId))
+            let (file, _) = try await s.source.download(s.family.photo.ref)
+            let version = file.deletingLastPathComponent()
+            let node = version.deletingLastPathComponent()
+            let versionId = try #require(s.family.photo.currentVersion?.id)
+            #expect(version == TemporaryCopies.openedFolder(itemId: s.family.photo.id, version: versionId, familyWorkspace: s.family.workspaceId, in: s.temporary))
+            let longAgo = Date().addingTimeInterval(-3 * 24 * 3600)
+
+            // The node folder is days old, the version in it fresh (a download continued today): it stays.
+            try FileManager.default.setAttributes([.modificationDate: longAgo], ofItemAtPath: node.path)
+            TemporaryCopies.sweep(in: s.temporary)
+            #expect(FileManager.default.fileExists(atPath: file.path), "the sweep deleted a fresh download")
+
+            // The version itself untouched for days (a partial nobody continued): it goes.
+            try FileManager.default.setAttributes([.modificationDate: longAgo], ofItemAtPath: version.path)
+            try FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: node.path)
+            TemporaryCopies.sweep(in: s.temporary)
+            #expect(!FileManager.default.fileExists(atPath: version.path), "a day-old download outlived the sweep")
+        }
+
+        /*
          * The same account signs in again in the app (a new token in the shared keychain) while the
          * extension's sync of the old session still runs: its late definite refusal, written at once
          * or left pending and written later, lets nothing of the new session's location go. Fails if
@@ -1592,7 +1643,7 @@ extension OnFakeDrive {
             let copies = s.temporary.appendingPathComponent("opened/family/\(s.family.workspaceId)")
             await s.phone.vault.setBeforeChunk { _ in
                 // Something of the file is already on disk, as a partial a retry would continue.
-                let partial = copies.appendingPathComponent("files/partial.part")
+                let partial = copies.appendingPathComponent("\(s.family.photo.id)/partial/content.part")
                 try? FileManager.default.createDirectory(at: partial.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try? Data("decrypted bytes".utf8).write(to: partial)
                 _ = extensionProcess.letGo(group, owner: owner)
