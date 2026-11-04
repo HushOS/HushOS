@@ -1,0 +1,31 @@
+apps/web/src/components/families/decline-invitation.tsx
+  s_566b8e0c4467a4::t_c01575a29adf22 17,50-51,64-74
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_235fc577a28449 2721-2727
+apps/web/src/lib/groups/api.ts
+  s_566b8e0c4467a4::t_d8eeccea540e31 169
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_9e1d130d3ff7be 2153-2204
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_1490c47417c266 1980-1995,2192,2199-2200,2220-2224,2234-2235
+packages/groups/src/server.test.ts
+  s_566b8e0c4467a4::t_d24a9078c5e8dd 1095-1127
+packages/groups/src/server.ts
+  s_566b8e0c4467a4::t_10ec300b95f84c 2277-2282,2284-2285,2288,2296-2299,2314-2323
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "faf1df5e068865f29dcf1ec3a98090cd309b9f6c",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
