@@ -1,0 +1,1803 @@
+.env.example
+  s_566b8e0c4467a4::t_58a37d5d6692df 81-83
+.gitattributes
+  s_566b8e0c4467a4::t_1450349622f840 2
+.github/actions/android-toolchain/action.yml
+  s_566b8e0c4467a4::t_ed28bc96b5742c 1-40
+.github/workflows/android-release.yml
+  s_566b8e0c4467a4::t_c48055594d9d4c 1-337
+.github/workflows/ci.yml
+  s_566b8e0c4467a4::t_af6eee91e3a361 81,107,109,153,155,166,172-176,186-189,191,216,218-219,235,269,293,295-296,312,341,417-418,610,615
+.github/workflows/fuzz.yml
+  s_566b8e0c4467a4::t_31eea037dd655f 51,53,68,76,95,97-98,109,146,148,158,173,202,210
+.github/workflows/release.yml
+  s_566b8e0c4467a4::t_d2128eb52f3b3f 247-252
+.github/workflows/webkit.yml
+  s_566b8e0c4467a4::t_b476a6d1ef046e 1-200
+.release-please-manifest.json
+  s_566b8e0c4467a4::t_7125e1e448ba3f 2
+CHANGELOG.md
+  s_566b8e0c4467a4::t_a9465ab8938e6b 3-153
+CONTRIBUTING.md
+  s_566b8e0c4467a4::t_1a6bab8d2a1578 3,27,37-40,49-56,59,112,147-148
+Cargo.lock
+  s_566b8e0c4467a4::t_9a1c13d4ddc2ae 92,131,133,293,397,399,461,463,477,509,564,591,593,635,637,753,842,844,888,890,898,1002-1003,1121,1123,1213,1218,1220,1231,1233,1261,1263,1272,1274,1278,1313,1315,1335,1337,1340,1380,1382,1414,1416,1423,1425,1429,1440,1442,1455,1457,1464,1466,1473,1475,1485,1487,1491,1493,1500,1502,1506,1508,1522,1524,1548,1550,1560,1562,1573,1575,1590,1592,1602,1604,1615,1617,1712,1714,1721,1723,1732,1734
+DESIGN.md
+  s_566b8e0c4467a4::t_ce0b98ff73cdea 4,7,10,12,15,25,29,45,48,293-295,297,299,303,320,322-323,326,331,343,345,348-349,352,371,374,398,414-417,437,440-443,445-446,450-455,462,464,466-471,479,482,485-486,491-492,498-499,501-503,512-514,520-521,538,547-548
+README.md
+  s_566b8e0c4467a4::t_a92c5892b96282 36,50,77
+apps/android/AGENTS.md
+  s_566b8e0c4467a4::t_3eb9009d453c02 20,25,30,32,40-42,60,62,65-100
+apps/android/app/build.gradle.kts
+  s_566b8e0c4467a4::t_c4c72a8e19c958 62-64,72,92-94,136-143,162-165,180-182
+apps/android/app/src/main/AndroidManifest.xml
+  s_566b8e0c4467a4::t_795e5a451b33ff 63,82-83,144-149
+apps/android/app/src/main/kotlin/com/hushos/app/HushOSApplication.kt
+  s_566b8e0c4467a4::t_9074fc47fac061 16-27
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_566b8e0c4467a4::t_80ddfd50bab5ca 9-10,18,45-46,48-55,61-63,69-74,76,79-80
+apps/android/app/src/main/kotlin/com/hushos/app/data/AppLinks.kt
+  s_566b8e0c4467a4::t_02ba4a3f49d493 26-29,103-112,142-144
+apps/android/app/src/main/kotlin/com/hushos/app/data/Auth.kt
+  s_566b8e0c4467a4::t_cdc805bb81cc94 140-142,144-145,152-153,159-200,220-221,230,233-236,246-252,392-394,498-500,529-530,533-534,539-540,548-549,555-556,620-621,633,641-642,646,648,740-742
+apps/android/app/src/main/kotlin/com/hushos/app/data/Catalogue.kt
+  s_566b8e0c4467a4::t_19e54393bf024a 17-35,37-40,43-46,48,50-51,56,60-62,64,119-122,125-128,130-131,134-141,151-154,157-160,163-166,174,182,206-207,211-241,268,270,272-273
+apps/android/app/src/main/kotlin/com/hushos/app/data/ContactGuard.kt
+  s_566b8e0c4467a4::t_6c1fd0b7383326 1-231
+apps/android/app/src/main/kotlin/com/hushos/app/data/ContactTrust.kt
+  s_566b8e0c4467a4::t_396e6adaeec6d4 1-663
+apps/android/app/src/main/kotlin/com/hushos/app/data/Contacts.kt
+  s_566b8e0c4467a4::t_d80c220ba7456c 5-7,10,18,20-21,27,59-68,106-125,128-130,157-158,160-182,185,199-200,216,219-233,263-281,304,314-316,386-461,496-499,520-521,526,533-552,557-562,564-571
+apps/android/app/src/main/kotlin/com/hushos/app/data/DecryptedCopies.kt
+  s_566b8e0c4467a4::t_dad366e404ebea 11-14,22-26,28-29,42-80
+apps/android/app/src/main/kotlin/com/hushos/app/data/DriveApi.kt
+  s_566b8e0c4467a4::t_e05b3a0e535ec8 11-20,60-70,118-119,140-144,151-155,186,203-212,268,281,284,288,292,305,321,326,330,334,369,372,375,379,383,387-411,414,420,424,429,433,436,438-441,449,451-471
+apps/android/app/src/main/kotlin/com/hushos/app/data/FailedTransfers.kt
+  s_566b8e0c4467a4::t_83160c1ffc2dce 3,19-29,31-50,52-54,72-77,80,87,92-93,97-99,104-112
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyCheck.kt
+  s_566b8e0c4467a4::t_cac1c5d042edfa 1-180
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyGuard.kt
+  s_566b8e0c4467a4::t_1f47504e7c87bc 1-136
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyJoin.kt
+  s_566b8e0c4467a4::t_8da8c4d727710b 1-238
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyLines.kt
+  s_566b8e0c4467a4::t_d3a9d264a187fb 1-362
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyManage.kt
+  s_566b8e0c4467a4::t_d9ce67238f46f5 1-1275
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyPlan.kt
+  s_566b8e0c4467a4::t_0096e784ecbea8 1-67
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyRecords.kt
+  s_566b8e0c4467a4::t_c0c74eeaaedb81 1-120
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyRemoval.kt
+  s_566b8e0c4467a4::t_0d1f959399dc1e 1-686
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySessions.kt
+  s_566b8e0c4467a4::t_546d00e7806c90 1-62
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySettings.kt
+  s_566b8e0c4467a4::t_7ef5f334390bc9 1-94
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_566b8e0c4467a4::t_e12943533b1b7e 1-1039
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyUploads.kt
+  s_566b8e0c4467a4::t_01ca15b3145cec 1-153
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyWalkWork.kt
+  s_566b8e0c4467a4::t_c4f454cc401fb2 1-166
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyWalks.kt
+  s_566b8e0c4467a4::t_43f92d2cf58f7a 1-313
+apps/android/app/src/main/kotlin/com/hushos/app/data/FilesRoots.kt
+  s_566b8e0c4467a4::t_5ee78532025ef0 6-10,12,17-50,59-74
+apps/android/app/src/main/kotlin/com/hushos/app/data/FolderPick.kt
+  s_566b8e0c4467a4::t_37d7289a4ce9a4 25,33-34
+apps/android/app/src/main/kotlin/com/hushos/app/data/GroupsApi.kt
+  s_566b8e0c4467a4::t_c4eb1eae56f095 1-476
+apps/android/app/src/main/kotlin/com/hushos/app/data/Integrity.kt
+  s_566b8e0c4467a4::t_6b1cffe7f506b7 30-33,35-36,47-48,54-56,58,61-63,65-68,70,72,77,81,98-106,109-113,189-206,216-218,221-222,224-226,238-239,242-254,379-381
+apps/android/app/src/main/kotlin/com/hushos/app/data/ItemKind.kt
+  s_566b8e0c4467a4::t_a5049f01fdd2f3 1-82
+apps/android/app/src/main/kotlin/com/hushos/app/data/JobLocks.kt
+  s_566b8e0c4467a4::t_9a59c416f4c59b 21-23
+apps/android/app/src/main/kotlin/com/hushos/app/data/JobNames.kt
+  s_566b8e0c4467a4::t_4b2b5859c9c794 1-53
+apps/android/app/src/main/kotlin/com/hushos/app/data/LandedJobs.kt
+  s_566b8e0c4467a4::t_95310f1bc7a4d8 29-31,35-37
+apps/android/app/src/main/kotlin/com/hushos/app/data/Links.kt
+  s_566b8e0c4467a4::t_23179abe318a0c 312-333
+apps/android/app/src/main/kotlin/com/hushos/app/data/Mirror.kt
+  s_566b8e0c4467a4::t_592108581c1f3c 38-75,114-117,124-127,131-138,141-149,166-172
+apps/android/app/src/main/kotlin/com/hushos/app/data/Names.kt
+  s_566b8e0c4467a4::t_f0034db0417e6e 1-45
+apps/android/app/src/main/kotlin/com/hushos/app/data/NodeCache.kt
+  s_566b8e0c4467a4::t_fcb993c18ae141 17-31,37-39,47-64,67-73,77,79,81,84,89-96,111-120
+apps/android/app/src/main/kotlin/com/hushos/app/data/Places.kt
+  s_566b8e0c4467a4::t_e5f94ba38a56e4 13-16,21-25,28-32
+apps/android/app/src/main/kotlin/com/hushos/app/data/Reservations.kt
+  s_566b8e0c4467a4::t_f0822c99fe3941 1-246
+apps/android/app/src/main/kotlin/com/hushos/app/data/Resumable.kt
+  s_566b8e0c4467a4::t_9e40834c1424e7 92-97,100-104,106-112,114,116-117,121-124
+apps/android/app/src/main/kotlin/com/hushos/app/data/Rotation.kt
+  s_566b8e0c4467a4::t_85f77d9633fead 49-53,55,62-72,78-101,108-109,117-119,131,136-145,158-180,192-194,199-201,205-218,220-301,303-323,325-332,334,340-341,346-347
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveTargets.kt
+  s_566b8e0c4467a4::t_e330986ae779ee 1-108
+apps/android/app/src/main/kotlin/com/hushos/app/data/SettingsMark.kt
+  s_566b8e0c4467a4::t_e30bd59420a564 4-6,8-9,17-64,66-68,70-115,120-122,124-175,184,186-188,191-197,204-207,210,213-217,219-267,272-275,277-279,281-283,285-296,298-304,306-310
+apps/android/app/src/main/kotlin/com/hushos/app/data/ShareSeals.kt
+  s_566b8e0c4467a4::t_76d16f36faeaf3 49-55,61-97
+apps/android/app/src/main/kotlin/com/hushos/app/data/SharedText.kt
+  s_566b8e0c4467a4::t_53cef4bfe8509a 33-34
+apps/android/app/src/main/kotlin/com/hushos/app/data/Tags.kt
+  s_566b8e0c4467a4::t_9fe045c0e7436f 30,32-40
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferNotices.kt
+  s_566b8e0c4467a4::t_74131a03973337 137-166,255-256
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_566b8e0c4467a4::t_e03fdd90d9c0e4 15,23,70-72,74,79-320,327-329,331-338,341-432,435-441,447-467,471-517,525-552,555-556,558-575,579-591,595-601,610-618,621-623,628-650,653-801,863-871,880,887-890,892-897,899-900,902-903,905-906,910,917-1057,1061-1086,1089-1091,1096,1106-1109,1113-1123,1128-1148,1154-1168,1170,1179-1181,1184,1201-1202,1220,1222,1227
+apps/android/app/src/main/kotlin/com/hushos/app/data/TrashBatches.kt
+  s_566b8e0c4467a4::t_358268cd0ca90e 1-252
+apps/android/app/src/main/kotlin/com/hushos/app/data/UploadFinish.kt
+  s_566b8e0c4467a4::t_b4bdc81862b5c0 24-29
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_566b8e0c4467a4::t_ce91f0eb78376b 11,67-68,91-98,100-143,176-179,189-194,200-205,209-211,216,220-292,303-307,320-326,333,360,405-406,446,471,496-499,503,515,518-537,544,548-549,552,555,564-567,569-571,573,576,584,590-593,595,599,601,621,626-629,631-632,634-640,642-644,647-648,653,671,676,701-704,708-710,713-714,722-733,736-743,746,748-749,754,763,769-770,772-776,780-791,795,804,818-825,845-847,851,860,924,926-930,978,985,999-1047,1099,1112-1114,1119-1123,1126-1130,1136-1149,1152,1155-1170,1184-1187,1192-1196,1198-1229,1232-1249,1258-1281,1287-1294,1300-1313,1318-1322,1324-1328,1335-1340,1343-1357,1359-1360,1394-1440,1443-1459,1489-1491,1507,1514-1518,1522-1524,1528-1542,1545-1554,1556-1571,1573-1575,1577,1580,1585-1596,1602,1605-1607,1609-1613,1622-1624,1628-1629,1631,1635,1655,1662-1669,1672-1673,1675-1677,1679-1728,1732-1735,1737-1755,1757-1784,1788,1790,1796,1803,1805-1806,1853-1858,1860-1870,1873-1874,1876-1878,1890-1891,1896-1897,1904,1908-1912,1926-1943,1946-1974,2005-2006,2010-2056,2060-2061,2066-2068,2070,2072-2073,2076-2078
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_566b8e0c4467a4::t_83e3fa06278a4d 1-559
+apps/android/app/src/main/kotlin/com/hushos/app/data/WriteBacks.kt
+  s_566b8e0c4467a4::t_27310d4319e1fd 1-978
+apps/android/app/src/main/kotlin/com/hushos/app/files/FeedPulls.kt
+  s_566b8e0c4467a4::t_48a2fbbfe85f1f 1-47
+apps/android/app/src/main/kotlin/com/hushos/app/files/FilesPoll.kt
+  s_566b8e0c4467a4::t_f2e06c744388f6 1-69
+apps/android/app/src/main/kotlin/com/hushos/app/files/HushOSDocumentsProvider.kt
+  s_566b8e0c4467a4::t_fa71002abb2a98 17,22,32-40,52-53,56-59,71-72,75,77,85-86,95,172-179,183-227,243-244,249,251,265-268,278-286,290-292,299-300,302-349,351-370,375-377,379-381,387-421,423,426-428,430-459,463-464,467-468,470-489,491,493-512,514-575,579-633,637-639,648-650,652-655,669-672,679-686,688-689,694-697,703-713
+apps/android/app/src/main/kotlin/com/hushos/app/files/ProviderFamilies.kt
+  s_566b8e0c4467a4::t_dec35c0145cd0e 1-699
+apps/android/app/src/main/kotlin/com/hushos/app/files/ProviderRefresh.kt
+  s_566b8e0c4467a4::t_1ab25c6c1d5bba 1-43
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AccountScreen.kt
+  s_566b8e0c4467a4::t_974f6afb4d7f49 3,121-122,125-126,146-150,171-172,178,305,312,314-326,334-335,350,352,369,371-375,466-468,692,724
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Adaptive.kt
+  s_566b8e0c4467a4::t_9f6eedb22f2362 1-168
+apps/android/app/src/main/kotlin/com/hushos/app/ui/AddMenu.kt
+  s_566b8e0c4467a4::t_1ffa06f0bd6ed4 3,79-80,82-84,277-279
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Components.kt
+  s_566b8e0c4467a4::t_6c3c34ce8dc1ab 4,23-24,274,278-291,293-301,303-304
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ContactsUi.kt
+  s_566b8e0c4467a4::t_185648c390c7a1 1-387
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DevicesScreen.kt
+  s_566b8e0c4467a4::t_c83093d49535ba 3,47-49,137
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_566b8e0c4467a4::t_84b3590b43ea96 16-20,22,27-39,84-85,107,109-110,112,159-160,181,200,204,206-242,244-247,329,336-342,375-376,379-383,385-386,388-390,393-394,397-398,400,411,415,426,451-452,454-460,478-485,507,511,514-519,521-522,525-529,536,539-541,543-544,692-693,729,732-737,739-749,824-825,838-842,846-853,876-879,881-883,893-902,908-911,993-995,1036-1038,1149,1153-1159,1166-1170,1174,1238-1239,1246,1249-1251,1308-1364,1368,1445-1449,1451-1452,1498-1499,1502-1512,1516-1517,1520,1523,1528-1529,1538-1546,1596,1598,1612,1620-1622,1647-1648,1654,1657,1671-1673,1676,1679,1683-1684,1686,1746,1766,1770,1813,1914-1915,1942-1943,1945-1947,1950-1952,1954,2119,2176-2201,2215-2225,2227-2247,2253,2260-2265,2269,2278-2290
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Families.kt
+  s_566b8e0c4467a4::t_3cb4e4c388ee18 1-842
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_566b8e0c4467a4::t_d944e3b6cbc0e9 1-1448
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamilyCheck.kt
+  s_566b8e0c4467a4::t_a450381fe823d9 1-180
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamilyJoin.kt
+  s_566b8e0c4467a4::t_6766ded3615137 1-271
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamilyPlan.kt
+  s_566b8e0c4467a4::t_cc386ee54c1346 1-85
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_566b8e0c4467a4::t_a7ecb359ddef85 3-4,116-121,125,131,134-139,150-155,163,186,209-212,228-231,271,291,309-311,328-329,343,362,420-428,447-448,453,471,474,491,503
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HomeScreen.kt
+  s_566b8e0c4467a4::t_3355c6a301fb10 3,75,81-83,85,88,98-99,141,146,175,199-200,206,242-244,253,264,269-270,311,326-328
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_566b8e0c4467a4::t_afc43bbd4e7363 3-27,44,119-120,124,162-167,170,200,218-297,301-302,304-310,313-324,327,329,338-378,388-391,396-463,593-595,729-731
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_566b8e0c4467a4::t_1279d6a725efe0 3-13,22-31,116,129,141-142,148-149,173-174,185,215-216,221-223,225-245,297,312,317-319,324-381,424-425,427-429,434,544-545,547,549,552,601-602,604,606,703-711,713-735,738-740,742-743,752-754,761-775,779-780,793-819,847,852,855,888,935-936,985
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_566b8e0c4467a4::t_bf951262c10959 3,111-117,174-177,179-183,190,196-197,200-209,213-220,224-278,283,286,295,299-300,302-308,310,323,325,330-331,334,349-351,377-380,397-410,415-416,428,434,436,445-463,466,473-508,517-518,521,534-542,559,690-691,693,850,865-867,875-877,879-881,884-888,890-891,898,900,902,906-910,950-952,957,961,963,968-973,979,982-983,986-989,1017-1020,1181-1182
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NodeRow.kt
+  s_566b8e0c4467a4::t_40bcba1ed02597 3-4,124-125,148-149,153,155,158,217,272-280,286-287,306-311,316-320,327-329,340
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NodeTile.kt
+  s_566b8e0c4467a4::t_c7ca7ca4c1b099 90-91
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NoticeQueue.kt
+  s_566b8e0c4467a4::t_1c0a3cf9d982a2 1-54
+apps/android/app/src/main/kotlin/com/hushos/app/ui/RecoverScreen.kt
+  s_566b8e0c4467a4::t_a8e1cd07cc589d 3,180-183,185-186
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SaveToHushOS.kt
+  s_566b8e0c4467a4::t_c11ba59bc2fe32 66-67,88-89,92,150-151,169-172,179,182-185,193-194,196-208,211-215,220,222,225-231,233-243,326-329,337,355-361,368-377
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Screens.kt
+  s_566b8e0c4467a4::t_08d904adf203a5 3-5,145,147-148,203-204,209-214,221,229,235,237-238,259-260,262
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SharedScreen.kt
+  s_566b8e0c4467a4::t_f34da3ac522b8c 3,30,32,103,109-117,120-121,149,156,201-220,252-253,325-326,334,352,358-368,372,374,389-390,415-416
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SharingRefresh.kt
+  s_566b8e0c4467a4::t_40f9c6ba6bdb95 1-100
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SignInScreen.kt
+  s_566b8e0c4467a4::t_05b21978988866 3,63
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TrashBatch.kt
+  s_566b8e0c4467a4::t_0e709e9f9a5016 4,9,13-17,19,25-30,34-53,55,59-60,70-73,93-94,101-102,109-110,112-115,117,124,132,134-139,159-168
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Unverified.kt
+  s_566b8e0c4467a4::t_1255aafcc5401d 26-27,34-38,42,61,67-72,77-110
+apps/android/app/src/main/res/values-night/colors.xml
+  s_566b8e0c4467a4::t_4917d6a5d645ba 4-5
+apps/android/app/src/test/kotlin/com/hushos/app/LinkFilterTest.kt
+  s_566b8e0c4467a4::t_9fb7302a443fc3 1-80
+apps/android/app/src/test/kotlin/com/hushos/app/data/AccountStoreTest.kt
+  s_566b8e0c4467a4::t_7a7f035172da8a 19,32-36,43-45,53,55,114-128
+apps/android/app/src/test/kotlin/com/hushos/app/data/AppLinksTest.kt
+  s_566b8e0c4467a4::t_c5fdbffe15fadd 22-37
+apps/android/app/src/test/kotlin/com/hushos/app/data/ContactGuardTest.kt
+  s_566b8e0c4467a4::t_74efd3246d583f 1-134
+apps/android/app/src/test/kotlin/com/hushos/app/data/ContactTrustTest.kt
+  s_566b8e0c4467a4::t_f539b9ee055862 1-463
+apps/android/app/src/test/kotlin/com/hushos/app/data/FailedTransfersTest.kt
+  s_566b8e0c4467a4::t_0f0e0f2f63684f 73
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_566b8e0c4467a4::t_0f3897d12f5155 1-916
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyCheckTest.kt
+  s_566b8e0c4467a4::t_364d43714b2134 1-154
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyFixture.kt
+  s_566b8e0c4467a4::t_5ad79b91dba696 1-645
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyGuardTest.kt
+  s_566b8e0c4467a4::t_ced7a36c2c9e61 1-204
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyJoinTest.kt
+  s_566b8e0c4467a4::t_78a10e9d79d210 1-200
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyLeaveTest.kt
+  s_566b8e0c4467a4::t_004e84a1af454d 1-138
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyManageTest.kt
+  s_566b8e0c4467a4::t_2b3a2bcc25a53f 1-690
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyRemovalTest.kt
+  s_566b8e0c4467a4::t_ca298d730041c7 1-851
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyRolesTest.kt
+  s_566b8e0c4467a4::t_b7c5b57ee620e1 1-712
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_566b8e0c4467a4::t_10806efead791b 1-1209
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyUploadsTest.kt
+  s_566b8e0c4467a4::t_5ce54a8fefa0a3 1-762
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyWalksTest.kt
+  s_566b8e0c4467a4::t_28a2f699e910ea 1-448
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyWritesTest.kt
+  s_566b8e0c4467a4::t_16d5c0ec819121 1-326
+apps/android/app/src/test/kotlin/com/hushos/app/data/FilesChangesTest.kt
+  s_566b8e0c4467a4::t_740b280012e775 1-241
+apps/android/app/src/test/kotlin/com/hushos/app/data/FilesRootsTest.kt
+  s_566b8e0c4467a4::t_bd380ec57a00e8 1-40
+apps/android/app/src/test/kotlin/com/hushos/app/data/InfoShareListTest.kt
+  s_566b8e0c4467a4::t_7af7c50785bd42 1-191
+apps/android/app/src/test/kotlin/com/hushos/app/data/IntegrityTest.kt
+  s_566b8e0c4467a4::t_4fbe3f17750df8 51,61,63,66,85,93,97-99,111,115-129,136,167
+apps/android/app/src/test/kotlin/com/hushos/app/data/JobNamesTest.kt
+  s_566b8e0c4467a4::t_ca837e874a1591 1-50
+apps/android/app/src/test/kotlin/com/hushos/app/data/NamesTest.kt
+  s_566b8e0c4467a4::t_36e74751a924be 1-54
+apps/android/app/src/test/kotlin/com/hushos/app/data/NodeAttributesTest.kt
+  s_566b8e0c4467a4::t_490cbbeece9f40 3-9,16-20,22-27,29-30,34-43,47-51,53-55
+apps/android/app/src/test/kotlin/com/hushos/app/data/NodeCacheTest.kt
+  s_566b8e0c4467a4::t_344ae150a6c803 26,84-162,164
+apps/android/app/src/test/kotlin/com/hushos/app/data/OwnIdentityTest.kt
+  s_566b8e0c4467a4::t_005eadacc3419f 34
+apps/android/app/src/test/kotlin/com/hushos/app/data/PlanStandingTest.kt
+  s_566b8e0c4467a4::t_3cafa0867aa968 1-74
+apps/android/app/src/test/kotlin/com/hushos/app/data/RecoveryWordsTest.kt
+  s_566b8e0c4467a4::t_7f35da0bd29ee5 56
+apps/android/app/src/test/kotlin/com/hushos/app/data/ResealTest.kt
+  s_566b8e0c4467a4::t_d3e83df39f174d 41,76,108
+apps/android/app/src/test/kotlin/com/hushos/app/data/RestoredVersionTest.kt
+  s_566b8e0c4467a4::t_7b410b7f2f7f5b 39,47
+apps/android/app/src/test/kotlin/com/hushos/app/data/RotationRaceTest.kt
+  s_566b8e0c4467a4::t_bfc72f52157a08 1-81
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveTargetsTest.kt
+  s_566b8e0c4467a4::t_ba904a7271d7c0 1-125
+apps/android/app/src/test/kotlin/com/hushos/app/data/SavedCopyTest.kt
+  s_566b8e0c4467a4::t_7783dc38979c51 45
+apps/android/app/src/test/kotlin/com/hushos/app/data/ScopedIdsTest.kt
+  s_566b8e0c4467a4::t_375fe519510a51 62,75
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsKeyTest.kt
+  s_566b8e0c4467a4::t_9543cffefe0da0 60,80
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsMarkTest.kt
+  s_566b8e0c4467a4::t_c55c94d73c651f 3-6,10,14,17-21,26-36,40-43,48-99,102-105,107-113,116,118-132,135,137-144,147,149-155,159-166,171-200
+apps/android/app/src/test/kotlin/com/hushos/app/data/SettingsTest.kt
+  s_566b8e0c4467a4::t_103d13c2bd90a9 103-161
+apps/android/app/src/test/kotlin/com/hushos/app/data/ShareOpenTest.kt
+  s_566b8e0c4467a4::t_41d8f7c3fbd477 10,40-41,75-76,78
+apps/android/app/src/test/kotlin/com/hushos/app/data/ShareSealsTest.kt
+  s_566b8e0c4467a4::t_33a53c300ad9a5 62-88
+apps/android/app/src/test/kotlin/com/hushos/app/data/SharingTrustTest.kt
+  s_566b8e0c4467a4::t_bcc200c6355794 21,77,79-80,82,84-86,94-96,106,133,135-137,139-151
+apps/android/app/src/test/kotlin/com/hushos/app/data/SuccessionPinTest.kt
+  s_566b8e0c4467a4::t_e2f485d0a8f19d 17,54,88,96,144-155,158,160
+apps/android/app/src/test/kotlin/com/hushos/app/data/TagsTest.kt
+  s_566b8e0c4467a4::t_7d8a6bd9e48126 33-44
+apps/android/app/src/test/kotlin/com/hushos/app/data/TrashBatchesTest.kt
+  s_566b8e0c4467a4::t_a7ae9ae16c3adf 1-233
+apps/android/app/src/test/kotlin/com/hushos/app/data/UploadWorkerTest.kt
+  s_566b8e0c4467a4::t_322a3e32f47b42 1-714
+apps/android/app/src/test/kotlin/com/hushos/app/data/VaultAttributesTest.kt
+  s_566b8e0c4467a4::t_697ec142bdcdbf 1-264
+apps/android/app/src/test/kotlin/com/hushos/app/files/FeedPullsTest.kt
+  s_566b8e0c4467a4::t_7dae1aa3946c46 1-68
+apps/android/app/src/test/kotlin/com/hushos/app/files/FilesSaveOrderTest.kt
+  s_566b8e0c4467a4::t_459723ed8075c2 1-2450
+apps/android/app/src/test/kotlin/com/hushos/app/files/FilesTreeGrantsTest.kt
+  s_566b8e0c4467a4::t_3c0a252af675dc 1-136
+apps/android/app/src/test/kotlin/com/hushos/app/files/FilesWriteModesTest.kt
+  s_566b8e0c4467a4::t_3015f834fa8fe9 1-171
+apps/android/app/src/test/kotlin/com/hushos/app/files/ProviderFamiliesTest.kt
+  s_566b8e0c4467a4::t_0b2c052a560fec 1-2076
+apps/android/app/src/test/kotlin/com/hushos/app/files/ProviderRefreshTest.kt
+  s_566b8e0c4467a4::t_200e177824f4b3 1-79
+apps/android/app/src/test/kotlin/com/hushos/app/ui/AdaptiveTest.kt
+  s_566b8e0c4467a4::t_be4edc6517d516 1-145
+apps/android/app/src/test/kotlin/com/hushos/app/ui/AfterAddTest.kt
+  s_566b8e0c4467a4::t_26e21183f8b7e9 1-35
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamiliesModelRacesTest.kt
+  s_566b8e0c4467a4::t_d8b44a4653f916 1-366
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamiliesModelSessionTest.kt
+  s_566b8e0c4467a4::t_d44254cdaf8d3f 1-132
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamiliesSessionTest.kt
+  s_566b8e0c4467a4::t_39c3b2b2af233f 1-207
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyFoldersTest.kt
+  s_566b8e0c4467a4::t_d17b93152cc707 1-70
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyManageModelTest.kt
+  s_566b8e0c4467a4::t_1bc722eabfc0d3 1-452
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyPlanTest.kt
+  s_566b8e0c4467a4::t_27571f3c87ac41 1-114
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyRemovalModelTest.kt
+  s_566b8e0c4467a4::t_f7d30c6a36239c 1-51
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyRolesModelTest.kt
+  s_566b8e0c4467a4::t_372ddebd96c478 1-248
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyWorkScheduleTest.kt
+  s_566b8e0c4467a4::t_53f8e344c14177 1-174
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FolderRefreshTest.kt
+  s_566b8e0c4467a4::t_43ff6401dc3271 19
+apps/android/app/src/test/kotlin/com/hushos/app/ui/LeaveDialogStateTest.kt
+  s_566b8e0c4467a4::t_bd5f0e591f9eeb 1-125
+apps/android/app/src/test/kotlin/com/hushos/app/ui/NoticeQueueTest.kt
+  s_566b8e0c4467a4::t_bc782740caa89e 1-48
+apps/android/app/src/test/kotlin/com/hushos/app/ui/PersonalCheckTest.kt
+  s_566b8e0c4467a4::t_171f5a3dea76c5 1-24
+apps/android/app/src/test/kotlin/com/hushos/app/ui/SharingRefreshTest.kt
+  s_566b8e0c4467a4::t_ff0f1684f76c2a 1-219
+apps/android/app/src/test/kotlin/com/hushos/app/ui/TrashBatchTest.kt
+  s_566b8e0c4467a4::t_eb43683016ac59 7,9,28,38-39,45-58,69-76,110-118,205-259
+apps/android/gradle/libs.versions.toml
+  s_566b8e0c4467a4::t_7ee1afab357f3c 5,7-10,13-14,18-19,22-26,30,42-47,53
+apps/android/gradle/wrapper/gradle-wrapper.properties
+  s_566b8e0c4467a4::t_644223370e4c63 3,5-6
+apps/android/gradlew
+  s_566b8e0c4467a4::t_a4e1c53c623348 23,32,60
+apps/android/gradlew.bat
+  s_566b8e0c4467a4::t_87df0c0145b5c4 22,26-54,75-79,81-82,90-94,96-97,104-107,109-112
+apps/android/scripts/build-core.sh
+  s_566b8e0c4467a4::t_d67887381b3a2d 15-17
+apps/android/scripts/check-bundle.sh
+  s_566b8e0c4467a4::t_7833067c5c4f8d 1-94
+apps/android/scripts/play-publish.sh
+  s_566b8e0c4467a4::t_d16a15b46b5574 1-229
+apps/android/scripts/previous-apk.sh
+  s_566b8e0c4467a4::t_39747ee1798bc6 1-59
+apps/android/scripts/release-apk.sh
+  s_566b8e0c4467a4::t_ab26437b56857e 7-9,20-21,134
+apps/ios/AGENTS.md
+  s_566b8e0c4467a4::t_ef201a066b683a 18-20,22,30,36,51-55,70,76,79,85-93,117-118,122,135-143
+apps/ios/App/AccountView.swift
+  s_566b8e0c4467a4::t_3f5d104b6b877d 28-49,52,54-58,78,108,121-124,133-137,147-148,158,160-169,172-174,190,197,300-307,382,388,394-396,402,449,483-486,497-499,622
+apps/ios/App/ActionSheets.swift
+  s_566b8e0c4467a4::t_acc7a03f5e4d97 212,278-279,391,473,475-476,478-485,492,518-519,558-567,627-653
+apps/ios/App/AppModel.swift
+  s_566b8e0c4467a4::t_fa82485233515a 161-162,164,179-181,202-203,214-229,231,252,272-279,337,341
+apps/ios/App/Appeared.swift
+  s_566b8e0c4467a4::t_9a92ac654360b9 1-43
+apps/ios/App/Assets.xcassets/LaunchBackground.colorset/Contents.json
+  s_566b8e0c4467a4::t_3cc31dcec11ab6 14
+apps/ios/App/BackgroundTransfers.swift
+  s_566b8e0c4467a4::t_67248a9643bab6 240-241,243,392-394,400,420,425,582,586,599-600,604-605,608,657-659,685-690,702-707,782-783
+apps/ios/App/BrowseView.swift
+  s_566b8e0c4467a4::t_18a7d2749dd0ba 12-16,23,29-30,32-53,114-115,187-189,198-204,261-262,268-271,285-289,361-363,432,439,451-453,631-632,763-774
+apps/ios/App/Contacts.swift
+  s_566b8e0c4467a4::t_c1215f43f078b7 1-538
+apps/ios/App/DevicesView.swift
+  s_566b8e0c4467a4::t_d7b0fbccec89be 66
+apps/ios/App/DriveStore.swift
+  s_566b8e0c4467a4::t_98f120e115bb35 22,24-25,45-57,71-72,81-85,90-91,94-99,111-116,120,129-145,159-162,167-168,171-207,361-366,372-374,376-378,380-393,398,401,419-420,460-466,474-491,493,497-498,502-503,505,510,513-525,530,540-543,545-551,555-565,569,649-654,656-659,661,669-671,691-725,853-869,872,874-879,881-886,889-890,892-904,907-908,956-957,959-960,966-973,1005,1009-1016,1018-1028,1041,1044,1055-1065,1079-1088,1093,1103,1133,1187,1195,1354-1392,1452-1454,1490,1492,1498-1500,1505,1508,1518-1520,1522-1533,1536,1538,1548,1550,1559-1560,1565,1570,1598-1602,1633,1641,1692,1703,1717,1724,1732,1739,1784,1926-1927,1962-1991,1993-1996,1998-2001,2009-2023,2026,2032-2036,2041-2043,2045,2054-2062,2073-2075,2077
+apps/ios/App/Families.swift
+  s_566b8e0c4467a4::t_cf9620504f9e65 15-123,135,180,182-189,192-199,203-206,208,216-217,219-243,251-252,255-256,258-265,272-277,281,283,286,289-322,324-340,342-348,351-353,358-361,364-365,367-371,377-378,384-412,418,422,426-427,430-436,440,443,445-449,455-459,461,465-472,474,477-500,503,505,507,509-510,535-709,752-756,760-761,766-768,772,783,826-827,840-861,867,871,873,875,881-882,888-890,894-935,941,944-945,954,956-958,962,982-1032,1086-1117,1119-1120,1122-1124,1130-1174,1201-1259
+apps/ios/App/FamilyCheck.swift
+  s_566b8e0c4467a4::t_1f9f3d5e8560c0 1-255
+apps/ios/App/FamilyManaging.swift
+  s_566b8e0c4467a4::t_43a9c74a821ef3 1-683
+apps/ios/App/FamilyWalkTasks.swift
+  s_566b8e0c4467a4::t_91fe68a57fd5c6 1-130
+apps/ios/App/FolderColourSheet.swift
+  s_566b8e0c4467a4::t_56631ff9519444 1-83
+apps/ios/App/Glyphs.swift
+  s_566b8e0c4467a4::t_19666f968dd90b 1,9-12,14-16,32,34,42-45,63-64,70,83,91-113
+apps/ios/App/HushOS-Simulator.entitlements
+  s_566b8e0c4467a4::t_406349f6a7a610 14,18
+apps/ios/App/HushOS.entitlements
+  s_566b8e0c4467a4::t_1337b309188cfc 12,16
+apps/ios/App/HushOSApp.swift
+  s_566b8e0c4467a4::t_19524c96e9db05 19,73,79-82
+apps/ios/App/Info.plist
+  s_566b8e0c4467a4::t_2df1c815874187 8,39-40
+apps/ios/App/InnerDisplayHarness.swift
+  s_566b8e0c4467a4::t_21a684669d5eb8 1-82
+apps/ios/App/Join.swift
+  s_566b8e0c4467a4::t_1d122ce8d1421f 5,7-10,43-51,59,63-64,71-76,80-82,84-101,126,139,141-145,148-150,153-162,164-172,174-177,179-180,182,185-186,208-213,229-238,259-263,269-270,283-284,286-287,295,317-320,322,326,333-334,340-341,359-361,363-364,366-368,372-373,377,379-389,392,394,397,399,401-402,414-415
+apps/ios/App/MainView.swift
+  s_566b8e0c4467a4::t_d081ea483d270a 16-17,26-29,69,78-80,82-83,110-111,121-122,152-153,178,195-199,205-206,233-253
+apps/ios/App/NodeActions.swift
+  s_566b8e0c4467a4::t_6ca7c3ce88427f 18,29,58-102,105-145,239,496,512-514,535-552
+apps/ios/App/NodeRow.swift
+  s_566b8e0c4467a4::t_3d9bddb31acfda 25,57-58,104,118,164-165,171,342,354,356,381-421
+apps/ios/App/Received.swift
+  s_566b8e0c4467a4::t_72317511fc65a5 22-23,25-28,32-59,64-66,74,76,87-90,92-98,114,116,219,221-238,242,257-272,382,497-506,578,580
+apps/ios/App/RecentsView.swift
+  s_566b8e0c4467a4::t_9d03f94c78bd2c 7-8,25,30,60-62,68-70,84,104,134,163,186,188,198,205,328-330,397,406,434,660,685
+apps/ios/App/SearchView.swift
+  s_566b8e0c4467a4::t_da33bbc2ada267 5-20,25-27,33,48,52-53,109,115,137,145,155,213-243
+apps/ios/App/Sharing.swift
+  s_566b8e0c4467a4::t_c47fe49e51443f 10-13,32-42,142-143,149-160,175-177,184,205-206,208-210,236,243,251,253-264,278,286-316,328-329,334-341,354-377,381,384-386,389-434,667-670,676-682,685-687,689,698-717,733-746,754-755,770,781-783,785,787-789,806,883-886,893-895,898,916,919,930-931,933-934,936,941,954,958-960,967-968,977,984-1014,1026-1035,1089
+apps/ios/App/SignInView.swift
+  s_566b8e0c4467a4::t_e3ef99eddbda02 27-39,76-79
+apps/ios/App/TabSidebar.swift
+  s_566b8e0c4467a4::t_c2a88ac6c25c06 1-59
+apps/ios/App/Theme.swift
+  s_566b8e0c4467a4::t_cc7e56d5e13e2e 38,48-54,109-138,267-278,281,286,290,295,301-302,304-305,308-309,315,317-318,322-337,340,345-347,349-355
+apps/ios/App/Unverified.swift
+  s_566b8e0c4467a4::t_70c0f12bfa9346 5-8,27,40-42,55-58,80-83,92-93,100-102,145
+apps/ios/App/Uploads.swift
+  s_566b8e0c4467a4::t_2babeed038650d 193-194,196-198
+apps/ios/App/Viewer.swift
+  s_566b8e0c4467a4::t_e289cbdd677060 25-26,39-79,100,103,106-108,110-112,114-124,128-173,175,178,209-214,216-217,219-222,285-286
+apps/ios/Files/FamilyFileProvider.swift
+  s_566b8e0c4467a4::t_8c0279fd221bfc 1-198
+apps/ios/Files/FileProviderExtension.swift
+  s_566b8e0c4467a4::t_506a0b47874763 29-30,34-85,88,90-91,97-107,109,115,117-119,121,171-181,207-218,221-224,231,233,255-259,291-309,365-369,387-406,429-435,449-452,456
+apps/ios/Files/HushOSFiles.entitlements
+  s_566b8e0c4467a4::t_3f67ac73410af9 7,11
+apps/ios/Files/Info.plist
+  s_566b8e0c4467a4::t_c4380645e45963 23-24
+apps/ios/FilesUI/HushOSFilesUI.entitlements
+  s_566b8e0c4467a4::t_2f1d5fddcd6ef8 7,11
+apps/ios/FilesUI/Info.plist
+  s_566b8e0c4467a4::t_e8203e1facf2eb 23-24
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Account.swift
+  s_566b8e0c4467a4::t_6f1fa49d5c0b55 65-115,160-161,170,172-173,185,189-203,227-229,253,443-444
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AccountStore.swift
+  s_566b8e0c4467a4::t_8bd6c7a7171bdf 23-28,32-38,42-43,46-48,81,105-109,111,113-121,125,130-132,142-143
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AppGroup.swift
+  s_566b8e0c4467a4::t_a12523c25af69e 1-65
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Auth.swift
+  s_566b8e0c4467a4::t_62270cc0d6cc78 42,55-74,162-168
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ContactGuard.swift
+  s_566b8e0c4467a4::t_282c0eb75a5daf 1-281
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Contacts.swift
+  s_566b8e0c4467a4::t_e3efe92437801d 35,60-61,81-89,92,95-112,114-119,124,126-129,132-138,157,159,190-191,211,214,219-220,262,281-284,286-287,291-297,299,302,305-306,358-359,386,393-394,407
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DriveAPI.swift
+  s_566b8e0c4467a4::t_2de8153ea9abc1 4-5,64-65,110-129,131,139,170,278-288,366-377
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DriveModels.swift
+  s_566b8e0c4467a4::t_3533ead122987f 254-271
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyCheck.swift
+  s_566b8e0c4467a4::t_4b0db6a96d6df5 1-358
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyFiles.swift
+  s_566b8e0c4467a4::t_83a3d4ff1a9b36 1-1187
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyGuard.swift
+  s_566b8e0c4467a4::t_25b568b829b81b 1-250
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyIntegrity.swift
+  s_566b8e0c4467a4::t_34672fccdc43b9 24-25,85,87,90-96,109,116,128,234,340,353-370
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyJoin.swift
+  s_566b8e0c4467a4::t_f5d5356625751c 5-7,9-20,22-24,124-125,127-136,138,142-143,146-158,162-163,166-168,170,173,177,180-181,189-192,195-198,202,207,216-217,220-221,227,230,232,236-241,243,248-258,261,269-270,272-273,278,280-284,286-309,311-313,318-322
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyLeave.swift
+  s_566b8e0c4467a4::t_2e8b330261ffc8 1-193
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyManage.swift
+  s_566b8e0c4467a4::t_860761670ef3b7 1-835
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyRecords.swift
+  s_566b8e0c4467a4::t_e60947fe699d2c 23-31,35,37-39,43-58,62,95-107,109,113-123,153-157,163-167,173-178
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyRoles.swift
+  s_566b8e0c4467a4::t_a544b5df0465d3 1-345
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_566b8e0c4467a4::t_2e09dafb34643a 3-5,39-40,43-59,79-80,164-165,171,181-191,209,211,217-234,236-250,252-258,260,263-311,313,328-330,332-334,369-370,374,392-473,494,498-572,579-585,613,622,625,636-643,647-653,665,667,670-680,685-762,764-814,818,843-847,858-873,875,877-891,896,958-971,974-987,993-994,1008,1044-1047,1049,1053,1056-1057,1061,1070-1075,1117,1124,1143-1147,1149-1153,1155-1158,1162-1165,1173-1178,1180-1181,1184-1186,1188,1202-1212,1232-1233,1236,1238,1244,1268-1269,1283-1297,1307-1308,1331-1332,1337,1342,1379-1381,1387-1393,1410,1419-1445
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyUploads.swift
+  s_566b8e0c4467a4::t_d44ea3b7be0d3a 110
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyWalkWork.swift
+  s_566b8e0c4467a4::t_9b931a45d405f0 1-172
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyWalks.swift
+  s_566b8e0c4467a4::t_bb5c6c1892cde1 1-373
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FileLock.swift
+  s_566b8e0c4467a4::t_1d1899a64ebdf2 1-97
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FilesDomain.swift
+  s_566b8e0c4467a4::t_d22733e9d969d2 75-77,79-80,82-84,87,89,96-116,118,139,142-145,149-150,154,158-164,191-197,211-223
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/GroupsAPI+Manage.swift
+  s_566b8e0c4467a4::t_2051565d665c90 1-464
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/GroupsAPI.swift
+  s_566b8e0c4467a4::t_ebcf42de4589a2 26-27,40-41,239-246,277,294,310-321,374
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/InfoFollow.swift
+  s_566b8e0c4467a4::t_d5135285a43f68 1-74
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Integrity.swift
+  s_566b8e0c4467a4::t_e39f28b6b5d5f1 68,70,72,74,80,84,88,90,98,137-138,155-159,167,179,185,232-233,276-290,365-367
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ItemKind.swift
+  s_566b8e0c4467a4::t_e8ed3af748d995 1-84
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Keychain.swift
+  s_566b8e0c4467a4::t_c4d93b6eb5222e 2,13-18,35-42
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Links.swift
+  s_566b8e0c4467a4::t_dd8554639a5e2b 306-307,317
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/NodeTable.swift
+  s_566b8e0c4467a4::t_f767491171634d 30-34,51-63,86
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Offline.swift
+  s_566b8e0c4467a4::t_42c0d925c59417 65-83,159,247-252,256-265,273-279
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Places.swift
+  s_566b8e0c4467a4::t_e79368cc92f96b 10,12,15-16,21-31,37-39,41
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Resumable.swift
+  s_566b8e0c4467a4::t_e3d2d99c932c3e 106-107,111,113-116,129,138-141
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/RollbackMarks.swift
+  s_566b8e0c4467a4::t_07834cff4c3e3e 5-31,33-36,38-42,44-61,64-66,68-84,86-87,91-93,95-110,113-117,119-121,125-126,128-148,150-151,155-157,159-190,195-199,202-227,229-250,253-272,274-275,277-282,284-306,308,311-320,325-328,332-339,341-347,349-350,352-353,358-363,367-370,372,376-378,380-381,386-390,392,395-397
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/RoomBeside.swift
+  s_566b8e0c4467a4::t_ade3a24008e445 1-46
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SaveTargets.swift
+  s_566b8e0c4467a4::t_321a5f67230700 1-149
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SessionChange.swift
+  s_566b8e0c4467a4::t_f89ab838f90957 39-42,44,46-57
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SessionGate.swift
+  s_566b8e0c4467a4::t_36cf0237af1f37 1-251
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Settings.swift
+  s_566b8e0c4467a4::t_175f9f72c4ca02 133,138-169,171,173-201,204-218,291-367,392-413,423,427-451,460-461,463,466,478-483,500-503,516,521-522,524-525,529,531
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ShareHandoff.swift
+  s_566b8e0c4467a4::t_3a6c048d8fd5bd 12-16,36-41,45-46,54,169-185,194,196,198-199,205-207,210-213,216-229,231
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Shares.swift
+  s_566b8e0c4467a4::t_a1a11c82394334 13-18,20-28,30,33-35,77-78,111-112,117-118,123-128,143-147,154-166
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SharingRefresh.swift
+  s_566b8e0c4467a4::t_3872a411d01538 1-90
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/StagedSave.swift
+  s_566b8e0c4467a4::t_e80356fed2feca 13-23,29-34,37,40
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Succession.swift
+  s_566b8e0c4467a4::t_dead1a83747d58 49-63,65-70,72,120-122,196-212,215-220,223-226,230-240,243-247
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Tags.swift
+  s_566b8e0c4467a4::t_3d9657d19541fb 37,39-49,106
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/TrashBatch.swift
+  s_566b8e0c4467a4::t_53af4b5a9dda5c 50-54,56,60-66,71,75-79,84-90,93,105-106,125-128,137-140,147-153,155,164-165,185,188,192-194,198,200,203-205,207,229,231-526
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Unbacked.swift
+  s_566b8e0c4467a4::t_a422a86b62e058 188-189,214-219,221-233,240-406,416,421-422,431-490
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Catalogue.swift
+  s_566b8e0c4467a4::t_f2d3bae6443ec0 17-28,30-71,73-74,144-149,161-166,168-170,172-173,175-177,179-180,182,198-200,204-210,223,238-296,312-313,320,339-340,342-343
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Families.swift
+  s_566b8e0c4467a4::t_5150120070ba1e 153-155,157,162,189,199-227,229-235,243-246,261,263-271,274,276-281,288-290,296,307-310,312,314,318-376,379,397,401,407-408,411-431
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Identity.swift
+  s_566b8e0c4467a4::t_3ccf5d8e880a9a 6-7,16-17,23,26,34-35,89,93-95,113,121,169-170,201,210,231-234,236,240-241,247,249,254,256,258,261-270,284-287,296-299,302-329,343-344
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Rotation.swift
+  s_566b8e0c4467a4::t_b60408c9854485 11-13,32-33,88-96,135-147,165-178,195,198,201-208,222-245,255-257,260-263,265-284,310,350-362,399,406,408-433,439-440,446,448
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Trust.swift
+  s_566b8e0c4467a4::t_0113168ed5a5ac 1-800
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_566b8e0c4467a4::t_7570c4cf08ec5d 20-51,60,63-71,86-115,128,133,141,148-153,176-189,194-208,220-241,244-249,251-287,292-300,308-311,313-399,404-418,423-427,431-433,442-444,448-454,500,510,518-520,550-551,561,563,585,626-627,633,669-670,674-675,677-706,708-710,712-724,749-750,755-759,770-790,821-822,841-848,869-872,894,916,932-937,947,955-1070,1101-1107,1109,1111,1113-1137
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault.swift
+  s_566b8e0c4467a4::t_a9682e865e910c 9-10,93-105,119-167,175-180,182-192,214-215,219-231,234-238,262-274,280-282,289-290,307-309,313,338,394,465,467-469,474,477,484-496,524,530-531,539,551-556,568-576,579-587,589,605-607,610-611,615-648,651-688,691-693,703,708-723,728,743,748-784,786-793,799,810-825,829-847,864-865,887-957,959-961,972,974-977,983-992,995-1004,1029-1030,1037-1038,1050,1059-1071,1083-1086,1093-1144
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/AccountStoreTests.swift
+  s_566b8e0c4467a4::t_87153d415d2778 43-48,104-112,127,176
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/AppGroupTests.swift
+  s_566b8e0c4467a4::t_ff63a1e15390b7 1-61
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/AttributesTests.swift
+  s_566b8e0c4467a4::t_d40f2cfab583f6 1-133
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/CatalogueFeedTests.swift
+  s_566b8e0c4467a4::t_2fa653724c265d 1-332
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ContactGuardTests.swift
+  s_566b8e0c4467a4::t_e8563381ae286f 1-1509
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyCheckTests.swift
+  s_566b8e0c4467a4::t_feb184a1427275 1-527
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyFilesTests.swift
+  s_566b8e0c4467a4::t_6c2de0c271a570 1-1916
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyJoinTests.swift
+  s_566b8e0c4467a4::t_b194ad59a45653 7-13,18,22,26-31,33,41,43,47-49,51-57,59-65,68-80,84-104,106-116,120-123,125,129-130,132-142,144-150,154-157,159,161-162,164,166-170,172-175,178-184,186-195,197-199,201-218,222-224,226,228-241,243-246,250-254,256,258-271,273-391,467-475
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyLeaveTests.swift
+  s_566b8e0c4467a4::t_0a8f6d7f8181b4 1-177
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyLinesTests.swift
+  s_566b8e0c4467a4::t_ad1cd8d98c1275 26-48
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyManageStub.swift
+  s_566b8e0c4467a4::t_22bbbcc9a0619a 1-285
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyManageTests.swift
+  s_566b8e0c4467a4::t_4bf04de275dab0 1-902
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyQueueTests.swift
+  s_566b8e0c4467a4::t_018b35680b1430 350
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyRolesTests.swift
+  s_566b8e0c4467a4::t_4747a4b5fcdf72 1-532
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyRotationStub.swift
+  s_566b8e0c4467a4::t_1245f4f15a8187 1-390
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilySyncTests.swift
+  s_566b8e0c4467a4::t_8765c353719ed8 62-310,332-333,335,425-725,892,977-995,997,1009-1010,1027,1043,1054-1055,1086-1088,1091,1095,1108,1122-1124,1132,1139-1149,1156-1159,1164-1182,1187-1192,1195-1210,1216-1222,1243-1244,1248-1249,1324-1355,1385-1389,1391-1395,1441-1444,1466,1468-1469,1484-1486,1489-1491,1499-1500,1510,1514-1516,1531,1564-1579,1631-1634,1683-1705,1717-1730
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyWalkTests.swift
+  s_566b8e0c4467a4::t_8e4b9bc2799d42 1-478
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyWriteTests.swift
+  s_566b8e0c4467a4::t_fed140764c5935 43-44,50-1023,1083,1092,1105-1109,1282-1286,1331
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FilesOwnerTests.swift
+  s_566b8e0c4467a4::t_047bb032620d73 75,80,96-120,148-172,187-190,228,232,235,240,244-269,277
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/GranterTrustTests.swift
+  s_566b8e0c4467a4::t_9a324236fb7011 7-9,21-26,30-32,35-42,62-63,104-119,147
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/IdentityUpgradeTests.swift
+  s_566b8e0c4467a4::t_32886ceb8ab2f1 93-111,136-139,207-208,231-233,241-243,251-259,277,295-313
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/InfoFollowTests.swift
+  s_566b8e0c4467a4::t_025fdc499a8890 1-345
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/IntegrityTests.swift
+  s_566b8e0c4467a4::t_53f1a7b25cb51d 6-8,17-18,24,171-173,177-180,373
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/KeptFolderTests.swift
+  s_566b8e0c4467a4::t_72fd6072a43c0e 18
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/NodeCacheTests.swift
+  s_566b8e0c4467a4::t_f8266777d33e2c 28,57,75
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/OwnWordsTests.swift
+  s_566b8e0c4467a4::t_0c5df1850999bf 47-50
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/PlanStandingTests.swift
+  s_566b8e0c4467a4::t_4709221728af24 1-73
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RoleChangesTests.swift
+  s_566b8e0c4467a4::t_669c74d120c4cb 1-34
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RoomBesideTests.swift
+  s_566b8e0c4467a4::t_1428840fd37aca 1-66
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RotationTests.swift
+  s_566b8e0c4467a4::t_f20445dbae7ea9 67-149,237-239,282-295,304-309,311,318,326-327,360-405,470-487,519-529,627-628,631-633,635,647-649,651,653-655,659-675,705-706
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveTargetsTests.swift
+  s_566b8e0c4467a4::t_05039458ef0667 1-182
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SessionEndTests.swift
+  s_566b8e0c4467a4::t_389a2e291136a2 1-64
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SessionForgetTests.swift
+  s_566b8e0c4467a4::t_e9fe7c269b50bd 26,32-253,258
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SessionGateTests.swift
+  s_566b8e0c4467a4::t_23fbe159fd9dc5 1-571
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsTests.swift
+  s_566b8e0c4467a4::t_feccadbf9c5e1b 32,121-135,138-141,144-161,164-217,219-224,226-238,241-243,248-249,255-258,260-261,263-269,271-272,275-299,302-424,427-446
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsUpgradeTests.swift
+  s_566b8e0c4467a4::t_cac70272099116 41-61,72-73
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ShareSweepTests.swift
+  s_566b8e0c4467a4::t_f3e57354406b89 102-104,106,109,111,114-115,120-145
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SharingRefreshTests.swift
+  s_566b8e0c4467a4::t_7624f257111552 1-176
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TagsTests.swift
+  s_566b8e0c4467a4::t_e54489939244e5 38-51
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ThumbnailOfTests.swift
+  s_566b8e0c4467a4::t_2c098f81cc9c78 1-102
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TrashBatchRoutesTests.swift
+  s_566b8e0c4467a4::t_bebe1a592110b4 1-257
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TrashBatchTests.swift
+  s_566b8e0c4467a4::t_be27e4244cf7c0 18,28-29,35-39,46-47,50-53,65-74,83-90,135,193,247-301
+apps/ios/Project.xcconfig
+  s_566b8e0c4467a4::t_404b35960fe763 1-6
+apps/ios/Share/HushOSShare.entitlements
+  s_566b8e0c4467a4::t_ebe8ea3b84a49d 7,11
+apps/ios/Share/Info.plist
+  s_566b8e0c4467a4::t_6e13c5ed5dbba0 23-24
+apps/ios/Share/SaveModel.swift
+  s_566b8e0c4467a4::t_e921c77a7a5c37 10-12,35-36,42,54-55,57,69-72,77-79,84,87-96,225,228-243,253-267,269,285,294-301
+apps/ios/Share/SaveView.swift
+  s_566b8e0c4467a4::t_4174f0c7108ea6 49,109-112,133,135-145,169-180,182
+apps/ios/Share/ShareUploads.swift
+  s_566b8e0c4467a4::t_3faba0e5c7d65f 8-10,17-18,27,29,36,44,47-48,50
+apps/ios/Widgets/HushOSWidgets.swift
+  s_566b8e0c4467a4::t_82cd0d460a81e7 103,105
+apps/ios/Widgets/Info.plist
+  s_566b8e0c4467a4::t_18c42dcecfa365 23-24
+apps/ios/project.yml
+  s_566b8e0c4467a4::t_f27b8cb44d77c1 23,26-29,69,114-115,138-139,146,174-175,182,212,228,230,232,234,240-241,248
+apps/ios/scripts/release-ipa.sh
+  s_566b8e0c4467a4::t_4a78b7eda15de3 1-147
+apps/web/Dockerfile
+  s_566b8e0c4467a4::t_4e7e0bb526ef9e 1,6-7,27,34
+apps/web/nitro.config.ts
+  s_566b8e0c4467a4::t_2cbade1d1cc265 10-16
+apps/web/package.json
+  s_566b8e0c4467a4::t_7acfc40e2f1d8a 9,20-22,41-42,44-46,48-49,51,53-54,62-69,74,77-79,82-84,91-92,95-102,106-107
+apps/web/public/brand/hushos-logo-on-dark.svg
+  s_566b8e0c4467a4::t_61a8a163551c9b 1
+apps/web/public/brand/hushos-wordmark-on-dark.svg
+  s_566b8e0c4467a4::t_e37dc743ef543e 1
+apps/web/scripts/check-dev-only.ts
+  s_566b8e0c4467a4::t_802eda9e34c5bf 1-53
+apps/web/scripts/mobile-brand-assets.ts
+  s_566b8e0c4467a4::t_67d3ac70989df2 95
+apps/web/server/plugins/database.ts
+  s_566b8e0c4467a4::t_f83c30875051e4 1,5
+apps/web/src/components/access-cell.tsx
+  s_566b8e0c4467a4::t_d1fc94c706146f 52
+apps/web/src/components/access-demo.tsx
+  s_566b8e0c4467a4::t_d22f804d612e8f 77,105
+apps/web/src/components/account-devices.tsx
+  s_566b8e0c4467a4::t_d65cf1455bddf0 334
+apps/web/src/components/app-sidebar.tsx
+  s_566b8e0c4467a4::t_d803642835ae6b 6,30,55,91-92,94,131,180,184,223-224,236-238,249,454-458,462
+apps/web/src/components/device-control.tsx
+  s_566b8e0c4467a4::t_f35da0ebac61b1 39
+apps/web/src/components/drive/access.tsx
+  s_566b8e0c4467a4::t_f228f169c92b49 107
+apps/web/src/components/drive/account-changed.tsx
+  s_566b8e0c4467a4::t_ca064d60d82ac9 2,4-5,7,9-10,15-24,26-40,42,44-51,53,55,57,59,61-67,70-72,78-101,103-122,128-167,169-172,174-184
+apps/web/src/components/drive/add-menu.tsx
+  s_566b8e0c4467a4::t_519ccb4ab1bfb6 25-28
+apps/web/src/components/drive/add-someone.tsx
+  s_566b8e0c4467a4::t_a324cedb01604b 1-134
+apps/web/src/components/drive/area-notice.tsx
+  s_566b8e0c4467a4::t_d57cfcf8024059 49-51
+apps/web/src/components/drive/check-contact.test.tsx
+  s_566b8e0c4467a4::t_00b4239cf78389 2,7-11,14-17,20-25,27-32,34-35,37-53,55-58,61,63-68,71,75-76,78-85,87-93,95-117,119-122,124-126,129-131,133-163
+apps/web/src/components/drive/check-contact.tsx
+  s_566b8e0c4467a4::t_96a0c342d263a9 1-4,6,8-9,12,14-15,18,20,23-25,27-36,38-42,44-46,49-52,55-65,67,69-70,73-84,87-89,91,95-96,99-104,107,109,113-115,117,119-128,130-138,141-148,150-151,155-178,181-183,186-218,225-229,232-233,235,237-244,246-265
+apps/web/src/components/drive/command-palette.tsx
+  s_566b8e0c4467a4::t_e1f16e48850e64 70,110,159
+apps/web/src/components/drive/contact-flow.tsx
+  s_566b8e0c4467a4::t_6b13adf00d79f4 1-219
+apps/web/src/components/drive/details-panel.tsx
+  s_566b8e0c4467a4::t_bfbc1b2132026f 10,12,370-371,431-435
+apps/web/src/components/drive/drive-shell.tsx
+  s_566b8e0c4467a4::t_9dce9c14ca7cb2 20,321
+apps/web/src/components/drive/file-list.tsx
+  s_566b8e0c4467a4::t_7e62ad1cf57817 10,61-62,68,91,112-121,123-150,316,320-333,377-378,387,430,641,854,861-869
+apps/web/src/components/drive/file-mark.tsx
+  s_566b8e0c4467a4::t_81fe9046156caf 1,3,36-43,45,47,75,81-100,102,106,108,113-114,120,131,156-168,172,174,189
+apps/web/src/components/drive/folder-colour-dialog.tsx
+  s_566b8e0c4467a4::t_64ba853e7dc435 1-247
+apps/web/src/components/drive/folder-view.tsx
+  s_566b8e0c4467a4::t_32049bc968ec68 10,20-22,27-28,32,54,99,259,274,376,463,523-525,529-540,543,670,687,753,858-859,861-862,864-888,890-912,914-939,943-957,991,1012,1052,1067,1183,1260,1270,1280,1286,1390,1400,1409,1413,1420,1425-1428,1534,1593-1596,1631-1633,1645,1652,1655-1656,1662,1664-1668,1670-1686,1848
+apps/web/src/components/drive/home-view.tsx
+  s_566b8e0c4467a4::t_13641473e5d9fc 17-19,41,70-72,100-102,106-108,110,113,127,271,329-331,335-346,349,389,433,437-455,462,472,508,518,529,533,617,800,803,816-817,821,828-829
+apps/web/src/components/drive/info-dialog.tsx
+  s_566b8e0c4467a4::t_74ce21943a035f 2,4,17-19,31-33,35-44,46-51,53-56,62-99
+apps/web/src/components/drive/json-view.tsx
+  s_566b8e0c4467a4::t_9e7f10b43efe65 28,186-191,200,202
+apps/web/src/components/drive/link-row.tsx
+  s_566b8e0c4467a4::t_47dcb5db62a093 8,17-18,54,169
+apps/web/src/components/drive/move-dialog.tsx
+  s_566b8e0c4467a4::t_58af60cd25d3ad 345
+apps/web/src/components/drive/node-actions.tsx
+  s_566b8e0c4467a4::t_35b109afb3832e 13-14,101-102,175-180,290,310-311,322-324,429-433
+apps/web/src/components/drive/office-viewer.tsx
+  s_566b8e0c4467a4::t_4532cd8bdc1c5c 321,363
+apps/web/src/components/drive/preview.tsx
+  s_566b8e0c4467a4::t_07cb5552c5c8ee 60,86-89,91-113,148-149,217-222,237,239
+apps/web/src/components/drive/rich-text.css
+  s_566b8e0c4467a4::t_a8a227b192cecc 100-105,107,109,247,249,258-259,261-269,273-276,279,284,295-299,302,312,316-318
+apps/web/src/components/drive/rich-text.tsx
+  s_566b8e0c4467a4::t_d917e164c70243 12,69-84,143,148
+apps/web/src/components/drive/search-view.tsx
+  s_566b8e0c4467a4::t_d9f2a19b3147a4 15,23,42
+apps/web/src/components/drive/share-dialog.test.tsx
+  s_566b8e0c4467a4::t_50ad4822f747e7 1-257
+apps/web/src/components/drive/share-dialog.tsx
+  s_566b8e0c4467a4::t_a88d7c232c1db4 17-19,21,51-63,87-90,101-102,104-110,112-120,126-143,147-148,152-153,165,171-179,188-226,230,232-233,236-237,241,243-245,250-290,299-303,308-309,311,318,335,353-395,399,401-402,405-464,513-516,522-538,561-586,589-594,601-603,605-656,658-660,662,664-711,719,724,732-735,755,758-759,764,767-769,779,786-788,790-859,861-888,890-891,893-915,925-937,1017-1019,1034-1036,1044-1046,1048-1049,1065,1086,1094,1105,1174,1183
+apps/web/src/components/drive/shortcuts.ts
+  s_566b8e0c4467a4::t_0cc3f0eb897a5f 41-53
+apps/web/src/components/drive/storage-full-dialog.tsx
+  s_566b8e0c4467a4::t_53ed0989a18f15 2,5-11,23,87-89,122,152,190-203,207,289
+apps/web/src/components/drive/tag-colour.tsx
+  s_566b8e0c4467a4::t_84de7729b9b9d4 1,6,36-37,42-43,47,56,60,67,71,96-97,109,115,119,121-122,124,175,187-201,205,274,298,340,367,372-375,379,381
+apps/web/src/components/drive/tag-stamp.tsx
+  s_566b8e0c4467a4::t_e5a89351e56fe7 46,100
+apps/web/src/components/drive/tag-view.tsx
+  s_566b8e0c4467a4::t_7dccf824c1444e 119
+apps/web/src/components/drive/transfers-panel.tsx
+  s_566b8e0c4467a4::t_66ea6d6b037eac 470
+apps/web/src/components/drive/trash-view.tsx
+  s_566b8e0c4467a4::t_cc73886413aee8 7,12,52,54,57-58,67-68,161,163-167,182-185,190,206,255-258,263-271,274-289,292-293,295,300,304-306,311,320-321,329-333,336-346,348-351,353-360,362-363,378,436,477-478,489,511-512,559,627,631,882
+apps/web/src/components/drive/unverified-mark.tsx
+  s_566b8e0c4467a4::t_901ccb6c510fc9 8-9,16,25,28-29,110-172,195-198,200-201,208-212,219,221-229,232,237-238,268-269,301,303-308,315-317
+apps/web/src/components/drive/versions-dialog.tsx
+  s_566b8e0c4467a4::t_98d5c69e865d77 148
+apps/web/src/components/drive/viewer-parts.tsx
+  s_566b8e0c4467a4::t_2e0461a127f31e 175
+apps/web/src/components/email-step.tsx
+  s_566b8e0c4467a4::t_d32eb87bea270b 2,11-16,29,35-36,51-53,68-70,85,173-211,241,325
+apps/web/src/components/families/create-family-dialog.tsx
+  s_566b8e0c4467a4::t_6e6f478def9f7b 4,19-25,27,44-45,71-81,83-85,87-95,100,103-113,117,125-141,152-158,162,176,193-194,214,257
+apps/web/src/components/families/delete-folder-dialog.tsx
+  s_566b8e0c4467a4::t_16a169b16192cb 58
+apps/web/src/components/families/family-alerts.tsx
+  s_566b8e0c4467a4::t_3efc7731fc34b3 11,23,29-33,35-44,46-47,50-51
+apps/web/src/components/families/family-billing.tsx
+  s_566b8e0c4467a4::t_01091dbfdd642a 2-9,14-15,17,29-36,75-80,110,120-130,137-144,161,163-172,186-201,203-218,220-247,311-333,335,337,340-341,358-360,362-366,370,372-376,379,447,464,467,471,479,481,486,494,499-500,507,511,521-541,543-544,546,548-573,593,595,598-599,611-651,667,683,686-687,689-690,692-700,704-710,713-722,736,744,750,820-853,870,904,922-941,960-966,968-979,998-1001,1004-1008,1010-1055,1103-1123,1127,1156-1295,1492,1532-1533,1690,1712-1715,1741-1742,1878-1882,1885
+apps/web/src/components/families/family-check.tsx
+  s_566b8e0c4467a4::t_e4840c0567caf5 2-3,10,15-18,20,23-30,33-47,51-61,64-66,68-71,75-83,86-87,90-99,101-103,106-108,110-111,114,116,120,123-190,192-239,241-248,251-255,259-260,262-263,266-267,271-280,282-290
+apps/web/src/components/families/family-page.tsx
+  s_566b8e0c4467a4::t_42f54743509caf 4,10,12-17,21,48,53-59,62-63,83-95,124-137,166-167,199,213-223,230-236,253-255,263-351,365-419,423-424,426,428-483,490-498,500-512,514-522,524-526,528-536,584-589,600,609,631-639,663-667
+apps/web/src/components/families/family-space.tsx
+  s_566b8e0c4467a4::t_bb587fe8a40977 34-35
+apps/web/src/components/families/family-trash.tsx
+  s_566b8e0c4467a4::t_4b4140a6ba415c 4-6,8-10,22-37,44-48,50-55,58,60-63,72-76,80-89,91-117,131-134,156-161,175-232,234-254,264-268,270-271,273,275-280,282-348,350-365,367-435,437-460,471
+apps/web/src/components/families/invite-dialog.test.tsx
+  s_566b8e0c4467a4::t_8167ae0146fa0d 1-77
+apps/web/src/components/families/invite-dialog.tsx
+  s_566b8e0c4467a4::t_305bece45199f6 5,16,22-27,45,60-66,73,95,131-151
+apps/web/src/components/families/key-changes.tsx
+  s_566b8e0c4467a4::t_8a8542e4e06b42 44,59,75-85
+apps/web/src/components/families/members.test.tsx
+  s_566b8e0c4467a4::t_ec5aaff53f0fea 1-776
+apps/web/src/components/families/members.tsx
+  s_566b8e0c4467a4::t_8eccac787c0cfe 3-5,7,9-10,31-32,35-36,40,47-70,72-73,77-84,87,90-92,99-100,104,111-112,115,117-118,127-130,134-161,163-164,166-167,172,174,188-232,248,253,255-258,262,265,267-607,617-624,643,653-654,657-670,672-673,681,683-764,766-819,826,833-840,853,871-874,876-881,894-967,974,978-979,985-991,994-1016,1029,1034-1037,1041,1047-1077,1100-1199,1214-1341,1347,1379,1426-1428,1467-1469
+apps/web/src/components/families/new-folder-dialog.tsx
+  s_566b8e0c4467a4::t_1308f7deeb7946 56
+apps/web/src/components/families/no-family.tsx
+  s_566b8e0c4467a4::t_3b81fe3c70448e 11,62-63,88,136-139
+apps/web/src/components/families/remove-dialog.tsx
+  s_566b8e0c4467a4::t_a14683462d876e 1,23,44-45,75-79,83-85,93,99-107,131-135,146-168,316-321,340-342
+apps/web/src/components/families/rename-dialog.tsx
+  s_566b8e0c4467a4::t_7d5625dda6d82b 1-2,4-11,13-16,19-23,25,27-28,30,33-34,36,38,40-43,45-49,51-55,57-58,60,65-117
+apps/web/src/components/families/word-list.tsx
+  s_566b8e0c4467a4::t_92ae4915bdeab3 2-3,14
+apps/web/src/components/fingerprint-words.tsx
+  s_566b8e0c4467a4::t_77541e3eaeb8af 8-10,12-18,23,35-39,57-65
+apps/web/src/components/folder-mark.tsx
+  s_566b8e0c4467a4::t_59e42fd897e454 1,3,5-19,23,25,40-62
+apps/web/src/components/operator.tsx
+  s_566b8e0c4467a4::t_397157a41fc1ce 4,48-54,57,117,126,128
+apps/web/src/components/own-words-dialog.tsx
+  s_566b8e0c4467a4::t_d40bcca545ee6c 16-17,51-52
+apps/web/src/components/page-header.tsx
+  s_566b8e0c4467a4::t_ee360c71db7df1 7,12,18,26-31
+apps/web/src/components/person-avatar.tsx
+  s_566b8e0c4467a4::t_0c9e68ea22f976 2,18-23
+apps/web/src/components/portal-link.tsx
+  s_566b8e0c4467a4::t_87e27e870e8297 1-43
+apps/web/src/components/recovery-phrase.tsx
+  s_566b8e0c4467a4::t_389bb21839c2d2 458
+apps/web/src/components/security-page.tsx
+  s_566b8e0c4467a4::t_6a5f43ce243336 101,114,279
+apps/web/src/components/settings.tsx
+  s_566b8e0c4467a4::t_66b7b74bf40e82 6,29,49,55-56,59,63,94-99,109,111
+apps/web/src/components/site-header.tsx
+  s_566b8e0c4467a4::t_a12632bd0d437b 300-301
+apps/web/src/components/site.tsx
+  s_566b8e0c4467a4::t_1435f4b780526d 9,235-239,250,252
+apps/web/src/components/storage-card.tsx
+  s_566b8e0c4467a4::t_ca60f186a3da9b 110,147
+apps/web/src/components/theme-toggle.tsx
+  s_566b8e0c4467a4::t_5534467f362856 50
+apps/web/src/components/ui/accordion.tsx
+  s_566b8e0c4467a4::t_d5ada942b05e05 31
+apps/web/src/components/ui/breadcrumb.tsx
+  s_566b8e0c4467a4::t_e88f3a0689af4c 43
+apps/web/src/components/ui/button.tsx
+  s_566b8e0c4467a4::t_9a487304f2db7d 5-9,11,16,18-20,22-24,26,29-31,34-39,51-68,81-82
+apps/web/src/components/ui/checkbox.tsx
+  s_566b8e0c4467a4::t_ce10b7c4335883 10
+apps/web/src/components/ui/command.tsx
+  s_566b8e0c4467a4::t_f9b17f13d73f1c 86,155
+apps/web/src/components/ui/context-menu.tsx
+  s_566b8e0c4467a4::t_49ad5d6075cf28 97,122,151,184
+apps/web/src/components/ui/dropdown-menu.tsx
+  s_566b8e0c4467a4::t_42351162fdeb4c 91,116,165,207
+apps/web/src/components/ui/input.tsx
+  s_566b8e0c4467a4::t_2a6891171ec829 11
+apps/web/src/components/ui/radio-group.tsx
+  s_566b8e0c4467a4::t_515955def291b2 22,43
+apps/web/src/components/ui/scroll-area.tsx
+  s_566b8e0c4467a4::t_9a68df5753b3f3 13
+apps/web/src/components/ui/segment.ts
+  s_566b8e0c4467a4::t_aac35d8c9f9c0d 1-15
+apps/web/src/components/ui/select.tsx
+  s_566b8e0c4467a4::t_8895202c8842c7 34,106
+apps/web/src/components/ui/sidebar.tsx
+  s_566b8e0c4467a4::t_2c5928c692888e 285,394,418,466,555,659
+apps/web/src/components/ui/switch.tsx
+  s_566b8e0c4467a4::t_a00ce780be33e8 16
+apps/web/src/components/ui/textarea.tsx
+  s_566b8e0c4467a4::t_1d84fba8a58360 9
+apps/web/src/components/ui/toast.tsx
+  s_566b8e0c4467a4::t_ebd7d1af6b7b67 10-12,32,45,50,106,133
+apps/web/src/components/user-menu.tsx
+  s_566b8e0c4467a4::t_dc6cb2cd351ba0 20,93,95
+apps/web/src/components/verified-email-step.tsx
+  s_566b8e0c4467a4::t_79bf69d3f63ffa 8,44-45
+apps/web/src/content/about.mdx
+  s_566b8e0c4467a4::t_b5a63e56163485 80
+apps/web/src/content/blog/family-plans.mdx
+  s_566b8e0c4467a4::t_33093764d57eb9 3,5,13,43,45,47,49,51,53,55,57-59,122-123
+apps/web/src/content/roadmap.ts
+  s_566b8e0c4467a4::t_647b2df70d3b81 51,62-63,66,69-76,176-177,183-184
+apps/web/src/content/security.mdx
+  s_566b8e0c4467a4::t_0c6988dbe0670f 159,163-171,273-276,290,339,358,362,373,503-504,542-543,546
+apps/web/src/dev/breakdown.tsx
+  s_566b8e0c4467a4::t_2f703eb09906d5 1-59
+apps/web/src/dev/components-page.tsx
+  s_566b8e0c4467a4::t_23036820678d70 1-91
+apps/web/src/dev/demo.tsx
+  s_566b8e0c4467a4::t_397e820849e854 1-148
+apps/web/src/dev/demos/app.tsx
+  s_566b8e0c4467a4::t_901f5bd159e704 1-483
+apps/web/src/dev/demos/breakdowns.tsx
+  s_566b8e0c4467a4::t_bb4d4b3ee525d7 1-95
+apps/web/src/dev/demos/controls.tsx
+  s_566b8e0c4467a4::t_6e170915a6580a 1-406
+apps/web/src/dev/demos/motion.tsx
+  s_566b8e0c4467a4::t_ec814854c20aec 1-149
+apps/web/src/dev/demos/overlays.tsx
+  s_566b8e0c4467a4::t_45aa768ad35a50 1-398
+apps/web/src/dev/demos/structure.tsx
+  s_566b8e0c4467a4::t_9e6a7f37900d57 1-259
+apps/web/src/dev/layers-page.tsx
+  s_566b8e0c4467a4::t_fe0fef1f705bbe 1-296
+apps/web/src/dev/layers.ts
+  s_566b8e0c4467a4::t_f247fddd992be7 1-142
+apps/web/src/dev/measure-overlay.tsx
+  s_566b8e0c4467a4::t_f5db8a399db4f6 1-514
+apps/web/src/dev/playground-state.tsx
+  s_566b8e0c4467a4::t_4bc3dc46da4d44 1-77
+apps/web/src/dev/playground.css
+  s_566b8e0c4467a4::t_9efe6aa9c7bb63 1-31
+apps/web/src/dev/pseudo-states.ts
+  s_566b8e0c4467a4::t_6e6c6c75eb3a55 1-55
+apps/web/src/dev/routes.tsx
+  s_566b8e0c4467a4::t_11c8e0feb201bd 1-43
+apps/web/src/dev/shell.tsx
+  s_566b8e0c4467a4::t_400b34a89e5a45 1-104
+apps/web/src/identities.css
+  s_566b8e0c4467a4::t_62bdbf38accde0 387-394
+apps/web/src/lib/api-client.ts
+  s_566b8e0c4467a4::t_3eeb7069e95174 3,11-15
+apps/web/src/lib/api.server.ts
+  s_566b8e0c4467a4::t_8e4afeab66f443 33,40,46,279-280,638-639,685-707,1268-1271,1278,1318-1329,1495-1505,2525-2529,2547,2564,2645,2649-2655,2666,2674-2677,2680,2686-2695,2718-2720,2726-2730,2745,2774,2797,2811
+apps/web/src/lib/app-links.server.test.ts
+  s_566b8e0c4467a4::t_1d71a44abbfd0d 1-97
+apps/web/src/lib/app-links.server.ts
+  s_566b8e0c4467a4::t_c963d0189be7a9 6-7,25
+apps/web/src/lib/auth-client.ts
+  s_566b8e0c4467a4::t_420022d33537ec 8,30-32
+apps/web/src/lib/billing-api.ts
+  s_566b8e0c4467a4::t_aa1cc3bcceee2c 21-22,27-28
+apps/web/src/lib/brand.ts
+  s_566b8e0c4467a4::t_27ad5229b60f1a 81
+apps/web/src/lib/contact-guard.ts
+  s_566b8e0c4467a4::t_fdf3cf7f2f5206 1-750
+apps/web/src/lib/contacts.families.test.ts
+  s_566b8e0c4467a4::t_614a0e1fafa79d 6-7,138
+apps/web/src/lib/contacts.first-use.test.ts
+  s_566b8e0c4467a4::t_a36b6ae3f4f88e 1-1342
+apps/web/src/lib/contacts.succession.test.ts
+  s_566b8e0c4467a4::t_d0202969258779 41,43-56
+apps/web/src/lib/contacts.ts
+  s_566b8e0c4467a4::t_fe4ad7b2266b5c 8-20,24,30,34,37-49,51-52,57,68-75,79,110,143-145,167-172,262,268,273,283-328,346,351,362,378,443,460,462-463,476-477,496-500,504-505,511,519-520,535-542,544-868,870-872,874-934,936-1116,1118-1173,1177-1180,1187,1190-1204,1211,1213,1215,1217-1222,1227,1234,1256-1260,1262,1266,1276-1285,1291-1295,1301-1546,1554,1559-1564,1566-1585,1587-1591,1593-1594,1597-1606,1611-1681,1687,1689-1718,1724,1726-1730,1733-1759,1761-1789,1798,1802-1809,1812-1826,1828-1830,1833,1837-1926,1931-1939,1941,1944-1974,1985-1993,2003-2009,2013-2017,2029-2030,2033-2035
+apps/web/src/lib/device-data.test.ts
+  s_566b8e0c4467a4::t_fc83735dd8f5c3 1-589
+apps/web/src/lib/device-data.ts
+  s_566b8e0c4467a4::t_91fe4cd8ec7bfe 1-418
+apps/web/src/lib/device-session.test.ts
+  s_566b8e0c4467a4::t_21235a935c8eae 1-106
+apps/web/src/lib/device-session.ts
+  s_566b8e0c4467a4::t_f3353e12996f12 1,3,5-11,15-20,22-27,29-36,38-40
+apps/web/src/lib/drive-api.ts
+  s_566b8e0c4467a4::t_4593a5e4d6e738 119-120
+apps/web/src/lib/drive.ts
+  s_566b8e0c4467a4::t_19cd5ff72cbdf4 7,23,27,45-46,48,59-60,80,82-85,202,205-225
+apps/web/src/lib/families.ts
+  s_566b8e0c4467a4::t_23a0bf69421d94 3,12,183-196,206-214,246-248
+apps/web/src/lib/families.walk-poll.test.tsx
+  s_566b8e0c4467a4::t_d6040394d4d4ed 1-122
+apps/web/src/lib/family-billing.test.ts
+  s_566b8e0c4467a4::t_35e03e6df35365 13-15,19,185,193-196,204,214,546-698
+apps/web/src/lib/family-billing.ts
+  s_566b8e0c4467a4::t_4556d7f806874a 12-13,51-55,75,80-139,410,412,414-415,427,433,473,518-540
+apps/web/src/lib/family-checkout.ts
+  s_566b8e0c4467a4::t_9d5ec757e77ed6 1-117
+apps/web/src/lib/family-guard.test.ts
+  s_566b8e0c4467a4::t_1404a1e503193f 1-148
+apps/web/src/lib/family-leave.test.ts
+  s_566b8e0c4467a4::t_b9764214c79d92 2,42-58
+apps/web/src/lib/family-leave.ts
+  s_566b8e0c4467a4::t_35b39c4b80387f 26-43
+apps/web/src/lib/family-pending.test.ts
+  s_566b8e0c4467a4::t_60faec6833656d 1-133
+apps/web/src/lib/family-pending.ts
+  s_566b8e0c4467a4::t_37fc7cc20883d2 1-229
+apps/web/src/lib/family-pin.test.ts
+  s_566b8e0c4467a4::t_39c209ffc20036 3,6-10,34,36,38
+apps/web/src/lib/family-pin.ts
+  s_566b8e0c4467a4::t_e4ae63bd96a9a2 17,20,26-28
+apps/web/src/lib/family-trash.test.ts
+  s_566b8e0c4467a4::t_381fee3b017bcd 1-129
+apps/web/src/lib/family-trash.ts
+  s_566b8e0c4467a4::t_38eef5d029aa87 1-154
+apps/web/src/lib/family-trust.test.ts
+  s_566b8e0c4467a4::t_d439f187abd028 1-452
+apps/web/src/lib/family-trust.ts
+  s_566b8e0c4467a4::t_192ecab7a547a7 1-269
+apps/web/src/lib/family-work.ts
+  s_566b8e0c4467a4::t_6bee22e75024e5 53-54,84
+apps/web/src/lib/group-write-floor.test.ts
+  s_566b8e0c4467a4::t_9f39b38e54e062 1-142
+apps/web/src/lib/group-write-floor.ts
+  s_566b8e0c4467a4::t_9272f8f1def675 1-64
+apps/web/src/lib/groups/api.ts
+  s_566b8e0c4467a4::t_443b3332608483 155-159,163-167,169-170,214-236
+apps/web/src/lib/groups/client.ts
+  s_566b8e0c4467a4::t_9a0519fb18aede 2,4,29-34,56-57
+apps/web/src/lib/groups/context.ts
+  s_566b8e0c4467a4::t_1fc491b0712b56 9,44,46-52,83-90,93-115,166-173
+apps/web/src/lib/groups/copy.test.ts
+  s_566b8e0c4467a4::t_cc52ff29e53a82 2-3,5-26
+apps/web/src/lib/groups/copy.ts
+  s_566b8e0c4467a4::t_149a147a3ea782 14-19,97,103,110-112,119,121,123,138-139,144,164-165,233-242,293,316,319,321-322
+apps/web/src/lib/groups/family-checks.test.ts
+  s_566b8e0c4467a4::t_8acddacc8b580e 1-194
+apps/web/src/lib/groups/family-checks.ts
+  s_566b8e0c4467a4::t_4a635b328e0fe2 1-91
+apps/web/src/lib/groups/join-only.test.ts
+  s_566b8e0c4467a4::t_b01ccb73be2c53 6-18,24-29,42-44,52-55,57,60-61,64-67,70-71,73-77,116-119,128-132,134,151,155,159,167,169-170,172-174,176,179,182-185,188
+apps/web/src/lib/groups/join.test.ts
+  s_566b8e0c4467a4::t_a8401b64f05ec6 2-4,6-10,12,16-24,33-34,90-94,98-99,108-125,164-174,176-187,194-195,203-230,237,239,241-247,251-254,260-261,265,274-286,294-306,321-348,351-352,354-375,377,383-385,387-388,392-394,396,399,401-402,404-437,440,442-443,445-453,455-469,472,474,476-486,488-507,510,512-513,515-521,523-534,537,539-540,542-545,547-560,563,565-566,568-571,573-579,582,584-585,587-590,592-613,615-638,641,643-644,646-649,651-674,676-678,681,684-687,690-693,695-703,705-706,710-711,714,716-717,719-722,724-731,736,738-739,741,751-756,759-769,772,774-776,785-786
+apps/web/src/lib/groups/join.ts
+  s_566b8e0c4467a4::t_6350555e6af07b 1,3-12,15-19,21-35,37-42,45,53,64,66,80,85-86,94,97,106-109,117,122-128,130-136,144-152,157,160-161,166,168-169,175,186,195,197,201-203,205-206,216-218,229-230,239-262,267-274,289
+apps/web/src/lib/groups/outbox.test.ts
+  s_566b8e0c4467a4::t_608daee958a350 1-2,326-328,362-395,397,419,434,439,450,452,455,457,463,466,482,493,499,514-671,676,682,724
+apps/web/src/lib/groups/outbox.ts
+  s_566b8e0c4467a4::t_291960dc36c1c5 2,11,46-48,60-61,93-98,100,230-234,473-491,499-501,521-523,543-546,729-734,852,865-866,869,880
+apps/web/src/lib/groups/pins.test.ts
+  s_566b8e0c4467a4::t_c18191f15d46b9 191-192
+apps/web/src/lib/groups/pins.ts
+  s_566b8e0c4467a4::t_bd2a2b74ea7f85 4,48-54,66,69-71,93-96,98-99
+apps/web/src/lib/groups/removal.test.ts
+  s_566b8e0c4467a4::t_2a55c56e951605 42,45-53,129-161,184,187,191,279,282-283,286-303
+apps/web/src/lib/groups/removal.ts
+  s_566b8e0c4467a4::t_53398d0ee49338 2-3,5,7,40-45,50-57,66-89,97,115,122-124,129,148-149,154,165-183,192,215,229,275-280,294,298,302,307,375-391,402-410,497-589
+apps/web/src/lib/groups/server-testkit.ts
+  s_566b8e0c4467a4::t_f2a48fd40106b6 12-14,16,64,71,87-88,93-98,184,187-219,247-252,304-319,330,355,374-375,378-382,520,532-538,543,551,553,563-586,590,597,602-603,613-620
+apps/web/src/lib/groups/store.ts
+  s_566b8e0c4467a4::t_67413e1d9ae988 2
+apps/web/src/lib/groups/sync.test.ts
+  s_566b8e0c4467a4::t_cf2f387281db73 4-5,240-242,258-307
+apps/web/src/lib/groups/sync.ts
+  s_566b8e0c4467a4::t_69861297d45ebf 1,16-21,214-263,309,320-321,350-352,475,481-493,495,500-528,540,576-582,590-593
+apps/web/src/lib/groups/test-harness.ts
+  s_566b8e0c4467a4::t_9c788c4522a4b0 2,4-10,12,216-217,250,257-258,263-267,337,344,381
+apps/web/src/lib/groups/two-tabs.test.ts
+  s_566b8e0c4467a4::t_feebab5bddbc12 6-7,120-121,130
+apps/web/src/lib/groups/walks.test.ts
+  s_566b8e0c4467a4::t_86066349ef6359 3-12,156-677
+apps/web/src/lib/groups/walks.ts
+  s_566b8e0c4467a4::t_a611a36d661b10 87-482
+apps/web/src/lib/groups/without-words.test.ts
+  s_566b8e0c4467a4::t_4255b466183bfc 1-460
+apps/web/src/lib/groups/worker-testkit.ts
+  s_566b8e0c4467a4::t_c6067f9dc8128a 86-87,92-99
+apps/web/src/lib/groups/writers.test.ts
+  s_566b8e0c4467a4::t_5624887a53c0b7 144-157
+apps/web/src/lib/groups/writers.ts
+  s_566b8e0c4467a4::t_0cc976ea153d74 2,41-43,50-56
+apps/web/src/lib/initials.test.ts
+  s_566b8e0c4467a4::t_f2ffebf9b8b17e 1-43
+apps/web/src/lib/initials.ts
+  s_566b8e0c4467a4::t_4f03ed5f917ff6 1-31
+apps/web/src/lib/integrity-lines.test.ts
+  s_566b8e0c4467a4::t_a21a2e8f83c009 19,44-45,97-122,187-189,191-197,201,204-205,207-208,215,223,225,267,473,478
+apps/web/src/lib/integrity-lines.ts
+  s_566b8e0c4467a4::t_770184b87d9dfa 166-167,181-189,195,198-199,201-206,208,216,226-227,231-234,236,238-243,245-251,309,313-314,596-645,660
+apps/web/src/lib/integrity.ts
+  s_566b8e0c4467a4::t_8d8e2354ea333a 4,32-43
+apps/web/src/lib/link-sent.ts
+  s_566b8e0c4467a4::t_5a5b732ea87461 1-74
+apps/web/src/lib/move-across.test.ts
+  s_566b8e0c4467a4::t_ecfc61ae83050f 1-87
+apps/web/src/lib/move-across.ts
+  s_566b8e0c4467a4::t_9977184f2c9062 16,19,93-94,125-139,142,155
+apps/web/src/lib/own-identity.test.ts
+  s_566b8e0c4467a4::t_6d2ea757eae852 54-55,174-186
+apps/web/src/lib/own-identity.ts
+  s_566b8e0c4467a4::t_5d8e7b82dd1c82 52-53,61,69,87,89,98,101,105
+apps/web/src/lib/plans.ts
+  s_566b8e0c4467a4::t_c3173b2a0d0226 1-2,45,152-174,176
+apps/web/src/lib/previews.ts
+  s_566b8e0c4467a4::t_2eb468b8dd3311 1,125-138
+apps/web/src/lib/pricing-faq.ts
+  s_566b8e0c4467a4::t_bfffa7cd52474d 91
+apps/web/src/lib/rollback-marks.bound.test.ts
+  s_566b8e0c4467a4::t_5167d0601f7227 1-94
+apps/web/src/lib/rollback-marks.test.ts
+  s_566b8e0c4467a4::t_40ae992f57e936 1-7,10,12-13,21-27,32-119,121-221,223,239-549,552-558,562,570,575-580
+apps/web/src/lib/rollback-marks.ts
+  s_566b8e0c4467a4::t_dd1d75db98a2a0 1-10,12-13,23-54,56-75,78-85,88-151,153-154,156-157,159-168,170,172-349,352,363-364,367,388-389,392-393,396
+apps/web/src/lib/save-copy.test.ts
+  s_566b8e0c4467a4::t_ab4a418aa2d9b3 1-256
+apps/web/src/lib/save-copy.ts
+  s_566b8e0c4467a4::t_df915ba00e05db 4-5,8-9,32-70,78-79,109-117,127
+apps/web/src/lib/sign-out.test.ts
+  s_566b8e0c4467a4::t_bdadd9cad8d12b 4,15-16,19-20,30-31,37-39,42,44,52-53,56-61,63-73,85-86,89,100,104-105,109,117-119,128-178,181-182,186,191-192,194,209,213,245-272,302,543-606
+apps/web/src/lib/sign-out.ts
+  s_566b8e0c4467a4::t_9bb3843fcc6811 4-5,14-16,31-41,45-50,53-71,74-84,89-99,101-121,124-125
+apps/web/src/lib/space-registry.ts
+  s_566b8e0c4467a4::t_f40faa05d5f808 46,88,91-105
+apps/web/src/lib/spaces.ts
+  s_566b8e0c4467a4::t_b0bd9eddca233b 8-10,18,29,116-119,211,213-217,249-253,255-258,261-262,265-272,274-277,292-293,301,303-304,307,311-312,320-326,328-351,354-360,363,365-374
+apps/web/src/lib/stash.test.ts
+  s_566b8e0c4467a4::t_abf27f194425d1 103,126,237-358
+apps/web/src/lib/stash.ts
+  s_566b8e0c4467a4::t_ee2463daa84b14 35-41,53-55,74-79,81-88,110-120,159,162-166,174-176,182,188-198,235,239-240,245,247-250,295-302,320,322-327
+apps/web/src/lib/stash.upload.test.ts
+  s_566b8e0c4467a4::t_fe32b0651d7294 1-127
+apps/web/src/lib/tags.ts
+  s_566b8e0c4467a4::t_e924c2286af253 1-8,31-32,34,37,50,57-64
+apps/web/src/lib/transfers.ts
+  s_566b8e0c4467a4::t_ef22b51def326b 11-12,118-119,143-146
+apps/web/src/lib/trash-batch-request.test.ts
+  s_566b8e0c4467a4::t_04db7cca8c4907 21,24
+apps/web/src/lib/trash-batch-request.ts
+  s_566b8e0c4467a4::t_45995ebdf27e66 4,9
+apps/web/src/lib/trash-batch.test.ts
+  s_566b8e0c4467a4::t_3e8d1cec549bc2 1-6,10-16,46-48,53-54,59-64,67,77-80,131-173,176-178,180-186,391-576
+apps/web/src/lib/trash-batch.ts
+  s_566b8e0c4467a4::t_d087e065a21c5b 4-5,14-17,28-29,32-33,36-39,43,51,109-135,154,184-186,230-304
+apps/web/src/lib/uploads.ts
+  s_566b8e0c4467a4::t_e2f165ebfc63a8 12,16,32-41,45,65,116,119-120,128,130,132,139,141,151,155,157
+apps/web/src/router.tsx
+  s_566b8e0c4467a4::t_82100bc23d42ba 28-33
+apps/web/src/routes/__root.tsx
+  s_566b8e0c4467a4::t_5b398ae8b96353 237,248
+apps/web/src/routes/_authenticated/app/_drive/contacts.tsx
+  s_566b8e0c4467a4::t_9494f3dd866d42 1-51,54-55,57-348
+apps/web/src/routes/_authenticated/app/_drive/families/$groupId/join.tsx
+  s_566b8e0c4467a4::t_55eaa848faea71 4,10,20-22,31-35,68,156-169,174-175,178-183,205
+apps/web/src/routes/_authenticated/app/_drive/family/index.tsx
+  s_566b8e0c4467a4::t_329ca2235261f3 10,40-43,45-47,57-58,71,73
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/f.$folderId.tsx
+  s_566b8e0c4467a4::t_1c246858277dc2 87
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/index.tsx
+  s_566b8e0c4467a4::t_d920d6f56dc6af 63,113
+apps/web/src/routes/_authenticated/app/_drive/s/$groupId/trash.tsx
+  s_566b8e0c4467a4::t_1bd3a324bdc3bf 4-5,8
+apps/web/src/routes/_authenticated/app/_drive/shared.tsx
+  s_566b8e0c4467a4::t_1bbcca01441ab3 21,51,65,70,97-98,103,105,112,188,261-265,280-284,287-343,347-350,352-367,370,372-410,412,414,417,424,427,432-433,436,454,526
+apps/web/src/routes/_authenticated/app/_drive/trash.tsx
+  s_566b8e0c4467a4::t_51bf956739a985 1-4,6,9-10,14-15,21-25,29-30,34-70,72-89
+apps/web/src/routes/_authenticated/app/account.tsx
+  s_566b8e0c4467a4::t_7ad5b0ae925295 122
+apps/web/src/routes/_authenticated/app/admin/accounts/$accountId.tsx
+  s_566b8e0c4467a4::t_5b9ae5b4f542ba 306
+apps/web/src/routes/_authenticated/app/admin/index.tsx
+  s_566b8e0c4467a4::t_82f42053b9f592 97-102,109-119,214-237,361,371-373,389-574,590,599-601
+apps/web/src/routes/_authenticated/app/billing.tsx
+  s_566b8e0c4467a4::t_710745790561d7 4,32-33,41,72-74,214-216,219,226,231,245,361-363,366,375-376,391-395,401,407-408,421,423-426,472,478-479,481-482,500,515,528-538,552-553,555,559-565,570-572,574-575,586-596,667,713,721,729-731,756-759,766,781-817,862,871-872,900-904
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_566b8e0c4467a4::t_d4cb617a968dd9 171-172,185
+apps/web/src/routes/join/route.tsx
+  s_566b8e0c4467a4::t_2ca5f8db21fa9c 14,49,267,272-273,276-278,280-282,317,320-324
+apps/web/src/routes/pricing/route.tsx
+  s_566b8e0c4467a4::t_1bf58668dc81cc 39,279,281-283,361
+apps/web/src/routes/recover/complete.tsx
+  s_566b8e0c4467a4::t_89a1591b53627c 143
+apps/web/src/routes/s/$token.tsx
+  s_566b8e0c4467a4::t_610765f6b46e03 563,618
+apps/web/src/styles.css
+  s_566b8e0c4467a4::t_eb435d0953fdb8 88-94,101,170-171,215-218,226-235,243-252,260-269,277-282,291-296,304-309,317-322,330-365,369-372,376,381,419-421,439,465-488,497-603
+apps/web/src/test/setup.ts
+  s_566b8e0c4467a4::t_514a5b9ee5c1b5 2,5-8
+apps/web/vite.config.ts
+  s_566b8e0c4467a4::t_83eaf4c61197e5 126-162,192
+bun.lock
+  s_566b8e0c4467a4::t_7d313fb4c26f3a 8,10-11,13-16,18-19,26-28,47-48,50-52,54-55,57,59-60,68-75,80,83-85,88-90,97-98,101-108,112-113,124,128-129,131,142,146,148,155,172,176,187-188,192,194,196,203-204,209,213-214,216,223,225-226,230-237,246,250,252,268-269,271,273,275,287,291,293,300,304,306,314,323,325,333,344,346,348,350,352,354,356,358,360,362,364,366,368,370,372,374,376,378,380,382,384,386,388,426,428,432,434,436,438,440,442,502,548,550,552,554,556,558,560,562,564,566,568,570,572,574,576,578,580,582,584,586,588,590,592,594,596,598,630,632,634,636,638,640,642,644,646,648,650,652,656,658,660,662,664,666,668,670,672,690-692,694,696,698,700,702,704,706,708,710,712,714,716,718,720,722,724,726,728,730,732,734,736,738,740,742,744,746,748,750,752,754,756,758,760,762,764,766,768,770,772,774,776,778,780,782,784,818,820,822,824,826,828,830,832,834,836,838,840,842,844,846,848,850,912,914,916,918,920,922,924,928,934,936,938,944,978,980,982,984,986,988,990,992,994,996,998,1006,1010,1014,1016,1018,1022,1024,1026,1028,1032,1034,1036,1038,1044,1048,1050,1052,1056,1066,1068,1070,1072,1074,1076,1078,1082,1110,1114,1116,1164,1166,1168,1214,1228,1234,1244,1254,1264,1288,1290,1298,1300,1328-1329,1346,1348,1368,1398,1408,1430,1448,1476,1488,1532,1538,1592,1594,1600,1604,1648,1740,1742,1744,1748,1752,1754,1762,1770,1772,1782,1784,1786,1800,1804,1806,1808,1810,1828,1830,1832,1834,1866,1868,1870,1882,1912,1926,1930,1934-1936,1942,1948,1956,1958,1964-1965,1984,1986,1988,2020,2026-2028,2030,2034,2044,2054,2060,2070,2104,2116,2120,2122,2132,2138,2144,2168,2170,2194,2198-2207,2224-2227,2230,2232-2234,2238-2239,2260-2261,2266,2268,2270,2272,2274,2304,2306,2308,2310,2312,2316
+compose.dev.yaml
+  s_566b8e0c4467a4::t_a03abd97ae5b48 6
+compose.yaml
+  s_566b8e0c4467a4::t_1df9f4baf9d2dc 20,39,130
+crates/hushos-core/AGENTS.md
+  s_566b8e0c4467a4::t_ba0defdb0a040e 160-168,180,185-206
+crates/hushos-core/Cargo.toml
+  s_566b8e0c4467a4::t_2d153eaaa50514 3,26-27
+crates/hushos-core/examples/fixtures.rs
+  s_566b8e0c4467a4::t_eb73c2265b4e52 139,144-163,725-730
+crates/hushos-core/examples/group_fixtures.rs
+  s_566b8e0c4467a4::t_621299c67e4d11 83
+crates/hushos-core/examples/roster_call_fixtures.rs
+  s_566b8e0c4467a4::t_b7bb995c7c5002 5-7,17-18,33-36
+crates/hushos-core/fixtures/join-session-scenarios.json
+  s_566b8e0c4467a4::t_856fee585622ee 1367-2730
+crates/hushos-core/fixtures/merge-pin-cases.json
+  s_566b8e0c4467a4::t_81fe0241a654a7 184-209,221-247
+crates/hushos-core/fixtures/pin-cases.json
+  s_566b8e0c4467a4::t_ef560413338f68 1-1182
+crates/hushos-core/fixtures/v0.10.0/planted-join.json
+  s_566b8e0c4467a4::t_48b5ba5b54484f 1-81
+crates/hushos-core/fixtures/v0.10.0/planted_join.rs
+  s_566b8e0c4467a4::t_26570807b98ae7 1-102
+crates/hushos-core/fixtures/web-area-ledger.json
+  s_566b8e0c4467a4::t_67b13cd0086b96 95-96,105-107,116,118,131,140,142,209,220,231,311,374-375,388,399,410,478-479,488-490,503,514,525,536,590-591,604,615,626,637,700-701,714,725,736,747,758,816-817,826,828,841,852,863,874,885,894,896,907,918,986-987,1000,1011,1022,1078-1079,1092,1168-1169,1178-1180,1193,1292-1293,1306,1315,1317,1326,1328,1337,1339,1348,1350,1361,1370,1372,1471-1472,1485,1494,1496,1505,1507,1516,1518,1527,1529,1540,1549,1551,1630-1631,1644,1655,1666,1677,1788-1789,1799-1800,1813,1824,1835,1891,1902,1913,1924,1935,1989,2000,2038,2049,2060,2117,2128,2184-2185,2198,2209,2220,2231,2332-2333,2346,2357,2368,2424-2425,2434-2436,2449,2544-2545,2558,2569,2580,2639-2640,2649-2651,2664,2725-2726,2735-2737,2750,2812,2888,2899,2910,2921,2998-2999,3009-3010,3023,3034,3045,3056,3067,3078,3089,3136,3147,3158,3169,3180,3247-3248,3261,3272,3283,3294,3305,3316,3327,3391-3392,3405,3458,3460,3462,3467,3471,3510,3513,3516-3517,3524,3527-3528,3548,3553,3555-3556,3558,3571,3576,3578-3579,3581,3596,3598,3600-3601,3603-3604,3637,3639,3641-3642,3644-3645,3684,3686,3693,3700,3702-3703,3705,3711,3718,3720-3721,3723,3729,3736,3738-3739,3741,3749,3751-3752,3754,3800,3803,3806-3807,3814,3817-3818,3824-3825,3831-3832,3852,3857,3859-3860,3862,3875,3880,3882-3883,3885,3898,3900,3913,3915,3930,3932,3934-3935,3937-3938,3972,3974,3976-3977,3979-3980,4019,4021,4028,4035,4037-4038,4040,4046,4053,4055-4056,4058,4064,4071,4074,4076,4084,4086-4087,4089,4128,4131,4134-4135,4142-4143,4149-4150,4156-4157,4177,4182,4184-4185,4187,4200,4202,4215,4217,4230,4232,4247,4249,4251-4252,4254-4255,4294,4296,4298,4303,4307,4312,4360,4363,4366-4367,4374,4377-4378,4384-4385,4405,4410,4412-4413,4415,4428,4433,4435-4436,4438,4451,4453,4468,4470,4472-4473,4475-4476,4509,4511,4513-4514,4516-4517,4556,4558,4560,4572,4596,4598,4600,4612,4614,4616,4621,4625,4638,4640,4642,4647,4651,4664,4742,4745,4748-4749,4759,4762,4765-4766,4773,4776-4777,4787,4790,4793-4794,4801,4804-4805,4825,4830,4832-4833,4835,4849,4854,4856-4857,4859,4872,4877,4879-4880,4882,4896,4901,4903-4904,4906,4919,4924,4926-4927,4929,4944,4946,4948-4949,4951-4952,4985,4987,4989-4990,4992-4993,5027,5029,5031-5032,5034-5035,5068,5070,5072-5073,5075-5076,5109,5111,5113-5114,5116-5117,5155,5157,5159,5164,5168,5173,5177,5182,5186,5242,5245,5248-5249,5256,5259-5260,5266,5269-5270,5276-5277,5297,5302,5304-5305,5307,5320,5325,5327-5328,5330,5343,5348,5350-5351,5353,5366,5368,5383,5385,5387-5388,5390-5391,5425,5427,5429-5430,5432-5433,5467,5469,5471-5472,5474-5475,5513,5515,5517,5522,5526,5565,5568,5571-5572,5579,5582-5583,5603,5608,5610-5611,5613,5626,5631,5633-5634,5636,5651,5653,5655-5656,5658-5659,5693,5695,5697-5698,5700-5701,5740,5742,5744,5749,5785,5788,5791-5792,5799-5800,5820,5825,5827-5828,5830,5843,5845,5860,5862,5864-5865,5867-5868,5907,5909,5911,5944,5946,5948,5972,6046,6048,6085,6159,6161,6173,6175,6181,6183,6189,6191,6228,6311,6313,6337,6420,6422,6446,6529,6531,6555,6638,6640,6664,6744,6746,6752,6754,6760,6762,6799,6879,6881,6887,6889,6895,6897,6934,7023,7025,7031,7033,7058,7142,7144,7150,7152,7177,7256,7258,7264,7266,7303,7380,7382,7388,7390,7396,7398,7423,7498,7500,7506,7508,7514,7516,7576,7578,7584,7586,7592,7594,7618,7620,7626,7628,7675,7677,7683,7685,7691,7693,7717,7719,7725,7727,7733,7735,7790,7792,7798,7800,7806,7808,7833,7904,7906,7912,7914,7920,7922,7976,8046,8048,8054,8056,8062,8064,8093,8095,8101,8103,8129,8200,8202,8208,8210,8216,8218,8247,8249,8255,8257,8263,8265,8302,8369,8371,8377,8379,8385,8387,8416,8418,8424,8426,8432,8434,8471,8559,8561,8567,8569,8594,8710,8780,8782,8788,8790,8796,8798,8822,8824,8836,8838,8844,8846,8872,8947,8949,8955,8957,8963,8965,9004,9078,9080,9105,9179,9181,9205,9332-9339
+crates/hushos-core/fixtures/web-groups.json
+  s_566b8e0c4467a4::t_fba7dd72309fc3 20,38,56,74,146,148,209,211,278,280,341,343,351,353,377,393,451,458,460,466,468,474,476,482,484,501,595-598,609,616,618,624,626,632,634,640,642,659,675,682,684,690,692,698,700,717,733,740,742,748,750,756,758,775,791,809,811,817,819,825,827,844,874,912,914,920,922,928,930,947,977,995,997,1003,1005,1011,1013,1030,1060,1078,1080,1086,1088,1105,1121,1139,1141,1147,1149,1155,1157,1174,1190,1208,1210,1270,1359-1362,1373,1380,1382,1442,1458,1476,1478,1538,1568,1575,1577,1636,1652,1659,1661,1721,1737,1744,1746,1752,1754,1811,1827,1834,1836,1842,1844,1904,1920,1927,1929,1935,1937,1992,2008,2015,2017,2023,2025,2031,2033,2100,2130,2137,2139,2145,2147,2153,2155,2172,2180,2182,2193,2203,2213,2223,2314-2317,2328,2335,2337,2343,2345,2351,2353,2370,2378,2380,2471-2474,2485,2492,2494,2500,2502,2508,2510,2527,2535,2537,2628-2631,2642,2649,2651,2657,2659,2665,2667,2684,2692,2694,2705,2715,2725,2735,2826-2829,2840,2847,2849,2855,2857,2863,2865,2882,2890,2892,2983-2986,2997,3004,3006,3012,3014,3020,3022,3039,3048,3050,3140-3143,3154,3161,3163,3169,3171,3177,3179,3196,3205,3207,3297-3300,3311,3318,3320,3326,3328,3334,3336,3342,3344,3352,3354,3370,3386,3393,3395,3401,3403,3409,3411,3419,3421,3437,3453,3460,3462,3468,3470,3476,3478,3495,3511,3518,3520,3528,3530,3536,3538,3554,3570,3588,3590,3598,3600,3606,3608,3624,3705-3708,3719,3747,3749,3757,3759,3775,3805,3812,3814,3820,3822,3828,3830,3836,3838,3853,3953-3956,3967,3974,3976,3982,3984,3990,3992,3998,4000,4015,4031,4038,4040,4046,4048,4065,4081,4088,4090,4096,4098,4115,4131,4138,4140,4146,4148,4154,4156,4195,4290-4293,4304,4311,4313,4319,4321,4360,4444-4447,4458,4465,4467,4473,4475,4492,4576-4579,4590,4597,4599,4605,4607,4613,4615,4632,4731-4734,4745,4752,4754,4760,4762,4768,4770,4787,4899-4902,4916,4923,4925,4931,4933,4950,4973-4974,5051-5054,5068,5075,5077,5083,5085,5091,5093,5099,5101,5109,5111,5127,5232-5235,5246,5253,5255,5261,5263,5269,5271,5288,5378-5381,5392,5410,5412,5418,5420,5426,5428,5445,5475,5493,5495,5501,5503,5509,5511,5517,5519,5525,5527,5533,5535,5541,5543,5549,5551,5557,5559,5565,5567,5575,5577,5593,5704-5707,5718,5736,5738,5744,5746,5752,5754,5760,5762,5768,5770,5776,5778,5784,5786,5792,5794,5800,5802,5808,5810,5818,5820,5904,6015-6018,6029,6047,6049,6055,6057,6063,6065,6071,6073,6079,6081,6087,6089,6095,6097,6103,6105,6111,6113,6119,6121,6129,6131,6147,6258-6261,6272,6279,6281,6287,6289,6295,6297,6303,6305,6311,6313,6319,6321,6327,6329,6335,6337,6343,6345,6353,6355,6361,6379,6485-6488,6499,6506,6508,6514,6516,6522,6524,6530,6532,6538,6540,6546,6548,6554,6556,6562,6564,6570,6572,6580,6582,6588,6590,6606,6712-6715,6726,6734,6736,6820,6926-6929,6940,6947,6949,6955,6957,6963,6965,6971,6973,6981,6983,6989,6991,7007,7023,7030,7032,7038,7040,7046,7048,7054,7056,7062,7064,7072,7074,7080,7082,7098,7193-7196,7207,7214,7216,7222,7224,7230,7232,7238,7240,7246,7248,7256,7258,7264,7266,7282,7377-7380,7391,7398,7400,7406,7408,7414,7416,7422,7424,7432,7434,7440,7442,7458,7474,7481,7483,7489,7491,7508,7531-7532,7609-7612,7626,7633,7635,7641,7643,7660,7689-7690,7767-7770,7784,7791,7793,7799,7801,7818,7841-7842,7854-7855,7932-7935,7949,7956,7958,7964,7966,7983,8064-8067,8081,8088,8090,8096,8098,8115,8202-8205,8219,8226,8228,8234,8236,8253,8334-8337,8351,8358,8360,8366,8368,8385,8472-8475,8489,8496,8498,8504,8506,8512,8514,8531,8554-8555,8643-8646,8660,8713,8729,8798,8814,8832,8834,8840,8842,8859,8875,8893,8895,8901,8903,8909,8911,8919,8921,8927,8929,8945,9031-9032,9042,9060,9062,9068,9070,9078,9080,9096,9112,9130,9132,9138,9140,9146,9148,9156,9158,9174,9190,9208,9210,9216,9218,9224,9226,9234,9236,9252,9282,9300,9302,9308,9310,9316,9318,9326,9328,9344,9360,9378,9380,9386,9388,9394,9396,9404,9406,9422,9438,9445,9447,9453,9455,9461,9463,9471,9473,9489,9505,9512,9514,9520,9522,9555,9643-9646,9657,9664,9666,9672,9674,9707,9737,9744,9746,9752,9754,9787,9817,9824,9826,9832,9834,9867,9897,9904,9906,9912,9914,9947,9963,9970,9972,9978,9980,10012,10028,10035,10037,10043,10045,10051,10053,10061,10063,10095,10208-10211,10222,10229,10231,10237,10239,10245,10247,10255,10257,10289,10319,10326,10328,10334,10336,10342,10344,10352,10354,10386,10499-10502,10513,10520,10522,10528,10530,10563,10593,10600,10602,10608,10610,10616,10618,10626,10660,10676,10683,10685,10691,10693,10699,10701,10709,10711,10717,10719,10735,10751,10758,10760,10777,10801,10813-10814,10888-10891,10905,10912,10914,10931,10961,10973-10974,11048-11051,11065,11072,11074,11080,11082,11088,11090,11107,11130-11131,11143-11144,11256-11259,11273,11280,11282,11288,11290,11296,11298,11315,11344-11345,11357-11358,11470-11473,11487,11494,11496,11502,11504,11521,11544,11645-11648,11662,11669,11671,11677,11679,11696,11719-11720,11821-11824,11838,11845,11847,11853,11855,11872,11895-11896,11997-12000,12014,12021,12023,12029,12031,12048,12071-12072,12173-12176,12190,12197,12199,12205,12207,12224,12247-12248,12349-12352,12366,12373,12375,12381,12383,12400,12423-12424,12436-12437,12538-12541,12555,12562,12564,12570,12572,12589,12612-12613,12625-12626,12727-12730,12744,12751,12753,12770,12793,12867-12870,12884,12891,12893,12910,12933,13007-13010,13024,13031,13033,13050,13073-13074,13916-13919,13933,13940,13942,13959,13982-13983,14825-14828,14842,14849,14851,14868,14891-14892,15746-15749,15763,15770,15772,15789,15812-15813,15887-15890,15904,15911,15913,15919,15921,15927,15929,15946,15975,15987-15988,16101-16104,16118,16125,16127,16133,16135,16152,16181,16283-16286,16300,16307,16309,16315,16317,16323,16325,16342,16371,16383,16481-16484,16498,16505,16507,16513,16515,16521,16523,16540,16569-16570,16582-16583,16695-16698,16712,16719,16721,16727,16729,16735,16737,16769,16854-16857,16868,16906,16908,16924,16954,16982,16984,16990,16992,16998,17000,17016,17018,17042,17072,17090,17092,17098,17100,17106,17108,17116,17118,17134,17150,17168,17170,17176,17178,17184,17186,17194,17196,17212,17228,17256,17258,17264,17266,17272,17274,17280,17282,17290,17292,17308,17338,17356,17358,17375,17391,17398,17400,17406,17408,17414,17416,17424,17426,17442,17458,17465,17467,17473,17475,17483,17485,17491,17493,17509,17593-17596,17607,17614,17616,17624,17626,17685,17701,17709,17711,17770,17786,17793,17795,17801,17803,17820,17836,17843,17845,17851,17853,17859,17861,17869,17871,17887,17903,17910,17912,17918,17920,17926,17928,17936,17938,17954,17970,17998,18000,18006,18008,18014,18016,18024,18026,18042,18072,18090,18092,18098,18100,18117,18133,18140,18142,18148,18150,18163,18179,18186,18188,18194,18196,18213,18236,18313-18316,18330,18337,18339,18345,18347,18364,18452-18455,18469,18476,18478,18495,18518-18519,18531-18532,18606-18609,18623,18630,18632,18649,18678-18679,18691-18692,18766-18769,18783,18790,18792,18809,18838-18839,18913-18916,18930,18937,18939,18945,18947,18964,19047-19050,19061,19068,19070,19076,19078,19095,19111,19118,19120,19126,19128,19145,19161,19168,19170,19176,19178,19195,19211,19218,19220,19226,19228,19245,19261,19268,19270,19276,19278,19295,19311,19318,19320,19326,19328,19345,19361,19368,19370,19387,19403,19410,19412,19418,19420,19437,19531-19534,19545,19552,19554,19560,19562,19579,19595,19602,19604,19610,19612,19629,19645,19652,19654,19660,19662,19679,19771-19774,19785,19792,19794,19800,19802,19819,19835,19842,19844,19850,19852,19869,19885,19892,19894,19900,19902,19919,19935,19942,19944,19950,19952,19969,19998,20085-20088,20102,20109,20111,20117,20119,20136,20160,20173,20260-20263,20277,20284,20286,20303,20326-20327,20401-20404,20418,20425,20427,20444,20467-20468,20542-20545,20559,20566,20568,20585,20608-20609,20621-20622,20696-20699,20713,20720,20722,20739,20762-20763,20775-20776,20850-20853,20867,20874,20876,20893,20916-20917,20929-20930,21004-21007,21021,21028,21030,21047,21071,21083-21084,21158-21161,21175,21182,21184,21201,21230-21231,21243-21244,21318-21321,21335,21342,21344,21361,21390-21391,21465-21468,21482,21489,21491,21508,21586-21589,21600,21607,21609,21626,21704-21707,21718,21725,21727,21744,21822-21825,21836,21843,21845,21862,21938-21941,21952,21959,21961,21967,21969,21986,22069-22072,22083,22090,22092,22098,22100,22117,22200-22203,22214,22221,22223,22229,22231,22248,22264,22271,22273,22279,22281,22298,22314,22321,22323,22329,22331,22348,22435-22438,22449,22456,22458,22464,22466,22483,22499,22506,22508,22514,22516,22533,22549,22556,22558,22564,22566,22572,22574,22591,22607,22614,22616,22622,22624,22630,22632,22649,22665,22672,22674,22680,22682,22688,22690,22707,22723,22730,22732,22738,22740,22746,22748,22765,22781,22788,22790,22796,22798,22804,22806,22823,22908-22911,22922,22929,22931,22937,22939,22945,22947,22964,22980,22987,22989,22995,22997,23014,23098-23101,23112,23119,23121,23189,23274-23277,23288,23356,23372,23431,23447,23454,23456,23508,23582-23585,23596,23654-26247,26277,26290-26291,26303-26304,26343,26396,26409,26448,26461-26462,26489,26491,26497,26499,26512,26524-26525,26540,26542,26563,26581,26583,26604,26622,26624,26645,26663,26665,26671,26673,26679,26681,26702,26720,26722,26744,26762,26764,26770,26772,26794,26812,26814,26820,26822,26840,26866-26867,26883,26885,26891,26893,26911,26931,26933,26939,26941,26959,26986,26998-26999,27012,27028,27030,27036,27038,27056,27082-27083,27095-27096,27112,27114,27120,27122,27140,27166-27167,27179-27180,27196,27198,27204,27206,27224,27250-27251,27263,27279,27281,27287,27289,27295,27297,27303,27305,27324,27350-27351,27363-27364,27380,27382,27388,27390,27396,27398,27404,27406,27425,27451-27452,27464-27465,27477-27478,27499,27510,27512,27518,27520,27548-27549,27565,27567,27573,27575,27581,27583,27602,27623-27624,27644,27646,27652,27654,27681,27694,27696,27702,27704,27731,27744,27746,27773,27786,27788,27794,27796,27802,27804,27825,27846-27847,27867,27869,27875,27877,27897,27923,27939,27941,27947,27949,27969,27995-27996,28012,28014,28020,28022,28042,28068-28069,28085,28087,28093,28095,28116,28134,28136,28142,28144,28165,28183,28185,28206,28224,28226,28232,28234,28240,28242,28262,28283-28284,28297,28317,28319,28325,28327,28345,28362,28364,28399,28401,28436,28438,28473,28475,28510,28512,28518,28520,28555,28557,28593,28595,28630,28632,28638,28640,28675,28677,28683,28685,28720,28722,28728,28730,28765,28767,28802,28804,28839,28841,28847,28849,28908-28909,28921-28922,28955-28956,28968-28969,28981-28982,29015-29016,29028-29029,29041-29042,29075,29087,29120-29121,29133-29134,29167,29200,29560,29584,29608,29622,29636,29650,29664
+crates/hushos-core/fixtures/web-join.json
+  s_566b8e0c4467a4::t_64412b8bd91524 15,17,23,25,31,33,39,41,47,49,64,66,72,74,80,82,88,90,96,98,113,115,121,123,129,131,139,141,155,157,163,165,171,173,188,190,196,198,202-408,548-550,1230-1245,1248-1264,1383-1392,1403-1405,1410-1419,1981-1990,2620-2629,2662-3459,3463-3466,3590-3596,3598-3600,3603-3605,3607,3612-3618,3620-3622,3625-3627,3629,3634-3640,3642-3644,3647-3649,3651,3656-3662,3664-3666,3672-3678,3680-3682,3685-3687,3689,3694-3700,3702-3704,3707-3709,3711,3716-3722,3724-3726,3729-3731,3733,3738-3744,3746-3748,3751-3753,3755,3760-3766,3768-3770,3773-3775,3777,3784-3791,3797-3804,3810-3818,3823-3830,3836-3843,3849-3856,3862-3869,3875-3882,4011,4025
+crates/hushos-core/fixtures/web-roster-calls.json
+  s_566b8e0c4467a4::t_940ce592c0939b 29,31,37,39,45,47,53,55,61,63,69,71,77,79,128,130,140,149,161-162,194,196,204,238,240,243,245-246,248,257,292,294,426,430,664-915,930-931,946-947,962-963,978-979,994-995,1009-1010,1024-1025,1041-1042,1058-1059,1070,1082-1083,1094-1095,1106-2177,2186-2187,2192-2193,2226-2227,2232-2233,2253-2254,2259-2260,2280-2281,2286-2287,2320-2321,2326-2327,2362-2363,2368-2369,2390-2391,2396-2397,2432-2433,2438-2439,2460-2461,2466-2467,2487-2488,2493-2494,2514-2515,2520-2521,2541-2542,2547-2548,2581-2582,2587-2588,2604-2605,2610-2611,2627-2628,2633-2634,2650-2651,2656-2657,2673-2674,2691-2692,2697-2698,2703-2704,2743-2744,2749-2750,2755-2756,2761-2762,2800-2801,2806-2807,2812-2813,2818-2819,2857-2858,2863-2864,2869-2870,2875-2876,2881-2882,2887-2888,2908-2909,2914-2915,2948-2949,2954-2955,2975-2976,2981-2982,3002-3003,3008-3009,3014-3015,3020-3021,3059-3060,3065-3066,3086-3087,3092-3093,3116-3117,3141-3143,3161-3163,3189-3191,3205-3207,3217-3219,3233-3235,3249-3251,3269-3271,3285-3287,3301-3303,3313-3315,3329-3331,3345-3347,3361-3363,3373-3375,3409-3411
+crates/hushos-core/fixtures/web.json
+  s_566b8e0c4467a4::t_60d419312d76ae 4-5,10-12,14,18,21,23-24,26-27,30-31,34,37-39,41,44-48,51,54-56,60,63-65,70-72,76-78,86-87,90-110,113-116,119-120,123,128,132,137-140,143-144,147,152,158-161,164-165,168,173,179-182,185-186,189,194,198,203-206,209,211,698,702-704,710-716,718-720,723-725,727,729,731-732,734-743,747-748,750,752-755,757-758,761-762,767-774,777-781,785-786,789-790,792,796-797,801,804-805,809-812,816-819,822-825,829-830,833-834,837-838,843-844,849,851-854,856,861-864,868,870-873,875,877-880,883,885-886,890,892-893,897,899-901,904,906-908,917-918,923,925-928,930-931,934,938,955-958,962,964-967,969-970,973,977,994-995,1000,1002-1005,1007-1008,1011,1029-1030,1035,1037-1040,1042-1043,1047,1064-1065,1070,1072-1075,1077-1078,1081-1082,1085,1102-1105,1109,1111-1114,1116-1117,1120,1124-1125,1141-1142,1147,1149-1152,1154-1155,1158,1162,1179-1180,1185,1187-1190,1192-1193,1196,1200,1217-1220,1224,1226-1229,1231-1232,1235,1239,1256-1259,1263,1265-1268,1270-1271,1274,1278,1295-1296,1301,1303-1306,1308-1309,1312,1316,1333-1334,1339,1341-1344,1346,1350,1354,1371-1372,1377,1379-1382,1384-1385,1400-1401,1406,1408-1411,1413-1414,1417,1421,1438-1439,1444,1446-1449,1451-1452,1455,1459,1476-1477,1482,1484-1487,1489-1490,1493,1497,1514-1515,1520,1522-1525,1528,1531,1535,1552-1555,1559,1561-1564,1567,1570,1588-1589,1594,1596,1598-1599,1601-1602,1606,1623-1624,1629,1631,1633-1634,1636-1637,1640,1644,1661-1662,1667,1669-1670,1672,1674-1675,1678,1682,1699-1700,1705,1707-1710,1712-1713,1716,1720,1737-1740,1744,1746-1749,1751-1752,1755,1759,1776-1779,1783,1785-1788,1790-1791,1794,1798,1815-1816,1821,1823-1826,1828-1829,1832,1836,1853-1854,1859,1861-1864,1866-1867,1870,1874,1891-1894,1898,1900-1903,1905-1906,1909,1913-1914,1930-1931,1936,1938-1941,1944,1947,1951,1968-1969,1974,1976-1979,1981-1982,1985,1989,2006-2007,2012,2014-2017,2019-2020,2023,2027,2044-2045,2050,2052-2055,2057-2058,2061,2079,2085,2087-2090,2092-2093,2096,2114-2115,2120,2122-2125,2127-2128,2131,2135,2152-2153,2158,2160-2163,2165-2166,2171,2180,2183,2196,2207-2210,2214,2216-2219,2221-2222,2227,2230,2237,2240,2249,2253,2264-2265,2270,2272-2275,2277-2278,2284,2291,2314-2315,2320,2322-2325,2327-2328,2333,2336,2343,2346,2359,2370-2371,2376,2378-2381,2383-2384,2389,2392,2399,2410,2425-2426,2431,2433-2436,2438-2439,2444,2447,2454,2457,2466,2481-2482,2487,2489-2492,2494-2495,2500,2503,2510,2513,2522,2537-2538,2543,2545-2548,2550-2551,2556,2559,2572,2587-2588,2593,2595-2598,2601,2606,2609,2622,2637-2640,2644,2646-2649,2651-2652,2657,2660,2667,2693-2696,2700,2702-2705,2707-2708,2713,2716,2744-2747,2751,2753-2756,2758-2759,2764,2767,2795-2798,2802,2804-2807,2809-2810,2815,2818,2825,2828,2852-2853,2858,2860,2862-2863,2865-2866,2871,2874,2881,2884,2908-2909,2914,2916-2919,2921-2922,2928,2934,2937,2950,2961-2962,2967,2969-2972,2974-2975,2981,2987,2990,3003,3014-3015,3020,3022-3025,3027,3033,3036,3043,3046,3068-3069,3073-3079,3081-3083,3086-3088,3090,3095-3104,3110-3117,3122-3129,3134-3136,3140-3143,3148,3151-3155,3157,3160-3161,3165-3171,3173-3176,3182-3188,3190-3192,3195-3197,3199,3204-3210,3216-3222,3224-3226,3229-3231,3233,3238,3333-3334,3339-3340
+crates/hushos-core/fuzz/Cargo.lock
+  s_566b8e0c4467a4::t_cc15790b7c6d58 75,77,114,116,260,262,324,326,340,351,383,438,487,489,566,664,666,702,704,712,794-795,956,961,963,995,997,1006,1008,1012,1063,1065,1068,1096,1098,1107,1109,1116,1118,1122,1139,1141,1145,1147,1206,1208,1215,1217,1226,1228
+crates/hushos-core/fuzz/src/fixtures.rs
+  s_566b8e0c4467a4::t_15dc42144d5928 79
+crates/hushos-core/fuzz/src/lib.rs
+  s_566b8e0c4467a4::t_2c076e9c6ecd4e 36-40
+crates/hushos-core/fuzz/src/structured.rs
+  s_566b8e0c4467a4::t_e2fbba0bb747b4 179-186
+crates/hushos-core/fuzz/src/targets.rs
+  s_566b8e0c4467a4::t_a3977dab3f7843 680-681,684-685,848-851,855,872-892,895-896,903-905,914,918-921,923-924,930-942,947,961,965-1023,1030,1046-1055,1059-1160,1202-1207,1210-1216,1222,1228-1229,1631-1632,1789-1876,1948-1958,2060-2269
+crates/hushos-core/src/area_ledger.rs
+  s_566b8e0c4467a4::t_bee0e4b9439fb1 114-132,200-222,353-356,366-370,392-393,402-405,422-449,656-662,679-685,720-721,1319,1336-1364,1422,1444-1515,1520,1766,1843,2067-2087,2100,2118-2125,2193-2257,2290-2300,2308-2320,2322-2342,2378-2398,2417-2421,2427,2434-2435,2536-2547,2552-2554,2560,2564,2570-2586,2597,2632-2638,2688,2987,3082,3086,3189,3318,3342,3488-3494,3958
+crates/hushos-core/src/area_open/tests.rs
+  s_566b8e0c4467a4::t_4f0ba8c9b43d48 3,84-85
+crates/hushos-core/src/colour.rs
+  s_566b8e0c4467a4::t_23798aad58eea7 1-434
+crates/hushos-core/src/contact_guard.rs
+  s_566b8e0c4467a4::t_6b49f87d03f48e 1-214
+crates/hushos-core/src/contacts.rs
+  s_566b8e0c4467a4::t_e04a0683ecc06b 172-259
+crates/hushos-core/src/device_record.rs
+  s_566b8e0c4467a4::t_2721af4c96d8aa 41-42,50-51,537-538,546-556,576-664,691-692,731-739,762,777-779,782,784,798-809,816-831,837,844-845,850,854-856,860-867,888,899-907,946,951,955,961-962,1018,1021,1031,1038-1041,1044-1045,1048-1056,1165-1167,1216-1224,1277,1280,1349,1382-1389,1628,1709,1727,1781,1835,1840,1842,1850,1855,1867-1876,1906,1909-1910,1914-1915,1919-2105,2162-2169,2177,2188,2248-2285,2292-2295
+crates/hushos-core/src/drive.rs
+  s_566b8e0c4467a4::t_dbfc45c5541af5 19,33-35,304-405,408,411-412,418,423-440,506,515-517,523,527-531,548-558,634-647,651-652,654-655,1272,1498-1504,1577-1583,1588-1594,1600-1606,1625,1629-1638,1642-1648,1652-1906,2335-2341,2424-2430
+crates/hushos-core/src/first_seen.rs
+  s_566b8e0c4467a4::t_0bc7221d6c2ef8 1-320
+crates/hushos-core/src/first_seen/tests.rs
+  s_566b8e0c4467a4::t_179abd76838cc7 1-530
+crates/hushos-core/src/group_trust.rs
+  s_566b8e0c4467a4::t_5ca975f9d6cc72 23-24,227,322-377,386,388-389,409-411,414-417,424-461,483-487,490,495-556,857,888-889,1424-1426,1449,1460,1468,1472-1475,1481,1489,1494,1502,1535,1543,1552-1563,1631-1638,1649,1760,1781-1820,1949-1961,1973-1974,1978,1986,2151-2160,2167-2175,2177,2794,2855-2856,2872,2918,3010,3117,3130,3288,3413,4313,4882-4918,5615-5621,6133,6141,6572,6635,6849
+crates/hushos-core/src/group_verdicts.rs
+  s_566b8e0c4467a4::t_58f388e5a6da69 270-271
+crates/hushos-core/src/groups.rs
+  s_566b8e0c4467a4::t_4828ae51128bc3 1586,2100,3295,3402
+crates/hushos-core/src/join.rs
+  s_566b8e0c4467a4::t_b38401da2b88eb 42,44,46-47,50,52-53,55,222,227-242,263,318-335,338-339,343-345,374-378,392-396,405,428-581,695-702,704-717,720-727,729-730,733-742,750-751,754,765,783-795,798,805-814,817,886-889,897,899-901,911-918,927-938,940-944,946-947,1043,1058,1187,1238-1239,1246,1254-1358,1495,1499,1510,1532-1534,1624,1627-1628,1630-1632,1686,1732-1734,1780,1788,1910-1912,1926-1928,1932-1935,2066-2073,2194-2206,2258,2260,2319,2337,2345-2352,2648-2961
+crates/hushos-core/src/ledger_settings.rs
+  s_566b8e0c4467a4::t_150cccb765bcf8 83-104,241-245,459-465,492,501-502,545-557
+crates/hushos-core/src/lib.rs
+  s_566b8e0c4467a4::t_cf3d83351fe80e 19,21,28,41,52,54,60,72
+crates/hushos-core/src/rollback_marks.rs
+  s_566b8e0c4467a4::t_49e2b619468abe 1-266
+crates/hushos-core/src/roster_calls.rs
+  s_566b8e0c4467a4::t_488016817c9ffb 32-34,42,46-47,60-61,68-71,76-78,123-133,135-140,154-155,368-373,391-402,421,437-438,443-498,511,593-594,597,599-600,634-661,782-796,798-827,836-843,854-856,876-888,902-934,943-949,1004-1094,1111-1119,1122,1140,1372-1376,1383,1679-1681,1721,1736-1738
+crates/hushos-core/src/roster_calls/removal.rs
+  s_566b8e0c4467a4::t_6a8ab2b1fc4aec 1-746
+crates/hushos-core/src/roster_calls/tests.rs
+  s_566b8e0c4467a4::t_326bddbc99a3fc 3-6,15,151,325,459,462-468,487-499,626-655,757-760,776-783,799-801,927,1206,1228-1235,1301-1872
+crates/hushos-core/src/signatures.rs
+  s_566b8e0c4467a4::t_5c61158bb36845 66-69,95-97,103-104,339,380-382,615,657,703,1208,1225-1226,1245,1249,1375,1380,1734,1742,1775,1804,1910,1927,1942,2098-2104,2132-2133,2165-2171,2206,2262-2268,2291
+crates/hushos-core/tests/common/area_ledger.rs
+  s_566b8e0c4467a4::t_35841c9802dfc2 142,159,613-623
+crates/hushos-core/tests/common/device_records.rs
+  s_566b8e0c4467a4::t_14e664a3dc4935 491,515,529
+crates/hushos-core/tests/common/groups.rs
+  s_566b8e0c4467a4::t_37d7c16264a867 553,667,682-683,689-693,837,853,859,867,882-889,936,954,1017,1028,1030,1087,1862,1876,1923,1932,1948,1960,1973,1994,2017,2062-2066,2119,2131,2144,2169,2190,2727,2856,2872,3543-3769,4204,4221-4225,4231-4272,4284-4285,4313,5469,5560
+crates/hushos-core/tests/common/join.rs
+  s_566b8e0c4467a4::t_17c464b100afe1 21-22,43-51,87-125,262-263,312-315,343-347,425,430-438,452,512-521,932-938,940-942,950,977-983,995-1045,1086-1087,1090-1091,1162-1176,1192,1202-1209,1213-1217,1224-1250,1257-1262,1285-1303,1341-1343,1357,1364-1374,1383,1415-1422
+crates/hushos-core/tests/common/mod.rs
+  s_566b8e0c4467a4::t_5268faa80fe6c9 8
+crates/hushos-core/tests/common/rekeyed.rs
+  s_566b8e0c4467a4::t_40277d61a249c2 57,178,192
+crates/hushos-core/tests/common/removal_calls.rs
+  s_566b8e0c4467a4::t_ef844e13e5d5da 1-615
+crates/hushos-core/tests/common/roster_calls.rs
+  s_566b8e0c4467a4::t_ff7f0ab5c41194 30,49,121,138,210-217,280,282,465-474,505-522,623-628,771-780,1038-1045,1104-1117,1124-1192,1296-1303
+crates/hushos-core/tests/common/rotations.rs
+  s_566b8e0c4467a4::t_678be9e029c3a1 286-292,360-366,1075
+crates/hushos-core/tests/common/settings_areas.rs
+  s_566b8e0c4467a4::t_2f4be3044cac34 215
+crates/hushos-core/tests/join_fixtures.rs
+  s_566b8e0c4467a4::t_afedb1df0a67bf 63,65-69
+crates/hushos-core/tests/pin_cases.rs
+  s_566b8e0c4467a4::t_618b21a1e932fe 1-204
+crates/hushos-core/tests/planted_join.rs
+  s_566b8e0c4467a4::t_2c00ffb7a5bbc9 1-212
+crates/hushos-core/tests/roster_call_fixtures.rs
+  s_566b8e0c4467a4::t_87e44a04119660 31-50,82-152
+crates/hushos-core/tests/web_fixtures.rs
+  s_566b8e0c4467a4::t_7f5ab7d2ce2a66 141-167,432,437,483,812
+crates/hushos-core/tests/web_group_fixtures.rs
+  s_566b8e0c4467a4::t_a0e7377981910c 33,132,215
+docs/drive-design.md
+  s_566b8e0c4467a4::t_ec16b9b9655e68 26,131,134-137,163,349,447-448,677,799
+docs/families-shared-pool.md
+  s_566b8e0c4467a4::t_7d31a8681dbabc 56,199,250
+docs/groups-design.md
+  s_566b8e0c4467a4::t_f63cc4b7244b88 70,118,120-125,141-145,209-210,217,327,333-340,349,368-369,575-589
+docs/groups-invariants.md
+  s_566b8e0c4467a4::t_b2c2aad8260025 99,103,105-106,108,110-112,289,297,304
+docs/groups-mobile-plan.md
+  s_566b8e0c4467a4::t_d42ec7fa040b6e 109,136-142,175,177,187,196-199,213,228-240,268
+docs/groups-server.md
+  s_566b8e0c4467a4::t_c4a4929c9c0ffe 236
+docs/groups-threat-model.md
+  s_566b8e0c4467a4::t_48b016f9d629ac 39-50,172
+docs/identity-pq-design.md
+  s_566b8e0c4467a4::t_41cde0867c905c 94
+docs/integrity-design.md
+  s_566b8e0c4467a4::t_065a01766ca900 222-224
+docs/opaque-auth-design.md
+  s_566b8e0c4467a4::t_235aafe216d37b 161
+docs/optional-verification.md
+  s_566b8e0c4467a4::t_95513d3d1a676e 1-552
+docs/proposed.md
+  s_566b8e0c4467a4::t_1e24720c3036e4 19
+docs/release/README.md
+  s_566b8e0c4467a4::t_ef530a53f2b196 5-20
+docs/release/apple.md
+  s_566b8e0c4467a4::t_4d632ae555b0d3 249
+docs/release/checklist.md
+  s_566b8e0c4467a4::t_3f2cc7cbf5566c 47,50
+docs/release/google-play-ci.md
+  s_566b8e0c4467a4::t_f3547da9932957 1-127
+docs/release/google.md
+  s_566b8e0c4467a4::t_6409ff02887823 147-148,154,183-184
+docs/release/signing.md
+  s_566b8e0c4467a4::t_ac037e051f7e33 22,115
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_4def0a5c8be8d7 66-82,86,211-212,290-314,559,581,583-584,586,588,599-620,673-674,694,704-706,733-738,748,750-751
+e2e/catalogue.spec.ts
+  s_566b8e0c4467a4::t_f7af0568b35126 152
+e2e/contacts.spec.ts
+  s_566b8e0c4467a4::t_9d6aea3df7870a 6-8,36-37,63-64,69,72,74-76,78-86,88-94,97,99-105,107,109-114,117-120,128-130
+e2e/devices.spec.ts
+  s_566b8e0c4467a4::t_435444cdb2a2f8 134-135
+e2e/drive.spec.ts
+  s_566b8e0c4467a4::t_2499e6a50d8cfd 484-485,543-636
+e2e/families.spec.ts
+  s_566b8e0c4467a4::t_c54e14d957f480 1,3,29-33,36-43,46-47,88-96,184-192,212-218,220-222,224,226-229,232,234-239,242-249,324,326-331,333-339,341-348,354-359,364,369,378-379,389-390,395-397,400-401,406-407,411-458,790,803-804,813,816,818-819,839,995,1143,1164,1172-1488,1506,1517,1539,1546-1548,1550-1553,1557,1559,1561-1563,1568,1570-1572,1658-1659,1713,1755-1757,1762,1769-1775,1828,1833,1836-1837,1848,1877,1879,1881-1882,1885,1921-1925,1929,1944-1946,1948-1952,2026,2128,2271,2432,2487,2493,2514,2519,2566,2574,2576-2736,2739-2758,2760-3005,3050-3052,3059,3064-3070,3073-3080,3082-3123,3125-3147,3150-3217
+e2e/first-use.spec.ts
+  s_566b8e0c4467a4::t_e85e57568cb3ff 1-207
+e2e/fixtures/start-over.ts
+  s_566b8e0c4467a4::t_57e6d9c4a5749b 1-59
+e2e/helpers.ts
+  s_566b8e0c4467a4::t_ceefb4f60f744b 183,188-202,205-210,545-556
+e2e/integrity.spec.ts
+  s_566b8e0c4467a4::t_c65f99bbc98e48 13,17-25,111,145-146,148,174,179-186,188-189,206,209,211,213,218-220,222-232,278,304-306,308,312-316,353-361,363,402
+e2e/links.spec.ts
+  s_566b8e0c4467a4::t_510792a52f6618 293,322,339
+e2e/list-keyboard.spec.ts
+  s_566b8e0c4467a4::t_649f3b4e28c00e 1-161
+e2e/palette.spec.ts
+  s_566b8e0c4467a4::t_e44c0f06561eae 41,43,45,54
+e2e/referrals.spec.ts
+  s_566b8e0c4467a4::t_d47b7a90228600 61-63,82-84
+e2e/screenshots.spec.ts
+  s_566b8e0c4467a4::t_892ae616458615 231-234,359,455
+e2e/sharing.spec.ts
+  s_566b8e0c4467a4::t_b6cc23e093877c 18-23,53-56,91,93-94,98-104
+package.json
+  s_566b8e0c4467a4::t_f8df760d5b832b 3,43,67,69-70,72-75,77-78,81,83
+packages/auth/package.json
+  s_566b8e0c4467a4::t_5ebd4b8fb4ab9b 26,30-31,33
+packages/auth/src/client.test.ts
+  s_566b8e0c4467a4::t_68fa79ad18c516 240,245-246,249-252
+packages/auth/src/client.ts
+  s_566b8e0c4467a4::t_3d75df5dc7197d 824,839-841
+packages/auth/src/device-storage.test.ts
+  s_566b8e0c4467a4::t_44dbf514d7d9df 311-371
+packages/auth/src/device-storage.ts
+  s_566b8e0c4467a4::t_8779c1d6208124 124-161,166,220,242,312
+packages/auth/src/server.ts
+  s_566b8e0c4467a4::t_b623c5d89d79a7 1044-1054,1078,1091,1096-1138,1882,1941-1952
+packages/auth/src/store.test.ts
+  s_566b8e0c4467a4::t_7260cd2ea04d41 2,57-74
+packages/auth/src/store.ts
+  s_566b8e0c4467a4::t_8124d6228687bf 35-43,76-79
+packages/billing/package.json
+  s_566b8e0c4467a4::t_038ca7f63e6212 23,27,29
+packages/billing/src/api.ts
+  s_566b8e0c4467a4::t_bafcfa5ad0f882 59-81,93-94,157-161,316-326,352-357
+packages/billing/src/endings.ts
+  s_566b8e0c4467a4::t_cf65a9d573b95f 2,5-6,53-57,93-94,103-107,137,143-144,286,375-385,397-399,618-629,672-678,781-786,916-920,928-929,931,943,1002-1004,1013-1035,1042-1081,1116-1145,1153,1190-1195,1203-1206,1210-1222,1230-1231,1239-1241,1258-1260,1264-1270,1276-1735
+packages/billing/src/groups.ts
+  s_566b8e0c4467a4::t_f7b492731a7dd2 9-16,24,35-36,39,276-286,297,304-327,347-355,357-380,390-398,400,402,417-425,432-434,447,455-456,458-467,474-476,479,586-751,770,809-827,850-858,870-874,893,895-898,900-901,917-920,923-927,929-1034,1036,1038-1058,1060-1063,1065-1075,1078,1082,1087-1088,1100-1105,1116,1241-1243,1527-1529,1570-1971,1975-1977,1982-1994,1998-1999,2008,2010-2017,2027-2065,2067-2070,2078,2143-2232,2238-2243,2284-2288,2349,2358-2365,2440-2441,2450,2464-2465,2477,2487,2498-2500,2502-2506,2515,2601,2655,2660,2718,2729,2738,2742,2748,2771,2835-2836,2865,2875,2888,2907,2914-2916,3023-3054,3104-3107,3117,3156
+packages/billing/src/protocol.ts
+  s_566b8e0c4467a4::t_9c6a2660f518fa 1-5,35-72,178-204
+packages/billing/src/provider.ts
+  s_566b8e0c4467a4::t_aebf26a1940866 33-34,36,70,89-95
+packages/billing/src/server.test.ts
+  s_566b8e0c4467a4::t_87c0543d08afff 1-2,47-48,182,205-206,237-238,261-264,280-287,455-460,667-691,701,850-855,963-965,980-988,990,994,999-1004,1043,1114,1123-1124,1131-1132,1441-1461,1469-1472,1474-1483,1485-1576,1579-1597,1599-1600,1602-1631,1633,1636-1641,1643-1654,1658-1667,1669-1671,1673-1712,1715-1730,1734-1765,1768-1815,1817-1846,1848-1912,1915-1922,1924-1927,1929-1945,1947-1950,1953-1958,1960-1972,1974-1975,1977-1985,1987-1996,1999-2011,2013-2024,2026-2088,2091-2099,2102-2114,2117-2124,2126-2165,2167-2184,2187-2211,2213-4314,4316-4323,4325-4334,4336-4342,4345-4363,4365-4373,4375-4391,4393-4397,4400,4402-4408,4411-4424,4427-4442,4444-4680,4682-4710,4713-4751,4753-4764,4767-4795,4797-4805,4808-4822,4825-4851,4854-4868,4870-4923,4925-4932,4935-4986,4988-5026,5029-5039,5041-5061,5063-5082,5084-5094,5096-5123,5126-5153,5156-5175,5178-5180,5183-5190,5192-5203,5205,5207-5211,5214-5227,5229-5233,5236-5245,5247-5248,5251-5263,5266-5283,5286-5300,5302-5309,5311-5394,5396-5413,5415-5425,5427-5438,5441-5444,5446-5492,5495-5502,5504-5553,5555-5634,5637-5645,5648-5664,5667-5679,5681-5683,5686-5699,5703-5707,5709-5731,5733-5735,5738-5742,5744-5745,5747-5749,5753-5756,5758-5774,5777-5783,5786-5790,5792-5805,5808-5811,5813-5820,5823-5824,5826-5829,5832-5833,5836-5842,5844-5858,5861-5870,5872-5880,5882-5892,5894-5901,5903-5904,5907-5908,5911-5918,5920-5924,5926-5929,5931-5966,5969-5970,5975-5976,5978,5980,5982-5999,6001-6005,6007-6008,6010-6023,6025-6035,6038-6043,6045-6055,6058-6064,6066-6088,6090-6092,7353,7367,8225,8241,8301-8546,8558,8644-8692,8748,8766,8778,8791,8804,8827,8834,8865-8869,8962-9354,9356-9364,9366,9368-9370,9372-9422,9424-9432,9435-9445,9447-9451,9453,9455-9459,9463-9483,9485-9492,9495,9497-9517,9520,9522-9540,9543,9545,9547-9556,9564,9575-9579,9596-9600,9606-9610,9614,9634-9635,9637-9639,9668-9904
+packages/billing/src/server.ts
+  s_566b8e0c4467a4::t_a275d50bf0ae95 10-23,32,38,61,65-67,69-71,74,77,82,96-97,135-138,142,167,173,175-232,252,506-527,684-688,692-693,704-708,712,721,727,729,731-732,745,748-750,759-772,774,776-782,795-825,878-885,890-894,896-901
+packages/config/package.json
+  s_566b8e0c4467a4::t_7a702020e02319 15
+packages/crypto/fuzz/jazzer.ts
+  s_566b8e0c4467a4::t_833fc0ffe7671d 6-8,228
+packages/crypto/fuzz/oracles.test.ts
+  s_566b8e0c4467a4::t_4e26ca81b8dc7f 1-89
+packages/crypto/fuzz/seeds.ts
+  s_566b8e0c4467a4::t_1b072b3fae02bb 344,346-347,375-407,453-519,564-614,754-766
+packages/crypto/fuzz/verdicts.ts
+  s_566b8e0c4467a4::t_90bdee53d548dc 12-19,106,114,120-125,1124-1127,1132-1135,1313-1324,1348-1361,1365,1369-1374,1386,1389-1391,1396,1400-1401,1407-1410,1412,1420-1432,1437,1444,1448-1508,1515,1528-1536,1540-1631,1678-1696,1701,1705-1706,1843,1845,2144-2145,2149-2151,2259-2334,2379-2381,2389-2390,2441-2455,2513-2632
+packages/crypto/package.json
+  s_566b8e0c4467a4::t_d615a0174bba5a 22,31,55,59
+packages/crypto/scripts/core-fixtures.ts
+  s_566b8e0c4467a4::t_930726a0e8c244 15-16,182-209,283
+packages/crypto/scripts/group-fixtures.ts
+  s_566b8e0c4467a4::t_58e2f878ac8b19 167,175
+packages/crypto/scripts/pin-cases.ts
+  s_566b8e0c4467a4::t_6c9af55d78feba 1-444
+packages/crypto/scripts/roster-call-fixtures.ts
+  s_566b8e0c4467a4::t_689a218d1c7f15 2,17,20-22
+packages/crypto/src/__fixtures__/core-area-ledger.json
+  s_566b8e0c4467a4::t_bfe0ec5f3dccda 32,100,102,145,213,215,227,229,235,237,243,245,275,343,345,384,452,454,493,561,563,602,670,672,724,798,800,806,808,814,816,859,933,935,941,943,949,951,982,1056,1058,1064,1066,1106,1175,1177,1183,1185,1237,1301,1303,1309,1311,1351,1413,1415,1421,1423,1429,1431,1485,1554,1556,1562,1564,1570,1572,1602,1604,1610,1612,1618,1620,1652,1654,1660,1662,1701,1703,1709,1711,1717,1719,1764,1766,1772,1774,1780,1782,1832,1834,1840,1842,1848,1850,1881,1883,1889,1891,1897,1899,1931,2023,2025,2031,2033,2039,2041,2063,2136,2138,2144,2146,2177,2179,2185,2187,2193,2195,2227,2301,2303,2309,2311,2317,2319,2350,2352,2358,2360,2366,2368,2400,2470,2472,2478,2480,2486,2488,2519,2592,2594,2600,2602,2656,2757,2759,2765,2767,2773,2775,2797,2865,2867,2879,2881,2887,2889,2934,3003,3005,3011,3013,3019,3021,3052,3120,3122,3152,3220,3222,3303-3310,3409,3508,3512,3514,3522,3528,3539,3562,3564-3566,3570,3579,3603,3605-3607,3611,3624,3628,3630-3631,3640,3643-3644,3654,3659-3661,3664,3676,3681-3683,3686,3750,3754,3757-3759,3762,3772,3779-3781,3784,3790,3797-3799,3802,3808,3815-3817,3820,3833,3857,3859-3861,3865,3874,3898,3900-3902,3906,3919,3923,3925-3926,3935,3938-3939,3945,3948,3952,3955,3963,3968-3970,3973,3985,3990-3992,3995,4008,4012,4023,4027,4082,4086,4089-4091,4094,4104,4111-4113,4116,4122,4129-4131,4134,4140,4147-4148,4152,4165,4189,4191-4193,4197,4209,4213,4215-4216,4225,4228,4232,4235,4239,4242,4250,4255-4257,4260,4272,4276,4287,4291,4302,4306,4363,4367,4369,4377,4383,4387,4404,4427,4429-4431,4435,4444,4468,4470-4472,4476,4489,4493,4495-4496,4505,4508-4509,4515,4518,4526,4531-4533,4536,4548,4553-4555,4558,4571,4575,4600,4604,4606,4622,4711,4715,4717,4728,4732,4734,4742,4748,4756,4760,4762,4770,4776,4787,4811,4813-4815,4819,4828,4852,4854-4856,4860,4869,4893,4895-4897,4901,4911,4934,4936-4938,4942,4951,4974,4976-4978,4982,4995,4999,5001-5002,5012,5016,5018-5019,5028,5031-5032,5040,5044,5046-5047,5056,5059-5060,5070,5075-5077,5080,5094,5099-5101,5104,5116,5121-5123,5126,5141,5146-5148,5151,5163,5168-5170,5173,5190,5254,5258,5260,5268,5274,5278,5284,5288,5294,5305,5329,5331-5333,5337,5346,5370,5372-5374,5378,5388,5411,5413-5415,5419,5432,5436,5438-5439,5448,5451-5452,5458,5461-5462,5468,5471,5479,5484-5486,5489,5501,5506-5508,5511,5524,5529-5531,5534,5547,5551,5603,5607,5609,5617,5623,5634,5658,5660-5662,5666,5675,5699,5701-5703,5707,5720,5724,5726-5727,5736,5739-5740,5750,5755-5757,5760,5772,5777-5779,5782,5829,5833,5835,5843,5860,5884,5886-5888,5892,5904,5908,5910-5911,5920,5923,5931,5936-5938,5941,5953,5957,5982,5986,5988,6023,6033,6035,6061-6062,6072-6073,6077,6084,6088,6178,6189,6194,6256,6267,6278,6358,6372-6373,6435,6446,6457,6471-6472,6482-6483,6487,6550,6561,6572,6583,6597-6598,6651,6662,6673,6684,6698-6699,6761,6772,6783,6794,6805,6819-6820,6831,6835,6888,6899,6910,6921,6932,6943,6948,6954,6965,6979-6980,7047,7058,7069,7083-7084,7139,7153-7154,7164-7165,7169,7240,7254-7255,7353,7364,7369,7375,7380,7386,7391,7397,7402,7408,7419,7424,7433-7434,7532,7543,7548,7554,7559,7565,7570,7576,7581,7587,7598,7603,7612-7613,7691,7702,7713,7724,7738-7739,7749-7750,7860,7871,7882,7938,7949,7960,7971,7982,8036,8047,8085,8096,8107,8164,8175,8189-8190,8245,8256,8267,8278,8292-8293,8393,8404,8415,8429-8430,8440-8441,8445,8496,8546-8547,8605,8616,8627,8641-8642,8652-8653,8657,8711,8725-8726,8736-8737,8741,8797,8859,8935,8946,8957,8968,8982-8983,8993-8994,9070,9081,9092,9103,9114,9125,9136,9183,9194,9205,9216,9227,9241-9242,9308,9319,9330,9341,9352,9363,9374,9388-9389,9452
+packages/crypto/src/__fixtures__/core-groups.json
+  s_566b8e0c4467a4::t_31337d5fac59ec 65-68,108,127,135,137,143,145,151,153,159,161,174,193,201,203,209,211,217,219,225,227,240,259,267,269,275,277,283,285,298,317,325,327,333,335,341,343,370,389,408,410,416,418,424,426,453,472,511,513,519,521,527,529,556,575,594,596,602,604,610,612,625,644,663,665,671,673,686,705,724,726,732,734,740,742,804-807,842,904,923,925,938,1000,1008,1010,1037,1099,1118,1120,1133,1188,1196,1198,1211,1273,1281,1283,1296,1355,1363,1365,1371,1373,1386,1448,1456,1458,1464,1466,1479,1536,1544,1546,1552,1554,1581,1650,1658,1660,1666,1668,1674,1676,1738-1741,1777,1802,1812,1822,1832,1841,1843,1848,1856,1858,1864,1866,1872,1874,1936-1939,1975,1998,2000,2005,2013,2015,2021,2023,2029,2031,2093-2096,2132,2155,2157,2162,2170,2172,2178,2180,2186,2188,2250-2253,2289,2314,2324,2334,2344,2353,2355,2360,2368,2370,2376,2378,2384,2386,2448-2451,2487,2510,2512,2517,2525,2527,2533,2535,2541,2543,2605-2608,2644,2668,2670,2674,2682,2684,2690,2692,2698,2700,2762-2765,2801,2825,2827,2831,2839,2841,2847,2849,2855,2857,2870,2889,2897,2899,2905,2907,2913,2915,2921,2923,2931,2933,2945,2964,2972,2974,2980,2982,2988,2990,2998,3000,3012,3031,3039,3041,3047,3049,3055,3057,3070,3089,3097,3099,3107,3109,3115,3117,3177-3180,3208,3227,3246,3248,3256,3258,3264,3266,3292,3311,3340,3342,3350,3352,3419-3422,3462,3479,3487,3489,3495,3497,3503,3505,3511,3513,3526,3543,3551,3553,3559,3561,3567,3569,3575,3577,3590,3609,3617,3619,3625,3627,3640,3659,3667,3669,3675,3677,3742-3745,3783,3824,3832,3834,3840,3842,3848,3850,3909-3912,3945,3986,3994,3996,4002,4004,4063-4066,4099,4118,4126,4128,4134,4136,4203-4206,4246,4265,4273,4275,4281,4283,4289,4291,4358-4361,4405,4424,4446,4448,4454,4456,4462,4464,4518-4521,4553,4572,4577,4587,4608,4610,4616,4618,4691-4694,4734,4753,4761,4763,4769,4771,4777,4779,4785,4787,4795,4797,4859-4862,4897,4916,4924,4926,4932,4934,4940,4942,4969,4988,5007,5009,5015,5017,5023,5025,5104-5107,5147,5166,5185,5187,5193,5195,5201,5203,5209,5211,5217,5219,5225,5227,5233,5235,5241,5243,5249,5251,5257,5259,5267,5269,5347-5350,5390,5477,5496,5498,5504,5506,5512,5514,5520,5522,5528,5530,5536,5538,5544,5546,5552,5554,5560,5562,5568,5570,5578,5580,5658-5661,5701,5720,5739,5741,5747,5749,5755,5757,5763,5765,5771,5773,5779,5781,5787,5789,5795,5797,5803,5805,5811,5813,5821,5823,5901-5904,5939,5958,5966,5968,5974,5976,5982,5984,5990,5992,5998,6000,6006,6008,6014,6016,6022,6024,6030,6032,6040,6042,6048,6128-6131,6166,6185,6193,6195,6201,6203,6209,6211,6217,6219,6225,6227,6233,6235,6241,6243,6249,6251,6257,6259,6267,6269,6275,6277,6355-6358,6393,6480,6489,6491,6503,6522,6530,6532,6538,6540,6546,6548,6554,6556,6564,6566,6572,6574,6648-6651,6679,6698,6706,6708,6714,6716,6722,6724,6730,6732,6738,6740,6748,6750,6756,6758,6832-6835,6863,6882,6890,6892,6898,6900,6906,6908,6914,6916,6922,6924,6932,6934,6940,6942,6954,6973,6981,6983,6989,6991,6997,6999,7005,7007,7015,7017,7023,7025,7078-7081,7113,7132,7137,7147,7168,7170,7176,7178,7232-7235,7267,7286,7291,7301,7327,7329,7335,7337,7391-7394,7426,7445,7450,7460,7463,7473,7494,7496,7502,7504,7558-7561,7593,7612,7628,7630,7636,7638,7692-7695,7727,7746,7768,7770,7776,7778,7832-7835,7867,7886,7902,7904,7910,7912,7966-7969,8001,8020,8042,8044,8050,8052,8112-8115,8152,8171,8176,8186,8207,8209,8215,8217,8223,8225,8238,8257,8307,8369,8392,8411,8430,8432,8438,8440,8506,8534,8553,8572,8574,8580,8582,8588,8590,8598,8600,8606,8608,8620,8639,8658,8660,8666,8668,8676,8678,8690,8709,8728,8730,8736,8738,8744,8746,8754,8756,8782,8801,8820,8822,8828,8830,8836,8838,8846,8848,8860,8879,8898,8900,8906,8908,8914,8916,8924,8926,8938,8957,8976,8978,8984,8986,8992,8994,9002,9004,9016,9035,9043,9045,9051,9053,9059,9061,9069,9071,9131-9134,9169,9204,9212,9214,9220,9222,9249,9284,9292,9294,9300,9302,9329,9364,9372,9374,9380,9382,9409,9444,9452,9454,9460,9462,9475,9510,9518,9520,9526,9528,9541,9575,9583,9585,9591,9593,9672-9675,9717,9752,9760,9762,9768,9770,9776,9778,9786,9788,9814,9849,9857,9859,9865,9867,9873,9875,9883,9885,9963-9966,10008,10043,10051,10053,10059,10061,10067,10069,10077,10079,10105,10140,10148,10150,10156,10158,10171,10206,10214,10216,10222,10224,10230,10232,10240,10254,10273,10281,10283,10289,10291,10297,10299,10307,10309,10315,10317,10367-10370,10402,10421,10426,10439,10449,10470,10472,10523-10526,10558,10577,10582,10595,10605,10631,10633,10705-10708,10757,10776,10781,10791,10794,10804,10825,10827,10833,10835,10841,10843,10915-10918,10967,10986,10991,11001,11004,11014,11040,11042,11048,11050,11056,11058,11124-11127,11171,11190,11205,11226,11228,11234,11236,11302-11305,11349,11368,11373,11383,11404,11406,11412,11414,11480-11483,11527,11546,11551,11561,11582,11584,11590,11592,11658-11661,11705,11724,11729,11739,11760,11762,11768,11770,11836-11839,11883,11902,11907,11917,11938,11940,11946,11948,12014-12017,12061,12080,12085,12095,12098,12108,12129,12131,12137,12139,12205-12208,12252,12271,12276,12286,12289,12299,12320,12322,12328,12330,12381-12384,12416,12435,12450,12471,12473,12524-12527,12559,12578,12593,12614,12616,12667-12670,12702,12721,12726,12736,13589,13591,13642-13645,13677,13696,13701,13711,14564,14566,14617-14620,14652,14671,14676,14686,15552,15554,15605-15608,15640,15659,15664,15674,15695,15697,15769-15772,15821,15840,15855,15858,15868,15894,15896,15902,15904,15910,15912,15978-15981,16025,16044,16059,16085,16087,16093,16095,16160-16163,16205,16224,16239,16252,16278,16280,16286,16288,16294,16296,16368-16371,16420,16439,16444,16454,16457,16467,16493,16495,16501,16503,16509,16511,16571-16574,16607,16641,16649,16651,16657,16659,16665,16667,16694,16713,16752,16754,16780,16799,16828,16830,16836,16838,16844,16846,16862,16864,16884,16903,16922,16924,16930,16932,16938,16940,16948,16950,16962,16981,17000,17002,17008,17010,17016,17018,17026,17028,17054,17073,17102,17104,17110,17112,17118,17120,17126,17128,17136,17138,17150,17169,17188,17190,17203,17222,17230,17232,17238,17240,17246,17248,17256,17258,17321-17324,17352,17371,17379,17381,17387,17389,17397,17399,17405,17407,17419,17481,17489,17491,17499,17501,17513,17575,17584,17586,17598,17617,17625,17627,17633,17635,17648,17667,17675,17677,17683,17685,17691,17693,17701,17703,17715,17734,17742,17744,17750,17752,17758,17760,17768,17770,17796,17815,17844,17846,17852,17854,17860,17862,17870,17872,17884,17903,17922,17924,17930,17932,17945,17960,17968,17970,17976,17978,18032-18035,18067,18086,18101,18122,18124,18130,18132,18186-18189,18221,18240,18262,18264,18270,18272,18323-18326,18358,18377,18382,18392,18395,18405,18426,18428,18479-18482,18514,18533,18538,18548,18551,18561,18587,18589,18640-18643,18675,18694,18699,18709,18735,18737,18800-18803,18831,18850,18858,18860,18866,18868,18881,18900,18908,18910,18916,18918,18931,18950,18958,18960,18966,18968,18981,19000,19008,19010,19016,19018,19031,19050,19058,19060,19066,19068,19081,19100,19108,19110,19116,19118,19131,19150,19158,19160,19166,19168,19181,19200,19208,19210,19277-19280,19315,19334,19342,19344,19350,19352,19365,19384,19392,19394,19400,19402,19415,19434,19442,19444,19450,19452,19517-19520,19555,19574,19582,19584,19590,19592,19605,19624,19632,19634,19640,19642,19655,19674,19682,19684,19690,19692,19705,19724,19732,19734,19740,19742,19801-19804,19841,19860,19875,19901,19903,19909,19911,19970-19973,20010,20029,20034,20047,20078,20080,20086,20088,20139-20142,20174,20193,20198,20208,20229,20231,20282-20285,20317,20336,20341,20351,20372,20374,20425-20428,20460,20479,20484,20494,20497,20507,20528,20530,20581-20584,20616,20635,20640,20650,20653,20663,20684,20686,20737-20740,20772,20791,20796,20806,20809,20819,20840,20842,20893-20896,20928,20947,20952,20965,20975,20996,20998,21049-21052,21084,21103,21108,21118,21121,21131,21157,21159,21210-21213,21245,21264,21269,21279,21305,21307,21360-21363,21392,21411,21423,21425,21478-21481,21510,21529,21541,21543,21596-21599,21628,21647,21659,21661,21712-21715,21744,21763,21775,21777,21835-21838,21867,21886,21898,21900,21906,21908,21966-21969,21998,22017,22029,22031,22037,22039,22052,22071,22079,22081,22087,22089,22102,22121,22129,22131,22137,22139,22201-22204,22233,22252,22264,22266,22272,22274,22287,22306,22314,22316,22322,22324,22337,22356,22364,22366,22372,22374,22387,22406,22414,22416,22422,22424,22430,22432,22445,22464,22472,22474,22480,22482,22488,22490,22503,22522,22530,22532,22538,22540,22546,22548,22561,22580,22588,22590,22596,22598,22604,22606,22671-22674,22702,22721,22729,22731,22737,22739,22745,22747,22760,22779,22787,22789,22795,22797,22803,22805,22869-22872,22900,22919,22927,22929,22935,22937,23002-23005,23033,23103,23111,23113,23126,23196,23210,23271,23326-23329,23357,23414,23422,23424,23437,23497,23505-26097,26105,26115,26118,26128,26151,26161,26164,26174,26177,26187,26210,26220,26223,26233,26236,26246,26279,26292,26315,26325,26328,26338,26371,26404,26707,26717,26720,26730,26739,26792,26836,26845,26879,26889,26898,26914,26917,26927,26934,26936,26942,26944,27007,27031,27045,27059,27073,27087,27111,27127,27139,27151,27163,27224,27226,27287,27289,27356,27358,27419,27421,27440,27459,27461,27481,27500,27502,27522,27541,27543,27563,27582,27584,27590,27592,27598,27600,27621,27640,27642,27663,27682,27684,27690,27692,27712,27717,27727,27753,27755,27761,27763,27783,27801,27803,27809,27811,27831,27836,27849,27859,27862,27898,27900,27906,27908,27928,27933,27943,27946,27956,27982,27984,27990,27992,28012,28017,28027,28030,28040,28066,28068,28074,28076,28096,28101,28111,28124,28150,28152,28158,28160,28180,28185,28195,28198,28208,28235,28237,28243,28245,28251,28253,28259,28261,28281,28286,28296,28299,28309,28312,28322,28349,28351,28357,28359,28365,28367,28373,28375,28395,28400,28410,28436,28438,28444,28446,28466,28471,28481,28507,28509,28515,28517,28523,28525,28546,28565,28567,28573,28575,28596,28615,28617,28623,28625,28646,28665,28667,28688,28693,28703,28730,28732,28738,28740,28746,28748,28769,28784,28811,28813,28819,28821,28842,28847,28857,28884,28886,28892,28894,28915,28920,28930,28957,28959,28965,28967,28988,29006,29008,29014,29016,29037,29055,29057,29063,29065,29085,29104,29106,29126,29131,29141,29144,29181,29183,29189,29191,29197,29199,29219,29236,29238,29244,29246,29282,29284,29321,29323,29360,29362,29399,29401,29438,29440,29446,29448,29486,29488,29525,29527,29564,29566,29572,29574,29611,29613,29619,29621,29658,29660,29666,29668,29705,29707,29744,29746,29783,29785,29791,29793,29817,29831,29931,29933
+packages/crypto/src/__fixtures__/core-join.json
+  s_566b8e0c4467a4::t_fe8dee405c8227 118-121,123-125,128,130-132,134-135,137,140-143,145-147,150,152-154,156-157,159,162-165,167-169,174-175,177,180-183,185-187,190,192-194,196-197,199,202-205,207-209,212,214-216,218-219,221,224-227,229-231,234,236-238,240-241,243,246-249,251-253,256,258-260,262-263,265,268-271,273-275,278,280-282,284-285,287,290-293,295-297,300,302-304,306-307,309,315-316,318-320,322-324,328-329,331-333,335-337,341-342,344-346,348-350,354-355,357-359,361-363,367-368,370-372,374-376,380-381,383-385,387-389,392-394,396-398,400-402,406-407,409-411,413-415,430,444,1415-1430,1436-1452,1556,1558,1564,1566,1581,1583,1589,1591,1597,1599,1614,1616,1622,1624,1630,1632,1638,1640,1646,1648,1663,1665,1671,1673,1679,1681,1687,1689,1695,1697,1703-1867,1877,1879,1885,1887,1893,1895,1903,1905,1909-1950,2085-2087,2097,2099-2100,2131-2134,2136-2140,2153-2155,2158-2161,2163-2167,2729-2732,2734-2738,3368-3371,3373-3377,3412-4209
+packages/crypto/src/__fixtures__/core-roster-calls.json
+  s_566b8e0c4467a4::t_72536b0fdf7a6b 14,19-20,34,39-40,62,67-68,71,76-77,86,91-92,102,107-108,122,127-128,138,143-144,158,163-164,167,172-173,182,187-188,198,203-204,218,223-224,227,232-233,242,247-248,275,280-281,315,324,336,338,379,385-386,392,402,404,438,440,445,455-456,458-459,492,494,647,649,655,657,663,665,671,673,679,681,687,689,695,697,731,735,973,983,989,999,1005,1015,1021,1031,1037,1047,1053,1062,1068,1077,1084,1094,1101,1111,1118,1130,1135,1142,1147,1154,1159,1164-2485,2515-2516,2521-2522,2542-2543,2548-2549,2569-2570,2575-2576,2609-2610,2615-2616,2651-2652,2657-2658,2679-2680,2685-2686,2721-2722,2727-2728,2749-2750,2755-2756,2776-2777,2782-2783,2803-2804,2809-2810,2830-2831,2836-2837,2870-2871,2876-2877,2893-2894,2899-2900,2916-2917,2922-2923,2939-2940,2945-2946,2962-2963,2968-2969,2986-2987,3025-3026,3031-3032,3038-3039,3077-3078,3083-3084,3089-3090,3095-3096,3134-3135,3140-3141,3146-3147,3152-3153,3173-3174,3179-3180,3185-3186,3191-3192,3197-3198,3203-3204,3237-3238,3243-3244,3264-3265,3270-3271,3291-3292,3297-3298,3336-3337,3342-3343,3348-3349,3354-3355,3375-3376,3381-3382,3402-3403,3408-3409,3429-3430
+packages/crypto/src/__fixtures__/core.json
+  s_566b8e0c4467a4::t_cb6f8b47f1fe31 3,6,9-10,12-13,16,19-20,22-23,26,29-30,33-36,42,44-46,49,54,56-59,61-63,66,68-70,72-73,75,77,173-174,176-178,180-181,668-670,672-673,675-678,681-700,704,708-709,711-712,714-715,717,724-725,727,732,736-737,739-740,742-743,745,750,759-760,762-764,768,772-773,775-776,778-779,781,784,792,796-797,799-800,802-803,805,808,815,817-819,821,824-825,827-828,840,842,844-847,850,854-855,859,863,878,880,882-885,888,891-894,898,902,917,919,921-924,927,931-932,936,952,954,956-959,962,966-967,972,987,989,991-994,997,1001-1002,1006-1007,1010,1025,1027,1029-1032,1035,1038-1041,1045,1049-1050,1064,1066,1068-1071,1074,1078-1079,1083,1087,1102,1104,1106-1109,1112,1116-1117,1121,1125,1140,1142,1144-1147,1150,1153-1156,1160,1164,1179,1181,1183-1186,1189,1192-1195,1199,1203,1218,1220,1222-1225,1228,1232-1233,1237,1241,1256,1260-1263,1266,1270-1271,1275,1279,1294,1296,1298-1301,1304,1308-1309,1323,1325,1327-1330,1333,1337-1338,1342,1346,1361,1363,1365-1368,1371,1375-1376,1380,1384,1399,1401,1403-1406,1409,1413-1414,1418,1422,1437,1439,1441-1444,1451-1452,1456,1460,1475,1477,1479-1482,1488-1491,1495,1511,1513,1515-1517,1521,1525-1526,1531,1546,1548,1550-1552,1556,1560-1561,1565,1569,1584,1586,1588-1589,1591,1594,1598-1599,1603,1607,1622,1624,1626-1629,1632,1636-1637,1641,1645,1660,1662,1664-1667,1670,1673-1676,1680,1684,1699,1701,1703-1706,1709,1712-1715,1719,1723,1738,1740,1742-1745,1748,1752-1753,1757,1761,1776,1778,1780-1783,1786,1790-1791,1795,1799,1814,1816,1818-1821,1824,1827-1830,1834,1838-1839,1853,1855,1857-1860,1867-1868,1872,1876,1891,1893,1895-1898,1901,1905-1906,1910,1914,1929,1931,1933-1936,1939,1943-1944,1948,1952,1967,1969,1971-1974,1977,1981-1982,1986,2002,2004,2006-2009,2012,2017,2021,2037,2039,2041-2044,2047,2051-2052,2056,2060,2077,2081,2086,2095,2099,2104,2106-2109,2112,2116-2117,2128,2132,2136,2141,2145,2151,2155,2160,2162-2165,2168,2171-2174,2193,2199,2206,2211,2213-2216,2219,2223-2224,2239,2243,2248,2252,2258,2262,2267,2269-2272,2275,2279-2280,2291,2299,2304,2308,2314,2322,2324-2327,2330,2334-2335,2346,2354,2359,2363,2369,2373,2378,2380-2383,2386,2390-2391,2402,2410,2415,2419,2425,2429,2434,2436-2439,2442,2446-2447,2458,2466,2471,2475,2484,2486-2489,2492,2496-2497,2508,2516,2521,2525,2534,2536-2539,2546-2547,2566,2571,2575,2581,2589,2591-2594,2597,2600-2603,2622,2627,2631,2640,2642-2645,2648,2651-2654,2673,2678,2682,2691,2693-2696,2699,2702-2705,2724,2729,2733,2739,2743,2748,2750-2753,2756,2759-2762,2781,2786,2790,2796,2800,2805,2807-2809,2813,2817-2818,2833,2837,2843,2849,2853,2858,2860-2863,2866,2870-2871,2886,2890,2896,2902,2906,2911,2913-2916,2919,2923-2924,2943,2948,2952,2958,2962,2969-2972,2975,2979-2980,2988,2991-2994,2997,3001-3002,3005-3008,3011,3013,3015,3018,3020,3022,3025-3026,3028-3029,3032-3033,3035-3036,3040-3041,3044,3047-3050,3053,3056-3059,3062-3063,3065-3066,3072-3079,3083,3085,3088,3090-3091,3093-3094,3097,3100,3102-3103,3106-3109,3111-3113,3116,3118-3120,3122-3123,3125,3128-3131,3133-3136,3141-3142,3144,3146,3148-3149,3151-3152,3156-3157,3161,3163-3164,3166-3167,3171-3172,3174-3175,3177-3180,3184-3187,3191-3192,3195,3197-3200,3203-3206,3214-3215,3217-3219,3221-3223,3226-3227,3229-3231,3233-3235,3239,3241-3242,3245-3246,3248-3249,3253-3256,3258-3260,3263,3265-3267,3269-3270,3272,3275-3276,3278-3280,3282-3284,3286-3287,3291-3294,3296-3299,3304-3305,3307,3310-3313,3318-3319,3321,3324-3327,3329-3331,3334,3336-3338,3340-3341,3343,3346-3349,3351-3353,3356,3358-3360,3362-3363,3365,3367
+packages/crypto/src/area-ledger.ts
+  s_566b8e0c4467a4::t_0a4347ff44c457 4,9-15,106-125,186-198,345,397-409,414-415,419,421-423,425-428,446-455,458,468,681,700,717,1159-1161,1164
+packages/crypto/src/contact-guard.test.ts
+  s_566b8e0c4467a4::t_363aeb2b2e7896 1-59
+packages/crypto/src/contact-guard.ts
+  s_566b8e0c4467a4::t_95bb5e35d0a936 1-117
+packages/crypto/src/contacts.test.ts
+  s_566b8e0c4467a4::t_3f9213f2991d7b 13,21,23-25,389-498
+packages/crypto/src/contacts.ts
+  s_566b8e0c4467a4::t_449dbf7e4fa59f 4,21-30,79-86,110-153
+packages/crypto/src/core-fixtures.test.ts
+  s_566b8e0c4467a4::t_cfc3acc1dbd449 19,134-161
+packages/crypto/src/device-store.ts
+  s_566b8e0c4467a4::t_858fa9af2e129f 1-62
+packages/crypto/src/drive.test.ts
+  s_566b8e0c4467a4::t_53b49dbb7d104c 50-52,123-405
+packages/crypto/src/drive.ts
+  s_566b8e0c4467a4::t_74d38a95a5a861 81-96,102-106,175-187,196-200,338-417,423-427,443-444,446-451,485-488,495-501,510,555
+packages/crypto/src/first-seen.test.ts
+  s_566b8e0c4467a4::t_4b548d7a68c8d9 1-350
+packages/crypto/src/first-seen.ts
+  s_566b8e0c4467a4::t_7b932388e392d3 1-109
+packages/crypto/src/group-fixtures.test.ts
+  s_566b8e0c4467a4::t_4b1d48718e3909 5,7,91,95,313,315
+packages/crypto/src/group-testkit.ts
+  s_566b8e0c4467a4::t_2befd106be398a 41,44,525,548-549,700,793,1608,1617,1672,1687,1699,1710,1725,1745,1801-1805,1853,1865,1878,1915,2408,2549,3136-3360,3540
+packages/crypto/src/group-trust.property.test.ts
+  s_566b8e0c4467a4::t_1bada8dc1689c0 8,45
+packages/crypto/src/group-trust.test.ts
+  s_566b8e0c4467a4::t_551ee63efd2e0e 22-23,202,306,1060,1076,1366,1592-1625,3205,3433,3436,3444-3499
+packages/crypto/src/group-trust.ts
+  s_566b8e0c4467a4::t_39e4ecf79bb3d4 50,236-244,247-273,277,524,547-548,555-562,581-585,587-588,592-593,599-614,646-717,721-726,1152,1252-1258,1265-1267,1300-1318,1386-1389,1396,1480,1497-1530,1659-1669,1734-1736,1835,1918-1924,1931,1934,1936,2503,2571
+packages/crypto/src/groups.test.ts
+  s_566b8e0c4467a4::t_6935235765ec39 1729
+packages/crypto/src/index.ts
+  s_566b8e0c4467a4::t_ef5cb985837a74 41-42,56,63
+packages/crypto/src/join-fixtures.test.ts
+  s_566b8e0c4467a4::t_038389912961bb 97-101,103-104
+packages/crypto/src/join-testkit.ts
+  s_566b8e0c4467a4::t_4d9edb8c6f7843 12,25-26,88-96,129-168,324,330,368-375,457-473,527-538,969-975,977,990,992-993,1009-1010,1026-1071,1128-1134,1142,1214-1230,1239,1252,1254,1270,1272,1275-1282,1291-1293,1317-1333,1367,1392-1403,1412
+packages/crypto/src/metadata.property.test.ts
+  s_566b8e0c4467a4::t_f5f15958189bb3 1-92
+packages/crypto/src/outbox.ts
+  s_566b8e0c4467a4::t_739ab5fe4f3ba2 136-148,157-163,168,200,204,206-207,210
+packages/crypto/src/pair-check.test.ts
+  s_566b8e0c4467a4::t_0bc18d027ec401 1-231
+packages/crypto/src/pins.test.ts
+  s_566b8e0c4467a4::t_6c7c6043a23fc9 4-12,102-186,241-292
+packages/crypto/src/pins.ts
+  s_566b8e0c4467a4::t_bef2d6fa0753c4 3-4,40-192,298-301,326-333,349-376,387-542
+packages/crypto/src/planted-join.test.ts
+  s_566b8e0c4467a4::t_bbe8e2e7799b2c 1-103
+packages/crypto/src/protocol.ts
+  s_566b8e0c4467a4::t_6a33675139942f 44-46,63,124-171
+packages/crypto/src/record-acceptance.test.ts
+  s_566b8e0c4467a4::t_9817811dcccc1b 3-9,114-116
+packages/crypto/src/record-acceptance.ts
+  s_566b8e0c4467a4::t_aadf0ba6402678 1-8,68-71,76
+packages/crypto/src/removal-calls-testkit.ts
+  s_566b8e0c4467a4::t_46e2208c0265a4 1-669
+packages/crypto/src/rollback-marks.test.ts
+  s_566b8e0c4467a4::t_01a3540ce09039 1-223
+packages/crypto/src/rollback-marks.ts
+  s_566b8e0c4467a4::t_34cc69fd92af84 1-209
+packages/crypto/src/roster-call-fixtures.test.ts
+  s_566b8e0c4467a4::t_2765db82a93c25 4,36-46
+packages/crypto/src/roster-calls-testkit.ts
+  s_566b8e0c4467a4::t_8bee8b75d07c70 4,12,20,43-44,50,99-102,191,257-258,266-270,279-297,420,423,606-617,644-647,649-655,947-1011,1173,1246-1253,1309-1324,1580
+packages/crypto/src/session-groups.interleave.test.ts
+  s_566b8e0c4467a4::t_a226e9e055c7e3 1-239
+packages/crypto/src/session-groups.ts
+  s_566b8e0c4467a4::t_871e7b63aead32 1-10,13-18,22,54-56,59-61,73-74,121-131,318,369-372,375-376,378-381,388-399,468-478,496-511,548-587,706-714,742-748,761-765,817-824,833-846,919-937,951-952,1094,1097-1098,1119,1134,1137,1433,1546-1668,1670-1674,1686-1698,1700-1705,1708-1720,1722,1728,1733-1734,1747-1748,1766-1771,1791,1822-1829,1873-1875,1891,1927,2307,2402-2407,2414,2416,2446,2449-2451,2455,2458-2465,2474-2477,2484-2489,2499-2502,2520,2531-2550,2553-2554,2557,2560,2564-2565,2569-2576,2594,2630-2631,2638,2641-2642,2644,2652,2657,2659-2664,2678-2682,2684-2708,2720-2721,2740,2749,2752-2777,2882,2893-2954,3081-3082,3084,3212,3243,3246-3247,3254-3259,3266-3270,3304-3317,3321-3323,3325-3326,3330-3348,3352-3353,3355,3369-3371,3373-3379,3650,3735,3776,4035,4096-4101,4127,4129-4159,4162,4170-4185
+packages/crypto/src/session.drive.test.ts
+  s_566b8e0c4467a4::t_1917b87c4e92ca 1386,1462-1487
+packages/crypto/src/session.groups.test.ts
+  s_566b8e0c4467a4::t_31b94bece91e9f 23,372,383-397,430-432,968-972,1027-1029,1063-1065,1124,1157,1170,1175,1180,1191,1227-1228,1235-1236,1238,1244-1246,1270-1272,2879-2913,3346-3348,3358,3379,3383,3406,3766-3772,4804-5091
+packages/crypto/src/session.rotation.test.ts
+  s_566b8e0c4467a4::t_9289d27b70cbdf 735-832
+packages/crypto/src/session.ts
+  s_566b8e0c4467a4::t_ca20e4dff8f4e6 1,125-131,246-270,652-668,693-694,696,827-832,904-906,1122,1938-1987,3257-3295
+packages/crypto/src/settings-marks.test.ts
+  s_566b8e0c4467a4::t_27c6da5fe5418e 1-44
+packages/crypto/src/settings-marks.ts
+  s_566b8e0c4467a4::t_7765a21762c9cb 3,21,25-30,47-57,67,75,77,104-126
+packages/crypto/src/signatures.ts
+  s_566b8e0c4467a4::t_bce25933a1bc89 48-50,64,68,87-89,91-95,300,611-612,859-860,890-891
+packages/db/Dockerfile
+  s_566b8e0c4467a4::t_b9450a76141a08 1,6-7,27
+packages/db/drizzle/20260905145809_worried_barracuda/snapshot.json
+  s_566b8e0c4467a4::t_2af03dfd6654f2 2-3,7-21,24,26-27,30-32,40,43-45,53,58-60,63
+packages/db/drizzle/20260907172825_slow_lifeguard/snapshot.json
+  s_566b8e0c4467a4::t_3714b232e63aa7 2-3,7-19,21-32,34-45,47-58,60-71,73-85,87-101,104-192,195-203,206-279,282-1607
+packages/db/drizzle/20260907182012_slim_beyonder/snapshot.json
+  s_566b8e0c4467a4::t_505814ac9be4a4 2-3,7-73,76-83,86-91,93-97,99-111,113-117,119-131,133-137,139-152,154-171,173-190,192-291,294-1223
+packages/db/drizzle/20260907182127_spooky_alex_power/snapshot.json
+  s_566b8e0c4467a4::t_fcf0f97b57bab1 2-3,7-17,19,22-28,30-38,41-274
+packages/db/drizzle/20260907183015_public_demogoblin/snapshot.json
+  s_566b8e0c4467a4::t_38f0e620b50a9c 2-3,7-14,16,19-24,26,29-35,37-42,45-88
+packages/db/drizzle/20260908005640_supreme_siren/snapshot.json
+  s_566b8e0c4467a4::t_8d5840c0996bb8 2-3,7-20,22-34,36-48,50-53,55-59,62-66,69-73,75
+packages/db/drizzle/20260909171407_old_cardiac/snapshot.json
+  s_566b8e0c4467a4::t_d903a400a2369f 2-3,7-17,19,22-28,30-43,45-62,64-72,75-332
+packages/db/drizzle/20260909223154_colossal_darkhawk/snapshot.json
+  s_566b8e0c4467a4::t_7fb8bdee8052fb 2-3,7-15,17,20-24,26-29,31,34-39,41-45,47-51,54-94
+packages/db/drizzle/20260911025137_billing/snapshot.json
+  s_566b8e0c4467a4::t_f5c5b5bae1985d 2-3,7-17,19-31,33-44,46-57,59,62-67,69,72-77,79-83,85-98,100-117,119-136,138-155,157-165,168-845
+packages/db/drizzle/20260912144703_billing_currency/snapshot.json
+  s_566b8e0c4467a4::t_6443b44d5bc8f2 2-3,7,9-14,16,19-24,26,29-62
+packages/db/drizzle/20260912224849_drive/snapshot.json
+  s_566b8e0c4467a4::t_6a4b6a23bd11cb 2-3,7-73,76-83,86-93,96-102,104-117,119-132,134-148,150-164,166-179,181-185,187-200,202-215,217-230,232-245,247-260,262-275,277-291,293-310,312-329,331-348,350-369,371-388,390-407,409-426,428-445,447-464,466-483,485-547,550-2527
+packages/db/drizzle/20260913145137_drive_ops/snapshot.json
+  s_566b8e0c4467a4::t_dbcc3db6b01f04 2-3,7-60,63-203
+packages/db/drizzle/20260913164406_settings_roles/snapshot.json
+  s_566b8e0c4467a4::t_996a60cce22db5 2-3,7-59,62-231
+packages/db/drizzle/20260913170034_drive_shares/snapshot.json
+  s_566b8e0c4467a4::t_89c69cb496aa79 2-3,7-17,19,22-28,30-44,46-59,61-75,77-94,96-113,115-132,134-142,145-554
+packages/db/drizzle/20260913180206_drive_links/snapshot.json
+  s_566b8e0c4467a4::t_ed669113ccda74 2-3,7-18,20,23-29,31-93,96-442
+packages/db/drizzle/20260913193257_link_secret/snapshot.json
+  s_566b8e0c4467a4::t_4313f29a78287f 2-3,7-37,40-64
+packages/db/drizzle/20260913201923_reports/snapshot.json
+  s_566b8e0c4467a4::t_a92e7040c166ec 2-3,7-58,61-68,71-78,81-247,250-1550
+packages/db/drizzle/20260913210340_report_thumbnails_requests/snapshot.json
+  s_566b8e0c4467a4::t_157838d07fb1a7 2-3,7,9-167,170-480
+packages/db/drizzle/20260913215934_rotations/snapshot.json
+  s_566b8e0c4467a4::t_67310f81579844 2-3,7-119,122-351
+packages/db/drizzle/20260913220954_share_events/snapshot.json
+  s_566b8e0c4467a4::t_8aaa3339f59b7f 2-3,7-38,41-152
+packages/db/drizzle/20260914161739_growth/snapshot.json
+  s_566b8e0c4467a4::t_4c0f78825bee1a 2-3,7-76,79-351,354-1455
+packages/db/drizzle/20260914182125_thumbnails_in_object/snapshot.json
+  s_566b8e0c4467a4::t_26c8203a1d3a64 2-3,7-22,24-36,39-51,54-241,243-244,247-248,251-252,255-256,259-260,263-264,267-268,271-272,275-276,279-280,283-284,287-291,294-298,301-305,308-312,314
+packages/db/drizzle/20260914231158_server_secrets/snapshot.json
+  s_566b8e0c4467a4::t_b546b683982e5a 2-3,7-19,22-91
+packages/db/drizzle/20260915165300_hybrid_shares/snapshot.json
+  s_566b8e0c4467a4::t_cd0f8c0eb67794 2-3,7-82,85-167
+packages/db/drizzle/20260915234814_hybrid_reports/snapshot.json
+  s_566b8e0c4467a4::t_da4b4f0a9247be 2-3,7-18,21-29
+packages/db/drizzle/20260916014134_workspace_documents/snapshot.json
+  s_566b8e0c4467a4::t_e867538447882d 2-3,7-38,41-188
+packages/db/drizzle/20260916055412_tags_registry_resync/snapshot.json
+  s_566b8e0c4467a4::t_317506fa5e3811 2-3,7-43,46-77
+packages/db/drizzle/20261011152024_drop_report_content_hash/snapshot.json
+  s_566b8e0c4467a4::t_6e00654e2d0c0e 2-3,7-43,45-46,49-53,55
+packages/db/drizzle/20261012132409_report_release/snapshot.json
+  s_566b8e0c4467a4::t_6ab996403225a3 2-3,7-33,36-63
+packages/db/drizzle/20261012132956_server_hash_key/snapshot.json
+  s_566b8e0c4467a4::t_27620f373cab1d 2-4,7-8
+packages/db/drizzle/20261012133230_admin_storage/snapshot.json
+  s_566b8e0c4467a4::t_cfbdcd2524e71e 2-3,7-62,65-121
+packages/db/drizzle/20261012135331_envelope_versions/snapshot.json
+  s_566b8e0c4467a4::t_22f0f1246f4dab 2-3,7,9-16,19-26,29-36,39-88
+packages/db/drizzle/20261012173635_content_suite_3/snapshot.json
+  s_566b8e0c4467a4::t_d2719d54827e72 2-3,7-28,31-39
+packages/db/drizzle/20261012174046_writer_signatures/snapshot.json
+  s_566b8e0c4467a4::t_122a58ff2275bd 2-3,7,9-16,19-26,29-36,39-46,49-56,58-204,207-446
+packages/db/drizzle/20261012174906_share_suite_3/snapshot.json
+  s_566b8e0c4467a4::t_c76faac72dcdd1 2-3,7-24,27-35
+packages/db/drizzle/20261012175109_identity_history/snapshot.json
+  s_566b8e0c4467a4::t_d006f4f4e6feaa 2-3,7-38,41-444
+packages/db/drizzle/20261012175419_settings_key/snapshot.json
+  s_566b8e0c4467a4::t_8e37d09215669c 2-3,7-56,59-193
+packages/db/drizzle/20261013001717_share_feed_ancestors/snapshot.json
+  s_566b8e0c4467a4::t_9b4c5ba367080a 2-3,7,9-14,16,19-36
+packages/db/drizzle/20261013010217_report_release/snapshot.json
+  s_566b8e0c4467a4::t_dd2fe01dfce7d1 2-3,7-163,165-172,175-182,185-189,192-196,199-203,206-210,213-217,220-224,226
+packages/db/drizzle/20261014213244_pq_identity/snapshot.json
+  s_566b8e0c4467a4::t_cfb1ef5bb07217 2-3,7,9-16,19-26,29-36,39-46,49-278,281-488
+packages/db/drizzle/20261014231034_pq_identity_not_null/snapshot.json
+  s_566b8e0c4467a4::t_a3eba42285efe7 2-3,7-61,63-67,70-74,76
+packages/db/drizzle/20261016013230_devices/snapshot.json
+  s_566b8e0c4467a4::t_548fa9962176a0 2-3,7-205,208-725
+packages/db/drizzle/20261016032459_workspace_owners/snapshot.json
+  s_566b8e0c4467a4::t_bf9757e6451981 2-3,7,9-16,19-133,136-275
+packages/db/drizzle/20261016032529_succession_consent/snapshot.json
+  s_566b8e0c4467a4::t_96fb00c2187af2 2-3,7-37,40-67
+packages/db/drizzle/20261016081643_group_tables/snapshot.json
+  s_566b8e0c4467a4::t_1ac1950829c329 2-3,7-17,19-30,32-43,45-57,59-70,72-84,86-97,99-112,114-125,127-138,140-149,151-159,161-165,167-180,182-186,188-200,202-206,208-220,222-226,228-241,243-255,257-261,263-275,277-281,283-295,297-301,303-316,318-331,333-347,349-366,368-385,387-404,406-423,425-442,444-461,463-480,482-499,501-518,520-537,539-556,558-579,581-598,600-621,623-640,642-659,661-678,680-697,699-716,718-735,737-754,756-775,777-789,792-3440
+packages/db/drizzle/20261016164352_group_creation_digest/snapshot.json
+  s_566b8e0c4467a4::t_05ab78c231ed32 2-3,7,9-16,19-27,30-57
+packages/db/drizzle/20261017062152_rekeyed_origins/snapshot.json
+  s_566b8e0c4467a4::t_7635ea7f869cab 2-3,7,9-19,22-29,32-39,42-49,52-59,62-69,72-79,82-89,92-99,102-109,112-119,122-129,132-139,142-149,152-159,162-325,328-940
+packages/db/drizzle/20261017121401_group_billing/snapshot.json
+  s_566b8e0c4467a4::t_eba9bfd230a0cc 2-3,7-162,165-882
+packages/db/drizzle/20261017153848_origin_drop_evidence/snapshot.json
+  s_566b8e0c4467a4::t_580dda785690cd 2-3,7-79,82-173
+packages/db/drizzle/20261017170455_group_area_deletion/snapshot.json
+  s_566b8e0c4467a4::t_494cce81600437 2-3,7-60,63-192
+packages/db/drizzle/20261018020252_group_plan_tiers/snapshot.json
+  s_566b8e0c4467a4::t_a7c5fd2f5d17ba 2-3,7,9-21,24-36,39-51,54-66,69-81,84-96,99-106,109-121,124-136,139-151,154-166,169-181,184-196,199-211,214-439
+packages/db/drizzle/20261018222928_one_family/snapshot.json
+  s_566b8e0c4467a4::t_19b1f577eb5675 2-3,7-74,77-146
+packages/db/drizzle/20261018235021_invitation_email_index/snapshot.json
+  s_566b8e0c4467a4::t_0b6144e42be45d 2-3,7-26,29-54
+packages/db/drizzle/20261019161551_personal_plan_endings/snapshot.json
+  s_566b8e0c4467a4::t_69351f46581fd4 2-3,7-112,115-740
+packages/db/drizzle/20261019171449_refund_disputed/snapshot.json
+  s_566b8e0c4467a4::t_8a56a29ccd33d5 2-3,7-22,25-33
+packages/db/drizzle/20261019181225_drive_moves/snapshot.json
+  s_566b8e0c4467a4::t_66de5d6d34b9a5 2-3,7,9-16,19-26,29-36,39-46,49-56,59-66,69-81,84-101,104-235
+packages/db/drizzle/20261020151204_group_billing_no_group_fk/snapshot.json
+  s_566b8e0c4467a4::t_d0035f15e87ee8 2-3,7-39,41-42,45-46,48
+packages/db/drizzle/20261020192250_dissolve_cancels/snapshot.json
+  s_566b8e0c4467a4::t_d0fa0ac2f789a3 2-3,7,9-21,24-36,39-51,54-66,69-81,84-96,99-196
+packages/db/drizzle/20261020211129_dissolve_failing/snapshot.json
+  s_566b8e0c4467a4::t_1dafcfa1a267a8 2-3,7,9-14,16-21,24-41
+packages/db/drizzle/20261020213416_change_seq_renumber/snapshot.json
+  s_566b8e0c4467a4::t_daec84bd1b8bed 2-3,7-8
+packages/db/drizzle/20261020214235_change_seq_unique/snapshot.json
+  s_566b8e0c4467a4::t_e1391ea19bf7f8 2-3,7-24,27-35
+packages/db/drizzle/20261021073123_personal_plan_lapsed/migration.sql
+  s_566b8e0c4467a4::t_f02ddd23a5d0af 1-18
+packages/db/drizzle/20261021073123_personal_plan_lapsed/snapshot.json
+  s_566b8e0c4467a4::t_35f74c7327a595 1-55
+packages/db/drizzle/20261026094157_family_lapsed_revoke_refusal/migration.sql
+  s_566b8e0c4467a4::t_6208bac7797a9b 1-22
+packages/db/drizzle/20261026094157_family_lapsed_revoke_refusal/snapshot.json
+  s_566b8e0c4467a4::t_c61de02fc42961 1-135
+packages/db/drizzle/20261026095529_family_orphan_paid_after/migration.sql
+  s_566b8e0c4467a4::t_7f5507a7d60fe3 1-25
+packages/db/drizzle/20261026095529_family_orphan_paid_after/snapshot.json
+  s_566b8e0c4467a4::t_3c1300d0433e50 1-63
+packages/db/drizzle/20261026151404_reconcile_order/migration.sql
+  s_566b8e0c4467a4::t_91b2b73c0a96c5 1-19
+packages/db/drizzle/20261026151404_reconcile_order/snapshot.json
+  s_566b8e0c4467a4::t_0c2f91c32cdfb2 1-140
+packages/db/package.json
+  s_566b8e0c4467a4::t_f054b74c1e3092 15-18,34-35,39,41,43
+packages/db/src/auth.ts
+  s_566b8e0c4467a4::t_8d9f12ddda8ba2 855,1094,1096-1098,1104-1107,1113-1114
+packages/db/src/billing.groups.test.ts
+  s_566b8e0c4467a4::t_c380f80be08585 1,4,15-16,59,207-276,438,452,537-972
+packages/db/src/billing.test.ts
+  s_566b8e0c4467a4::t_eeefaf52043042 7,45,69,80,96,104,118,124,137,151,164,172,195,202,207-474,496-532
+packages/db/src/billing.ts
+  s_566b8e0c4467a4::t_7652e83786f25e 24-64,105-110,118-151,170-181,189-190,192,197-204,206,214,218,220-225,229-232,285,289,297-306,310-315,331,335-339,351,484-488,501-508,514,528-536,557,755-758,761-765,777,784,795,859-912,958-963,976-979,1015-1210,1260-1270,1272,1278-1287,1289,1297-1298,1304,1323-1329,1370-1378,1381,1394-1395,1405-1413,1438,1483-1785,1802-1804,1819,1859-2143,2186-2193,2196-2205,2296-2297,2303-2306,2456-2460,2467,2478-2481
+packages/db/src/client.ts
+  s_566b8e0c4467a4::t_22b0b6fe421e2a 4,15-27
+packages/db/src/drive.moves.test.ts
+  s_566b8e0c4467a4::t_3f77cd4bc1028a 130,488,728,849
+packages/db/src/drive.pool-none.test.ts
+  s_566b8e0c4467a4::t_48877884a7d0b5 58,91
+packages/db/src/drive.pool.test.ts
+  s_566b8e0c4467a4::t_7782a97ea9fcd5 4,7-21,101,750-766,955,1053
+packages/db/src/drive.purge-batch.test.ts
+  s_566b8e0c4467a4::t_19f72e34c63158 1-548
+packages/db/src/drive.ts
+  s_566b8e0c4467a4::t_3063956a4cd596 132-164,1146-1147,3098-3105,3125-3126,3132,3161-3168,3174-3272
+packages/db/src/groups.purge-none.test.ts
+  s_566b8e0c4467a4::t_7bf72905407f7a 1-109
+packages/db/src/groups.purge.test.ts
+  s_566b8e0c4467a4::t_0fc808dbd60bee 560,588,649,651,659,669,673,820,827
+packages/db/src/groups.test.ts
+  s_566b8e0c4467a4::t_6ed5dfe2157b92 849-911
+packages/db/src/groups.ts
+  s_566b8e0c4467a4::t_c1bd7badb7ed14 106-115,325-332,1420-1424,1528-1534,1655-1656,1814-1829,1926-1933,1958-1992,2018-2019,2121-2129,2138-2141,2147-2179,2190-2193,2217-2219,3605-3616,3619
+packages/db/src/index.ts
+  s_566b8e0c4467a4::t_b165904063ed46 1
+packages/db/src/pool-count.ts
+  s_566b8e0c4467a4::t_20e1b2649dbcda 1-21
+packages/db/src/pool.ts
+  s_566b8e0c4467a4::t_c48838d59fe8af 5,59,79-82,101,103
+packages/db/src/readiness.ts
+  s_566b8e0c4467a4::t_81694f912ccfe3 14
+packages/db/src/schema/billing.ts
+  s_566b8e0c4467a4::t_7cde125285e31d 9,18-25,34-38,115-131,260-290,327-332,334-342,346-352,435-440
+packages/drive/package.json
+  s_566b8e0c4467a4::t_5448787359b3a7 28-29,34,38-39,41
+packages/drive/src/api.ts
+  s_566b8e0c4467a4::t_59b18c068a5963 298-314,586
+packages/drive/src/catalogue.test.ts
+  s_566b8e0c4467a4::t_526f0e056824ad 55-56,60,62-67,80,114-186
+packages/drive/src/catalogue.ts
+  s_566b8e0c4467a4::t_4935d9a7382801 14-23,26-47,91-150,315-324,326,328-331,349-353,358-359,364,373,376
+packages/drive/src/client.attributes.test.ts
+  s_566b8e0c4467a4::t_5c1f1d9c4ff500 1-319
+packages/drive/src/client.catalogue.test.ts
+  s_566b8e0c4467a4::t_bec807d2fc90d5 528,533-544
+packages/drive/src/client.rotation.test.ts
+  s_566b8e0c4467a4::t_e2ac6a1572bd29 1-656
+packages/drive/src/client.test.ts
+  s_566b8e0c4467a4::t_a473a6669c94b4 5,285-316
+packages/drive/src/client.ts
+  s_566b8e0c4467a4::t_34299b1a591199 10,18-19,49,51,195,197,275-277,279,284-285,342-346,351,354-369,883-887,889,892-900,902-906,1066-1068,1073,1088-1110,1138-1171,1178,1193-1202,1224-1244,1246-1259,1303-1306,1316,1721-1723,1764-1767,1769,1772,1778-1781,1821-1823,1833-1835,1850,1856-1863,1865,1917-1931,1944-1945,2043-2048,2052,2061,2068-2070,2097,2109,2119-2127,2154-2162,2182-2185,2307,2319,2360
+packages/drive/src/colour.test.ts
+  s_566b8e0c4467a4::t_057ad94f9e9900 1-72
+packages/drive/src/colour.ts
+  s_566b8e0c4467a4::t_6807e6d14e28ce 1-145
+packages/drive/src/journal.ts
+  s_566b8e0c4467a4::t_8f56f8170051ef 2,83-84,109-110
+packages/drive/src/pin-cases.test.ts
+  s_566b8e0c4467a4::t_a6ac0bf4f86f3b 1-105
+packages/drive/src/server.trash-batch.test.ts
+  s_566b8e0c4467a4::t_a7803c106970a9 120-197
+packages/drive/src/server.ts
+  s_566b8e0c4467a4::t_e1361fe465bd9d 473-474,759-766,860-888,936,938
+packages/drive/src/tags.test.ts
+  s_566b8e0c4467a4::t_3b869922341f1a 2,79-97
+packages/drive/src/tags.ts
+  s_566b8e0c4467a4::t_7e4f600e021193 15-20,136-139,141
+packages/drive/src/transfers.test.ts
+  s_566b8e0c4467a4::t_eeb428630e3cbb 4,30-32,139-140,150-151,211,281,457,1764-1869,1989-2116
+packages/drive/src/transfers.ts
+  s_566b8e0c4467a4::t_9e0793fe57956c 3,10-16,23,151-156,180-194,199-200,285-286,333-337,499-500,1013,1081-1099,1147-1148,1150,1166-1171,1183-1184,1226,1471-1491,1493-1495,1605,1630-1641,1649-1651,1679,1698,2164,2218,2279-2327,2331-2332
+packages/drive/src/trust.test.ts
+  s_566b8e0c4467a4::t_9b3dcf62d635ca 3,9,210-309
+packages/drive/src/trust.ts
+  s_566b8e0c4467a4::t_a152b7bd70fc21 3,25-34,43-46,53,103-106,112-113,117,126-131,133-134,147-148,150,160-161,164,168-170,174-179,183,185,217-221,223-224,237-239,242,313,318-324,328,369-374,385-386
+packages/drive/src/walk-holds.ts
+  s_566b8e0c4467a4::t_58c392d1c15307 1-75
+packages/emails/package.json
+  s_566b8e0c4467a4::t_dc1bbf75a0865e 19,21-22,26-33
+packages/emails/scripts/render.tsx
+  s_566b8e0c4467a4::t_302fb30339fb2d 188,194-208,212,215
+packages/emails/src/rendered/family-plan-ending.ts
+  s_566b8e0c4467a4::t_04876d28e59899 3-10
+packages/emails/src/rendered/group-invitation.ts
+  s_566b8e0c4467a4::t_c0474a2f23283f 3-4
+packages/emails/src/rendered/security-notice.ts
+  s_566b8e0c4467a4::t_f203ee18fefe7b 4,8,12,16
+packages/emails/src/rendered/share-notice.ts
+  s_566b8e0c4467a4::t_51a5a8194839ff 4,8
+packages/emails/src/rendered/verify-email.ts
+  s_566b8e0c4467a4::t_75f6981f55a21e 4,8
+packages/emails/src/service.ts
+  s_566b8e0c4467a4::t_671e7e22b884b8 269-271,275-280,286-289
+packages/emails/src/templates/family-plan-ending.tsx
+  s_566b8e0c4467a4::t_a66dd0f09a0787 16-18,39,44-45,53-54,57,70-74,80-83,178-180,248-250
+packages/emails/src/templates/group-invitation.tsx
+  s_566b8e0c4467a4::t_e67220bc18c192 73-77,83-86,182-183,185-187
+packages/emails/src/templates/security-notice.tsx
+  s_566b8e0c4467a4::t_eca93033d261c3 111-115,121-124
+packages/emails/src/templates/share-notice.tsx
+  s_566b8e0c4467a4::t_b6d9641f969d80 70-74,80-83
+packages/emails/src/templates/verify-email.tsx
+  s_566b8e0c4467a4::t_0813f6745857d0 65-69,75-78
+packages/env/package.json
+  s_566b8e0c4467a4::t_11e28b38988259 25,29,31
+packages/env/src/storage.ts
+  s_566b8e0c4467a4::t_6632643327aafe 56-67
+packages/groups/package.json
+  s_566b8e0c4467a4::t_116fbab6d57cd3 26-27,29,31,33
+packages/groups/src/protocol.ts
+  s_566b8e0c4467a4::t_9f7e1d1654ce98 17-18,22,124-139
+packages/groups/src/server.billing.test.ts
+  s_566b8e0c4467a4::t_039b1b2f9b7748 1,44-50,110-143,171-173,189,210-218,223-230,232-234,244-247,511-553,704,712-1223,1240,1247,1280-1408
+packages/groups/src/server.test.ts
+  s_566b8e0c4467a4::t_323b803a13470e 3,413-455,661-737,3605,3651,3677-3849
+packages/groups/src/server.ts
+  s_566b8e0c4467a4::t_fe243d07d8a626 30,33-36,471-479,787-798,903-907,934,937-943,1051,1062-1068,1941,2004,2010,2023-2033,2038-2039,2046,2071,2107-2113,2116-2225,2228,2231,2247-2252,2254-2269,2275,2294-2304
+packages/jobs/Dockerfile
+  s_566b8e0c4467a4::t_884a7029af840d 1,6-7,39
+packages/jobs/package.json
+  s_566b8e0c4467a4::t_ff9e2cbab504e5 23,27,29
+packages/jobs/src/client.ts
+  s_566b8e0c4467a4::t_60c50bffb186ea 40-41
+packages/jobs/src/jobs/reconcile-billing.ts
+  s_566b8e0c4467a4::t_3aedf2e3f07a2f 8,46-53,108-113
+packages/logging/package.json
+  s_566b8e0c4467a4::t_468d821ad1bf49 22,26,28
+packages/logging/src/privacy.ts
+  s_566b8e0c4467a4::t_1c6e35189bf6c5 198-201
+packages/shared/package.json
+  s_566b8e0c4467a4::t_bed52f85de7186 19
+packages/tokens/generated/Alpine.kt
+  s_566b8e0c4467a4::t_6a0edb0ae41fde 45-46,49-50,54
+packages/tokens/generated/Alpine.swift
+  s_566b8e0c4467a4::t_ce44dfba62fdcd 6-7,10,12,18,20,28,100,103-104
+packages/tokens/generated/tokens.css
+  s_566b8e0c4467a4::t_08cc2a19c1fcc7 51-52,55-56,60,92-93,96-97,101
+packages/tokens/package.json
+  s_566b8e0c4467a4::t_e26418ffb22fb8 21,23
+packages/tokens/scripts/generate.ts
+  s_566b8e0c4467a4::t_8e18bd556c9ae2 7,14,106-107,112,135,138-139
+packages/tokens/src/contrast.test.ts
+  s_566b8e0c4467a4::t_7b7f704206e9e1 4,86-145
+packages/tokens/src/index.ts
+  s_566b8e0c4467a4::t_b48699550e5eb3 23-31,39,42,47,50,69,76,104,107,297-298
+packages/utils/package.json
+  s_566b8e0c4467a4::t_49ded912ff5f63 19
+playwright.config.ts
+  s_566b8e0c4467a4::t_fab39c58e0a9f4 30-31
+scripts/release-notes-section.sh
+  s_566b8e0c4467a4::t_c1f74fa96d2e5d 9-11,13
+turbo.json
+  s_566b8e0c4467a4::t_2f0f043c325aaf 21-23,89-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "75d95f1cf0062e8d636393e113d88fefceaf51f9",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
